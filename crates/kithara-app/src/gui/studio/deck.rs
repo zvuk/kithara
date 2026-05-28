@@ -10,7 +10,10 @@ use iced::{
     },
 };
 
-use super::tokens::{StudioRadius, StudioSize, StudioSpace, StudioType};
+use super::{
+    styles::vertical_divider,
+    tokens::{StudioRadius, StudioSize, StudioSpace, StudioType},
+};
 use crate::{
     gui::{
         app::Kithara,
@@ -24,10 +27,18 @@ use crate::{
     theme::gui::GuiPalette,
 };
 
-/// Deck EQ knob range in dB; mirrors the compact equalizer tab so a
-/// band's knob and slider agree on the same gain.
+/// Deck EQ fader range in dB; mirrors the compact equalizer tab so a
+/// band's fader and slider agree on the same gain.
 const EQ_MIN_DB: f32 = -24.0;
 const EQ_MAX_DB: f32 = 6.0;
+/// Gap between adjacent EQ faders; kept tight to match the reference deck.
+const FADER_GAP: f32 = 2.0;
+/// Vertical gap between a fader track and its value/frequency labels.
+const FADER_LABEL_GAP: f32 = 2.0;
+/// Vertical inset of the fader bank from the panel's top/bottom border.
+const FADER_EDGE_PAD: f32 = 10.0;
+/// Gap between the transport cluster and the fader bank.
+const TRANSPORT_FADERS_GAP: f32 = 14.0;
 
 pub(super) fn view_deck(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
@@ -36,8 +47,7 @@ pub(super) fn view_deck(state: &Kithara) -> Element<'_, Message> {
         column![
             deck_header(state, p),
             waveform_cluster(state, p),
-            transport_row(state, p),
-            knob_strip(state, p),
+            transport_and_faders_row(state, p),
         ]
         .spacing(Gap::CONTENT),
     )
@@ -48,9 +58,10 @@ pub(super) fn view_deck(state: &Kithara) -> Element<'_, Message> {
     .into()
 }
 
-/// One rotary knob per EQ band, frequency-labelled, sharing the band gain
-/// with the compact equalizer tab through `EqBandChanged`.
-fn knob_strip(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
+/// One vertical fader per EQ band, frequency-labelled, sharing the band gain
+/// with the compact equalizer tab through `EqBandChanged`. Bands fill the
+/// space right of the transport with a tight gap, mirroring the reference.
+fn faders(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
     let total = state.ui_state.eq_bands.len();
     let strip = state
         .ui_state
@@ -58,43 +69,47 @@ fn knob_strip(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
         .iter()
         .copied()
         .enumerate()
-        .map(|(index, value)| knob_cell(index, total, value, p))
+        .map(|(index, value)| fader_cell(index, total, value, p))
         .fold(
-            row![].spacing(Gap::INLINE).align_y(Alignment::Center),
+            row![]
+                .spacing(FADER_GAP)
+                .align_y(Alignment::End)
+                .width(Length::Fill),
             Row::push,
         );
 
     container(strip)
         .width(Length::Fill)
-        .padding([8.0, 14.0])
-        .style(transport_style(p))
+        .padding([FADER_EDGE_PAD, 0.0])
         .into()
 }
 
-fn knob_cell(index: usize, total: usize, value: f32, p: GuiPalette) -> Element<'static, Message> {
+fn fader_cell(index: usize, total: usize, value: f32, p: GuiPalette) -> Element<'static, Message> {
     let value = value.clamp(EQ_MIN_DB, EQ_MAX_DB);
 
     container(
         column![
-            widgets::knob(
+            text(format!("{value:+.0}"))
+                .size(StudioType::MONO_SM)
+                .line_height(1.0)
+                .font(fonts::mono(Weight::Medium))
+                .color(p.text_dim),
+            widgets::vfader(
+                index,
                 value,
                 EQ_MIN_DB,
                 EQ_MAX_DB,
-                StudioSize::KNOB_SIZE,
+                StudioSize::FADER_HEIGHT,
                 p,
-                move |v| { Message::EqBandChanged(index, v) }
             ),
             text(eq_band_label(index, total))
                 .size(StudioType::MONO_XS)
+                .line_height(1.0)
                 .font(fonts::mono(Weight::Medium))
-                .color(p.muted),
-            text(format!("{value:+.1} dB"))
-                .size(StudioType::MONO_SM)
-                .font(fonts::mono(Weight::Medium))
-                .color(p.accent),
+                .color(p.text_dim),
         ]
         .align_x(Alignment::Center)
-        .spacing(4.0),
+        .spacing(FADER_LABEL_GAP),
     )
     .width(Length::FillPortion(1))
     .into()
@@ -186,20 +201,32 @@ fn playhead_progress(position: f64, duration: f64) -> f32 {
     progress
 }
 
-fn transport_row(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
+/// Transport (prev / play / next) on the left, a divider, then the EQ fader
+/// bank — all in one panel, matching the reference deck layout.
+fn transport_and_faders_row(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
     container(
         row![
-            secondary_transport_button(Icon::SkipPrev, p, Message::Prev),
-            widgets::play_button(state.ui_state.playing, p, Message::TogglePlayPause),
-            secondary_transport_button(Icon::SkipNext, p, Message::Next),
+            transport_buttons(state, p),
+            vertical_divider(StudioSize::DIVIDER, StudioSize::FADER_HEIGHT, p.line_soft),
+            faders(state, p),
         ]
         .align_y(Alignment::Center)
-        .spacing(Gap::INLINE),
+        .spacing(TRANSPORT_FADERS_GAP),
     )
     .width(Length::Fill)
-    .center_x(Length::Fill)
     .padding([8.0, 14.0])
     .style(transport_style(p))
+    .into()
+}
+
+fn transport_buttons(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
+    row![
+        secondary_transport_button(Icon::SkipPrev, p, Message::Prev),
+        widgets::play_button(state.ui_state.playing, p, Message::TogglePlayPause),
+        secondary_transport_button(Icon::SkipNext, p, Message::Next),
+    ]
+    .align_y(Alignment::Center)
+    .spacing(Gap::INLINE)
     .into()
 }
 

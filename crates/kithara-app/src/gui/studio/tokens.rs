@@ -14,7 +14,7 @@ impl StudioSize {
     pub(super) const BRAND_DIVIDER_HEIGHT: f32 = 16.0;
     pub(super) const LIBRARY_WIDTH: f32 = 280.0;
     pub(super) const WAVEFORM_HEIGHT: f32 = 84.0;
-    pub(super) const KNOB_SIZE: f32 = 46.0;
+    pub(super) const FADER_HEIGHT: f32 = 90.0;
     pub(super) const LIB_HEAD_HEIGHT: f32 = 28.0;
     pub(super) const LIB_ROW_HEIGHT: f32 = 30.0;
     pub(super) const STATUS_DOT: f32 = 6.0;
