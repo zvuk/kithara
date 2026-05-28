@@ -1,8 +1,9 @@
-use std::process::Command;
+use std::{fs, path::Path, process::Command};
 
-use anyhow::{Result, bail};
-use cargo_metadata::MetadataCommand;
+use anyhow::{Context, Result, bail};
+use cargo_metadata::{Metadata, MetadataCommand};
 use clap::{Args, ValueEnum};
+use serde::Deserialize;
 
 use crate::util::check_tool;
 
@@ -10,11 +11,26 @@ struct Consts;
 impl Consts {
     const INSTALL_HINT: &'static str = "cargo install similarity-rs";
 
-    const EXCLUDED_CRATES: &'static [&'static str] = &[
-        "kithara-workspace-hack",
-        "kithara-test-utils",
-        "kithara-test-macros",
-    ];
+    const CONFIG_REL: &'static str = ".config/similarity.toml";
+}
+
+/// Crate exclusions for similarity scans, loaded from
+/// `.config/similarity.toml`. Project-agnostic: when the file is absent
+/// no crates are excluded — every project supplies its own list.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct SimilarityConfig {
+    excluded_crates: Vec<String>,
+}
+
+fn load_config(workspace_root: &Path) -> Result<SimilarityConfig> {
+    let path = workspace_root.join(Consts::CONFIG_REL);
+    if !path.exists() {
+        return Ok(SimilarityConfig::default());
+    }
+    let text = fs::read_to_string(&path)
+        .with_context(|| format!("read similarity config: {}", path.display()))?;
+    toml::from_str(&text).with_context(|| format!("parse similarity config: {}", path.display()))
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -58,12 +74,16 @@ pub(crate) fn run(args: &SimilarityArgs) -> Result<()> {
     cmd.arg("--exclude").arg(".claude");
     cmd.arg("--exclude").arg(".worktrees");
 
+    let metadata = MetadataCommand::new().no_deps().exec()?;
+    let config = load_config(metadata.workspace_root.as_std_path())?;
+    let excluded = &config.excluded_crates;
+
     let roots = if args.paths.is_empty() {
-        default_roots()?
+        default_roots(&metadata, excluded)
     } else {
         args.paths
             .iter()
-            .filter(|p| !path_is_in_excluded_crate(p))
+            .filter(|p| !path_is_in_excluded_crate(p, excluded))
             .cloned()
             .collect::<Vec<_>>()
     };
@@ -81,20 +101,19 @@ pub(crate) fn run(args: &SimilarityArgs) -> Result<()> {
     Ok(())
 }
 
-fn path_is_in_excluded_crate(path: &str) -> bool {
-    Consts::EXCLUDED_CRATES.iter().any(|crate_name| {
+fn path_is_in_excluded_crate(path: &str, excluded: &[String]) -> bool {
+    excluded.iter().any(|crate_name| {
         let prefix = format!("crates/{crate_name}/");
         path == format!("crates/{crate_name}") || path.starts_with(&prefix)
     })
 }
 
-fn default_roots() -> Result<Vec<String>> {
-    let metadata = MetadataCommand::new().no_deps().exec()?;
+fn default_roots(metadata: &Metadata, excluded: &[String]) -> Vec<String> {
     let workspace_root = metadata.workspace_root.as_std_path();
     let mut out = Vec::new();
     for pkg in metadata.workspace_packages() {
         let name = pkg.name.as_str();
-        if Consts::EXCLUDED_CRATES.contains(&name) {
+        if excluded.iter().any(|e| e == name) {
             continue;
         }
         let src = workspace_root.join("crates").join(name).join("src");
@@ -103,5 +122,5 @@ fn default_roots() -> Result<Vec<String>> {
         }
     }
     out.sort();
-    Ok(out)
+    out
 }
