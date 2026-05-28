@@ -5,8 +5,9 @@
 
 # Workspace-relative globs whose violations are dropped from every idioms
 # check before baseline-write and ratchet-diff. Idioms target production
-# runtime quality; test code and compile-time test-infra crates are exempt
-# (per project policy).
+# runtime quality; test code, compile-time test-infra crates, and build
+# scripts (compile-time, never on a runtime path) are exempt (per project
+# policy).
 exclude_paths = [
     "**/tests/**",
     "**/tests.rs",
@@ -14,6 +15,7 @@ exclude_paths = [
     "**/test_*.rs",
     "crates/kithara-test-utils/**",
     "crates/kithara-test-macros/**",
+    "**/build.rs",
 ]
 
 [branch_chains]
