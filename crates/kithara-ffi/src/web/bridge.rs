@@ -1,8 +1,28 @@
+use std::sync::atomic::{AtomicI64, Ordering};
+
 use kithara_platform::sync::{Mutex, MutexGuard, mpsc};
 use kithara_play::wasm_support;
 use wasm_bindgen::JsValue;
 
 use crate::web::commands::WorkerCmd;
+
+/// Worker → main mirror of the current track id, written by the worker's
+/// event source on `CurrentTrackChanged` and read synchronously on the
+/// main thread by [`WorkerBridge::current_track_id`]. Lives in shared wasm
+/// linear memory (SharedArrayBuffer), so the atomic is visible across the
+/// worker boundary without a round-trip. `-1` is the "no current track"
+/// sentinel ([`TrackId`](kithara_queue::TrackId) values are small
+/// monotonic `u64`s that never reach the `i64` sign bit in practice).
+static CURRENT_TRACK_ID: AtomicI64 = AtomicI64::new(WorkerBridge::NO_CURRENT_TRACK);
+
+/// Record the worker's current track id for the main-thread read-back.
+/// Called from the worker's event source on every `CurrentTrackChanged`.
+pub(crate) fn set_current_track_id(id: Option<kithara_queue::TrackId>) {
+    let raw = id.map_or(WorkerBridge::NO_CURRENT_TRACK, |id| {
+        i64::try_from(id.as_u64()).unwrap_or(WorkerBridge::NO_CURRENT_TRACK)
+    });
+    CURRENT_TRACK_ID.store(raw, Ordering::Relaxed);
+}
 
 /// Owns the command channel to the engine [`Worker`](crate::web::worker)
 /// and lazily boots it on first use. Mirrors the worker-bootstrap half of
@@ -18,6 +38,9 @@ pub(crate) struct WorkerBridge {
 }
 
 impl WorkerBridge {
+    /// Sentinel stored in [`CURRENT_TRACK_ID`] when no track is current.
+    const NO_CURRENT_TRACK: i64 = -1;
+
     fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
         self.cmd_tx.lock_sync()
     }
@@ -42,13 +65,15 @@ impl WorkerBridge {
         wasm_support::bridge_is_playing()
     }
 
-    /// Id of the worker's current track, if the worker has a synchronous
-    /// read-back for it. Not yet wired (Wave 5): the worker owns the
-    /// current-track cursor and does not mirror it to the main thread, so
-    /// this returns `None` and the facade reports "no current item".
+    /// Id of the worker's current track, read synchronously from the
+    /// shared [`CURRENT_TRACK_ID`] atomic the worker's event source keeps
+    /// in sync. `None` when no track is current.
     pub(crate) fn current_track_id(&self) -> Option<kithara_queue::TrackId> {
         let _ = self;
-        None
+        match CURRENT_TRACK_ID.load(Ordering::Relaxed) {
+            Self::NO_CURRENT_TRACK => None,
+            raw => u64::try_from(raw).ok().map(kithara_queue::TrackId),
+        }
     }
 
     /// Boot the engine worker once. Idempotent: subsequent calls return

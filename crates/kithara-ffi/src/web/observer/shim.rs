@@ -1,9 +1,9 @@
-use js_sys::{Function, Object, Reflect};
+use js_sys::{Function, Object, Reflect, Uint8Array};
 use send_wrapper::SendWrapper;
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 
 use crate::{
-    observer::{ItemObserver, PlayerObserver, SeekCallback},
+    observer::{FfiKeyProcessor, ItemObserver, PlayerObserver, SeekCallback},
     types::{FfiItemEvent, FfiPlayerEvent, FfiTimeRange, FfiVariant},
     web::observer::source::encode as encode_player_event,
 };
@@ -71,6 +71,40 @@ impl SeekCallback for SeekCallbackJs {
         let _ = self
             .func
             .call1(&JsValue::UNDEFINED, &JsValue::from_bool(finished));
+    }
+}
+
+/// Bridges a JS callback into the [`FfiKeyProcessor`] trait. The JS side
+/// is `process_key(key: Uint8Array, salt: string) -> Uint8Array`, invoked
+/// synchronously on the main thread by the
+/// [`key_processor_bridge`](crate::web::key_processor_bridge) pump. A
+/// non-`Uint8Array` return (or a throwing callback) yields an empty key,
+/// so the decrypt fails loudly downstream rather than silently using the
+/// raw bytes.
+pub(crate) struct KeyProcessorJs {
+    func: SendWrapper<Function>,
+}
+
+impl KeyProcessorJs {
+    pub(crate) fn new(func: Function) -> Self {
+        Self {
+            func: SendWrapper::new(func),
+        }
+    }
+}
+
+impl FfiKeyProcessor for KeyProcessorJs {
+    fn process_key(&self, key: Vec<u8>, salt: String) -> Vec<u8> {
+        let key_js = Uint8Array::from(key.as_slice());
+        let result = self.func.call2(
+            &JsValue::UNDEFINED,
+            key_js.as_ref(),
+            &JsValue::from_str(&salt),
+        );
+        match result.and_then(JsCast::dyn_into::<Uint8Array>) {
+            Ok(arr) => arr.to_vec(),
+            Err(_) => Vec::new(),
+        }
     }
 }
 

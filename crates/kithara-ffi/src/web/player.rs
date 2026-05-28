@@ -226,6 +226,7 @@ impl Player {
 
     fn tick(&self) {
         wasm_support::tick_and_poll();
+        crate::web::key_processor_bridge::pump();
     }
 
     fn warm_up_audio(&self) {

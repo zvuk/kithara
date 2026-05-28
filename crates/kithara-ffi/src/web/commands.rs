@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use kithara_queue::{TrackId, Transition};
 
 /// Commands sent from the main-thread bridge to the engine Worker.
@@ -65,20 +67,34 @@ pub(crate) enum WorkerCmd {
     },
     /// Clear every track from the queue.
     RemoveAll,
-    /// Wave-5 placeholders. The control surface accepts these on wasm and
-    /// forwards them so the worker can acknowledge (and log) the request,
-    /// but the DRM / ABR / network plumbing they drive is not wired yet —
-    /// the worker logs them as not-implemented rather than silently
-    /// dropping the call. See the Wave 4 handoff.
-    SetAbrModeTodo {
+    /// Set the ABR mode on the worker's current track. `None` selects
+    /// automatic adaptation; `Some(index)` pins a manual variant. Mirrors
+    /// [`NativeInner::set_abr_mode`](crate::native::inner::NativeInner).
+    SetAbrMode {
         variant_index: Option<u32>,
     },
-    PeakBitrateTodo {
+    /// Apply per-network peak-bitrate ceilings to the worker's current ABR
+    /// handle. Mirrors
+    /// [`NativeInner::update_peak_bitrate`](crate::native::inner::NativeInner).
+    PeakBitrate {
         wifi_bps: f64,
         cellular_bps: f64,
     },
-    AuthTokenTodo {
+    /// Set or clear the player-wide auth token. An empty token removes the
+    /// `X-Auth-Token` header. Applied to subsequently built tracks. Mirrors
+    /// [`NativeInner::setup_network`](crate::native::inner::NativeInner).
+    AuthToken {
         token: String,
     },
-    SetupHlsAesTodo,
+    /// Register a DRM key rule on the worker. The worker builds a
+    /// cross-thread key processor (the real JS callback stays on the main
+    /// thread) keyed on `salt`, then folds the rule into the player-wide
+    /// `KeyOptions` and header map. Mirrors
+    /// [`NativeInner::setup_hls_aes_with_rule`](crate::native::inner::NativeInner).
+    SetupHlsAes {
+        salt: String,
+        domains: Vec<String>,
+        headers: Option<HashMap<String, String>>,
+        query_params: Option<HashMap<String, String>>,
+    },
 }

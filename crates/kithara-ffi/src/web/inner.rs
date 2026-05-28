@@ -368,7 +368,7 @@ impl WasmInner {
             FfiAbrMode::Auto => None,
             FfiAbrMode::Manual { variant_index } => Some(variant_index),
         };
-        self.send(WorkerCmd::SetAbrModeTodo { variant_index });
+        self.send(WorkerCmd::SetAbrMode { variant_index });
     }
 
     pub(crate) fn set_crossfade_duration(&self, seconds: f32) {
@@ -405,16 +405,31 @@ impl WasmInner {
         }
     }
 
-    pub(crate) fn setup_hls_aes(&self, _processor: Arc<dyn FfiKeyProcessor>) {
-        self.send(WorkerCmd::SetupHlsAesTodo);
+    pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
+        let salt = crate::web::js::generate_salt();
+        let rule = FfiKeyRule {
+            processor,
+            headers: None,
+            query_params: None,
+            domains: vec!["*".to_string()],
+            salt: Some(salt),
+        };
+        self.setup_hls_aes_with_rule(rule);
     }
 
-    pub(crate) fn setup_hls_aes_with_rule(&self, _rule: FfiKeyRule) {
-        self.send(WorkerCmd::SetupHlsAesTodo);
+    pub(crate) fn setup_hls_aes_with_rule(&self, rule: FfiKeyRule) {
+        crate::web::key_processor_bridge::install_main_processor(Arc::clone(&rule.processor));
+        let salt = rule.salt.unwrap_or_else(crate::web::js::generate_salt);
+        self.send(WorkerCmd::SetupHlsAes {
+            salt,
+            domains: rule.domains,
+            headers: rule.headers,
+            query_params: rule.query_params,
+        });
     }
 
     pub(crate) fn setup_network(&self, auth_token: String) {
-        self.send(WorkerCmd::AuthTokenTodo { token: auth_token });
+        self.send(WorkerCmd::AuthToken { token: auth_token });
     }
 
     pub(crate) fn snapshot(&self) -> FfiPlayerSnapshot {
@@ -440,7 +455,7 @@ impl WasmInner {
     }
 
     pub(crate) fn update_peak_bitrate(&self, wifi_bps: f64, cellular_bps: f64) {
-        self.send(WorkerCmd::PeakBitrateTodo {
+        self.send(WorkerCmd::PeakBitrate {
             wifi_bps,
             cellular_bps,
         });

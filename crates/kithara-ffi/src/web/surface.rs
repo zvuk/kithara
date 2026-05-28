@@ -7,8 +7,8 @@ use wasm_bindgen::prelude::*;
 use crate::{
     item::AudioPlayerItem,
     player::AudioPlayer,
-    types::{FfiItemConfig, FfiPlayerConfig, FfiTransition},
-    web::observer::shim::{ItemObserverJs, PlayerObserverJs, SeekCallbackJs},
+    types::{FfiAbrMode, FfiItemConfig, FfiPlayerConfig, FfiTransition},
+    web::observer::shim::{ItemObserverJs, KeyProcessorJs, PlayerObserverJs, SeekCallbackJs},
 };
 
 /// Milliseconds per second.
@@ -273,6 +273,73 @@ impl AudioPlayer {
             .ok_or_else(|| JsValue::from_str("item index out of range"))?;
         item.set_observer(Arc::new(ItemObserverJs::new(func)));
         Ok(())
+    }
+
+    /// Register a JS DRM key processor (`process_key(key: Uint8Array,
+    /// salt: string) -> Uint8Array`) and arm a wildcard AES key rule. This
+    /// is the FFI boundary site that adapts the JS `Function` into the
+    /// typed `Arc<dyn FfiKeyProcessor>` the facade expects; the worker then
+    /// routes every segment-key decrypt back to this callback over the
+    /// cross-thread key bridge.
+    ///
+    /// # Errors
+    /// Returns a JS error if `obj` is not a callable function.
+    #[wasm_bindgen(js_name = setupHlsAes)]
+    pub fn setup_hls_aes_js(&self, obj: JsValue) -> Result<(), JsValue> {
+        let func: Function = obj
+            .dyn_into()
+            .map_err(|_| JsValue::from_str("key processor must be a function"))?;
+        self.inner
+            .setup_hls_aes(Arc::new(KeyProcessorJs::new(func)));
+        Ok(())
+    }
+
+    /// Set or clear the player-wide auth token (`X-Auth-Token`). An empty
+    /// string clears it. Applied to subsequently built tracks.
+    #[wasm_bindgen(js_name = setupNetwork)]
+    pub fn setup_network_js(&self, auth_token: String) {
+        self.inner.setup_network(auth_token);
+    }
+
+    /// Pin a manual ABR variant by index, or pass a negative index to
+    /// restore automatic adaptation.
+    #[wasm_bindgen(js_name = setAbrMode)]
+    pub fn set_abr_mode_js(&self, variant_index: i32) {
+        let mode = if variant_index < 0 {
+            FfiAbrMode::Auto
+        } else {
+            FfiAbrMode::Manual {
+                variant_index: cast(variant_index).unwrap_or(0),
+            }
+        };
+        self.inner.set_abr_mode(mode);
+    }
+
+    /// Cap ABR variant selection by per-network peak bitrate (bits/sec).
+    /// `0.0` lifts the cap for that network.
+    #[wasm_bindgen(js_name = updatePeakBitrate)]
+    pub fn update_peak_bitrate_js(&self, wifi_bps: f64, cellular_bps: f64) {
+        self.inner.update_peak_bitrate(wifi_bps, cellular_bps);
+    }
+
+    /// Track id (`f64`) of the currently playing item, or `-1.0` if none.
+    #[wasm_bindgen(js_name = currentItemId)]
+    #[must_use]
+    pub fn current_item_id_js(&self) -> f64 {
+        self.inner
+            .current_item()
+            .map_or(-1.0, |item| id_to_f64(&item))
+    }
+
+    /// Drive the main-thread pumps once. Call from a
+    /// `requestAnimationFrame` loop: it polls the worker → main session
+    /// channel (audio-graph updates) and services pending DRM key requests
+    /// (invoking the registered JS key callback). Mirrors the legacy
+    /// `player_tick` for the unified facade.
+    #[wasm_bindgen(js_name = tick)]
+    pub fn tick_js(&self) {
+        kithara_play::wasm_support::tick_and_poll();
+        crate::web::key_processor_bridge::pump();
     }
 
     fn item_by_id(&self, raw: f64) -> Option<Arc<AudioPlayerItem>> {

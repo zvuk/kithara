@@ -114,6 +114,13 @@ tracing-android = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen", "symphonia"] }
 kithara-queue = { workspace = true, default-features = false, features = ["backend-web-audio", "symphonia"] }
+# The wasm worker reaches the shared DRM key-options, ABR-mode, and
+# key-processor types directly (native reaches the same types through the
+# `kithara` facade and a native-only `kithara-drm` dep).
+kithara-hls = { workspace = true }
+kithara-abr = { workspace = true }
+kithara-drm = { workspace = true }
+bytes = { workspace = true }
 console_error_panic_hook = { workspace = true }
 js-sys = { workspace = true }
 num-traits = { workspace = true }
