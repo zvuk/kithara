@@ -157,17 +157,6 @@ schema_version = 1
 "crates/kithara-stream/src/stream.rs:440:4" = 1
 "crates/kithara-stream/src/stream.rs:488:4" = 1
 
-[guard_cascade]
-"crates/kithara-app/src/gui/view.rs:970:4" = 1
-"crates/kithara-assets/src/flush/worker.rs:81:12" = 1
-"crates/kithara-encode/src/ffmpeg/flac.rs:197:4" = 1
-"crates/kithara-encode/src/types.rs:107:8" = 1
-"crates/kithara-ffi/src/event_bridge.rs:157:8" = 1
-"crates/kithara-hls/src/loading/size_estimation.rs:105:8" = 1
-"crates/kithara-hls/src/variant.rs:674:20" = 1
-"crates/kithara-play/src/impls/player_processor.rs:535:20" = 1
-"crates/kithara-storage/src/backend/resource/wait.rs:43:12" = 1
-
 [loop_allocation]
 "crates/kithara-app/src/tui/dashboard.rs:218:28" = 1
 "crates/kithara-app/src/tui/dashboard.rs:239:23" = 1

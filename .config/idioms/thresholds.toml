@@ -31,7 +31,9 @@ general_arms = 5
 count_if_let = false
 
 [guard_cascade]
-# Three consecutive early-return guards (or `let-else`) are enough to
-# warrant either a parallel-compute + tuple-match, or an Option-resolver
-# extraction. See `xtask/src/idioms/checks/guard_cascade.rs` module docs.
-warn_streak = 3
+# Streak of independent early-return guards (`return`/divergent-macro;
+# break/continue loop-control and binding-dependency chains are excluded
+# by the check). 3 consecutive guards is idiomatic validation / defensive
+# flow that the parallel-compute+tuple-match remedy does not improve; the
+# decision-table anti-pattern is meaningful at 4+. See module docs.
+warn_streak = 4

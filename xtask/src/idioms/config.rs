@@ -261,7 +261,7 @@ impl Default for GuardCascadeConfig {
 }
 
 fn default_cascade_warn_streak() -> usize {
-    3
+    4
 }
 
 fn default_terminator_macros() -> Vec<String> {
