@@ -270,14 +270,13 @@ mod tests {
 
     struct StatefulPeer {
         state: Arc<AbrState>,
-        variants: Vec<VariantInfo>,
     }
     impl Abr for StatefulPeer {
         fn state(&self) -> Option<Arc<AbrState>> {
             Some(Arc::clone(&self.state))
         }
         fn variants(&self) -> Vec<VariantInfo> {
-            self.variants.clone()
+            test_variants_3()
         }
     }
 
@@ -290,7 +289,6 @@ mod tests {
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
-            variants: test_variants_3(),
         });
         let handle = controller.register(&peer);
 
@@ -317,7 +315,6 @@ mod tests {
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
-            variants: test_variants_3(),
         });
         let handle = controller.register(&peer);
 
@@ -341,7 +338,6 @@ mod tests {
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(1))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
-            variants: test_variants_3(),
         });
         let handle = controller.register(&peer);
 
@@ -378,7 +374,6 @@ mod tests {
         let handle = {
             let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
                 state: Arc::clone(&state),
-                variants: test_variants_3(),
             });
             let h = controller.register(&peer);
             assert_eq!(h.variants().len(), 3);
@@ -400,7 +395,6 @@ mod tests {
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
-            variants: test_variants_3(),
         });
 
         let bus = EventBus::new(DEFAULT_EVENT_BUS_CAPACITY);
