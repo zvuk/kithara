@@ -25,8 +25,8 @@ schema_version = 1
 [fat_loop_body]
 "crates/kithara-app/build.rs:404:while_body" = 1
 "crates/kithara-app/build.rs:430:for_body" = 1
-"crates/kithara-app/src/gui/view.rs:486:for_body" = 1
-"crates/kithara-app/src/tui/dashboard.rs:235:for_body" = 1
+"crates/kithara-app/src/gui/view.rs:485:for_body" = 1
+"crates/kithara-app/src/tui/dashboard.rs:234:for_body" = 1
 "crates/kithara-app/src/tui/runner.rs:98:loop_body" = 1
 "crates/kithara-assets/src/flush/worker.rs:65:loop_body" = 1
 "crates/kithara-assets/src/flush/worker.rs:79:loop_body" = 1
@@ -234,7 +234,7 @@ schema_version = 1
 "crates/kithara-test-macros/src/test/parse.rs:78:4" = 1
 
 [guard_cascade]
-"crates/kithara-app/src/gui/view.rs:972:4" = 1
+"crates/kithara-app/src/gui/view.rs:970:4" = 1
 "crates/kithara-assets/src/flush/worker.rs:81:12" = 1
 "crates/kithara-decode/src/factory/probe.rs:33:4" = 1
 "crates/kithara-encode/src/fdk/aac_he_v2.rs:128:4" = 1
@@ -252,9 +252,9 @@ schema_version = 1
 "crates/kithara-app/build.rs:302:20" = 1
 "crates/kithara-app/build.rs:446:19" = 1
 "crates/kithara-app/build.rs:446:36" = 1
-"crates/kithara-app/src/tui/dashboard.rs:219:28" = 1
-"crates/kithara-app/src/tui/dashboard.rs:242:23" = 1
-"crates/kithara-app/src/tui/dashboard.rs:340:36" = 1
+"crates/kithara-app/src/tui/dashboard.rs:218:28" = 1
+"crates/kithara-app/src/tui/dashboard.rs:239:23" = 1
+"crates/kithara-app/src/tui/dashboard.rs:338:36" = 1
 "crates/kithara-app/src/tui/runner.rs:113:33" = 1
 "crates/kithara-app/src/tui/runner.rs:123:33" = 1
 "crates/kithara-app/src/tui/runner.rs:124:65" = 1
