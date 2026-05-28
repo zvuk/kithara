@@ -71,6 +71,14 @@ enum RecvOutcome {
     Item(Fetch<PcmChunk>),
 }
 
+/// Outcome of a single blocking-recv probe pass in
+/// [`Audio::poll_blocking_recv`]. `Wait` means "nothing yet, keep parking".
+enum RecvPoll {
+    Closed,
+    Wait,
+    Item(Fetch<PcmChunk>),
+}
+
 /// Generic audio pipeline running in a separate thread.
 ///
 /// Provides a simple interface for reading decoded PCM audio, compatible
@@ -541,37 +549,54 @@ impl<S> Audio<S> {
     #[kithara::hang_watchdog]
     fn recv_outcome_blocking(&mut self) -> RecvOutcome {
         loop {
-            if let Some(fetch) = self.pcm_rx.try_pop() {
-                hang_reset!();
-                self.wake_worker();
-                return RecvOutcome::Item(fetch);
+            match self.poll_blocking_recv() {
+                RecvPoll::Item(fetch) => {
+                    hang_reset!();
+                    self.wake_worker();
+                    return RecvOutcome::Item(fetch);
+                }
+                RecvPoll::Closed => {
+                    hang_reset!();
+                    return RecvOutcome::Closed;
+                }
+                RecvPoll::Wait => {
+                    hang_tick!();
+                    Self::wait_for_fetch();
+                }
             }
-            if self
-                .cancel
-                .as_ref()
-                .is_some_and(CancellationToken::is_cancelled)
-            {
-                hang_reset!();
-                return RecvOutcome::Closed;
-            }
-            self.wake_worker();
-            self.reader_wake.register_current();
-            if let Some(fetch) = self.pcm_rx.try_pop() {
-                hang_reset!();
-                self.wake_worker();
-                return RecvOutcome::Item(fetch);
-            }
-            if self
-                .cancel
-                .as_ref()
-                .is_some_and(CancellationToken::is_cancelled)
-            {
-                hang_reset!();
-                return RecvOutcome::Closed;
-            }
-            hang_tick!();
-            Self::wait_for_fetch();
         }
+    }
+
+    /// One blocking-recv probe pass: try the PCM ring, then the cancel
+    /// token, register the current thread for wakeups, and retry both once.
+    /// Pure (allocates nothing) so it stays safe on the audio thread; the
+    /// `hang_reset!`/`hang_tick!` side-effects are kept in the watchdog'd
+    /// caller where the detector macros are in scope.
+    #[inline]
+    fn poll_blocking_recv(&mut self) -> RecvPoll {
+        if let Some(fetch) = self.pcm_rx.try_pop() {
+            return RecvPoll::Item(fetch);
+        }
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return RecvPoll::Closed;
+        }
+        self.wake_worker();
+        self.reader_wake.register_current();
+        if let Some(fetch) = self.pcm_rx.try_pop() {
+            return RecvPoll::Item(fetch);
+        }
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return RecvPoll::Closed;
+        }
+        RecvPoll::Wait
     }
 
     #[kithara::hang_watchdog]

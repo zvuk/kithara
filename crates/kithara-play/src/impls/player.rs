@@ -420,10 +420,9 @@ impl PlayerImpl {
             return Vec::new();
         };
 
-        let mut out = Vec::new();
-        while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
-            out.push(format!("{notification:?}"));
-        }
+        let out = std::iter::from_fn(|| state.notification_rx.lock_sync().try_pop())
+            .map(|notification| format!("{notification:?}"))
+            .collect();
         state.drain_trash();
         out
     }

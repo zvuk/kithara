@@ -176,29 +176,75 @@ fn run_loop<N: Node, O: SchedulerObserver>(
     let mut needs_reorder = false;
 
     loop {
-        observer.on_event(SchedulerEvent::PassStart);
-
-        if cancel_and_drain(cancel, cmd_rx, &mut slots, &mut needs_reorder) {
-            return;
+        match run_pass(
+            cmd_rx,
+            cancel,
+            &mut observer,
+            &mut slots,
+            &mut slots_order,
+            &mut needs_reorder,
+        ) {
+            PassControl::Stop => return,
+            PassControl::Park(outcome) => park_after_outcome::<N, O>(wake, outcome),
         }
-
-        refresh_service_classes(&mut slots, &mut needs_reorder);
-
-        if needs_reorder {
-            recompute_slots_order(&slots, &mut slots_order);
-            needs_reorder = false;
-        }
-
-        let outcome = step_all_slots(&mut slots, &slots_order, &mut observer);
-
-        let before = slots.len();
-        slots.retain(|slot| !slot.is_removable());
-        needs_reorder |= slots.len() < before;
-
-        report_outcome(&mut observer, outcome);
-        observer.on_event(SchedulerEvent::PassEnd);
-        park_after_outcome::<N, O>(wake, outcome);
     }
+}
+
+/// Outcome of one scheduler pass: either the loop should exit, or it should
+/// park according to `outcome` before the next pass.
+enum PassControl {
+    Stop,
+    Park(PassOutcome),
+}
+
+/// Run a single scheduler pass: emit pass-boundary events, drain commands
+/// (honouring cancellation), reorder slots, step every node, prune terminal
+/// slots, and report the aggregate outcome. Returns the park decision for the
+/// caller's tick loop.
+fn run_pass<N: Node, O: SchedulerObserver>(
+    cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
+    cancel: &CancellationToken,
+    observer: &mut O,
+    slots: &mut Vec<Slot<N>>,
+    slots_order: &mut Vec<usize>,
+    needs_reorder: &mut bool,
+) -> PassControl {
+    observer.on_event(SchedulerEvent::PassStart);
+
+    if cancel_and_drain(cancel, cmd_rx, slots, needs_reorder) {
+        return PassControl::Stop;
+    }
+
+    reorder_if_needed(slots, slots_order, needs_reorder);
+
+    let outcome = step_all_slots(slots, slots_order, observer);
+
+    prune_terminal_slots(slots, needs_reorder);
+
+    report_outcome(observer, outcome);
+    observer.on_event(SchedulerEvent::PassEnd);
+    PassControl::Park(outcome)
+}
+
+/// Refresh per-slot service classes and recompute the priority order when a
+/// class changed or a slot was added/removed since the last pass.
+fn reorder_if_needed<N: Node>(
+    slots: &mut [Slot<N>],
+    slots_order: &mut Vec<usize>,
+    needs_reorder: &mut bool,
+) {
+    refresh_service_classes(slots, needs_reorder);
+    if *needs_reorder {
+        recompute_slots_order(slots, slots_order);
+        *needs_reorder = false;
+    }
+}
+
+/// Drop terminal slots, flagging a reorder when the slot count shrank.
+fn prune_terminal_slots<N: Node>(slots: &mut Vec<Slot<N>>, needs_reorder: &mut bool) {
+    let before = slots.len();
+    slots.retain(|slot| !slot.is_removable());
+    *needs_reorder |= slots.len() < before;
 }
 
 fn cancel_and_drain<N: Node>(
@@ -263,38 +309,8 @@ fn step_all_slots<N: Node, O: SchedulerObserver>(
         if idx >= slots.len() {
             continue;
         }
-        let slot = &mut slots[idx];
-
-        let start = Instant::now();
-        let result = if let Ok(r) = catch_unwind(AssertUnwindSafe(|| slot.node.tick())) {
-            r
-        } else {
-            warn!(slot_id = slot.id, "scheduler: node panicked");
-            slot.is_terminal = true;
-            slot.node.on_cancel();
-            TickResult::Done
-        };
-        let elapsed = start.elapsed();
-
-        if elapsed > Scheduler::<N, O>::SLOW_TICK_THRESHOLD {
-            observer.on_event(SchedulerEvent::SlowTick {
-                elapsed,
-                slot: slot.id,
-            });
-        }
-
-        if result == TickResult::Done {
-            slot.is_terminal = true;
-        }
-
-        best = match (best, result) {
-            (TickResult::Progress, _) | (_, TickResult::Progress) => TickResult::Progress,
-            (TickResult::Waiting, _) | (_, TickResult::Waiting) => TickResult::Waiting,
-            (TickResult::Backpressured, _) | (_, TickResult::Backpressured) => {
-                TickResult::Backpressured
-            }
-            _ => TickResult::Done,
-        };
+        let result = tick_slot::<N, O>(&mut slots[idx], observer);
+        best = merge_tick(best, result);
     }
 
     match best {
@@ -302,6 +318,48 @@ fn step_all_slots<N: Node, O: SchedulerObserver>(
         TickResult::Waiting => PassOutcome::Waiting,
         TickResult::Backpressured => PassOutcome::Backpressured,
         TickResult::Done => PassOutcome::Idle,
+    }
+}
+
+/// Tick a single slot under panic isolation, report slow ticks, and mark the
+/// slot terminal when its node panicked or finished. Returns the node's
+/// `TickResult` (`Done` when it panicked).
+fn tick_slot<N: Node, O: SchedulerObserver>(slot: &mut Slot<N>, observer: &mut O) -> TickResult {
+    let start = Instant::now();
+    let result = if let Ok(r) = catch_unwind(AssertUnwindSafe(|| slot.node.tick())) {
+        r
+    } else {
+        warn!(slot_id = slot.id, "scheduler: node panicked");
+        slot.is_terminal = true;
+        slot.node.on_cancel();
+        TickResult::Done
+    };
+    let elapsed = start.elapsed();
+
+    if elapsed > Scheduler::<N, O>::SLOW_TICK_THRESHOLD {
+        observer.on_event(SchedulerEvent::SlowTick {
+            elapsed,
+            slot: slot.id,
+        });
+    }
+
+    if result == TickResult::Done {
+        slot.is_terminal = true;
+    }
+
+    result
+}
+
+/// Fold a slot's `TickResult` into the running best-of-pass aggregate using
+/// the precedence Progress > Waiting > Backpressured > Done.
+fn merge_tick(best: TickResult, result: TickResult) -> TickResult {
+    match (best, result) {
+        (TickResult::Progress, _) | (_, TickResult::Progress) => TickResult::Progress,
+        (TickResult::Waiting, _) | (_, TickResult::Waiting) => TickResult::Waiting,
+        (TickResult::Backpressured, _) | (_, TickResult::Backpressured) => {
+            TickResult::Backpressured
+        }
+        _ => TickResult::Done,
     }
 }
 

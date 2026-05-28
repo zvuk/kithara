@@ -44,6 +44,17 @@ pub enum ReadOutcome {
     Failed,
 }
 
+/// Outcome of one [`PlayerResource::fill_scratch_step`] batch read.
+enum ScratchStep {
+    /// Wrote `n` frames (`n > 0`); keep filling.
+    Filled(usize),
+    /// The underlying reader reached EOF; stop and report EOF upstream.
+    Eof,
+    /// No frames available this pass (scratch full, pending, or error);
+    /// stop without signalling EOF.
+    Stop,
+}
+
 impl PlayerResource {
     /// Buffer duration divisor: `sample_rate` / `BUFFER_DURATION_DIVISOR` gives ~200ms of frames.
     const BUFFER_DURATION_DIVISOR: usize = 5;
@@ -93,39 +104,57 @@ impl PlayerResource {
         let mut eof_reached = self.eof_seen;
 
         while target_frames > self.write_len && !eof_reached {
-            let avail = self.channel_buffers[0].len() - self.write_pos;
-            if avail == 0 {
-                break;
-            }
-
-            let channel_buffers = &mut self.channel_buffers;
-            let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
-            let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
-            let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
-            let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
-
-            let n = match self.resource.read_planar(&mut planar) {
-                Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => count.get(),
-                Ok(kithara_audio::ReadOutcome::Pending { .. }) => 0,
-                Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
-                    self.eof_seen = true;
+            match self.fill_scratch_step() {
+                ScratchStep::Filled(n) => {
+                    self.write_len += n;
+                    self.write_pos += n;
+                }
+                ScratchStep::Eof => {
                     eof_reached = true;
-                    0
+                    break;
                 }
-                Err(err) => {
-                    warn!(src = %self.src, error = %err, "PlayerResource: decode error");
-                    self.failed = true;
-                    0
-                }
-            };
-            if n == 0 {
-                break;
+                ScratchStep::Stop => break,
             }
-            self.write_len += n;
-            self.write_pos += n;
         }
 
         eof_reached
+    }
+
+    /// Read one batch into the free tail of the scratch buffers.
+    ///
+    /// Stack-only (the planar slice array borrows the existing buffers — no
+    /// heap allocation), so it stays safe on the audio thread. `#[inline]`
+    /// keeps the codegen identical to the inlined `while` body. The `break`
+    /// terminators live in [`fill_scratch`](Self::fill_scratch); this returns
+    /// the per-step outcome the loop dispatches on.
+    #[inline]
+    fn fill_scratch_step(&mut self) -> ScratchStep {
+        let avail = self.channel_buffers[0].len() - self.write_pos;
+        if avail == 0 {
+            return ScratchStep::Stop;
+        }
+
+        let channel_buffers = &mut self.channel_buffers;
+        let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
+        let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
+        let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
+        let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
+
+        match self.resource.read_planar(&mut planar) {
+            Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => {
+                ScratchStep::Filled(count.get())
+            }
+            Ok(kithara_audio::ReadOutcome::Pending { .. }) => ScratchStep::Stop,
+            Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
+                self.eof_seen = true;
+                ScratchStep::Eof
+            }
+            Err(err) => {
+                warn!(src = %self.src, error = %err, "PlayerResource: decode error");
+                self.failed = true;
+                ScratchStep::Stop
+            }
+        }
     }
 
     /// Remaining buffered frames when the wrapped reader has reached EOF.
