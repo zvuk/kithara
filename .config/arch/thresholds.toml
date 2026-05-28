@@ -128,6 +128,17 @@ exempt_crates = [
     "kithara-probe-macros",
 ]
 
+[cancel_hierarchy]
+# Crates whose production *is* test scaffolding (helpers, mocks): their
+# hard-coded `CancellationToken::new()` calls are indistinguishable from
+# test fixtures and don't violate the cancel-hierarchy contract.
+exempt_crates = [
+    "kithara-test-utils",
+    "kithara-test-macros",
+    "kithara-probe-macros",
+    "xtask",
+]
+
 [shared_state]
 warn = 3
 deny = 5

@@ -435,66 +435,25 @@ impl Default for ModuleFanOutThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NoLibStaticsThreshold {
     /// Crate names exempt from the rule. App / FFI / wasm / xtask / test
     /// support crates legitimately own singletons; lib crates do not.
+    /// Project-specific — supplied via config.
     #[serde(default)]
     pub(crate) exempt_crates: Vec<String>,
 }
 
-impl Default for NoLibStaticsThreshold {
-    fn default() -> Self {
-        Self {
-            exempt_crates: default_no_lib_statics_exempt_crates(),
-        }
-    }
-}
-
-fn default_no_lib_statics_exempt_crates() -> Vec<String> {
-    [
-        "kithara-app",
-        "kithara-ffi",
-        "xtask",
-        "kithara-test-utils",
-        "kithara-test-macros",
-        "kithara-probe-macros",
-    ]
-    .iter()
-    .map(|s| (*s).to_string())
-    .collect()
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CancelHierarchyThreshold {
     /// Crates whose production *is* test scaffolding (helpers, mocks).
     /// Their hard-coded `CancellationToken::new()` calls are
     /// indistinguishable from test fixtures and don't violate the
-    /// hierarchy contract.
-    #[serde(default = "default_cancel_hierarchy_exempt_crates")]
+    /// hierarchy contract. Project-specific — supplied via config.
+    #[serde(default)]
     pub(crate) exempt_crates: Vec<String>,
-}
-
-impl Default for CancelHierarchyThreshold {
-    fn default() -> Self {
-        Self {
-            exempt_crates: default_cancel_hierarchy_exempt_crates(),
-        }
-    }
-}
-
-fn default_cancel_hierarchy_exempt_crates() -> Vec<String> {
-    [
-        "kithara-test-utils",
-        "kithara-test-macros",
-        "kithara-probe-macros",
-        "xtask",
-    ]
-    .iter()
-    .map(|s| (*s).to_string())
-    .collect()
 }
 
 #[derive(Debug, Deserialize)]
