@@ -8,15 +8,6 @@ repository.workspace = true
 description = "Cross-platform FFI adapter for the kithara audio player"
 publish = false
 
-# kithara-play is consumed by:
-#   - `src/android_test.rs` (target_os = "android" + feature = "test")
-#   - `src/web/*` (target_arch = "wasm32")
-# On native host targets the modules aren't compiled, so cargo-machete on
-# a macOS/linux dev machine flags the dep as unused — suppress it
-# explicitly.
-[package.metadata.cargo-machete]
-ignored = ["kithara-play"]
-
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 
@@ -30,6 +21,11 @@ workspace = true
 
 [dependencies]
 # Cross-platform deps (used by both the native UniFFI modules and `src/web`).
+# `kithara-play` is the canonical owner of the shared play types
+# (`PlayError`, `PlayerStatus`, `TimeRange`, …) that `core::types` mirrors,
+# so the cross-platform `AudioPlayer` facade resolves them from one crate on
+# both targets. The native arm pulls a host backend below; the wasm arm pulls
+# the web-audio backend in the wasm32 target block.
 kithara-platform = { workspace = true }
 kithara-events = { workspace = true }
 kithara-test-macros = { workspace = true }
@@ -75,7 +71,7 @@ dev = []
 # Exposes JNI entrypoints that render through the offline firewheel
 # backend and write WAV output, bypassing cpal/AAudio. Never ship in a
 # release AAR.
-test = ["kithara/probe", "dep:kithara-play", "dep:tokio", "dep:cpal"]
+test = ["kithara/probe", "kithara-play/probe", "dep:tokio", "dep:cpal"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # `default-features = false` on kithara/kithara-queue: their defaults pull
@@ -85,9 +81,11 @@ test = ["kithara/probe", "dep:kithara-play", "dep:tokio", "dep:cpal"]
 kithara = { workspace = true, default-features = false, features = ["file", "hls"] }
 kithara-drm = { workspace = true }
 kithara-queue = { workspace = true, default-features = false, features = ["backend-cpal"] }
-# Optional direct dep so the `test` feature can enable `test-utils` on
-# kithara-play (needed for `init_offline_backend` / offline module).
-kithara-play = { workspace = true, optional = true, default-features = false, features = ["backend-cpal", "probe"] }
+# Direct dep so the cross-platform `core::types` / `core::item` can resolve
+# the shared play types from `kithara_play` on native too (the wasm arm pulls
+# the same crate with the web-audio backend). The `probe` feature is gated
+# behind the crate's own `test` feature below.
+kithara-play = { workspace = true, default-features = false, features = ["backend-cpal"] }
 bytes = { workspace = true }
 dashmap = { workspace = true }
 rand = { workspace = true }
@@ -119,6 +117,14 @@ kithara-queue = { workspace = true, default-features = false, features = ["backe
 console_error_panic_hook = { workspace = true }
 js-sys = { workspace = true }
 num-traits = { workspace = true }
+# `core::item` derives the per-item `uuid_i64` handle via UUIDv5 (pure SHA-1,
+# no RNG) — the workspace dep is `v5`-only, so no `getrandom` wasm backend is
+# pulled.
+uuid = { workspace = true }
+# Wraps the `!Send` `js_sys::Function` behind a `Send + Sync` guard (with a
+# runtime same-thread assertion) so the JS-backed observer impls satisfy the
+# `core::observer` traits' real `Send + Sync` supertraits on wasm.
+send_wrapper = { workspace = true }
 tracing-log = { workspace = true }
 tracing-wasm = { workspace = true }
 wasm-bindgen = { workspace = true }

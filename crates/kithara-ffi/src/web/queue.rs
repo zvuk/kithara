@@ -1,203 +1,151 @@
 use std::sync::LazyLock;
 
 use js_sys::Promise;
-use kithara_queue::{TrackId, Transition};
-use num_traits::cast;
 use wasm_bindgen::prelude::*;
 
-use crate::web::{commands::WorkerCmd, inner::WasmInner};
+use crate::player::AudioPlayer;
 
-/// Encode a [`TrackId`] as the JS `f64` the bindings hand back. Track ids
-/// are allocated monotonically from `0` and stay far below `2^53`, so the
-/// conversion is exact; `0.0` is a safe floor for the impossible overflow.
-fn id_to_f64(id: TrackId) -> f64 {
-    cast::<u64, f64>(id.as_u64()).unwrap_or(0.0)
+/// Process-wide [`AudioPlayer`] backing the deprecated `queue_*`
+/// wasm-bindgen surface. Superseded by the `#[wasm_bindgen]` methods on
+/// [`AudioPlayer`] itself (see [`crate::web::surface`]); these free
+/// functions remain as thin shims until the JS demo migrates (Wave 6).
+static PLAYER: LazyLock<AudioPlayer> = LazyLock::new(AudioPlayer::new_js);
+
+fn player() -> &'static AudioPlayer {
+    &PLAYER
 }
 
-/// Decode a [`TrackId`] from the JS `f64` convention. Non-finite or
-/// negative inputs map to `TrackId(0)`; callers that need "no id" use
-/// [`decode_optional_id`].
-fn id_from_f64(raw: f64) -> TrackId {
-    TrackId(cast::<f64, u64>(raw.max(0.0)).unwrap_or(0))
+fn resolved(value: impl Into<JsValue>) -> Promise {
+    Promise::resolve(&value.into())
 }
 
-/// Process-wide [`WasmInner`] singleton backing the multi-track `queue_*`
-/// wasm-bindgen surface. Parallel to the legacy
-/// [`Player`](crate::web::player) singleton: both drive the same engine
-/// worker (which owns the `Arc<Queue>`), but through separate command
-/// entry points until Wave 4 merges them behind the
-/// [`AudioPlayer`](crate::player) facade.
-static QUEUE: LazyLock<WasmInner> = LazyLock::new(WasmInner::default);
-
-fn queue() -> &'static WasmInner {
-    &QUEUE
-}
-
-/// Boot the engine worker. Resolves once the worker spawn is requested.
+/// Boot the engine worker.
+/// Deprecated: use `new AudioPlayer()`.
 #[wasm_bindgen]
 pub fn queue_new() -> Promise {
-    match queue().start() {
-        Ok(()) => Promise::resolve(&JsValue::UNDEFINED),
-        Err(err) => Promise::reject(&err),
-    }
+    let _ = player();
+    Promise::resolve(&JsValue::UNDEFINED)
 }
 
-/// Append a track to the tail of the queue. Returns the allocated track id.
+/// Append a track to the tail of the queue. Returns the allocated id.
 ///
 /// # Errors
-/// Returns a JS error if the engine command channel is unavailable.
+/// Returns a JS error if the queue rejects the item.
+/// Deprecated: use `AudioPlayer.append`.
 #[wasm_bindgen]
 pub fn queue_append(url: String) -> Result<f64, JsValue> {
-    let id = TrackId::allocate();
-    queue().dispatch(WorkerCmd::Append { id, url })?;
-    Ok(id_to_f64(id))
+    player().append_js(url)
 }
 
-/// Insert a track after `after_id` (or at the head when `after_id` is
-/// negative). Returns a `Promise` that resolves with the new track id once
-/// the worker confirms placement, or rejects on `UnknownTrackId`.
+/// Insert a track after `after_id` (or at the head when negative).
+///
+/// # Errors
+/// Returns a JS error if `after_id` is unknown.
+/// Deprecated: use `AudioPlayer.insert`.
 #[wasm_bindgen]
 pub fn queue_insert(url: String, after_id: f64) -> Result<Promise, JsValue> {
-    let id = TrackId::allocate();
-    let after = decode_optional_id(after_id);
-    let request_id = crate::web::js::next_request_id();
-    queue().dispatch(WorkerCmd::Insert {
-        id,
-        url,
-        after,
-        request_id,
-    })?;
-    crate::web::js::reply_promise_with_value(request_id, id_to_f64(id))
+    player().insert_js(url, after_id).map(resolved)
 }
 
-/// Remove a track by id. Returns a `Promise` that resolves once the worker
-/// confirms removal, or rejects on `UnknownTrackId`.
+/// Remove a track by id.
+///
+/// # Errors
+/// Returns a JS error if the id is unknown.
+/// Deprecated: use `AudioPlayer.remove`.
 #[wasm_bindgen]
 pub fn queue_remove(id: f64) -> Result<Promise, JsValue> {
-    let id = id_from_f64(id);
-    let request_id = crate::web::js::next_request_id();
-    queue().dispatch(WorkerCmd::Remove { id, request_id })?;
-    crate::web::js::reply_promise(request_id)
+    player()
+        .remove_js(id)
+        .map(|()| resolved(JsValue::UNDEFINED))
 }
 
-/// Replace the track at `index`. Returns a `Promise` resolving with the new
-/// track id, or rejecting if the index is out of range.
+/// Replace the track at `index`.
+///
+/// # Errors
+/// Returns a JS error if `index` is out of range.
+/// Deprecated: use `AudioPlayer.replaceItem`.
 #[wasm_bindgen]
 pub fn queue_replace(index: u32, url: String) -> Result<Promise, JsValue> {
-    let id = TrackId::allocate();
-    let request_id = crate::web::js::next_request_id();
-    queue().dispatch(WorkerCmd::Replace {
-        index,
-        id,
-        url,
-        request_id,
-    })?;
-    crate::web::js::reply_promise_with_value(request_id, id_to_f64(id))
+    player().replace_item_js(index, url).map(resolved)
 }
 
-/// Select (start playing) a queued track with an immediate cut. Returns a
-/// `Promise` resolving once the worker accepts the selection.
+/// Select (start playing) a queued track with an immediate cut.
+///
+/// # Errors
+/// Returns a JS error if `index` is out of range.
+/// Deprecated: use `AudioPlayer.selectItem`.
 #[wasm_bindgen]
-pub fn queue_select(id: f64) -> Result<Promise, JsValue> {
-    let id = id_from_f64(id);
-    let request_id = crate::web::js::next_request_id();
-    queue().dispatch(WorkerCmd::SelectQueue {
-        id,
-        transition: Transition::None,
-        request_id,
-    })?;
-    crate::web::js::reply_promise(request_id)
+pub fn queue_select(index: u32) -> Result<Promise, JsValue> {
+    player()
+        .select_item_js(index)
+        .map(|()| resolved(JsValue::UNDEFINED))
 }
 
 /// Remove every track from the queue.
-///
-/// # Errors
-/// Returns a JS error if the engine command channel is unavailable.
+/// Deprecated: use `AudioPlayer.removeAllItems`.
 #[wasm_bindgen]
-pub fn queue_remove_all() -> Result<(), JsValue> {
-    queue().dispatch(WorkerCmd::RemoveAll)
+pub fn queue_remove_all() {
+    player().remove_all_items_js();
 }
 
 /// Start playback.
-///
-/// # Errors
-/// Returns a JS error if the engine command channel is unavailable.
+/// Deprecated: use `AudioPlayer.play`.
 #[wasm_bindgen]
-pub fn queue_play() -> Result<(), JsValue> {
-    queue().play()
+pub fn queue_play() {
+    player().play_js();
 }
 
 /// Pause playback.
-///
-/// # Errors
-/// Returns a JS error if the engine command channel is unavailable.
+/// Deprecated: use `AudioPlayer.pause`.
 #[wasm_bindgen]
-pub fn queue_pause() -> Result<(), JsValue> {
-    queue().pause()
+pub fn queue_pause() {
+    player().pause_js();
 }
 
 /// Pause and clear the queue.
-///
-/// # Errors
-/// Returns a JS error if the engine command channel is unavailable.
+/// Deprecated: use `AudioPlayer.stop`.
 #[wasm_bindgen]
-pub fn queue_stop() -> Result<(), JsValue> {
-    queue().stop()
+pub fn queue_stop() {
+    player().stop_js();
 }
 
 /// Seek the current track to `position_ms`.
-///
-/// # Errors
-/// Returns a JS error if the engine command channel is unavailable.
+/// Deprecated: use `AudioPlayer.seek`.
 #[wasm_bindgen]
-pub fn queue_seek(position_ms: f64) -> Result<(), JsValue> {
-    /// Milliseconds per second.
-    const MS_PER_SECOND: f64 = 1000.0;
-    queue().seek(position_ms / MS_PER_SECOND)
+pub fn queue_seek(position_ms: f64) {
+    player().seek_js(position_ms);
 }
 
 /// Set the output volume (0.0..=1.0).
-///
-/// # Errors
-/// Returns a JS error if the engine command channel is unavailable.
+/// Deprecated: use `AudioPlayer.setVolume`.
 #[wasm_bindgen]
-pub fn queue_set_volume(volume: f32) -> Result<(), JsValue> {
-    queue().set_volume(volume)
+pub fn queue_set_volume(volume: f32) {
+    player().set_volume_js(volume);
 }
 
 /// Set the crossfade duration in seconds.
-///
-/// # Errors
-/// Returns a JS error if the engine command channel is unavailable.
+/// Deprecated: use `AudioPlayer.setCrossfadeSeconds`.
 #[wasm_bindgen]
-pub fn queue_set_crossfade_seconds(seconds: f32) -> Result<(), JsValue> {
-    queue().set_crossfade_duration(seconds)
+pub fn queue_set_crossfade_seconds(seconds: f32) {
+    player().set_crossfade_seconds_js(seconds);
 }
 
 /// Set the gain for an EQ band.
 ///
 /// # Errors
-/// Returns a JS error if the engine command channel is unavailable.
+/// Returns a JS error if the engine rejects the change.
+/// Deprecated: use `AudioPlayer.setEqGain`.
 #[wasm_bindgen]
 pub fn queue_set_eq_gain(band: u32, gain_db: f32) -> Result<(), JsValue> {
-    queue().set_eq_gain(band, gain_db)
+    player().set_eq_gain_js(band, gain_db)
 }
 
 /// Reset every EQ band to 0 dB.
 ///
 /// # Errors
-/// Returns a JS error if the engine command channel is unavailable.
+/// Returns a JS error if the engine rejects the change.
+/// Deprecated: use `AudioPlayer.resetEq`.
 #[wasm_bindgen]
 pub fn queue_reset_eq() -> Result<(), JsValue> {
-    queue().reset_eq()
-}
-
-/// Decode an optional `TrackId` from the JS `f64` convention: negative
-/// means `None` (insert at head), non-negative is the id.
-fn decode_optional_id(raw: f64) -> Option<TrackId> {
-    if raw < 0.0 {
-        None
-    } else {
-        Some(id_from_f64(raw))
-    }
+    player().reset_eq_js()
 }

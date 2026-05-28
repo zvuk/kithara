@@ -65,4 +65,20 @@ pub(crate) enum WorkerCmd {
     },
     /// Clear every track from the queue.
     RemoveAll,
+    /// Wave-5 placeholders. The control surface accepts these on wasm and
+    /// forwards them so the worker can acknowledge (and log) the request,
+    /// but the DRM / ABR / network plumbing they drive is not wired yet —
+    /// the worker logs them as not-implemented rather than silently
+    /// dropping the call. See the Wave 4 handoff.
+    SetAbrModeTodo {
+        variant_index: Option<u32>,
+    },
+    PeakBitrateTodo {
+        wifi_bps: f64,
+        cellular_bps: f64,
+    },
+    AuthTokenTodo {
+        token: String,
+    },
+    SetupHlsAesTodo,
 }

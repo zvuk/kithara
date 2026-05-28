@@ -22,21 +22,46 @@ impl WorkerBridge {
         self.cmd_tx.lock_sync()
     }
 
+    /// Live playback position (seconds) read from the worker's audio
+    /// session bridge. `0.0` when no item is loaded.
+    pub(crate) fn position_secs(&self) -> f64 {
+        let _ = self;
+        wasm_support::bridge_position_secs()
+    }
+
+    /// Current item duration (seconds) read from the worker's audio
+    /// session bridge. `0.0` when unknown.
+    pub(crate) fn duration_secs(&self) -> f64 {
+        let _ = self;
+        wasm_support::bridge_duration_secs()
+    }
+
+    /// Whether the worker's audio session is currently playing.
+    pub(crate) fn is_playing(&self) -> bool {
+        let _ = self;
+        wasm_support::bridge_is_playing()
+    }
+
+    /// Id of the worker's current track, if the worker has a synchronous
+    /// read-back for it. Not yet wired (Wave 5): the worker owns the
+    /// current-track cursor and does not mirror it to the main thread, so
+    /// this returns `None` and the facade reports "no current item".
+    pub(crate) fn current_track_id(&self) -> Option<kithara_queue::TrackId> {
+        let _ = self;
+        None
+    }
+
     /// Boot the engine worker once. Idempotent: subsequent calls return
     /// early while a live channel exists. Mirrors
     /// [`Player::ensure_worker_started`](crate::web::player).
-    ///
-    /// # Errors
-    /// Returns a [`JsValue`] error if the worker spawn or session bootstrap
-    /// fails.
-    pub(crate) fn ensure_worker_started(&self) -> Result<(), JsValue> {
+    pub(crate) fn ensure_worker_started(&self) {
         if self.lock_cmd_tx().is_some() {
-            return Ok(());
+            return;
         }
 
         let _start_guard = self.start_lock.lock_sync();
         if self.lock_cmd_tx().is_some() {
-            return Ok(());
+            return;
         }
 
         wasm_support::ensure_main_session();
@@ -50,7 +75,6 @@ impl WorkerBridge {
             crate::web::worker::worker_main(cmd_rx);
         });
         std::mem::forget(worker);
-        Ok(())
     }
 
     /// Forward a command to the worker, respawning the worker once if the
@@ -61,7 +85,7 @@ impl WorkerBridge {
     /// Returns a [`JsValue`] error if the command channel cannot be
     /// (re)established.
     pub(crate) fn send(&self, cmd: WorkerCmd) -> Result<(), JsValue> {
-        self.ensure_worker_started()?;
+        self.ensure_worker_started();
 
         let tx = self
             .lock_cmd_tx()
@@ -73,7 +97,7 @@ impl WorkerBridge {
         }
 
         *self.lock_cmd_tx() = None;
-        self.ensure_worker_started()?;
+        self.ensure_worker_started();
         let tx = self
             .lock_cmd_tx()
             .as_ref()

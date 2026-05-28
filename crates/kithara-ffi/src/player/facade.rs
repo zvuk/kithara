@@ -8,13 +8,15 @@ use crate::{
 };
 
 /// FFI-facing audio player. A thin facade over the platform-selected
-/// [`Inner`] engine (`NativeInner` on Apple / Android). Every
-/// `UniFFI`-exported method delegates straight to `inner`; the facade
-/// only owns the `UniFFI` object identity and the `Drop` shutdown
-/// pulse.
+/// [`Inner`] engine (`NativeInner` on Apple / Android, `WasmInner` on
+/// wasm32). Every exported method delegates straight to `inner`; the
+/// facade only owns the object identity and (on native) the `Drop`
+/// shutdown pulse. The JS control surface lives in
+/// [`crate::web::surface`].
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct AudioPlayer {
-    inner: Inner,
+    pub(crate) inner: Inner,
 }
 
 /// Methods exported across the FFI boundary.

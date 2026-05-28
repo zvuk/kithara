@@ -16,21 +16,20 @@ use kithara_events::TrackId;
 #[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
 uniffi::custom_type!(TrackId, u64, { remote });
 
-#[cfg(not(target_arch = "wasm32"))]
 mod core;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod player;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use core::registry;
-#[cfg(not(target_arch = "wasm32"))]
 pub use core::{config, item, observer, types};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use native::{FFI_RUNTIME, Inner, config as native_config, event_bridge};
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{cipher, logging};
+#[cfg(target_arch = "wasm32")]
+pub(crate) use web::inner::Inner;

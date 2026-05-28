@@ -1,14 +1,18 @@
-use std::{collections::HashMap, sync::Arc};
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use kithara_events::TrackId;
 use kithara_platform::Mutex;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::native::item_bridge::ItemEventBridge;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::types::FfiAbrMode;
 use crate::{
-    native::item_bridge::ItemEventBridge,
     observer::{ItemLoadCallback, ItemObserver},
-    types::{FfiAbrMode, FfiItemConfig, FfiItemLoadResult, FfiTimeRange},
+    types::{FfiItemConfig, FfiItemLoadResult, FfiTimeRange},
 };
 
 /// Cached subset of item state surfaced through synchronous getters
@@ -42,13 +46,19 @@ pub struct AudioPlayerItem {
     pub(crate) state: Arc<Mutex<ItemState>>,
     /// Scoped event bus — set by `AudioPlayer::insert` so per-resource
     /// events (Hls/File/Audio) published during `Resource::new` are
-    /// captured even when [`set_observer`] is called later.
+    /// captured even when [`set_observer`] is called later. Native-only:
+    /// the wasm worker owns the queue and its event bus.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) bus: Mutex<Option<kithara_events::EventBus>>,
     /// Inserted-into-queue flag — flipped by `AudioPlayer::insert` so
     /// [`Self::load`] can tell "still detached" from "loaded enough to
     /// answer playable". Pre-insert / post-remove value is `false`.
     pub(crate) inserted: Mutex<bool>,
     config: FfiItemConfig,
+    /// Per-item event bridge translating resource events into
+    /// [`ItemObserver`] callbacks. Native-only: the wasm worker routes
+    /// item events through the main-thread event router instead (Wave 5).
+    #[cfg(not(target_arch = "wasm32"))]
     event_bridge: Mutex<Option<ItemEventBridge>>,
     observer: Mutex<Option<Arc<dyn ItemObserver>>>,
     /// Process-wide monotonic id allocated at construction. Surfaces
@@ -81,8 +91,10 @@ impl AudioPlayerItem {
             config,
             id,
             uuid,
+            #[cfg(not(target_arch = "wasm32"))]
             event_bridge: Mutex::new(None),
             observer: Mutex::new(None),
+            #[cfg(not(target_arch = "wasm32"))]
             bus: Mutex::new(None),
             inserted: Mutex::new(false),
             state: Arc::new(Mutex::new(ItemState {
@@ -203,10 +215,12 @@ impl AudioPlayerItem {
 
 /// Internal methods not exported across FFI.
 impl AudioPlayerItem {
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn abr_mode(&self) -> Option<FfiAbrMode> {
         self.config.abr_mode
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn headers(&self) -> Option<HashMap<String, String>> {
         self.config.headers.clone()
     }
@@ -218,6 +232,7 @@ impl AudioPlayerItem {
     /// (Re)subscribe the bridge to the currently-attached scoped bus.
     /// Called from `set_observer` and from `AudioPlayer::insert` right
     /// after the bus is attached.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn restart_bridge(&self) {
         let Some(observer) = self.observer() else {
             *self.event_bridge.lock_sync() = None;
@@ -232,10 +247,17 @@ impl AudioPlayerItem {
             observer,
             None,
             Arc::clone(&self.state),
-            CancellationToken::new(), // kithara:cancel:bridge
+            tokio_util::sync::CancellationToken::new(), // kithara:cancel:bridge
         );
         *self.event_bridge.lock_sync() = Some(bridge);
     }
+
+    /// Wasm has no per-item bus bridge yet: the worker owns the queue and
+    /// routes item events through the main-thread event router (Wave 5).
+    /// The observer is still recorded by [`Self::set_observer`] so the
+    /// router can dispatch to it once that path lands.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn restart_bridge(&self) {}
 
     /// Strongly-typed view of [`Self::audio_id`] for queue calls that
     /// take a [`TrackId`]. The value is identical — just the wrapper

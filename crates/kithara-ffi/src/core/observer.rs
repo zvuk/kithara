@@ -1,5 +1,14 @@
 use crate::types::{FfiItemEvent, FfiPlayerEvent};
 
+/// Local shim so `#[kithara::mock]` resolves on wasm, which does not
+/// depend on the `kithara` facade crate (only on `kithara-test-macros`).
+/// On native the real `kithara` crate is in scope and provides the macro,
+/// so the shim is wasm-only to avoid an ambiguous-name conflict.
+#[cfg(target_arch = "wasm32")]
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
 /// Receives player-level state changes from Rust.
 ///
 /// All calls happen on an arbitrary background thread.

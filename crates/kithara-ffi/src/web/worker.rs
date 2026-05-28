@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::rc::Rc;
 
 use kithara_events::{Event, QueueEvent, TrackStatus};
 use kithara_platform::{
@@ -31,11 +31,12 @@ pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
 
     task_spawn(async move {
         clog!("[WORKER] spawn: building Queue");
-        let queue = Arc::new(Queue::new(QueueConfig::default()));
+        let queue = Rc::new(Queue::new(QueueConfig::default()));
         queue.set_crossfade_duration(CROSSFADE_SECONDS);
         clog!("[WORKER] spawn: Queue ready, starting tick loop + command loop");
 
-        spawn_tick_loop(Arc::clone(&queue));
+        spawn_tick_loop(Rc::clone(&queue));
+        crate::web::observer::source::spawn(&queue);
 
         while let Ok(cmd) = cmd_rx.recv_async().await {
             dispatch_cmd(cmd, &queue);
@@ -47,7 +48,7 @@ pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
 /// Spawn the periodic `Queue::tick` loop. `tick` is synchronous; the
 /// loop awaits a `setTimeout`-backed `sleep` between ticks so it yields
 /// to the worker's task executor without busy-spinning.
-fn spawn_tick_loop(queue: Arc<Queue>) {
+fn spawn_tick_loop(queue: Rc<Queue>) {
     /// Tick cadence for the queue's internal `tick()` loop, in
     /// milliseconds. Drives auto-advance / crossfade arming and drains
     /// engine events. Wall clock; not tied to the audio-thread process
@@ -64,7 +65,7 @@ fn spawn_tick_loop(queue: Arc<Queue>) {
     });
 }
 
-fn dispatch_cmd(cmd: WorkerCmd, queue: &Arc<Queue>) {
+fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>) {
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
@@ -76,7 +77,7 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Arc<Queue>) {
 
     match cmd {
         WorkerCmd::SelectTrack { url, request_id } => {
-            spawn_play_single(Arc::clone(queue), url, request_id);
+            spawn_play_single(Rc::clone(queue), url, request_id);
         }
         WorkerCmd::Play => queue.play(),
         WorkerCmd::Pause => queue.pause(),
@@ -144,6 +145,27 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Arc<Queue>) {
             crate::web::js::send_reply(request_id, result);
         }
         WorkerCmd::RemoveAll => queue.clear(),
+        WorkerCmd::SetAbrModeTodo { variant_index } => {
+            clog!("[WORKER] SetAbrMode({variant_index:?}) not implemented on wasm yet (Wave 5)");
+        }
+        WorkerCmd::PeakBitrateTodo {
+            wifi_bps,
+            cellular_bps,
+        } => {
+            clog!(
+                "[WORKER] PeakBitrate(wifi={wifi_bps}, cellular={cellular_bps}) not implemented on \
+                 wasm yet (Wave 5)"
+            );
+        }
+        WorkerCmd::AuthTokenTodo { token } => {
+            clog!(
+                "[WORKER] AuthToken(present={}) not implemented on wasm yet (Wave 5)",
+                !token.is_empty()
+            );
+        }
+        WorkerCmd::SetupHlsAesTodo => {
+            clog!("[WORKER] setup_hls_aes not implemented on wasm yet (Wave 5)");
+        }
     }
 }
 
@@ -152,14 +174,14 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Arc<Queue>) {
 /// reaches [`TrackStatus::Loaded`] (preserving the pre-Wave-3 contract
 /// where `player_select_track` resolves when playback is ready) or
 /// rejects on [`TrackStatus::Failed`].
-fn spawn_play_single(queue: Arc<Queue>, url: String, request_id: u32) {
+fn spawn_play_single(queue: Rc<Queue>, url: String, request_id: u32) {
     task_spawn(async move {
         let result = play_single(&queue, url).await;
         crate::web::js::send_reply(request_id, result);
     });
 }
 
-async fn play_single(queue: &Arc<Queue>, url: String) -> Result<(), String> {
+async fn play_single(queue: &Rc<Queue>, url: String) -> Result<(), String> {
     clog!("[WORKER] select_track: url={url}");
     queue.clear();
     let mut rx = queue.subscribe();
@@ -195,7 +217,7 @@ async fn play_single(queue: &Arc<Queue>, url: String) -> Result<(), String> {
 /// Mirror of [`NativeInner::replace_item`](crate::native::inner::NativeInner::replace_item):
 /// insert the new track after the predecessor of `index`, then drop the
 /// old track at `index`.
-fn replace_track(queue: &Arc<Queue>, index: u32, id: TrackId, url: String) -> Result<(), String> {
+fn replace_track(queue: &Rc<Queue>, index: u32, id: TrackId, url: String) -> Result<(), String> {
     let idx = index as usize;
     let tracks = queue.tracks();
     let old = tracks
