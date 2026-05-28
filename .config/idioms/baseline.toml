@@ -3,11 +3,6 @@ schema_version = 1
 [accumulator_loops]
 "crates/kithara-decode/src/gapless/trimmer/core.rs:142:12" = 1
 "crates/kithara-decode/src/gapless/trimmer/core.rs:443:12" = 1
-"crates/kithara-hls/src/loading/size_estimation.rs:95:8" = 1
-
-[box_concrete_type]
-"crates/kithara-decode/src/android/media_extractor.rs:70:22" = 1
-"crates/kithara-decode/src/apple/audio_file.rs:73:22" = 1
 
 [fat_loop_body]
 "crates/kithara-app/build.rs:404:while_body" = 1
@@ -273,10 +268,6 @@ schema_version = 1
 "crates/kithara-stream/src/dl/response.rs:112:61" = 1
 "crates/kithara-stream/src/stream.rs:375:70" = 1
 "crates/kithara-stream/src/stream.rs:408:68" = 1
-
-[loop_flag_accumulator]
-"crates/kithara-app/src/tui/runner.rs:98:tick_error_logged" = 1
-"crates/kithara-queue/src/loader.rs:134:marked" = 1
 
 [retry_fallback]
 "crates/kithara-audio/src/pipeline/track_fsm.rs:51:attempt" = 1

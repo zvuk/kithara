@@ -1,7 +1,7 @@
 use anyhow::Result;
 use syn::{
-    BinOp, Block, Expr, ExprBinary, ExprBreak, ExprContinue, ExprForLoop, ExprIf, ExprMethodCall,
-    ExprReturn, Stmt,
+    BinOp, Block, Expr, ExprAwait, ExprBinary, ExprBreak, ExprContinue, ExprForLoop, ExprIf,
+    ExprMethodCall, ExprReturn, Stmt,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -110,6 +110,9 @@ fn classify_loop(cfg: &AccumulatorLoopsConfig, e: &ExprForLoop) -> Option<Patter
     if cfg.ignore_with_break && body_has_jump(&e.body) {
         return None;
     }
+    if body_has_await(&e.body) {
+        return None;
+    }
     let stmts = &e.body.stmts;
     let pat = match stmts.len() {
         1 => classify_single_stmt(&stmts[0])?,
@@ -204,6 +207,34 @@ fn body_has_jump(b: &Block) -> bool {
     v.found
 }
 
+/// The accumulated expression contains an `.await`, so the loop is a
+/// *sequential async* accumulation. There is no pure `.map().collect()` /
+/// `.map().sum()` equivalent: rewriting it requires `futures::stream`
+/// (`stream::iter(..).then(..).collect().await`), which changes the
+/// concurrency model and pulls in a dependency. Skip it. Nested closures
+/// and nested loops own their own `.await`, so they are not descended
+/// into — only an await in this loop's own body counts.
+fn body_has_await(b: &Block) -> bool {
+    let mut v = AwaitFinder { found: false };
+    v.visit_block(b);
+    v.found
+}
+
+struct AwaitFinder {
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for AwaitFinder {
+    fn visit_expr_await(&mut self, _: &'ast ExprAwait) {
+        self.found = true;
+    }
+
+    fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {}
+    fn visit_expr_for_loop(&mut self, _: &'ast ExprForLoop) {}
+    fn visit_expr_loop(&mut self, _: &'ast syn::ExprLoop) {}
+    fn visit_expr_while(&mut self, _: &'ast syn::ExprWhile) {}
+}
+
 struct JumpFinder {
     found: bool,
 }
@@ -225,4 +256,67 @@ impl<'ast> Visit<'ast> for JumpFinder {
     fn visit_expr_for_loop(&mut self, _: &'ast ExprForLoop) {}
     fn visit_expr_loop(&mut self, _: &'ast syn::ExprLoop) {}
     fn visit_expr_while(&mut self, _: &'ast syn::ExprWhile) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn count(src: &str) -> usize {
+        let cfg = AccumulatorLoopsConfig::default();
+        let file: syn::File = syn::parse_str(src).expect("valid Rust source");
+        let mut out = Vec::new();
+        let mut v = LoopVisitor {
+            cfg: &cfg,
+            rel: "fixture.rs",
+            out: &mut out,
+        };
+        v.visit_file(&file);
+        out.len()
+    }
+
+    #[test]
+    fn sync_push_flagged() {
+        let src = "fn f(xs: &[i32]) -> Vec<i32> { \
+                   let mut acc = Vec::new(); \
+                   for x in xs { acc.push(*x); } \
+                   acc }";
+        assert_eq!(count(src), 1);
+    }
+
+    #[test]
+    fn sync_sum_flagged() {
+        let src = "fn f(xs: &[i32]) -> i32 { \
+                   let mut total = 0; \
+                   for x in xs { total += *x; } \
+                   total }";
+        assert_eq!(count(src), 1);
+    }
+
+    #[test]
+    fn async_push_not_flagged() {
+        let src = "async fn f(n: usize) -> Vec<u64> { \
+                   let mut acc = Vec::new(); \
+                   for i in 0..n { acc.push(estimate(i).await); } \
+                   acc }";
+        assert_eq!(count(src), 0);
+    }
+
+    #[test]
+    fn async_sum_not_flagged() {
+        let src = "async fn f(n: usize) -> u64 { \
+                   let mut total = 0; \
+                   for i in 0..n { total += estimate(i).await; } \
+                   total }";
+        assert_eq!(count(src), 0);
+    }
+
+    #[test]
+    fn await_in_nested_closure_does_not_exempt() {
+        let src = "fn f(xs: &[i32]) -> Vec<i32> { \
+                   let mut acc = Vec::new(); \
+                   for x in xs { acc.push(map(*x, |y| async move { y.await })); } \
+                   acc }";
+        assert_eq!(count(src), 1);
+    }
 }
