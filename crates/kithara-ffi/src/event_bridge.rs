@@ -88,6 +88,25 @@ impl EventBridge {
         }
     }
 
+    /// Emit `make_event(value)` when `value` differs from `last` by more
+    /// than [`Self::TIME_UPDATE_THRESHOLD`], tracking the last emitted
+    /// value (and clearing it when the source goes empty).
+    fn emit_if_changed(
+        observer: &Arc<dyn PlayerObserver>,
+        value: Option<f64>,
+        last: &mut Option<f64>,
+        make_event: impl FnOnce(f64) -> FfiPlayerEvent,
+    ) {
+        match value {
+            Some(v) if last.is_none_or(|prev| (prev - v).abs() > Self::TIME_UPDATE_THRESHOLD) => {
+                observer.on_event(make_event(v));
+                *last = Some(v);
+            }
+            None if last.is_some() => *last = None,
+            _ => {}
+        }
+    }
+
     fn player_event_to_ffi(event: &PlayerEvent) -> Option<FfiPlayerEvent> {
         Some(match event {
             PlayerEvent::RateChanged { rate } => FfiPlayerEvent::RateChanged { rate: *rate },
@@ -248,36 +267,18 @@ impl EventBridge {
                 sleep(interval);
                 let _ = queue.tick();
                 queue.process_notifications();
-                let time = queue.position_seconds();
-                let duration = queue.duration_seconds();
-
-                match time {
-                    Some(t)
-                        if last_time
-                            .is_none_or(|prev| (prev - t).abs() > Self::TIME_UPDATE_THRESHOLD) =>
-                    {
-                        observer.on_event(FfiPlayerEvent::TimeChanged { seconds: t });
-                        last_time = Some(t);
-                    }
-                    None if last_time.is_some() => {
-                        last_time = None;
-                    }
-                    _ => {}
-                }
-
-                match duration {
-                    Some(d)
-                        if last_duration
-                            .is_none_or(|prev| (prev - d).abs() > Self::TIME_UPDATE_THRESHOLD) =>
-                    {
-                        observer.on_event(FfiPlayerEvent::DurationChanged { seconds: d });
-                        last_duration = Some(d);
-                    }
-                    None if last_duration.is_some() => {
-                        last_duration = None;
-                    }
-                    _ => {}
-                }
+                Self::emit_if_changed(
+                    &observer,
+                    queue.position_seconds(),
+                    &mut last_time,
+                    |seconds| FfiPlayerEvent::TimeChanged { seconds },
+                );
+                Self::emit_if_changed(
+                    &observer,
+                    queue.duration_seconds(),
+                    &mut last_duration,
+                    |seconds| FfiPlayerEvent::DurationChanged { seconds },
+                );
             }
         })
     }
