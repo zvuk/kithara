@@ -6,7 +6,6 @@ schema_version = 1
 
 [fat_loop_body]
 "crates/kithara-audio/src/audio.rs:543:loop_body" = 1
-"crates/kithara-audio/src/effects/eq.rs:1128:for_body" = 1
 "crates/kithara-audio/src/runtime/scheduler.rs:178:loop_body" = 1
 "crates/kithara-audio/src/runtime/scheduler.rs:262:for_body" = 1
 "crates/kithara-audio/src/runtime/wake.rs:38:loop_body" = 1
@@ -27,8 +26,6 @@ schema_version = 1
 "crates/kithara-play/src/impls/player_processor.rs:532:for_body" = 1
 "crates/kithara-play/src/impls/player_resource.rs:95:while_body" = 1
 "crates/kithara-storage/src/backend/resource/wait.rs:35:loop_body" = 1
-"crates/kithara-stream/src/timeline.rs:561:for_body" = 1
-"crates/kithara-stream/src/timeline.rs:700:for_body" = 1
 
 [function_branch_density]
 "crates/kithara-abr/src/controller/core.rs:135:4" = 1
@@ -42,8 +39,6 @@ schema_version = 1
 "crates/kithara-app/src/gui/update.rs:15:0" = 1
 "crates/kithara-assets/src/cache.rs:318:4" = 1
 "crates/kithara-assets/src/cache.rs:389:4" = 1
-"crates/kithara-assets/src/cache.rs:514:8" = 1
-"crates/kithara-assets/src/cache.rs:542:8" = 1
 "crates/kithara-assets/src/disk_store.rs:283:4" = 1
 "crates/kithara-assets/src/disk_store.rs:331:4" = 1
 "crates/kithara-assets/src/evict.rs:217:4" = 1
@@ -162,12 +157,9 @@ schema_version = 1
 "crates/kithara-play/src/impls/player_processor.rs:721:4" = 1
 "crates/kithara-play/src/impls/player_resource.rs:140:4" = 1
 "crates/kithara-play/src/impls/player_track.rs:376:4" = 1
-"crates/kithara-play/src/impls/player_track.rs:728:8" = 1
 "crates/kithara-play/src/impls/resource.rs:39:4" = 1
 "crates/kithara-play/src/impls/session/state.rs:247:0" = 1
-"crates/kithara-queue/src/queue/lifecycle.rs:138:4" = 1
 "crates/kithara-queue/src/queue/lifecycle.rs:211:4" = 1
-"crates/kithara-queue/src/queue/lifecycle.rs:52:4" = 1
 "crates/kithara-queue/src/queue/playback.rs:168:4" = 1
 "crates/kithara-queue/src/queue/selection.rs:112:4" = 1
 "crates/kithara-queue/src/queue/selection.rs:123:4" = 1
@@ -191,8 +183,6 @@ schema_version = 1
 "crates/kithara-stream/src/stream.rs:348:4" = 1
 "crates/kithara-stream/src/stream.rs:503:4" = 1
 "crates/kithara-stream/src/stream.rs:551:4" = 1
-"crates/kithara-stream/src/stream.rs:675:8" = 1
-"crates/kithara-stream/src/stream.rs:765:8" = 1
 
 [guard_cascade]
 "crates/kithara-hls/src/loading/size_estimation.rs:105:8" = 1

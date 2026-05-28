@@ -7,14 +7,16 @@
 //! readability, expressivity).
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs,
+    ops::RangeInclusive,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context as _, Result, bail};
 use cargo_metadata::MetadataCommand;
 use clap::Args;
+use syn::{ImplItem, Item, Meta, spanned::Spanned};
 
 mod checks;
 mod config;
@@ -24,6 +26,7 @@ use config::IdiomsConfig;
 
 use crate::common::{
     baseline::{Baseline, RatchetDiff},
+    parse::parse_file,
     report,
     scope::Scope,
     violation::Report,
@@ -92,6 +95,7 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
     }
 
     apply_exclude_paths(&mut report, &config.thresholds.exclude_paths);
+    apply_cfg_test_exclusion(&mut report, &workspace_root);
 
     if args.update_baseline {
         let new_baseline = Baseline::from_report(&report);
@@ -156,6 +160,120 @@ fn apply_exclude_paths(report: &mut Report, patterns: &[String]) {
 /// always ends at the `.rs` extension, so we slice up to and including it.
 fn key_path(key: &str) -> &str {
     key.find(".rs").map_or(key, |i| &key[..i + 3])
+}
+
+/// Extract the 1-based source line a violation key points at. The line is the
+/// first `:`-separated field after the `.rs` path portion, e.g. `561` in
+/// `crates/x/src/foo.rs:561:for_body`. Returns `None` for keys that carry no
+/// line (e.g. `file.rs::Name`).
+fn key_line(key: &str) -> Option<usize> {
+    let path = key_path(key);
+    let rest = key.get(path.len()..)?.strip_prefix(':')?;
+    let field = rest.split(':').next()?;
+    field.parse::<usize>().ok()
+}
+
+/// Drop violations that land on a line inside a `#[cfg(test)]`-predicated item
+/// (`mod tests { ... }`, a test `fn`, a test `impl`, ...). Complements the
+/// path-glob `exclude_paths` pass: inline test modules in production `src/*.rs`
+/// files are test code but are not matched by path globs. Only `test`-keyed
+/// cfgs count — `#[cfg(feature = ...)]` and other cfgs are left untouched.
+/// Files that fail to parse are skipped (their violations are kept).
+fn apply_cfg_test_exclusion(report: &mut Report, workspace_root: &Path) {
+    let mut files: BTreeSet<String> = BTreeSet::new();
+    for v in &report.violations {
+        files.insert(key_path(&v.key).to_string());
+    }
+
+    let ranges: BTreeMap<String, Vec<RangeInclusive<usize>>> = files
+        .into_iter()
+        .filter_map(|rel| {
+            let file = parse_file(&workspace_root.join(&rel)).ok()?;
+            let mut out = Vec::new();
+            collect_cfg_test_ranges(&file.items, &mut out);
+            (!out.is_empty()).then_some((rel, out))
+        })
+        .collect();
+
+    report.violations.retain(|v| {
+        let Some(line) = key_line(&v.key) else {
+            return true;
+        };
+        ranges
+            .get(key_path(&v.key))
+            .is_none_or(|rs| !rs.iter().any(|r| r.contains(&line)))
+    });
+}
+
+/// Walk items recursively, recording the line range of every item whose
+/// attributes carry a `test`-predicated cfg. Recurses into module bodies so
+/// nested `#[cfg(test)] mod`/`fn` are caught regardless of depth.
+fn collect_cfg_test_ranges(items: &[Item], out: &mut Vec<RangeInclusive<usize>>) {
+    for item in items {
+        if attrs_have_cfg_test(item_attrs(item)) {
+            out.push(item.span().start().line..=item.span().end().line);
+        }
+        if let Item::Mod(m) = item
+            && let Some((_, inner)) = &m.content
+        {
+            collect_cfg_test_ranges(inner, out);
+        }
+        if let Item::Impl(im) = item {
+            for it in &im.items {
+                if let ImplItem::Fn(f) = it
+                    && attrs_have_cfg_test(&f.attrs)
+                {
+                    out.push(f.span().start().line..=f.span().end().line);
+                }
+            }
+        }
+    }
+}
+
+fn item_attrs(item: &Item) -> &[syn::Attribute] {
+    match item {
+        Item::Const(i) => &i.attrs,
+        Item::Enum(i) => &i.attrs,
+        Item::ExternCrate(i) => &i.attrs,
+        Item::Fn(i) => &i.attrs,
+        Item::ForeignMod(i) => &i.attrs,
+        Item::Impl(i) => &i.attrs,
+        Item::Macro(i) => &i.attrs,
+        Item::Mod(i) => &i.attrs,
+        Item::Static(i) => &i.attrs,
+        Item::Struct(i) => &i.attrs,
+        Item::Trait(i) => &i.attrs,
+        Item::TraitAlias(i) => &i.attrs,
+        Item::Type(i) => &i.attrs,
+        Item::Union(i) => &i.attrs,
+        Item::Use(i) => &i.attrs,
+        _ => &[],
+    }
+}
+
+/// True when any `#[cfg(...)]` attribute is keyed on `test` — either directly
+/// (`#[cfg(test)]`) or as a bare predicate inside `any(...)` / `all(...)`
+/// (`#[cfg(any(test, feature = "x"))]`). `#[cfg(not(test))]`, `feature = "test"`,
+/// and non-cfg attributes are intentionally not matched.
+fn attrs_have_cfg_test(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| match &a.meta {
+        Meta::List(list) if list.path.is_ident("cfg") => meta_tokens_have_test(&list.tokens),
+        _ => false,
+    })
+}
+
+fn meta_tokens_have_test(tokens: &proc_macro2::TokenStream) -> bool {
+    syn::parse2::<Meta>(tokens.clone()).is_ok_and(|m| cfg_predicate_has_test(&m))
+}
+
+fn cfg_predicate_has_test(meta: &Meta) -> bool {
+    match meta {
+        Meta::Path(p) => p.is_ident("test"),
+        Meta::List(list) if list.path.is_ident("any") || list.path.is_ident("all") => list
+            .parse_args_with(syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+            .is_ok_and(|nested| nested.iter().any(cfg_predicate_has_test)),
+        _ => false,
+    }
 }
 
 fn print_report(report: &Report, ran: &[&'static str], diff: &RatchetDiff<'_>) {
@@ -261,5 +379,140 @@ mod tests {
             "crates/x/src/foo.rs"
         );
         assert_eq!(key_path("kithara-foo"), "kithara-foo");
+    }
+
+    #[test]
+    fn key_line_reads_first_field_after_path() {
+        assert_eq!(key_line("crates/x/src/foo.rs:561:for_body"), Some(561));
+        assert_eq!(key_line("crates/x/src/foo.rs:7:8"), Some(7));
+        assert_eq!(key_line("crates/x/src/foo.rs:173:48::outcome"), Some(173));
+        assert_eq!(key_line("crates/x/src/foo.rs::Name"), None);
+        assert_eq!(key_line("kithara-foo"), None);
+    }
+
+    fn ranges(src: &str) -> Vec<(usize, usize)> {
+        let file: syn::File = syn::parse_str(src).expect("valid Rust source");
+        let mut out = Vec::new();
+        collect_cfg_test_ranges(&file.items, &mut out);
+        out.iter().map(|r| (*r.start(), *r.end())).collect()
+    }
+
+    fn line_in_any(line: usize, rs: &[(usize, usize)]) -> bool {
+        rs.iter().any(|(s, e)| (*s..=*e).contains(&line))
+    }
+
+    #[test]
+    fn cfg_test_mod_range_excludes_inner_lines() {
+        let src = "fn prod() {}\n\
+                   #[cfg(test)]\n\
+                   mod tests {\n\
+                       fn a() {}\n\
+                       fn b() {}\n\
+                   }\n";
+        let rs = ranges(src);
+        assert_eq!(rs.len(), 1);
+        // production `fn prod` on line 1 is not covered.
+        assert!(!line_in_any(1, &rs));
+        // lines 2..=6 (the cfg(test) attr + mod body) are covered.
+        assert!(line_in_any(4, &rs));
+        assert!(line_in_any(5, &rs));
+    }
+
+    #[test]
+    fn cfg_any_test_mod_is_excluded() {
+        let src = "#[cfg(any(test, feature = \"x\"))]\n\
+                   mod tests {\n\
+                       fn a() {}\n\
+                   }\n";
+        let rs = ranges(src);
+        assert_eq!(rs.len(), 1);
+        assert!(line_in_any(3, &rs));
+    }
+
+    #[test]
+    fn cfg_all_test_mod_is_excluded() {
+        let src = "#[cfg(all(test, feature = \"x\"))]\n\
+                   mod tests {\n\
+                       fn a() {}\n\
+                   }\n";
+        let rs = ranges(src);
+        assert_eq!(rs.len(), 1);
+        assert!(line_in_any(3, &rs));
+    }
+
+    #[test]
+    fn cfg_test_fn_and_impl_are_excluded() {
+        let src = "#[cfg(test)]\n\
+                   fn helper() {}\n\
+                   struct S;\n\
+                   #[cfg(test)]\n\
+                   impl S {\n\
+                       fn t(&self) {}\n\
+                   }\n";
+        let rs = ranges(src);
+        assert_eq!(rs.len(), 2);
+        assert!(line_in_any(2, &rs));
+        assert!(line_in_any(6, &rs));
+    }
+
+    #[test]
+    fn non_test_cfg_blocks_are_not_excluded() {
+        let src = "#[cfg(feature = \"probe\")]\n\
+                   mod probes {\n\
+                       fn a() {}\n\
+                   }\n\
+                   #[cfg(not(test))]\n\
+                   fn prod_only() {}\n";
+        assert!(ranges(src).is_empty());
+    }
+
+    #[test]
+    fn apply_cfg_test_exclusion_filters_inline_test_module() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let rel = "crates/x/src/foo.rs";
+        let src = "fn prod() {\n\
+                   \x20\x20\x20\x20for _ in 0..1 {}\n\
+                   }\n\
+                   #[cfg(test)]\n\
+                   mod tests {\n\
+                       fn unit() {\n\
+                       \x20\x20\x20\x20for _ in 0..1 {}\n\
+                       }\n\
+                   }\n";
+        let path = tmp.path().join(rel);
+        fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        fs::write(&path, src).expect("write fixture");
+
+        let mut report = Report::default();
+        report.extend([
+            // production loop on line 2 — must stay.
+            Violation::warn("fat_loop_body", format!("{rel}:2:for_body"), "prod"),
+            // test loop on line 7 (inside cfg(test) mod) — must drop.
+            Violation::warn("fat_loop_body", format!("{rel}:7:for_body"), "test"),
+        ]);
+
+        apply_cfg_test_exclusion(&mut report, tmp.path());
+
+        let keys: Vec<&str> = report.violations.iter().map(|v| v.key.as_str()).collect();
+        assert_eq!(keys, [format!("{rel}:2:for_body")]);
+    }
+
+    #[test]
+    fn apply_cfg_test_exclusion_keeps_unparsable_files() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let rel = "crates/x/src/broken.rs";
+        let path = tmp.path().join(rel);
+        fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        fs::write(&path, "this is not valid rust ::: {{{").expect("write fixture");
+
+        let mut report = Report::default();
+        report.extend([Violation::warn(
+            "fat_loop_body",
+            format!("{rel}:3:for_body"),
+            "kept",
+        )]);
+
+        apply_cfg_test_exclusion(&mut report, tmp.path());
+        assert_eq!(report.violations.len(), 1);
     }
 }
