@@ -1,16 +1,15 @@
 use std::{
     collections::HashMap,
-    sync::{
-        Arc, Mutex, PoisonError,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex, PoisonError},
 };
 
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_play::{PlayerConfig, PlayerImpl};
 use tokio_util::sync::CancellationToken;
 
-use super::types::PendingSelect;
+use super::types::{
+    AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase,
+};
 use crate::{
     config::QueueConfig,
     loader::Loader,
@@ -39,22 +38,19 @@ pub struct Queue {
     /// Authoritative playback position updated on every `tick`. Filters
     /// transient 0.0 blips the engine reports on pause/resume —
     /// downstream UIs should read from this field rather than polling
-    /// the engine directly.
-    ///
-    /// Stored as `f64::to_bits` in `AtomicU64`; a `NaN` bit pattern
-    /// represents "no value" so `Option<f64>` semantics are preserved
-    /// without a `Mutex`.
-    pub(super) cached_position: Arc<AtomicU64>,
+    /// the engine directly. Read/written lock-free as a typed
+    /// [`CachedPosition`] — [`CachedPosition::Unknown`] before the first
+    /// stable sample.
+    pub(super) cached_position: Arc<AtomicCachedPosition>,
     /// Tracks the id of the track whose crossfade-advance has already
     /// been armed during `tick()`. Prevents triggering the next-track
     /// select repeatedly as the remaining playtime keeps ticking below
     /// the crossfade threshold. Cleared on
     /// [`QueueEvent::CurrentTrackChanged`](kithara_events::QueueEvent::CurrentTrackChanged).
     ///
-    /// Stored as `AtomicU64` with sentinel [`Self::NO_ARMED_TRACK`] for
-    /// "not armed" — readers and writers run lock-free from the tick
+    /// Read/written lock-free as a typed [`CrossfadeArm`] from the tick
     /// loop and the engine event handler.
-    pub(super) crossfade_armed_for: Arc<AtomicU64>,
+    pub(super) crossfade_armed_for: Arc<AtomicTrackId>,
     /// Whether this queue auto-starts playback once the first registered
     /// track finishes loading. Configured via
     /// [`QueueConfig::should_autoplay`]. `false` means the user must
@@ -69,12 +65,12 @@ pub struct Queue {
     /// First registered track id awaiting autoplay-on-load. Set when
     /// `autoplay = true` and the queue has no active selection;
     /// consumed when the matching id finishes loading.
-    /// `Self::NO_ARMED_TRACK` sentinel = no pending target.
+    /// [`CrossfadeArm::Disarmed`] = no pending target.
     #[cfg(any(test, feature = "probe"))]
-    pub(super) autoplay_target: Arc<AtomicU64>,
+    pub(super) autoplay_target: Arc<AtomicTrackId>,
     pub(super) loader: Arc<Loader>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
-    pub(super) pending_select: Arc<Mutex<Option<PendingSelect>>>,
+    pub(super) pending_select: Arc<Mutex<SelectPhase>>,
     pub(super) player: Arc<PlayerImpl>,
     /// Kept alongside `tracks` so a `Consumed` track can be re-spawned
     /// on re-selection (user tapping a previously-played track). The
@@ -109,17 +105,6 @@ pub struct Queue {
 }
 
 impl Queue {
-    /// Sentinel for "no track armed" stored in `crossfade_armed_for`.
-    /// `TrackId(u64::MAX)` is reserved as the sentinel; real ids are
-    /// allocated monotonically starting from `0` by
-    /// [`TrackId::allocate`](kithara_events::TrackId::allocate).
-    pub(super) const NO_ARMED_TRACK: u64 = u64::MAX;
-
-    /// Sentinel for "no cached position" stored in `cached_position`
-    /// (as `f64::NAN.to_bits()`). Queried via [`Self::read_cached_position`],
-    /// which filters `NaN` back to `None`.
-    pub(super) const NO_CACHED_POSITION: f64 = f64::NAN;
-
     /// Build a queue from a [`QueueConfig`].
     ///
     /// If `config.player` is `Some`, the caller-supplied
@@ -166,15 +151,15 @@ impl Queue {
             should_autoplay,
             cancel,
             navigation: Arc::new(Mutex::new(NavigationState::new())),
-            pending_select: Arc::new(Mutex::new(None)),
+            pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
             sources: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(test, feature = "probe"))]
             test_resources: Arc::new(Mutex::new(HashMap::new())),
             player_rx: Mutex::new(player_rx),
-            crossfade_armed_for: Arc::new(AtomicU64::new(Self::NO_ARMED_TRACK)),
+            crossfade_armed_for: Arc::new(AtomicTrackId::disarmed()),
             #[cfg(any(test, feature = "probe"))]
-            autoplay_target: Arc::new(AtomicU64::new(Self::NO_ARMED_TRACK)),
-            cached_position: Arc::new(AtomicU64::new(Self::NO_CACHED_POSITION.to_bits())),
+            autoplay_target: Arc::new(AtomicTrackId::disarmed()),
+            cached_position: Arc::new(AtomicCachedPosition::unknown()),
         }
     }
 
@@ -192,7 +177,7 @@ impl Queue {
 
     pub(in crate::queue) fn lock_pending_select_mut(
         &self,
-    ) -> std::sync::MutexGuard<'_, Option<PendingSelect>> {
+    ) -> std::sync::MutexGuard<'_, SelectPhase> {
         self.pending_select
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -206,43 +191,28 @@ impl Queue {
         self.tracks.lock()
     }
 
-    pub(super) fn read_armed_for(&self) -> Option<TrackId> {
-        let v = self.crossfade_armed_for.load(Ordering::Acquire);
-        if v == Self::NO_ARMED_TRACK {
-            None
-        } else {
-            Some(TrackId(v))
-        }
+    pub(super) fn read_armed_for(&self) -> CrossfadeArm {
+        self.crossfade_armed_for.load()
     }
 
-    pub(super) fn read_cached_position(&self) -> Option<f64> {
-        let f = f64::from_bits(self.cached_position.load(Ordering::Acquire));
-        if f.is_nan() { None } else { Some(f) }
+    pub(super) fn read_cached_position(&self) -> CachedPosition {
+        self.cached_position.load()
     }
 
     pub(super) fn set_status(&self, id: TrackId, status: kithara_events::TrackStatus) {
         self.tracks.set_status(id, status);
     }
 
-    pub(super) fn take_armed_for(&self) -> Option<TrackId> {
-        let prev = self
-            .crossfade_armed_for
-            .swap(Self::NO_ARMED_TRACK, Ordering::AcqRel);
-        if prev == Self::NO_ARMED_TRACK {
-            None
-        } else {
-            Some(TrackId(prev))
-        }
+    pub(super) fn take_armed_for(&self) -> CrossfadeArm {
+        self.crossfade_armed_for.take()
     }
 
-    pub(super) fn write_armed_for(&self, value: Option<TrackId>) {
-        let bits = value.map_or(Self::NO_ARMED_TRACK, |TrackId(v)| v);
-        self.crossfade_armed_for.store(bits, Ordering::Release);
+    pub(super) fn write_armed_for(&self, arm: CrossfadeArm) {
+        self.crossfade_armed_for.store(arm);
     }
 
-    pub(super) fn write_cached_position(&self, value: Option<f64>) {
-        let bits = value.unwrap_or(Self::NO_CACHED_POSITION).to_bits();
-        self.cached_position.store(bits, Ordering::Release);
+    pub(super) fn write_cached_position(&self, pos: CachedPosition) {
+        self.cached_position.store(pos);
     }
 }
 
@@ -290,5 +260,49 @@ pub(super) mod tests {
     #[kithara::test]
     fn queue_new_constructs_without_panic() {
         let _queue = make_queue();
+    }
+
+    #[kithara::test]
+    fn crossfade_arm_disarmed_after_construction() {
+        let queue = make_queue();
+        assert_eq!(queue.read_armed_for(), CrossfadeArm::Disarmed);
+    }
+
+    #[kithara::test]
+    fn crossfade_arm_take_round_trips_then_disarms() {
+        let queue = make_queue();
+        queue.write_armed_for(CrossfadeArm::armed(TrackId(9)));
+        assert_eq!(
+            queue.take_armed_for(),
+            CrossfadeArm::Armed {
+                for_track: TrackId(9),
+            }
+        );
+        assert_eq!(queue.read_armed_for(), CrossfadeArm::Disarmed);
+    }
+
+    #[kithara::test]
+    fn cached_position_unknown_after_construction() {
+        let queue = make_queue();
+        assert_eq!(Option::<f64>::from(queue.read_cached_position()), None);
+    }
+
+    #[kithara::test]
+    fn cached_position_round_trips_through_queue() {
+        let queue = make_queue();
+        queue.write_cached_position(CachedPosition::known(12.5));
+        assert_eq!(
+            Option::<f64>::from(queue.read_cached_position()),
+            Some(12.5)
+        );
+    }
+
+    #[kithara::test]
+    fn select_phase_idle_after_construction() {
+        let queue = make_queue();
+        assert!(matches!(
+            *queue.lock_pending_select_mut(),
+            SelectPhase::Idle
+        ));
     }
 }

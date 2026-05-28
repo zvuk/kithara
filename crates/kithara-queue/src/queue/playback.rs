@@ -4,7 +4,10 @@ use kithara_events::{Event, PlayerEvent, QueueEvent};
 use tokio::sync::broadcast::error::TryRecvError;
 use tracing::debug;
 
-use super::{Queue, types::Transition};
+use super::{
+    Queue,
+    types::{CachedPosition, CrossfadeArm, Transition},
+};
 use crate::error::QueueError;
 
 impl Queue {
@@ -12,7 +15,7 @@ impl Queue {
     /// return `true` — the engine's trailing `ItemDidPlayToEnd` for
     /// the same track must not advance again.
     fn consume_armed_advance(&self, pos: f64, dur: f64) -> bool {
-        if self.take_armed_for().is_some() {
+        if self.take_armed_for().is_armed() {
             debug!(pos, dur, "consumed ItemDidPlayToEnd (armed pre-end)");
             true
         } else {
@@ -52,7 +55,7 @@ impl Queue {
     fn handle_current_item_changed(&self) {
         let idx = self.player.current_index();
         let id = self.lock_tracks().get(idx).map(|e| e.id);
-        self.write_cached_position(None);
+        self.write_cached_position(CachedPosition::Unknown);
         self.bus.publish(QueueEvent::CurrentTrackChanged { id });
     }
 
@@ -112,7 +115,7 @@ impl Queue {
         if !super::types::should_arm_crossfade(time, crossfade, entry.id, armed_for) {
             return;
         }
-        self.write_armed_for(Some(entry.id));
+        self.write_armed_for(CrossfadeArm::armed(entry.id));
         let transition = if crossfade > 0.0 {
             Transition::Crossfade
         } else {
@@ -127,7 +130,7 @@ impl Queue {
     /// see stable values.
     #[must_use]
     pub fn position_seconds(&self) -> Option<f64> {
-        self.read_cached_position()
+        self.read_cached_position().into()
     }
 
     fn process_player_event(&self, ev: &Event) {
@@ -190,14 +193,11 @@ impl Queue {
         let Some(t) = self.player.position_seconds() else {
             return;
         };
-        if t == 0.0
-            && self
-                .read_cached_position()
-                .is_some_and(|prev| prev > MIN_STABLE_POSITION_SECS)
-        {
+        let prev = Option::<f64>::from(self.read_cached_position());
+        if t == 0.0 && prev.is_some_and(|p| p > MIN_STABLE_POSITION_SECS) {
             return;
         }
-        self.write_cached_position(Some(t));
+        self.write_cached_position(CachedPosition::known(t));
     }
 }
 
@@ -211,7 +211,7 @@ mod tests {
     use super::*;
     use crate::queue::{
         state::tests::make_queue,
-        types::{PlaybackTime, should_arm_crossfade},
+        types::{CrossfadeArm, PlaybackTime, should_arm_crossfade},
     };
 
     #[kithara::test(tokio)]
@@ -237,32 +237,53 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::remaining_equals_crossfade(157.0, 162.0, 5.0, TrackId(1), None, true)]
-    #[case::remaining_below_crossfade(160.0, 162.0, 5.0, TrackId(1), None, true)]
-    #[case::far_from_end(100.0, 162.0, 5.0, TrackId(1), None, false)]
-    #[case::already_armed_for_same_track(160.0, 162.0, 5.0, TrackId(1), Some(TrackId(1)), false)]
+    #[case::remaining_equals_crossfade(157.0, 162.0, 5.0, TrackId(1), CrossfadeArm::Disarmed, true)]
+    #[case::remaining_below_crossfade(160.0, 162.0, 5.0, TrackId(1), CrossfadeArm::Disarmed, true)]
+    #[case::far_from_end(100.0, 162.0, 5.0, TrackId(1), CrossfadeArm::Disarmed, false)]
+    #[case::already_armed_for_same_track(
+        160.0,
+        162.0,
+        5.0,
+        TrackId(1),
+        CrossfadeArm::armed(TrackId(1)),
+        false
+    )]
     #[case::armed_for_different_track_still_arms(
         160.0,
         162.0,
         5.0,
         TrackId(1),
-        Some(TrackId(0)),
+        CrossfadeArm::armed(TrackId(0)),
         true
     )]
-    #[case::crossfade_zero_at_tail_no_pre_arm(161.9, 162.0, 0.0, TrackId(1), None, false)]
-    #[case::crossfade_zero_quiet_middle(161.0, 162.0, 0.0, TrackId(1), None, false)]
-    #[case::zero_position_rejected(0.0, 162.0, 5.0, TrackId(1), None, false)]
-    #[case::zero_duration_rejected(10.0, 0.0, 5.0, TrackId(1), None, false)]
+    #[case::crossfade_zero_at_tail_no_pre_arm(
+        161.9,
+        162.0,
+        0.0,
+        TrackId(1),
+        CrossfadeArm::Disarmed,
+        false
+    )]
+    #[case::crossfade_zero_quiet_middle(
+        161.0,
+        162.0,
+        0.0,
+        TrackId(1),
+        CrossfadeArm::Disarmed,
+        false
+    )]
+    #[case::zero_position_rejected(0.0, 162.0, 5.0, TrackId(1), CrossfadeArm::Disarmed, false)]
+    #[case::zero_duration_rejected(10.0, 0.0, 5.0, TrackId(1), CrossfadeArm::Disarmed, false)]
     fn should_arm_crossfade_cases(
         #[case] pos: f64,
         #[case] dur: f64,
         #[case] crossfade: f32,
         #[case] current_id: TrackId,
-        #[case] armed_for: Option<TrackId>,
+        #[case] armed_for: CrossfadeArm,
         #[case] expected: bool,
     ) {
         assert_eq!(
-            should_arm_crossfade(PlaybackTime { dur, pos }, crossfade, current_id, armed_for,),
+            should_arm_crossfade(PlaybackTime { dur, pos }, crossfade, current_id, armed_for),
             expected
         );
     }
