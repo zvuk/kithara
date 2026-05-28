@@ -2,15 +2,14 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use kithara_abr::AbrMode;
 use kithara_drm::{KeyRequest, KeyRequestFactory};
-use kithara_events::{Event, QueueEvent, TrackStatus};
 use kithara_hls::{KeyOptions, KeyProcessorRule};
 use kithara_platform::{
     sync::mpsc,
     time::{Duration, sleep},
     tokio::task::spawn as task_spawn,
 };
-use kithara_play::{ResourceConfig, SessionDuckingMode};
-use kithara_queue::{Queue, QueueConfig, TrackId, TrackSource, Transition};
+use kithara_play::ResourceConfig;
+use kithara_queue::{Queue, QueueConfig, TrackId, TrackSource};
 
 use crate::{
     observer::{AUTH_TOKEN_HEADER, SALT_HEADER},
@@ -87,17 +86,7 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<Buil
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
-    /// Ducking mode for soft attenuation.
-    const DUCKING_SOFT: u32 = 1;
-
-    /// Ducking mode for hard attenuation.
-    const DUCKING_HARD: u32 = 2;
-
     match cmd {
-        WorkerCmd::SelectTrack { url, request_id } => {
-            let source = build_source(&build_state.borrow(), url);
-            spawn_play_single(Rc::clone(queue), source, request_id);
-        }
         WorkerCmd::Play => queue.play(),
         WorkerCmd::Pause => queue.pause(),
         WorkerCmd::Stop => {
@@ -110,22 +99,11 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<Buil
         WorkerCmd::SetVolume(vol) => queue.set_volume(vol),
         WorkerCmd::SetCrossfade(secs) => queue.set_crossfade_duration(secs),
         WorkerCmd::SetEqGain { band, gain_db } => {
-            let _ = queue.set_eq_gain(band as usize, gain_db);
+            let band_idx: usize = num_traits::cast(band).unwrap_or(0);
+            let _ = queue.set_eq_gain(band_idx, gain_db);
         }
         WorkerCmd::ResetEq => {
             let _ = queue.reset_eq();
-        }
-        WorkerCmd::SetDucking(mode) => {
-            let mode = match mode {
-                DUCKING_SOFT => SessionDuckingMode::Soft,
-                DUCKING_HARD => SessionDuckingMode::Hard,
-                _ => SessionDuckingMode::Off,
-            };
-            // The queue does not expose a session-ducking setter (it is a
-            // player-wide concern surfaced via the facade in Wave 4). The
-            // legacy command is accepted and logged as a no-op here so the
-            // existing `player_set_session_ducking` export keeps compiling.
-            clog!("[WORKER] SetDucking({mode:?}) is a no-op on the queue path (Wave 4)");
         }
         WorkerCmd::Append { id, url } => {
             let source = build_source(&build_state.borrow(), url);
@@ -191,8 +169,8 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<Buil
         } => {
             register_key_rule(
                 &mut build_state.borrow_mut(),
-                salt,
-                domains,
+                &salt,
+                &domains,
                 headers,
                 query_params,
             );
@@ -221,10 +199,9 @@ fn apply_abr_mode(queue: &Rc<Queue>, variant_index: Option<u32>) {
     let Some(handle) = queue.current_abr_handle() else {
         return;
     };
-    let mode = match variant_index {
-        None => AbrMode::Auto(None),
-        Some(index) => AbrMode::Manual(index as usize),
-    };
+    let mode = variant_index.map_or(AbrMode::Auto(None), |index| {
+        AbrMode::Manual(num_traits::cast(index).unwrap_or(0))
+    });
     if let Err(err) = handle.set_mode(mode) {
         clog!("[WORKER] set_abr_mode rejected by ABR state: {err:?}");
     }
@@ -244,8 +221,8 @@ fn apply_peak_bitrate(queue: &Rc<Queue>, wifi_bps: f64, cellular_bps: f64) {
 /// [`NativeInner::setup_hls_aes_with_rule`](crate::native::inner::NativeInner).
 fn register_key_rule(
     state: &mut BuildState,
-    salt: String,
-    domains: Vec<String>,
+    salt: &str,
+    domains: &[String],
     headers: Option<HashMap<String, String>>,
     query_params: Option<HashMap<String, String>>,
 ) {
@@ -254,10 +231,12 @@ fn register_key_rule(
             state.headers.insert(k.clone(), v.clone());
         }
     }
-    state.headers.insert(SALT_HEADER.to_string(), salt.clone());
+    state
+        .headers
+        .insert(SALT_HEADER.to_string(), salt.to_owned());
 
     let factory: KeyRequestFactory = {
-        let salt = salt.clone();
+        let salt = salt.to_owned();
         std::sync::Arc::new(move || {
             let mut req_headers = HashMap::new();
             req_headers.insert(SALT_HEADER.to_string(), salt.clone());
@@ -267,7 +246,7 @@ fn register_key_rule(
             )
         })
     };
-    let rule = KeyProcessorRule::for_domains(&domains, factory)
+    let rule = KeyProcessorRule::for_domains(domains, factory)
         .maybe_headers(headers)
         .maybe_query_params(query_params)
         .build();
@@ -297,51 +276,6 @@ fn build_source(state: &BuildState, url: String) -> TrackSource {
         Err(err) => {
             clog!("[WORKER] build_source: invalid url {url}: {err}; using raw URI");
             TrackSource::Uri(url)
-        }
-    }
-}
-
-/// Legacy single-track entry point. Clears the queue, appends the URL,
-/// and selects it, then resolves the `request_id` reply once the track
-/// reaches [`TrackStatus::Loaded`] (preserving the pre-Wave-3 contract
-/// where `player_select_track` resolves when playback is ready) or
-/// rejects on [`TrackStatus::Failed`].
-fn spawn_play_single(queue: Rc<Queue>, source: TrackSource, request_id: u32) {
-    task_spawn(async move {
-        let result = play_single(&queue, source).await;
-        crate::web::js::send_reply(request_id, result);
-    });
-}
-
-async fn play_single(queue: &Rc<Queue>, source: TrackSource) -> Result<(), String> {
-    clog!("[WORKER] select_track");
-    queue.clear();
-    let mut rx = queue.subscribe();
-    let id = queue.append(source);
-    // `select` on a still-loading track records a pending select that the
-    // loader fires once the resource is ready, so playback starts as soon
-    // as the load completes.
-    queue
-        .select(id, Transition::None)
-        .map_err(|e| e.to_string())?;
-    queue.play();
-
-    loop {
-        match rx.recv().await {
-            Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: ev_id, status }))
-                if ev_id == id =>
-            {
-                match status {
-                    TrackStatus::Loaded | TrackStatus::Consumed => {
-                        clog!("[WORKER] select_track: ready ({status:?})");
-                        return Ok(());
-                    }
-                    TrackStatus::Failed(reason) => return Err(reason),
-                    _ => {}
-                }
-            }
-            Ok(_) => {}
-            Err(_) => return Err("event stream closed before track became ready".to_string()),
         }
     }
 }

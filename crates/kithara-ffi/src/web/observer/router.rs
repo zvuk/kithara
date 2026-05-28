@@ -47,7 +47,10 @@ pub(crate) fn install(observer: Arc<dyn PlayerObserver>, queue_view: Arc<Mutex<Q
 }
 
 /// Mirror native `route_track_status_to_item`: surface
-/// `TrackStatusChanged` as per-item `StatusChanged` / `Error` callbacks.
+/// `TrackStatusChanged` as per-item `StatusChanged` / `Error` callbacks,
+/// and refresh the item's cached [`ItemState`](crate::item) so
+/// [`AudioPlayerItem::load`](crate::item::AudioPlayerItem) answers
+/// truthfully even when no observer is attached.
 fn route_to_item(queue_view: &Arc<Mutex<QueueView>>, event: &FfiPlayerEvent) {
     let FfiPlayerEvent::TrackStatusChanged { item_id, status } = event else {
         return;
@@ -58,10 +61,25 @@ fn route_to_item(queue_view: &Arc<Mutex<QueueView>>, event: &FfiPlayerEvent) {
         .find(|(id, _)| id == item_id)
         .map(|(_, item)| Arc::clone(item));
     let Some(item) = item else { return };
-    let Some(item_obs) = item.observer() else {
-        return;
-    };
-    dispatch_track_status_to_item(&item_obs, status);
+    update_item_state(&item, status);
+    if let Some(item_obs) = item.observer() {
+        dispatch_track_status_to_item(&item_obs, status);
+    }
+}
+
+fn update_item_state(item: &Arc<AudioPlayerItem>, status: &FfiTrackStatus) {
+    let mut state = item.state.lock_sync();
+    match status {
+        FfiTrackStatus::Loaded => {
+            state.is_ready_to_play = true;
+            state.is_failed = false;
+        }
+        FfiTrackStatus::Failed { .. } => {
+            state.is_ready_to_play = false;
+            state.is_failed = true;
+        }
+        _ => {}
+    }
 }
 
 fn dispatch_track_status_to_item(observer: &Arc<dyn ItemObserver>, status: &FfiTrackStatus) {

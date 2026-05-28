@@ -252,12 +252,35 @@ impl AudioPlayerItem {
         *self.event_bridge.lock_sync() = Some(bridge);
     }
 
-    /// Wasm has no per-item bus bridge yet: the worker owns the queue and
-    /// routes item events through the main-thread event router (Wave 5).
-    /// The observer is still recorded by [`Self::set_observer`] so the
-    /// router can dispatch to it once that path lands.
+    /// Wasm has no long-lived per-item bus bridge — the worker owns the
+    /// queue and routes events through the main-thread router
+    /// ([`crate::web::observer::router`]). What restart still needs to do
+    /// is prime a freshly-attached observer with the item's cached
+    /// [`ItemState`] so the caller sees the same initial event
+    /// (`StatusChanged`) the native path emits when its bridge spawns.
+    /// Without this priming, observers attached *after* the worker has
+    /// already announced "loaded" would never see the readiness event.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn restart_bridge(&self) {}
+    pub(crate) fn restart_bridge(&self) {
+        let Some(observer) = self.observer() else {
+            return;
+        };
+        let snapshot = *self.state.lock_sync();
+        if snapshot.is_failed {
+            observer.on_event(crate::types::FfiItemEvent::StatusChanged {
+                status: crate::types::FfiItemStatus::Failed,
+            });
+        } else if snapshot.is_ready_to_play {
+            observer.on_event(crate::types::FfiItemEvent::StatusChanged {
+                status: crate::types::FfiItemStatus::ReadyToPlay,
+            });
+        }
+        if snapshot.duration_sec > 0.0 {
+            observer.on_event(crate::types::FfiItemEvent::DurationChanged {
+                seconds: snapshot.duration_sec,
+            });
+        }
+    }
 
     /// Strongly-typed view of [`Self::audio_id`] for queue calls that
     /// take a [`TrackId`]. The value is identical — just the wrapper

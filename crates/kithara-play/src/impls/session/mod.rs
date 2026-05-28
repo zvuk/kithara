@@ -19,8 +19,8 @@ pub use client::SessionDispatcher;
 pub(crate) use host_native::session_client;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use host_web::{
-    bridge_duration_secs, bridge_is_playing, bridge_position_secs, bridge_process_count,
-    init_worker_channel, session_client, tick_and_poll_remote, warm_up_audio,
+    bridge_duration_secs, bridge_is_playing, bridge_position_secs, init_worker_channel,
+    session_client, tick_and_poll_remote, warm_up_audio,
 };
 pub use state::{
     AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionState, StartStreamFn, run_cmd,

@@ -725,17 +725,6 @@ impl PlayerImpl {
         }
     }
 
-    /// Diagnostic: number of times the audio processor's `process()` has been called.
-    pub fn process_count(&self) -> u64 {
-        let Some(slot_id) = *self.current_slot.lock_sync() else {
-            return 0;
-        };
-        let Some(state) = self.engine.slot_shared_state(slot_id) else {
-            return 0;
-        };
-        state.process_count.load(Ordering::Relaxed)
-    }
-
     /// Process audio-thread notifications, emitting `ItemDidPlayToEnd`
     /// only when a track finishes via natural EOF.
     pub fn process_notifications(&self) {

@@ -86,7 +86,6 @@ schema_version = 1
 [file_density]
 "crates/kithara-app/src/gui/view.rs" = 1
 "crates/kithara-decode/src/gapless/trimmer/tests.rs" = 1
-"crates/kithara-ffi/src/web/player.rs" = 1
 "crates/kithara-hls/src/variant/tests.rs" = 1
 "crates/kithara-stream/src/timeline.rs" = 1
 
@@ -254,7 +253,6 @@ schema_version = 1
 "crates/kithara-decode/src/apple/ffi.rs" = 1
 "crates/kithara-events/src/play.rs" = 1
 "crates/kithara-ffi/src/core/types.rs" = 1
-"crates/kithara-ffi/src/web/player.rs" = 1
 "crates/kithara-hls/src/parsing.rs" = 1
 "crates/kithara-platform/src/maybe_send.rs" = 1
 "crates/kithara-platform/src/thread.rs" = 1
@@ -295,7 +293,6 @@ schema_version = 1
 "crates/kithara-events/src/play.rs::MediaTime" = 1
 "crates/kithara-ffi/src/core/item.rs::AudioPlayerItem" = 1
 "crates/kithara-ffi/src/player.rs::AudioPlayer" = 1
-"crates/kithara-ffi/src/web/player.rs::Player" = 1
 "crates/kithara-file/src/coord.rs::FileCoord" = 1
 "crates/kithara-file/src/session/source.rs::FileSource" = 1
 "crates/kithara-hls/src/config.rs::HlsConfig" = 1

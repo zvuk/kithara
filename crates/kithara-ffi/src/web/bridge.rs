@@ -9,7 +9,7 @@ use crate::web::commands::WorkerCmd;
 /// Worker → main mirror of the current track id, written by the worker's
 /// event source on `CurrentTrackChanged` and read synchronously on the
 /// main thread by [`WorkerBridge::current_track_id`]. Lives in shared wasm
-/// linear memory (SharedArrayBuffer), so the atomic is visible across the
+/// linear memory (`SharedArrayBuffer`), so the atomic is visible across the
 /// worker boundary without a round-trip. `-1` is the "no current track"
 /// sentinel ([`TrackId`](kithara_queue::TrackId) values are small
 /// monotonic `u64`s that never reach the `i64` sign bit in practice).
@@ -24,10 +24,10 @@ pub(crate) fn set_current_track_id(id: Option<kithara_queue::TrackId>) {
     CURRENT_TRACK_ID.store(raw, Ordering::Relaxed);
 }
 
-/// Owns the command channel to the engine [`Worker`](crate::web::worker)
-/// and lazily boots it on first use. Mirrors the worker-bootstrap half of
-/// the legacy [`Player`](crate::web::player) singleton, but as an
-/// instance so [`WasmInner`](crate::web::inner::WasmInner) can hold one.
+/// Owns the command channel to the engine
+/// [`worker`](crate::web::worker) and lazily boots it on first use. Held
+/// by [`WasmInner`](crate::web::inner::WasmInner) as the wasm-side
+/// counterpart of `NativeInner`'s direct `Queue` handle.
 ///
 /// The worker itself owns the `Arc<Queue>`; this bridge only forwards
 /// [`WorkerCmd`]s and (re)spawns the worker if the channel closes.
@@ -77,8 +77,7 @@ impl WorkerBridge {
     }
 
     /// Boot the engine worker once. Idempotent: subsequent calls return
-    /// early while a live channel exists. Mirrors
-    /// [`Player::ensure_worker_started`](crate::web::player).
+    /// early while a live channel exists.
     pub(crate) fn ensure_worker_started(&self) {
         if self.lock_cmd_tx().is_some() {
             return;
@@ -91,7 +90,6 @@ impl WorkerBridge {
 
         wasm_support::ensure_main_session();
         wasm_support::init_worker_session();
-        crate::web::js::init_event_reader();
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);
@@ -103,8 +101,7 @@ impl WorkerBridge {
     }
 
     /// Forward a command to the worker, respawning the worker once if the
-    /// channel has closed. Mirrors
-    /// [`Player::send_cmd`](crate::web::player).
+    /// channel has closed.
     ///
     /// # Errors
     /// Returns a [`JsValue`] error if the command channel cannot be

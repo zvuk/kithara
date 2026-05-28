@@ -310,7 +310,6 @@ impl SeleniumHarness {
 struct Snapshot {
     active_index: Option<usize>,
     dur: Option<f64>,
-    pc: Option<f64>,
     playlist: Vec<String>,
     pos: Option<f64>,
     status: String,
@@ -321,7 +320,6 @@ impl Default for Snapshot {
         Self {
             active_index: None,
             dur: None,
-            pc: None,
             playlist: Vec::new(),
             pos: None,
             status: "<snapshot-unavailable>".to_string(),
@@ -469,8 +467,10 @@ impl WasmPlayerSelenium {
     async fn clear_playlist(&self) -> Result<(), String> {
         self.driver
             .execute(
-                "window.playlist && (window.playlist.length = 0); \
-                 typeof renderPlaylist === 'function' && renderPlaylist();",
+                "typeof clearPlaylist === 'function' \
+                 ? clearPlaylist() \
+                 : (window.playlist && (window.playlist.length = 0), \
+                    typeof renderPlaylist === 'function' && renderPlaylist());",
                 Vec::<Value>::new(),
             )
             .await
@@ -530,9 +530,8 @@ impl WasmPlayerSelenium {
                 activeIndex: activeIndex >= 0 ? activeIndex : null,
             };
             if (window.__player) {
-                out.pc = window.__player.process_count();
-                out.pos = window.__player.get_position_ms();
-                out.dur = window.__player.get_duration_ms();
+                out.pos = window.__player.currentTimeMs();
+                out.dur = window.__durationMs ?? 0;
             }
             return out;
         "#;
@@ -654,11 +653,6 @@ impl WasmPlayerSelenium {
             return Ok(());
         }
 
-        let pc_delta = end.pc.unwrap_or(0.0) - start.pc.unwrap_or(0.0);
-        if pc_delta >= 5.0 {
-            return Ok(());
-        }
-
         Err(format!(
             "{description}: playback did not advance enough; start={start:?} end={end:?}"
         ))
@@ -760,7 +754,7 @@ impl WasmPlayerSelenium {
             let current = self
                 .driver
                 .execute(
-                    "return window.__player ? window.__player.get_volume() : -1;",
+                    "return window.__player ? window.__player.volume() : -1;",
                     Vec::<Value>::new(),
                 )
                 .await
@@ -988,13 +982,13 @@ impl WasmPlayerSelenium {
     async fn get_position_ms(&self) -> Result<f64, String> {
         self.driver
             .execute(
-                "return window.__player ? window.__player.get_position_ms() : -1;",
+                "return window.__player ? window.__player.currentTimeMs() : -1;",
                 Vec::<Value>::new(),
             )
             .await
-            .map_err(|err| format!("get_position_ms script failed: {err}"))?
+            .map_err(|err| format!("currentTimeMs script failed: {err}"))?
             .convert::<f64>()
-            .map_err(|err| format!("get_position_ms conversion failed: {err}"))
+            .map_err(|err| format!("currentTimeMs conversion failed: {err}"))
     }
 
     async fn check_playback_advancing(
@@ -1060,14 +1054,6 @@ impl WasmPlayerSelenium {
         target_ms: f64,
         label: &str,
     ) -> Result<(bool, bool), String> {
-        let _ = self
-            .driver
-            .execute(
-                "window.__player && window.__player.take_events();",
-                Vec::<Value>::new(),
-            )
-            .await;
-
         self.driver
             .execute(
                 "window.__player && window.__player.seek(arguments[0]);",
@@ -1105,16 +1091,7 @@ impl WasmPlayerSelenium {
             positions.push(pos);
         }
 
-        let events = self
-            .driver
-            .execute(
-                "return window.__player ? (window.__player.take_events() || '') : '';",
-                Vec::<Value>::new(),
-            )
-            .await
-            .ok()
-            .and_then(|v| v.convert::<String>().ok())
-            .unwrap_or_default();
+        let events = self.collect_browser_logs().await;
 
         let advancing =
             positions.len() >= 2 && positions.last().copied().unwrap_or(0.0) > positions[0] + 100.0;

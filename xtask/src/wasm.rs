@@ -171,13 +171,6 @@ mod wasm_patcher_regex {
         LazyLock::new(|| Regex::new(r#"<link rel="modulepreload"[^>]*>"#).expect("valid regex"));
     pub(super) static RE_PRELOAD: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r#"<link rel="preload"[^>]*>"#).expect("valid regex"));
-    pub(super) static RE_PLAYER_CLASS: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?m)^export class Player\b").expect("valid regex"));
-    pub(super) static RE_PLAYER_NEW: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?m)^export function player_new\(").expect("valid regex"));
-    pub(super) static RE_PLAYER_FN: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?m)^export function (player_[a-z_]+)\(([^)]*)\)").expect("valid regex")
-    });
 }
 
 fn strip_html_attrs(content: &str) -> String {
@@ -229,43 +222,6 @@ fn apply_inline_patches(content: &str) -> String {
         )
 }
 
-fn generate_player_class(js: &str) -> Option<String> {
-    if wasm_patcher_regex::RE_PLAYER_CLASS.is_match(js)
-        || !wasm_patcher_regex::RE_PLAYER_NEW.is_match(js)
-    {
-        return None;
-    }
-
-    let mut methods = Vec::new();
-    for cap in wasm_patcher_regex::RE_PLAYER_FN.captures_iter(js) {
-        let fname = &cap[1];
-        let params = &cap[2];
-        let Some(method) = fname.strip_prefix("player_") else {
-            continue;
-        };
-        if method == "new" {
-            methods
-                .push("    constructor(readyPromise) { this._ready = readyPromise; }".to_owned());
-            methods.push(
-                "    static async create() \
-                 { const p = player_new(); const inst = new Player(p); await p; return inst; }"
-                    .to_owned(),
-            );
-        } else if params.is_empty() {
-            methods.push(format!("    {method}() {{ return {fname}(); }}"));
-        } else {
-            methods.push(format!(
-                "    {method}({params}) {{ return {fname}({params}); }}"
-            ));
-        }
-    }
-    methods.sort();
-    Some(format!(
-        "export class Player {{\n{}\n}}",
-        methods.join("\n")
-    ))
-}
-
 fn run_postbuild(staging_dir: &str) -> Result<()> {
     let dir = Path::new(staging_dir);
     anyhow::ensure!(dir.is_dir(), "staging dir does not exist: {staging_dir}");
@@ -280,12 +236,7 @@ fn run_postbuild(staging_dir: &str) -> Result<()> {
     if js.exists() {
         let content = fs::read_to_string(&js).context("read kithara-ffi.js")?;
         let content = apply_text_decoder_polyfill(&content);
-        let mut content = content + Consts::CHECK_RUNTIME_JS;
-        if let Some(class) = generate_player_class(&content) {
-            content.push('\n');
-            content.push_str(&class);
-            println!("post-build: Player class appended");
-        }
+        let content = content + Consts::CHECK_RUNTIME_JS;
         fs::write(&js, content).context("write kithara-ffi.js")?;
         println!("post-build: kithara-ffi.js patched");
     }
@@ -374,28 +325,5 @@ mod tests {
         let input = "{ __wst_parent_managed: true }";
         let result = apply_inline_patches(input);
         assert!(result.contains("__wst_boot_lock_ptr: (globalThis.__wst_boot_lock_ptr || 0)"));
-    }
-
-    #[test]
-    fn generate_player_class_wraps_exports() {
-        let js = "export function player_new() {}\n\
-                   export function player_play() {}\n\
-                   export function player_seek(pos) {}";
-        let class = generate_player_class(js).expect("should generate class");
-        assert!(class.contains("static async create()"));
-        assert!(class.contains("play() { return player_play(); }"));
-        assert!(class.contains("seek(pos) { return player_seek(pos); }"));
-    }
-
-    #[test]
-    fn player_class_skipped_when_native_export() {
-        let js = "export class Player { }";
-        assert!(generate_player_class(js).is_none());
-    }
-
-    #[test]
-    fn player_class_skipped_when_no_player_new() {
-        let js = "export function other_func() {}";
-        assert!(generate_player_class(js).is_none());
     }
 }

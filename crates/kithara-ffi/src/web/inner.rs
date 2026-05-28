@@ -15,11 +15,10 @@ use crate::{
     web::{bridge::WorkerBridge, commands::WorkerCmd},
 };
 
-/// Number of EQ bands surfaced through the wasm facade. Mirrors the
-/// fixed log-spaced layout the legacy [`Player`](crate::web::player)
-/// singleton exposed. Module-level because the struct's `eq_gains` array
-/// length references it (a position where `Self::` is not yet in scope);
-/// the remaining scalar defaults live as `WasmInner` associated consts.
+/// Number of EQ bands surfaced through the wasm facade. Module-level
+/// because the struct's `eq_gains` array length references it (a position
+/// where `Self::` is not yet in scope); the remaining scalar defaults
+/// live as `WasmInner` associated consts.
 const EQ_BANDS: usize = 10;
 
 /// Caller-facing ordered queue view: the `(TrackId, item)` pairs the

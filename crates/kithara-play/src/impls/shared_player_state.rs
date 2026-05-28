@@ -26,7 +26,9 @@ pub struct SharedPlayerState {
     pub position: AtomicF64,
     /// Current sample rate from the audio stream.
     pub sample_rate: AtomicU32,
-    /// Diagnostic: how many times `process()` has been called on the audio thread.
+    /// Diagnostic: how many times `process()` has been called on the audio
+    /// thread. Read by offline test harnesses to assert the RT graph is
+    /// actually pulling audio.
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
     pub seek_epoch: AtomicU64,

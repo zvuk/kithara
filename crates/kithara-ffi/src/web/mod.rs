@@ -11,7 +11,5 @@ pub(crate) mod inner;
 pub(crate) mod js;
 pub(crate) mod key_processor_bridge;
 pub(crate) mod observer;
-pub mod player;
-pub mod queue;
 pub mod surface;
 pub(crate) mod worker;

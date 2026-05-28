@@ -4,10 +4,7 @@ use kithara_queue::{TrackId, Transition};
 
 /// Commands sent from the main-thread bridge to the engine Worker.
 ///
-/// The legacy single-track variants (`SelectTrack`, `Play`, `Pause`, …)
-/// remain in place: the demo's `player_*` free functions still drive
-/// them. Wave 4 merges the overlapping control surface; Wave 6 removes
-/// the legacy half. The multi-track queue variants
+/// The multi-track queue variants
 /// (`Append`/`Insert`/`Remove`/`Replace`/`SelectQueue`/`RemoveAll`)
 /// mirror [`NativeInner`](crate::native::inner::NativeInner)'s queue
 /// methods — the caller allocates the [`TrackId`] on the main thread
@@ -16,10 +13,6 @@ use kithara_queue::{TrackId, Transition};
 /// `insert_with_id`.
 #[derive(Clone)]
 pub(crate) enum WorkerCmd {
-    SelectTrack {
-        url: String,
-        request_id: u32,
-    },
     Play,
     Pause,
     Stop,
@@ -31,7 +24,6 @@ pub(crate) enum WorkerCmd {
         gain_db: f32,
     },
     ResetEq,
-    SetDucking(u32),
     /// Append a track to the tail of the queue. Loading starts in the
     /// background; playback does not begin until a matching `SelectQueue`.
     Append {

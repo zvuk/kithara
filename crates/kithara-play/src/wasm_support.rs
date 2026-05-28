@@ -54,8 +54,3 @@ pub fn bridge_duration_secs() -> f64 {
 pub fn bridge_is_playing() -> bool {
     session::bridge_is_playing()
 }
-
-/// Audio-thread process count (read from shared atomics).
-pub fn bridge_process_count() -> u64 {
-    session::bridge_process_count()
-}

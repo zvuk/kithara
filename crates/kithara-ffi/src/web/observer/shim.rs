@@ -101,10 +101,9 @@ impl FfiKeyProcessor for KeyProcessorJs {
             key_js.as_ref(),
             &JsValue::from_str(&salt),
         );
-        match result.and_then(JsCast::dyn_into::<Uint8Array>) {
-            Ok(arr) => arr.to_vec(),
-            Err(_) => Vec::new(),
-        }
+        result
+            .and_then(JsCast::dyn_into::<Uint8Array>)
+            .map_or_else(|_| Vec::new(), |arr| arr.to_vec())
     }
 }
 

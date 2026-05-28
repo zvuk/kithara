@@ -18,7 +18,8 @@ pub fn setup() {
     tracing_wasm::set_as_global_default_with_config(config);
 }
 
-/// Build revision string: "version git_hash build_timestamp"
+/// Build revision string: `"version git_hash build_timestamp"`.
+#[must_use]
 #[wasm_bindgen]
 pub fn build_info() -> String {
     format!(
