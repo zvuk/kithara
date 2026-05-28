@@ -62,6 +62,47 @@ impl Fmp4SegmentDemuxer {
         EnsureCursor::Ready
     }
 
+    /// Pull the next decoded frame from the active cursor, advancing
+    /// `next_index`. `None` once the cursor's frames are exhausted (caller
+    /// drops the cursor and moves to the next segment).
+    #[inline]
+    fn next_cursor_frame(&mut self) -> Option<Fmp4Frame> {
+        let cursor = self
+            .cursor
+            .as_mut()
+            .expect("BUG: cursor present after ensure_cursor");
+        let frames_state = cursor
+            .frames
+            .as_mut()
+            .expect("BUG: frames present after Ready");
+        let frame_idx = frames_state.next_index;
+        if frame_idx >= frames_state.frames.len() {
+            None
+        } else {
+            let frame = frames_state.frames[frame_idx];
+            frames_state.next_index = frame_idx + 1;
+            Some(frame)
+        }
+    }
+
+    /// Build the borrowed [`DemuxOutcome::Frame`] for `frame`, reading its
+    /// bytes out of the active cursor's segment buffer and converting the
+    /// fMP4 decode-time / duration ticks to wall-clock. Pure read of the
+    /// cursor.
+    #[inline]
+    fn current_frame(&self, frame: Fmp4Frame) -> DemuxOutcome<'_> {
+        let cursor = self.cursor.as_ref().expect("BUG: cursor still present");
+        let pts = ticks_to_duration(frame.decode_time, self.init.timescale);
+        let dur = ticks_to_duration(u64::from(frame.duration), self.init.timescale);
+        let data: &[u8] = &cursor.read.buffer[frame.offset..frame.offset + frame.size];
+        DemuxOutcome::Frame(Frame {
+            data,
+            pts,
+            duration: dur,
+            packet_desc: &[],
+        })
+    }
+
     fn fill_cursor(&mut self) -> DecodeResult<FillStatus> {
         let cursor = self
             .cursor
@@ -166,38 +207,11 @@ impl Demuxer for Fmp4SegmentDemuxer {
                 FillStatus::Pending(reason) => return Ok(DemuxOutcome::Pending(reason)),
             }
 
-            let frame_meta = {
-                let cursor = self
-                    .cursor
-                    .as_mut()
-                    .expect("BUG: cursor present after ensure_cursor");
-                let frames_state = cursor
-                    .frames
-                    .as_mut()
-                    .expect("BUG: frames present after Ready");
-                let frame_idx = frames_state.next_index;
-                if frame_idx >= frames_state.frames.len() {
-                    None
-                } else {
-                    let frame = frames_state.frames[frame_idx];
-                    frames_state.next_index = frame_idx + 1;
-                    Some(frame)
-                }
-            };
-            let Some(frame) = frame_meta else {
+            let Some(frame) = self.next_cursor_frame() else {
                 self.cursor = None;
                 continue;
             };
-            let cursor = self.cursor.as_ref().expect("BUG: cursor still present");
-            let pts = ticks_to_duration(frame.decode_time, self.init.timescale);
-            let dur = ticks_to_duration(u64::from(frame.duration), self.init.timescale);
-            let data: &[u8] = &cursor.read.buffer[frame.offset..frame.offset + frame.size];
-            return Ok(DemuxOutcome::Frame(Frame {
-                data,
-                pts,
-                duration: dur,
-                packet_desc: &[],
-            }));
+            return Ok(self.current_frame(frame));
         }
     }
 

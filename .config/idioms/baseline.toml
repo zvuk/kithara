@@ -2,14 +2,10 @@ schema_version = 1
 
 [accumulator_loops]
 "crates/kithara-decode/src/gapless/trimmer/core.rs:142:12" = 1
-"crates/kithara-decode/src/gapless/trimmer/core.rs:443:12" = 1
+"crates/kithara-decode/src/gapless/trimmer/core.rs:458:8" = 1
 
 [fat_loop_body]
 "crates/kithara-decode/src/composed.rs:166:loop_body" = 1
-"crates/kithara-decode/src/fmp4/demuxer.rs:158:loop_body" = 1
-"crates/kithara-decode/src/gapless/trimmer/core.rs:423:for_body" = 1
-"crates/kithara-decode/src/gapless/trimmer/core.rs:613:for_body" = 1
-"crates/kithara-decode/src/gapless/trimmer/core.rs:675:for_body" = 1
 "crates/kithara-hls/src/variant.rs:1013:while_body" = 1
 "crates/kithara-hls/src/variant.rs:1032:while_body" = 1
 "crates/kithara-hls/src/variant.rs:1060:while_body" = 1
@@ -80,13 +76,13 @@ schema_version = 1
 "crates/kithara-decode/src/apple/audio_file_demuxer.rs:160:4" = 1
 "crates/kithara-decode/src/apple/codec.rs:134:4" = 1
 "crates/kithara-decode/src/apple/codec.rs:215:4" = 1
-"crates/kithara-decode/src/composed.rs:262:4" = 1
+"crates/kithara-decode/src/composed.rs:291:4" = 1
 "crates/kithara-decode/src/factory/inner.rs:140:4" = 1
 "crates/kithara-decode/src/factory/inner.rs:153:4" = 1
 "crates/kithara-decode/src/factory/inner.rs:181:4" = 1
 "crates/kithara-decode/src/factory/inner.rs:216:4" = 1
-"crates/kithara-decode/src/fmp4/demuxer.rs:156:4" = 1
-"crates/kithara-decode/src/fmp4/demuxer.rs:89:4" = 1
+"crates/kithara-decode/src/fmp4/demuxer.rs:130:4" = 1
+"crates/kithara-decode/src/fmp4/demuxer.rs:197:4" = 1
 "crates/kithara-decode/src/fmp4/parsing.rs:58:0" = 1
 "crates/kithara-decode/src/gapless/mp3.rs:15:0" = 1
 "crates/kithara-decode/src/gapless/mp4.rs:12:0" = 1

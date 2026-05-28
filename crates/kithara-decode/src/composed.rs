@@ -181,34 +181,16 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 self.codec
                     .decode_frame(frame.data, frame_pts, frame.packet_desc, &mut buf)?;
             let mut chunk_pts = frame_pts;
-            if let Some(target) = self.pending_seek_target {
-                if frame_end <= target {
-                    drop(buf);
-                    continue;
-                }
-                // WHY: frame straddles target — trim leading samples (README "Seek trim").
-                if frame_pts < target && frames > 0 {
-                    let live_spec = self.codec.spec();
-                    let trim_frames_u64 = frames_to_trim(frame_pts, target, live_spec.sample_rate)
-                        .min(u64::from(frames));
-                    let trim_frames = u32::try_from(trim_frames_u64).unwrap_or(frames);
-                    if trim_frames > 0 && trim_frames < frames {
-                        let channels = usize::from(live_spec.channels);
-                        let trim_samples = usize::try_from(trim_frames)
-                            .unwrap_or(0)
-                            .saturating_mul(channels);
-                        let total_samples = usize::try_from(frames)
-                            .unwrap_or(0)
-                            .saturating_mul(channels);
-                        if trim_samples < total_samples && trim_samples <= buf.len() {
-                            buf.copy_within(trim_samples..total_samples, 0);
-                            buf.truncate(total_samples - trim_samples);
-                            frames = frames.saturating_sub(trim_frames);
-                            chunk_pts = target;
-                        }
-                    }
-                }
-                self.pending_seek_target = None;
+            if self.apply_pending_seek_trim(
+                frame_pts,
+                frame_end,
+                &mut buf,
+                &mut frames,
+                &mut chunk_pts,
+            ) == SeekTrim::DropFrame
+            {
+                drop(buf);
+                continue;
             }
             if frames == 0 {
                 continue;
@@ -216,6 +198,53 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             let chunk = self.build_chunk(buf, frames, chunk_pts, source_bytes);
             return Ok(DecoderChunkOutcome::Chunk(chunk));
         }
+    }
+
+    /// Resolve a pending seek target against the just-decoded frame.
+    /// Returns [`SeekTrim::DropFrame`] when the frame ends at or before
+    /// the target (caller drops it and pulls the next one). Otherwise the
+    /// frame straddles or follows the target: leading samples are trimmed
+    /// in place (mutating `buf` / `frames` / `chunk_pts`), the pending
+    /// target is cleared, and [`SeekTrim::Keep`] is returned.
+    #[inline]
+    fn apply_pending_seek_trim(
+        &mut self,
+        frame_pts: Duration,
+        frame_end: Duration,
+        buf: &mut PcmBuf,
+        frames: &mut u32,
+        chunk_pts: &mut Duration,
+    ) -> SeekTrim {
+        let Some(target) = self.pending_seek_target else {
+            return SeekTrim::Keep;
+        };
+        if frame_end <= target {
+            return SeekTrim::DropFrame;
+        }
+        // WHY: frame straddles target — trim leading samples (README "Seek trim").
+        if frame_pts < target && *frames > 0 {
+            let live_spec = self.codec.spec();
+            let trim_frames_u64 =
+                frames_to_trim(frame_pts, target, live_spec.sample_rate).min(u64::from(*frames));
+            let trim_frames = u32::try_from(trim_frames_u64).unwrap_or(*frames);
+            if trim_frames > 0 && trim_frames < *frames {
+                let channels = usize::from(live_spec.channels);
+                let trim_samples = usize::try_from(trim_frames)
+                    .unwrap_or(0)
+                    .saturating_mul(channels);
+                let total_samples = usize::try_from(*frames)
+                    .unwrap_or(0)
+                    .saturating_mul(channels);
+                if trim_samples < total_samples && trim_samples <= buf.len() {
+                    buf.copy_within(trim_samples..total_samples, 0);
+                    buf.truncate(total_samples - trim_samples);
+                    *frames = frames.saturating_sub(trim_frames);
+                    *chunk_pts = target;
+                }
+            }
+        }
+        self.pending_seek_target = None;
+        SeekTrim::Keep
     }
 
     fn seek_inner(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
@@ -334,6 +363,17 @@ mod default_priming_tests {
         assert_eq!(decoder.default_priming_frames(AudioCodec::Opus), 312);
         assert_eq!(decoder.default_priming_frames(AudioCodec::Flac), 0);
     }
+}
+
+/// Outcome of resolving a pending seek target against a decoded frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SeekTrim {
+    /// Frame ends at or before the target — caller drops it and pulls the
+    /// next frame; the pending target stays set.
+    DropFrame,
+    /// Frame straddles or follows the target — emit it (after any leading
+    /// trim already applied in place).
+    Keep,
 }
 
 fn frame_offset_for(at: Duration, sample_rate: u32) -> u64 {

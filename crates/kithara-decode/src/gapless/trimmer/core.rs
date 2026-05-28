@@ -424,29 +424,43 @@ fn apply_trailing_fade_out(tail_buffer: &mut TailBuffer, sample_rate: u32) {
         if faded_so_far >= total_frames {
             break;
         }
-        let channels = usize::from(chunk.spec().channels.max(1));
-        let chunk_total_frames = usize_from_u64_saturating(chunk_frames(chunk));
-        if chunk_total_frames == 0 {
-            continue;
-        }
-        let in_window = (total_frames - faded_so_far).min(chunk_total_frames);
-        let first_to_shape = chunk_total_frames - in_window;
-
-        let pcm_end = (chunk_total_frames * channels).min(chunk.pcm.len());
-        let pcm_start = (first_to_shape * channels).min(pcm_end);
-        let window = &mut chunk.pcm[pcm_start..pcm_end];
-        for (frame_in_chunk, frame_samples) in window.chunks_exact_mut(channels).enumerate() {
-            let frames_to_end = in_window - 1 - frame_in_chunk + faded_so_far;
-            let frame_in_fade = total_frames - 1 - frames_to_end;
-            let position = f32::from(u16::try_from(frame_in_fade).unwrap_or(u16::MAX)) / denom;
-            let gain = 0.5 + 0.5 * (std::f32::consts::PI * position).cos();
-            for sample in frame_samples {
-                *sample *= gain;
-            }
-        }
-
-        faded_so_far += in_window;
+        faded_so_far += fade_out_chunk(chunk, total_frames, faded_so_far, denom);
     }
+}
+
+/// Shape the trailing-fade window inside one chunk in place. `faded_so_far`
+/// is the count of frames already faded by chunks after this one (the tail
+/// is processed back-to-front). Returns the number of frames shaped in this
+/// chunk (0 for an empty chunk), which the caller adds to `faded_so_far`.
+#[inline]
+fn fade_out_chunk(
+    chunk: &mut PcmChunk,
+    total_frames: usize,
+    faded_so_far: usize,
+    denom: f32,
+) -> usize {
+    let channels = usize::from(chunk.spec().channels.max(1));
+    let chunk_total_frames = usize_from_u64_saturating(chunk_frames(chunk));
+    if chunk_total_frames == 0 {
+        return 0;
+    }
+    let in_window = (total_frames - faded_so_far).min(chunk_total_frames);
+    let first_to_shape = chunk_total_frames - in_window;
+
+    let pcm_end = (chunk_total_frames * channels).min(chunk.pcm.len());
+    let pcm_start = (first_to_shape * channels).min(pcm_end);
+    let window = &mut chunk.pcm[pcm_start..pcm_end];
+    for (frame_in_chunk, frame_samples) in window.chunks_exact_mut(channels).enumerate() {
+        let frames_to_end = in_window - 1 - frame_in_chunk + faded_so_far;
+        let frame_in_fade = total_frames - 1 - frames_to_end;
+        let position = f32::from(u16::try_from(frame_in_fade).unwrap_or(u16::MAX)) / denom;
+        let gain = 0.5 + 0.5 * (std::f32::consts::PI * position).cos();
+        for sample in frame_samples {
+            *sample *= gain;
+        }
+    }
+
+    in_window
 }
 
 fn arm_fade_in(state: &mut HeuristicState) {
@@ -611,19 +625,12 @@ fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
         let channels = usize::from(chunk.spec().channels.max(1));
         let channels_f64: f64 = channels.max(1).as_();
         for frame in (0..chunk_total_frames).rev() {
-            let frame_start = usize_from_u64_saturating(frame).saturating_mul(channels);
-            let frame_end = frame_start.saturating_add(channels).min(samples.len());
-            if frame_end <= frame_start {
+            let Some(frame_mean_abs) = frame_mean_abs(samples, frame, channels, channels_f64)
+            else {
                 continue;
-            }
-            let frame_sum_abs: f64 = samples[frame_start..frame_end]
-                .iter()
-                .map(|&sample| f64::from(sample.abs()))
-                .sum();
-            let frame_mean_abs = frame_sum_abs / channels_f64;
+            };
             window_sum_abs += frame_mean_abs;
             window_count = window_count.saturating_add(1);
-
             if window_count >= window_frames {
                 let window_count_f64: f64 = window_count.as_();
                 let mean_abs = window_sum_abs / window_count_f64;
@@ -647,6 +654,23 @@ fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
     }
 
     silent_frames
+}
+
+/// Mean of `|sample|` across one frame's channels. `None` for an empty
+/// span (mirrors the original `continue` on a zero-width frame). Pure
+/// read of `samples`.
+#[inline]
+fn frame_mean_abs(samples: &[f32], frame: u64, channels: usize, channels_f64: f64) -> Option<f64> {
+    let frame_start = usize_from_u64_saturating(frame).saturating_mul(channels);
+    let frame_end = frame_start.saturating_add(channels).min(samples.len());
+    if frame_end <= frame_start {
+        return None;
+    }
+    let frame_sum_abs: f64 = samples[frame_start..frame_end]
+        .iter()
+        .map(|&sample| f64::from(sample.abs()))
+        .sum();
+    Some(frame_sum_abs / channels_f64)
 }
 
 /// Find the first non-silent frame in the buffered leading audio.
@@ -676,25 +700,49 @@ fn find_leading_trim_frames(
             if scanned_frames >= params.scan_window_frames {
                 return None;
             }
-
-            let frame_start = usize_from_u64_saturating(frame).saturating_mul(channels);
-            let frame_end = frame_start.saturating_add(channels).min(samples.len());
-            if frame_end <= frame_start {
-                scanned_frames = scanned_frames.saturating_add(1);
-                trim_frames = trim_frames.saturating_add(1);
-                continue;
+            match classify_leading_frame(samples, frame, channels, threshold_amp) {
+                LeadingFrame::Advance => {
+                    scanned_frames = scanned_frames.saturating_add(1);
+                    trim_frames = trim_frames.saturating_add(1);
+                }
+                LeadingFrame::Boundary => {
+                    return (trim_frames >= params.min_trim_frames).then_some(trim_frames);
+                }
             }
-
-            if !frame_is_silent(&samples[frame_start..frame_end], threshold_amp) {
-                return (trim_frames >= params.min_trim_frames).then_some(trim_frames);
-            }
-
-            scanned_frames = scanned_frames.saturating_add(1);
-            trim_frames = trim_frames.saturating_add(1);
         }
     }
 
     None
+}
+
+/// Classification of one leading frame during the silence scan.
+enum LeadingFrame {
+    /// Empty or below-threshold frame — keep scanning, counting it as
+    /// trimmable.
+    Advance,
+    /// First audible frame — the trim boundary is here.
+    Boundary,
+}
+
+/// Classify frame `frame` (an empty span counts as silent, mirroring the
+/// original per-sample scan). Pure read of `samples`.
+#[inline]
+fn classify_leading_frame(
+    samples: &[f32],
+    frame: u64,
+    channels: usize,
+    threshold_amp: f32,
+) -> LeadingFrame {
+    let frame_start = usize_from_u64_saturating(frame).saturating_mul(channels);
+    let frame_end = frame_start.saturating_add(channels).min(samples.len());
+    if frame_end <= frame_start {
+        return LeadingFrame::Advance;
+    }
+    if frame_is_silent(&samples[frame_start..frame_end], threshold_amp) {
+        LeadingFrame::Advance
+    } else {
+        LeadingFrame::Boundary
+    }
 }
 
 fn drain_tail(tail_buffer: &mut TailBuffer, tail_buffered_frames: &mut u64) -> GaplessOutput {
