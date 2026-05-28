@@ -1,6 +1,6 @@
 use std::{
     io::{Seek, SeekFrom},
-    ops::Range,
+    ops::{ControlFlow, Range},
 };
 
 use kithara_stream::{PendingReason, SegmentLayout, StreamReadError};
@@ -102,57 +102,79 @@ pub(crate) fn fill_segment_buffer(
     live: LiveRange<'_>,
 ) -> DecodeResult<FillStatus> {
     loop {
-        refresh_range(state, live);
-        let total = state.total();
-        if state.buffer.len() != total {
-            state.buffer.resize(total, 0);
-        }
-        if state.filled >= total {
-            return Ok(FillStatus::Ready);
-        }
-
-        let abs_offset = state.range.start + state.filled as u64;
-        source.seek(SeekFrom::Start(abs_offset))?;
-        if refresh_range(state, live) {
-            let total_after = state.total();
-            if state.buffer.len() != total_after {
-                state.buffer.clear();
-                state.buffer.resize(total_after, 0);
-            }
-            if state.filled >= total_after {
-                return Ok(FillStatus::Ready);
-            }
-            let corrected = state.range.start + state.filled as u64;
-            source.seek(SeekFrom::Start(corrected))?;
-        }
-
-        match source
-            .try_read(&mut state.buffer[state.filled..])
-            .map_err(map_stream_err)?
-        {
-            InputReadOutcome::Bytes(n) => state.filled += n.get(),
-            InputReadOutcome::Pending(reason) => return Ok(FillStatus::Pending(reason)),
-            InputReadOutcome::Eof => {
-                if state.filled == state.total() {
-                    return Ok(FillStatus::Ready);
-                }
-                if refresh_range(state, live) {
-                    let new_total = state.total();
-                    if state.buffer.len() != new_total {
-                        state.buffer.resize(new_total, 0);
-                    }
-                    if state.filled >= new_total {
-                        return Ok(FillStatus::Ready);
-                    }
-                }
-                return Err(DecodeError::InvalidData(format!(
-                    "unexpected EOF before segment buffer filled: {} / {}",
-                    state.filled,
-                    state.total()
-                )));
-            }
+        if let ControlFlow::Break(status) = fill_step(source, state, live)? {
+            return Ok(status);
         }
     }
+}
+
+/// Run one fill iteration: re-resolve the live range, size the buffer,
+/// seek to the next unfilled byte, and read. Returns `Break(status)` when
+/// the buffer is full or the source went pending, `Continue` to keep
+/// reading.
+fn fill_step(
+    source: &mut BoxedSource,
+    state: &mut SegmentReadState,
+    live: LiveRange<'_>,
+) -> DecodeResult<ControlFlow<FillStatus>> {
+    refresh_range(state, live);
+    let total = state.total();
+    if state.buffer.len() != total {
+        state.buffer.resize(total, 0);
+    }
+    if state.filled >= total {
+        return Ok(ControlFlow::Break(FillStatus::Ready));
+    }
+
+    let abs_offset = state.range.start + state.filled as u64;
+    source.seek(SeekFrom::Start(abs_offset))?;
+    if refresh_range(state, live) {
+        let total_after = state.total();
+        if state.buffer.len() != total_after {
+            state.buffer.clear();
+            state.buffer.resize(total_after, 0);
+        }
+        if state.filled >= total_after {
+            return Ok(ControlFlow::Break(FillStatus::Ready));
+        }
+        let corrected = state.range.start + state.filled as u64;
+        source.seek(SeekFrom::Start(corrected))?;
+    }
+
+    match source
+        .try_read(&mut state.buffer[state.filled..])
+        .map_err(map_stream_err)?
+    {
+        InputReadOutcome::Bytes(n) => {
+            state.filled += n.get();
+            Ok(ControlFlow::Continue(()))
+        }
+        InputReadOutcome::Pending(reason) => Ok(ControlFlow::Break(FillStatus::Pending(reason))),
+        InputReadOutcome::Eof => on_eof(state, live).map(ControlFlow::Break),
+    }
+}
+
+/// Resolve an EOF mid-fill: accept it as `Ready` when the buffer is full
+/// (or becomes full after a live-range shrink), otherwise report the
+/// short read.
+fn on_eof(state: &mut SegmentReadState, live: LiveRange<'_>) -> DecodeResult<FillStatus> {
+    if state.filled == state.total() {
+        return Ok(FillStatus::Ready);
+    }
+    if refresh_range(state, live) {
+        let new_total = state.total();
+        if state.buffer.len() != new_total {
+            state.buffer.resize(new_total, 0);
+        }
+        if state.filled >= new_total {
+            return Ok(FillStatus::Ready);
+        }
+    }
+    Err(DecodeError::InvalidData(format!(
+        "unexpected EOF before segment buffer filled: {} / {}",
+        state.filled,
+        state.total()
+    )))
 }
 
 /// Re-resolve `state.range` against the live layout. Returns `true` if

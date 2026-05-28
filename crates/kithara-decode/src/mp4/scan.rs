@@ -455,43 +455,50 @@ fn parse_elst(payload: &[u8]) -> Result<SmallVec<[Mp4EditListEntry; 1]>, Mp4Meta
 
     let entry_count = entry_count.min(Consts::ELST_MAX_ENTRIES);
     let mut offset = 8;
-    let mut entries = SmallVec::with_capacity(entry_count);
 
-    for _ in 0..entry_count {
-        let entry = match version {
-            0 => {
-                let segment_duration = u64::from(
-                    read_be_u32(slice(payload, offset, 4, "elst v0 segment duration")?)
-                        .ok_or_else(|| invalid("elst v0 segment duration is truncated"))?,
-                );
-                let media_time = i64::from(
-                    read_be_i32(slice(payload, offset + 4, 4, "elst v0 media time")?)
-                        .ok_or_else(|| invalid("elst v0 media time is truncated"))?,
-                );
-                offset += 12;
-                Mp4EditListEntry {
-                    media_time,
-                    segment_duration,
-                }
-            }
-            1 => {
-                let segment_duration =
-                    read_be_u64(slice(payload, offset, 8, "elst v1 segment duration")?)
-                        .ok_or_else(|| invalid("elst v1 segment duration is truncated"))?;
-                let media_time = read_be_i64(slice(payload, offset + 8, 8, "elst v1 media time")?)
-                    .ok_or_else(|| invalid("elst v1 media time is truncated"))?;
-                offset += 20;
-                Mp4EditListEntry {
-                    media_time,
-                    segment_duration,
-                }
-            }
-            _ => return Err(invalid(format!("unsupported elst version {version}"))),
-        };
-        entries.push(entry);
+    (0..entry_count)
+        .map(|_| parse_elst_entry(payload, version, &mut offset))
+        .collect()
+}
+
+/// Parse one `elst` edit-list entry at `*offset`, advancing `*offset`
+/// past the consumed bytes. `version` selects the 32- or 64-bit field
+/// layout; any other value is rejected.
+fn parse_elst_entry(
+    payload: &[u8],
+    version: u8,
+    offset: &mut usize,
+) -> Result<Mp4EditListEntry, Mp4MetadataError> {
+    match version {
+        0 => {
+            let segment_duration = u64::from(
+                read_be_u32(slice(payload, *offset, 4, "elst v0 segment duration")?)
+                    .ok_or_else(|| invalid("elst v0 segment duration is truncated"))?,
+            );
+            let media_time = i64::from(
+                read_be_i32(slice(payload, *offset + 4, 4, "elst v0 media time")?)
+                    .ok_or_else(|| invalid("elst v0 media time is truncated"))?,
+            );
+            *offset += 12;
+            Ok(Mp4EditListEntry {
+                media_time,
+                segment_duration,
+            })
+        }
+        1 => {
+            let segment_duration =
+                read_be_u64(slice(payload, *offset, 8, "elst v1 segment duration")?)
+                    .ok_or_else(|| invalid("elst v1 segment duration is truncated"))?;
+            let media_time = read_be_i64(slice(payload, *offset + 8, 8, "elst v1 media time")?)
+                .ok_or_else(|| invalid("elst v1 media time is truncated"))?;
+            *offset += 20;
+            Ok(Mp4EditListEntry {
+                media_time,
+                segment_duration,
+            })
+        }
+        _ => Err(invalid(format!("unsupported elst version {version}"))),
     }
-
-    Ok(entries)
 }
 
 /// Parses an iTunes `data` sub-box. Returns the 24-bit type code (with the
