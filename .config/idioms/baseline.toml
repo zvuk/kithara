@@ -22,9 +22,6 @@ schema_version = 1
 "crates/kithara-decode/src/apple/audio_file.rs:73:22" = 1
 "crates/kithara-decode/src/fmp4/tests.rs:150:30" = 1
 
-[branch_chains]
-"crates/kithara-stream/src/media.rs:181:8" = 1
-
 [fat_loop_body]
 "crates/kithara-app/build.rs:404:while_body" = 1
 "crates/kithara-app/build.rs:430:for_body" = 1
@@ -208,8 +205,8 @@ schema_version = 1
 "crates/kithara-queue/src/queue/lifecycle.rs:211:4" = 1
 "crates/kithara-queue/src/queue/lifecycle.rs:52:4" = 1
 "crates/kithara-queue/src/queue/playback.rs:168:4" = 1
-"crates/kithara-queue/src/queue/selection.rs:108:4" = 1
-"crates/kithara-queue/src/queue/selection.rs:119:4" = 1
+"crates/kithara-queue/src/queue/selection.rs:112:4" = 1
+"crates/kithara-queue/src/queue/selection.rs:123:4" = 1
 "crates/kithara-queue/src/queue/selection.rs:13:4" = 1
 "crates/kithara-storage/src/backend/resource/io.rs:36:4" = 1
 "crates/kithara-storage/src/backend/resource/lifecycle.rs:12:4" = 1
@@ -248,13 +245,7 @@ schema_version = 1
 "crates/kithara-hls/src/loading/size_estimation.rs:105:8" = 1
 "crates/kithara-hls/src/variant.rs:674:20" = 1
 "crates/kithara-play/src/impls/player_processor.rs:533:20" = 1
-"crates/kithara-play/src/impls/session/state.rs:522:4" = 1
-"crates/kithara-play/src/impls/session/state.rs:623:4" = 1
-"crates/kithara-play/src/impls/session/state.rs:651:4" = 1
-"crates/kithara-play/src/impls/session/state.rs:680:4" = 1
-"crates/kithara-play/src/impls/session/state.rs:709:4" = 1
 "crates/kithara-storage/src/backend/resource/wait.rs:43:12" = 1
-"crates/kithara-stream/src/media.rs:213:8" = 1
 "crates/kithara-test-macros/src/test/entry.rs:114:4" = 1
 
 [loop_allocation]
