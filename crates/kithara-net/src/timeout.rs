@@ -16,15 +16,15 @@ use crate::{
 
 /// Timeout decorator for Net implementations
 pub struct TimeoutNet<N> {
+    inner: N,
     #[cfg(not(target_arch = "wasm32"))]
     timeout: Duration,
-    inner: N,
 }
 
 impl<N: Net> TimeoutNet<N> {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(inner: N, timeout: Duration) -> Self {
-        Self { timeout, inner }
+        Self { inner, timeout }
     }
 
     #[cfg(target_arch = "wasm32")]

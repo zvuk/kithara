@@ -136,6 +136,19 @@ pub enum ChunkOutcome {
 /// - `Err(DecodeError)` — decoder or channel failure. The reader may
 ///   or may not recover; callers that finalise tracks MUST NOT treat
 ///   this as EOF.
+///
+/// **Usage pattern:**
+/// ```ignore
+/// // Async preload before audio callback
+/// resource.preload()?;
+///
+/// // In audio callback (non-blocking after preload)
+/// match resource.read_planar(&mut buffers)? {
+///     ReadOutcome::Frames { count, .. } if count > 0 => play_samples(count),
+///     ReadOutcome::Frames { .. } => { /* silence this tick */ }
+///     ReadOutcome::Eof { .. } => finalise_track(),
+/// }
+/// ```
 #[kithara::mock(api = PcmReaderMock)]
 pub trait PcmReader: kithara_platform::MaybeSend {
     /// Runtime ABR handle for the underlying stream.

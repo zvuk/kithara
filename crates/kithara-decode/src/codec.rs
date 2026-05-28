@@ -33,13 +33,23 @@ pub(crate) fn access_unit_frames(codec: AudioCodec) -> u32 {
 /// through the injected `PcmPool`, which keeps the hot path zero-alloc
 /// once the pool is warm.
 pub(crate) trait FrameCodec: Send + 'static {
-    /// Decode one demuxed frame into `out` (interleaved f32, from the
-    /// shared `PcmPool`); returns frames written, `0` for a consumed
-    /// packet that produced no PCM (warm-up / backpressure). `pts` is the
-    /// demuxer presentation time (diagnostics only). `packet_desc` carries
-    /// opaque per-packet VBR metadata (Apple MP3/ALAC serialize an
-    /// `AudioStreamPacketDescription`); empty for CBR. See README
-    /// "Module layout" / `FrameCodec` contract.
+    /// Decode one demuxed frame, writing interleaved f32 samples into
+    /// `out` (which the caller acquired from the shared `PcmPool`).
+    /// Returns the frame count actually written (each frame is
+    /// `spec.channels` samples). `0` means the codec consumed the input
+    /// but produced no PCM (warm-up packet, codec backpressure, etc.) —
+    /// caller should pull the next frame.
+    ///
+    /// `frame_data` is the raw bytes for this frame. `pts` is the
+    /// presentation time supplied by the demuxer; codecs may use it
+    /// for diagnostics — decoded sample count + sample rate are the
+    /// authoritative duration source.
+    ///
+    /// `packet_desc` carries opaque per-packet metadata from the
+    /// demuxer for VBR codecs (Apple MP3/ALAC pass a serialized
+    /// `AudioStreamPacketDescription` here). Empty when the demuxer
+    /// produces CBR frames or doesn't model per-packet descriptors;
+    /// codecs that don't need it ignore the slot.
     ///
     /// # Errors
     ///

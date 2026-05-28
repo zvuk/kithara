@@ -71,7 +71,23 @@ const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 ///
 /// Wraps source, audio options, and protocol-specific settings into a single
 /// builder. `Item::new(config)` auto-detects the stream type from the input.
-/// See the crate `README.md` "Usage".
+///
+/// # Example
+///
+/// ```ignore
+/// use kithara_play::ResourceConfig;
+///
+/// // From URL
+/// let config = ResourceConfig::new("https://example.com/song.mp3")?;
+///
+/// // From local path
+/// let config = ResourceConfig::new("/path/to/song.mp3")?;
+///
+/// // With options
+/// let config = ResourceConfig::new("https://example.com/playlist.m3u8")?
+///     .hint("mp3")
+///     .look_ahead_bytes(1_000_000);
+/// ```
 #[derive(Clone, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]

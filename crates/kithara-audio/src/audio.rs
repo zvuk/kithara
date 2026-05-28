@@ -71,18 +71,35 @@ enum RecvOutcome {
     Item(Fetch<PcmChunk>),
 }
 
-/// Outcome of a single blocking-recv probe pass in
-/// [`Audio::poll_blocking_recv`]. `Wait` means "nothing yet, keep parking".
-enum RecvPoll {
-    Closed,
-    Wait,
-    Item(Fetch<PcmChunk>),
-}
-
 /// Generic audio pipeline running in a separate thread.
 ///
-/// Provides a simple interface for reading decoded PCM audio, compatible
-/// with cpal and rodio backends. See the crate `README.md` "Usage".
+/// Provides a simple interface for reading decoded PCM audio,
+/// compatible with cpal and rodio audio backends.
+///
+/// # Example
+///
+/// ```ignore
+/// use kithara_audio::{Audio, AudioConfig};
+/// use kithara_hls::{Hls, HlsConfig};
+/// use kithara_stream::Stream;
+///
+/// let config = AudioConfig::<Hls>::new(hls_config)
+///     .hint("mp3");
+/// let audio = Audio::<Stream<Hls>>::new(config).await?;
+///
+/// // Get audio format
+/// let spec = audio.spec();
+/// println!("{}Hz, {} channels", spec.sample_rate, spec.channels);
+///
+/// // Read PCM samples
+/// let mut buf = [0.0f32; 1024];
+/// loop {
+///     match audio.read(&mut buf)? {
+///         ReadOutcome::Frames { count, .. } => play_samples(&buf[..count]),
+///         ReadOutcome::Eof { .. } => break,
+///     }
+/// }
+/// ```
 pub struct Audio<S> {
     /// Notify for async preload (first chunk available).
     pub(crate) preload_notify: Arc<Notify>,
@@ -549,54 +566,37 @@ impl<S> Audio<S> {
     #[kithara::hang_watchdog]
     fn recv_outcome_blocking(&mut self) -> RecvOutcome {
         loop {
-            match self.poll_blocking_recv() {
-                RecvPoll::Item(fetch) => {
-                    hang_reset!();
-                    self.wake_worker();
-                    return RecvOutcome::Item(fetch);
-                }
-                RecvPoll::Closed => {
-                    hang_reset!();
-                    return RecvOutcome::Closed;
-                }
-                RecvPoll::Wait => {
-                    hang_tick!();
-                    Self::wait_for_fetch();
-                }
+            if let Some(fetch) = self.pcm_rx.try_pop() {
+                hang_reset!();
+                self.wake_worker();
+                return RecvOutcome::Item(fetch);
             }
+            if self
+                .cancel
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled)
+            {
+                hang_reset!();
+                return RecvOutcome::Closed;
+            }
+            self.wake_worker();
+            self.reader_wake.register_current();
+            if let Some(fetch) = self.pcm_rx.try_pop() {
+                hang_reset!();
+                self.wake_worker();
+                return RecvOutcome::Item(fetch);
+            }
+            if self
+                .cancel
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled)
+            {
+                hang_reset!();
+                return RecvOutcome::Closed;
+            }
+            hang_tick!();
+            Self::wait_for_fetch();
         }
-    }
-
-    /// One blocking-recv probe pass: try the PCM ring, then the cancel
-    /// token, register the current thread for wakeups, and retry both once.
-    /// Pure (allocates nothing) so it stays safe on the audio thread; the
-    /// `hang_reset!`/`hang_tick!` side-effects are kept in the watchdog'd
-    /// caller where the detector macros are in scope.
-    #[inline]
-    fn poll_blocking_recv(&mut self) -> RecvPoll {
-        if let Some(fetch) = self.pcm_rx.try_pop() {
-            return RecvPoll::Item(fetch);
-        }
-        if self
-            .cancel
-            .as_ref()
-            .is_some_and(CancellationToken::is_cancelled)
-        {
-            return RecvPoll::Closed;
-        }
-        self.wake_worker();
-        self.reader_wake.register_current();
-        if let Some(fetch) = self.pcm_rx.try_pop() {
-            return RecvPoll::Item(fetch);
-        }
-        if self
-            .cancel
-            .as_ref()
-            .is_some_and(CancellationToken::is_cancelled)
-        {
-            return RecvPoll::Closed;
-        }
-        RecvPoll::Wait
     }
 
     #[kithara::hang_watchdog]
@@ -1277,7 +1277,9 @@ impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
         let frames = output[0].len();
         let total_samples = frames * channels;
 
-        // NOTE: detach the pre-sized scratch for `&mut self` `read`, restored before return.
+        // Detach the held, pre-sized scratch so we can pass it to `self.read`
+        // (which needs `&mut self`); restore it before returning. Pre-sized in
+        // `new`, so this `resize` stays within capacity and never reallocates
         let mut interleaved = self
             .interleaved
             .take()

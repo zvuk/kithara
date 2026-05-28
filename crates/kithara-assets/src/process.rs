@@ -41,12 +41,32 @@ impl Consts {
 pub type ProcessChunkFn<Ctx> =
     Arc<dyn Fn(&[u8], &mut [u8], &mut Ctx, bool) -> Result<usize, String> + Send + Sync>;
 
-/// A resource wrapper that transforms content on `commit` (e.g. DRM decrypt).
+/// A resource wrapper that processes content on commit.
 ///
-/// `read_at` returns already-processed bytes; processing runs only when
-/// `ctx` is `Some`. A [`ReadinessGate`] keeps readers from observing
-/// "ready" bytes before `commit` finishes. See the crate `README.md`
-/// "Processing & readiness gate".
+/// On `commit`:
+/// 1. Reads raw content in chunks
+/// 2. Transforms each chunk via callback (no allocation)
+/// 3. Writes processed chunks back to disk
+///
+/// `read_at` returns data directly from disk (already processed).
+///
+/// Processing only happens when `ctx` is `Some`. When `ctx` is `None`
+/// (playlists, keys), commit just delegates to inner — no processing.
+///
+/// ## Readability sync
+///
+/// `inner.wait_range` reports `Ready` as soon as bytes hit disk via
+/// `write_at`, but for an active processor those bytes are still
+/// **encrypted** until [`Self::commit`] runs `process_and_write`. A
+/// reader that observed `wait_range = Ready` and immediately called
+/// `read_at` would race the processor and hit
+/// [`StorageError::NotReadable`] (the symptom that surfaced as the
+/// `local_queue_playlist_behavior_*` post-seek hang under DRM).
+///
+/// `ProcessedResource` therefore owns a [`ReadinessGate`] that pairs
+/// the `processed` flag with a [`Condvar`]: `commit()` flips the flag
+/// and notifies, and `wait_range`/`read_at` block on the gate so
+/// callers cannot see "ready bytes" until processing has finished.
 pub struct ProcessedResource<R, Ctx> {
     readiness: Arc<ReadinessGate>,
     pool: BytePool,
@@ -209,60 +229,33 @@ where
         let mut write_offset = 0u64;
 
         while read_offset < final_len {
-            let Some((read, written)) = self.process_chunk(
-                final_len,
-                read_offset,
-                write_offset,
-                &mut ctx,
-                &mut input_buf,
-                &mut output_buf,
-            )?
-            else {
+            let remaining_u64 = (final_len - read_offset).min(Consts::CHUNK_SIZE_U64);
+            let to_read = usize::try_from(remaining_u64).map_err(|err| {
+                StorageError::Failed(format!(
+                    "process_and_write: chunk size {remaining_u64} does not fit usize: {err}"
+                ))
+            })?;
+            let is_last = read_offset + remaining_u64 >= final_len;
+
+            let n = self.inner.read_at(read_offset, &mut input_buf[..to_read])?;
+            if n == 0 {
                 break;
-            };
-            read_offset += read;
-            write_offset += written;
+            }
+
+            let written = (self.process)(&input_buf[..n], &mut output_buf[..n], &mut ctx, is_last)
+                .map_err(StorageError::Failed)?;
+
+            self.inner.write_at(write_offset, &output_buf[..written])?;
+
+            read_offset += n as u64;
+            write_offset += u64::try_from(written).map_err(|err| {
+                StorageError::Failed(format!(
+                    "process_and_write: written {written} does not fit u64: {err}"
+                ))
+            })?;
         }
 
         Ok(write_offset)
-    }
-
-    /// Read, transform, and write back one chunk starting at
-    /// `read_offset`. Returns the `(bytes_read, bytes_written)` advance,
-    /// or `None` when the inner resource yields no bytes (end of data).
-    fn process_chunk(
-        &self,
-        final_len: u64,
-        read_offset: u64,
-        write_offset: u64,
-        ctx: &mut Ctx,
-        input_buf: &mut [u8],
-        output_buf: &mut [u8],
-    ) -> StorageResult<Option<(u64, u64)>> {
-        let remaining_u64 = (final_len - read_offset).min(Consts::CHUNK_SIZE_U64);
-        let to_read = usize::try_from(remaining_u64).map_err(|err| {
-            StorageError::Failed(format!(
-                "process_and_write: chunk size {remaining_u64} does not fit usize: {err}"
-            ))
-        })?;
-        let is_last = read_offset + remaining_u64 >= final_len;
-
-        let n = self.inner.read_at(read_offset, &mut input_buf[..to_read])?;
-        if n == 0 {
-            return Ok(None);
-        }
-
-        let written = (self.process)(&input_buf[..n], &mut output_buf[..n], ctx, is_last)
-            .map_err(StorageError::Failed)?;
-
-        self.inner.write_at(write_offset, &output_buf[..written])?;
-
-        let written = u64::try_from(written).map_err(|err| {
-            StorageError::Failed(format!(
-                "process_and_write: written {written} does not fit u64: {err}"
-            ))
-        })?;
-        Ok(Some((n as u64, written)))
     }
 }
 
@@ -731,11 +724,62 @@ mod tests {
         );
     }
 
-    /// Guards the DRM small-cache flake (`live_ephemeral_small_cache_playback_drm`):
-    /// after `acquire_resource_with_ctx(K, Some)` reactivates a just-committed
-    /// cache entry (flipping `processed` to `false`), a concurrent reader holding
-    /// a cloned `Arc` must not see `contains_range = true` yet hit the pre-commit
-    /// read guard. The availability view and `read_at` must agree.
+    /// RED test (integration: `live_ephemeral_small_cache_playback_drm`)
+    ///
+    /// Root cause hypothesis for the DRM-only flake:
+    ///
+    /// The availability index and the LRU-cached `ProcessedResource`
+    /// disagree when a writer calls `acquire_resource_with_ctx(K, Some)`
+    /// on an entry that was *just committed* by another writer. The
+    /// cache hit triggers `ProcessedResource::reactivate()`, which flips
+    /// `processed` to `false`. The shared `AvailabilityIndex` still
+    /// advertises the committed range (nobody removed it — this was not
+    /// an LRU displace, so `on_invalidated` never ran). A concurrent
+    /// reader that holds a cloned `Arc` to the same `ProcessedResource`
+    /// then:
+    ///
+    ///   1. sees `contains_range` → true (availability still says
+    ///      committed),
+    ///   2. calls `read_at` → fires the pre-commit guard
+    ///      ("processed resource is not readable before commit").
+    ///
+    /// In `HlsSource::read_from_entry` this is propagated as
+    /// `Err(StreamError::Source(..))`, which poisons the decoder FSM
+    /// (`TrackState::Failed`) and makes `next_chunk_with_timeout`
+    /// panic at `stage='ephemeral_small_cache'`.
+    ///
+    /// Sibling case (`_hls`) is unaffected because without DRM context
+    /// `ProcessedResource::is_readable()` short-circuits on
+    /// `ctx.is_none()`, and `reactivate()` never poisons reads.
+    ///
+    /// Contract under test: after
+    /// `acquire_resource_with_ctx(K, Some(ctx))` observes an existing
+    /// *committed* entry in cache, the `contains_range` view over that
+    /// entry and the `read_at` path must agree. Either the availability
+    /// index clears the range on reactivate (preferred), or reactivate
+    /// avoids flipping `processed` while an uncommitted write has not
+    /// arrived, or the reader gets a committed snapshot that is unaffected
+    /// by subsequent writer reactivations.
+    ///
+    /// Deterministic construction:
+    ///   1. Build an ephemeral `AssetStore` (same shape as the failing
+    ///      integration test).
+    ///   2. Writer A acquires `(K, Some(ctx))`, writes + commits →
+    ///      availability records the commit, cache holds the entry.
+    ///   3. Reader asks `open_resource(K)` (ctx=None) → cache returns
+    ///      the committed entry via the ctx=None fall-through. `Reader`
+    ///      holds a cloned `Arc` to the same `ProcessedResource`.
+    ///   4. `contains_range(K, 0..N)` returns `true` — the reader's
+    ///      gate has passed.
+    ///   5. Writer B calls `acquire_resource_with_ctx(K, Some(ctx))` →
+    ///      cache hit → `res.reactivate()` → `processed = false`.
+    ///   6. Reader proceeds with `read_at(0, &mut buf)`.
+    ///
+    /// Expected: either the reader still sees the committed plaintext
+    /// (preferred), or the read returns a benign `NotFound`-style error
+    /// so `HlsSource` converts to `ReadOutcome::Retry`. Today it returns
+    /// `StorageError::Failed("processed resource is not readable before
+    /// commit")`, which is a hard error.
     #[kithara::test]
     fn red_test_drm_small_cache_writer_reactivate_poisons_concurrent_reader() {
         #[derive(Clone, Debug, Hash, Eq, PartialEq, Default)]

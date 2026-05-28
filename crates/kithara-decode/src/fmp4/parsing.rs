@@ -182,7 +182,9 @@ fn extract_aac_asc_raw(bytes: &[u8]) -> DecodeResult<Vec<u8>> {
         let child_start = cursor.position();
         let (child_type, child_size) = read_header(&mut cursor)?;
         if u32::from(child_type) == FOURCC_ESDS {
-            seek_to(&mut cursor, SeekFrom::Current(4), "seek past esds header")?;
+            cursor
+                .seek(SeekFrom::Current(4))
+                .map_err(|e| DecodeError::InvalidData(format!("seek past esds header: {e}")))?;
             return read_esds_decoder_specific_info(
                 &mut cursor,
                 child_start + child_size,
@@ -191,11 +193,9 @@ fn extract_aac_asc_raw(bytes: &[u8]) -> DecodeResult<Vec<u8>> {
                 TAG_DECODER_SPECIFIC,
             );
         }
-        seek_to(
-            &mut cursor,
-            SeekFrom::Start(child_start + child_size),
-            "skip mp4a child",
-        )?;
+        cursor
+            .seek(SeekFrom::Start(child_start + child_size))
+            .map_err(|e| DecodeError::InvalidData(format!("skip mp4a child: {e}")))?;
     }
     Err(DecodeError::InvalidData("esds box not found".into()))
 }
@@ -284,24 +284,18 @@ fn read_descriptor_header(cursor: &mut Cursor<&[u8]>) -> DecodeResult<(u8, u32)>
         .map_err(|e| DecodeError::InvalidData(format!("read descriptor tag: {e}")))?;
     let mut size: u32 = 0;
     for _ in 0..4 {
-        let b = read_size_byte(cursor)?;
-        size = (size << 7) | u32::from(b & 0x7F);
-        if b & 0x80 == 0 {
+        let mut b = [0u8; 1];
+        cursor
+            .read_exact(&mut b)
+            .map_err(|e| DecodeError::InvalidData(format!("read descriptor size byte: {e}")))?;
+        size = (size << 7) | u32::from(b[0] & 0x7F);
+        if b[0] & 0x80 == 0 {
             return Ok((tag[0], size));
         }
     }
     Err(DecodeError::InvalidData(
         "descriptor size length exceeds 4 bytes".into(),
     ))
-}
-
-/// Read one byte of an MPEG-4 expandable descriptor size field.
-fn read_size_byte(cursor: &mut Cursor<&[u8]>) -> DecodeResult<u8> {
-    let mut b = [0u8; 1];
-    cursor
-        .read_exact(&mut b)
-        .map_err(|e| DecodeError::InvalidData(format!("read descriptor size byte: {e}")))?;
-    Ok(b[0])
 }
 
 /// Locate `fLaC` sample entry inside the init bytes and read its
@@ -355,20 +349,19 @@ fn parse_flac_sample_entry(bytes: &[u8]) -> DecodeResult<(u32, u16, Vec<u8>)> {
         let inner_start = cursor.position();
         let (inner_type, inner_size) = read_header(&mut cursor)?;
         if u32::from(inner_type) == FOURCC_DFLA {
-            seek_to(
-                &mut cursor,
-                SeekFrom::Current(4 + 4),
-                "seek past dfLa header",
-            )?;
-            let payload = read_streaminfo(&mut cursor)?;
+            cursor
+                .seek(SeekFrom::Current(4 + 4))
+                .map_err(|e| DecodeError::InvalidData(format!("seek past dfLa header: {e}")))?;
+            let mut payload = vec![0u8; 34];
+            cursor
+                .read_exact(&mut payload)
+                .map_err(|e| DecodeError::InvalidData(format!("read STREAMINFO: {e}")))?;
             let _ = inner_size;
             return Ok((sample_rate, channels, payload));
         }
-        seek_to(
-            &mut cursor,
-            SeekFrom::Start(inner_start + inner_size),
-            "skip sample entry child",
-        )?;
+        cursor
+            .seek(SeekFrom::Start(inner_start + inner_size))
+            .map_err(|e| DecodeError::InvalidData(format!("skip sample entry child: {e}")))?;
     }
     let _ = stsd_end;
     Err(DecodeError::InvalidData("dfLa box not found".into()))
@@ -379,33 +372,18 @@ fn descend_into(cursor: &mut Cursor<&[u8]>, end: u64, target: BoxType) -> Decode
         let pos = cursor.position();
         let (box_type, size) = read_header(cursor)?;
         if box_type == target {
-            seek_to(cursor, SeekFrom::Start(pos), "rewind to box header")?;
+            cursor
+                .seek(SeekFrom::Start(pos))
+                .map_err(|e| DecodeError::InvalidData(format!("rewind to box header: {e}")))?;
             return Ok(());
         }
-        seek_to(cursor, SeekFrom::Start(pos + size), "skip box")?;
+        cursor
+            .seek(SeekFrom::Start(pos + size))
+            .map_err(|e| DecodeError::InvalidData(format!("skip box: {e}")))?;
     }
     Err(DecodeError::InvalidData(format!(
         "box {target:?} not found"
     )))
-}
-
-/// Seek `cursor` to `from`, tagging any I/O error with `ctx`. Keeps the
-/// error-formatting allocation out of the box-walk loops that call it.
-fn seek_to(cursor: &mut Cursor<&[u8]>, from: SeekFrom, ctx: &str) -> DecodeResult<()> {
-    cursor
-        .seek(from)
-        .map(|_| ())
-        .map_err(|e| DecodeError::InvalidData(format!("{ctx}: {e}")))
-}
-
-/// Read the 34-byte FLAC `STREAMINFO` body from `cursor`'s current
-/// position.
-fn read_streaminfo(cursor: &mut Cursor<&[u8]>) -> DecodeResult<Vec<u8>> {
-    let mut payload = vec![0u8; 34];
-    cursor
-        .read_exact(&mut payload)
-        .map_err(|e| DecodeError::InvalidData(format!("read STREAMINFO: {e}")))?;
-    Ok(payload)
 }
 
 fn read_header(cursor: &mut Cursor<&[u8]>) -> DecodeResult<(BoxType, u64)> {
@@ -432,61 +410,51 @@ pub(crate) fn parse_segment_frames(
     let mut frames = Vec::new();
 
     while cursor.position() < total {
-        parse_top_level_box(init, &mut cursor, segment_bytes, &mut frames)?;
+        let box_start = cursor.position();
+        let (box_type, size) = read_header(&mut cursor)?;
+        if size < 8 {
+            return Err(DecodeError::InvalidData(format!(
+                "invalid box size {size} at offset {box_start}"
+            )));
+        }
+        let box_end = box_start + size;
+
+        if box_type == BoxType::MoofBox {
+            let moof = MoofBox::read_box(&mut cursor, size)
+                .map_err(|e| DecodeError::InvalidData(format!("re_mp4: {e}")))?;
+            cursor
+                .seek(SeekFrom::Start(box_end))
+                .map_err(|e| DecodeError::InvalidData(format!("seek after moof: {e}")))?;
+
+            let mdat_start = cursor.position();
+            let (mdat_type, mdat_size) = read_header(&mut cursor)?;
+            if mdat_type != BoxType::MdatBox {
+                return Err(DecodeError::InvalidData(format!(
+                    "expected mdat after moof, got {mdat_type:?}"
+                )));
+            }
+            let mdat_payload_start = cursor.position();
+            cursor
+                .seek(SeekFrom::Start(mdat_start + mdat_size))
+                .map_err(|e| DecodeError::InvalidData(format!("seek past mdat: {e}")))?;
+
+            collect_frames(
+                init,
+                &moof,
+                box_start,
+                mdat_payload_start,
+                segment_bytes,
+                &mut frames,
+            )?;
+            continue;
+        }
+
+        cursor
+            .seek(SeekFrom::Start(box_end))
+            .map_err(|e| DecodeError::InvalidData(format!("skip top-level box: {e}")))?;
     }
 
     Ok(frames)
-}
-
-/// Parse one top-level box at `cursor`'s position. For `moof` boxes, read
-/// the fragment, walk its following `mdat`, and append the contained
-/// frames to `out`; for any other box, skip past it. Advances `cursor`
-/// to the next box boundary.
-fn parse_top_level_box(
-    init: &Fmp4InitInfo,
-    cursor: &mut Cursor<&[u8]>,
-    segment_bytes: &[u8],
-    out: &mut Vec<Fmp4Frame>,
-) -> DecodeResult<()> {
-    let box_start = cursor.position();
-    let (box_type, size) = read_header(cursor)?;
-    if size < 8 {
-        return Err(DecodeError::InvalidData(format!(
-            "invalid box size {size} at offset {box_start}"
-        )));
-    }
-    let box_end = box_start + size;
-
-    if box_type != BoxType::MoofBox {
-        return seek_to(cursor, SeekFrom::Start(box_end), "skip top-level box");
-    }
-
-    let moof = MoofBox::read_box(cursor, size)
-        .map_err(|e| DecodeError::InvalidData(format!("re_mp4: {e}")))?;
-    seek_to(cursor, SeekFrom::Start(box_end), "seek after moof")?;
-
-    let mdat_start = cursor.position();
-    let (mdat_type, mdat_size) = read_header(cursor)?;
-    if mdat_type != BoxType::MdatBox {
-        return Err(DecodeError::InvalidData(format!(
-            "expected mdat after moof, got {mdat_type:?}"
-        )));
-    }
-    let mdat_payload_start = cursor.position();
-    seek_to(
-        cursor,
-        SeekFrom::Start(mdat_start + mdat_size),
-        "seek past mdat",
-    )?;
-
-    collect_frames(
-        init,
-        &moof,
-        box_start,
-        mdat_payload_start,
-        segment_bytes,
-        out,
-    )
 }
 
 fn collect_frames(
@@ -509,93 +477,48 @@ fn collect_frames(
     let mut decode_time = traf.tfdt.as_ref().map_or(0, |t| t.base_media_decode_time);
 
     for trun in &traf.truns {
-        let byte = trun_base_offset(trun, tfhd, default_base_is_moof, moof_start);
-        let _ = mdat_payload_start;
-        let ctx = SampleCtx {
-            tfhd,
-            trun,
-            segment_bytes,
+        let data_offset_i32 = trun.data_offset.unwrap_or(0);
+        let base = if default_base_is_moof {
+            moof_start
+        } else {
+            tfhd.base_data_offset.unwrap_or(moof_start)
         };
-        let mut cursor = FrameCursor { byte, decode_time };
+        let mut byte_cursor = if data_offset_i32 < 0 {
+            base.saturating_sub(u64::from(data_offset_i32.unsigned_abs()))
+        } else {
+            base.saturating_add(u64::try_from(data_offset_i32).unwrap_or(0))
+        };
+        let _ = mdat_payload_start;
+
         for sample_idx in 0..trun.sample_count as usize {
-            push_sample_frame(&ctx, sample_idx, &mut cursor, out)?;
+            let size = sample_size_for(trun, tfhd, sample_idx)?;
+            let duration = sample_duration_for(trun, tfhd, sample_idx);
+
+            let start = usize::try_from(byte_cursor).map_err(|_| {
+                DecodeError::InvalidData(format!("frame offset overflows usize: {byte_cursor}"))
+            })?;
+            let end = start
+                .checked_add(size as usize)
+                .ok_or_else(|| DecodeError::InvalidData("sample byte range overflow".into()))?;
+            if end > segment_bytes.len() {
+                return Err(DecodeError::InvalidData(format!(
+                    "sample byte range {start}..{end} past segment end {}",
+                    segment_bytes.len()
+                )));
+            }
+
+            out.push(Fmp4Frame {
+                decode_time,
+                duration,
+                offset: start,
+                size: size as usize,
+            });
+
+            byte_cursor = byte_cursor.saturating_add(u64::from(size));
+            decode_time = decode_time.saturating_add(u64::from(duration));
         }
-        decode_time = cursor.decode_time;
     }
 
-    Ok(())
-}
-
-/// First mdat byte offset for `trun`'s samples, resolved from the
-/// `tfhd`/`trun` base-offset flags (`default-base-is-moof` vs explicit
-/// `base_data_offset`, plus the signed `trun.data_offset`).
-fn trun_base_offset(
-    trun: &re_mp4::TrunBox,
-    tfhd: &re_mp4::TfhdBox,
-    default_base_is_moof: bool,
-    moof_start: u64,
-) -> u64 {
-    let data_offset_i32 = trun.data_offset.unwrap_or(0);
-    let base = if default_base_is_moof {
-        moof_start
-    } else {
-        tfhd.base_data_offset.unwrap_or(moof_start)
-    };
-    if data_offset_i32 < 0 {
-        base.saturating_sub(u64::from(data_offset_i32.unsigned_abs()))
-    } else {
-        base.saturating_add(u64::try_from(data_offset_i32).unwrap_or(0))
-    }
-}
-
-/// Loop-invariant inputs shared by every sample of one `trun`.
-struct SampleCtx<'a> {
-    tfhd: &'a re_mp4::TfhdBox,
-    trun: &'a re_mp4::TrunBox,
-    segment_bytes: &'a [u8],
-}
-
-/// Running per-`trun` cursors advanced as samples are emitted.
-struct FrameCursor {
-    byte: u64,
-    decode_time: u64,
-}
-
-/// Append the frame descriptor for sample `idx` to `out`, advancing the
-/// cursor's byte and decode-time positions by the sample's size and
-/// duration. Validates that the frame's byte range stays inside the
-/// segment buffer.
-fn push_sample_frame(
-    ctx: &SampleCtx<'_>,
-    idx: usize,
-    cursor: &mut FrameCursor,
-    out: &mut Vec<Fmp4Frame>,
-) -> DecodeResult<()> {
-    let size = sample_size_for(ctx.trun, ctx.tfhd, idx)?;
-    let duration = sample_duration_for(ctx.trun, ctx.tfhd, idx);
-
-    let start = usize::try_from(cursor.byte).map_err(|_| {
-        DecodeError::InvalidData(format!("frame offset overflows usize: {}", cursor.byte))
-    })?;
-    let end = start
-        .checked_add(size as usize)
-        .ok_or_else(|| DecodeError::InvalidData("sample byte range overflow".into()))?;
-    if end > ctx.segment_bytes.len() {
-        return Err(DecodeError::InvalidData(format!(
-            "sample byte range {start}..{end} past segment end {}",
-            ctx.segment_bytes.len()
-        )));
-    }
-
-    out.push(Fmp4Frame {
-        duration,
-        decode_time: cursor.decode_time,
-        offset: start,
-        size: size as usize,
-    });
-
-    cursor.byte = cursor.byte.saturating_add(u64::from(size));
-    cursor.decode_time = cursor.decode_time.saturating_add(u64::from(duration));
     Ok(())
 }
 

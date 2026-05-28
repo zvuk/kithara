@@ -175,24 +175,18 @@ fn build_initial_key_state(
         return (KeyOptions::new(), HashMap::new());
     }
     let mut registry = KeyProcessorRegistry::new();
-    let player_headers: HashMap<String, String> = ffi
-        .rules
-        .into_iter()
-        .flat_map(|r| {
-            let headers = r
-                .headers
-                .iter()
-                .flatten()
-                .map(|(k, v)| (k.clone(), v.clone()));
-            let salt = r
-                .salt
-                .as_ref()
-                .map(|salt| (SALT_HEADER.to_string(), salt.clone()));
-            let entries: Vec<(String, String)> = headers.chain(salt).collect();
-            registry.add(build_processor_rule(r));
-            entries
-        })
-        .collect();
+    let mut player_headers: HashMap<String, String> = HashMap::new();
+    for r in ffi.rules {
+        if let Some(headers) = r.headers.as_ref() {
+            for (k, v) in headers {
+                player_headers.insert(k.clone(), v.clone());
+            }
+        }
+        if let Some(salt) = r.salt.as_ref() {
+            player_headers.insert(SALT_HEADER.to_string(), salt.clone());
+        }
+        registry.add(build_processor_rule(r));
+    }
     let key_options = KeyOptions::builder().key_registry(registry).build();
     (key_options, player_headers)
 }

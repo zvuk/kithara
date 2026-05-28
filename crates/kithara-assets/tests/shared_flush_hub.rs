@@ -46,7 +46,7 @@ fn shared_hub_flush_survives_dropped_store() {
     res_b.commit(Some(5)).unwrap();
     drop(res_b);
 
-    // NOTE: dropping store A before any flush leaves its registry entries dangling.
+    // Drop store A before any flush — its registry entries now dangle.
     drop(store_a);
 
     hub.flush_now()
@@ -58,7 +58,7 @@ fn shared_hub_flush_survives_dropped_store() {
         "surviving store B must persist after a sibling store was dropped"
     );
 
-    // NOTE: with all stores gone the registry fully GCs and flush stays a no-op.
+    // All stores gone — the registry fully GCs and flush stays a no-op.
     drop(store_b);
     hub.flush_now()
         .expect("flush_now must succeed with no live stores left");

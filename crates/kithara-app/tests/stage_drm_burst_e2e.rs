@@ -2,8 +2,14 @@ use futures::future::join_all;
 use kithara_net::{Headers, HttpClient, NetOptions, RangeSpec};
 use url::Url;
 
+const TRACK_MASTER: &str = "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8";
+const STAGE_UA: &str = "OpenPlay - com.zvooq.openplay/4.30.0 (iPhone; iOS 17.5; Scale/3.00)";
+const ENV_AUTH: &str = "KITHARA_DRM_STAGE_AUTH_TOKEN";
+const PROBE_BURST_SEGMENTS: usize = 32;
+/// Mirrors `HlsConfig::head_estimation_concurrency` in production.
+const PROBE_BURST_CONCURRENCY: usize = 8;
+
 fn drm_headers(auth: &str) -> Headers {
-    const STAGE_UA: &str = "OpenPlay - com.zvooq.openplay/4.30.0 (iPhone; iOS 17.5; Scale/3.00)";
     let mut h = Headers::new();
     h.insert("User-Agent", STAGE_UA);
     h.insert("X-Auth-Token", auth);
@@ -59,12 +65,6 @@ fn total_from_range(headers: &Headers) -> Option<u64> {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "live HTTP; run with --ignored when KITHARA_DRM_STAGE_AUTH_TOKEN is set"]
 async fn stage_drm_range_get_probe_returns_full_size_map() {
-    const TRACK_MASTER: &str =
-        "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8";
-    const ENV_AUTH: &str = "KITHARA_DRM_STAGE_AUTH_TOKEN";
-    const PROBE_BURST_SEGMENTS: usize = 32;
-    /// Mirrors `HlsConfig::head_estimation_concurrency` in production.
-    const PROBE_BURST_CONCURRENCY: usize = 8;
     let auth = std::env::var(ENV_AUTH)
         .unwrap_or_else(|_| panic!("{ENV_AUTH} must be set to a valid zvuk stage X-Auth-Token"));
     let client = stage_client();

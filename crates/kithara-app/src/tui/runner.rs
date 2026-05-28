@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
 use kithara::{
     abr::AbrMode,
-    events::{AppEvent, Event, EventReceiver},
+    events::{AppEvent, Event},
 };
 use kithara_queue::{Queue, QueueEvent, TrackId, Transition};
 use tokio::{sync::broadcast::error::TryRecvError, task};
@@ -95,157 +95,114 @@ fn run_ui_loop(controller: &Arc<StateController>, palette: &tui::TuiPalette) -> 
     let mut auto_advanced_index: Option<usize> = None;
     let mut tick_error_logged = false;
 
-    loop {
-        if drain_events(
-            &mut event_rx,
-            &mut crossfade_clock,
-            controller,
-            &mut ui,
-            &mut progress_log,
-            &state,
-        )? {
-            break;
-        }
-        tick_queue(controller, &mut tick_error_logged, &mut ui, &state)?;
-        update_crossfade(controller, &mut crossfade_clock, &mut auto_advanced_index);
-        if poll_and_render(controller, &mut ui, &mut auto_advanced_index, &mut state)? {
-            break;
-        }
-    }
-
-    Ok(())
-}
-
-/// Drain all pending queue events. Returns `true` if the UI loop should exit
-/// (a `Stop` event or a closed channel).
-fn drain_events(
-    event_rx: &mut EventReceiver,
-    crossfade_clock: &mut Option<CrossfadeClock>,
-    controller: &StateController,
-    ui: &mut UiSession,
-    progress_log: &mut ProgressLog,
-    state: &UiState,
-) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    loop {
-        match event_rx.try_recv() {
-            Ok(event) => {
-                if let Event::Queue(QueueEvent::CrossfadeStarted { duration_seconds }) = &event {
-                    *crossfade_clock = Some(CrossfadeClock::new(*duration_seconds));
-                    controller.mutate(|st| st.crossfade_progress = Some(0.0));
-                }
-                if handle_event(&event, ui, progress_log, state)? {
-                    return Ok(true);
-                }
-            }
-            Err(TryRecvError::Empty) => return Ok(false),
-            Err(TryRecvError::Lagged(n)) => {
-                ui.log_line(&format!("events lagged: {n}"), state)?;
-            }
-            Err(TryRecvError::Closed) => return Ok(true),
-        }
-    }
-}
-
-/// Advance the queue one tick, logging the first failure in any error streak.
-fn tick_queue(
-    controller: &StateController,
-    tick_error_logged: &mut bool,
-    ui: &mut UiSession,
-    state: &UiState,
-) -> RunnerResult {
-    match controller.queue().tick() {
-        Ok(()) => *tick_error_logged = false,
-        Err(err) => {
-            if !*tick_error_logged {
-                ui.log_line(&format!("tick failed: {err}"), state)?;
-                controller.mutate(|st| st.status_note = Some(format!("tick failed: {err}")));
-                *tick_error_logged = true;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Refresh continuous state and advance the crossfade clock, kicking off an
-/// auto-advance near the end of the current track.
-fn update_crossfade(
-    controller: &StateController,
-    crossfade_clock: &mut Option<CrossfadeClock>,
-    auto_advanced_index: &mut Option<usize>,
-) {
-    controller.refresh_continuous();
-
-    if let Some(clock) = crossfade_clock.as_ref() {
-        let progress = clock.progress();
-        controller.mutate(|st| st.crossfade_progress = Some(progress));
-        if progress >= 1.0 {
-            *crossfade_clock = None;
-        }
-    } else {
-        controller.mutate(|st| st.crossfade_progress = None);
-    }
-
-    let queue = controller.queue();
-    let crossfade_secs = f64::from(queue.crossfade_duration());
-    if let (Some(pos), Some(dur)) = (queue.position_seconds(), queue.duration_seconds())
-        && dur > crossfade_secs
-        && pos >= dur - crossfade_secs
-    {
-        let current = queue.current_index().unwrap_or(0);
-        let not_yet_advanced = *auto_advanced_index != Some(current);
-        if not_yet_advanced && current + 1 < queue.len() {
-            *auto_advanced_index = Some(current);
-            let _ = queue.advance_to_next(Transition::Crossfade);
-        }
-    }
-}
-
-/// Poll for one terminal event, dispatch it, then render the frame. Returns
-/// `true` if the user requested quit (the loop should exit before drawing).
-fn poll_and_render(
-    controller: &StateController,
-    ui: &mut UiSession,
-    auto_advanced_index: &mut Option<usize>,
-    state: &mut UiState,
-) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    if event::poll(Duration::from_millis(Consts::CONTROL_POLL_MS))? {
-        *state = controller.snapshot();
-        match event::read()? {
-            TermEvent::Key(key)
-                if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
-            {
-                match handle_key(key.code, key.modifiers, controller, &mut ui.dashboard) {
-                    ControlOutcome::Continue(Some(line)) => ui.log_line(&line, state)?,
-                    ControlOutcome::Continue(None) => {}
-                    ControlOutcome::SwitchTrack(index) => {
-                        if let Some(id) = controller.queue().tracks().get(index).map(|t| t.id) {
-                            switch_to_id(controller, id, index, ui, auto_advanced_index, state)?;
-                        }
+    'ui: loop {
+        loop {
+            match event_rx.try_recv() {
+                Ok(event) => {
+                    if let Event::Queue(QueueEvent::CrossfadeStarted { duration_seconds }) = &event
+                    {
+                        crossfade_clock = Some(CrossfadeClock::new(*duration_seconds));
+                        controller.mutate(|st| st.crossfade_progress = Some(0.0));
                     }
-                    ControlOutcome::DeleteCurrent => {
-                        if let Some(id) = controller.queue().current().map(|e| e.id) {
-                            match controller.queue().remove(id) {
-                                Ok(()) => {
-                                    *auto_advanced_index = None;
-                                    ui.log_line(&format!("removed track {}", id.as_u64()), state)?;
-                                }
-                                Err(e) => {
-                                    ui.log_line(&format!("remove failed: {e}"), state)?;
+                    if handle_event(&event, &mut ui, &mut progress_log, &state)? {
+                        break 'ui;
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Lagged(n)) => {
+                    ui.log_line(&format!("events lagged: {n}"), &state)?;
+                }
+                Err(TryRecvError::Closed) => break 'ui,
+            }
+        }
+
+        match controller.queue().tick() {
+            Ok(()) => tick_error_logged = false,
+            Err(err) => {
+                if !tick_error_logged {
+                    ui.log_line(&format!("tick failed: {err}"), &state)?;
+                    controller.mutate(|st| st.status_note = Some(format!("tick failed: {err}")));
+                    tick_error_logged = true;
+                }
+            }
+        }
+
+        controller.refresh_continuous();
+
+        if let Some(clock) = crossfade_clock.as_ref() {
+            let progress = clock.progress();
+            controller.mutate(|st| st.crossfade_progress = Some(progress));
+            if progress >= 1.0 {
+                crossfade_clock = None;
+            }
+        } else {
+            controller.mutate(|st| st.crossfade_progress = None);
+        }
+
+        let queue = controller.queue();
+        let crossfade_secs = f64::from(queue.crossfade_duration());
+        if let (Some(pos), Some(dur)) = (queue.position_seconds(), queue.duration_seconds())
+            && dur > crossfade_secs
+            && pos >= dur - crossfade_secs
+        {
+            let current = queue.current_index().unwrap_or(0);
+            let not_yet_advanced = auto_advanced_index != Some(current);
+            if not_yet_advanced && current + 1 < queue.len() {
+                auto_advanced_index = Some(current);
+                let _ = queue.advance_to_next(Transition::Crossfade);
+            }
+        }
+
+        if event::poll(Duration::from_millis(Consts::CONTROL_POLL_MS))? {
+            state = controller.snapshot();
+            match event::read()? {
+                TermEvent::Key(key)
+                    if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
+                {
+                    match handle_key(key.code, key.modifiers, controller, &mut ui.dashboard) {
+                        ControlOutcome::Continue(Some(line)) => ui.log_line(&line, &state)?,
+                        ControlOutcome::Continue(None) => {}
+                        ControlOutcome::SwitchTrack(index) => {
+                            if let Some(id) = controller.queue().tracks().get(index).map(|t| t.id) {
+                                switch_to_id(
+                                    controller,
+                                    id,
+                                    index,
+                                    &mut ui,
+                                    &mut auto_advanced_index,
+                                    &state,
+                                )?;
+                            }
+                        }
+                        ControlOutcome::DeleteCurrent => {
+                            if let Some(id) = controller.queue().current().map(|e| e.id) {
+                                match controller.queue().remove(id) {
+                                    Ok(()) => {
+                                        auto_advanced_index = None;
+                                        ui.log_line(
+                                            &format!("removed track {}", id.as_u64()),
+                                            &state,
+                                        )?;
+                                    }
+                                    Err(e) => {
+                                        ui.log_line(&format!("remove failed: {e}"), &state)?;
+                                    }
                                 }
                             }
                         }
+                        ControlOutcome::Quit => break,
                     }
-                    ControlOutcome::Quit => return Ok(true),
                 }
+                TermEvent::Resize(_, _) => ui.on_resize(&state)?,
+                _ => {}
             }
-            TermEvent::Resize(_, _) => ui.on_resize(state)?,
-            _ => {}
         }
+
+        state = controller.snapshot();
+        ui.draw(&state)?;
     }
 
-    *state = controller.snapshot();
-    ui.draw(state)?;
-    Ok(false)
+    Ok(())
 }
 
 /// Returns `true` if the UI loop should exit.

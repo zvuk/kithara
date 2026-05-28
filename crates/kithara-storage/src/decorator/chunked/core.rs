@@ -102,10 +102,25 @@ impl<R: ResourceExt> AtomicChunked<R> {
         Arc::clone(&self.inner.lock_sync())
     }
 
-    /// Open a fresh chunked-atomic resource at `canonical_path`, claiming
-    /// `<canonical>.tmp` via `OpenOptions::create_new`. See the crate
-    /// `README.md` "Chunked atomic claim" for the `factory`, claim, and
-    /// stale-temp semantics.
+    /// Open a fresh chunked-atomic resource at `canonical_path`.
+    /// The provided `factory` opens the inner at a given filesystem
+    /// path; it is called once with the temp path during this
+    /// constructor and once more with the canonical path after the
+    /// atomic rename in [`ResourceExt::commit`].
+    ///
+    /// Atomically claims `<canonical>.tmp` via `OpenOptions::create_new`
+    /// — the filesystem rejects the second concurrent open of the same
+    /// tmp path. Returns [`StorageError::TmpClaimed`] if another
+    /// `AssetStore` instance (or another process) is already writing
+    /// the same canonical path; the caller should poll until the
+    /// holder releases (commit or drop) and either retry or take a
+    /// passthrough view of the canonical once committed.
+    ///
+    /// Stale temp left from a prior crashed run is **not** auto-wiped:
+    /// liveness is signalled by tmp existence alone, and a leftover
+    /// from a `kill -9` would block subsequent opens until cleaned up
+    /// explicitly. Maintenance task is the caller's responsibility (a
+    /// future enhancement may add PID-aware cleanup).
     ///
     /// # Errors
     ///

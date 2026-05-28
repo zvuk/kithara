@@ -13,6 +13,9 @@ use super::{
     registry::{FetchProgress, Registry},
 };
 
+/// Capacity of the per-peer bounded command channel.
+const PEER_CMD_CHANNEL_CAPACITY: usize = 32;
+
 /// Unified downloader — sole HTTP client owner and fetch orchestrator.
 ///
 /// Created once at the application level, then shared (via [`Clone`]) across
@@ -148,8 +151,6 @@ impl Downloader {
     /// and ABR state through the shared controller. The returned handle's
     /// `Drop` unregisters both.
     pub fn register(&self, peer: Arc<dyn Peer>) -> PeerHandle {
-        /// Capacity of the per-peer bounded command channel.
-        const PEER_CMD_CHANNEL_CAPACITY: usize = 32;
         self.ensure_spawned();
         let cancel = self.inner.cancel.child_token();
         let (cmd_tx, cmd_rx) = mpsc::channel(PEER_CMD_CHANNEL_CAPACITY);

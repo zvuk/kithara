@@ -81,21 +81,29 @@ impl AvailabilityIndex {
             }
         };
 
-        archived.assets.iter().for_each(|(root, asset_record)| {
-            let asset_map: Arc<dashmap::DashMap<String, Arc<Mutex<Availability>>>> = Arc::new(
-                asset_record
-                    .resources
-                    .iter()
-                    .map(|(path, res_record)| {
-                        (path.as_str().to_string(), hydrate_availability(res_record))
-                    })
-                    .collect(),
-            );
+        for (root, asset_record) in archived.assets.iter() {
+            let root_str = root.as_str().to_string();
+            let asset_map = Arc::new(dashmap::DashMap::new());
 
-            self.inner
-                .assets
-                .insert(root.as_str().to_string(), asset_map);
-        });
+            for (path, res_record) in asset_record.resources.iter() {
+                let mut avail = Availability::default();
+                res_record
+                    .ranges
+                    .iter()
+                    .for_each(|r| avail.insert(r.0.to_native()..r.1.to_native()));
+
+                let final_len: Option<u64> = res_record.final_len.as_ref().map(|l| l.to_native());
+
+                match final_len {
+                    Some(flen) => avail.mark_committed(flen),
+                    None => avail.committed = res_record.is_committed,
+                }
+
+                asset_map.insert(path.as_str().to_string(), Arc::new(Mutex::new(avail)));
+            }
+
+            self.inner.assets.insert(root_str, asset_map);
+        }
         Ok(())
     }
 
@@ -106,24 +114,6 @@ impl AvailabilityIndex {
     pub(crate) fn persist_to<R: ResourceExt>(&self, res: &Atomic<R>) -> AssetsResult<()> {
         write_aggregate(&self.inner, res, false)
     }
-}
-
-/// Rebuild an [`Availability`] from its archived resource record:
-/// replay the persisted ranges, then restore the commit state.
-fn hydrate_availability(
-    res_record: &crate::index::schema::ArchivedResourceAvailabilityFile,
-) -> Arc<Mutex<Availability>> {
-    let mut avail = Availability::default();
-    res_record
-        .ranges
-        .iter()
-        .for_each(|r| avail.insert(r.0.to_native()..r.1.to_native()));
-
-    match res_record.final_len.as_ref().map(|l| l.to_native()) {
-        Some(flen) => avail.mark_committed(flen),
-        None => avail.committed = res_record.is_committed,
-    }
-    Arc::new(Mutex::new(avail))
 }
 
 impl InnerIndex {
@@ -167,7 +157,7 @@ fn write_aggregate<R: ResourceExt>(
             (entry.key().clone(), AssetAvailabilityFile { resources })
         })
         .collect();
-    let file = AvailabilityFile { assets, version: 1 };
+    let file = AvailabilityFile { version: 1, assets };
     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
     if durable {

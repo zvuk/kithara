@@ -1,5 +1,3 @@
-use std::iter;
-
 use ffmpeg::{
     ChannelLayout, Dictionary, Error as FfmpegError, Packet, Rational,
     codec::{
@@ -39,7 +37,21 @@ impl FlacFFmpegEncoder {
     pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
 
     pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
-        request.validate()?;
+        if request.timescale == 0 {
+            return Err(EncodeError::InvalidInput(
+                "timescale must be > 0".to_owned(),
+            ));
+        }
+        if request.packets_per_segment == 0 {
+            return Err(EncodeError::InvalidInput(
+                "packets_per_segment must be > 0".to_owned(),
+            ));
+        }
+        if request.pcm.total_byte_len().is_none() {
+            return Err(EncodeError::InvalidInput(
+                "PCM source must have a finite length".to_owned(),
+            ));
+        }
 
         ensure_ffmpeg_initialized()?;
         let codec_config = extract_flac_codec_config(request.pcm)?;
@@ -196,20 +208,23 @@ fn extract_flac_codec_config(pcm: &dyn crate::PcmSource) -> EncodeResult<Vec<u8>
 ///
 /// Returns [`EncodeError`] if no STREAMINFO body can be located in `raw`.
 pub fn normalize_flac_codec_config(raw: &[u8]) -> EncodeResult<Vec<u8>> {
-    (raw.len() == FlacFFmpegEncoder::FLAC_STREAMINFO_LEN)
-        .then(|| raw.to_vec())
-        .or_else(|| parse_flac_metadata_block(raw).map(<[u8]>::to_vec))
-        .or_else(|| {
-            raw.strip_prefix(b"fLaC")
-                .and_then(parse_flac_metadata_block)
-                .map(<[u8]>::to_vec)
-        })
-        .ok_or_else(|| {
-            EncodeError::InvalidInput(format!(
-                "unsupported FLAC codec_config layout ({} bytes)",
-                raw.len()
-            ))
-        })
+    if raw.len() == FlacFFmpegEncoder::FLAC_STREAMINFO_LEN {
+        return Ok(raw.to_vec());
+    }
+    if let Some(stream_info) = parse_flac_metadata_block(raw) {
+        return Ok(stream_info.to_vec());
+    }
+    if let Some(stream_info) = raw
+        .strip_prefix(b"fLaC")
+        .and_then(parse_flac_metadata_block)
+    {
+        return Ok(stream_info.to_vec());
+    }
+
+    Err(EncodeError::InvalidInput(format!(
+        "unsupported FLAC codec_config layout ({} bytes)",
+        raw.len()
+    )))
 }
 
 fn extract_stream_info_from_flac_bytes(raw: &[u8]) -> EncodeResult<Vec<u8>> {
@@ -277,56 +292,35 @@ fn collect_encoded_packets(
     units: &mut Vec<EncodedAccessUnit>,
 ) {
     let mut encoded = Packet::empty();
-    units.extend(
-        iter::from_fn(|| {
-            encoder.receive_packet(&mut encoded).is_ok().then(|| {
-                encoded_access_unit(
-                    &encoded,
-                    encoder_time_base,
-                    target_time_base,
-                    timestamp_origin,
-                )
-            })
-        })
-        .flatten(),
-    );
-}
-
-fn encoded_access_unit(
-    encoded: &Packet,
-    encoder_time_base: Rational,
-    target_time_base: Rational,
-    timestamp_origin: &mut Option<i64>,
-) -> Option<EncodedAccessUnit> {
-    if encoded.size() == 0 {
-        return None;
+    while encoder.receive_packet(&mut encoded).is_ok() {
+        if encoded.size() == 0 {
+            continue;
+        }
+        let mut packet = Packet::copy(encoded.data().unwrap_or(&[]));
+        packet.set_pts(encoded.pts());
+        packet.set_dts(encoded.dts());
+        packet.set_duration(encoded.duration());
+        packet.rescale_ts(encoder_time_base, target_time_base);
+        let raw_pts = packet.pts().unwrap_or_default();
+        let raw_dts = packet.dts().unwrap_or_default();
+        let origin = *timestamp_origin.get_or_insert(raw_pts.min(raw_dts));
+        units.push(EncodedAccessUnit {
+            bytes: packet.data().unwrap_or(&[]).to_vec(),
+            pts: normalize_timestamp(raw_pts, origin),
+            dts: normalize_timestamp(raw_dts, origin),
+            duration: {
+                let d = packet.duration().max(0);
+                u32::try_from(d).unwrap_or_else(|_| {
+                    tracing::error!(
+                        packet_duration = d,
+                        "BUG: FLAC packet duration exceeds u32::MAX in target_time_base"
+                    );
+                    0
+                })
+            },
+            is_sync: encoded.is_key(),
+        });
     }
-    let mut packet = Packet::copy(encoded.data().unwrap_or(&[]));
-    packet.set_pts(encoded.pts());
-    packet.set_dts(encoded.dts());
-    packet.set_duration(encoded.duration());
-    packet.rescale_ts(encoder_time_base, target_time_base);
-    let raw_pts = packet.pts().unwrap_or_default();
-    let raw_dts = packet.dts().unwrap_or_default();
-    let origin = *timestamp_origin.get_or_insert(raw_pts.min(raw_dts));
-    Some(EncodedAccessUnit {
-        bytes: packet.data().unwrap_or(&[]).to_vec(),
-        pts: normalize_timestamp(raw_pts, origin),
-        dts: normalize_timestamp(raw_dts, origin),
-        duration: packet_duration_in_target(packet.duration()),
-        is_sync: encoded.is_key(),
-    })
-}
-
-fn packet_duration_in_target(duration: i64) -> u32 {
-    let d = duration.max(0);
-    u32::try_from(d).unwrap_or_else(|_| {
-        tracing::error!(
-            packet_duration = d,
-            "BUG: FLAC packet duration exceeds u32::MAX in target_time_base"
-        );
-        0
-    })
 }
 
 fn normalize_timestamp(value: i64, origin: i64) -> u64 {

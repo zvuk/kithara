@@ -36,32 +36,18 @@ impl SchedulerWake {
         }
         let deadline = Instant::now() + timeout;
         loop {
-            if let Some(result) = self.poll_until(deadline) {
-                return result;
+            if self.woken.swap(false, Ordering::Acquire) {
+                return true;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            park_timeout(deadline - now);
+            if self.woken.swap(false, Ordering::Acquire) {
+                return true;
             }
         }
-    }
-
-    /// One park cycle of [`wait_timeout`](Self::wait_timeout)'s double-check
-    /// pattern: consume the flag, bail on a hit, give up at the deadline,
-    /// otherwise park for the remaining budget and re-check the flag on
-    /// wake-up. `Some(true)` = woken, `Some(false)` = timed out, `None` =
-    /// spurious wake-up, keep looping. `#[inline]` so the borrowing loop
-    /// codegen and atomic orderings stay byte-identical to the inlined form.
-    #[inline]
-    fn poll_until(&self, deadline: Instant) -> Option<bool> {
-        if self.woken.swap(false, Ordering::Acquire) {
-            return Some(true);
-        }
-        let now = Instant::now();
-        if now >= deadline {
-            return Some(false);
-        }
-        park_timeout(deadline - now);
-        if self.woken.swap(false, Ordering::Acquire) {
-            return Some(true);
-        }
-        None
     }
 
     /// Signal the scheduler to wake up. Wait-free and safe to call from any

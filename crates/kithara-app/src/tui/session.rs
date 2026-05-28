@@ -11,6 +11,8 @@ use ratatui::{
 use super::dashboard::Dashboard;
 use crate::state::UiState;
 
+const CURSOR_GUARD_LINES: u16 = 2;
+
 /// Error type returned by TUI session operations.
 pub type TuiError = Box<dyn StdError + Send + Sync>;
 
@@ -110,11 +112,10 @@ impl UiSession {
     }
 
     fn park_cursor_above_dashboard(&mut self, state: &UiState) -> TuiResult {
-        const CURSOR_GUARD_LINES: u16 = 2;
         let terminal_height = self.terminal.size()?.height.max(1);
         let height = self.dashboard_height(state).min(terminal_height);
         let y = terminal_height.saturating_sub(height.saturating_add(CURSOR_GUARD_LINES));
-        self.terminal.set_cursor_position(Position { y, x: 0 })?;
+        self.terminal.set_cursor_position(Position { x: 0, y })?;
         Ok(())
     }
 

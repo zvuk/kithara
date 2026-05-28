@@ -197,20 +197,45 @@ fn pull_one_chunk(
     None
 }
 
-/// RED scaffold: a freshly opened `Fmp4SegmentDemuxer` always restarts at
-/// the layout's seg-0 (`open` hardcodes `next_segment_index = 0`), so ABR
-/// variant-switch `recreate_decoder` restarts playback at the new variant's
-/// seg-0 instead of resuming. Pins the broken observable; invert to
-/// `timestamp >= resume_point` when a non-zero resume API lands. Timestamp
-/// is bounded (not 0) because the fdk-aac adapter strips ~1024 frames of
-/// algo delay, landing the first chunk at packet 1 (≈46 ms @ 44.1 kHz).
+/// RED scaffold for ABR variant-switch sub-problem #3
+/// (see `project_hls_abr_variant_switch_init_range_bug`).
+///
+/// `Fmp4SegmentDemuxer::open` hardcodes `next_segment_index = 0`.
+/// Production calls `apply_format_change` with `target_offset` equal to
+/// the init-range start in the NEW variant's byte map (which is 0 because
+/// `set_layout_variant` already swapped the active byte map). The
+/// factory then builds the demuxer with `OffsetReader::base_offset = 0`,
+/// and the demuxer's first `next_frame` queries
+/// `segment_at_index(0)` which always returns the layout's seg-0.
+///
+/// Result: regardless of where the previous decoder left off, the new
+/// decoder restarts at the new variant's seg-0 (T1's "drift = full
+/// pre-switch frame count" symptom).
+///
+/// This test pins the CURRENT (broken) observable: a freshly opened
+/// `Fmp4SegmentDemuxer` restarts at the layout's seg-0; there is no API
+/// to resume at a non-zero `decode_time`. ABR variant-switch
+/// `recreate_decoder` relies on this and consequently restarts playback
+/// at seg-0 of the new variant. When the resume API lands, invert this
+/// assertion to `chunk.meta.timestamp >= resume_point`.
+///
+/// Note on the exact timestamp: the fixture is AAC-LC @ 44.1 kHz. The
+/// in-tree fdk-aac adapter strips its algorithmic delay
+/// (`outputDelay ≈ 1024` frames for AAC-LC @ 44.1 kHz, see
+/// `crates/kithara-decode/src/symphonia/aac_fdk.rs`), so the first
+/// emitted chunk lands at packet index 1 (≈ 46.44 ms).
+/// The "open restarts at seg-0" contract is preserved — the
+/// time-domain anchor is offset by the codec strip — so we assert
+/// the timestamp sits inside the first few AAC frames' window, not
+/// strictly equal to zero.
 #[kithara::test]
 fn red_open_always_starts_at_layout_seg_0() {
     let (blob, segmented) = build_test_layout(3);
     let (mut decoder, _reads, _record) = make_decoder(blob, segmented);
 
     let chunk = pull_one_chunk(&mut decoder).expect("BUG: at least one PCM chunk from seg-0");
-    // WHY: 50ms cap = codec-strip frame + warm-up packet ≈ 2 × 23.22 ms ≈ 46 ms, plus margin.
+    // 1 codec-strip frame + 1 warm-up packet ≈ 2 × 23.22 ms ≈ 46 ms.
+    // Cap at 50 ms to leave a small margin.
     let max_strip_time = Duration::from_micros(50_000);
     assert!(
         chunk.meta.timestamp <= max_strip_time,
@@ -225,13 +250,29 @@ fn red_open_always_starts_at_layout_seg_0() {
     );
 }
 
-/// RED scaffold (cursor freshness): `SegmentCursor::read.byte_range` is
-/// frozen at `ensure_cursor`/`seek` time. If `SegmentLayout` updates the
-/// descriptor before `fill_segment_buffer` (HEAD estimate → committed size,
-/// or pre- → post-DRM), the cursor fills against the stale range and
-/// `parse_segment_frames` panics ("sample byte range past segment end").
-/// Fix must re-query the layout each fill (and grow) or version-cookie the
-/// cursor. `#[ignore]`d: reproducing the panic needs bespoke moof bytes.
+/// RED scaffold for ABR variant-switch sub-problem #4
+/// (cursor freshness): `SegmentCursor::read.byte_range` is frozen at
+/// `ensure_cursor` / `seek` time from `descriptor.byte_range`. If the
+/// underlying `SegmentLayout` updates the descriptor between
+/// `ensure_cursor` and `fill_segment_buffer` (HEAD-estimated size →
+/// actual committed size, or pre-DRM → post-DRM), the cursor still
+/// allocates and seeks against the OLD range. `parse_segment_frames`
+/// then panics with "sample byte range past segment end" because the
+/// fragment's moof-described samples don't fit the smaller buffer.
+///
+/// Contract under test:
+///   - Either `fill_segment_buffer` must re-query the layout each
+///     iteration and grow the buffer if the descriptor's range
+///     extended.
+///   - Or `ensure_cursor` must capture a layout-version cookie and
+///     refuse to fill against a stale descriptor.
+///
+/// Today neither holds: the cursor commits to whatever
+/// `segment_after_byte` returned at first call. This scaffold is
+/// `#[ignore]`-marked because reproducing the parse-side panic
+/// requires bespoke moof bytes — left as a TODO for the fix author.
+/// The point of the scaffold is to make the missing contract
+/// explicit so the fix has somewhere to land its regression test.
 #[kithara::test]
 #[ignore = "RED scaffold — needs crafted moof fixture to demonstrate \
             the parse_segment_frames panic. Add when implementing \
@@ -254,7 +295,8 @@ fn seek_backs_up_one_segment_for_aac_preroll() {
     reads.lock().expect("BUG: clear").clear();
     record.store(true, Ordering::Release);
 
-    // WHY: 18s = seg-2/seg-3 boundary; AAC SBR warm-up backs the seek into seg-2.
+    // Target sits on the seg-2/seg-3 boundary (18 s). AAC SBR warm-up
+    // backs the seek into seg-2.
     let target = Duration::from_secs(18);
     let outcome = decoder.seek(target).expect("BUG: seek");
     let DecoderSeekOutcome::Landed {

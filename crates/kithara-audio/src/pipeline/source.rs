@@ -803,7 +803,12 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// `NoChange` when neither applies.
     #[kithara::probe]
     fn detect_format_change(&self) -> FormatChangeDetection {
-        // NOTE: seek-epoch suppression (see README "Decoder recreate policy").
+        // Suppress redundant cross-variant recreate inside a single seek
+        // epoch: when the session was installed for the in-flight seek's
+        // epoch and that seek is still pending, the decoder is already
+        // aligned with the seek's landing variant. A second recreate at
+        // the same epoch is wasted work and discards the freshly-built
+        // decoder before it ever emits a sample.
         let timeline = self.shared_stream.timeline();
         if timeline.is_seek_pending()
             && self.session.installed_at_seek_epoch == timeline.seek_epoch()
@@ -1020,10 +1025,37 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Shared recovery path for a failed `decoder.seek()`.
     ///
-    /// Splits by [`DecodeError`] variant: [`DecodeError::SeekOutOfRange`]
-    /// fails the seek (no recreate), anything else recreates at the
-    /// init/offset range. Always returns `false`. See the crate
-    /// `README.md` "Seek error recovery".
+    /// Two classes of failure share this entry point and need different
+    /// architectural responses:
+    ///
+    /// 1. **Decoder internal-state corruption** — e.g. Symphonia's moof
+    ///    fragment table holding stale offsets after a variant switch.
+    ///    Fresh decoder state resolves this; recreate is the right cure.
+    ///
+    /// 2. **Caller-side invalid target** — e.g. seek past EOF, target
+    ///    timestamp out-of-range for the stream's known duration.
+    ///    Recreate cannot fix this: a freshly built decoder has the same
+    ///    `duration()` and rejects the same target with the same error.
+    ///    Retrying loops forever (the prod "перемотка не работает" bug).
+    ///
+    /// Classification is by [`DecodeError`] variant, not by string
+    /// match: caller-side errors arrive as
+    /// [`DecodeError::SeekOutOfRange`] (produced by the decoder layer
+    /// from typed Symphonia `SeekErrorKind::OutOfRange` and from typed
+    /// `StreamSeekPastEof` payloads in the underlying `io::Error`).
+    /// Those route directly to `fail_seek` — no recreate, no retry.
+    /// Anything else is treated as class (1) and dispatched to the
+    /// recreate-at-init path.
+    ///
+    /// Init-bearing containers (fMP4/MP4/WAV/MKV/CAF) must recreate at
+    /// the source's init segment range; mid-segment recreate would land
+    /// on bytes with no ftyp/RIFF/EBML header and the factory would fail
+    /// silently. Mid-stream-decodable containers (MPEG-ES/ADTS/FLAC/Ogg/
+    /// MPEG-TS) and unknown containers use `recreate_offset` directly.
+    ///
+    /// Calls `fail_seek` for class (2), missing `MediaInfo`, or when an
+    /// init-bearing container has no available init range. Always
+    /// returns `false` so callers can `return` directly.
     fn recover_from_decoder_seek_error(
         &mut self,
         request: SeekRequest,
@@ -1670,11 +1702,38 @@ impl<T: StreamType> StreamAudioSource<T> {
             .phase_at(self.recreate_ready_range(offset))
     }
 
-    /// Byte range whose readiness gates decoder recreation, shared by the
-    /// gate and the wait path so the two never disagree (a mismatch
-    /// livelocks the worker). Init range alone for a separate CMAF init,
-    /// else the `[offset..offset+READ_AHEAD)` window. See the crate
-    /// `README.md` "Recreate readiness gating".
+    /// Readiness for decoder recreation. When the source advertises a
+    /// **separate** init segment (CMAF `EXT-X-MAP` init box — typically
+    /// well under `DEFAULT_READ_AHEAD_BYTES`), the decoder factory's
+    /// probe only needs that init range to construct the codec; the
+    /// post-recreate `Seek` / `ApplySeek` / `Decode` action then
+    /// repositions via `decoder_seek_safe`. Gating on the init range
+    /// alone is required because after a backwards seek the HLS
+    /// scheduler emits segments around the reader byte cursor (past
+    /// `seg 0`) and never schedules `[0..DEFAULT_READ_AHEAD)`, which
+    /// produces the hang in `app.log` (2026-05-16 22:23 same-codec
+    /// V0→V2, 2026-05-17 09:08 cross-codec V3→V1).
+    ///
+    /// When the source has no separate init (raw containers like WAV,
+    /// where `format_change_segment_range` falls back to the full
+    /// `seg 0` byte range and is therefore much larger than the
+    /// read-ahead window), gating on `seg 0` is unsafe by the same
+    /// argument and we fall through to the `[offset..offset +
+    /// DEFAULT_READ_AHEAD)` slow path, whose window the scheduler
+    /// actively keeps in flight around the reader.
+    /// Byte range whose readiness gates decoder recreation. Shared by
+    /// the gate ([`Self::source_ready_for_recreate`]) and the wait path
+    /// ([`Self::wait_for_source_on_recreate`] /
+    /// [`WaitContext::Recreation`]) so the two never disagree on what
+    /// "ready" means — a mismatch livelocks the worker
+    /// (`recv_outcome_blocking` hang on HE-AAC v2 variant switch).
+    ///
+    /// For CMAF (a separate init segment within the read-ahead window)
+    /// this is the init range alone: the factory probe needs only the
+    /// init to rebuild the codec, and after a far seek the HLS scheduler
+    /// keeps segments around the reader cursor — never `[0..READ_AHEAD)`
+    /// of seg 0 — so gating or waiting on the wider boundary window
+    /// hangs. Otherwise the `[offset..offset+READ_AHEAD)` boundary window.
     fn recreate_ready_range(&self, offset: u64) -> Range<u64> {
         if let Ok(init_range) = self.shared_stream.format_change_segment_range()
             && init_range.end.saturating_sub(init_range.start) <= Self::DEFAULT_READ_AHEAD_BYTES

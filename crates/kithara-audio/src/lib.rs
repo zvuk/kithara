@@ -1,11 +1,38 @@
+//! # Kithara Audio
+//!
 //! Audio pipeline library with decoding, effects, and resampling.
 //!
-//! - [`Audio`] — generic audio pipeline running in a separate thread
-//! - [`AudioConfig`] — pipeline configuration
-//! - [`ResamplerQuality`] — sample rate conversion quality
+//! ## Architecture
+//!
+//! - [`Audio`] - Generic audio pipeline running in a separate thread
+//! - [`AudioConfig`] - Pipeline configuration
+//! - [`ResamplerQuality`] - Sample rate conversion quality
 //! - `Audio` also implements `rodio::Source` directly (requires `rodio` feature)
 //!
-//! See the crate `README.md` for usage, threading model, and architecture.
+//! ## Target API
+//!
+//! ```ignore
+//! use kithara_audio::{Audio, AudioConfig};
+//! use kithara_hls::{Hls, HlsConfig};
+//! use kithara_stream::Stream;
+//! use ringbuf::traits::Consumer;
+//!
+//! // HLS stream with decoding
+//! let config = AudioConfig::<Hls>::new(hls_config);
+//! let mut audio = Audio::<Stream<Hls>>::new(config).await?;
+//! sink.append(audio);  // rodio compatible
+//!
+//! // Or read PCM from channel directly
+//! while let Some(chunk) = audio.pcm_rx().try_pop() {
+//!     play_audio(chunk);
+//! }
+//!
+//! // Events via event_bus()
+//! let mut events = audio.event_bus().subscribe();
+//! while let Ok(event) = events.recv().await {
+//!     println!("Audio: {:?}", event);
+//! }
+//! ```
 
 #![forbid(unsafe_code)]
 

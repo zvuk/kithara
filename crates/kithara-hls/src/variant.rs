@@ -834,12 +834,35 @@ impl HlsVariant {
         self.position.load(Ordering::Acquire)
     }
 
-    /// Byte range a demuxer reads to re-establish container state after a
-    /// format change (variant flip or codec change).
+    /// Byte range a demuxer should read to re-establish container state
+    /// after a format change (HLS variant flip or codec change).
     ///
-    /// `Ok(init_range)` for `served_from() == 0`, else
-    /// `Err(FormatChangeNotApplicable)` for byte-shifted same-codec
-    /// commits. See the crate `README.md` "Format-change header byte range".
+    /// fMP4 variants advertise an `#EXT-X-MAP` init segment — its range
+    /// is `0..init_size`. Containers that embed the file header inside
+    /// the first media segment (raw WAV / PCM with leading header) fall
+    /// back to segment 0's byte range so the demuxer can re-parse the
+    /// header from there. Containers with implicit framing (AAC ADTS,
+    /// MP3, MPEG-TS) do not need this range — the caller filters via
+    /// `container_needs_init_range` before reading.
+    ///
+    /// Header byte range for cross-codec format-change recovery.
+    ///
+    /// `Ok(range)` only when recovery is actually applicable:
+    /// - `served_from() == 0` AND `init.size > 0`: virtual init range
+    ///   `[0..init_size)`. The decoder factory's Symphonia probe re-
+    ///   reads init from here.
+    /// - `served_from() == 0` AND `init.size == 0` (raw TS/AAC): start
+    ///   of segment 0 — the demuxer re-parses the header from there.
+    ///
+    /// `Err(FormatChangeNotApplicable)` when the variant was
+    /// activated by [`Self::activate_at_segment_with_shift`]
+    /// (same-codec ABR commit) and has `served_from() > 0`. Init
+    /// bytes live at natural `[0..init_size)` while virtual space
+    /// starts at `byte_shift` — same-codec playback continues
+    /// through the byte-shift without needing init recovery. Format-
+    /// change recovery by design does not apply to byte-shifted
+    /// variants; cross-codec recovery only runs after
+    /// [`Self::reset_to_full_range`] zeroes the shift.
     pub(crate) fn header_byte_range(&self) -> StreamResult<Range<u64>> {
         if self.served_from() != 0 {
             return Err(StreamError::Source(SourceError::FormatChangeNotApplicable));
@@ -1169,10 +1192,28 @@ impl HlsVariant {
         Some(seg)
     }
 
-    /// Same as [`Self::rebuild`] but also enqueues `seg 0` when
-    /// `from_seg > 0`, so the decoder factory's probe has the container
-    /// header to construct the codec. See the crate `README.md`
-    /// "Decoder-probe rebuild".
+    /// Same as [`Self::rebuild`] but **also** enqueues `seg 0` when
+    /// `from_seg > 0`. The decoder factory's probe (Symphonia format
+    /// reader) reads the container's first ~1 KB to construct the
+    /// codec; on post-ABR switch into mid-playback the active variant's
+    /// queue would otherwise start at `target_seg`, leaving
+    /// `[0..PROBE)` unfetched and the probe hanging on
+    /// `wait_range budget exceeded v=new range_start=0` (Cluster C/D/F
+    /// sentinel, Wave 2.A.3b memo).
+    ///
+    /// `seg 0` is required even when the variant advertises a separate
+    /// init (CMAF `EXT-X-MAP`): the init covers a few-dozen-byte
+    /// header, but the probe scans further into the first media chunk.
+    /// Skipping `seg 0` here masked the bug while `rebuild(0)` worked
+    /// (loaded every segment from 0 — over-fetched whole file).
+    ///
+    /// After probe succeeds, `decoder_seek_safe(target_time)` jumps the
+    /// decoder forward to the user-visible position, so segments
+    /// `1..from_seg` are **never** fetched — only `seg 0` itself.
+    /// Adds at most one extra segment (~`one_segment_size` bytes) per
+    /// switch; if `seg 0` is already cached the scheduler skips the
+    /// fetch and the queue entry resolves via `committed_final_len` in
+    /// `dispatch`.
     #[kithara::probe(
         variant = self.variant as u64,
         from_seg,

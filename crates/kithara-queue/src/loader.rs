@@ -159,6 +159,11 @@ mod tests {
     use super::*;
     use crate::track::TrackEntry;
 
+    const CAP_3: NonZeroUsize = match NonZeroUsize::new(3) {
+        Some(n) => n,
+        None => unreachable!(),
+    };
+
     /// Builder for test [`Loader`] fixtures. Defaults cover most tests;
     /// override via setters when a specific concurrency cap matters.
     struct LoaderFixtureSpec {
@@ -167,10 +172,6 @@ mod tests {
 
     impl Default for LoaderFixtureSpec {
         fn default() -> Self {
-            const CAP_3: NonZeroUsize = match NonZeroUsize::new(3) {
-                Some(n) => n,
-                None => unreachable!(),
-            };
             Self { cap: CAP_3 }
         }
     }

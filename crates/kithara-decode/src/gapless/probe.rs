@@ -5,6 +5,10 @@ use kithara_stream::AudioCodec;
 use super::{GaplessInfo, mp3::read_lame_trim, mp4::probe_mp4_gapless_dyn};
 use crate::traits::DecoderInput;
 
+/// LAME header probe window: read up to ~16 `KiB` to cover `ID3v2`
+/// tags and a couple of MP3 frames before the Xing/Info+LAME slot.
+const LAME_PROBE_WINDOW_BYTES: usize = 16 * 1024;
+
 /// Rewind `source` to byte 0, run [`probe_codec_gapless`], then rewind
 /// again so the caller can hand the same source to a demuxer.
 /// Replaces three near-identical "seek → probe → seek" blocks that
@@ -38,9 +42,6 @@ pub(crate) fn probe_codec_gapless(
     codec: AudioCodec,
     source: &mut dyn DecoderInput,
 ) -> Option<GaplessInfo> {
-    /// LAME header probe window: read up to ~16 `KiB` to cover `ID3v2`
-    /// tags and a couple of MP3 frames before the Xing/Info+LAME slot.
-    const LAME_PROBE_WINDOW_BYTES: usize = 16 * 1024;
     match codec {
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
             probe_mp4_gapless_dyn(source).ok().flatten()

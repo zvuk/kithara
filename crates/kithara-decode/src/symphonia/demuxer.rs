@@ -181,22 +181,6 @@ impl SymphoniaDemuxer {
     }
 }
 
-/// Outcome of [`SymphoniaDemuxer::next_track_packet`]. `Frame` carries the
-/// timing already derived from the stored packet; `Eof`/`Pending` mirror
-/// the corresponding [`DemuxOutcome`] variants.
-enum PacketStep {
-    Frame { pts: Duration, duration: Duration },
-    Eof,
-    Pending(PendingReason),
-}
-
-/// Result of reading one raw packet: either a track packet to inspect, or
-/// a terminal step (EOF / pending) to forward unchanged.
-enum PacketRead {
-    Packet(symphonia::core::packet::Packet),
-    Done(PacketStep),
-}
-
 impl Demuxer for SymphoniaDemuxer {
     fn current_segment_index(&self) -> Option<u32> {
         let byte = self.current_byte()?;
@@ -221,22 +205,57 @@ impl Demuxer for SymphoniaDemuxer {
     #[kithara::probe]
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         self.current_packet = None;
-        let (pts, duration) = match self.next_track_packet()? {
-            PacketStep::Frame { pts, duration } => (pts, duration),
-            PacketStep::Eof => return Ok(DemuxOutcome::Eof),
-            PacketStep::Pending(reason) => return Ok(DemuxOutcome::Pending(reason)),
-        };
-        let data: &[u8] = &self.current_packet.as_ref().expect("BUG: just stored").data;
-        Ok(DemuxOutcome::Frame(Frame {
-            data,
-            duration,
-            pts,
-            packet_desc: &[],
-        }))
+        loop {
+            let packet = match self.format_reader.next_packet() {
+                Ok(Some(p)) => p,
+                Ok(None) => return Ok(DemuxOutcome::Eof),
+                Err(SymphoniaError::ResetRequired) => continue,
+                Err(SymphoniaError::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => {
+                    return Ok(DemuxOutcome::Eof);
+                }
+                Err(SymphoniaError::IoError(e))
+                    if e.kind() == ErrorKind::Interrupted || e.kind() == ErrorKind::WouldBlock =>
+                {
+                    let reason = e
+                        .get_ref()
+                        .and_then(|src| src.downcast_ref::<StreamPending>())
+                        .map(|p| p.reason)
+                        .or_else(|| {
+                            e.get_ref()
+                                .and_then(|src| src.downcast_ref::<PendingReason>())
+                                .copied()
+                        })
+                        .unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending));
+                    return Ok(DemuxOutcome::Pending(reason));
+                }
+                Err(e) => return Err(DecodeError::backend(e)),
+            };
+            if packet.track_id != self.track_id {
+                continue;
+            }
+            let pts = self.ts_to_duration(packet.pts);
+            let duration = self.dur_to_duration(packet.dur);
+            self.current_packet = Some(packet);
+            let data: &[u8] = &self.current_packet.as_ref().expect("BUG: just stored").data;
+            return Ok(DemuxOutcome::Frame(Frame {
+                data,
+                duration,
+                pts,
+                packet_desc: &[],
+            }));
+        }
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
-        // WHY: park before target by max(priming warmup, one codec packet) so the trim guard lands on a packet boundary (README "Seek pre-roll and trim").
+        // For MDCT codecs park the cursor before the user-requested target so
+        // the `pending_seek_target` guard in `ComposedDecoder` can trim frames
+        // to the exact sub-packet boundary. Backup magnitude covers two needs:
+        // 1. `priming.frames` sample-domain warmup — Apple-style codecs that
+        //    need pre-target packets fed through to prime MDCT/SBR state.
+        // 2. At least 1 codec packet for sample-accurate trim — composed.rs
+        //    pending_seek_target/frames_to_trim relies on landing on a packet
+        // Both are derived from codec facts (1024 frames/packet for AAC,
+        // 1152 for MP3) and the actual track sample_rate — no magic ms.
         let sr = f64::from(self.track_info.sample_rate.max(1));
         let priming_secs = f64::from(u32::try_from(priming.frames).unwrap_or(u32::MAX)) / sr;
         let packet_secs = f64::from(mdct_packet_frames(self.track_info.codec)) / sr;
@@ -283,64 +302,6 @@ impl Demuxer for SymphoniaDemuxer {
 }
 
 impl SymphoniaDemuxer {
-    /// Store `packet` as the current frame source and return its timing.
-    fn accept_packet(&mut self, packet: symphonia::core::packet::Packet) -> PacketStep {
-        let pts = self.ts_to_duration(packet.pts);
-        let duration = self.dur_to_duration(packet.dur);
-        self.current_packet = Some(packet);
-        PacketStep::Frame { pts, duration }
-    }
-
-    /// Pull the next packet belonging to the selected track, storing it
-    /// in `self.current_packet` so the caller can borrow its payload.
-    /// Skips packets from other tracks; non-frame outcomes are surfaced
-    /// verbatim.
-    fn next_track_packet(&mut self) -> DecodeResult<PacketStep> {
-        loop {
-            let packet = match self.read_one_packet()? {
-                PacketRead::Packet(p) => p,
-                PacketRead::Done(step) => return Ok(step),
-            };
-            if packet.track_id != self.track_id {
-                continue;
-            }
-            return Ok(self.accept_packet(packet));
-        }
-    }
-
-    /// Read a single packet from the underlying [`FormatReader`],
-    /// transparently retrying on Symphonia `ResetRequired` and mapping
-    /// EOF / interrupt / would-block conditions onto a terminal
-    /// [`PacketStep`].
-    fn read_one_packet(&mut self) -> DecodeResult<PacketRead> {
-        loop {
-            return match self.format_reader.next_packet() {
-                Ok(Some(p)) => Ok(PacketRead::Packet(p)),
-                Ok(None) => Ok(PacketRead::Done(PacketStep::Eof)),
-                Err(SymphoniaError::ResetRequired) => continue,
-                Err(SymphoniaError::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => {
-                    Ok(PacketRead::Done(PacketStep::Eof))
-                }
-                Err(SymphoniaError::IoError(e))
-                    if e.kind() == ErrorKind::Interrupted || e.kind() == ErrorKind::WouldBlock =>
-                {
-                    let reason = e
-                        .get_ref()
-                        .and_then(|src| src.downcast_ref::<StreamPending>())
-                        .map(|p| p.reason)
-                        .or_else(|| {
-                            e.get_ref()
-                                .and_then(|src| src.downcast_ref::<PendingReason>())
-                                .copied()
-                        })
-                        .unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending));
-                    Ok(PacketRead::Done(PacketStep::Pending(reason)))
-                }
-                Err(e) => Err(DecodeError::backend(e)),
-            };
-        }
-    }
-
     /// Override the `track.gapless` slot built by `from_reader` with a
     /// container-level probe result.
     ///

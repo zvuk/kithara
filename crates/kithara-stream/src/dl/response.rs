@@ -109,21 +109,11 @@ impl BodyStream {
         let mut total: u64 = 0;
         while let Some(chunk) = self.next().await {
             let data = chunk?;
-            write_chunk(&mut writer, data.as_ref())?;
+            writer(data.as_ref()).map_err(|e| NetError::Http(e.to_string()))?;
             total += data.len() as u64;
         }
         Ok(total)
     }
-}
-
-/// Feed one chunk to the consumer's writer, mapping its I/O error onto
-/// [`NetError::Http`]. Lifted out of [`BodyStream::write_all`]'s loop so
-/// the per-failure error string is built only on the cold error path.
-fn write_chunk<W>(writer: &mut W, data: &[u8]) -> Result<(), NetError>
-where
-    W: FnMut(&[u8]) -> std::io::Result<()>,
-{
-    writer(data).map_err(|e| NetError::Http(e.to_string()))
 }
 
 impl Stream for BodyStream {

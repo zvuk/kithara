@@ -1,5 +1,3 @@
-use std::iter;
-
 use ffmpeg::{
     ChannelLayout, Dictionary, Error as FfmpegError, Packet, Rational,
     codec::{
@@ -30,7 +28,21 @@ impl AacFFmpegEncoder {
     pub(crate) const AAC_FRAME_SAMPLES: usize = 1024;
 
     pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
-        request.validate()?;
+        if request.timescale == 0 {
+            return Err(EncodeError::InvalidInput(
+                "timescale must be > 0".to_owned(),
+            ));
+        }
+        if request.packets_per_segment == 0 {
+            return Err(EncodeError::InvalidInput(
+                "packets_per_segment must be > 0".to_owned(),
+            ));
+        }
+        if request.pcm.total_byte_len().is_none() {
+            return Err(EncodeError::InvalidInput(
+                "PCM source must have a finite length".to_owned(),
+            ));
+        }
 
         ensure_ffmpeg_initialized()?;
         let mut encoder = PacketCollectingEncoder::new(
@@ -169,56 +181,35 @@ fn collect_encoded_packets(
     units: &mut Vec<EncodedAccessUnit>,
 ) {
     let mut encoded = Packet::empty();
-    units.extend(
-        iter::from_fn(|| {
-            encoder.receive_packet(&mut encoded).is_ok().then(|| {
-                encoded_access_unit(
-                    &encoded,
-                    encoder_time_base,
-                    target_time_base,
-                    timestamp_origin,
-                )
-            })
-        })
-        .flatten(),
-    );
-}
-
-fn encoded_access_unit(
-    encoded: &Packet,
-    encoder_time_base: Rational,
-    target_time_base: Rational,
-    timestamp_origin: &mut Option<i64>,
-) -> Option<EncodedAccessUnit> {
-    if encoded.size() == 0 {
-        return None;
+    while encoder.receive_packet(&mut encoded).is_ok() {
+        if encoded.size() == 0 {
+            continue;
+        }
+        let mut packet = Packet::copy(encoded.data().unwrap_or(&[]));
+        packet.set_pts(encoded.pts());
+        packet.set_dts(encoded.dts());
+        packet.set_duration(encoded.duration());
+        packet.rescale_ts(encoder_time_base, target_time_base);
+        let raw_pts = packet.pts().unwrap_or_default();
+        let raw_dts = packet.dts().unwrap_or_default();
+        let origin = *timestamp_origin.get_or_insert(raw_pts.min(raw_dts));
+        units.push(EncodedAccessUnit {
+            bytes: packet.data().unwrap_or(&[]).to_vec(),
+            pts: normalize_timestamp(raw_pts, origin),
+            dts: normalize_timestamp(raw_dts, origin),
+            duration: {
+                let d = packet.duration().max(0);
+                u32::try_from(d).unwrap_or_else(|_| {
+                    tracing::error!(
+                        packet_duration = d,
+                        "BUG: AAC packet duration exceeds u32::MAX in target_time_base"
+                    );
+                    0
+                })
+            },
+            is_sync: encoded.is_key(),
+        });
     }
-    let mut packet = Packet::copy(encoded.data().unwrap_or(&[]));
-    packet.set_pts(encoded.pts());
-    packet.set_dts(encoded.dts());
-    packet.set_duration(encoded.duration());
-    packet.rescale_ts(encoder_time_base, target_time_base);
-    let raw_pts = packet.pts().unwrap_or_default();
-    let raw_dts = packet.dts().unwrap_or_default();
-    let origin = *timestamp_origin.get_or_insert(raw_pts.min(raw_dts));
-    Some(EncodedAccessUnit {
-        bytes: packet.data().unwrap_or(&[]).to_vec(),
-        pts: normalize_timestamp(raw_pts, origin),
-        dts: normalize_timestamp(raw_dts, origin),
-        duration: packet_duration_in_target(packet.duration()),
-        is_sync: encoded.is_key(),
-    })
-}
-
-fn packet_duration_in_target(duration: i64) -> u32 {
-    let d = duration.max(0);
-    u32::try_from(d).unwrap_or_else(|_| {
-        tracing::error!(
-            packet_duration = d,
-            "BUG: AAC packet duration exceeds u32::MAX in target_time_base"
-        );
-        0
-    })
 }
 
 fn normalize_timestamp(value: i64, origin: i64) -> u64 {

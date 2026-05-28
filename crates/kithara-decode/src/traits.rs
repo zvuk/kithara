@@ -39,7 +39,9 @@ pub enum InputReadOutcome {
 /// the requested target itself unless it coincides). `PastEof` carries
 /// the decoder's known total duration so the caller can park at EOF
 /// without rounding.
-// WHY: not #[non_exhaustive] — cross-crate mock (`tests/src/decode_mock.rs`) builds variants by named fields (AGENTS.md "small, obviously stable exception").
+// Not #[non_exhaustive]: `tests/src/decode_mock.rs` constructs variants by
+// named-field syntax across crates; direct construction is part of the
+// intended mock contract (AGENTS.md "small, obviously stable exception").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderSeekOutcome {
     /// Decoder is now parked at `landed_at` / `landed_frame` /

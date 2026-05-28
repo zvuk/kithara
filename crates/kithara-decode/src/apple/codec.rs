@@ -482,7 +482,10 @@ fn build_aac_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
         });
     }
 
-    // WHY: first byte 0x03 = full ESDS body (M4A cookie), else raw ASC to wrap (README "Apple AAC input format (ESDS rationale)").
+    // First byte = 0x03 → already a full ESDS body (M4A magic cookie);
+    // anything else → raw ASC that needs wrapping. ESDS tag 0x03 cannot
+    // appear as the first byte of a valid ASC. README "Apple AAC input
+    // format" documents the two paths.
     let esds = if track.extra_data.first() == Some(&0x03) {
         track.extra_data.clone()
     } else {
@@ -517,7 +520,9 @@ fn derive_aac_asbd_from_esds(
     };
 
     let mut list_bytes: UInt32 = 0;
-    // SAFETY: `format_info` is a valid stack value; its `mMagicCookie` points into the live `esds` slice; `list_bytes` is a writable `u32` slot.
+    // SAFETY: `format_info` is a valid stack value with `mMagicCookie`
+    // pointing into the `esds` slice (alive for the duration of this
+    // function). `list_bytes` is a writable `u32` slot.
     let status = unsafe {
         AudioFormatGetPropertyInfo(
             Consts::kAudioFormatProperty_FormatList,
@@ -544,7 +549,8 @@ fn derive_aac_asbd_from_esds(
     }
     let mut items: Vec<AudioFormatListItem> = vec![AudioFormatListItem::default(); item_count];
     let mut io_size = list_bytes;
-    // SAFETY: `items` holds `item_count` `AudioFormatListItem`s (verified above); `format_info` is still alive.
+    // SAFETY: `items` holds `item_count` `AudioFormatListItem`s
+    // (verified above); `format_info` is still alive.
     let status = unsafe {
         AudioFormatGetProperty(
             Consts::kAudioFormatProperty_FormatList,
@@ -607,10 +613,17 @@ fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
         .try_into()
         .map_err(|_| too_long("ES_Descriptor", esd_body_len))?;
 
-    // NOTE: ES_Descriptor chain; field-by-field layout in README "Apple AAC input format".
     let header: [u8; 22] = [
-        0x03, esd_body, 0x00, 0x00, 0x00, 0x04, dcd_body, 0x40, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, dsi_body,
+        0x03, esd_body, // ES_Descriptor (tag, size)
+        0x00, 0x00, // ES_ID = 0
+        0x00, // Flags = 0
+        0x04, dcd_body, // DecoderConfigDescriptor (tag, size)
+        0x40,     // OTI = MPEG-4 Audio
+        0x15,     // streamType = AudioStream<<2 | reserved
+        0x00, 0x00, 0x00, // BufferSizeDB (3 bytes)
+        0x00, 0x00, 0x00, 0x00, // MaxBitrate (4 bytes)
+        0x00, 0x00, 0x00, 0x00, // AvgBitrate (4 bytes)
+        0x05, dsi_body, // DecoderSpecificInfo (tag, size)
     ];
     let trailer: [u8; 3] = [0x06, 0x01, 0x02];
     Ok(header

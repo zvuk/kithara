@@ -20,12 +20,71 @@ use super::{
     },
 };
 
-/// Unified async/wasm test attribute.
+/// Unified test attribute.
 ///
-/// Flags (`tokio`, `wasm`, `native`, `browser`, `timeout`, `env`,
-/// `tracing`, `soft_fail`, `serial`, `multi_thread`, `selenium`) can be
-/// combined and support `#[case]` parameterization plus fixture injection.
-/// See the crate `README.md` "`#[kithara::test]` flags".
+/// ```text
+/// #[kithara::test]                                     // sync, native + wasm
+/// #[kithara::test(tokio)]                              // async, native + wasm
+/// #[kithara::test(wasm)]                               // wasm-only (async)
+/// #[kithara::test(native)]                             // native-only
+/// #[kithara::test(native, tokio)]                      // native-only async
+/// #[kithara::test(browser)]                            // wasm-only, browser with thread pool init
+/// #[kithara::test(native, browser)]                    // sync native + browser wasm
+/// #[kithara::test(tokio, browser)]                     // async native + browser wasm
+/// #[kithara::test(timeout(Duration::from_secs(5)))]    // sync + timeout
+/// #[kithara::test(tokio, timeout(Duration::from_secs(5)))]  // async + timeout
+/// #[kithara::test(env(NO_PROXY = "host.example.com"))] // set env vars
+/// #[kithara::test(tracing("kithara_hls=debug,kithara_stream=debug"))] // custom tracing filter
+/// #[kithara::test(soft_fail("connection", "refused"))] // soft-fail on matching panics
+/// #[kithara::test(tokio, serial)]                      // serial execution (no parallel)
+/// #[kithara::test(tokio, multi_thread)]                 // multi-thread tokio runtime
+/// #[kithara::test(selenium)]                            // selenium: native + serial + multi_thread + ignore
+/// #[kithara::test(selenium, timeout(Duration::from_secs(120)))]
+/// ```
+///
+/// ## `env`
+///
+/// `env(KEY = "value")` sets environment variables before the test body runs.
+///
+/// ## `tracing`
+///
+/// `tracing("directives")` initializes tracing with a custom `EnvFilter`
+/// directive string. When omitted, tests default to `warn`.
+///
+/// ## `soft_fail`
+///
+/// `soft_fail("pattern1", "pattern2")` catches panics whose message contains
+/// any of the given substrings (case-insensitive). Matching panics are printed
+/// as `[SOFT FAIL]` warnings; non-matching panics propagate normally.
+///
+/// Requires `futures` crate at the call site for async tests.
+///
+/// ## `serial`
+///
+/// `serial` emits `#[serial_test::serial]` on each generated test function,
+/// preventing parallel execution with other `serial` tests. Use for
+/// resource-intensive tests that are sensitive to CPU/IO contention.
+///
+/// Requires `serial_test` crate at the call site.
+///
+/// ## `multi_thread`
+///
+/// Uses `tokio::runtime::Builder::new_multi_thread().worker_threads(2)` instead
+/// of `new_current_thread()`.  Required when the test body spawns tasks that
+/// need a multi-threaded executor (e.g. `thirtyfour` `WebDriver`).
+///
+/// ## `selenium`
+///
+/// Convenience flag that implies `native + tokio + serial + multi_thread` and
+/// adds `#[ignore = "requires selenium"]`.  Designed for Selenium/WebDriver
+/// integration tests that need a multi-threaded runtime and serial execution.
+///
+/// ## `browser`
+///
+/// The `browser` flag injects `kithara_platform::tokio::ensure_thread_pool().await` on
+/// WASM to initialize Web Workers before running the test body.
+///
+/// Supports `#[case]` / `#[case::name]` parameterization and fixture injection.
 pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as TestArgs);
     let func = parse_macro_input!(item as ItemFn);

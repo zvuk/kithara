@@ -101,8 +101,8 @@ impl TryFrom<&[u8]> for AacStreamConfig {
         Ok(Self {
             object_type,
             sample_rate,
-            channels,
             sample_rate_index: sample_rate_index(sample_rate),
+            channels,
         })
     }
 }
@@ -121,10 +121,10 @@ impl TryFrom<&AudioCodecParameters> for AacStreamConfig {
             Error::Unsupported("aac: channel count overflows u8 in AacStreamConfig")
         })?;
         Ok(Self {
-            sample_rate,
-            channels,
             object_type: 2,
+            sample_rate,
             sample_rate_index: sample_rate_index(sample_rate),
+            channels,
         })
     }
 }
