@@ -222,6 +222,16 @@ authoritative `mSampleRate` / `mChannelsPerFrame` /
 (HE-AAC v2 doubles the rate vs the container declaration; `FormatList`
 returns the upsampled rate).
 
+## Trait Bridges
+
+- `&PcmMeta` → `kithara_stream::ChunkPosition` (`From`) — map decoded-chunk timing into stream space
+- `DecoderChunkOutcome` → `PcmChunk` (`TryFrom`) — extract PCM from a decode outcome
+- `GaplessProbe` → `Option<GaplessInfo>` (`From`) — prefer elst-derived over iTunSMPB gapless data
+- `GaplessInfo` → `GaplessTrimmer` (`From`) — build the encoder-delay/padding trimmer
+- `&[u8]` / `&AudioCodecParameters` → `AacStreamConfig` (`TryFrom`) — FDK AAC config from ASC or codec params
+- `io::Error` / `TryFromIntError` / `BudgetExhausted` → `DecodeError` (`From`) — typed error wrapping
+- `PcmSpec` / `DecoderBackend` (`Display`) — human-readable rendering
+
 ## Integration
 
 Consumed by `kithara-audio` which wraps it in a threaded pipeline with effects and resampling. Accepts any `R: Read + Seek + Send + Sync + 'static` -- works with `Stream<File>`, `Stream<Hls>`, `Cursor<Vec<u8>>`, or plain files.

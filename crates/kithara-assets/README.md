@@ -126,6 +126,14 @@ Internally these sit on top of an aggregate `AvailabilityIndex` (`DashMap<Resour
 
 `Resource<D>::CommonState.available` remains the per-resource byte map inside `kithara-storage`, but it is an implementation detail — consumers outside `kithara-storage` must query through `AssetStore`, not through `resource.contains_range()` on an ad-hoc `open_resource` call.
 
+## Trait Bridges
+
+- `&Url` → `ResourceKey` (`From`) — derive a unique key from a URL, query-aware
+- `&StoreOptions` → `EvictConfig` (`From`) — extract eviction config from store options
+- `ResourceStatus` → `AssetResourceState` (`From`) — map storage status to asset state
+- `&LruState` ↔ `LruIndexFile` (`From` both ways) — LRU index persistence round-trip
+- `DiskStore<Ctx>` / `MemStore<Ctx>` → `AssetStore<Ctx>` (`From`) — wrap a backend into the unified store
+
 ## Integration
 
 Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-file`, `kithara-hls`). Provides a unified `AssetStore` type (`Disk`/`Mem`) that internally composes decorators: `CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<...>>>>`.

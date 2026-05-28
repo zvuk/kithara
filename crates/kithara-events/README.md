@@ -61,6 +61,14 @@ All variants of `Event` and all subsystem sub-enums are feature-gated. The defau
 <tr><td><code>queue</code></td><td>yes</td><td><code>QueueEvent</code>, <code>TrackId</code>, <code>TrackStatus</code></td></tr>
 </table>
 
+## Trait Bridges
+
+- `{Downloader,Hls,File,Audio,Player,Engine,Item,Session,Dj,App,Queue,Abr}Event` → `Event` (`From`) — lift subsystem events into the top-level enum
+- `TrackId` ↔ `u64` (`From` both ways) — track-id newtype conversions
+- `AbrMode` ↔ `usize` (`From` both ways) — variant-index encoding
+- `Duration` → `MediaTime` (`From`) / `&MediaTime` → `Duration` (`TryFrom`) — playback-time bridge, rejects invalid/indefinite
+- `FileError` / `HlsError` / `AudioFormat` / `TrackId` (`Display`) — human-readable rendering
+
 ## Integration
 
 Used by `kithara-audio`, `kithara-file`, `kithara-hls`, `kithara-abr`, `kithara-play`, `kithara-queue`, `kithara-app`, and the `kithara` facade. Each subsystem publishes to a shared `EventBus`; consumers subscribe for a unified `Event` stream via `tokio::sync::broadcast`.

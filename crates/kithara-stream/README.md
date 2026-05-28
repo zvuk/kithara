@@ -101,6 +101,16 @@ Defined here as the single source of truth and re-exported by other crates:
 - Treat `wait_range`, `read_at`, and the pull-driven `Peer` contract as the surface of this crate. Fix the owned invariant instead of papering over it with surface-specific hacks.
 - Shared media vocabulary stays here. Reuse `AudioCodec`, `ContainerFormat`, and `MediaInfo` instead of creating parallel cross-crate types.
 
+## Trait Bridges
+
+- `AudioCodec` → `MediaInfo` (`From`) — codec-only media info, container inferred
+- `AudioCodec` → `ContainerFormat` (`TryFrom`) — standalone container, ambiguous codecs fail
+- `&[u8]` → `AudioCodec` (`TryFrom`) — codec detection from magic prefix
+- `E: Into<SourceError>` → `StreamError` (`From`) — lift source errors into stream errors
+- `Iterator<SlotEntry>` → `BatchGroup` (`FromIterator`) — group fetch slots by cancel epoch
+- `NotReadyCause` / `PendingReason` (`Display`) — human-readable not-ready / pending reasons
+- `StreamSeekPastEof` / `StreamReadError` / `StreamPending` / `VariantChangeError` (`Display`) — reader error rendering
+
 ## Integration
 
 Central orchestration layer. Protocol crates (`kithara-file`, `kithara-hls`) implement `StreamType` and `dl::Peer`. `kithara-decode` consumes `Stream<T>`. The `Downloader` is owned at the consumer-crate top (`kithara-play::PlayerImpl`, `kithara-queue::Queue`, etc.) so all peers share one HTTP pool. Other crates re-export `AudioCodec`, `ContainerFormat`, `MediaInfo` from here.
