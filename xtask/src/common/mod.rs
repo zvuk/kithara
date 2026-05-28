@@ -10,6 +10,7 @@
 pub(crate) mod baseline;
 pub(crate) mod fix;
 pub(crate) mod parse;
+pub(crate) mod project;
 pub(crate) mod report;
 pub(crate) mod scope;
 pub(crate) mod style;

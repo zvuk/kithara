@@ -10,13 +10,18 @@ use std::{
 use anyhow::{Context, Result, bail};
 use cargo_metadata::{DependencyKind, MetadataCommand};
 
-use crate::util::check_tool;
+use crate::{
+    common::project::{ProjectConfig, PublishConfig},
+    util::check_tool,
+};
 
 struct Consts;
 
 impl Consts {
     const DEFAULT_DELAY_SECS: u64 = 20;
-    const WORKSPACE_HACK: &'static str = "kithara-workspace-hack";
+    /// User-agent used for registry availability checks when the project
+    /// config leaves `publish.user_agent` empty.
+    const DEFAULT_USER_AGENT: &'static str = "xtask-publish";
 }
 
 #[derive(Debug, clap::Args)]
@@ -58,7 +63,8 @@ pub(crate) fn run(args: &PublishArgs) -> Result<()> {
     } else {
         println!("Mode: publish ({}s delay between crates)", args.delay);
         println!();
-        run_publish(&order, args.delay)?;
+        let project = ProjectConfig::load(Path::new("."))?;
+        run_publish(&order, args.delay, &project.publish)?;
     }
 
     println!();
@@ -114,7 +120,7 @@ fn run_dry_run_inner(order: &[String]) -> Result<()> {
 /// `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`. Since kithara
 /// places the hack under such a target section, we strip it ourselves and call
 /// `cargo publish` directly; the original Cargo.toml is restored unconditionally.
-fn run_publish(order: &[String], delay: u64) -> Result<()> {
+fn run_publish(order: &[String], delay: u64, publish: &PublishConfig) -> Result<()> {
     let manifests = locate_manifests(order)?;
     let versions = locate_versions(order)?;
 
@@ -126,7 +132,7 @@ fn run_publish(order: &[String], delay: u64) -> Result<()> {
         let total = order.len();
         let version = &versions[name];
 
-        if registry_has(name, version)? {
+        if registry_has(name, version, &publish.user_agent)? {
             println!("[{pos}/{total}] Skipping {name} v{version} (already on crates.io).");
             last_action_was_publish = false;
             continue;
@@ -139,7 +145,7 @@ fn run_publish(order: &[String], delay: u64) -> Result<()> {
 
         println!("[{pos}/{total}] Publishing {name} v{version}...");
         let manifest = &manifests[name];
-        publish_one(name, manifest)?;
+        publish_one(name, manifest, &publish.workspace_hack_crate)?;
         published_count += 1;
         last_action_was_publish = true;
     }
@@ -176,9 +182,13 @@ fn locate_versions(order: &[String]) -> Result<HashMap<String, String>> {
 /// Returns true if status is 200. Any non-2xx/non-404 is reported as an
 /// error so transient failures don't silently lead to duplicate-publish
 /// attempts.
-fn registry_has(name: &str, version: &str) -> Result<bool> {
+fn registry_has(name: &str, version: &str, configured_agent: &str) -> Result<bool> {
     let url = format!("https://crates.io/api/v1/crates/{name}/{version}");
-    let user_agent = format!("kithara-xtask-publish ({}@prosoftware.io)", "zvuk_ai");
+    let user_agent = if configured_agent.is_empty() {
+        Consts::DEFAULT_USER_AGENT
+    } else {
+        configured_agent
+    };
     let output = Command::new("curl")
         .args([
             "-sS",
@@ -187,7 +197,7 @@ fn registry_has(name: &str, version: &str) -> Result<bool> {
             "-w",
             "%{http_code}",
             "-A",
-            &user_agent,
+            user_agent,
             "--max-time",
             "20",
             &url,
@@ -241,19 +251,16 @@ fn locate_manifests(order: &[String]) -> Result<HashMap<String, PathBuf>> {
     Ok(out)
 }
 
-fn publish_one(name: &str, manifest: &Path) -> Result<()> {
+fn publish_one(name: &str, manifest: &Path, hack_crate: &str) -> Result<()> {
     let original = fs::read_to_string(manifest)
         .with_context(|| format!("read {} for {name}", manifest.display()))?;
-    let stripped = strip_workspace_hack(&original);
+    let stripped = strip_workspace_hack(&original, hack_crate);
     let did_strip = stripped != original;
 
     if did_strip {
         fs::write(manifest, &stripped)
             .with_context(|| format!("write stripped manifest {}", manifest.display()))?;
-        println!(
-            "  Temporarily removed {} dependency.",
-            Consts::WORKSPACE_HACK
-        );
+        println!("  Temporarily removed {hack_crate} dependency.");
     }
 
     let result = run_cargo(
@@ -274,14 +281,15 @@ fn publish_one(name: &str, manifest: &Path) -> Result<()> {
 /// Remove every `kithara-workspace-hack = { ... }` dependency line, regardless
 /// of whether it lives under `[dependencies]` or a `[target.<cfg>.dependencies]`
 /// section. Preserves all other content byte-for-byte.
-fn strip_workspace_hack(manifest: &str) -> String {
+fn strip_workspace_hack(manifest: &str, hack_crate: &str) -> String {
+    if hack_crate.is_empty() {
+        return manifest.to_owned();
+    }
     let mut out = String::with_capacity(manifest.len());
     for line in manifest.split_inclusive('\n') {
         let trimmed = line.trim_start();
-        if trimmed.starts_with(Consts::WORKSPACE_HACK)
-            && trimmed[Consts::WORKSPACE_HACK.len()..]
-                .trim_start()
-                .starts_with('=')
+        if trimmed.starts_with(hack_crate)
+            && trimmed[hack_crate.len()..].trim_start().starts_with('=')
         {
             continue;
         }
@@ -462,7 +470,7 @@ kithara-workspace-hack = { version = \"0.0.1-alpha1\", path = \"../kithara-works
 kithara-workspace-hack = { version = \"0.0.1-alpha1\", path = \"../kithara-workspace-hack\" }
 bar = { workspace = true }
 ";
-        let out = strip_workspace_hack(input);
+        let out = strip_workspace_hack(input, "kithara-workspace-hack");
         assert!(!out.contains("kithara-workspace-hack"), "{out}");
         assert!(out.contains("foo = { workspace = true }"));
         assert!(out.contains("bar = { workspace = true }"));
@@ -472,7 +480,7 @@ bar = { workspace = true }
     #[test]
     fn strip_workspace_hack_keeps_unrelated_lines() {
         let input = "no_hack_here = true\n";
-        assert_eq!(strip_workspace_hack(input), input);
+        assert_eq!(strip_workspace_hack(input, "kithara-workspace-hack"), input);
     }
 
     #[test]

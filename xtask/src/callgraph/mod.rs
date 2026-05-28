@@ -15,6 +15,7 @@ use syn::{ImplItem, Item, ItemImpl, spanned::Spanned};
 
 use crate::common::{
     parse::parse_file,
+    project::ProjectConfig,
     walker::{relative_to, walk_rs_files},
 };
 
@@ -56,9 +57,15 @@ pub(crate) fn run(args: &CallgraphArgs) -> Result<()> {
 
 fn emit_ir(workspace_root: &Path) -> Result<()> {
     println!("emitting LLVM-IR into {TARGET_DIR} (slow, opt-in)...");
+    let config = ProjectConfig::load(workspace_root)?;
+    let mut args = vec!["build".to_owned(), "--workspace".to_owned()];
+    for krate in &config.callgraph.workspace_exclude {
+        args.push("--exclude".to_owned());
+        args.push(krate.clone());
+    }
     let status = Command::new("cargo")
         .current_dir(workspace_root)
-        .args(["build", "--workspace", "--exclude", "kithara-fuzz"])
+        .args(&args)
         .env("CARGO_TARGET_DIR", TARGET_DIR)
         .env(
             "RUSTFLAGS",
