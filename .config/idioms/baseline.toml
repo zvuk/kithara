@@ -4,13 +4,12 @@ schema_version = 1
 "crates/kithara-decode/src/gapless/trimmer/core.rs:142:12" = 1
 "crates/kithara-decode/src/gapless/trimmer/core.rs:443:12" = 1
 "crates/kithara-hls/src/loading/size_estimation.rs:95:8" = 1
-"crates/kithara-stream/src/dl/tests.rs:324:4" = 1
+"crates/kithara-stream/src/dl/tests.rs:325:4" = 1
 
 [arc_mutex_collection]
 "crates/kithara-decode/src/fmp4/tests.rs:143:4" = 1
 "crates/kithara-decode/src/fmp4/tests.rs:148:15" = 1
 "crates/kithara-decode/src/fmp4/tests.rs:28:11" = 1
-"crates/kithara-stream/src/dl/tests.rs:493:22" = 1
 "crates/kithara-stream/src/dl/tests.rs:655:21" = 1
 "crates/kithara-test-utils/src/probe/capture/recorder.rs:8:28" = 1
 
@@ -66,7 +65,7 @@ schema_version = 1
 "crates/kithara-play/src/impls/player_resource.rs:95:while_body" = 1
 "crates/kithara-queue/src/queue/selection.rs:18:loop_body" = 1
 "crates/kithara-storage/src/backend/resource/wait.rs:35:loop_body" = 1
-"crates/kithara-stream/src/dl/registry.rs:205:for_body" = 1
+"crates/kithara-stream/src/dl/registry.rs:208:for_body" = 1
 "crates/kithara-stream/src/stream.rs:344:loop_body" = 1
 "crates/kithara-stream/src/timeline.rs:561:for_body" = 1
 "crates/kithara-stream/src/timeline.rs:700:for_body" = 1
@@ -778,8 +777,8 @@ schema_version = 1
 "crates/kithara-stream/src/dl/peer.rs:191:4" = 1
 "crates/kithara-stream/src/dl/peer.rs:207:4" = 1
 "crates/kithara-stream/src/dl/peer.rs:260:4" = 1
-"crates/kithara-stream/src/dl/registry.rs:262:4" = 1
-"crates/kithara-stream/src/dl/registry.rs:304:4" = 1
+"crates/kithara-stream/src/dl/registry.rs:260:4" = 1
+"crates/kithara-stream/src/dl/registry.rs:302:4" = 1
 "crates/kithara-stream/src/dl/response.rs:73:4" = 1
 "crates/kithara-stream/src/dl/response.rs:80:4" = 1
 "crates/kithara-stream/src/dl/tests.rs:691:4" = 1
@@ -928,14 +927,13 @@ schema_version = 1
 "crates/kithara-test-macros/src/test/shared.rs:178:30" = 1
 
 [loop_flag_accumulator]
-"crates/kithara-abr/src/handle.rs:418:seen" = 1
+"crates/kithara-abr/src/handle.rs:412:seen" = 1
 "crates/kithara-app/src/tui/runner.rs:98:tick_error_logged" = 1
 "crates/kithara-queue/src/loader.rs:134:marked" = 1
 "crates/kithara-storage/src/backend/mmap/io.rs:110:found_match" = 1
 
 [parallel_loops]
 "crates/kithara-hls/src/variant/tests.rs:448:4::cmds" = 1
-"crates/kithara-stream/src/dl/registry.rs:171:8::self.peers" = 1
 
 [retry_fallback]
 "crates/kithara-audio/src/pipeline/track_fsm.rs:51:attempt" = 1

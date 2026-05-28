@@ -4534,6 +4534,7 @@ dependencies = [
  "bitflags 2.11.1",
  "bon",
  "bytes",
+ "dashmap",
  "delegate",
  "futures",
  "hotpath",

@@ -13,6 +13,7 @@ use axum::{
     routing::{get, head},
 };
 use bytes::Bytes;
+use dashmap::DashSet;
 use futures::stream::iter as stream_iter;
 use kithara_abr::Abr;
 use kithara_events::{DownloaderEvent, Event, EventBus};
@@ -490,8 +491,7 @@ async fn shared_client_keepalive_bounds_socket_count() {
 
     let total_served = Arc::new(AtomicUsize::new(0));
     let total_served_c = Arc::clone(&total_served);
-    let unique_ports: Arc<Mutex<std::collections::HashSet<u16>>> =
-        Arc::new(Mutex::new(std::collections::HashSet::new()));
+    let unique_ports: Arc<DashSet<u16>> = Arc::new(DashSet::new());
     let unique_ports_c = Arc::clone(&unique_ports);
 
     let app = Router::new()
@@ -510,7 +510,7 @@ async fn shared_client_keepalive_bounds_socket_count() {
                         .extensions()
                         .get::<axum::extract::ConnectInfo<SocketAddr>>()
                     {
-                        unique.lock_sync().insert(info.0.port());
+                        unique.insert(info.0.port());
                     }
                     next.run(req).await
                 }
@@ -578,7 +578,7 @@ async fn shared_client_keepalive_bounds_socket_count() {
     }
 
     let expected = total_dls * REQUESTS_PER_DL;
-    let unique = unique_ports.lock_sync().len();
+    let unique = unique_ports.len();
     assert!(
         all_failures.is_empty(),
         "shared client should not produce HTTP failures: {total_ok}/{expected} ok, \
