@@ -32,7 +32,7 @@ pub(crate) struct AacHeV2Encoder;
 
 impl AacHeV2Encoder {
     pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
-        validate(request)?;
+        request.validate()?;
 
         let sample_rate = request.pcm.sample_rate();
         let channels = request.pcm.channels();
@@ -122,25 +122,6 @@ impl AacHeV2Encoder {
     pub(crate) const fn frame_samples() -> usize {
         Consts::FRAME_OUTPUT_SAMPLES
     }
-}
-
-fn validate(request: &PackagedEncodeRequest<'_>) -> EncodeResult<()> {
-    if request.timescale == 0 {
-        return Err(EncodeError::InvalidInput(
-            "timescale must be > 0".to_owned(),
-        ));
-    }
-    if request.packets_per_segment == 0 {
-        return Err(EncodeError::InvalidInput(
-            "packets_per_segment must be > 0".to_owned(),
-        ));
-    }
-    if request.pcm.total_byte_len().is_none() {
-        return Err(EncodeError::InvalidInput(
-            "PCM source must have a finite length".to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 /// Streams interleaved i16 samples from `pcm` into `feed` in
