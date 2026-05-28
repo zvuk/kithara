@@ -131,7 +131,7 @@ impl DecoderHooks for HlsReaderHooks {
             return;
         };
         if let PrerollHint::Required(byte) = preroll {
-            // F.2 will replace this with self.coord.request_preroll(byte);
+            // TODO: route preroll byte to the coordinator once preroll plumbing lands.
             let _ = byte;
         }
         let Some(to) = landed_byte else {

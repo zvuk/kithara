@@ -122,10 +122,8 @@ impl FlushHub {
     /// synchronously through [`Self::flush_now`].
     #[must_use]
     pub fn new(cancel: CancellationToken, policy: FlushPolicy) -> Arc<Self> {
+        // NOTE: `cancel` is a caller-owned child token; `Drop` cancels it to stop the worker.
         Arc::new(Self {
-            // The caller passes a child token it owns exclusively (see
-            // the cancel-hierarchy rule): `Drop` cancels it to stop the
-            // worker without touching the shared parent (storage, app).
             cancel,
             policy,
             flush_lock: Mutex::new(()),

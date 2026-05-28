@@ -1,34 +1,6 @@
 schema_version = 1
 
 [comment_hygiene]
-"crates/kithara-assets/src/flush/core.rs:126:category" = 1
-"crates/kithara-assets/src/flush/core.rs:127:category" = 1
-"crates/kithara-assets/src/flush/core.rs:128:category" = 1
-"crates/kithara-assets/src/index/pin/core.rs:16:size:doc" = 1
-"crates/kithara-assets/src/lib.rs:3:size:doc" = 1
-"crates/kithara-assets/src/process.rs:44:size:doc" = 1
-"crates/kithara-assets/src/process.rs:727:size:doc" = 1
-"crates/kithara-assets/src/store.rs:160:size:doc" = 1
-"crates/kithara-assets/src/store.rs:867:size:doc" = 1
-"crates/kithara-assets/src/store.rs:957:size:doc" = 1
-"crates/kithara-assets/tests/shared_flush_hub.rs:49:category" = 1
-"crates/kithara-assets/tests/shared_flush_hub.rs:61:category" = 1
-"crates/kithara-audio/src/audio.rs:1280:category" = 1
-"crates/kithara-audio/src/audio.rs:1281:category" = 1
-"crates/kithara-audio/src/audio.rs:1282:category" = 1
-"crates/kithara-audio/src/audio.rs:74:size:doc" = 1
-"crates/kithara-audio/src/lib.rs:1:size:doc" = 1
-"crates/kithara-audio/src/pipeline/source.rs:1026:size:doc" = 1
-"crates/kithara-audio/src/pipeline/source.rs:1705:size:doc" = 1
-"crates/kithara-audio/src/pipeline/source.rs:806:category" = 1
-"crates/kithara-audio/src/pipeline/source.rs:806:size:inline" = 1
-"crates/kithara-audio/src/pipeline/source.rs:807:category" = 1
-"crates/kithara-audio/src/pipeline/source.rs:808:category" = 1
-"crates/kithara-audio/src/pipeline/source.rs:809:category" = 1
-"crates/kithara-audio/src/pipeline/source.rs:810:category" = 1
-"crates/kithara-audio/src/pipeline/source.rs:811:category" = 1
-"crates/kithara-audio/src/traits.rs:127:size:doc" = 1
-"crates/kithara-bufpool/src/lib.rs:1:size:doc" = 1
 "crates/kithara-decode/src/apple/codec.rs:485:category" = 1
 "crates/kithara-decode/src/apple/codec.rs:485:size:inline" = 1
 "crates/kithara-decode/src/apple/codec.rs:486:category" = 1
@@ -103,17 +75,6 @@ schema_version = 1
 "crates/kithara-decode/src/traits.rs:42:category" = 1
 "crates/kithara-decode/src/traits.rs:43:category" = 1
 "crates/kithara-decode/src/traits.rs:44:category" = 1
-"crates/kithara-drm/src/decrypt.rs:18:size:doc" = 1
-"crates/kithara-hls/src/loading/keys.rs:144:size:doc" = 1
-"crates/kithara-hls/src/reader.rs:134:category" = 1
-"crates/kithara-hls/src/variant.rs:1195:size:doc" = 1
-"crates/kithara-hls/src/variant.rs:837:size:doc" = 1
-"crates/kithara-platform/src/lib.rs:1:size:doc" = 1
-"crates/kithara-play/src/impls/config.rs:70:size:doc" = 1
-"crates/kithara-storage/src/decorator/chunked/core.rs:105:size:doc" = 1
-"crates/kithara-test-macros/src/probe/parse.rs:8:size:doc" = 1
-"crates/kithara-test-macros/src/test/entry.rs:23:size:doc" = 1
-"crates/kithara-test-utils/src/probe/capture/mod.rs:1:size:doc" = 1
 
 [const_locality]
 "crates/kithara-app/src/crossfade.rs::PROGRESS_LOG_INTERVAL" = 1
