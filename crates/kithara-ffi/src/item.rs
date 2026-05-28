@@ -11,17 +11,70 @@ use crate::{
     types::{FfiAbrMode, FfiItemConfig, FfiItemLoadResult, FfiTimeRange},
 };
 
+/// Loading lifecycle of an item. A sum type so the contradictory
+/// boolean combinations the old packed struct allowed
+/// (`ready && failed`, `ready && duration == 0`, `failed && duration`)
+/// are unrepresentable: a duration only exists inside `Ready`, and
+/// `Ready` / `Failed` are mutually exclusive.
+#[derive(Debug, Clone, Copy)]
+enum LoadingState {
+    /// Inserted but no duration resolved yet (and not failed).
+    Pending,
+    /// Metadata resolved; `duration_sec` is the playable duration.
+    Ready { duration_sec: f64 },
+    /// Terminal failure — sticky, carries no duration.
+    Failed,
+}
+
 /// Cached subset of item state surfaced through synchronous getters
 /// (`duration_sec`, `is_live_stream`, …) and the `load()` resolver.
-/// Updated by [`ItemEventBridge`] as the underlying resource emits
-/// metadata events.
-#[derive(Default, Debug, Clone, Copy)]
-pub(crate) struct ItemState {
-    pub has_protected_content: bool,
-    pub is_failed: bool,
-    pub is_live_stream: bool,
-    pub is_ready_to_play: bool,
-    pub duration_sec: f64,
+/// Updated by [`ItemEventBridge`] through the typed transition methods
+/// as the underlying resource emits metadata events.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ItemView {
+    loading: LoadingState,
+    has_protected_content: bool,
+    is_live_stream: bool,
+}
+
+impl ItemView {
+    fn new(is_live_stream: bool) -> Self {
+        Self {
+            loading: LoadingState::Pending,
+            has_protected_content: false,
+            is_live_stream,
+        }
+    }
+
+    /// Resolved duration in seconds, or `0.0` when not yet `Ready`
+    /// (pending or failed).
+    fn duration_sec(&self) -> f64 {
+        match self.loading {
+            LoadingState::Ready { duration_sec } => duration_sec,
+            LoadingState::Pending | LoadingState::Failed => 0.0,
+        }
+    }
+
+    /// Whether the item resolved metadata and is playable. False while
+    /// pending or after a failure — `Ready` and `Failed` are exclusive,
+    /// so this is the typed replacement for `is_ready_to_play && !is_failed`.
+    fn is_ready(&self) -> bool {
+        matches!(self.loading, LoadingState::Ready { .. })
+    }
+
+    /// Metadata resolved with `duration_sec`. A no-op once `Failed`
+    /// (failure is sticky), mirroring the old `is_failed` flag never
+    /// being cleared.
+    pub(crate) fn resolve_duration(&mut self, duration_sec: f64) {
+        if !matches!(self.loading, LoadingState::Failed) {
+            self.loading = LoadingState::Ready { duration_sec };
+        }
+    }
+
+    /// Terminal failure transition from any state.
+    pub(crate) fn mark_failed(&mut self) {
+        self.loading = LoadingState::Failed;
+    }
 }
 
 /// FFI-facing audio player item.
@@ -39,7 +92,7 @@ pub(crate) struct ItemState {
 ///   `uuid: Int64` on iOS.
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
 pub struct AudioPlayerItem {
-    pub(crate) state: Arc<Mutex<ItemState>>,
+    pub(crate) state: Arc<Mutex<ItemView>>,
     /// Scoped event bus — set by `AudioPlayer::insert` so per-resource
     /// events (Hls/File/Audio) published during `Resource::new` are
     /// captured even when [`set_observer`] is called later.
@@ -85,10 +138,7 @@ impl AudioPlayerItem {
             observer: Mutex::new(None),
             bus: Mutex::new(None),
             inserted: Mutex::new(false),
-            state: Arc::new(Mutex::new(ItemState {
-                is_live_stream: live,
-                ..ItemState::default()
-            })),
+            state: Arc::new(Mutex::new(ItemView::new(live))),
         })
     }
 
@@ -103,7 +153,7 @@ impl AudioPlayerItem {
     /// Cached item duration in seconds. Defaults to `0.0` until the
     /// underlying resource emits a duration update.
     pub fn duration_sec(&self) -> f64 {
-        self.state.lock_sync().duration_sec
+        self.state.lock_sync().duration_sec()
     }
 
     /// Whether this item represents a live HLS feed. The flag is set
@@ -155,7 +205,7 @@ impl AudioPlayerItem {
         let result = if inserted {
             FfiItemLoadResult {
                 has_protected_content: snapshot.has_protected_content,
-                is_playable: snapshot.is_ready_to_play && !snapshot.is_failed,
+                is_playable: snapshot.is_ready(),
             }
         } else {
             FfiItemLoadResult {
@@ -375,6 +425,52 @@ mod tests {
         let item = AudioPlayerItem::new(config);
         assert!(item.is_playable(0.0, vec![]));
         assert!(item.is_playable(9999.0, vec![]));
+    }
+
+    #[kithara::test]
+    fn item_view_pending_is_not_ready_and_zero_duration() {
+        let view = ItemView::new(false);
+        assert!(!view.is_ready());
+        assert_eq!(view.duration_sec(), 0.0);
+    }
+
+    #[kithara::test]
+    fn item_view_resolve_duration_sets_ready() {
+        let mut view = ItemView::new(false);
+        view.resolve_duration(42.0);
+        assert!(view.is_ready());
+        assert_eq!(view.duration_sec(), 42.0);
+    }
+
+    #[kithara::test]
+    fn item_view_mark_failed_is_not_ready_and_zero_duration() {
+        let mut view = ItemView::new(false);
+        view.resolve_duration(42.0);
+        view.mark_failed();
+        assert!(!view.is_ready());
+        assert_eq!(view.duration_sec(), 0.0);
+    }
+
+    #[kithara::test]
+    fn item_view_failure_is_sticky_over_resolve_duration() {
+        let mut view = ItemView::new(false);
+        view.mark_failed();
+        view.resolve_duration(42.0);
+        assert!(
+            !view.is_ready(),
+            "resolve_duration must not un-fail a Failed item"
+        );
+        assert_eq!(view.duration_sec(), 0.0);
+    }
+
+    #[kithara::test]
+    fn item_view_live_flag_preserved_across_transitions() {
+        let mut view = ItemView::new(true);
+        assert!(view.is_live_stream);
+        view.resolve_duration(10.0);
+        assert!(view.is_live_stream);
+        view.mark_failed();
+        assert!(view.is_live_stream);
     }
 
     #[kithara::test]
