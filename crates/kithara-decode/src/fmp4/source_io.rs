@@ -52,11 +52,6 @@ impl SegmentReadState {
         }
     }
 
-    pub(crate) fn total(&self) -> usize {
-        usize::try_from(self.range.end - self.range.start)
-            .expect("BUG: segment range fits usize on supported targets")
-    }
-
     /// Resize `buffer` to the current `total()` and report whether the
     /// segment is already fully filled. Every fill checkpoint runs this
     /// after a live-range re-resolve that may have grown or shrunk the
@@ -67,6 +62,11 @@ impl SegmentReadState {
             self.buffer.resize(total, 0);
         }
         self.filled >= total
+    }
+
+    pub(crate) fn total(&self) -> usize {
+        usize::try_from(self.range.end - self.range.start)
+            .expect("BUG: segment range fits usize on supported targets")
     }
 }
 
