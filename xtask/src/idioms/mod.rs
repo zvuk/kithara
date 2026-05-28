@@ -9,7 +9,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Context as _, Result, bail};
@@ -27,6 +27,7 @@ use crate::common::{
     report,
     scope::Scope,
     violation::Report,
+    walker::{compile_globs, matches_any},
 };
 
 #[derive(Debug, Default, Args)]
@@ -90,6 +91,8 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
         report.extend(violations);
     }
 
+    apply_exclude_paths(&mut report, &config.thresholds.exclude_paths);
+
     if args.update_baseline {
         let new_baseline = Baseline::from_report(&report);
         let path = new_baseline.save(&args.config_dir)?;
@@ -135,6 +138,26 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
     Ok(())
 }
 
+/// Drop violations whose path portion matches any `exclude_paths` glob.
+/// Applied centrally before baseline-write and ratchet-diff so the exclusion
+/// is consistent across both. A no-op when `patterns` is empty.
+fn apply_exclude_paths(report: &mut Report, patterns: &[String]) {
+    if patterns.is_empty() {
+        return;
+    }
+    let globs = compile_globs(patterns);
+    report
+        .violations
+        .retain(|v| !matches_any(&globs, Path::new(key_path(&v.key))));
+}
+
+/// Extract the workspace-relative path portion from a violation key. Keys look
+/// like `crates/<crate>/src/.../file.rs:line:col` or `file.rs::Name`; the path
+/// always ends at the `.rs` extension, so we slice up to and including it.
+fn key_path(key: &str) -> &str {
+    key.find(".rs").map_or(key, |i| &key[..i + 3])
+}
+
 fn print_report(report: &Report, ran: &[&'static str], diff: &RatchetDiff<'_>) {
     if ran.is_empty() {
         println!("OK: no idioms checks registered yet.");
@@ -168,4 +191,75 @@ fn validate(args: &IdiomsArgs) -> Result<()> {
         bail!("--json and --report are mutually exclusive");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::violation::Violation;
+
+    fn exclude_globs() -> Vec<String> {
+        [
+            "**/tests/**",
+            "**/tests.rs",
+            "**/*_test.rs",
+            "**/test_*.rs",
+            "crates/kithara-test-utils/**",
+            "crates/kithara-test-macros/**",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+    }
+
+    #[test]
+    fn excludes_test_code_keeps_production() {
+        let mut report = Report::default();
+        report.extend([
+            Violation::warn("loop_allocation", "crates/x/tests.rs:10:4", "test"),
+            Violation::warn(
+                "fat_loop_body",
+                "crates/x/tests/helper.rs:5:loop_body",
+                "test",
+            ),
+            Violation::warn(
+                "box_concrete_type",
+                "crates/kithara-test-utils/src/a.rs:1:1",
+                "test",
+            ),
+            Violation::warn(
+                "arc_mutex_collection",
+                "crates/kithara-test-macros/src/b.rs:2:2",
+                "test",
+            ),
+            Violation::warn("loop_allocation", "crates/x/src/foo.rs:7:8", "test"),
+        ]);
+
+        apply_exclude_paths(&mut report, &exclude_globs());
+
+        let keys: Vec<&str> = report.violations.iter().map(|v| v.key.as_str()).collect();
+        assert_eq!(keys, ["crates/x/src/foo.rs:7:8"]);
+    }
+
+    #[test]
+    fn empty_patterns_is_noop() {
+        let mut report = Report::default();
+        report.extend([Violation::warn(
+            "loop_allocation",
+            "crates/x/tests.rs:10:4",
+            "test",
+        )]);
+        apply_exclude_paths(&mut report, &[]);
+        assert_eq!(report.violations.len(), 1);
+    }
+
+    #[test]
+    fn key_path_strips_line_col_and_name_suffix() {
+        assert_eq!(key_path("crates/x/src/foo.rs:7:8"), "crates/x/src/foo.rs");
+        assert_eq!(
+            key_path("crates/x/src/foo.rs:173:48::outcome"),
+            "crates/x/src/foo.rs"
+        );
+        assert_eq!(key_path("kithara-foo"), "kithara-foo");
+    }
 }

@@ -3,6 +3,19 @@
 # guard_cascade limits trimmed to surface more hot-path branch-prediction
 # offenders (see plan: Bug #2 hot-path optimization).
 
+# Workspace-relative globs whose violations are dropped from every idioms
+# check before baseline-write and ratchet-diff. Idioms target production
+# runtime quality; test code and compile-time test-infra crates are exempt
+# (per project policy).
+exclude_paths = [
+    "**/tests/**",
+    "**/tests.rs",
+    "**/*_test.rs",
+    "**/test_*.rs",
+    "crates/kithara-test-utils/**",
+    "crates/kithara-test-macros/**",
+]
+
 [branch_chains]
 # Strongest match-conversion hint — homogeneous chains test the same
 # expression with the same operator. Three arms are already a `match`.
