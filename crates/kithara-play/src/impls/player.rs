@@ -687,13 +687,6 @@ impl PlayerImpl {
         debug!(rate, "play");
     }
 
-    /// Insert a resource at the end and immediately crossfade to it.
-    pub fn play_resource(&self, resource: Resource) -> Result<(), PlayError> {
-        self.insert(resource, None, None);
-        let index = self.item_count().saturating_sub(1);
-        self.select_item(index, true)
-    }
-
     /// Current playback position in seconds.
     pub fn position_seconds(&self) -> Option<f64> {
         let slot_id = (*self.current_slot.lock_sync())?;

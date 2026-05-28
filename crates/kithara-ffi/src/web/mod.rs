@@ -5,7 +5,10 @@
 //! wasm-only and require no per-item gating.
 
 pub mod bindings;
+pub(crate) mod bridge;
 pub(crate) mod commands;
+pub(crate) mod inner;
 pub(crate) mod js;
 pub mod player;
+pub mod queue;
 pub(crate) mod worker;

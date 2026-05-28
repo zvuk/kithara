@@ -58,13 +58,26 @@ pub(crate) fn send_reply(request_id: u32, result: Result<(), String>) {
     bc.close();
 }
 
-/// Create a JS Promise that resolves when the Worker sends a reply with
-/// matching `request_id` via `BroadcastChannel("kithara-reply")`.
+/// Create a JS Promise that resolves with `undefined` when the Worker
+/// sends an `ok` reply with matching `request_id` via
+/// `BroadcastChannel("kithara-reply")`, or rejects with the error string.
 pub(crate) fn reply_promise(request_id: u32) -> Result<Promise, JsValue> {
+    reply_promise_with_value(request_id, JsValue::UNDEFINED)
+}
+
+/// Like [`reply_promise`] but resolves with `value` instead of
+/// `undefined`. Used by queue ops that hand a freshly-allocated track id
+/// back to the caller once the worker confirms placement.
+pub(crate) fn reply_promise_with_value(
+    request_id: u32,
+    value: impl Into<JsValue>,
+) -> Result<Promise, JsValue> {
     let bc = BroadcastChannel::new("kithara-reply")?;
+    let value: JsValue = value.into();
 
     let promise = Promise::new(&mut |resolve, reject| {
         let bc_ref = bc.clone();
+        let value = value.clone();
         let closure = Closure::wrap(Box::new(move |ev: MessageEvent| {
             let data = ev.data();
             let rid = get_f64(&data, "request_id")
@@ -76,7 +89,7 @@ pub(crate) fn reply_promise(request_id: u32) -> Result<Promise, JsValue> {
             bc_ref.set_onmessage(None);
             bc_ref.close();
             if get_bool(&data, "ok").unwrap_or(false) {
-                let _ = resolve.call0(&JsValue::UNDEFINED);
+                let _ = resolve.call1(&JsValue::UNDEFINED, &value);
             } else {
                 let err = get_str(&data, "error").unwrap_or_else(|| "unknown error".into());
                 let _ = reject.call1(&JsValue::UNDEFINED, &JsValue::from_str(&err));
