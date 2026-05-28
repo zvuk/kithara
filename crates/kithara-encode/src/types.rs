@@ -1,7 +1,5 @@
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
-const DEFAULT_LOSSY_BIT_RATE: u64 = 128_000;
-
 /// PCM source for encoder requests.
 pub trait PcmSource: Send + Sync {
     fn channels(&self) -> u16;
@@ -41,6 +39,7 @@ impl BytesEncodeTarget {
 
     #[must_use]
     pub const fn default_bit_rate(self) -> Option<u64> {
+        const DEFAULT_LOSSY_BIT_RATE: u64 = 128_000;
         match self {
             Self::Mp3 | Self::Aac | Self::M4a => Some(DEFAULT_LOSSY_BIT_RATE),
             Self::Flac => None,

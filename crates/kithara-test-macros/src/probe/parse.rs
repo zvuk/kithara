@@ -5,28 +5,9 @@ use syn::{
     punctuated::Punctuated,
 };
 
-/// Parsed `#[kithara::probe(...)]` arguments.
-///
-/// * `#[kithara::probe]` (no parens) — marker probe: emits only the
-///   cheap auto-fields (`seq`, `caller_file`, `caller_line`) and zero
-///   wire args. Use this for very-frequent production functions
-///   whose parameters are not `IntoProbeArg` (e.g.
-///   `Future::poll_next(&self, cx: &mut Context)`).
-/// * `#[kithara::probe(field1, field2, …)]` — explicit list of
-///   parameter idents to record as wire args (max 6, USDT arity
-///   ceiling). Each ident must match a real parameter name.
-/// * `#[kithara::probe(name = expr, …)]` — record a computed value
-///   under the wire-name `name`. `expr` is evaluated inside the
-///   function body at probe-firing time (so it can read `self`,
-///   parameters, locals); its result must implement `IntoProbeArg`.
-///   Plain parameter idents and `name = expr` entries may be mixed
-///   freely; the combined count counts against the 6-arg ceiling.
-/// * `#[kithara::probe(caller, …)]` — additionally capture
-///   `caller_fn` via `backtrace::trace`. Opt-in because backtrace
-///   resolution is ~ms per firing and blows up hot loops; do NOT
-///   use on `poll_next`-style hot probes.
-/// * `#[kithara::probe(probe_return)]` — record the function's
-///   return value through `Probe::record_probe`.
+/// Parsed `#[kithara::probe(...)]` arguments: parameter idents, computed
+/// `name = expr` values, and the `caller` / `probe_return` flags. See the
+/// crate `README.md` "`#[kithara::probe(...)]` arguments" for the syntax.
 #[derive(Default, Debug)]
 pub(crate) struct ProbeFilter {
     pub args: Option<Vec<Ident>>,

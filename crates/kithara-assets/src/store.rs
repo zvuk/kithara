@@ -159,33 +159,8 @@ pub(crate) type MemStore<Ctx = ()> =
 
 /// Constructor for the ready-to-use [`AssetStore`].
 ///
-/// ## Usage
-/// ```ignore
-/// // Without processing:
-/// let store = AssetStoreBuilder::new()
-///     .root_dir("/path/to/cache")
-///     .asset_root(Some(&asset_root_for_url(&master_url)))
-///     .build();
-///
-/// // With processing callback:
-/// let store = AssetStoreBuilder::new()
-///     .root_dir("/path/to/cache")
-///     .asset_root(Some(&asset_root_for_url(&master_url)))
-///     .process_fn(my_decrypt_callback)
-///     .build();
-///
-/// // Local-only (absolute keys only, no asset_root):
-/// let store = AssetStoreBuilder::new()
-///     .root_dir("/path/to/cache")
-///     .asset_root(None)
-///     .build();
-/// ```
-///
-/// ## Decorator order (normative)
-/// - `EvictAssets` is applied first (evaluates eviction at "asset creation time")
-/// - `CachedAssets` caches opened resources in memory
-/// - `LeaseAssets` provides RAII pinning for opened resources (outermost)
-/// - `ProcessingAssets` (if configured) wraps resources for transformation
+/// See the crate `README.md` "Usage" for builder examples and
+/// "Decorator Chain" for the normative decorator order.
 pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()> {
     asset_root: Option<String>,
     cache_capacity: Option<NonZeroUsize>,
@@ -864,52 +839,11 @@ mod tests {
         assert!(matches!(backend, AssetStore::Disk { .. }));
     }
 
-    /// Red test pinning the root cause of the
-    /// `local_queue_playlist_behavior_*` HLS+AES128 hang
-    /// (`kithara_stream::stream::try_read` spins until the 10 s hang
-    /// detector panics).
-    ///
-    /// The exact production trace is:
-    ///
-    /// ```text
-    /// LeaseResource::drop -> remove_resource (BYPASSES availability invalidation)
-    ///     key=Relative("v0_15.m4s") status=Active
-    /// DiskStore::remove_resource
-    ///     existed=true availability_final_len=65640
-    /// ...
-    /// DiskStore::open_resource: NotFound (file missing)
-    ///     availability_final_len=65640 availability_contains_0_1=true
-    /// ```
-    ///
-    /// `AvailabilityIndex` is the canonical reflection of what is on
-    /// disk. Once a `commit` observer records `final_len`, the index
-    /// is the source of truth and must be invalidated synchronously
-    /// with any disk-side deletion. `CachedAssets` does NOT cause this
-    /// divergence — it only caches in-memory handles. The bug is in
-    /// the disk-side deletion path skipping availability invalidation.
-    ///
-    /// Path doing the divergent deletion: `LeaseResource::drop`
-    /// (lease.rs:367-394). When the writer drops with
-    /// `status = Active | Failed(_)` and `drop_token` strong count
-    /// reaches one, it runs the `RemoveFn` closure (lease.rs:484-488)
-    /// which does `inner.remove_resource(key)` — descending straight
-    /// through `CachedAssets`/`ProcessingAssets`/`EvictAssets` to
-    /// `DiskAssetStore::remove_resource` and `fs::remove_file`.
-    /// `unified::AssetStore::remove_resource` (unified.rs:152) — the
-    /// only place that calls `availability.remove` next to
-    /// `store.remove_resource` — is bypassed entirely.
-    ///
-    /// This reproduction triggers the exact production drop path:
-    /// commit a writer, then `reactivate()` the resource (the live
-    /// path that flips `MmapState::Committed → Active`, mmap.rs:289)
-    /// and drop without commit. `LeaseResource::drop` then sees
-    /// `status == Active` and runs `RemoveFn`. After the drop the
-    /// file is gone, but `AvailabilityIndex` still holds the
-    /// committed `final_len`. Same divergence as the production
-    /// trace, no LRU manipulation, no manual `fs` calls.
-    ///
-    /// FAILING today on the second assertion. Will pass once the
-    /// disk-side deletion path syncs `AvailabilityIndex`.
+    /// Pins the `local_queue_playlist_behavior_*` HLS+AES128 hang: a single-resource
+    /// disk deletion via `LeaseResource::drop` must invalidate `AvailabilityIndex`
+    /// synchronously. Otherwise `contains_range` keeps claiming a committed range
+    /// whose file is gone, and the HLS reader spins on wait_range=Ready / read_at=Retry
+    /// until the hang detector fires.
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn red_test_lease_resource_drop_strands_availability_index() {
@@ -954,38 +888,11 @@ mod tests {
         );
     }
 
-    /// Red test pinning the SECOND bypass surfaced by the parallel
-    /// `local_queue_playlist_behavior_symphonia` failure in
-    /// `just test`. After fixing `LeaseResource::drop`'s availability
-    /// invalidation (`lease.rs` → `DiskStore::remove_resource`), the same
-    /// HLS+AES128 hang still reproduces under parallel pressure.
-    ///
-    /// Trace: any caller that deletes an entire `asset_root` directory
-    /// (instead of a single resource) goes through `delete_asset_dir`
-    /// (`fs::remove_dir_all`) without telling `AvailabilityIndex`.
-    /// Three production paths take this shortcut:
-    ///
-    /// 1. `DiskAssetStore::delete_asset` (in `disk_store.rs`) — invoked
-    ///    via `AssetStore::delete_asset` and `CachedAssets::delete_asset`.
-    /// 2. `EvictAssets::on_asset_created` (in `evict.rs`) — LRU
-    ///    eviction triggered when a new `asset_root` is observed.
-    /// 3. `EvictAssets::evict_one` → `delete_and_forget`
-    ///    (evict.rs:219) — explicit byte-cap eviction.
-    ///
-    /// All three invalidate the directory but leave per-resource
-    /// entries stranded in `AvailabilityIndex`. Subsequent
-    /// `contains_range` / `final_len` queries hit the hot-path map and
-    /// answer with stale `true` / `Some(len)`. A `wait_range` caller
-    /// then issues a `read_at` that returns `NotFound` — same race as
-    /// the first bypass, observable as a 10 s `hang_detector` panic.
-    ///
-    /// The minimal repro below uses `AssetStore::delete_asset` because
-    /// it is the most direct of the three. Once
-    /// `AvailabilityIndex::clear_root` (or equivalent) is wired into
-    /// every directory-deletion path, this test passes and the
-    /// remaining production hang lifts.
-    ///
-    /// FAILING today on the second assertion.
+    /// Pins the second bypass behind the same HLS+AES128 hang: deleting a whole
+    /// `asset_root` directory (`delete_asset` and the two LRU-eviction paths) must
+    /// also clear the per-resource `AvailabilityIndex` entries. Otherwise stale
+    /// `contains_range`/`final_len` answers strand a deleted resource and the reader
+    /// spins on wait_range=Ready / read_at=Retry until the hang detector fires.
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn red_test_delete_asset_strands_availability_index() {

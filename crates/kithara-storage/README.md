@@ -88,6 +88,14 @@ sequenceDiagram
 <tr><td><code>path()</code></td><td><code>Some</code></td><td><code>None</code></td></tr>
 </table>
 
+## Chunked atomic claim
+
+`AtomicChunked::open(canonical_path, factory)` opens a fresh chunked-atomic resource. The `factory` opens the inner resource at a given filesystem path; it is called once with the temp path during the constructor and once more with the canonical path after the atomic rename in `ResourceExt::commit`.
+
+`open` atomically claims `<canonical>.tmp` via `OpenOptions::create_new`, so the filesystem rejects a second concurrent open of the same tmp path. It returns `StorageError::TmpClaimed` when another `AssetStore` instance (or process) is already writing the same canonical path; the caller should poll until the holder releases (commit or drop) and either retry or take a passthrough view once committed.
+
+Stale temp left from a prior crashed run is not auto-wiped: liveness is signalled by tmp existence alone, so a leftover from `kill -9` blocks subsequent opens until cleaned up explicitly. The maintenance task is the caller's responsibility (a future enhancement may add PID-aware cleanup).
+
 ## Synchronization
 
 Range tracking uses `RangeSet<u64>` (from `rangemap`) to record which byte ranges have been written. `wait_range` blocks via `parking_lot::Condvar` with a 50 ms timeout loop until the requested range is fully covered, returns `Eof` when the resource is committed and the range starts beyond the final length, and returns `Interrupted` when a seek/flush wakes the waiter. `CancellationToken` is checked at operation entry and during wait loops.

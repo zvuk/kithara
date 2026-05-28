@@ -25,13 +25,6 @@ use crate::{
 /// Marker type for file streaming.
 pub struct File;
 
-/// Bounded poll interval while a sibling `AssetStore` instance holds
-/// the atomic-chunked tmp for the same canonical path. Short enough
-/// that the observed ~67 ms race window in
-/// `local_queue_playlist_behavior` resolves in a handful of ticks but
-/// long enough not to busy-spin a tokio worker.
-const TMP_CLAIMED_POLL_INTERVAL: Duration = Duration::from_millis(10);
-
 impl StreamType for File {
     type Config = FileConfig;
     type Events = EventBus;
@@ -209,6 +202,12 @@ impl File {
         config: FileConfig,
         cancel: CancellationToken,
     ) -> Result<FileSource, StreamSourceError> {
+        /// Bounded poll interval while a sibling `AssetStore` instance holds
+        /// the atomic-chunked tmp for the same canonical path. Short enough
+        /// that the observed ~67 ms race window in
+        /// `local_queue_playlist_behavior` resolves in a handful of ticks but
+        /// long enough not to busy-spin a tokio worker.
+        const TMP_CLAIMED_POLL_INTERVAL: Duration = Duration::from_millis(10);
         loop {
             match Self::create_remote(url.clone(), config.clone(), cancel.clone()) {
                 Ok(src) => {

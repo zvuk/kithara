@@ -143,25 +143,19 @@ impl KeyManager {
 
     /// Load, optionally preprocess, and return the final key bytes.
     ///
-    /// Looks up the matching rule in [`KeyProcessorRegistry`] by the
-    /// key URL's host, applies the rule's query params + headers to
-    /// the request, and runs the rule's processor on the response.
-    ///
-    /// Rule-matched (DRM) and plain AES-128 keys both persist to the
-    /// [`AssetStore`] under `ResourceKey::from_url(key_url)`. DRM keys
-    /// get decrypted via `rule.processor()` before the write-back so
-    /// the cached bytes are the **plaintext** AES-128 key — the
-    /// per-session seed on the wire never reaches disk. Non-DRM keys
-    /// share the same path through [`fetch_atomic_body`].
+    /// Matches a [`KeyProcessorRegistry`] rule by the key URL's host,
+    /// applies its query params + headers, and runs its processor on the
+    /// response. DRM and plain AES-128 keys both persist to the
+    /// [`AssetStore`] under `ResourceKey::from_url(key_url)`; DRM keys are
+    /// decrypted before write-back, so the cached bytes are the plaintext
+    /// key and the per-session wire seed never reaches disk.
     ///
     /// # Errors
     /// Returns an error when the fetch or the processor fails.
     ///
     /// # Panics
-    /// Panics only if the `rule.is_none()` branch fallthrough is reached
-    /// despite matching the `is_none()` guard — this is logically
-    /// impossible, expressed via `expect` instead of an unreachable
-    /// assertion so the reason is attributed at the call site.
+    /// Panics if the matched rule is somehow absent after the `is_none`
+    /// guard above (logically impossible; `expect` attributes the reason).
     pub async fn get_raw_key(
         &self,
         url: &Url,

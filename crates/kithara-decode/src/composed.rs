@@ -186,10 +186,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                     drop(buf);
                     continue;
                 }
-                // Frame straddles target — trim leading samples so the
-                // emitted chunk starts AT `target`, not at the packet
-                // boundary. Sample-accurate seek without this trim
-                // leaks up to one packet's worth of pre-target audio.
+                // WHY: frame straddles target — trim leading samples (README "Seek trim").
                 if frame_pts < target && frames > 0 {
                     let live_spec = self.codec.spec();
                     let trim_frames_u64 = frames_to_trim(frame_pts, target, live_spec.sample_rate)
@@ -303,12 +300,11 @@ mod default_priming_tests {
     use super::*;
     use crate::symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer};
 
-    const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../assets/test.mp3"
-    ));
-
     fn build_mp3_decoder() -> ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec> {
+        const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/test.mp3"
+        ));
         let cursor = Cursor::new(TEST_MP3_BYTES.to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
@@ -332,9 +328,8 @@ mod default_priming_tests {
     #[kithara::test]
     fn composed_decoder_priming_combines_encoder_and_symphonia_mp3_algo_delay() {
         let decoder = build_mp3_decoder();
-        // 576 libmp3lame encoder priming + 529 LAME-convention algo delay
+        // WHY: 1105 = 576 libmp3lame priming + 529 LAME algo delay (README "Gapless probe contract").
         assert_eq!(decoder.default_priming_frames(AudioCodec::Mp3), 1105);
-        // Codecs without overrides fall back to encoder priming only
         assert_eq!(decoder.default_priming_frames(AudioCodec::AacLc), 1024);
         assert_eq!(decoder.default_priming_frames(AudioCodec::Opus), 312);
         assert_eq!(decoder.default_priming_frames(AudioCodec::Flac), 0);
@@ -360,7 +355,7 @@ fn frames_to_trim(frame_pts: Duration, target: Duration, sample_rate: u32) -> u6
     }
     let delta_nanos = target.saturating_sub(frame_pts).as_nanos();
     let sr_u128 = u128::from(sample_rate);
-    // Round-to-nearest: (n*sr + 5e8) / 1e9 (half-up at the 0.5-sample mark).
+    // WHY: round-to-nearest sample, half-up via +5e8 before the /1e9 divide.
     let frames_u128 = delta_nanos
         .saturating_mul(sr_u128)
         .saturating_add(500_000_000)
@@ -721,9 +716,7 @@ mod seek_trim_tests {
             "expected Chunk, got {outcome:?}"
         );
 
-        // 2 calls: frame[0] (end=20ms ≤ 30ms target) dropped by
-        // `pending_seek_target` guard; frame[1] (end=40ms > 30ms)
-        // emitted as first chunk with leading 10ms trimmed.
+        // WHY: 2 calls — frame[0] (end=20ms ≤ 30ms target) dropped by the guard; frame[1] (end=40ms) emitted with leading 10ms trimmed.
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,
