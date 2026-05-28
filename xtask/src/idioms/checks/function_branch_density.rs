@@ -478,10 +478,17 @@ impl<'ast> Visit<'ast> for BodyCounter {
     }
 
     fn visit_expr_match(&mut self, node: &'ast ExprMatch) {
-        let arms = node.arms.len();
-        if arms > 1 {
-            self.own_branches += arms - 1;
+        // A `match` lowers to a jump table / balanced decision tree, not an
+        // `if/else-if` ladder: variant dispatch is one control-flow decision
+        // regardless of arm count, so count it as a single branch (like an
+        // `if`) rather than `arms - 1`. Each arm *guard* is a sequential
+        // conditional the CPU evaluates in arm order, so it counts +1 — a
+        // guard-ladder disguised as a `match` is still measured. Nested
+        // control flow in arm bodies and guards is counted by descent.
+        if node.arms.len() > 1 {
+            self.own_branches += 1;
         }
+        self.own_branches += node.arms.iter().filter(|arm| arm.guard.is_some()).count();
         visit::visit_expr_match(self, node);
     }
 
@@ -501,7 +508,14 @@ impl<'ast> Visit<'ast> for BodyCounter {
     }
 
     fn visit_expr_try(&mut self, node: &'ast ExprTry) {
-        self.own_branches += 1;
+        // `?` lowers to a discriminant test + cold early-return. LLVM marks
+        // the Err/None arm `unlikely` and the branch predictor nails a
+        // consistently-not-taken branch at ~zero cost, so error-plumbing
+        // does not contribute the hot-path branch-predictor pressure this
+        // check measures. Counting it inflated the deepest-path metric with
+        // near-free branches; it is not counted. Real data-dependent
+        // control flow inside the fallible expression is still counted by
+        // descent.
         visit::visit_expr_try(self, node);
     }
 
@@ -585,7 +599,9 @@ mod tests {
     }
 
     #[test]
-    fn counts_match_arms_minus_one() {
+    fn guardless_match_dispatch_counts_as_one() {
+        // A guardless `match` is a single jump-table dispatch, not an
+        // `if/else-if` ladder — arm count must not inflate the score.
         let n = count_body(
             r#"{
                 match x {
@@ -595,18 +611,49 @@ mod tests {
                 };
             }"#,
         );
-        assert_eq!(n, 2);
+        assert_eq!(n, 1);
     }
 
     #[test]
-    fn counts_let_else_question_mark_and_logical_ops() {
+    fn match_arm_guards_each_count_as_a_branch() {
+        // Guards are sequential conditionals the CPU evaluates in arm
+        // order: 1 dispatch + 2 guards = 3.
+        let n = count_body(
+            r#"{
+                match x {
+                    A if a => 1,
+                    B if b => 2,
+                    _ => 3,
+                };
+            }"#,
+        );
+        assert_eq!(n, 3);
+    }
+
+    #[test]
+    fn counts_let_else_and_logical_ops_but_not_question_mark() {
+        // let-else (+1), if (+1), && (+1) count; the `?` is a predictable
+        // cold early-return and is not counted.
         let n = count_body(
             r#"{
                 let Some(_a) = opt else { return; };
                 if x && y { run()?; }
             }"#,
         );
-        assert_eq!(n, 4);
+        assert_eq!(n, 3);
+    }
+
+    #[test]
+    fn question_mark_alone_counts_zero() {
+        // A bare `?` is a predictable cold early-return — no hot-path
+        // branch-predictor pressure, so it must not score.
+        let n = count_body(
+            r#"{
+                let _v = run()?;
+                let _w = step()?;
+            }"#,
+        );
+        assert_eq!(n, 0);
     }
 
     #[test]
