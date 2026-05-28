@@ -23,30 +23,44 @@ pub(crate) fn pump_pcm_frames(
     let mut buf = vec![0u8; chunk_frames * bytes_per_frame];
 
     while offset < total_byte_len {
-        let remaining_bytes = total_byte_len - offset;
-        let read_bytes = remaining_bytes.min(buf.len());
-        let read = pcm.read_pcm_at(offset, &mut buf[..read_bytes]);
-        if read == 0 {
+        let Some((audio_frame, read)) = read_audio_frame(pcm, &mut buf, offset, pts) else {
             break;
-        }
-
-        let frames_read = read / bytes_per_frame;
-        let mut audio_frame = AudioFrame::new(
-            Sample::I16(SampleType::Packed),
-            frames_read,
-            ChannelLayout::default(i32::from(pcm.channels())),
-        );
-        audio_frame.set_rate(pcm.sample_rate());
-        audio_frame.set_pts(Some(pts as i64));
-        audio_frame.data_mut(0)[..read].copy_from_slice(&buf[..read]);
-
+        };
         on_frame(&audio_frame)?;
-
         offset += read;
-        pts += frames_read;
+        pts += read / bytes_per_frame;
     }
 
     Ok(())
+}
+
+/// Read up to one chunk from `pcm` at `offset` into `buf` and wrap it in an
+/// `AudioFrame` tagged with `pts`. Returns `None` on a zero-length read.
+fn read_audio_frame(
+    pcm: &dyn PcmSource,
+    buf: &mut [u8],
+    offset: usize,
+    pts: usize,
+) -> Option<(AudioFrame, usize)> {
+    let total_byte_len = pcm.total_byte_len().unwrap_or(0);
+    let read_bytes = (total_byte_len - offset).min(buf.len());
+    let read = pcm.read_pcm_at(offset, &mut buf[..read_bytes]);
+    if read == 0 {
+        return None;
+    }
+
+    let bytes_per_frame = pcm.channels() as usize * size_of::<i16>();
+    let frames_read = read / bytes_per_frame;
+    let mut audio_frame = AudioFrame::new(
+        Sample::I16(SampleType::Packed),
+        frames_read,
+        ChannelLayout::default(i32::from(pcm.channels())),
+    );
+    audio_frame.set_rate(pcm.sample_rate());
+    audio_frame.set_pts(Some(pts as i64));
+    audio_frame.data_mut(0)[..read].copy_from_slice(&buf[..read]);
+
+    Some((audio_frame, read))
 }
 
 pub(crate) fn send_frame_to_filter(

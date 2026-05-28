@@ -1,5 +1,7 @@
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
+use crate::{EncodeError, EncodeResult};
+
 /// PCM source for encoder requests.
 pub trait PcmSource: Send + Sync {
     fn channels(&self) -> u16;
@@ -91,6 +93,31 @@ pub struct PackagedEncodeRequest<'a> {
     pub trailing_delay: u32,
     pub bit_rate: u64,
     pub packets_per_segment: usize,
+}
+
+impl PackagedEncodeRequest<'_> {
+    /// Reject requests that cannot produce a valid packaged track, shared by
+    /// every packaged encoder backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EncodeError::InvalidInput`] for a zero timescale, a zero
+    /// `packets_per_segment`, or a PCM source without a finite length.
+    pub(crate) fn validate(&self) -> EncodeResult<()> {
+        let problem = match (
+            self.timescale == 0,
+            self.packets_per_segment == 0,
+            self.pcm.total_byte_len().is_none(),
+        ) {
+            (true, _, _) => Some("timescale must be > 0"),
+            (_, true, _) => Some("packets_per_segment must be > 0"),
+            (_, _, true) => Some("PCM source must have a finite length"),
+            (false, false, false) => None,
+        };
+        problem.map_or(Ok(()), |message| {
+            Err(EncodeError::InvalidInput(message.to_owned()))
+        })
+    }
 }
 
 #[derive(Debug, Clone)]

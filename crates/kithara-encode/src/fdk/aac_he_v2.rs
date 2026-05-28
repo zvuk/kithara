@@ -32,7 +32,7 @@ pub(crate) struct AacHeV2Encoder;
 
 impl AacHeV2Encoder {
     pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
-        validate(request)?;
+        request.validate()?;
 
         let sample_rate = request.pcm.sample_rate();
         let channels = request.pcm.channels();
@@ -71,35 +71,16 @@ impl AacHeV2Encoder {
         pump_pcm_into_encoder(request.pcm, frame_input_samples, |input| {
             let mut output = [0u8; Consts::ACCESS_UNIT_CAPACITY];
             let encoded = encoder.encode(input, &mut output)?;
-            if encoded.output_size > 0 {
-                units.push(EncodedAccessUnit {
-                    pts,
-                    bytes: output[..encoded.output_size].to_vec(),
-                    dts: pts,
-                    duration: u32::try_from(frame_pts_step).unwrap_or(u32::MAX),
-                    is_sync: true,
-                });
-                pts = pts.saturating_add(frame_pts_step);
-            }
+            units.extend(take_encoded_unit(
+                &encoded,
+                &output,
+                &mut pts,
+                frame_pts_step,
+            ));
             Ok::<usize, EncodeError>(encoded.input_consumed)
         })?;
 
-        let empty: [i16; 0] = [];
-        loop {
-            let mut output = [0u8; Consts::ACCESS_UNIT_CAPACITY];
-            let encoded = encoder.encode(&empty, &mut output)?;
-            if encoded.output_size == 0 {
-                break;
-            }
-            units.push(EncodedAccessUnit {
-                pts,
-                bytes: output[..encoded.output_size].to_vec(),
-                dts: pts,
-                duration: u32::try_from(frame_pts_step).unwrap_or(u32::MAX),
-                is_sync: true,
-            });
-            pts = pts.saturating_add(frame_pts_step);
-        }
+        drain_encoder(&encoder, &mut pts, frame_pts_step, &mut units)?;
 
         let mut media_info = request.media_info.clone();
         media_info.codec = Some(AudioCodec::AacHeV2);
@@ -124,23 +105,43 @@ impl AacHeV2Encoder {
     }
 }
 
-fn validate(request: &PackagedEncodeRequest<'_>) -> EncodeResult<()> {
-    if request.timescale == 0 {
-        return Err(EncodeError::InvalidInput(
-            "timescale must be > 0".to_owned(),
-        ));
+/// Build an access unit from a freshly encoded chunk, advancing `pts` by one
+/// frame step. Returns `None` when the encoder produced no output.
+fn take_encoded_unit(
+    encoded: &EncodeInfo,
+    output: &[u8],
+    pts: &mut u64,
+    frame_pts_step: u64,
+) -> Option<EncodedAccessUnit> {
+    (encoded.output_size > 0).then(|| {
+        let unit = EncodedAccessUnit {
+            pts: *pts,
+            bytes: output[..encoded.output_size].to_vec(),
+            dts: *pts,
+            duration: u32::try_from(frame_pts_step).unwrap_or(u32::MAX),
+            is_sync: true,
+        };
+        *pts = pts.saturating_add(frame_pts_step);
+        unit
+    })
+}
+
+/// Flush the encoder by feeding empty input until it stops emitting frames.
+fn drain_encoder(
+    encoder: &Encoder,
+    pts: &mut u64,
+    frame_pts_step: u64,
+    units: &mut Vec<EncodedAccessUnit>,
+) -> EncodeResult<()> {
+    let empty: [i16; 0] = [];
+    loop {
+        let mut output = [0u8; Consts::ACCESS_UNIT_CAPACITY];
+        let encoded = encoder.encode(&empty, &mut output)?;
+        match take_encoded_unit(&encoded, &output, pts, frame_pts_step) {
+            Some(unit) => units.push(unit),
+            None => return Ok(()),
+        }
     }
-    if request.packets_per_segment == 0 {
-        return Err(EncodeError::InvalidInput(
-            "packets_per_segment must be > 0".to_owned(),
-        ));
-    }
-    if request.pcm.total_byte_len().is_none() {
-        return Err(EncodeError::InvalidInput(
-            "PCM source must have a finite length".to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 /// Streams interleaved i16 samples from `pcm` into `feed` in
