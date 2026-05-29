@@ -360,15 +360,96 @@ impl Default for GodModuleThreshold {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GodStructThreshold {
-    /// `fields + methods` per struct. Methods include both inherent and
-    /// trait-impl methods aggregated from all `impl` blocks in the file.
+    /// `fields + methods` per struct. Methods are inherent methods plus
+    /// domain trait-impl methods aggregated across every `impl` block in the
+    /// file. Methods that only satisfy a standard-library / language trait
+    /// contract (see `std_traits`) and `#[cfg(test)]` items are excluded.
     pub(crate) warn: usize,
+    /// Trait names whose impl methods are standard conformance (idiomatic
+    /// plumbing), not accreted responsibility — `Drop`, `Default`, `From`,
+    /// arithmetic, ordering, IO adapters, ... Matched on the trait's last
+    /// path segment. Methods from these impls do not count toward the total;
+    /// domain-trait methods still do.
+    #[serde(default = "default_std_traits")]
+    pub(crate) std_traits: Vec<String>,
 }
 
 impl Default for GodStructThreshold {
     fn default() -> Self {
-        Self { warn: 15 }
+        Self {
+            warn: 15,
+            std_traits: default_std_traits(),
+        }
     }
+}
+
+fn default_std_traits() -> Vec<String> {
+    [
+        "Drop",
+        "Default",
+        "Clone",
+        "Copy",
+        "Debug",
+        "Display",
+        "PartialEq",
+        "Eq",
+        "PartialOrd",
+        "Ord",
+        "Hash",
+        "From",
+        "Into",
+        "TryFrom",
+        "TryInto",
+        "AsRef",
+        "AsMut",
+        "Borrow",
+        "BorrowMut",
+        "Deref",
+        "DerefMut",
+        "Add",
+        "Sub",
+        "Mul",
+        "Div",
+        "Rem",
+        "Neg",
+        "AddAssign",
+        "SubAssign",
+        "MulAssign",
+        "DivAssign",
+        "RemAssign",
+        "Not",
+        "BitAnd",
+        "BitOr",
+        "BitXor",
+        "Shl",
+        "Shr",
+        "BitAndAssign",
+        "BitOrAssign",
+        "BitXorAssign",
+        "ShlAssign",
+        "ShrAssign",
+        "Index",
+        "IndexMut",
+        "Read",
+        "Write",
+        "Seek",
+        "BufRead",
+        "Iterator",
+        "IntoIterator",
+        "DoubleEndedIterator",
+        "ExactSizeIterator",
+        "FromIterator",
+        "Extend",
+        "FromStr",
+        "ToString",
+        "ToOwned",
+        "Send",
+        "Sync",
+        "Unpin",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
 }
 
 #[derive(Debug, Deserialize)]

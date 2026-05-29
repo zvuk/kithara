@@ -127,10 +127,26 @@ pub(crate) fn key_line(key: &str) -> Option<usize> {
     field.parse::<usize>().ok()
 }
 
+/// Count lines in `src` that do not fall inside a `#[cfg(test)]` item range.
+/// File-keyed checks (e.g. `file_size`) carry no line in their violation key,
+/// so the line-based [`apply_cfg_test_exclusion`] pass cannot reach them — they
+/// fold the same test-code exclusion in here instead, measuring only the
+/// production surface. Returns the raw line count when `src` fails to parse.
+pub(crate) fn non_test_line_count(src: &str) -> usize {
+    let total = src.lines().count();
+    let Ok(file) = syn::parse_file(src) else {
+        return total;
+    };
+    let mut ranges = Vec::new();
+    collect_cfg_test_ranges(&file.items, &mut ranges);
+    let excluded: BTreeSet<usize> = ranges.into_iter().flatten().collect();
+    total.saturating_sub(excluded.len())
+}
+
 /// Walk items recursively, recording the line range of every item whose
 /// attributes carry a `test`-predicated cfg. Recurses into module bodies so
 /// nested `#[cfg(test)] mod`/`fn` are caught regardless of depth.
-fn collect_cfg_test_ranges(items: &[Item], out: &mut Vec<RangeInclusive<usize>>) {
+pub(crate) fn collect_cfg_test_ranges(items: &[Item], out: &mut Vec<RangeInclusive<usize>>) {
     for item in items {
         if attrs_have_cfg_test(item_attrs(item)) {
             out.push(item.span().start().line..=item.span().end().line);
@@ -203,7 +219,7 @@ fn item_attrs(item: &Item) -> &[syn::Attribute] {
 /// (`#[cfg(test)]`) or as a bare predicate inside `any(...)` / `all(...)`
 /// (`#[cfg(any(test, feature = "x"))]`). `#[cfg(not(test))]`, `feature = "test"`,
 /// and non-cfg attributes are intentionally not matched.
-fn attrs_have_cfg_test(attrs: &[syn::Attribute]) -> bool {
+pub(crate) fn attrs_have_cfg_test(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|a| match &a.meta {
         Meta::List(list) if list.path.is_ident("cfg") => meta_tokens_have_test(&list.tokens),
         _ => false,
@@ -370,6 +386,36 @@ mod tests {
 
         apply_cfg_test_exclusion(&mut report, tmp.path());
         assert_eq!(report.violations.len(), 1);
+    }
+
+    #[test]
+    fn non_test_line_count_subtracts_cfg_test_modules() {
+        let src = "fn a() {}\n\
+                   fn b() {}\n\
+                   #[cfg(test)]\n\
+                   mod tests {\n\
+                       fn t1() {}\n\
+                       fn t2() {}\n\
+                   }\n";
+        // 7 lines total, the `#[cfg(test)] mod` spans lines 3..=7 (5 lines).
+        assert_eq!(non_test_line_count(src), 2);
+    }
+
+    #[test]
+    fn non_test_line_count_matches_cfg_all_test_feature() {
+        let src = "fn a() {}\n\
+                   #[cfg(all(test, feature = \"x\"))]\n\
+                   mod tests {\n\
+                       fn t() {}\n\
+                   }\n";
+        // `all(test, feature)` is a test cfg: lines 2..=5 drop, leaving 1.
+        assert_eq!(non_test_line_count(src), 1);
+    }
+
+    #[test]
+    fn non_test_line_count_keeps_unparsable_and_test_free() {
+        assert_eq!(non_test_line_count("not ::: valid {{{"), 1);
+        assert_eq!(non_test_line_count("fn a() {}\nfn b() {}\n"), 2);
     }
 
     fn module_ranges(src: &str, patterns: &[&str]) -> Vec<(usize, usize)> {

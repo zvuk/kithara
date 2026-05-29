@@ -20,6 +20,10 @@ exclude_globs = [
 ]
 
 [file_size]
+# Line count per file, excluding lines inside `#[cfg(test)]` items (inline
+# unit-test modules are not production surface). `exclude_globs` drops whole
+# files (generated/proto); test-support crates and `tests/` are dropped by the
+# shared `[lint_exclude]` pass in `.config/xtask.toml`.
 warn = 400
 deny = 1000
 exclude_globs = [
@@ -60,11 +64,14 @@ warn = 8
 "xtask" = 20
 
 [god_struct]
-# `fields + methods` per struct. Methods include both inherent (`impl X`)
-# and trait-impl (`impl Trait for X`) functions, aggregated across every
-# `impl` block in the file (so a type whose surface is split across many
-# traits still hits the threshold). Tuple structs and unit structs count
-# as zero fields.
+# `fields + methods` per struct. Methods are inherent (`impl X`) plus domain
+# trait-impl (`impl DomainTrait for X`) functions, aggregated across every
+# `impl` block (so a type whose surface is split across domain traits still
+# hits the threshold). Excluded from the count: `#[cfg(test)]` items and
+# methods that only satisfy a standard-library / language trait contract
+# (`Drop`, `Default`, `From`, arithmetic, ordering, IO adapters, ...) — these
+# are idiomatic plumbing, not accreted responsibility. Override the set via
+# `std_traits = [...]`. Tuple/unit structs count as zero fields.
 warn = 15
 
 [god_trait]
