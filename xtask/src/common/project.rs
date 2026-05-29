@@ -14,7 +14,6 @@ const CONFIG_REL: &str = ".config/xtask.toml";
 pub(crate) struct ProjectConfig {
     pub(crate) project: ProjectIdentity,
     pub(crate) health: HealthConfig,
-    pub(crate) callgraph: CallgraphConfig,
     pub(crate) publish: PublishConfig,
 }
 
@@ -31,13 +30,6 @@ pub(crate) struct HealthConfig {
     /// Crates excluded from the `cargo hack --feature-powerset` stage.
     pub(crate) feature_powerset_exclude: Vec<String>,
     /// Crates excluded from whole-workspace stages (semver, nextest, doc-test).
-    pub(crate) workspace_exclude: Vec<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct CallgraphConfig {
-    /// Crates excluded from the LLVM-IR workspace build.
     pub(crate) workspace_exclude: Vec<String>,
 }
 
