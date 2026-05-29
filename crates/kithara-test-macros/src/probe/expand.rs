@@ -168,6 +168,7 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
             let __probe_ret = (|| #block)();
             #[cfg(any(test, feature = "probe"))]
             {
+                let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
                 ::kithara_test_utils::probe::register_probes();
                 ::kithara_test_utils::probe::Probe::record_probe(&__probe_ret, #fn_name_str);
             }
@@ -233,6 +234,7 @@ fn build_emit_entry_event(
     quote! {
         #[cfg(any(test, feature = "probe"))]
         {
+            let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
             ::kithara_test_utils::probe::register_probes();
             let __probe_caller = ::core::panic::Location::caller();
             let __probe_seq: u64 = ::kithara_test_utils::probe::next_probe_seq();

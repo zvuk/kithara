@@ -126,6 +126,7 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 #(#field_consume)*
                 #[cfg(any(test, feature = "probe"))]
                 {
+                    let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
                     ::kithara_test_utils::probe::register_probes();
                     #(#bindings)*
                     ::kithara_test_utils::probe::#fire_fn(name, #(#slot_idents),*);

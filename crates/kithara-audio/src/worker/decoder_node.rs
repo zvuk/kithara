@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use kithara_decode::PcmChunk;
 use kithara_platform::tokio::sync::Notify;
+use kithara_test_utils::kithara;
 use tracing::trace;
 
 use super::{AudioWorkerSource, handle::TrackRegistration, types::ServiceClass};
@@ -46,6 +47,7 @@ pub(crate) struct DecoderNode {
 }
 
 impl DecoderNode {
+    #[kithara::rtsan_allow_blocking]
     fn complete_preload(&mut self) {
         if !self.runtime.preloaded {
             self.preload_notify.notify_one();

@@ -124,13 +124,16 @@ test-selenium *ARGS:
 
 # RealtimeSanitizer: compile the player RT path under `-Zsanitizer=realtime`
 # and run the offline-render tests, which enter the
-# `#[sanitize(realtime = "nonblocking")]`-marked node processors without an
-# audio device. Any malloc / lock / syscall in the RT context aborts the run.
-# The `rtsan` cfg gates the attribute on, so stable/production builds are byte
+# `#[kithara::rtsan_forbid_blocking]`-marked node processors and audio-worker
+# scheduler without an audio device. Any malloc / lock / syscall in the RT
+# context aborts the run unless wrapped by `#[kithara::rtsan_allow_blocking]`.
+# The `rtsan` cfg gates the attributes on, so stable/production builds are byte
 # -identical. Requires nightly + rust-src; `--target` keeps the flags off
-# build scripts and proc-macros.
+# build scripts and proc-macros. FILTER passes through to libtest, so multiple
+# space-separated test substrings are OR-matched.
 #   just rtsan
 #   just rtsan offline_harness_smoke
+#   just rtsan "auto_advance gapless_offline_e2e"
 rtsan FILTER="offline_harness":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -138,7 +141,7 @@ rtsan FILTER="offline_harness":
     RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
     RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
         cargo +nightly test -p kithara-integration-tests --test suite_light \
-        --target "$target" {{FILTER}} -- --nocapture
+        --target "$target" -- --nocapture {{FILTER}}
 
 # Convenience: workspace tests + doc-tests in one run.
 test-all: test test-doc

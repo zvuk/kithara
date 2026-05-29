@@ -5,13 +5,17 @@
 //! - [`test`] — `#[kithara::test]` (sync/async/native/wasm с case+fixture).
 //! - [`fixture`] — `#[kithara::fixture]` (rstest-fixture replacement).
 //! - [`probe`] — `#[kithara::probe]` + `#[derive(kithara::Probe)]`
-//!   (USDT + tracing instrumentation; auto-gated `cfg(any(test, feature = "probe"))`).
+//!   (USDT + tracing instrumentation; auto-gated
+//!   `cfg(any(test, feature = "probe"))`, with the emit wrapped in a
+//!   `kithara_test_utils::rtsan::permit` guard so probes stay active but
+//!   `RTSan`-transparent under `--cfg rtsan`).
 //! - [`mock`] — `#[kithara::mock]` (unimock forwarder, gated `cfg(any(test, feature = "mock"))`).
 
 mod fixture;
 mod hang_watchdog;
 mod mock;
 mod probe;
+mod rtsan;
 mod test;
 
 use proc_macro::TokenStream;
@@ -37,7 +41,9 @@ pub fn fixture(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// `#[kithara::probe]` — USDT + tracing-event instrumentation.
-/// Тело гейтится `cfg(any(test, feature = "probe"))` → no-op в проде.
+/// Тело гейтится `cfg(any(test, feature = "probe"))` → no-op в проде; emit
+/// обёрнут в `rtsan::permit`, поэтому под `--cfg rtsan` пробы активны, но
+/// `RTSan` их не флагает.
 #[proc_macro_attribute]
 pub fn probe(attr: TokenStream, item: TokenStream) -> TokenStream {
     probe::expand_attr(attr, item)
@@ -51,8 +57,27 @@ pub fn mock(args: TokenStream, item: TokenStream) -> TokenStream {
     mock::expand(args, item)
 }
 
+/// `#[kithara::rtsan_forbid_blocking]` — forbid blocking in this function and
+/// its callees by marking it a `RealtimeSanitizer`-checked entry point. Expands
+/// to `#[cfg_attr(rtsan, sanitize(realtime = "nonblocking"))]`; off `rtsan` the
+/// function is byte-identical.
+#[proc_macro_attribute]
+pub fn rtsan_forbid_blocking(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    rtsan::expand_forbid_blocking(item)
+}
+
+/// `#[kithara::rtsan_allow_blocking]` — allow a genuinely-blocking function
+/// inside a `forbid_blocking` context by wrapping its body in a reentrant
+/// `kithara_test_utils::rtsan::permit` guard (`__rtsan_disable`/`enable`).
+/// Off `rtsan` the guard is a zero-cost no-op.
+#[proc_macro_attribute]
+pub fn rtsan_allow_blocking(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    rtsan::expand_allow_blocking(item)
+}
+
 /// `#[derive(kithara::Probe)]` — generates `record_probe()` для value-type probes.
-/// Тело гейтится `cfg(any(test, feature = "probe"))`.
+/// Тело гейтится `cfg(any(test, feature = "probe"))`; emit обёрнут в
+/// `rtsan::permit` (активно, но `RTSan`-прозрачно под `--cfg rtsan`).
 #[proc_macro_derive(Probe, attributes(probe))]
 pub fn derive_probe(input: TokenStream) -> TokenStream {
     probe::expand_derive_entry(input)

@@ -9,6 +9,7 @@ use kithara_platform::{
     thread::{spawn_named, yield_now},
     time::Instant,
 };
+use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 
@@ -164,6 +165,7 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
     }
 }
 
+#[kithara::rtsan_forbid_blocking]
 fn run_loop<N: Node, O: SchedulerObserver>(
     cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
     wake: &SchedulerWake,
@@ -201,6 +203,7 @@ fn run_loop<N: Node, O: SchedulerObserver>(
     }
 }
 
+#[kithara::rtsan_allow_blocking]
 fn cancel_and_drain<N: Node>(
     cancel: &CancellationToken,
     cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
@@ -226,6 +229,7 @@ fn report_outcome<O: SchedulerObserver>(observer: &mut O, outcome: PassOutcome) 
     }
 }
 
+#[kithara::rtsan_allow_blocking]
 fn park_after_outcome<N: Node, O: SchedulerObserver>(wake: &SchedulerWake, outcome: PassOutcome) {
     match outcome {
         PassOutcome::Produced => yield_now(),
@@ -238,6 +242,7 @@ fn park_after_outcome<N: Node, O: SchedulerObserver>(wake: &SchedulerWake, outco
     }
 }
 
+#[kithara::rtsan_allow_blocking]
 fn recompute_slots_order<N: Node>(slots: &[Slot<N>], slots_order: &mut Vec<usize>) {
     slots_order.clear();
     slots_order.extend(0..slots.len());

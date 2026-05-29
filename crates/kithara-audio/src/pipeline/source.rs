@@ -715,6 +715,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    #[kithara::rtsan_allow_blocking]
     fn decoder_next_chunk_safe(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         let outcome: DecodeResult<DecoderChunkOutcome> =
             match catch_unwind(AssertUnwindSafe(|| self.session.decoder.next_chunk())) {
@@ -1420,6 +1421,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// Replaces the old `FallibleIterator::next` implementation.
     /// Called from `decode_one_fetch` to drive the decoder.
     #[kithara::hang_watchdog]
+    #[kithara::rtsan_allow_blocking]
     fn decode_next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             if self.timeline.is_flushing() || self.timeline.is_seek_pending() {

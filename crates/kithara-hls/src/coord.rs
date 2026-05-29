@@ -21,6 +21,7 @@ use kithara_stream::{
     ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SegmentDescriptor, SegmentLayout,
     SourcePhase, SourceSeekAnchor, StreamResult, Timeline,
 };
+use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -300,6 +301,7 @@ impl HlsCoord {
     /// `Cancelled`); otherwise the variant that currently serves
     /// `range.start` decides — mid-buffer boundary cross resolves to
     /// the right `range_ready` / `is_flushing` / `total_bytes` view.
+    #[kithara::rtsan_allow_blocking]
     pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         if self.cancel.is_cancelled() {
             return SourcePhase::Cancelled;

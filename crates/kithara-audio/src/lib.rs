@@ -8,6 +8,7 @@
 //! See the crate `README.md` for usage, threading model, and architecture.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(rtsan, feature(sanitize))]
 
 mod audio;
 pub mod effects;
