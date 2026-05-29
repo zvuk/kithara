@@ -2,7 +2,10 @@ use std::rc::Rc;
 
 use js_sys::{Object, Reflect};
 use kithara_events::{Event, EventReceiver, QueueEvent};
-use kithara_platform::tokio::{sync::broadcast, task::spawn as task_spawn};
+use kithara_platform::{
+    time::{Duration, sleep},
+    tokio::{sync::broadcast, task::spawn as task_spawn},
+};
 use kithara_play::PlayerEvent;
 use kithara_queue::Queue;
 use wasm_bindgen::JsValue;
@@ -25,6 +28,35 @@ pub(crate) fn spawn(queue: &Rc<Queue>) {
     let rx = queue.subscribe();
     task_spawn(async move {
         run(rx).await;
+    });
+    spawn_duration_poll(queue);
+}
+
+/// Emit [`FfiPlayerEvent::DurationChanged`] whenever the current track's
+/// duration changes. `DurationChanged` is not a raw bus event: the native
+/// bridge derives it by polling [`Queue::duration_seconds`], so the worker
+/// must do the same here. Without this the JS control surface never learns
+/// the track length and the seek slider has no range.
+fn spawn_duration_poll(queue: &Rc<Queue>) {
+    /// Poll cadence for the derived `DurationChanged` event, in milliseconds.
+    const DURATION_POLL_MS: u64 = 250;
+
+    let queue = Rc::clone(queue);
+    task_spawn(async move {
+        let Ok(channel) = BroadcastChannel::new(EVENT_CHANNEL) else {
+            return;
+        };
+        let mut last: Option<f64> = None;
+        loop {
+            let current = queue.duration_seconds();
+            if current != last
+                && let Some(seconds) = current
+            {
+                let _ = channel.post_message(&encode(&FfiPlayerEvent::DurationChanged { seconds }));
+                last = current;
+            }
+            sleep(Duration::from_millis(DURATION_POLL_MS)).await;
+        }
     });
 }
 

@@ -543,7 +543,7 @@ impl NativeInner {
 
     pub(crate) fn stop(&self) {
         self.queue.pause();
-        self.remove_all_items();
+        let _ = self.queue.seek(0.0);
     }
 
     pub(crate) fn update_peak_bitrate(&self, wifi_bps: f64, cellular_bps: f64) {

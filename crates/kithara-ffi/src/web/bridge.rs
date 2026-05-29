@@ -90,6 +90,12 @@ impl WorkerBridge {
 
         wasm_support::ensure_main_session();
         wasm_support::init_worker_session();
+        // Creates the (suspended) AudioContext + loads the AudioWorklet so the
+        // worker's Remote session has a Local output to hand decoded samples
+        // to; firewheel-web-audio auto-resumes it on the first user gesture.
+        // Without this no AudioContext exists, the session handshake never
+        // completes, and the worker stalls before making a track current.
+        wasm_support::warm_up_audio();
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);

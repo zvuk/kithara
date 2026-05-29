@@ -252,6 +252,15 @@ impl SeleniumHarness {
                 &trunk_port,
                 "--no-autoreload",
             ]);
+        // Realtime playback assertions (assert_motion, realtime seek) require
+        // an optimised wasm build: our own crates intentionally stay at debug
+        // opt-level, so the opt-0 audio pipeline (rubato sinc monomorphised in
+        // kithara-audio) cannot sustain realtime in a debug build. Build
+        // release by default; opt into debug only for fast non-realtime checks.
+        if env::var("KITHARA_SELENIUM_DEBUG").is_err() {
+            println!("[selenium] building wasm in release");
+            cmd.arg("--release");
+        }
 
         self.trunk_server = Some(ChildGuard::spawn("trunk", cmd)?);
         wait_url_ready(&page_url, self.config.startup_timeout, "wasm page").await

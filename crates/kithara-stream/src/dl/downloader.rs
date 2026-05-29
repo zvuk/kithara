@@ -238,9 +238,21 @@ impl Downloader {
         this: Self,
         rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
     ) {
-        drop(tokio::task::spawn(async move {
-            this.run(rx).await;
-        }));
+        // Run the download loop on a dedicated Web Worker (mirrors the
+        // pre-`unified-Downloader` `Backend` model). The decoder blocks the
+        // engine worker in `wait_range` (`Atomics.wait`); a `spawn_local`
+        // loop on that same worker would never be polled, so its fetches
+        // would never complete the bytes the blocking read waits for.
+        // Storage is shared linear memory and its condvar notify crosses
+        // workers via `Atomics.notify`, so the engine worker's blocked read
+        // is woken once this worker commits bytes. `keep_worker_alive` keeps
+        // the worker's event loop pumping for the page's lifetime.
+        kithara_platform::thread::spawn(move || {
+            kithara_platform::thread::keep_worker_alive();
+            drop(tokio::task::spawn(async move {
+                this.run(rx).await;
+            }));
+        });
     }
 }
 

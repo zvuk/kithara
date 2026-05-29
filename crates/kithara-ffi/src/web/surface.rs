@@ -35,15 +35,22 @@ fn id_to_f64(item: &Arc<AudioPlayerItem>) -> f64 {
 /// track ids, JS callback objects) onto the typed facade methods.
 #[wasm_bindgen]
 impl AudioPlayer {
-    /// Construct a player and eagerly boot the engine worker.
+    /// Construct a player. The engine worker and the audio worklet boot
+    /// lazily on the first command (via the worker bridge), not here: both
+    /// grow the shared `SharedArrayBuffer` concurrently with the main
+    /// thread, and wasm-bindgen boxes this handle's `Rc` *after* the
+    /// constructor body runs. Booting eagerly would box the handle in the
+    /// middle of that concurrent-grow storm, landing it above the main
+    /// instance's visible memory bound and trapping every later
+    /// `__wbg_ptr` deref with "memory access out of bounds". Constructing
+    /// single-threaded keeps the handle in the main thread's own grown
+    /// region, always addressable.
     #[wasm_bindgen(constructor)]
     #[must_use]
     pub fn new_js() -> Self {
-        let player = Self {
+        Self {
             inner: crate::Inner::new(FfiPlayerConfig::default()),
-        };
-        player.inner.start();
-        player
+        }
     }
 
     /// Append a track to the tail of the queue. Returns the allocated

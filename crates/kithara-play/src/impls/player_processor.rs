@@ -40,6 +40,9 @@ pub enum PlayerCmd {
     },
     /// Unload a track by its source identifier.
     UnloadTrack { src: Arc<str> },
+    /// Unload every track from the arena and reset the position/duration
+    /// snapshot to zero. Sent when the queue is explicitly cleared.
+    Clear,
     /// Add a track transition (fade in / fade out).
     Transition(TrackTransition),
     /// Seek active tracks to the given position in seconds.
@@ -63,6 +66,7 @@ impl fmt::Debug for PlayerCmd {
                 .field("src", src)
                 .finish_non_exhaustive(),
             Self::UnloadTrack { src } => f.debug_struct("UnloadTrack").field("src", src).finish(),
+            Self::Clear => f.write_str("Clear"),
             Self::Transition(t) => f.debug_tuple("Transition").field(t).finish(),
             Self::Seek {
                 seconds,
@@ -238,6 +242,9 @@ impl PlayerNodeProcessor {
                 }
                 PlayerCmd::UnloadTrack { src } => {
                     self.unload_track(&src);
+                }
+                PlayerCmd::Clear => {
+                    self.clear_all_tracks();
                 }
                 PlayerCmd::Transition(transition) => {
                     self.handle_transition(transition);
@@ -638,6 +645,25 @@ impl PlayerNodeProcessor {
         }
     }
 
+    /// Unload every track from the arena and reset the published
+    /// position/duration snapshot to zero. Backs [`PlayerCmd::Clear`],
+    /// sent when the queue is explicitly cleared, so a subsequent read of
+    /// `shared_state` reflects an empty player instead of a stale snapshot.
+    fn clear_all_tracks(&mut self) {
+        let keys: SmallVec<[Arc<str>; Self::MAX_TRACKS]> = self
+            .tracks
+            .iter_keys()
+            .map(|(key, _)| Arc::clone(key))
+            .collect();
+        for key in keys {
+            self.unload_track(&key);
+        }
+        self.tracks_transitions.clear();
+        self.shared_state.playing.store(false, Ordering::SeqCst);
+        self.shared_state.position.store(0.0, Ordering::Relaxed);
+        self.shared_state.duration.store(0.0, Ordering::Relaxed);
+    }
+
     /// Update `shared_state.position` / `shared_state.duration` from the
     /// leading track's last [`TrackReadOutcome`].
     ///
@@ -938,6 +964,49 @@ mod tests {
 
         tx.try_push(PlayerCmd::SetPaused(true)).ok();
         processor.drain_commands();
+        assert!(!processor.shared_state.playing.load(Ordering::SeqCst));
+    }
+
+    #[kithara::test(tokio)]
+    async fn processor_clear_unloads_tracks_and_resets_snapshot() {
+        let (reader, _recorded) = SampleRateTrackingReader::new(PcmSpec {
+            channels: 2,
+            sample_rate: 44_100,
+        });
+        let resource = Resource::from_reader(reader, None);
+        let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
+            resource,
+            Arc::from("track.mp3"),
+            &PcmPool::default(),
+        )));
+
+        let (mut processor, mut tx) = make_processor();
+
+        tx.try_push(PlayerCmd::LoadTrack {
+            resource: player_resource,
+            item_id: None,
+            src: Arc::from("track.mp3"),
+        })
+        .ok();
+        processor.drain_commands();
+        assert_eq!(processor.tracks.len(), 1);
+
+        processor.shared_state.playing.store(true, Ordering::SeqCst);
+        processor
+            .shared_state
+            .position
+            .store(42.0, Ordering::Relaxed);
+        processor
+            .shared_state
+            .duration
+            .store(60.0, Ordering::Relaxed);
+
+        tx.try_push(PlayerCmd::Clear).ok();
+        processor.drain_commands();
+
+        assert_eq!(processor.tracks.len(), 0, "arena must be empty after Clear");
+        assert_eq!(processor.shared_state.position.load(Ordering::Relaxed), 0.0);
+        assert_eq!(processor.shared_state.duration.load(Ordering::Relaxed), 0.0);
         assert!(!processor.shared_state.playing.load(Ordering::SeqCst));
     }
 

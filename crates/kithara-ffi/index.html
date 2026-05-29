@@ -304,12 +304,16 @@
         let durationMs = 0;
         window.__durationMs = 0;
 
-        // DRM: every protected stream below shares one AES-128 wildcard rule.
-        // The key processor echoes the fetched key bytes back unchanged; a
-        // real integration would decrypt/unwrap them here. setupNetwork wires
-        // the shared X-Auth-Token applied to subsequently inserted tracks.
+        // setupNetwork wires the shared X-Auth-Token applied to subsequently
+        // inserted tracks.
         player.setupNetwork('');
-        player.setupHlsAes((keyBytes, _salt) => keyBytes);
+        // The AES key processor is intentionally NOT wired here. setupHlsAes
+        // registers a player-wide rule whose salt header (X-Encrypted-Key) is
+        // currently attached to every fetch, not just key requests on the DRM
+        // domain; the plain MP3/HLS server's CORS (allow-headers: Range) then
+        // rejects the preflight (TypeError: Failed to fetch). The DRM track
+        // below therefore won't decrypt in this demo until the rule headers
+        // are scoped to the rule's domain.
 
         const seedTracks = [
             { url: 'https://stream.silvercomet.top/track.mp3', label: 'MP3 Track' },
@@ -397,11 +401,9 @@
         $('play-btn').onclick = () => { player.play(); $('status').textContent = 'Playing'; log('Play', 'info'); };
         $('pause-btn').onclick = () => { player.pause(); $('status').textContent = 'Paused'; log('Pause', 'info'); };
         $('stop-btn').onclick = () => {
+            // Stop = pause + reset position to 0; the queue is preserved so the
+            // same item can be replayed. Use clearPlaylist to empty the queue.
             player.stop();
-            playlist.length = 0;
-            currentId = -1;
-            durationMs = 0;
-            renderPlaylist();
             $('seek-slider').value = '0';
             $('position').textContent = '0:00';
             $('status').textContent = 'Stopped';

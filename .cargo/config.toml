@@ -10,6 +10,13 @@ rustflags = [
     "-C", "target-feature=+atomics,+bulk-memory,+mutable-globals",
     "-C", "link-arg=--shared-memory",
     "-C", "link-arg=--import-memory",
+    # Pre-allocate 256 MiB of shared linear memory up front so dlmalloc never
+    # has to grow it at runtime. On wasm threads, a concurrent memory.grow
+    # during the worker/worklet startup storm leaves other instances with a
+    # stale memory bound, so any later heap deref (JsFuture/setTimeout resolve
+    # closures, RAF tick, AudioPlayer __wbg_ptr) traps with "memory access out
+    # of bounds". A large initial avoids the grow entirely. Must be <= max.
+    "-C", "link-arg=--initial-memory=268435456",
     "-C", "link-arg=--max-memory=1610612736",
     "-C", "link-arg=--export=__wasm_init_tls",
     "-C", "link-arg=--export=__tls_size",

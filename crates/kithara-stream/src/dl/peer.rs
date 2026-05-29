@@ -3,10 +3,11 @@ use std::{
     task::{Context, Poll},
 };
 
+use bytes::Bytes;
 use futures::future::join_all;
 use kithara_abr::{Abr, AbrHandle, AbrPeerId};
 use kithara_events::{EventBus, RequestPriority};
-use kithara_net::NetError;
+use kithara_net::{Headers, NetError};
 use kithara_platform::{
     CancelGroup, RwLock,
     tokio::sync::{mpsc, oneshot},
@@ -14,6 +15,25 @@ use kithara_platform::{
 use tokio_util::sync::CancellationToken;
 
 use super::{cmd::FetchCmd, downloader::DownloaderInner, response::FetchResponse};
+
+/// Channel-path payload: a fully buffered response (headers + body bytes).
+///
+/// `Send` on every target, unlike a streaming [`FetchResponse`] whose
+/// wasm body is `!Send`. The download worker collects the body before
+/// replying so the engine worker — possibly a different Web Worker — only
+/// ever receives `Send` data. [`PeerHandle::execute`]/[`batch`] re-wrap it
+/// into a [`FetchResponse`] so callers see the same API.
+pub(super) type CollectedResponse = (Headers, Bytes);
+
+/// Re-wrap a collected channel-path payload into a [`FetchResponse`] so
+/// `execute`/`batch` callers keep the streaming API. The body is a single
+/// buffered chunk.
+fn collected_into_response((headers, bytes): CollectedResponse) -> FetchResponse {
+    FetchResponse {
+        headers,
+        body: bytes.into(),
+    }
+}
 
 /// Protocol-agnostic contract for download orchestration.
 ///
@@ -47,8 +67,10 @@ pub trait Peer: Abr {
 
 /// How the Downloader delivers the response for a command.
 pub(super) enum ResponseTarget {
-    /// Imperative path: send via oneshot (`execute` / `batch`).
-    Channel(oneshot::Sender<Result<FetchResponse, NetError>>),
+    /// Imperative path: send via oneshot (`execute` / `batch`). Carries a
+    /// fully collected [`CollectedResponse`] (not a stream) so the payload
+    /// stays `Send` across the download↔engine worker boundary on wasm.
+    Channel(oneshot::Sender<Result<CollectedResponse, NetError>>),
     /// Streaming path: per-command `writer`/`on_complete` in [`FetchCmd`].
     Streaming,
 }
@@ -165,7 +187,7 @@ impl PeerHandle {
     /// Individual commands may fail independently. Each slot in the
     /// returned `Vec` contains its own `Result`.
     pub async fn batch(&self, cmds: Vec<FetchCmd>) -> Vec<Result<FetchResponse, NetError>> {
-        let mut receivers: Vec<Option<oneshot::Receiver<Result<FetchResponse, NetError>>>> =
+        let mut receivers: Vec<Option<oneshot::Receiver<Result<CollectedResponse, NetError>>>> =
             Vec::with_capacity(cmds.len());
         let bus = self.bus();
         let peer_id = self.inner.abr.peer_id();
@@ -181,7 +203,10 @@ impl PeerHandle {
 
         join_all(receivers.into_iter().map(|rx| async move {
             match rx {
-                Some(resp_rx) => resp_rx.await.unwrap_or(Err(NetError::Cancelled)),
+                Some(resp_rx) => resp_rx
+                    .await
+                    .unwrap_or(Err(NetError::Cancelled))
+                    .map(collected_into_response),
                 None => Err(NetError::Cancelled),
             }
         }))
@@ -219,7 +244,10 @@ impl PeerHandle {
             .send(internal)
             .await
             .map_err(|_| NetError::Cancelled)?;
-        resp_rx.await.map_err(|_| NetError::Cancelled)?
+        resp_rx
+            .await
+            .map_err(|_| NetError::Cancelled)?
+            .map(collected_into_response)
     }
 
     /// Build a High-priority imperative `InternalCmd` paired with its
@@ -231,7 +259,7 @@ impl PeerHandle {
         peer_id: AbrPeerId,
     ) -> (
         InternalCmd,
-        oneshot::Receiver<Result<FetchResponse, NetError>>,
+        oneshot::Receiver<Result<CollectedResponse, NetError>>,
     ) {
         let cancel = CancelGroup::new(vec![self.inner.cancel.child_token()]);
         let (resp_tx, resp_rx) = oneshot::channel();

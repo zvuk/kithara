@@ -16,6 +16,7 @@ workspace = true
 [dependencies]
 futures = { workspace = true }
 tokio-util = { workspace = true }
+tracing = { workspace = true }
 web-time = { workspace = true }
 tokio_with_wasm = { workspace = true }
 

@@ -89,12 +89,6 @@ impl WasmInner {
         Self::default()
     }
 
-    /// Boot the engine worker eagerly so the first command does not pay
-    /// the spawn cost.
-    pub(crate) fn start(&self) {
-        self.bridge.ensure_worker_started();
-    }
-
     /// Forward a command to the worker, mapping a channel failure to a
     /// typed [`FfiError`]. Used by the fallible facade methods that should
     /// surface a real error when the worker link is down.
@@ -447,10 +441,6 @@ impl WasmInner {
 
     pub(crate) fn stop(&self) {
         self.send(WorkerCmd::Stop);
-        let mut view = self.queue_view.lock_sync();
-        for (_, item) in view.drain(..) {
-            *item.inserted.lock_sync() = false;
-        }
     }
 
     pub(crate) fn update_peak_bitrate(&self, wifi_bps: f64, cellular_bps: f64) {

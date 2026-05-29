@@ -766,6 +766,10 @@ impl PlayerImpl {
         self.items.lock_sync().clear();
         self.current_index.store(0, Ordering::Relaxed);
         self.set_status(PlayerStatus::Unknown);
+        // Drop the actively playing track from the audio-thread arena and
+        // reset the position/duration snapshot; otherwise the stale snapshot
+        // outlives the cleared queue. No-op when no slot is allocated.
+        let _ = self.send_to_slot(PlayerCmd::Clear);
         debug!("all items removed");
     }
 

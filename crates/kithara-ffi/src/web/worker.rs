@@ -43,13 +43,15 @@ pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
     const CROSSFADE_SECONDS: f32 = 5.0;
 
     kithara_platform::thread::assert_not_main_thread(concat!(module_path!(), "::worker_main"));
-    clog!("[WORKER] engine worker started");
+    // Without this the Worker's spawn closure returns immediately (it only
+    // spawns async tasks) and `wasm_safe_thread` `close()`s the Worker, killing
+    // the command + tick loops. Keeps the Worker's event loop pumping for the
+    // page's lifetime so the spawned futures keep running.
+    kithara_platform::thread::keep_worker_alive();
 
     task_spawn(async move {
-        clog!("[WORKER] spawn: building Queue");
         let queue = Rc::new(Queue::new(QueueConfig::default()));
         queue.set_crossfade_duration(CROSSFADE_SECONDS);
-        clog!("[WORKER] spawn: Queue ready, starting tick loop + command loop");
 
         let build_state = Rc::new(RefCell::new(BuildState::default()));
         spawn_tick_loop(Rc::clone(&queue));
@@ -58,7 +60,6 @@ pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
         while let Ok(cmd) = cmd_rx.recv_async().await {
             dispatch_cmd(cmd, &queue, &build_state);
         }
-        clog!("[WORKER] command channel closed, shutting down");
     });
 }
 
@@ -91,7 +92,7 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<Buil
         WorkerCmd::Pause => queue.pause(),
         WorkerCmd::Stop => {
             queue.pause();
-            queue.clear();
+            let _ = queue.seek(0.0);
         }
         WorkerCmd::Seek(ms) => {
             let _ = queue.seek(ms.max(0.0) / MS_PER_SECOND);
