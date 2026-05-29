@@ -1,9 +1,5 @@
 schema_version = 1
 
-[accumulator_loops]
-"crates/kithara-decode/src/gapless/trimmer/core.rs:142:12" = 1
-"crates/kithara-decode/src/gapless/trimmer/core.rs:443:12" = 1
-
 [fat_loop_body]
 "crates/kithara-app/src/tui/runner.rs:98:loop_body" = 1
 "crates/kithara-audio/src/audio.rs:543:loop_body" = 1
