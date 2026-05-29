@@ -1,38 +1,32 @@
 #![forbid(unsafe_code)]
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
-use std::{fmt::Debug, hash::Hash, ops::Range, path::Path};
+//! Unified asset store: disk or memory backend.
+
+use std::{
+    fmt::Debug,
+    hash::Hash,
+    ops::Range,
+    path::Path,
+    sync::{Arc, atomic::AtomicU64},
+};
 
 use rangemap::RangeSet;
+#[cfg(test)]
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     AssetResourceState,
     base::Assets,
     error::AssetsResult,
-    index::AvailabilityIndex,
+    identity::RequestIdentity,
+    index::{AvailabilityIndex, DemandEntry, DemandIndex, DemandLease, ProducerHandle},
     key::ResourceKey,
+    scope::AssetScope,
     store::{AssetResource, MemStore},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{disk_store::DiskAssetStore, store::DiskStore};
 
-/// Unified storage backend for assets.
-///
-/// Dispatches all operations to an inner disk or memory store chain.
-/// The `availability` field holds the aggregate byte-availability index
-/// (Phase P-2): every query method below checks it first and falls back
-/// to a slow `resource_state` probe only when the aggregate has no entry
-/// for the key. Phase P-3 wires the storage observer that populates the
-/// aggregate on `write_at` / `commit`; Phase P-4 adds explicit
-/// persistence via [`AssetStore::checkpoint`].
-///
-/// The `base` field on the `Disk` variant is an optional
-/// [`Arc<DiskAssetStore>`] needed only to open `_index/availability.bin`
-/// for checkpointing. It is `Some` when the store is built through
-/// [`crate::AssetStoreBuilder::build`] (production path) and `None`
-/// when a bare [`DiskStore`] chain is converted via `From`/`Into`
-/// (test-only path). A `None` `base` makes `checkpoint()` a no-op.
 /// Forward a method call to the active store variant. Keeps the
 /// `#[cfg(not(target_arch = "wasm32"))]` gate on `Disk` in one place so
 /// the enum arms don't repeat it across a dozen trivial wrappers.
@@ -46,6 +40,21 @@ macro_rules! delegate_to_store {
     };
 }
 
+/// Unified storage backend for assets.
+///
+/// Dispatches all operations to an inner disk or memory store chain.
+/// The `availability` field holds the aggregate byte-availability index:
+/// every query method below checks it first and falls back to a slow
+/// `resource_state` probe only when the aggregate has no entry for the
+/// key. The storage observer populates the aggregate on `write_at` /
+/// `commit`; explicit persistence is via [`AssetStore::checkpoint`].
+///
+/// The `base` field on the `Disk` variant is an optional
+/// [`Arc<DiskAssetStore>`] needed only to open `_index/availability.bin`
+/// for checkpointing. It is `Some` when the store is built through
+/// [`crate::AssetStoreBuilder::build`] (production path) and `None`
+/// when a bare [`DiskStore`] chain is converted via `From`/`Into`
+/// (test-only path). A `None` `base` makes `checkpoint()` a no-op.
 #[derive(Clone, Debug)]
 pub enum AssetStore<Ctx = ()>
 where
@@ -56,12 +65,14 @@ where
     Disk {
         store: DiskStore<Ctx>,
         availability: AvailabilityIndex,
+        demand: DemandIndex,
         base: Option<Arc<DiskAssetStore>>,
     },
     /// In-memory storage (ephemeral, no disk artifacts).
     Mem {
         store: MemStore<Ctx>,
         availability: AvailabilityIndex,
+        demand: DemandIndex,
     },
 }
 
@@ -69,34 +80,57 @@ impl<Ctx> AssetStore<Ctx>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
+    /// Bind this store to one `asset_root`, returning a scoped handle
+    /// that drops the per-call `asset_root` argument. Cheap to clone --
+    /// the backing store is shared, so many scopes over distinct asset
+    /// roots cooperate on one store.
+    #[must_use]
+    pub fn scope<R: Into<Arc<str>>>(&self, asset_root: R) -> AssetScope<Ctx> {
+        AssetScope::new(self.clone(), asset_root.into())
+    }
+
     /// Acquire a resource explicitly for mutation.
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the resource key is invalid or the underlying
-    /// storage cannot be opened.
-    pub fn acquire_resource(&self, key: &ResourceKey) -> AssetsResult<AssetResource<Ctx>> {
-        delegate_to_store!(self, acquire_resource, key)
+    /// Returns `AssetsError` if the resource cannot be opened.
+    pub fn acquire_resource(
+        &self,
+        key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
+    ) -> AssetsResult<AssetResource<Ctx>> {
+        delegate_to_store!(self, acquire_resource, key, identity)
     }
 
     /// Acquire a resource with processing context for an explicit write path.
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the resource key is invalid or the underlying
-    /// storage cannot be opened.
+    /// Returns `AssetsError` if the resource cannot be opened.
     pub fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
         ctx: Option<Ctx>,
     ) -> AssetsResult<AssetResource<Ctx>> {
-        delegate_to_store!(self, acquire_resource_with_ctx, key, ctx)
+        delegate_to_store!(self, acquire_resource_with_ctx, key, identity, ctx)
     }
 
-    /// Return the asset root identifier.
-    #[must_use]
-    pub fn asset_root(&self) -> &str {
-        delegate_to_store!(self, asset_root)
+    /// Attach a consumer's download demand for `key`.
+    ///
+    /// `read_pos` is shared with the consumer (the producer reads its
+    /// advances directly); `look_ahead` of `None` requests the whole
+    /// file as fast as possible. Returns a [`DemandLease`] the consumer
+    /// must hold for the lifetime of its demand, plus a
+    /// [`ProducerHandle`] to the single CAS-winning attacher only -- the
+    /// winner drives the shared download task. See `README.md`
+    /// "Consumer Demand".
+    pub fn attach_demand(
+        &self,
+        key: &ResourceKey,
+        read_pos: Arc<AtomicU64>,
+        look_ahead: Option<u64>,
+    ) -> (DemandLease, Option<ProducerHandle>) {
+        let entry = Arc::new(DemandEntry::new(read_pos, look_ahead));
+        self.demand().attach_demand(key, entry)
     }
 
     /// Return the crate-private aggregate availability handle.
@@ -109,17 +143,26 @@ where
         }
     }
 
+    /// Return the crate-private aggregate demand handle.
+    fn demand(&self) -> &DemandIndex {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk { demand, .. } => demand,
+            Self::Mem { demand, .. } => demand,
+        }
+    }
+
     /// Return a snapshot of byte ranges known to be available for the
     /// given resource.
     ///
     /// Fast path: aggregate lookup. Slow path: if the aggregate is
     /// empty for this key and `resource_state` reports
     /// `Committed { final_len: Some(len) }`, return `0..len` without
-    /// seeding the aggregate (Phase P-3's observer does the actual
-    /// seeding on open).
+    /// seeding the aggregate (the observer does the actual seeding on
+    /// open).
     #[must_use]
     pub fn available_ranges(&self, key: &ResourceKey) -> RangeSet<u64> {
-        let ranges = self.availability().available_ranges(self.asset_root(), key);
+        let ranges = self.availability().available_ranges(key);
         if !ranges.is_empty() {
             return ranges;
         }
@@ -139,8 +182,8 @@ where
     /// disk. For `AssetStore::Mem` this is a no-op.
     ///
     /// Checkpointing is always explicit — there is no `Drop` hook and
-    /// no background flush timer (attempt #1 landmine L3). Callers
-    /// decide when a consistent aggregate must survive a restart.
+    /// no background flush timer. Callers decide when a consistent
+    /// aggregate must survive a restart.
     ///
     /// # Errors
     ///
@@ -160,16 +203,13 @@ where
     ///
     /// Fast path checks the aggregate; slow path falls back to
     /// `resource_state` so pre-existing committed files on disk are
-    /// discoverable even before the Phase P-3 observer wires in.
+    /// discoverable even before the observer wires in.
     #[must_use]
     pub fn contains_range(&self, key: &ResourceKey, range: Range<u64>) -> bool {
         if range.start >= range.end {
             return true;
         }
-        if self
-            .availability()
-            .contains_range(self.asset_root(), key, range.clone())
-        {
+        if self.availability().contains_range(key, range.clone()) {
             return true;
         }
         if let Ok(AssetResourceState::Committed {
@@ -181,19 +221,24 @@ where
         false
     }
 
+    /// Whether this backend is ephemeral (in-memory).
+    #[must_use]
+    pub fn is_ephemeral(&self) -> bool {
+        matches!(self, Self::Mem { .. })
+    }
+
     /// Delete the entire asset directory.
     ///
     /// # Errors
-    ///
     /// Returns `AssetsError` if the directory cannot be removed.
-    pub fn delete_asset(&self) -> AssetsResult<()> {
-        delegate_to_store!(self, delete_asset)
+    pub(crate) fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
+        delegate_to_store!(self, delete_asset, asset_root)
     }
 
     /// Return the committed final length of the resource, if known.
     #[must_use]
     pub fn final_len(&self, key: &ResourceKey) -> Option<u64> {
-        if let Some(len) = self.availability().final_len(self.asset_root(), key) {
+        if let Some(len) = self.availability().final_len(key) {
             return Some(len);
         }
         if let Ok(AssetResourceState::Committed {
@@ -208,25 +253,26 @@ where
     /// Open a resource by key (no processing context).
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the resource key is invalid or the underlying
-    /// storage cannot be opened.
-    pub fn open_resource(&self, key: &ResourceKey) -> AssetsResult<AssetResource<Ctx>> {
-        delegate_to_store!(self, open_resource, key)
+    /// Returns `AssetsError` if the resource cannot be opened.
+    pub fn open_resource(
+        &self,
+        key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
+    ) -> AssetsResult<AssetResource<Ctx>> {
+        delegate_to_store!(self, open_resource, key, identity)
     }
 
     /// Open a resource with processing context.
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the resource key is invalid or the underlying
-    /// storage cannot be opened.
+    /// Returns `AssetsError` if the resource cannot be opened.
     pub fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
         ctx: Option<Ctx>,
     ) -> AssetsResult<AssetResource<Ctx>> {
-        delegate_to_store!(self, open_resource_with_ctx, key, ctx)
+        delegate_to_store!(self, open_resource_with_ctx, key, identity, ctx)
     }
 
     /// Remove a single resource from the store. The concrete store
@@ -246,11 +292,10 @@ where
         }
     }
 
-    /// Inspect the current resource state without creating or mutating it.
+    /// Inspect the current resource state.
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the key is invalid or the backend cannot inspect it.
+    /// Returns `AssetsError` if the key is invalid or the backend cannot inspect.
     pub fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
         delegate_to_store!(self, resource_state, key)
     }
@@ -262,6 +307,13 @@ where
     }
 }
 
+// Test-only conversions from a bare store chain (no shared cancel, no
+// `base` for checkpointing). The `demand` index is constructed with a
+// fresh cancel here because there is no upstream master on this path;
+// production stores are built through `AssetStoreBuilder::build`, which
+// threads the store cancel. Gated to keep the cancel-hierarchy lint
+// honest: these have no non-test callers in the workspace.
+#[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 impl<Ctx> From<DiskStore<Ctx>> for AssetStore<Ctx>
 where
@@ -271,11 +323,13 @@ where
         Self::Disk {
             store,
             availability: AvailabilityIndex::new(),
+            demand: DemandIndex::new(CancellationToken::new()),
             base: None,
         }
     }
 }
 
+#[cfg(test)]
 impl<Ctx> From<MemStore<Ctx>> for AssetStore<Ctx>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
@@ -284,6 +338,7 @@ where
         Self::Mem {
             store,
             availability: AvailabilityIndex::new(),
+            demand: DemandIndex::new(CancellationToken::new()),
         }
     }
 }

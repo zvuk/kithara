@@ -136,6 +136,7 @@ impl Queue {
     pub fn new(config: QueueConfig) -> Self {
         let QueueConfig {
             player,
+            cancel: config_cancel,
             max_concurrent_loads,
             prefetch_duration: _,
             #[cfg(any(test, feature = "probe"))]
@@ -143,7 +144,9 @@ impl Queue {
             #[cfg(not(any(test, feature = "probe")))]
                 should_autoplay: _,
         } = config;
-        let cancel = CancellationToken::new(); // kithara:cancel:owner
+        // App path threads a child of the app master; standalone / test
+        // use falls back to a fresh root (the documented safety net).
+        let cancel = config_cancel.unwrap_or_default();
         let player = player.unwrap_or_else(|| {
             let config = PlayerConfig::builder().cancel(cancel.clone()).build();
             Arc::new(PlayerImpl::new(config))

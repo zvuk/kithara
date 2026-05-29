@@ -12,6 +12,8 @@ use kithara_stream::dl::Downloader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+use crate::invalidation::HlsStore;
+
 /// Encryption key handling configuration.
 ///
 /// DRM key processing is routed through [`KeyProcessorRegistry`] so
@@ -99,6 +101,11 @@ pub struct HlsConfig {
     /// Storage configuration.
     #[builder(default)]
     pub store: StoreOptions,
+    /// Optional app-wide shared store. When present, the stream reuses
+    /// this backend (cache + flush hub + DRM `process_fn`) and registers
+    /// its eviction channel in the store's routing registry instead of
+    /// building a private per-stream store. See [`HlsStore`].
+    pub asset_store: Option<HlsStore>,
     /// Master playlist URL.
     pub url: Url,
     /// Max segments to download per step.
@@ -132,6 +139,7 @@ impl fmt::Debug for HlsConfig {
             .field("name", &self.name)
             .field("pool", &self.pool)
             .field("store", &self.store)
+            .field("asset_store", &self.asset_store.is_some())
             .field("url", &self.url)
             .field("download_batch_size", &self.download_batch_size)
             .field("event_channel_capacity", &self.event_channel_capacity)

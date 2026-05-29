@@ -44,10 +44,12 @@ mod pipeline;
 mod resampler;
 mod runtime;
 mod traits;
+mod waveform;
 pub(crate) mod worker;
 
 pub use audio::Audio;
 pub use effects::eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands};
+pub use effects::timestretch::TimeStretchProcessor;
 pub use pipeline::{
     config::AudioConfig,
     fetch::{EpochValidator, Fetch},
@@ -58,4 +60,5 @@ pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,
     SeekOutcome,
 };
+pub use waveform::{Envelope, PeakAccumulator};
 pub use worker::{AudioWorkerSource, handle::AudioWorkerHandle, types::ServiceClass};

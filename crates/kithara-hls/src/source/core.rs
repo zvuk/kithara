@@ -11,7 +11,9 @@ use kithara_stream::{
     StreamResult, Timeline,
 };
 
-use crate::{coord::HlsCoord, peer::HlsPeer, reader::HlsReaderHooks};
+use crate::{
+    coord::HlsCoord, invalidation::HlsInvalidationGuard, peer::HlsPeer, reader::HlsReaderHooks,
+};
 
 /// HLS source: thin façade over [`HlsCoord`].
 ///
@@ -37,6 +39,11 @@ pub struct HlsSource {
     /// [`HlsCoord::set_peer_wake`] so coord-side methods can wake the
     /// peer directly.
     peer_wake: Option<Arc<Notify>>,
+    /// Registry deregistration guard for the app-wide shared store. `Some`
+    /// only when an [`HlsStore`](crate::HlsStore) was injected; dropping it
+    /// removes this stream's eviction routing entry. `None` for a
+    /// private per-stream store.
+    invalidation_guard: Option<HlsInvalidationGuard>,
 }
 
 impl HlsSource {
@@ -47,7 +54,14 @@ impl HlsSource {
             hls_peer: None,
             peer_handle: None,
             peer_wake: None,
+            invalidation_guard: None,
         }
+    }
+
+    /// Pin the shared-store deregistration guard to this source's
+    /// lifetime. `None` keeps the private per-stream behaviour.
+    pub(crate) fn set_invalidation_guard(&mut self, guard: Option<HlsInvalidationGuard>) {
+        self.invalidation_guard = guard;
     }
 
     pub(crate) fn set_hls_peer(&mut self, peer: Arc<HlsPeer>) {

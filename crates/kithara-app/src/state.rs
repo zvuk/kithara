@@ -1,13 +1,24 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use kithara::{
     abr::AbrHandle,
+    audio::Envelope,
     events::{AbrMode, AppEvent, EngineEvent, Event, PlayerEvent, VariantInfo},
+    prelude::ResourceConfig,
+    stream::AudioCodec,
 };
 use kithara_platform::sync::Mutex;
-use kithara_queue::{Queue, QueueEvent, TrackEntry};
-use tokio::sync::broadcast::error::RecvError;
+use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry, TrackSource};
+use tokio::sync::{Notify, broadcast::error::RecvError};
 use tokio_util::sync::CancellationToken;
+
+use crate::{config::AppConfig, sources::build_resource_config, waveform::analyze};
+
+/// Analysis resolution for the per-track waveform envelope.
+const WAVEFORM_BUCKETS: usize = 1500;
 
 /// Snapshot of player state shared between the queue, the listener task,
 /// and the UI thread. The struct is cloned cheaply each frame so the UI
@@ -24,7 +35,11 @@ pub struct UiState {
     pub abr_variants: Vec<(usize, String)>,
     pub eq_bands: Vec<f32>,
     pub tracks: Vec<TrackEntry>,
+    /// Peak envelope of the current track; `None` until analysed.
+    pub waveform: Option<Envelope>,
+    pub repeat_mode: RepeatMode,
     pub abr_mode_is_auto: bool,
+    pub shuffle_enabled: bool,
     pub is_seeking: bool,
     pub playing: bool,
     pub crossfade: f32,
@@ -50,12 +65,15 @@ impl UiState {
             abr_mode_is_auto: true,
             selected_variant: None,
             playing: queue.is_playing(),
+            shuffle_enabled: queue.is_shuffle_enabled(),
+            repeat_mode: queue.repeat_mode(),
             position: queue.position_seconds().unwrap_or(0.0),
             duration: queue.duration_seconds().unwrap_or(0.0),
             volume: queue.volume(),
             crossfade: queue.crossfade_duration(),
             crossfade_progress: None,
             eq_bands: vec![0.0; queue.eq_band_count()],
+            waveform: None,
             status_note: None,
             is_seeking: false,
             seek_position: 0.0,
@@ -80,22 +98,52 @@ pub struct StateController {
     queue: Arc<Queue>,
     state: Arc<Mutex<UiState>>,
     cancel: CancellationToken,
+    /// Gate for per-track waveform analysis. `false` keeps the listener
+    /// from decoding whole tracks while the DJ Studio is closed; the
+    /// studio flips it on entry and off on exit.
+    waveform_enabled: Arc<AtomicBool>,
+    /// Wakes the listener when [`Self::waveform_enabled`] changes so it
+    /// can start (or cancel) analysis without waiting for a queue event.
+    waveform_wake: Arc<Notify>,
 }
 
 impl StateController {
     /// Build a controller and start the listener task that mirrors
     /// queue events into [`UiState`].
-    pub fn new(queue: Arc<Queue>) -> Self {
+    ///
+    /// `cancel` must be a child of the app master so the listener task
+    /// stops when the app shuts down; the controller's `Drop` also
+    /// cancels it to stop the listener when the UI tears down first.
+    /// `config` supplies the shared stores for per-track waveform analysis.
+    pub fn new(queue: Arc<Queue>, config: AppConfig, cancel: CancellationToken) -> Self {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
-        let cancel = CancellationToken::new(); // kithara:cancel:owner
+        let waveform_enabled = Arc::new(AtomicBool::new(false));
+        let waveform_wake = Arc::new(Notify::new());
 
-        spawn_listener(Arc::clone(&queue), Arc::clone(&state), cancel.clone());
+        spawn_listener(
+            Arc::clone(&queue),
+            Arc::clone(&state),
+            config,
+            cancel.clone(),
+            Arc::clone(&waveform_enabled),
+            Arc::clone(&waveform_wake),
+        );
 
         Self {
             queue,
             state,
             cancel,
+            waveform_enabled,
+            waveform_wake,
         }
+    }
+
+    /// Enable or disable per-track waveform analysis. The DJ Studio turns
+    /// this on while open so analysis only runs on demand; turning it off
+    /// cancels any in-flight analysis and clears the current envelope.
+    pub fn set_waveform_enabled(&self, enabled: bool) {
+        self.waveform_enabled.store(enabled, Ordering::SeqCst);
+        self.waveform_wake.notify_one();
     }
 
     /// Apply a closure under the lock. Returns the closure's result.
@@ -126,6 +174,8 @@ impl StateController {
         let mode = abr.as_ref().and_then(AbrHandle::mode);
         let mut st = self.state.lock_sync();
         st.playing = self.queue.is_playing();
+        st.shuffle_enabled = self.queue.is_shuffle_enabled();
+        st.repeat_mode = self.queue.repeat_mode();
         st.volume = self.queue.volume();
         st.position = position;
         st.duration = duration;
@@ -160,41 +210,148 @@ impl Drop for StateController {
     }
 }
 
-fn spawn_listener(queue: Arc<Queue>, state: Arc<Mutex<UiState>>, cancel: CancellationToken) {
+fn spawn_listener(
+    queue: Arc<Queue>,
+    state: Arc<Mutex<UiState>>,
+    config: AppConfig,
+    cancel: CancellationToken,
+    waveform_enabled: Arc<AtomicBool>,
+    waveform_wake: Arc<Notify>,
+) {
     let mut rx = queue.subscribe();
 
     tokio::spawn(async move {
+        let mut current_analyze: Option<CancellationToken> = None;
+
         loop {
-            let event = tokio::select! {
+            tokio::select! {
                 biased;
                 () = cancel.cancelled() => break,
-                event = rx.recv() => event,
-            };
-
-            match event {
-                Ok(event) => apply_event(event, &queue, &state),
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => break,
+                () = waveform_wake.notified() => {
+                    if waveform_enabled.load(Ordering::SeqCst) {
+                        spawn_analyze(&queue, &state, &config, &cancel, &mut current_analyze);
+                    } else {
+                        if let Some(prev) = current_analyze.take() {
+                            prev.cancel();
+                        }
+                        state.lock_sync().waveform = None;
+                    }
+                }
+                event = rx.recv() => match event {
+                    Ok(event) => {
+                        let track_changed =
+                            matches!(event, Event::Queue(QueueEvent::CurrentTrackChanged { .. }));
+                        apply_event(event, &queue, &state);
+                        if track_changed && waveform_enabled.load(Ordering::SeqCst) {
+                            spawn_analyze(&queue, &state, &config, &cancel, &mut current_analyze);
+                        }
+                    }
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => break,
+                },
             }
         }
     });
+}
+
+/// Analyse the current track, cancelling any in-flight prior analysis.
+/// `cancel` is the listener cancel; each run uses `cancel.child_token()`.
+fn spawn_analyze(
+    queue: &Arc<Queue>,
+    state: &Arc<Mutex<UiState>>,
+    config: &AppConfig,
+    cancel: &CancellationToken,
+    current_analyze: &mut Option<CancellationToken>,
+) {
+    if let Some(prev) = current_analyze.take() {
+        prev.cancel();
+    }
+
+    let track_id = {
+        let st = state.lock_sync();
+        let Some(idx) = st.current_track_index else {
+            return;
+        };
+        let Some(entry) = st.tracks.get(idx) else {
+            return;
+        };
+        entry.id
+    };
+
+    state.lock_sync().waveform = None;
+
+    let Some(source) = queue.track_source(track_id) else {
+        return;
+    };
+    let Some(resource_cfg) = resource_config_from_source(source, config) else {
+        return;
+    };
+
+    let analyze_cancel = cancel.child_token();
+    *current_analyze = Some(analyze_cancel.clone());
+    let state = Arc::clone(state);
+
+    tokio::spawn(async move {
+        let Some(envelope) = analyze(resource_cfg, WAVEFORM_BUCKETS, analyze_cancel).await else {
+            return;
+        };
+        let mut st = state.lock_sync();
+        // Commit only if the analysed track is still current.
+        let current_id = st
+            .current_track_index
+            .and_then(|i| st.tracks.get(i))
+            .map(|entry| entry.id);
+        if current_id == Some(track_id) {
+            st.waveform = Some(envelope);
+        }
+    });
+}
+
+/// Build an analysis resource from a track's source, reusing the shared
+/// stores so the analysis and the player share one download.
+fn resource_config_from_source(source: TrackSource, config: &AppConfig) -> Option<ResourceConfig> {
+    match source {
+        TrackSource::Config(cfg) => Some(*cfg),
+        TrackSource::Uri(url) => build_resource_config(&url, config),
+        _ => None,
+    }
+}
+
+/// Push the desired EQ gains down to the engine. Calls for bands with no
+/// active slot are no-ops; the master EQ persists once a slot accepts them.
+fn reapply_eq(queue: &Queue, eq_bands: &[f32]) {
+    for (band, &gain) in eq_bands.iter().enumerate() {
+        let _ = queue.set_eq_gain(band, gain);
+    }
 }
 
 fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
     match event {
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
-            let mut st = state.lock_sync();
-            st.current_track_index = current_index;
-            st.track_name = current_index
-                .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
-                .unwrap_or_default();
-            st.selected_variant = None;
-            st.is_seeking = false;
+            let eq_bands = {
+                let mut st = state.lock_sync();
+                st.current_track_index = current_index;
+                st.track_name = current_index
+                    .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
+                    .unwrap_or_default();
+                st.selected_variant = None;
+                st.is_seeking = false;
+                st.eq_bands.clone()
+            };
+            reapply_eq(queue, &eq_bands);
         }
         Event::Player(PlayerEvent::RateChanged { rate }) => {
+            let started = rate > 0.0;
             let mut st = state.lock_sync();
-            st.playing = rate > 0.0;
+            st.playing = started;
+            let eq_bands = started.then(|| st.eq_bands.clone());
+            drop(st);
+            // Playback just started on an active slot -- push the desired EQ
+            // down so gains set before play take effect.
+            if let Some(eq_bands) = eq_bands {
+                reapply_eq(queue, &eq_bands);
+            }
         }
         Event::Player(PlayerEvent::VolumeChanged { volume })
         | Event::Engine(EngineEvent::MasterVolumeChanged { volume }) => {
@@ -223,11 +380,31 @@ fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
 }
 
 fn variant_display_label_from_info(v: &VariantInfo) -> String {
-    v.name.clone().unwrap_or_else(|| {
-        v.bandwidth_bps.map_or_else(
-            || format!("variant {}", v.variant_index),
-            |b| format!("{} kbps", b / 1000),
-        )
+    let bitrate = v.bandwidth_bps.map(|b| format!("{} kbps", b / 1000));
+    let codec = v.codecs.as_deref().and_then(codec_label);
+    match (bitrate, codec) {
+        (Some(b), Some(c)) => format!("{b} \u{00b7} {c}"),
+        (Some(b), None) => b,
+        (None, Some(c)) => c.to_string(),
+        (None, None) => v
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("variant {}", v.variant_index)),
+    }
+}
+
+/// Human-readable codec family from an HLS `CODECS` attribute value
+/// (e.g. `mp4a.40.2` -> `AAC`). Unknown codecs yield `None` so the
+/// bitrate is shown without a trailing format tag.
+fn codec_label(codecs: &str) -> Option<&'static str> {
+    Some(match AudioCodec::parse_hls_codec(codecs)? {
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => "AAC",
+        AudioCodec::Mp3 => "MP3",
+        AudioCodec::Flac => "FLAC",
+        AudioCodec::Vorbis => "Vorbis",
+        AudioCodec::Opus => "Opus",
+        AudioCodec::Alac => "ALAC",
+        _ => return None,
     })
 }
 
@@ -238,4 +415,19 @@ fn variant_short_label(v: &VariantInfo) -> String {
             |b| format!("{}k", b / 1000),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::codec_label;
+
+    #[test]
+    fn codec_label_maps_known_hls_codecs() {
+        assert_eq!(codec_label("mp4a.40.2"), Some("AAC"));
+        assert_eq!(codec_label("mp4a.40.5"), Some("AAC"));
+        assert_eq!(codec_label("mp4a.40.34"), Some("MP3"));
+        assert_eq!(codec_label("flac"), Some("FLAC"));
+        assert_eq!(codec_label("opus"), Some("Opus"));
+        assert_eq!(codec_label("av01.0"), None);
+    }
 }

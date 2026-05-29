@@ -14,8 +14,8 @@ use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    AssetResourceState, base::Assets, error::AssetsResult, evict::ByteRecorder, index::PinsIndex,
-    key::ResourceKey,
+    AssetResourceState, base::Assets, error::AssetsResult, evict::ByteRecorder,
+    identity::RequestIdentity, index::PinsIndex, key::ResourceKey,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,8 +27,9 @@ enum AccessMode {
 type RemoveFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
 
 /// Shared registry of live (non-dropped) lease resources keyed by
-/// [`ResourceKey`]. Per-shard locks via `DashMap`; contention is bounded
-/// by lease churn rate and shard count (default 32).
+/// `ResourceKey` (which carries its own `asset_root`). Per-shard locks
+/// via `DashMap`; contention is bounded by lease churn rate and shard
+/// count (default 32).
 type LiveRegistry = DashMap<ResourceKey, Weak<LiveResource>>;
 
 struct LiveResource {
@@ -66,16 +67,8 @@ impl Drop for LiveResource {
 
 /// Decorator that adds "pin (lease) while handle lives" semantics on top of inner [`Assets`].
 ///
-/// ## Normative behavior
-/// - Every successful `open_resource()` pins `key.asset_root`.
-/// - The pin table is stored as a `HashSet<String>` (unique roots) in memory.
-/// - Pin/unpin operations eagerly persist to disk (best-effort) so that
-///   crash-recovery sees the current pin set immediately.
-/// - The pin index resource must be excluded from pinning to avoid recursion.
-/// - When `enabled` is `false`, all operations delegate directly to the inner layer
-///   (no pinning, no byte recording, no persistence).
-///
-/// This type does **not** do any filesystem/path logic; it uses the inner `Assets` abstraction.
+/// See crate `README.md` for the lease/pin contract. Absolute keys bypass
+/// pinning (no asset to pin under). The capability gate also bypasses.
 #[derive(Clone)]
 pub struct LeaseAssets<A>
 where
@@ -114,6 +107,19 @@ where
         self.inner
             .capabilities()
             .contains(crate::base::Capabilities::LEASE)
+    }
+
+    /// Force-persist the in-memory pin set to disk. No-op when the lease
+    /// layer is bypassed (capability inactive) or the underlying pins
+    /// index is ephemeral.
+    ///
+    /// # Errors
+    /// Returns `AssetsError` if the underlying pins index flush fails.
+    pub fn flush_pins(&self) -> AssetsResult<()> {
+        if !self.is_active() {
+            return Ok(());
+        }
+        self.pins.flush()
     }
 
     fn open_live_resource(&self, key: &ResourceKey, status: ResourceStatus) -> Arc<LiveResource> {
@@ -205,7 +211,6 @@ pub struct LeaseResource<R: ResourceExt, L> {
     remove: Option<RemoveFn>,
     resource_key: Option<ResourceKey>,
     inner: R,
-    asset_root: String,
 }
 
 impl<R, L> Debug for LeaseResource<R, L>
@@ -216,7 +221,7 @@ where
         f.debug_struct("LeaseResource")
             .field("inner", &self.inner)
             .field("mode", &self.mode)
-            .field("asset_root", &self.asset_root)
+            .field("key", &self.resource_key)
             .finish_non_exhaustive()
     }
 }
@@ -254,11 +259,12 @@ where
         }
 
         if let Some(ref recorder) = self.byte_recorder
+            && let Some(asset_root) = self.resource_key.as_ref().and_then(ResourceKey::asset_root)
             && let Some(path) = self.inner.path()
             && let Ok(metadata) = fs::metadata(path)
             && metadata.is_file()
         {
-            recorder.record_bytes(&self.asset_root, metadata.len());
+            recorder.record_bytes(asset_root, metadata.len());
         }
 
         Ok(())
@@ -339,17 +345,19 @@ where
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
-        self.wrap_resource(key, ctx, AccessMode::Write)
+        self.wrap_resource(key, identity, ctx, AccessMode::Write)
     }
 
     fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
-        self.wrap_resource(key, ctx, AccessMode::Read)
+        self.wrap_resource(key, identity, ctx, AccessMode::Read)
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
@@ -369,10 +377,9 @@ where
         to self.inner {
             fn capabilities(&self) -> crate::base::Capabilities;
             fn root_dir(&self) -> &Path;
-            fn asset_root(&self) -> &str;
             fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
-            fn delete_asset(&self) -> AssetsResult<()>;
+            fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
         }
     }
 }
@@ -389,8 +396,9 @@ where
     pub fn acquire_resource(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
     ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
-        self.acquire_resource_with_ctx(key, None)
+        self.acquire_resource_with_ctx(key, identity, None)
     }
 
     /// Open a resource with context through the explicit mutable-access alias.
@@ -401,9 +409,10 @@ where
     pub fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
         ctx: Option<A::Context>,
     ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
-        self.wrap_resource(key, ctx, AccessMode::Write)
+        self.wrap_resource(key, identity, ctx, AccessMode::Write)
     }
 
     fn wrap_opened_resource(
@@ -414,21 +423,23 @@ where
     ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
         let live = self.open_live_resource(key, inner.status());
 
-        if !self.is_active() {
+        let pin = (self.is_active() && !key.is_absolute())
+            .then(|| key.asset_root())
+            .flatten();
+        let Some(asset_root) = pin else {
             return Ok(LeaseResource {
                 inner,
                 mode,
                 _lease: LeaseGuard { inner: None },
-                asset_root: self.inner.asset_root().to_string(),
                 byte_recorder: None,
                 drop_token: matches!(mode, AccessMode::Write).then(|| Arc::new(())),
                 live: Some(live),
                 remove: None,
                 resource_key: Some(key.clone()),
             });
-        }
+        };
 
-        let lease = self.pin(self.inner.asset_root())?;
+        let lease = self.pin(asset_root)?;
         let remove: RemoveFn = {
             let inner = Arc::clone(&self.inner);
             Arc::new(move |key: &ResourceKey| {
@@ -440,7 +451,6 @@ where
             inner,
             mode,
             _lease: lease,
-            asset_root: self.inner.asset_root().to_string(),
             byte_recorder: self.byte_recorder.clone(),
             drop_token: matches!(mode, AccessMode::Write).then(|| Arc::new(())),
             live: Some(live),
@@ -452,12 +462,13 @@ where
     fn wrap_resource(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
         ctx: Option<A::Context>,
         mode: AccessMode,
     ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
         let inner = match mode {
-            AccessMode::Read => self.inner.open_resource_with_ctx(key, ctx)?,
-            AccessMode::Write => self.inner.acquire_resource_with_ctx(key, ctx)?,
+            AccessMode::Read => self.inner.open_resource_with_ctx(key, identity, ctx)?,
+            AccessMode::Write => self.inner.acquire_resource_with_ctx(key, identity, ctx)?,
         };
         self.wrap_opened_resource(key, inner, mode)
     }
@@ -514,6 +525,8 @@ mod tests {
     use super::*;
     use crate::{disk_store::DiskAssetStore, key::ResourceKey};
 
+    const ROOT: &str = "test_asset";
+
     fn make_pins_disk(dir: &Path) -> PinsIndex {
         let path = dir.join("_index").join("pins.bin");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -523,19 +536,6 @@ mod tests {
     fn make_lease(dir: &Path) -> LeaseAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(
             dir,
-            "test_asset",
-            CancellationToken::new(),
-            &crate::BytePool::default(),
-        ));
-        let pins = make_pins_disk(dir);
-        LeaseAssets::new(disk, CancellationToken::new(), pins)
-    }
-
-    /// Bypass test: empty `asset_root` → capabilities lack LEASE.
-    fn make_lease_disabled(dir: &Path) -> LeaseAssets<DiskAssetStore> {
-        let disk = Arc::new(DiskAssetStore::new(
-            dir,
-            "",
             CancellationToken::new(),
             &crate::BytePool::default(),
         ));
@@ -557,26 +557,40 @@ mod tests {
     fn pin_persists_immediately() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease(dir.path());
-        let key = ResourceKey::new("audio.mp3");
+        let key = ResourceKey::relative(ROOT, "audio.mp3");
 
-        let _res = lease.acquire_resource(&key).unwrap();
+        let _res = lease.acquire_resource(&key, None).unwrap();
 
         let on_disk = load_persisted_pins(dir.path());
         assert!(
-            on_disk.contains("test_asset"),
+            on_disk.contains(ROOT),
             "pin should be persisted immediately"
         );
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn explicit_flush_after_pin_is_safe() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = make_lease(dir.path());
+        let key = ResourceKey::relative(ROOT, "audio.mp3");
+
+        let _res = lease.acquire_resource(&key, None).unwrap();
+
+        lease.flush_pins().unwrap();
+
+        let on_disk = load_persisted_pins(dir.path());
+        assert!(on_disk.contains(ROOT));
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn drop_guard_eagerly_persists_unpin() {
         let dir = tempfile::tempdir().unwrap();
-        let key = ResourceKey::new("audio.mp3");
+        let key = ResourceKey::relative(ROOT, "audio.mp3");
 
         let lease = make_lease(dir.path());
-        let res = lease.acquire_resource(&key).unwrap();
+        let res = lease.acquire_resource(&key, None).unwrap();
 
-        assert!(load_persisted_pins(dir.path()).contains("test_asset"));
+        assert!(load_persisted_pins(dir.path()).contains(ROOT));
 
         drop(res);
 
@@ -589,49 +603,65 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn flush_persists_active_pins() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ResourceKey::relative(ROOT, "audio.mp3");
+
+        let lease = make_lease(dir.path());
+        let _res = lease.acquire_resource(&key, None).unwrap();
+
+        lease.flush_pins().unwrap();
+        let on_disk = load_persisted_pins(dir.path());
+        assert!(on_disk.contains(ROOT), "flush should persist active pins");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn clone_pin_persists_immediately() {
         let dir = tempfile::tempdir().unwrap();
-        let key = ResourceKey::new("audio.mp3");
+        let key = ResourceKey::relative(ROOT, "audio.mp3");
 
         let lease = make_lease(dir.path());
         let lease_clone = lease.clone();
-        let _res = lease_clone.acquire_resource(&key).unwrap();
+        let _res = lease_clone.acquire_resource(&key, None).unwrap();
 
         assert!(
-            load_persisted_pins(dir.path()).contains("test_asset"),
+            load_persisted_pins(dir.path()).contains(ROOT),
             "pin via clone should be persisted immediately"
         );
 
         drop(lease_clone);
 
         assert!(
-            load_persisted_pins(dir.path()).contains("test_asset"),
+            load_persisted_pins(dir.path()).contains(ROOT),
             "pin should remain while resource handle is alive"
         );
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn bypass_does_not_pin() {
+    fn bypass_does_not_pin_for_absolute_key() {
         let dir = tempfile::tempdir().unwrap();
-        let lease = make_lease_disabled(dir.path());
+        let lease = make_lease(dir.path());
         let p = dir.path().join("audio.mp3");
         fs::write(&p, b"data").unwrap();
         let key = ResourceKey::absolute(&p);
 
-        let _res = lease.open_resource(&key).unwrap();
+        let _res = lease.open_resource(&key, None).unwrap();
 
-        assert!(lease.pins.snapshot().is_empty(), "bypass should not pin");
+        assert!(
+            lease.pins.snapshot().is_empty(),
+            "absolute key must bypass pinning"
+        );
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn bypass_still_returns_resources() {
         let dir = tempfile::tempdir().unwrap();
-        let lease = make_lease_disabled(dir.path());
+        let lease = make_lease(dir.path());
         let p = dir.path().join("audio.mp3");
         fs::write(&p, b"data").unwrap();
         let key = ResourceKey::absolute(&p);
 
-        let res = lease.open_resource(&key).unwrap();
+        let res = lease.open_resource(&key, None).unwrap();
 
         let mut buf = [0u8; 4];
         let n = res.read_at(0, &mut buf).unwrap();

@@ -1,7 +1,7 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use kithara_assets::{ResourceKey, asset_root_for_url};
+use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use libfuzzer_sys::fuzz_target;
 use url::Url;
 
@@ -29,7 +29,8 @@ fuzz_target!(|input: Input| {
     assert_eq!(root.len(), 32);
     assert!(root.bytes().all(|b| b.is_ascii_hexdigit()));
 
-    let key = ResourceKey::from(&url);
+    let store = AssetStoreBuilder::new().ephemeral(true).build();
+    let key = store.scope(root.clone()).key_from_url(&url);
     assert!(!key.is_absolute());
 
     if url.host().is_some() {

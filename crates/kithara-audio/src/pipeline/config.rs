@@ -14,6 +14,7 @@ use kithara_stream::StreamType;
 use portable_atomic::AtomicF32;
 
 use crate::{
+    effects::timestretch::TimeStretchProcessor,
     resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality},
     traits::AudioEffect,
     worker::handle,
@@ -55,6 +56,9 @@ pub struct AudioConfig<T: StreamType> {
     pub pcm_pool: Option<PcmPool>,
     /// Shared atomic for dynamic playback rate (1.0 = normal speed).
     pub playback_rate: Option<Arc<AtomicF32>>,
+    /// Preserve-pitch tempo control. `Some` selects tempo mode (see
+    /// `create_effects`); `None` keeps the resampler-first chain.
+    pub tempo_ratio: Option<Arc<AtomicF32>>,
     /// Optional shared audio worker handle.
     pub worker: Option<handle::AudioWorkerHandle>,
     /// Resampling quality preset.
@@ -108,25 +112,38 @@ pub(crate) fn expected_output_spec(
     }
 }
 
-/// Create effects chain for audio pipeline.
+/// Build `[..pre, Resampler, ..custom]`. Tempo mode (`tempo_ratio`
+/// `Some`) adds a `TimeStretchProcessor` pre-slot and pins the
+/// resampler to `1.0`; else resampler-first with `playback_rate`.
 pub(crate) fn create_effects(
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
     playback_rate: &Arc<AtomicF32>,
+    tempo_ratio: Option<&Arc<AtomicF32>>,
     quality: ResamplerQuality,
     pool: Option<PcmPool>,
     custom_effects: Vec<Box<dyn AudioEffect>>,
 ) -> Vec<Box<dyn AudioEffect>> {
+    let mut chain: Vec<Box<dyn AudioEffect>> = Vec::new();
+
+    let resampler_rate = match tempo_ratio {
+        Some(_) => {
+            chain.push(Box::new(TimeStretchProcessor::new()));
+            Arc::new(AtomicF32::new(1.0))
+        }
+        None => Arc::clone(playback_rate),
+    };
+
     let params = ResamplerParams::builder()
         .host_sample_rate(Arc::clone(host_sample_rate))
         .source_sample_rate(initial_spec.sample_rate)
         .channels(initial_spec.channels as usize)
-        .playback_rate(Arc::clone(playback_rate))
+        .playback_rate(resampler_rate)
         .quality(quality)
         .maybe_pool(pool)
         .build();
 
-    let mut chain: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResamplerProcessor::new(params))];
+    chain.push(Box::new(ResamplerProcessor::new(params)));
     chain.extend(custom_effects);
     chain
 }
@@ -164,21 +181,45 @@ mod tests {
         assert_eq!(config.effects.len(), 2);
     }
 
+    fn spec() -> PcmSpec {
+        PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        }
+    }
+
     #[kithara::test]
     fn create_effects_includes_custom_effects() {
         let host_sr = Arc::new(AtomicU32::new(44100));
         let playback_rate = Arc::new(AtomicF32::new(1.0));
         let effects = create_effects(
-            PcmSpec {
-                sample_rate: 44100,
-                channels: 2,
-            },
+            spec(),
             &host_sr,
             &playback_rate,
+            None,
             ResamplerQuality::default(),
             None,
             vec![Box::new(PassthroughEffect)],
         );
+        // [Resampler, custom] -- resampler-first, no pre slot.
         assert_eq!(effects.len(), 2);
+    }
+
+    #[kithara::test]
+    fn create_effects_tempo_mode_prepends_stretch_slot() {
+        let host_sr = Arc::new(AtomicU32::new(44100));
+        let playback_rate = Arc::new(AtomicF32::new(1.0));
+        let tempo_ratio = Arc::new(AtomicF32::new(1.0));
+        let effects = create_effects(
+            spec(),
+            &host_sr,
+            &playback_rate,
+            Some(&tempo_ratio),
+            ResamplerQuality::default(),
+            None,
+            vec![Box::new(PassthroughEffect)],
+        );
+        // [TimeStretch, Resampler, custom] -- pre-resampler slot present.
+        assert_eq!(effects.len(), 3);
     }
 }

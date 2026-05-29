@@ -381,4 +381,34 @@ mod tests {
         let ids: Vec<TrackId> = snapshot.iter().map(|e| e.id).collect();
         assert_eq!(ids, vec![a, mid, b]);
     }
+
+    #[kithara::test(tokio)]
+    async fn track_source_is_keyed_by_id_across_removal() {
+        let queue = make_queue();
+        let a = queue.append("https://example.com/a.mp3");
+        let b = queue.append("https://example.com/b.mp3");
+
+        assert_eq!(
+            queue
+                .track_source(a)
+                .and_then(|s| s.uri().map(str::to_string)),
+            Some("https://example.com/a.mp3".to_string()),
+            "source resolves by identity"
+        );
+
+        // Removing an earlier track must not shift which source `b` resolves
+        // to, and the removed id must no longer have a source.
+        queue.remove(a).expect("BUG: remove existing track");
+        assert!(
+            queue.track_source(a).is_none(),
+            "removed track has no source"
+        );
+        assert_eq!(
+            queue
+                .track_source(b)
+                .and_then(|s| s.uri().map(str::to_string)),
+            Some("https://example.com/b.mp3".to_string()),
+            "surviving track still resolves to its own source by id"
+        );
+    }
 }

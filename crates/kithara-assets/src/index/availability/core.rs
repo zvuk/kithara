@@ -104,8 +104,8 @@ impl AvailabilityIndex {
         hub.register(Arc::downgrade(&self.inner) as Weak<dyn Flushable>);
     }
 
-    pub(crate) fn available_ranges(&self, asset_root: &str, key: &ResourceKey) -> RangeSet<u64> {
-        let (root, path) = Self::resolve_refs(asset_root, key);
+    pub(crate) fn available_ranges(&self, key: &ResourceKey) -> RangeSet<u64> {
+        let (root, path) = Self::resolve_refs(key);
         if let Some(asset) = self.inner.assets.get(root)
             && let Some(arc) = asset.get(path)
         {
@@ -127,16 +127,11 @@ impl AvailabilityIndex {
         self.inner.assets.remove(asset_root);
     }
 
-    pub(crate) fn contains_range(
-        &self,
-        asset_root: &str,
-        key: &ResourceKey,
-        range: Range<u64>,
-    ) -> bool {
+    pub(crate) fn contains_range(&self, key: &ResourceKey, range: Range<u64>) -> bool {
         if range.start >= range.end {
             return true;
         }
-        let (root, path) = Self::resolve_refs(asset_root, key);
+        let (root, path) = Self::resolve_refs(key);
         if let Some(asset) = self.inner.assets.get(root)
             && let Some(arc) = asset.get(path)
         {
@@ -145,8 +140,8 @@ impl AvailabilityIndex {
         false
     }
 
-    pub(crate) fn final_len(&self, asset_root: &str, key: &ResourceKey) -> Option<u64> {
-        let (root, path) = Self::resolve_refs(asset_root, key);
+    pub(crate) fn final_len(&self, key: &ResourceKey) -> Option<u64> {
+        let (root, path) = Self::resolve_refs(key);
         if let Some(asset) = self.inner.assets.get(root)
             && let Some(arc) = asset.get(path)
         {
@@ -193,33 +188,36 @@ impl AvailabilityIndex {
         )
     }
 
-    pub(crate) fn record_commit(&self, asset_root: &str, key: &ResourceKey, final_len: u64) {
-        let (root, path) = Self::resolve_refs(asset_root, key);
+    pub(crate) fn record_commit(&self, key: &ResourceKey, final_len: u64) {
+        let (root, path) = Self::resolve_refs(key);
         let arc = self.insert_or_get_entry(root, path);
         arc.lock_sync().mark_committed(final_len);
         self.inner.dirty.store(true, Ordering::Release);
     }
 
-    pub(crate) fn record_write(&self, asset_root: &str, key: &ResourceKey, range: Range<u64>) {
+    pub(crate) fn record_write(&self, key: &ResourceKey, range: Range<u64>) {
         if range.start >= range.end {
             return;
         }
-        let (root, path) = Self::resolve_refs(asset_root, key);
+        let (root, path) = Self::resolve_refs(key);
         let arc = self.insert_or_get_entry(root, path);
         arc.lock_sync().insert(range);
         self.inner.dirty.store(true, Ordering::Release);
     }
 
-    pub(crate) fn remove(&self, asset_root: &str, key: &ResourceKey) {
-        let (root, path) = Self::resolve_refs(asset_root, key);
+    pub(crate) fn remove(&self, key: &ResourceKey) {
+        let (root, path) = Self::resolve_refs(key);
         if let Some(asset) = self.inner.assets.get(root) {
             asset.remove(path);
         }
     }
 
-    fn resolve_refs<'a>(asset_root: &'a str, key: &'a ResourceKey) -> (&'a str, &'a str) {
+    fn resolve_refs(key: &ResourceKey) -> (&str, &str) {
         match key {
-            ResourceKey::Relative(path) => (asset_root, path.as_str()),
+            ResourceKey::Relative {
+                asset_root,
+                rel_path,
+            } => (asset_root, rel_path),
             ResourceKey::Absolute(path) => ("__absolute__", path.to_str().unwrap_or("")),
         }
     }
@@ -270,30 +268,24 @@ impl std::fmt::Debug for AvailabilityIndex {
 pub(crate) struct ScopedAvailabilityObserver {
     index: AvailabilityIndex,
     key: ResourceKey,
-    asset_root: String,
 }
 
 impl ScopedAvailabilityObserver {
-    pub(crate) fn new(asset_root: String, key: ResourceKey, index: AvailabilityIndex) -> Arc<Self> {
-        Arc::new(Self {
-            index,
-            key,
-            asset_root,
-        })
+    pub(crate) fn new(key: ResourceKey, index: AvailabilityIndex) -> Arc<Self> {
+        Arc::new(Self { index, key })
     }
 }
 
 impl AvailabilityObserver for ScopedAvailabilityObserver {
     fn on_commit(&self, final_len: u64) {
-        self.index
-            .record_commit(&self.asset_root, &self.key, final_len);
+        self.index.record_commit(&self.key, final_len);
         if let Some(hub) = self.index.inner.hub.get() {
             hub.signal();
         }
     }
 
     fn on_write(&self, range: Range<u64>) {
-        self.index.record_write(&self.asset_root, &self.key, range);
+        self.index.record_write(&self.key, range);
         if let Some(hub) = self.index.inner.hub.get() {
             hub.signal();
         }
@@ -369,67 +361,67 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn index_per_key_isolation() {
         let idx = AvailabilityIndex::new();
-        let k1 = ResourceKey::new("file1");
-        let k2 = ResourceKey::new("file2");
+        let k1 = ResourceKey::relative("test_asset", "file1");
+        let k2 = ResourceKey::relative("test_asset", "file2");
 
-        idx.record_write("test_asset", &k1, 0..10);
-        idx.record_write("test_asset", &k2, 20..30);
+        idx.record_write(&k1, 0..10);
+        idx.record_write(&k2, 20..30);
 
-        assert!(idx.contains_range("test_asset", &k1, 0..10));
-        assert!(!idx.contains_range("test_asset", &k1, 20..30));
-        assert!(idx.contains_range("test_asset", &k2, 20..30));
-        assert!(!idx.contains_range("test_asset", &k2, 0..10));
+        assert!(idx.contains_range(&k1, 0..10));
+        assert!(!idx.contains_range(&k1, 20..30));
+        assert!(idx.contains_range(&k2, 20..30));
+        assert!(!idx.contains_range(&k2, 0..10));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn index_new_is_empty() {
         let idx = AvailabilityIndex::new();
-        let k = ResourceKey::new("file1");
-        assert!(!idx.contains_range("test_asset", &k, 0..10));
-        assert_eq!(idx.final_len("test_asset", &k), None);
+        let k = ResourceKey::relative("test_asset", "file1");
+        assert!(!idx.contains_range(&k, 0..10));
+        assert_eq!(idx.final_len(&k), None);
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn index_record_commit_sets_final_len_and_full_range() {
         let idx = AvailabilityIndex::new();
-        let k = ResourceKey::new("file1");
+        let k = ResourceKey::relative("test_asset", "file1");
 
-        idx.record_commit("test_asset", &k, 50);
+        idx.record_commit(&k, 50);
 
-        assert_eq!(idx.final_len("test_asset", &k), Some(50));
-        assert!(idx.contains_range("test_asset", &k, 0..50));
+        assert_eq!(idx.final_len(&k), Some(50));
+        assert!(idx.contains_range(&k, 0..50));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn index_record_write_slow_then_fast_path() {
         let idx = AvailabilityIndex::new();
-        let k = ResourceKey::new("file1");
+        let k = ResourceKey::relative("test_asset", "file1");
 
-        idx.record_write("test_asset", &k, 0..10);
-        assert!(idx.contains_range("test_asset", &k, 0..10));
+        idx.record_write(&k, 0..10);
+        assert!(idx.contains_range(&k, 0..10));
 
-        idx.record_write("test_asset", &k, 10..20);
-        assert!(idx.contains_range("test_asset", &k, 0..20));
+        idx.record_write(&k, 10..20);
+        assert!(idx.contains_range(&k, 0..20));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn index_record_write_empty_range_is_noop() {
         let idx = AvailabilityIndex::new();
-        let k = ResourceKey::new("file1");
+        let k = ResourceKey::relative("test_asset", "file1");
 
-        idx.record_write("test_asset", &k, 10..10);
-        assert!(!idx.contains_range("test_asset", &k, 10..11));
+        idx.record_write(&k, 10..10);
+        assert!(!idx.contains_range(&k, 10..11));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn index_remove_clears_entry() {
         let idx = AvailabilityIndex::new();
-        let k = ResourceKey::new("file1");
+        let k = ResourceKey::relative("test_asset", "file1");
 
-        idx.record_write("test_asset", &k, 0..10);
-        idx.remove("test_asset", &k);
+        idx.record_write(&k, 0..10);
+        idx.remove(&k);
 
-        assert!(!idx.contains_range("test_asset", &k, 0..10));
+        assert!(!idx.contains_range(&k, 0..10));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -446,19 +438,19 @@ mod tests {
         let atomic = Atomic::new(res);
 
         let idx1 = AvailabilityIndex::new();
-        let k1 = ResourceKey::new("file1");
-        let k2 = ResourceKey::new("file2");
+        let k1 = ResourceKey::relative("test_asset", "file1");
+        let k2 = ResourceKey::relative("test_asset", "file2");
 
-        idx1.record_write("test_asset", &k1, 0..10);
-        idx1.record_commit("test_asset", &k2, 50);
+        idx1.record_write(&k1, 0..10);
+        idx1.record_commit(&k2, 50);
 
         idx1.persist_to(&atomic).unwrap();
 
         let idx2 = AvailabilityIndex::new();
         idx2.load_from(&atomic).unwrap();
 
-        assert!(idx2.contains_range("test_asset", &k1, 0..10));
-        assert_eq!(idx2.final_len("test_asset", &k2), Some(50));
+        assert!(idx2.contains_range(&k1, 0..10));
+        assert_eq!(idx2.final_len(&k2), Some(50));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]

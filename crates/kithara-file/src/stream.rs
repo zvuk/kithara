@@ -1,7 +1,8 @@
 use std::{path::PathBuf, sync::Arc};
 
 use kithara_assets::{
-    AssetResource, AssetStoreBuilder, AssetsError, EvictConfig, ResourceKey, asset_root_for_url,
+    AssetResource, AssetStore, AssetStoreBuilder, AssetsError, EvictConfig, ResourceKey,
+    StoreOptions, asset_root_for_url,
 };
 use kithara_events::EventBus;
 use kithara_platform::{time::Duration, tokio};
@@ -68,15 +69,12 @@ impl File {
             )));
         }
 
-        let store = Arc::new(
-            AssetStoreBuilder::new()
-                .asset_root(None)
-                .cancel(cancel.clone())
-                .build(),
-        );
+        let store = Arc::new(AssetStoreBuilder::new().cancel(cancel.clone()).build());
 
         let key = ResourceKey::absolute(path);
-        let res = store.open_resource(&key).map_err(SourceError::Assets)?;
+        let res = store
+            .open_resource(&key, None)
+            .map_err(SourceError::Assets)?;
         let len = res.len();
 
         let bus = config
@@ -131,17 +129,15 @@ impl File {
             )
         });
 
-        let backend_builder = AssetStoreBuilder::new()
-            .root_dir(&config.store.cache_dir)
-            .asset_root(Some(asset_root.as_str()))
-            .evict_config(EvictConfig::from(&config.store))
-            .ephemeral(config.store.is_ephemeral)
-            .cancel(cancel.clone());
-        let backend = Arc::new(backend_builder.build());
+        let backend = config
+            .asset_store
+            .clone()
+            .unwrap_or_else(|| build_shared_asset_store(&config.store, cancel.clone()));
 
+        let key = backend.scope(asset_root.as_str()).key_from_url(&url);
         let state = FileStreamState::create(
             &backend,
-            &url,
+            key,
             config.bus.clone(),
             config.event_channel_capacity,
         )?;
@@ -168,6 +164,18 @@ impl File {
             ));
         }
 
+        // Attach this consumer's download demand on the shared resource.
+        // The CAS winner gets the producer handle and drives the GET; a
+        // concurrent consumer of the same URL (e.g. a waveform analyzer)
+        // loses and reads the shared bytes instead of issuing its own
+        // download. With a private per-stream store this is a single
+        // consumer that always wins.
+        let (demand_lease, producer) = state.backend.attach_demand(
+            &state.key,
+            coord.read_pos_handle(),
+            config.look_ahead_bytes,
+        );
+
         let inner = Arc::new(FileInner::new(
             FileSourceCtx {
                 cancel,
@@ -182,10 +190,11 @@ impl File {
                 key: state.key.clone(),
             },
             FilePhase::Init,
+            Some(demand_lease),
         ));
 
         let peer_handle = downloader
-            .register(Arc::new(FilePeer::new(Arc::clone(&inner))))
+            .register(Arc::new(FilePeer::new(Arc::clone(&inner), producer)))
             .with_bus(state.bus.clone());
 
         let mut source = FileSource::with_inner(inner, coord);
@@ -223,6 +232,32 @@ impl File {
             }
         }
     }
+}
+
+/// Build an app-wide shared file asset store from [`StoreOptions`].
+///
+/// Inject the result into every [`FileConfig::asset_store`](crate::FileConfig)
+/// that should cooperate on a single cache so concurrent consumers of
+/// one URL share a single download. `cancel` must be a child of the app
+/// master so a shutdown cascades through the store. Also the standalone
+/// fallback when no store is injected (single consumer).
+#[must_use]
+pub fn build_shared_asset_store(
+    store: &StoreOptions,
+    cancel: CancellationToken,
+) -> Arc<AssetStore<()>> {
+    let mut builder = AssetStoreBuilder::new()
+        .cancel(cancel)
+        .root_dir(&store.cache_dir)
+        .evict_config(EvictConfig::from(store))
+        .ephemeral(store.is_ephemeral);
+    if let Some(cap) = store.cache_capacity {
+        builder = builder.cache_capacity(cap);
+    }
+    if let Some(ref hub) = store.flush_hub {
+        builder = builder.flush_hub(Arc::clone(hub));
+    }
+    Arc::new(builder.build())
 }
 
 /// Probe the first bytes of a committed `AssetResource` and try to

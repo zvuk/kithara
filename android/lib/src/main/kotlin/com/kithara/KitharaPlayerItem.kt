@@ -55,11 +55,12 @@ class KitharaPlayerItem(
     val url: String = inner.url()
 
     /**
-     * Stable per-item identifier (UUID-string). Mirrors the iOS
-     * `AudioPlayerItemProtocol.audioId`. Synonym alias [id] is kept
-     * for `Identifiable`-style consumers.
+     * Stable per-item identifier: the decimal string form of the
+     * monotonic `TrackId` (`u64`) the queue reserves at construction.
+     * Mirrors the iOS `AudioPlayerItemProtocol.audioId`. Synonym alias
+     * [id] is kept for `Identifiable`-style consumers.
      */
-    val audioId: String = inner.audioId()
+    val audioId: String = inner.audioId().toString()
 
     /** Synonym for [audioId]. */
     val id: String get() = audioId
@@ -183,6 +184,14 @@ class KitharaPlayerItem(
 
             is FfiItemEvent.DidReachEnd,
             is FfiItemEvent.DidStall -> Unit
+
+            is FfiItemEvent.DidFail -> {
+                updateState { it.copy(
+                    error = KitharaError.ItemFailed("item did fail"),
+                    status = ItemStatus.Failed,
+                ) }
+                eventsFlow.tryEmit(KitharaItemEvent.Error("item did fail"))
+            }
 
             is FfiItemEvent.Error -> {
                 updateState { it.copy(

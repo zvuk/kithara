@@ -56,7 +56,7 @@ fn create_with_probe_with_mp3_hint_succeeds() {
 #[cfg(feature = "symphonia")]
 #[kithara::test]
 fn create_from_media_info_surfaces_error_without_native_probe_fallback() {
-    use kithara_stream::MediaInfo;
+    use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
     let media_info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4));
     let source = Cursor::new(TEST_MP3_BYTES.to_vec());

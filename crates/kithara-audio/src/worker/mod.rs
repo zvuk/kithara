@@ -10,4 +10,4 @@ pub(crate) mod types;
 pub use traits::AudioWorkerSource;
 #[cfg(test)]
 pub(crate) use traits::MockAudioWorkerSource;
-pub(crate) use traits::{apply_effects, flush_effects, reset_effects};
+pub(crate) use traits::{apply_effects, drain_effects, reset_effects};

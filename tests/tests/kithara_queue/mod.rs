@@ -10,6 +10,7 @@ mod file_replay_from_warm_cache;
 mod flac_swallow_fixture;
 mod hls_seek_cancels_stale_fetches;
 mod hls_seek_near_end_stress;
+mod loader_starvation;
 mod local_track_plays;
 mod rapid_scrub_decode_failure;
 mod real_playlist;

@@ -1,5 +1,6 @@
 use std::{
     any::Any,
+    collections::VecDeque,
     io::{self, Read, Seek, SeekFrom},
     ops::Range,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -35,7 +36,7 @@ use crate::{
         },
     },
     traits::AudioEffect,
-    worker::{AudioWorkerSource, apply_effects, flush_effects, reset_effects},
+    worker::{AudioWorkerSource, apply_effects, drain_effects, reset_effects},
 };
 
 /// Shared stream wrapper for format change detection.
@@ -219,6 +220,9 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     peer_wake: Option<Box<dyn Fn() + Send + Sync>>,
     shared_stream: SharedStream<T>,
     effects: Vec<Box<dyn AudioEffect>>,
+    /// Buffered effect-chain tail produced by a single end-of-stream drain (`drain_effects`).
+    /// `None` until true EOF arms it.
+    eof_drain_queue: Option<VecDeque<PcmChunk>>,
     chunks_decoded: u64,
     total_samples: u64,
     /// `(seek_epoch, target)` of the most recent applied seek.
@@ -268,6 +272,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             decoder_factory,
             epoch,
             effects,
+            eof_drain_queue: None,
             timeline,
             gapless_mode,
             gapless,
@@ -478,7 +483,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         location: SegmentLocation,
         anchor_offset: Option<u64>,
     ) {
-        reset_effects(&mut self.effects);
+        self.reset_effect_chain();
         self.resume_target = Some((epoch, position));
         self.emit_seek_lifecycle(SeekLifecycleStage::SeekApplied, epoch, location);
         self.update_state(TrackState::AwaitingResume(ResumeState {
@@ -956,6 +961,14 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    /// Reset the effect chain and discard any armed `eof_drain_queue`.
+    /// Used on seek / decoder recreation, so a buffering effect's stale tail never leaks past
+    /// the discontinuity and a seek-after-EOF re-arms the drain from scratch.
+    fn reset_effect_chain(&mut self) {
+        reset_effects(&mut self.effects);
+        self.eof_drain_queue = None;
+    }
+
     /// Drain ready chunks from the gapless trimmer through the effect
     /// chain, returning the first chunk that survives effects.
     ///
@@ -1023,39 +1036,14 @@ impl<T: StreamType> StreamAudioSource<T> {
         Some(target)
     }
 
-    /// Shared recovery path for a failed `decoder.seek()`.
-    ///
-    /// Two classes of failure share this entry point and need different
-    /// architectural responses:
-    ///
-    /// 1. **Decoder internal-state corruption** — e.g. Symphonia's moof
-    ///    fragment table holding stale offsets after a variant switch.
-    ///    Fresh decoder state resolves this; recreate is the right cure.
-    ///
-    /// 2. **Caller-side invalid target** — e.g. seek past EOF, target
-    ///    timestamp out-of-range for the stream's known duration.
-    ///    Recreate cannot fix this: a freshly built decoder has the same
-    ///    `duration()` and rejects the same target with the same error.
-    ///    Retrying loops forever (the prod "перемотка не работает" bug).
-    ///
-    /// Classification is by [`DecodeError`] variant, not by string
-    /// match: caller-side errors arrive as
-    /// [`DecodeError::SeekOutOfRange`] (produced by the decoder layer
-    /// from typed Symphonia `SeekErrorKind::OutOfRange` and from typed
-    /// `StreamSeekPastEof` payloads in the underlying `io::Error`).
-    /// Those route directly to `fail_seek` — no recreate, no retry.
-    /// Anything else is treated as class (1) and dispatched to the
-    /// recreate-at-init path.
-    ///
-    /// Init-bearing containers (fMP4/MP4/WAV/MKV/CAF) must recreate at
-    /// the source's init segment range; mid-segment recreate would land
-    /// on bytes with no ftyp/RIFF/EBML header and the factory would fail
-    /// silently. Mid-stream-decodable containers (MPEG-ES/ADTS/FLAC/Ogg/
-    /// MPEG-TS) and unknown containers use `recreate_offset` directly.
-    ///
-    /// Calls `fail_seek` for class (2), missing `MediaInfo`, or when an
-    /// init-bearing container has no available init range. Always
-    /// returns `false` so callers can `return` directly.
+    /// Shared recovery path for a failed `decoder.seek()`. Classifies by
+    /// [`DecodeError`] variant, not by string match. Caller-side targets
+    /// (`SeekOutOfRange`: past EOF / out of range) route to `fail_seek`
+    /// with no recreate and no retry; anything else is treated as decoder
+    /// internal-state corruption and recreates the decoder. Init-bearing
+    /// containers recreate at the init segment range, others at
+    /// `recreate_offset`. Always returns `false` so callers can `return`
+    /// directly. See the crate `README.md` for the full classification.
     fn recover_from_decoder_seek_error(
         &mut self,
         request: SeekRequest,
@@ -1384,13 +1372,19 @@ impl<T: StreamType> StreamAudioSource<T> {
             "decode complete (true EOF)"
         );
 
-        if let Some(flushed) = flush_effects(&mut self.effects) {
-            self.emit_event(AudioEvent::EndOfStream);
-            return DecodeAction::Return(Ok(DecoderChunkOutcome::Chunk(flushed)));
+        if self.eof_drain_queue.is_none() {
+            let tail = drain_effects(&mut self.effects);
+            self.eof_drain_queue = Some(VecDeque::from(tail));
         }
 
-        self.emit_event(AudioEvent::EndOfStream);
-        DecodeAction::Return(Ok(DecoderChunkOutcome::Eof))
+        match self.eof_drain_queue.as_mut().and_then(VecDeque::pop_front) {
+            Some(chunk) => DecodeAction::Return(Ok(DecoderChunkOutcome::Chunk(chunk))),
+            None => {
+                // The source and the whole effect chain are fully drained - nothing left to hear.
+                self.emit_event(AudioEvent::EndOfStream);
+                DecodeAction::Return(Ok(DecoderChunkOutcome::Eof))
+            }
+        }
     }
 
     /// Handle decode error without boundary fallback.
@@ -1678,15 +1672,15 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Clear the seek-pending flag and wake the source's peer in one step.
     ///
-    /// `Timeline::clear_seek_pending` only flips the atomic flag — it does
+    /// `Timeline::clear_seek_pending` only flips the atomic flag; it does
     /// not wake anything. The HLS peer's `sync_abr_lock()` is invoked only
     /// inside `poll_next`, so when every requested segment is cached and
     /// the peer parks itself in `Poll::Pending`, the ABR lock acquired on
     /// seek-initiate stays held indefinitely. Subsequent `set_mode(Manual)`
     /// calls then hit `AbrReason::Locked` in `decide()` and silently fail
-    /// to commit — observed in app.log 2026-05-17 15:26:54..15:27:46.
+    /// to commit.
     ///
-    /// Notifying the source's waiter (`make_notify_fn` → `HlsCoord::wake_peer`)
+    /// Notifying the source's waiter (`make_notify_fn` -> `HlsCoord::wake_peer`)
     /// after every seek-completion ensures the peer runs one more
     /// `poll_next` cycle, which sees `is_seek_pending() == false` and
     /// releases the ABR lock through `sync_abr_lock`.
@@ -1753,10 +1747,9 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// probes), this gates on the **entire segment** containing the
     /// landing byte. A FLAC fmp4 chunk segment is ~700 KB; landing on
     /// its first byte with only 32 KB cached starves the decoder on the
-    /// very next read — `wait_range` budget exceeds, the audio worker's
-    /// `PassOutcome::Waiting` ticks the `HangDetector`, and prod app.log
-    /// captures the panic. For sources without a segment layout (raw
-    /// files), falls back to the boundary window.
+    /// very next read - `wait_range` budget exceeds and the audio worker's
+    /// `PassOutcome::Waiting` ticks the `HangDetector`. For sources without
+    /// a segment layout (raw files), falls back to the boundary window.
     fn source_is_ready_for_seek_landing(&self, byte: u64) -> bool {
         let end = self.seek_landing_end(byte);
         self.source_ready_for_range(byte..end)
@@ -1808,9 +1801,8 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// repositions via `decoder_seek_safe`. Gating on the init range
     /// alone is required because after a backwards seek the HLS
     /// scheduler emits segments around the reader byte cursor (past
-    /// `seg 0`) and never schedules `[0..DEFAULT_READ_AHEAD)`, which
-    /// produces the hang in `app.log` (2026-05-16 22:23 same-codec
-    /// V0→V2, 2026-05-17 09:08 cross-codec V3→V1).
+    /// `seg 0`) and never schedules `[0..DEFAULT_READ_AHEAD)`, which would
+    /// otherwise hang the decode loop.
     ///
     /// When the source has no separate init (raw containers like WAV,
     /// where `format_change_segment_range` falls back to the full
@@ -1859,7 +1851,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn apply_recreate_next(&mut self, next: &RecreateNext) -> TrackStep<PcmChunk> {
         match *next {
             RecreateNext::Decode => {
-                reset_effects(&mut self.effects);
+                self.reset_effect_chain();
                 self.update_state(TrackState::Decoding);
                 TrackStep::StateChanged
             }
@@ -1873,9 +1865,9 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Map a recreate-path error to the FSM outcome. Transient
     /// `ErrorClass::Interrupted` (probe ran before the source buffered
-    /// `[0..PROBE)` of a freshly-switched variant — see Wave 2.A
-    /// memo / commit message) → `NeedsSourceWait` so the caller retries
-    /// after the source phase becomes Ready. Everything else → hard fail.
+    /// `[0..PROBE)` of a freshly-switched variant) maps to `NeedsSourceWait`
+    /// so the caller retries after the source phase becomes Ready.
+    /// Everything else is a hard fail.
     fn classify_recreate_err(e: &DecodeError, _offset: u64) -> RecreateOutcome {
         if e.classify() == ErrorClass::Interrupted {
             RecreateOutcome::NeedsSourceWait
@@ -2251,7 +2243,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                 },
                 ..Default::default()
             }));
-            reset_effects(&mut self.effects);
+            self.reset_effect_chain();
             self.gapless.notify_seek();
             return TrackStep::StateChanged;
         }

@@ -1,7 +1,7 @@
-use std::{fmt, path::PathBuf};
+use std::{fmt, path::PathBuf, sync::Arc};
 
 use bon::Builder;
-use kithara_assets::StoreOptions;
+use kithara_assets::{AssetStore, StoreOptions};
 use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_stream::dl::Downloader;
@@ -52,8 +52,18 @@ pub struct FileConfig {
     /// Optional name for cache disambiguation.
     pub name: Option<String>,
     /// Storage configuration.
+    ///
+    /// Honoured only when [`Self::asset_store`] is `None` (standalone
+    /// mode). When the caller injects a shared `AssetStore` this field
+    /// is ignored - the two are mutually exclusive modes, not a
+    /// fallback chain.
     #[builder(default)]
     pub store: StoreOptions,
+    /// Externally-owned shared `AssetStore<()>`. When `Some`, the file
+    /// session reuses it and skips building a private store from
+    /// [`Self::store`]. Lets several `Resource`s pointing at the same
+    /// URL share one cached resource and availability surface.
+    pub asset_store: Option<Arc<AssetStore<()>>>,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
@@ -69,6 +79,7 @@ impl fmt::Debug for FileConfig {
             .field("look_ahead_bytes", &self.look_ahead_bytes)
             .field("name", &self.name)
             .field("store", &self.store)
+            .field("asset_store", &self.asset_store.is_some())
             .field("event_channel_capacity", &self.event_channel_capacity)
             .finish_non_exhaustive()
     }

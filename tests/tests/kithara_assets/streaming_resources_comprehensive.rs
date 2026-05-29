@@ -3,7 +3,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::EvictConfig;
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, ResourceKey},
+    assets::{AssetScope, AssetStoreBuilder},
     storage::ResourceExt,
 };
 use kithara_integration_tests::temp_dir;
@@ -17,28 +17,28 @@ fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     buf
 }
 
-fn asset_store_with_root(
+fn asset_scope_with_root(
     temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
-) -> AssetStore {
+) -> AssetScope {
     #[cfg(not(target_arch = "wasm32"))]
     {
         AssetStoreBuilder::new()
             .root_dir(temp_dir.path())
-            .asset_root(Some(asset_root))
             .evict_config(EvictConfig {
                 max_assets: None,
                 max_bytes: None,
             })
             .build()
+            .scope(asset_root)
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = temp_dir;
         AssetStoreBuilder::new()
             .ephemeral(true)
-            .asset_root(Some(asset_root))
             .build()
+            .scope(asset_root)
     }
 }
 
@@ -53,11 +53,11 @@ fn streaming_resource_complex_write_patterns(
     #[case] initial_offset: u64,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let store = asset_store_with_root(&temp_dir, "streaming-complex");
+    let scope = asset_scope_with_root(&temp_dir, "streaming-complex");
 
-    let key = ResourceKey::new("data.bin");
+    let key = scope.key("data.bin");
 
-    let res = store.acquire_resource(&key).unwrap();
+    let res = scope.store().acquire_resource(&key, None).unwrap();
 
     let total_chunks = total_size / chunk_size;
     for i in 0..total_chunks {
@@ -87,11 +87,11 @@ fn streaming_resource_concurrent_writes(
     #[case] chunk_size: usize,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let store = asset_store_with_root(&temp_dir, "streaming-concurrent");
+    let scope = asset_scope_with_root(&temp_dir, "streaming-concurrent");
 
-    let key = ResourceKey::new("concurrent.bin");
+    let key = scope.key("concurrent.bin");
 
-    let res = store.acquire_resource(&key).unwrap();
+    let res = scope.store().acquire_resource(&key, None).unwrap();
 
     let mut handles = Vec::new();
     for i in 0..write_count {
@@ -127,11 +127,11 @@ fn streaming_resource_edge_case_reads(
     #[case] read_size: usize,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let store = asset_store_with_root(&temp_dir, "streaming-edge-reads");
+    let scope = asset_scope_with_root(&temp_dir, "streaming-edge-reads");
 
-    let key = ResourceKey::new("edge.bin");
+    let key = scope.key("edge.bin");
 
-    let res = store.acquire_resource(&key).unwrap();
+    let res = scope.store().acquire_resource(&key, None).unwrap();
 
     let data_size = 6144;
     let initial_data: Vec<u8> = (0..data_size).map(|i| (i % 256) as u8).collect();
@@ -160,11 +160,11 @@ fn streaming_resource_multiple_range_operations(
     #[case] write_ranges: Vec<(usize, usize)>,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let store = asset_store_with_root(&temp_dir, "streaming-multi-range");
+    let scope = asset_scope_with_root(&temp_dir, "streaming-multi-range");
 
-    let key = ResourceKey::new("multi.bin");
+    let key = scope.key("multi.bin");
 
-    let res = store.acquire_resource(&key).unwrap();
+    let res = scope.store().acquire_resource(&key, None).unwrap();
 
     for (i, (offset, size)) in write_ranges.iter().enumerate() {
         let data: Vec<u8> = (0..*size).map(|j| ((i * 1000 + j) % 256) as u8).collect();
@@ -194,11 +194,11 @@ fn streaming_resource_commit_behavior(
     #[case] explicit_commit: bool,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let store = asset_store_with_root(&temp_dir, "streaming-commit");
+    let scope = asset_scope_with_root(&temp_dir, "streaming-commit");
 
-    let key = ResourceKey::new("commit.bin");
+    let key = scope.key("commit.bin");
 
-    let res = store.acquire_resource(&key).unwrap();
+    let res = scope.store().acquire_resource(&key, None).unwrap();
 
     let data = vec![0xAB; 4096];
     res.write_at(0, &data).unwrap();
@@ -217,12 +217,13 @@ fn streaming_resource_commit_behavior(
     drop(res);
 
     if explicit_commit {
-        let res_reopened = store.open_resource(&key).unwrap();
+        let res_reopened = scope.store().open_resource(&key, None).unwrap();
         let final_read = read_bytes(&res_reopened, 0, data.len());
         assert_eq!(final_read, data);
     } else {
-        let err = store
-            .open_resource(&key)
+        let err = scope
+            .store()
+            .open_resource(&key, None)
             .expect_err("drop without commit must not leave a ghost resource");
         assert!(
             err.to_string().contains("No such file")
@@ -241,11 +242,11 @@ fn streaming_resource_zero_length_operations(
     #[case] base_offset: u64,
     temp_dir: kithara_integration_tests::TestTempDir,
 ) {
-    let store = asset_store_with_root(&temp_dir, "streaming-zero-length");
+    let scope = asset_scope_with_root(&temp_dir, "streaming-zero-length");
 
-    let key = ResourceKey::new("zero.bin");
+    let key = scope.key("zero.bin");
 
-    let res = store.acquire_resource(&key).unwrap();
+    let res = scope.store().acquire_resource(&key, None).unwrap();
 
     let data = vec![0xCC; 2048];
     res.write_at(base_offset, &data).unwrap();

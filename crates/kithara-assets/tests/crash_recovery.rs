@@ -2,7 +2,7 @@
 
 use std::{fs, path::Path};
 
-use kithara_assets::{AssetStoreBuilder, FlushHub, FlushPolicy, ResourceKey};
+use kithara_assets::{AssetStoreBuilder, FlushHub, FlushPolicy};
 use kithara_platform::time::Duration;
 use kithara_storage::ResourceExt;
 use kithara_test_utils::kithara;
@@ -37,12 +37,10 @@ fn segment_path(root: &Path) -> std::path::PathBuf {
 /// shutdown would produce. The closure runs *after* checkpoint and
 /// before drop — the place to inject a "crash" by mangling files.
 fn seed_clean_state_then(dir: &Path, mangle: impl FnOnce(&Path)) {
-    let store = AssetStoreBuilder::new()
-        .root_dir(dir)
-        .asset_root(Some(Consts::ASSET_ROOT))
-        .build();
-    let key = ResourceKey::new(Consts::KEY_NAME);
-    let res = store.acquire_resource(&key).expect("acquire");
+    let store = AssetStoreBuilder::new().root_dir(dir).build();
+    let scope = store.scope(Consts::ASSET_ROOT);
+    let key = scope.key(Consts::KEY_NAME);
+    let res = store.acquire_resource(&key, None).expect("acquire");
     res.write_at(0, b"hello-world!").expect("write_at");
     res.commit(Some(12)).expect("commit");
     drop(res);
@@ -57,14 +55,12 @@ fn truncated_pins_bin_is_treated_as_empty() {
         fs::write(pins_bin(root), b"").unwrap();
     });
 
-    let store = AssetStoreBuilder::new()
-        .root_dir(dir.path())
-        .asset_root(Some(Consts::ASSET_ROOT))
-        .build();
+    let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
 
-    let key = ResourceKey::new(Consts::KEY_NAME);
+    let scope = store.scope(Consts::ASSET_ROOT);
+    let key = scope.key(Consts::KEY_NAME);
     let _res = store
-        .acquire_resource(&key)
+        .acquire_resource(&key, None)
         .expect("rebuild over zero-byte pins.bin must still acquire");
 }
 
@@ -75,13 +71,11 @@ fn garbage_pins_bin_is_treated_as_empty() {
         fs::write(pins_bin(root), b"NOT-RKYV-PAYLOAD-AT-ALL").unwrap();
     });
 
-    let store = AssetStoreBuilder::new()
-        .root_dir(dir.path())
-        .asset_root(Some(Consts::ASSET_ROOT))
-        .build();
-    let key = ResourceKey::new(Consts::KEY_NAME);
+    let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+    let scope = store.scope(Consts::ASSET_ROOT);
+    let key = scope.key(Consts::KEY_NAME);
     let _res = store
-        .acquire_resource(&key)
+        .acquire_resource(&key, None)
         .expect("garbage pins.bin must not block rebuild");
 }
 
@@ -92,14 +86,12 @@ fn garbage_lru_bin_is_treated_as_empty() {
         fs::write(lru_bin(root), [0xff; 64]).unwrap();
     });
 
-    let store = AssetStoreBuilder::new()
-        .root_dir(dir.path())
-        .asset_root(Some(Consts::ASSET_ROOT))
-        .build();
+    let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
 
-    let key = ResourceKey::new(Consts::KEY_NAME);
-    assert_eq!(store.final_len(&key), Some(12));
-    assert!(store.contains_range(&key, 0..12));
+    let scope = store.scope(Consts::ASSET_ROOT);
+    let key = scope.key(Consts::KEY_NAME);
+    assert_eq!(scope.store().final_len(&key), Some(12));
+    assert!(scope.store().contains_range(&key, 0..12));
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
@@ -109,18 +101,16 @@ fn garbage_availability_bin_is_treated_as_empty() {
         fs::write(availability_bin(root), b"corrupted-bytes-here").unwrap();
     });
 
-    let store = AssetStoreBuilder::new()
-        .root_dir(dir.path())
-        .asset_root(Some(Consts::ASSET_ROOT))
-        .build();
+    let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
 
-    let key = ResourceKey::new(Consts::KEY_NAME);
+    let scope = store.scope(Consts::ASSET_ROOT);
+    let key = scope.key(Consts::KEY_NAME);
     assert_eq!(
-        store.final_len(&key),
+        scope.store().final_len(&key),
         Some(12),
         "slow-path must recover committed segments when availability.bin is unreadable"
     );
-    assert!(store.contains_range(&key, 0..12));
+    assert!(scope.store().contains_range(&key, 0..12));
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
@@ -130,19 +120,17 @@ fn segment_deleted_externally_after_checkpoint_degrades_gracefully() {
         fs::remove_file(segment_path(root)).unwrap();
     });
 
-    let store = AssetStoreBuilder::new()
-        .root_dir(dir.path())
-        .asset_root(Some(Consts::ASSET_ROOT))
-        .build();
-    let key = ResourceKey::new(Consts::KEY_NAME);
+    let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+    let scope = store.scope(Consts::ASSET_ROOT);
+    let key = scope.key(Consts::KEY_NAME);
 
     assert_eq!(
-        store.final_len(&key),
+        scope.store().final_len(&key),
         Some(12),
         "aggregate is not re-verified against disk on hydration"
     );
 
-    match store.acquire_resource(&key) {
+    match scope.store().acquire_resource(&key, None) {
         Ok(res) => {
             let mut buf = Vec::new();
             let _ = res.read_into(&mut buf);
@@ -156,50 +144,46 @@ fn segment_deleted_externally_after_checkpoint_degrades_gracefully() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn partial_segment_with_no_commit_and_no_checkpoint_is_invisible_after_crash() {
     let dir = tempdir().unwrap();
-    let key = ResourceKey::new(Consts::KEY_NAME);
 
     {
-        let store = AssetStoreBuilder::new()
-            .root_dir(dir.path())
-            .asset_root(Some(Consts::ASSET_ROOT))
-            .build();
-        let res = store.acquire_resource(&key).unwrap();
+        let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+        let scope = store.scope(Consts::ASSET_ROOT);
+        let res = store
+            .acquire_resource(&scope.key(Consts::KEY_NAME), None)
+            .unwrap();
         res.write_at(0, b"partial-bytes").unwrap();
         drop(res);
     }
 
-    let store = AssetStoreBuilder::new()
-        .root_dir(dir.path())
-        .asset_root(Some(Consts::ASSET_ROOT))
-        .build();
+    let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+    let scope = store.scope(Consts::ASSET_ROOT);
+    let key = scope.key(Consts::KEY_NAME);
 
-    assert!(store.available_ranges(&key).is_empty());
-    assert_eq!(store.final_len(&key), None);
+    assert!(scope.store().available_ranges(&key).is_empty());
+    assert_eq!(scope.store().final_len(&key), None);
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn commit_then_crash_before_checkpoint_recovers_via_slow_path() {
     let dir = tempdir().unwrap();
-    let key = ResourceKey::new(Consts::KEY_NAME);
 
     {
-        let store = AssetStoreBuilder::new()
-            .root_dir(dir.path())
-            .asset_root(Some(Consts::ASSET_ROOT))
-            .build();
-        let res = store.acquire_resource(&key).unwrap();
+        let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+        let scope = store.scope(Consts::ASSET_ROOT);
+        let res = store
+            .acquire_resource(&scope.key(Consts::KEY_NAME), None)
+            .unwrap();
         res.write_at(0, b"durable-data").unwrap();
         res.commit(Some(12)).unwrap();
         drop(res);
     }
 
-    let store = AssetStoreBuilder::new()
-        .root_dir(dir.path())
-        .asset_root(Some(Consts::ASSET_ROOT))
-        .build();
+    let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+    let scope = store.scope(Consts::ASSET_ROOT);
+    let key = scope.key(Consts::KEY_NAME);
 
-    assert_eq!(store.final_len(&key), Some(12));
-    assert!(store.contains_range(&key, 0..12));
+    assert_eq!(scope.store().final_len(&key), Some(12));
+    assert!(scope.store().contains_range(&key, 0..12));
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
@@ -210,26 +194,28 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
     let dir_a = dir.path().join("a");
     let dir_b = dir.path().join("b");
 
-    let key = ResourceKey::new(Consts::KEY_NAME);
-
     {
         let store_a = AssetStoreBuilder::new()
             .root_dir(&dir_a)
-            .asset_root(Some("track-a"))
             .flush_hub(hub.clone())
             .build();
         let store_b = AssetStoreBuilder::new()
             .root_dir(&dir_b)
-            .asset_root(Some("track-b"))
             .flush_hub(hub.clone())
             .build();
 
-        let res_a = store_a.acquire_resource(&key).unwrap();
+        let scope_a = store_a.scope("track-a");
+        let res_a = store_a
+            .acquire_resource(&scope_a.key(Consts::KEY_NAME), None)
+            .unwrap();
         res_a.write_at(0, b"alpha-data!!").unwrap();
         res_a.commit(Some(12)).unwrap();
         drop(res_a);
 
-        let res_b = store_b.acquire_resource(&key).unwrap();
+        let scope_b = store_b.scope("track-b");
+        let res_b = store_b
+            .acquire_resource(&scope_b.key(Consts::KEY_NAME), None)
+            .unwrap();
         res_b.write_at(0, b"bravo-data!!").unwrap();
         res_b.commit(Some(12)).unwrap();
         drop(res_b);
@@ -237,34 +223,31 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
         store_a.checkpoint().unwrap();
     }
 
-    let rebuilt_a = AssetStoreBuilder::new()
-        .root_dir(&dir_a)
-        .asset_root(Some("track-a"))
-        .build();
-    let rebuilt_b = AssetStoreBuilder::new()
-        .root_dir(&dir_b)
-        .asset_root(Some("track-b"))
-        .build();
+    let rebuilt_a = AssetStoreBuilder::new().root_dir(&dir_a).build();
+    let rebuilt_b = AssetStoreBuilder::new().root_dir(&dir_b).build();
+    let scope_a = rebuilt_a.scope("track-a");
+    let scope_b = rebuilt_b.scope("track-b");
+    let key_a = scope_a.key(Consts::KEY_NAME);
+    let key_b = scope_b.key(Consts::KEY_NAME);
 
-    assert_eq!(rebuilt_a.final_len(&key), Some(12));
-    assert!(rebuilt_a.contains_range(&key, 0..12));
+    assert_eq!(rebuilt_a.final_len(&key_a), Some(12));
+    assert!(rebuilt_a.contains_range(&key_a, 0..12));
     assert_eq!(
-        rebuilt_b.final_len(&key),
+        rebuilt_b.final_len(&key_b),
         Some(12),
         "sibling without checkpoint still recovers via slow-path"
     );
-    assert!(rebuilt_b.contains_range(&key, 0..12));
+    assert!(rebuilt_b.contains_range(&key_b, 0..12));
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn red_segment_file_must_not_be_visible_at_canonical_path_before_commit() {
     let dir = tempdir().unwrap();
-    let store = AssetStoreBuilder::new()
-        .root_dir(dir.path())
-        .asset_root(Some(Consts::ASSET_ROOT))
-        .build();
-    let key = ResourceKey::new(Consts::KEY_NAME);
-    let res = store.acquire_resource(&key).unwrap();
+    let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+    let scope = store.scope(Consts::ASSET_ROOT);
+    let res = store
+        .acquire_resource(&scope.key(Consts::KEY_NAME), None)
+        .unwrap();
     res.write_at(0, b"partial-bytes").unwrap();
 
     let canonical = segment_path(dir.path());
@@ -280,12 +263,11 @@ fn red_segment_file_must_not_be_visible_at_canonical_path_before_commit() {
 fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
     let dir = tempdir().unwrap();
     {
-        let store = AssetStoreBuilder::new()
-            .root_dir(dir.path())
-            .asset_root(Some(Consts::ASSET_ROOT))
-            .build();
-        let key = ResourceKey::new(Consts::KEY_NAME);
-        let res = store.acquire_resource(&key).unwrap();
+        let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+        let scope = store.scope(Consts::ASSET_ROOT);
+        let res = store
+            .acquire_resource(&scope.key(Consts::KEY_NAME), None)
+            .unwrap();
         res.write_at(0, b"partial-bytes-from-killed-writer")
             .unwrap();
         std::mem::forget(res);
@@ -302,11 +284,9 @@ fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
         );
     }
 
-    let store = AssetStoreBuilder::new()
-        .root_dir(dir.path())
-        .asset_root(Some(Consts::ASSET_ROOT))
-        .build();
-    let key = ResourceKey::new(Consts::KEY_NAME);
+    let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+    let scope = store.scope(Consts::ASSET_ROOT);
+    let key = scope.key(Consts::KEY_NAME);
     assert_eq!(
         store.final_len(&key),
         None,
@@ -318,12 +298,11 @@ fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
 fn red_canonical_path_must_have_exact_bytes_after_commit_no_initial_mmap_padding() {
     let dir = tempdir().unwrap();
     let payload = b"exactly-12-b";
-    let store = AssetStoreBuilder::new()
-        .root_dir(dir.path())
-        .asset_root(Some(Consts::ASSET_ROOT))
-        .build();
-    let key = ResourceKey::new(Consts::KEY_NAME);
-    let res = store.acquire_resource(&key).unwrap();
+    let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+    let scope = store.scope(Consts::ASSET_ROOT);
+    let res = store
+        .acquire_resource(&scope.key(Consts::KEY_NAME), None)
+        .unwrap();
     res.write_at(0, payload).unwrap();
 
     let canonical = segment_path(dir.path());
@@ -354,18 +333,16 @@ fn doubly_corrupted_indexes_do_not_panic_and_slow_path_serves_data() {
         fs::write(availability_bin(root), b"PARTIAL!").unwrap();
     });
 
-    let store = AssetStoreBuilder::new()
-        .root_dir(dir.path())
-        .asset_root(Some(Consts::ASSET_ROOT))
-        .build();
-    let key = ResourceKey::new(Consts::KEY_NAME);
+    let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+    let scope = store.scope(Consts::ASSET_ROOT);
+    let key = scope.key(Consts::KEY_NAME);
 
     assert_eq!(
-        store.final_len(&key),
+        scope.store().final_len(&key),
         Some(12),
         "every index corrupt → slow-path still works"
     );
-    assert!(store.contains_range(&key, 0..12));
+    assert!(scope.store().contains_range(&key, 0..12));
 
     store
         .checkpoint()

@@ -108,16 +108,19 @@ fn main() -> AppResult {
         DownloaderConfig::for_client(HttpClient::new(net, app_cancel.child_token())).build(),
     );
     let flush_hub = FlushHub::new(app_cancel.child_token(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub)
+    let config = AppConfig::new(downloader, flush_hub, app_cancel.clone())
         .with_tracks(args.tracks)
         .with_should_accept_invalid_certs(args.insecure);
 
     let player_config = PlayerConfig::builder()
+        .cancel(app_cancel.child_token())
         .crossfade_duration(config.crossfade_seconds)
         .eq_layout(generate_log_spaced_bands(config.eq_band_count))
         .build();
     let player = Arc::new(PlayerImpl::new(player_config));
-    let queue_config = QueueConfig::default().with_player(player);
+    let queue_config = QueueConfig::default()
+        .with_player(player)
+        .with_cancel(app_cancel.child_token());
 
     let queue = Arc::new(Queue::new(queue_config));
 

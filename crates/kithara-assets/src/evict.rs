@@ -10,6 +10,7 @@ use crate::{
     base::Assets,
     deleter::AssetDeleter,
     error::AssetsResult,
+    identity::RequestIdentity,
     index::{EvictConfig, LruIndex, PinsIndex},
     key::ResourceKey,
 };
@@ -217,30 +218,35 @@ where
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
-        self.touch_and_maybe_evict(self.inner.asset_root(), None);
-        self.inner.acquire_resource_with_ctx(key, ctx)
+        if let Some(asset_root) = key.asset_root() {
+            self.touch_and_maybe_evict(asset_root, None);
+        }
+        self.inner.acquire_resource_with_ctx(key, identity, ctx)
     }
 
     fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
-        self.touch_and_maybe_evict(self.inner.asset_root(), None);
-        self.inner.open_resource_with_ctx(key, ctx)
+        if let Some(asset_root) = key.asset_root() {
+            self.touch_and_maybe_evict(asset_root, None);
+        }
+        self.inner.open_resource_with_ctx(key, identity, ctx)
     }
 
     delegate::delegate! {
         to self.inner {
             fn capabilities(&self) -> crate::base::Capabilities;
             fn root_dir(&self) -> &Path;
-            fn asset_root(&self) -> &str;
             fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState>;
-            fn delete_asset(&self) -> AssetsResult<()>;
+            fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
             fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
         }
     }

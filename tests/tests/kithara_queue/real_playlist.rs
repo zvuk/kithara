@@ -65,7 +65,7 @@ async fn shared_test_ctx() -> &'static TestCtx {
                     .build(),
             );
             let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
-            let config = AppConfig::new(downloader, flush_hub);
+            let config = AppConfig::new(downloader, flush_hub, CancellationToken::new());
             let player = Arc::new(PlayerImpl::new(
                 PlayerConfig::builder()
                     .session(OfflineSession::arc_auto())

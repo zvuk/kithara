@@ -20,4 +20,4 @@ mod session;
 mod stream;
 
 pub use config::{FileConfig, FileSrc};
-pub use stream::File;
+pub use stream::{File, build_shared_asset_store};
