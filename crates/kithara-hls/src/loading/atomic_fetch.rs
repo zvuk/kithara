@@ -1,11 +1,10 @@
 #![forbid(unsafe_code)]
 
 use bytes::Bytes;
-use kithara_assets::{AssetStore, ResourceKey};
+use kithara_assets::{AssetStore, ResourceHandle, ResourceKey};
 use kithara_bufpool::BytePool;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
-use kithara_storage::ResourceExt;
 use kithara_stream::dl::{FetchCmd, PeerHandle, reject_html_response};
 use tracing::{debug, trace};
 use url::Url;

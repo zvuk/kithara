@@ -8,9 +8,9 @@ use std::{
 };
 
 use kithara_abr::Abr;
+use kithara_assets::ResourceHandle;
 use kithara_events::{FileError, FileEvent};
 use kithara_net::{Headers, NetError, RangeSpec, Retryability};
-use kithara_storage::ResourceExt;
 use kithara_stream::{
     MediaInfo,
     dl::{FetchCmd, Peer, RequestPriority, reject_html_response},

@@ -7,10 +7,7 @@ use std::sync::{
 
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::EvictConfig;
-use kithara::{
-    assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey},
-    storage::ResourceExt,
-};
+use kithara::assets::{AssetStoreBuilder, ProcessChunkFn, ResourceHandle, ResourceKey};
 use kithara_integration_tests::temp_dir;
 use kithara_platform::time::Duration;
 

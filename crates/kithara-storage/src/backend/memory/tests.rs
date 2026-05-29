@@ -12,8 +12,9 @@ use tokio_util::sync::CancellationToken;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::StorageError;
 use crate::{
+    ResourceRead,
     backend::memory::driver::{MemOptions, MemResource},
-    resource::{ResourceExt, ResourceStatus, WaitOutcome},
+    resource::{ResourceStatus, WaitOutcome},
 };
 
 fn create_resource() -> MemResource {
@@ -44,7 +45,7 @@ fn test_write_and_read() {
     let res = create_resource();
 
     res.write_at(0, b"hello world").unwrap();
-    res.commit(Some(11)).unwrap();
+    let res = res.commit(Some(11)).unwrap();
 
     let mut buf = [0u8; 11];
     let n = res.read_at(0, &mut buf).unwrap();
@@ -56,7 +57,7 @@ fn test_write_and_read() {
 fn test_write_all_read_into() {
     let res = create_resource();
 
-    res.write_all(b"atomic data").unwrap();
+    let res = res.write_all(b"atomic data").unwrap();
 
     let mut buf = Vec::new();
     let n = res.read_into(&mut buf).unwrap();
@@ -93,16 +94,20 @@ fn test_wait_range_ready() {
 #[kithara::test(native)]
 fn test_wait_range_blocks_then_ready() {
     let res = create_resource();
-    let res2 = res.clone();
+    let reader = res.reader();
 
+    // Return the writer from the thread so it outlives the read: dropping an
+    // uncommitted writer now marks the resource failed (anti-hang), which would
+    // otherwise race the availability notify.
     let handle = thread::spawn(move || {
         thread::sleep(Duration::from_millis(50));
-        res2.write_at(0, b"delayed data").unwrap();
+        res.write_at(0, b"delayed data").unwrap();
+        res
     });
 
-    let outcome = res.wait_range(0..12).unwrap();
+    let outcome = reader.wait_range(0..12).unwrap();
     assert_eq!(outcome, WaitOutcome::Ready);
-    handle.join().unwrap();
+    let _writer = handle.join().unwrap();
 }
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -110,7 +115,7 @@ fn test_wait_range_eof() {
     let res = create_resource();
 
     res.write_at(0, b"short").unwrap();
-    res.commit(Some(5)).unwrap();
+    let res = res.commit(Some(5)).unwrap();
 
     let outcome = res.wait_range(5..10).unwrap();
     assert_eq!(outcome, WaitOutcome::Eof);
@@ -119,14 +124,14 @@ fn test_wait_range_eof() {
 #[kithara::test(native)]
 fn test_fail_wakes_waiters() {
     let res = create_resource();
-    let res2 = res.clone();
+    let reader = res.reader();
 
     let handle = thread::spawn(move || {
         thread::sleep(Duration::from_millis(50));
-        res2.fail("test error".to_string());
+        res.fail("test error".to_string());
     });
 
-    let result = res.wait_range(0..100);
+    let result = reader.wait_range(0..100);
     assert!(result.is_err());
     handle.join().unwrap();
 }
@@ -158,7 +163,7 @@ fn test_status_transitions() {
     res.write_at(0, b"data").unwrap();
     assert_eq!(res.status(), ResourceStatus::Active);
 
-    res.commit(Some(4)).unwrap();
+    let res = res.commit(Some(4)).unwrap();
     assert_eq!(
         res.status(),
         ResourceStatus::Committed { final_len: Some(4) }
@@ -168,9 +173,10 @@ fn test_status_transitions() {
 #[kithara::test(timeout(Duration::from_secs(1)))]
 fn test_status_failed() {
     let res = create_resource();
+    let reader = res.reader();
 
     res.fail("boom".to_string());
-    assert_eq!(res.status(), ResourceStatus::Failed("boom".to_string()));
+    assert_eq!(reader.status(), ResourceStatus::Failed("boom".to_string()));
 }
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -178,10 +184,10 @@ fn test_reactivate() {
     let res = create_resource();
 
     res.write_at(0, b"hello").unwrap();
-    res.commit(Some(5)).unwrap();
+    let res = res.commit(Some(5)).unwrap();
     assert!(matches!(res.status(), ResourceStatus::Committed { .. }));
 
-    res.reactivate().unwrap();
+    let res = res.reactivate().unwrap();
     assert_eq!(res.status(), ResourceStatus::Active);
     assert_eq!(res.len(), None);
 
@@ -191,7 +197,7 @@ fn test_reactivate() {
     assert_eq!(&buf, b"hello");
 
     res.write_at(5, b" world").unwrap();
-    res.commit(Some(11)).unwrap();
+    let res = res.commit(Some(11)).unwrap();
 
     let mut buf2 = vec![0u8; 11];
     let n = res.read_at(0, &mut buf2).unwrap();
@@ -199,15 +205,9 @@ fn test_reactivate() {
     assert_eq!(&buf2[..], b"hello world");
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
-fn test_write_rejected_after_commit() {
-    let res = create_resource();
-    res.write_at(0, b"data").unwrap();
-    res.commit(Some(4)).unwrap();
-
-    let result = res.write_at(0, b"nope");
-    assert!(result.is_err());
-}
+// `test_write_rejected_after_commit` removed: writing after commit is now a
+// compile error (`Resource<Committed, D>` has no `write_at`), not a runtime
+// rejection.
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
 #[case::sparse(100, b"sparse")]

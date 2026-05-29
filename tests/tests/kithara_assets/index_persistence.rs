@@ -8,11 +8,10 @@ use std::{
 };
 
 use kithara_assets::{
-    AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey,
+    AssetStore, AssetStoreBuilder, EvictConfig, ResourceHandle, ResourceKey,
     index::schema::{ArchivedAvailabilityFile, ArchivedLruIndexFile, ArchivedPinsIndexFile},
 };
 use kithara_integration_tests::{kithara, temp_dir};
-use kithara_storage::ResourceExt;
 use rkyv::option::ArchivedOption;
 
 fn index_dir(root: &Path) -> PathBuf {

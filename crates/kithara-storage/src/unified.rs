@@ -6,12 +6,12 @@ use std::{
     sync::Arc,
 };
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::MmapResource;
 use crate::{
-    AtomicChunked, MemResource, StorageResult,
-    resource::{ResourceExt, ResourceStatus, WaitOutcome},
+    AtomicChunked, MemDriver, MemResource, ResourceRead, StorageResult,
+    resource::{ResourceStatus, WaitOutcome},
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::{MmapDriver, MmapResource};
 
 /// Unified resource: disk (mmap) or memory backend.
 ///
@@ -31,10 +31,10 @@ use crate::{
 pub enum StorageResource {
     /// File-backed mmap resource (atomic or passthrough decorator).
     #[cfg(not(target_arch = "wasm32"))]
-    Mmap(Arc<AtomicChunked<MmapResource>>),
+    Mmap(Arc<AtomicChunked<MmapDriver>>),
     /// In-memory resource (always passthrough — memory has no
     /// torn-write hazard).
-    Mem(Arc<AtomicChunked<MemResource>>),
+    Mem(Arc<AtomicChunked<MemDriver>>),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -46,8 +46,8 @@ impl From<MmapResource> for StorageResource {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl From<AtomicChunked<MmapResource>> for StorageResource {
-    fn from(r: AtomicChunked<MmapResource>) -> Self {
+impl From<AtomicChunked<MmapDriver>> for StorageResource {
+    fn from(r: AtomicChunked<MmapDriver>) -> Self {
         Self::Mmap(Arc::new(r))
     }
 }
@@ -58,8 +58,15 @@ impl From<MemResource> for StorageResource {
     }
 }
 
-impl ResourceExt for StorageResource {
-    fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
+/// Shared, cheaply-cloneable resource handle delegating to the wrapped
+/// [`AtomicChunked`]. The split-handle typestate lives below this layer; this
+/// unified enum is the multi-owner facade used by the asset cache.
+impl StorageResource {
+    /// Commit the resource.
+    ///
+    /// # Errors
+    /// Returns error if the backend cannot finalize.
+    pub fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.commit(final_len),
@@ -67,7 +74,9 @@ impl ResourceExt for StorageResource {
         }
     }
 
-    fn contains_range(&self, range: Range<u64>) -> bool {
+    /// Whether the given range is fully covered by available data.
+    #[must_use]
+    pub fn contains_range(&self, range: Range<u64>) -> bool {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.contains_range(range),
@@ -75,15 +84,19 @@ impl ResourceExt for StorageResource {
         }
     }
 
-    fn fail(&self, reason: String) {
+    /// Mark the resource failed.
+    pub fn fail(&self, reason: String) {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.fail(reason),
             Self::Mem(r) => r.fail(reason),
         }
     }
-    // ast-grep-ignore: idioms.match-self-conversion
-    fn len(&self) -> Option<u64> {
+
+    /// Committed length, if known.
+    #[must_use]
+    pub fn len(&self) -> Option<u64> {
+        // ast-grep-ignore: idioms.match-self-conversion
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.len(),
@@ -91,23 +104,39 @@ impl ResourceExt for StorageResource {
         }
     }
 
-    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
+    /// Returns `true` if the resource has been committed with zero length.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == Some(0)
+    }
+
+    /// First gap in available data starting at `from`, up to `limit`.
+    #[must_use]
+    pub fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.next_gap(from, limit),
             Self::Mem(r) => r.next_gap(from, limit),
         }
     }
-    // ast-grep-ignore: idioms.match-self-conversion
-    fn path(&self) -> Option<&Path> {
+
+    /// Backing file path, if any.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        // ast-grep-ignore: idioms.match-self-conversion
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.path(),
             Self::Mem(_) => None,
         }
     }
-    // ast-grep-ignore: idioms.match-self-conversion
-    fn reactivate(&self) -> StorageResult<()> {
+
+    /// Reactivate a committed resource for continued writing.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled or the backend cannot reopen.
+    pub fn reactivate(&self) -> StorageResult<()> {
+        // ast-grep-ignore: idioms.match-self-conversion
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.reactivate(),
@@ -115,15 +144,34 @@ impl ResourceExt for StorageResource {
         }
     }
 
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+    /// Read data at the given offset into `buf`; returns bytes read.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.read_at(offset, buf),
             Self::Mem(r) => r.read_at(offset, buf),
         }
     }
-    // ast-grep-ignore: idioms.match-self-conversion
-    fn status(&self) -> ResourceStatus {
+
+    /// Read the entire resource into a caller buffer; returns bytes read.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    pub fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Mmap(r) => r.read_into(buf),
+            Self::Mem(r) => r.read_into(buf),
+        }
+    }
+
+    /// Current runtime status.
+    #[must_use]
+    pub fn status(&self) -> ResourceStatus {
+        // ast-grep-ignore: idioms.match-self-conversion
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.status(),
@@ -131,7 +179,12 @@ impl ResourceExt for StorageResource {
         }
     }
 
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
+    /// Wait until the given byte range is available.
+    ///
+    /// # Errors
+    /// Returns error if the range is invalid, the resource is cancelled, or the
+    /// resource has failed.
+    pub fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.wait_range(range),
@@ -139,12 +192,25 @@ impl ResourceExt for StorageResource {
         }
     }
 
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+    /// Write data at the given offset.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the write fails.
+    pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.write_at(offset, data),
             Self::Mem(r) => r.write_at(offset, data),
         }
+    }
+
+    /// Write entire contents and commit atomically.
+    ///
+    /// # Errors
+    /// Returns error if the write or commit fails.
+    pub fn write_all(&self, data: &[u8]) -> StorageResult<()> {
+        self.write_at(0, data)?;
+        self.commit(Some(data.len() as u64))
     }
 }
 

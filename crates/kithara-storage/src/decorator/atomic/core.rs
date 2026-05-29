@@ -7,65 +7,105 @@ use std::{ops::Range, path::Path};
 #[cfg(not(target_arch = "wasm32"))]
 use tempfile::NamedTempFile;
 
-use crate::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
+use crate::{
+    ResourceRead, ResourceStatus, ResourceWriter, StorageResult, WaitOutcome,
+    backend::traits::DriverIo,
+};
 
-/// Decorator for crash-safe whole-file writes.
+/// Decorator for crash-safe whole-file writes over a single-owner
+/// [`ResourceWriter`].
 ///
 /// For file-backed resources: write-rename pattern ensures that the target file
-/// is either the old version or the new version — never a partial write.
+/// is either the old version or the new version — never a partial write. The
+/// file is rewritten in place across flushes (`OpenMode::ReadWrite` index
+/// files), so the wrapped writer commits in place rather than being consumed.
 ///
 /// For in-memory resources: direct delegation (crash-safety is not applicable).
-#[derive(Clone, Debug)]
-pub struct Atomic<R: ResourceExt> {
-    inner: R,
+pub struct Atomic<D: DriverIo> {
+    inner: ResourceWriter<D>,
 }
 
-impl<R: ResourceExt> Atomic<R> {
-    /// Wrap a resource for crash-safe writes.
-    pub fn new(inner: R) -> Self {
+impl<D: DriverIo> Atomic<D> {
+    /// Wrap a writer for crash-safe writes.
+    #[must_use]
+    pub fn new(inner: ResourceWriter<D>) -> Self {
         Self { inner }
     }
-}
 
-impl<R: ResourceExt> ResourceExt for Atomic<R> {
-    fn write_all(&self, data: &[u8]) -> StorageResult<()> {
+    /// Whether the given range is fully covered by available data.
+    #[must_use]
+    pub fn contains_range(&self, range: Range<u64>) -> bool {
+        self.inner.contains_range(range)
+    }
+
+    /// Committed length, if known.
+    #[must_use]
+    pub fn len(&self) -> Option<u64> {
+        self.inner.len()
+    }
+
+    /// Returns `true` if the resource has been committed with zero length.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == Some(0)
+    }
+
+    /// Backing file path, if any.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        self.inner.path()
+    }
+
+    /// Read data at the given offset into `buf`.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        self.inner.read_at(offset, buf)
+    }
+
+    /// Read the entire resource into a caller buffer; returns bytes read.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    pub fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
+        self.inner.read_into(buf)
+    }
+
+    /// Current runtime status.
+    #[must_use]
+    pub fn status(&self) -> ResourceStatus {
+        self.inner.status()
+    }
+
+    /// Wait until the given byte range is available.
+    ///
+    /// # Errors
+    /// Returns error if the range is invalid, the resource is cancelled, or the
+    /// resource has failed.
+    pub fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
+        self.inner.wait_range(range)
+    }
+
+    /// Write the whole payload atomically (best-effort durability: atomic rename
+    /// only). Rewrites the file in place.
+    ///
+    /// # Errors
+    /// Propagates filesystem errors and the inner commit error.
+    pub fn write_all(&self, data: &[u8]) -> StorageResult<()> {
         self.write_all_inner(data, false)
     }
 
-    delegate::delegate! {
-        to self.inner {
-            fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
-            fn fail(&self, reason: String);
-            fn len(&self) -> Option<u64>;
-            fn path(&self) -> Option<&Path>;
-            fn reactivate(&self) -> StorageResult<()>;
-            fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-            fn status(&self) -> ResourceStatus;
-            fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
-            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
-        }
-    }
-}
-
-impl<R: ResourceExt> Atomic<R> {
-    /// Write the whole payload atomically AND durably: like
-    /// [`ResourceExt::write_all`] but also `sync_data`s the temp file
-    /// before the atomic rename. Returns only after the bytes are
-    /// physically on disk.
+    /// Write the whole payload atomically AND durably: like [`Atomic::write_all`]
+    /// but also `sync_data`s the temp file before the atomic rename. Returns
+    /// only after the bytes are physically on disk.
     ///
-    /// Use this on explicit checkpoint paths where the caller wants
-    /// post-return durability. Per-mutation flushes should keep using
-    /// the cheaper [`ResourceExt::write_all`] (best-effort, atomic
-    /// rename only).
-    ///
-    /// For memory-backed inners (no filesystem path) durability is
-    /// meaningless; the call falls back to the same passthrough as
-    /// `write_all`.
+    /// For memory-backed inners (no filesystem path) durability is meaningless;
+    /// the call falls back to the same passthrough as `write_all`.
     ///
     /// # Errors
-    ///
-    /// Propagates filesystem errors from temp creation, write,
-    /// `sync_data`, rename, or the inner's post-rename `commit`.
+    /// Propagates filesystem errors from temp creation, write, `sync_data`,
+    /// rename, or the inner's post-rename commit.
     pub fn write_all_durable(&self, data: &[u8]) -> StorageResult<()> {
         self.write_all_inner(data, true)
     }
@@ -95,11 +135,12 @@ impl<R: ResourceExt> Atomic<R> {
             tmp.persist(&path)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic rename: {e}")))?;
 
-            return self.inner.commit(Some(data.len() as u64));
+            return self.inner.commit_in_place(Some(data.len() as u64));
         }
 
         let _ = durable;
-        self.inner.reactivate()?;
-        self.inner.write_all(data)
+        self.inner.reactivate_in_place()?;
+        self.inner.write_at(0, data)?;
+        self.inner.commit_in_place(Some(data.len() as u64))
     }
 }

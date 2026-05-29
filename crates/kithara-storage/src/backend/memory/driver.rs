@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     StorageError, StorageResult,
     backend::{
-        resource::Resource,
+        resource::ResourceWriter,
         traits::{Driver, DriverState},
     },
 };
@@ -99,9 +99,9 @@ impl Driver for MemDriver {
 
 /// In-memory storage resource.
 ///
-/// Type alias for [`Resource<MemDriver>`]. Drop-in replacement for
+/// Type alias for [`ResourceWriter<MemDriver>`]. Drop-in replacement for
 /// [`MmapResource`](crate::MmapResource) on platforms without filesystem access.
-pub type MemResource = Resource<MemDriver>;
+pub type MemResource = ResourceWriter<MemDriver>;
 
 impl MemResource {
     /// Create a new empty in-memory resource.

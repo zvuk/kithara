@@ -4,12 +4,12 @@ use std::{fmt, num::NonZeroUsize, path::Path, sync::Arc};
 
 use dashmap::DashSet;
 use kithara_platform::Mutex;
-use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
+use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 use lru::LruCache;
 
 use crate::{
     AssetResourceState,
-    base::{Assets, Capabilities},
+    base::{Assets, Capabilities, ResourceHandle},
     error::AssetsResult,
     key::ResourceKey,
 };
@@ -46,7 +46,7 @@ impl<R> CachedResource<R> {
     }
 }
 
-impl<R: ResourceExt + Clone + Send + Sync + fmt::Debug + 'static> ResourceExt
+impl<R: ResourceHandle + Clone + Send + Sync + fmt::Debug + 'static> ResourceHandle
     for CachedResource<R>
 {
     delegate::delegate! {
@@ -481,7 +481,7 @@ mod tests {
     use std::{fs, path::Path, sync::Arc, time::Duration};
 
     use kithara_platform::thread;
-    use kithara_storage::{ResourceExt, StorageResource};
+    use kithara_storage::StorageResource;
     use kithara_test_utils::kithara;
     use tokio_util::sync::CancellationToken;
 
@@ -508,7 +508,7 @@ mod tests {
 
     impl Assets for ContextMemStore {
         type Context = u8;
-        type IndexRes = kithara_storage::MemResource;
+        type IndexRes = StorageResource;
         type Res = StorageResource;
 
         fn acquire_resource_with_ctx(

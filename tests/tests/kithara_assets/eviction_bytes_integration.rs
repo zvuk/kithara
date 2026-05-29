@@ -5,10 +5,7 @@
 use std::path::Path;
 
 use bytes::Bytes;
-use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
-    storage::ResourceExt,
-};
+use kithara::assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceHandle, ResourceKey};
 use kithara_integration_tests::{cancel_token, temp_dir};
 use kithara_platform::time::{Duration, sleep};
 use tokio_util::sync::CancellationToken;

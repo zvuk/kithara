@@ -7,7 +7,7 @@ use std::{
 };
 
 use kithara_platform::Mutex;
-use kithara_storage::{Atomic, MmapResource, ResourceExt, StorageError};
+use kithara_storage::{Atomic, MmapDriver, StorageError};
 use rkyv::option::ArchivedOption;
 use tokio_util::sync::CancellationToken;
 
@@ -22,14 +22,14 @@ use crate::{
 
 pub(super) struct AvailabilityPersist {
     cancel: CancellationToken,
-    res: OnceLock<Atomic<MmapResource>>,
+    res: OnceLock<Atomic<MmapDriver>>,
     path: PathBuf,
 }
 
 impl AvailabilityIndex {
     /// Enable disk persistence rooted at `path`. Hydrates the
     /// in-memory aggregate from the existing on-disk snapshot (if
-    /// any), then caches the `Atomic<MmapResource>` for subsequent
+    /// any), then caches the `Atomic<MmapDriver>` for subsequent
     /// flushes. Idempotent: subsequent calls are no-ops.
     ///
     /// Failures (open, load) collapse silently — the aggregate
@@ -64,7 +64,7 @@ impl AvailabilityIndex {
     }
 
     /// Load the availability index from a persistent resource.
-    pub(crate) fn load_from<R: ResourceExt>(&self, res: &Atomic<R>) -> AssetsResult<()> {
+    pub(crate) fn load_from(&self, res: &Atomic<MmapDriver>) -> AssetsResult<()> {
         let mut buf = Vec::new();
         let n = res.read_into(&mut buf)?;
         if n == 0 {
@@ -118,7 +118,7 @@ impl AvailabilityIndex {
     /// resource. Used by the cross-instance roundtrip tests; the
     /// production flush path goes through [`super::Flushable::flush`].
     #[cfg(test)]
-    pub(crate) fn persist_to<R: ResourceExt>(&self, res: &Atomic<R>) -> AssetsResult<()> {
+    pub(crate) fn persist_to(&self, res: &Atomic<MmapDriver>) -> AssetsResult<()> {
         write_aggregate(&self.inner, res, false)
     }
 }
@@ -137,9 +137,9 @@ impl InnerIndex {
 }
 
 /// Serialise the aggregate into an `Atomic`-wrapped storage resource.
-fn write_aggregate<R: ResourceExt>(
+fn write_aggregate(
     inner: &InnerIndex,
-    res: &Atomic<R>,
+    res: &Atomic<MmapDriver>,
     durable: bool,
 ) -> AssetsResult<()> {
     let mut file = AvailabilityFile {

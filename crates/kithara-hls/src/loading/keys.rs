@@ -7,10 +7,9 @@ use std::{
 
 use bytes::Bytes;
 use dashmap::DashMap;
-use kithara_assets::{AssetStore, ResourceKey};
+use kithara_assets::{AssetStore, ResourceHandle, ResourceKey};
 use kithara_drm::{DecryptContext, KeyProcessorRegistry};
 use kithara_net::Headers;
-use kithara_storage::ResourceExt;
 use kithara_stream::dl::{FetchCmd, PeerHandle};
 use url::Url;
 

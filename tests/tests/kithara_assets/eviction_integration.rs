@@ -3,10 +3,7 @@
 
 use std::{fs, path::Path};
 
-use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
-    storage::ResourceExt,
-};
+use kithara::assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceHandle, ResourceKey};
 use kithara_assets::index::schema::{ArchivedPinsIndexFile, PinsIndexFile};
 use kithara_integration_tests::temp_dir;
 use kithara_platform::{thread, time::Duration};

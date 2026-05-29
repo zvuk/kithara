@@ -28,7 +28,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct MemAssetStore {
     /// Weak cache of active resources to ensure sharing.
-    active_resources: Arc<DashMap<String, Weak<MemResource>>>,
+    active_resources: Arc<DashMap<String, Weak<StorageResource>>>,
     /// Single canonical removal channel. Synchronises in-memory
     /// `active_resources` clearing with the [`AvailabilityIndex`].
     /// See [`crate::deleter`].
@@ -47,7 +47,7 @@ pub struct MemAssetStore {
 /// for a foreign `asset_root` in this backend instance.
 #[derive(Debug)]
 pub(crate) struct MemAssetDeleter {
-    active_resources: Arc<DashMap<String, Weak<MemResource>>>,
+    active_resources: Arc<DashMap<String, Weak<StorageResource>>>,
     availability: AvailabilityIndex,
     lru: crate::index::LruIndex,
     pins: crate::index::PinsIndex,
@@ -60,7 +60,7 @@ impl MemAssetDeleter {
         availability: AvailabilityIndex,
         pins: crate::index::PinsIndex,
         lru: crate::index::LruIndex,
-        active_resources: Arc<DashMap<String, Weak<MemResource>>>,
+        active_resources: Arc<DashMap<String, Weak<StorageResource>>>,
     ) -> Self {
         Self {
             active_resources,
@@ -165,7 +165,7 @@ impl MemAssetStore {
         cancel: CancellationToken,
         mem_resource_capacity: Option<usize>,
         availability: AvailabilityIndex,
-        active_resources: Arc<DashMap<String, Weak<MemResource>>>,
+        active_resources: Arc<DashMap<String, Weak<StorageResource>>>,
         deleter: Arc<dyn AssetDeleter>,
     ) -> Self {
         Self {
@@ -181,7 +181,7 @@ impl MemAssetStore {
 
 impl Assets for MemAssetStore {
     type Context = ();
-    type IndexRes = MemResource;
+    type IndexRes = StorageResource;
     type Res = StorageResource;
 
     fn acquire_resource_with_ctx(
@@ -199,7 +199,7 @@ impl Assets for MemAssetStore {
         if let Some(weak) = self.active_resources.get(&cache_key)
             && let Some(res) = weak.upgrade()
         {
-            return Ok(StorageResource::from((*res).clone()));
+            return Ok((*res).clone());
         }
 
         let mut options = MemOptions::default();
@@ -208,18 +208,18 @@ impl Assets for MemAssetStore {
         {
             options.capacity = capacity;
         }
-        let mem = Resource::open_with_observer(
+        let mem: MemResource = Resource::open_with_observer(
             self.cancel.clone(),
             options,
             Some(self.scoped_observer(key)),
         )
         .map_err(AssetsError::Storage)?;
 
-        let shared = Arc::new(mem);
+        let shared = Arc::new(StorageResource::from(mem));
         self.active_resources
             .insert(cache_key, Arc::downgrade(&shared));
 
-        Ok(StorageResource::from((*shared).clone()))
+        Ok((*shared).clone())
     }
 
     fn asset_root(&self) -> &str {
@@ -235,11 +235,11 @@ impl Assets for MemAssetStore {
     }
 
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        Ok(MemResource::new(self.cancel.clone()))
+        Ok(StorageResource::from(MemResource::new(self.cancel.clone())))
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        Ok(MemResource::new(self.cancel.clone()))
+        Ok(StorageResource::from(MemResource::new(self.cancel.clone())))
     }
 
     fn open_resource_with_ctx(
@@ -257,7 +257,7 @@ impl Assets for MemAssetStore {
         if let Some(weak) = self.active_resources.get(&cache_key)
             && let Some(res) = weak.upgrade()
         {
-            return Ok(StorageResource::from((*res).clone()));
+            return Ok((*res).clone());
         }
 
         Err(IoError::new(ErrorKind::NotFound, "resource missing").into())
@@ -285,7 +285,6 @@ impl Assets for MemAssetStore {
 #[cfg(test)]
 mod tests {
     use kithara_platform::time::Duration;
-    use kithara_storage::ResourceExt;
     use kithara_test_utils::kithara;
 
     use super::*;

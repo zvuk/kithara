@@ -3,16 +3,13 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::{fs, path::Path};
 
+use kithara::assets::{AssetStoreBuilder, ResourceHandle, ResourceKey};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
-};
-use kithara::{
-    assets::{AssetStoreBuilder, ResourceKey},
-    storage::ResourceExt,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::TestTempDir;

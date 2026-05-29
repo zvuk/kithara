@@ -1,14 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Range, path::Path};
+use std::ops::Range;
 
 use rangemap::RangeSet;
-
-mod kithara {
-    pub(crate) use kithara_test_macros::mock;
-}
-
-use crate::StorageResult;
 
 /// Controls how [`MmapDriver`](crate::MmapDriver) opens the backing file.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -59,141 +53,6 @@ pub enum ResourceStatus {
     /// **only** when there is no other lifecycle classification to
     /// surface.
     Cancelled,
-}
-
-/// Unified sync resource trait.
-///
-/// Covers both incremental streaming (segments, progressive downloads)
-/// and atomic whole-file (playlists, keys, indexes) use-cases.
-///
-/// For streaming: use `write_at` + `commit`.
-/// For atomic: use `write_all` / `read_into` convenience methods.
-#[kithara::mock(api = ResourceMock)]
-pub trait ResourceExt: Send + Sync + 'static {
-    /// Mark the resource as fully written.
-    ///
-    /// If `final_len` is provided, the backing storage may be truncated to that size.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the resource is cancelled, failed, or the backend
-    /// cannot finalize (e.g. file truncation or reopen fails).
-    fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
-
-    /// Check if the given byte range is fully covered by available data (non-blocking).
-    ///
-    /// Returns `false` by default. Override for implementations that track
-    /// available byte ranges.
-    fn contains_range(&self, _range: Range<u64>) -> bool {
-        false
-    }
-
-    /// Mark the resource as failed.
-    fn fail(&self, reason: String);
-
-    /// Returns `true` if the resource has been committed with zero length.
-    fn is_empty(&self) -> bool {
-        self.len() == Some(0)
-    }
-
-    /// Get the committed length, if known.
-    fn len(&self) -> Option<u64>;
-
-    /// Find the first gap in available data starting from `from`, up to `limit`.
-    ///
-    /// Returns `None` by default (conservative: assumes no data available).
-    /// Override for implementations that track available byte ranges.
-    fn next_gap(&self, _from: u64, _limit: u64) -> Option<Range<u64>> {
-        None
-    }
-
-    /// Get the file path, if backed by a file.
-    ///
-    /// Returns `None` for in-memory resources that have no filesystem path.
-    fn path(&self) -> Option<&Path>;
-
-    /// Reactivate a committed resource for continued writing.
-    ///
-    /// Transitions Committed -> Active: reopens the backing store for writing,
-    /// resets committed flag, and clears `final_len`. Existing data remains
-    /// available for reading. New data can be written at any offset.
-    ///
-    /// Use for resuming partial downloads where the resource is smaller
-    /// than the expected total.
-    ///
-    /// No-op if the resource is already Active.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the resource is cancelled, failed, or the backend
-    /// cannot reopen for writing.
-    fn reactivate(&self) -> StorageResult<()>;
-
-    /// Read data at the given offset into `buf`.
-    ///
-    /// Returns the number of bytes read.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the resource is cancelled, failed, or the read fails.
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-
-    /// Read the entire resource contents into a caller-provided buffer.
-    ///
-    /// The buffer is resized to fit the data. Returns the number of bytes read.
-    /// Returns `0` if resource has no data.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the resource is cancelled, failed, or the read fails.
-    fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
-        let Some(len) = self.len() else {
-            let mut probe = [0u8; 1];
-            let _ = self.read_at(0, &mut probe)?;
-            return Ok(0);
-        };
-        if len == 0 {
-            buf.clear();
-            return Ok(0);
-        }
-        let len_usize = usize::try_from(len).unwrap_or(usize::MAX);
-        buf.resize(len_usize, 0);
-        let n = self.read_at(0, buf)?;
-        buf.truncate(n);
-        Ok(n)
-    }
-
-    /// Get resource status.
-    fn status(&self) -> ResourceStatus;
-
-    /// Wait until the given byte range is available.
-    ///
-    /// Blocks the calling thread using `Condvar` until data is written
-    /// or the resource reaches EOF / error / cancellation.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the range is invalid, the resource is cancelled,
-    /// or the resource has failed.
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
-
-    /// Write entire contents and commit atomically.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the write or commit fails.
-    fn write_all(&self, data: &[u8]) -> StorageResult<()> {
-        self.write_at(0, data)?;
-        self.commit(Some(data.len() as u64))
-    }
-
-    /// Write data at the given offset.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the resource is cancelled, failed, committed (and
-    /// the backend does not support post-commit writes), or the write fails.
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
 }
 
 /// Check if the `available` range set fully covers `range`.

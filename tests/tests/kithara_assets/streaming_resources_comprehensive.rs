@@ -2,15 +2,12 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::EvictConfig;
-use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, ResourceKey},
-    storage::ResourceExt,
-};
+use kithara::assets::{AssetStore, AssetStoreBuilder, ResourceHandle, ResourceKey};
 use kithara_integration_tests::temp_dir;
 use kithara_platform::{thread, time::Duration};
 
 /// Helper to read bytes from resource into a new Vec
-fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
+fn read_bytes<R: ResourceHandle>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
     let n = res.read_at(offset, &mut buf).unwrap_or(0);
     buf.truncate(n);

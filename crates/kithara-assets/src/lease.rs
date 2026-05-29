@@ -10,11 +10,15 @@ use std::{
 
 use dashmap::DashMap;
 use kithara_platform::Mutex;
-use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
+use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    AssetResourceState, base::Assets, error::AssetsResult, evict::ByteRecorder, index::PinsIndex,
+    AssetResourceState,
+    base::{Assets, ResourceHandle},
+    error::AssetsResult,
+    evict::ByteRecorder,
+    index::PinsIndex,
     key::ResourceKey,
 };
 
@@ -196,7 +200,7 @@ where
 
 /// Resource wrapper that combines lease guard with byte recording on commit.
 #[derive(Clone)]
-pub struct LeaseResource<R: ResourceExt, L> {
+pub struct LeaseResource<R: ResourceHandle, L> {
     mode: AccessMode,
     _lease: L,
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
@@ -210,7 +214,7 @@ pub struct LeaseResource<R: ResourceExt, L> {
 
 impl<R, L> Debug for LeaseResource<R, L>
 where
-    R: ResourceExt + Debug,
+    R: ResourceHandle + Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LeaseResource")
@@ -221,7 +225,7 @@ where
     }
 }
 
-impl<R: ResourceExt, L> LeaseResource<R, L> {
+impl<R: ResourceHandle, L> LeaseResource<R, L> {
     fn write_guard(&self, op: &str) {
         assert!(
             matches!(self.mode, AccessMode::Write),
@@ -232,7 +236,7 @@ impl<R: ResourceExt, L> LeaseResource<R, L> {
 
 impl<R, L> LeaseResource<crate::cache::CachedResource<R>, L>
 where
-    R: ResourceExt + Clone + Send + Sync + Debug + 'static,
+    R: ResourceHandle + Clone + Send + Sync + Debug + 'static,
 {
     /// Pin the underlying cached resource so it is never evicted.
     pub fn retain(self) -> Self {
@@ -241,9 +245,9 @@ where
     }
 }
 
-impl<R, L> ResourceExt for LeaseResource<R, L>
+impl<R, L> ResourceHandle for LeaseResource<R, L>
 where
-    R: ResourceExt + Send + Sync + Clone + Debug + 'static,
+    R: ResourceHandle + Send + Sync + Clone + Debug + 'static,
     L: Send + Sync + Clone + 'static,
 {
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
@@ -301,7 +305,7 @@ where
 
 impl<R, L> Drop for LeaseResource<R, L>
 where
-    R: ResourceExt,
+    R: ResourceHandle,
 {
     fn drop(&mut self) {
         if !matches!(self.mode, AccessMode::Write) {

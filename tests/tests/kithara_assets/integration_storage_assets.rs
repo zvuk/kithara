@@ -3,16 +3,15 @@
 use std::{fs, path::Path};
 
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
+    assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceHandle, ResourceKey},
     bufpool::BytePool,
-    storage::ResourceExt,
 };
 use kithara_assets::index::schema::{ArchivedPinsIndexFile, PinsIndexFile};
 use kithara_integration_tests::temp_dir;
 use kithara_platform::{thread, time::Duration};
 
 /// Helper to read bytes from resource into a pooled buffer
-fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
+fn read_bytes<R: ResourceHandle>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     let mut buf = BytePool::default().get_with(|b| b.resize(len, 0));
     let n = res.read_at(offset, &mut buf).unwrap_or(0);
     buf[..n].to_vec()

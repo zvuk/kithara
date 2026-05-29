@@ -7,9 +7,12 @@ use kithara_platform::{
     Condvar, Mutex,
     time::{Duration, Instant},
 };
-use kithara_storage::{ResourceExt, ResourceStatus, StorageError, StorageResult, WaitOutcome};
+use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
-use crate::{AssetResourceState, AssetsResult, ResourceKey, base::Assets};
+use crate::{
+    AssetResourceState, AssetsResult, ResourceKey,
+    base::{Assets, ResourceHandle},
+};
 
 /// Constants for streaming processing (64KB, multiple of AES block size 16).
 struct Consts;
@@ -171,7 +174,7 @@ where
 
 impl<R, Ctx> ProcessedResource<R, Ctx>
 where
-    R: ResourceExt + Debug,
+    R: ResourceHandle + Debug,
     Ctx: Clone + Debug,
 {
     pub fn new(inner: R, ctx: Option<Ctx>, process: ProcessChunkFn<Ctx>, pool: BytePool) -> Self {
@@ -188,7 +191,7 @@ where
 
 impl<R, Ctx> ProcessedResource<R, Ctx>
 where
-    R: ResourceExt + Send + Sync + Clone + Debug + 'static,
+    R: ResourceHandle + Send + Sync + Clone + Debug + 'static,
     Ctx: Clone + Send + Sync + Debug,
 {
     /// Whether further waiting is pointless because the inner
@@ -259,9 +262,9 @@ where
     }
 }
 
-impl<R, Ctx> ResourceExt for ProcessedResource<R, Ctx>
+impl<R, Ctx> ResourceHandle for ProcessedResource<R, Ctx>
 where
-    R: ResourceExt + Send + Sync + Clone + Debug + 'static,
+    R: ResourceHandle + Send + Sync + Clone + Debug + 'static,
     Ctx: Clone + Send + Sync + Debug + 'static,
 {
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
@@ -423,7 +426,7 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use kithara_storage::{MmapOptions, MmapResource, Resource};
+    use kithara_storage::{MmapOptions, MmapResource, Resource, StorageResource};
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
@@ -437,14 +440,14 @@ mod tests {
 
     /// Simple mock resource for testing.
     /// Returns both the resource and the `TempDir` to keep the directory alive.
-    fn mock_resource(content: &[u8]) -> (MmapResource, tempfile::TempDir) {
+    fn mock_resource(content: &[u8]) -> (StorageResource, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test.bin");
         let cancel = CancellationToken::new();
 
-        let res = Resource::open(cancel, MmapOptions::new(path)).unwrap();
+        let res: MmapResource = Resource::open(cancel, MmapOptions::new(path)).unwrap();
         res.write_at(0, content).unwrap();
-        (res, dir)
+        (StorageResource::from(res), dir)
     }
 
     /// Create XOR chunk processor (no allocation).
@@ -524,7 +527,7 @@ mod tests {
         let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
 
         let (resource, _dir) = mock_resource(b"test content");
-        let processed: ProcessedResource<MmapResource, ()> =
+        let processed: ProcessedResource<StorageResource, ()> =
             ProcessedResource::new(resource, None, process_fn, test_pool());
 
         processed
@@ -949,7 +952,12 @@ mod tests {
             Resource::open(cancel.clone(), MmapOptions::new(path)).unwrap();
         resource.write_at(0, &[1u8; 16]).unwrap();
 
-        let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
+        let processed = ProcessedResource::new(
+            StorageResource::from(resource),
+            Some(()),
+            process_fn,
+            test_pool(),
+        );
         let processed_for_reader = processed.clone();
 
         let reader = std::thread::spawn(move || processed_for_reader.wait_range(0..16));

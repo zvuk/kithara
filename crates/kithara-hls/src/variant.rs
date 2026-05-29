@@ -12,7 +12,9 @@ use std::{
     },
 };
 
-use kithara_assets::{AssetResource, AssetResourceState, AssetStore, AssetsError, ResourceKey};
+use kithara_assets::{
+    AssetResource, AssetResourceState, AssetStore, AssetsError, ResourceHandle, ResourceKey,
+};
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, NetError};
 use kithara_platform::{
@@ -21,7 +23,7 @@ use kithara_platform::{
     time::{Duration, Instant},
     tokio::sync::Notify,
 };
-use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
+use kithara_storage::{ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SegmentDescriptor,
     SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, Timeline,
