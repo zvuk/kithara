@@ -281,19 +281,15 @@ fn default_terminator_macros() -> Vec<String> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FunctionBranchDensityConfig {
-    /// Warn when the deepest reachable execution path from a public
-    /// entry point accumulates more than this many branches. Always a
-    /// warning — never escalated. Existing code that breaches the
-    /// threshold is technical debt, not an accepted floor; the
-    /// detector keeps firing on every audit run so the noise stays
-    /// visible until the code is restructured.
-    #[serde(default = "default_density_warn_path")]
-    pub(crate) warn_path: usize,
-    /// Warn when total branches across the whole reachable call graph
-    /// from a public entry point exceed this. Catches APIs whose
-    /// fan-out is broad rather than deep.
-    #[serde(default = "default_density_warn_total")]
-    pub(crate) warn_total: usize,
+    /// Warn when a single function body owns more than this many branch
+    /// decisions (if / match-dispatch / loop / `&&` / `||` / let-else).
+    /// Density is attributed to the function that *owns* the branches, not
+    /// to thin callers that merely route into dense callees. Always a
+    /// warning — never escalated. Existing code that breaches the threshold
+    /// is technical debt, not an accepted floor; the detector keeps firing
+    /// on every audit run so the noise stays visible until restructured.
+    #[serde(default = "default_density_warn_own")]
+    pub(crate) warn_own: usize,
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
 }
@@ -301,18 +297,14 @@ pub(crate) struct FunctionBranchDensityConfig {
 impl Default for FunctionBranchDensityConfig {
     fn default() -> Self {
         Self {
-            warn_path: default_density_warn_path(),
-            warn_total: default_density_warn_total(),
+            warn_own: default_density_warn_own(),
             exempt_files: default_exempt_files(),
         }
     }
 }
 
-fn default_density_warn_path() -> usize {
-    15
-}
-fn default_density_warn_total() -> usize {
-    50
+fn default_density_warn_own() -> usize {
+    12
 }
 
 #[derive(Debug, Deserialize)]
