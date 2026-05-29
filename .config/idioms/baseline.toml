@@ -1029,8 +1029,8 @@ schema_version = 1
 "crates/kithara-play/src/impls/player_processor.rs:581:pointwise_for" = 1
 
 [retry_fallback]
-"crates/kithara-audio/src/pipeline/track_fsm.rs:51:attempt" = 1
-"crates/kithara-audio/src/pipeline/track_fsm.rs:90:attempt" = 1
+"crates/kithara-audio/src/pipeline/track_fsm.rs:182:attempt" = 1
+"crates/kithara-audio/src/pipeline/track_fsm.rs:221:attempt" = 1
 "crates/kithara-events/src/audio.rs:107:attempts" = 1
 "crates/kithara-net/src/error.rs:25:max_retries" = 1
 "crates/kithara-net/src/retry.rs:140:max_attempts" = 1
