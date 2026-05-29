@@ -12,6 +12,7 @@ use firewheel::{
     },
 };
 use kithara_audio::{EqBandConfig, IsolatorEq};
+use kithara_test_utils::kithara;
 
 use super::shared_eq::{EQ_MAX_GAIN_DB, EQ_MIN_GAIN_DB};
 
@@ -131,7 +132,7 @@ impl AudioNodeProcessor for MasterEqProcessor {
         self.eq_r.update_sample_rate(self.sample_rate.get());
     }
 
-    #[cfg_attr(rtsan, sanitize(realtime = "nonblocking"))]
+    #[kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,
         info: &ProcInfo,

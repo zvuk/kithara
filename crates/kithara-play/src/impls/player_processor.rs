@@ -12,6 +12,7 @@ use firewheel::{
 };
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_platform::Mutex;
+use kithara_test_utils::kithara;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{
     HeapCons,
@@ -747,7 +748,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         }
     }
 
-    #[cfg_attr(rtsan, sanitize(realtime = "nonblocking"))]
+    #[kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,
         info: &ProcInfo,
