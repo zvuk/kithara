@@ -8,13 +8,7 @@ use anyhow::{Result, bail};
 use clap::Args;
 use serde::Deserialize;
 
-use crate::{
-    common::{
-        project::ProjectConfig,
-        walker::{compile_globs, matches_any},
-    },
-    util::ensure_clean_tree,
-};
+use crate::{common::project::ProjectConfig, util::ensure_clean_tree};
 
 #[derive(Debug, Args)]
 pub(crate) struct AstGrepArgs {
@@ -72,6 +66,21 @@ pub(crate) fn run(args: &AstGrepArgs) -> Result<()> {
     run_grouped(args)
 }
 
+/// Exclude test code from ast-grep at the source, consistent with the
+/// `arch`/`style`/`idioms` namespaces. Each `[lint_exclude].paths` glob is
+/// passed as a negated `--globs` so ast-grep skips those files for scanning
+/// AND `--fix`, uniformly across all rules (per-rule `ignores:` blocks vary).
+/// ast-grep's `--globs` "always overrides any other ignore logic". (Inline
+/// `#[cfg(test)]` is not handled — ast-grep does no cfg evaluation; rules that
+/// care use a `not: inside cfg(test)` clause.)
+fn add_exclude_globs(cmd: &mut Command) -> Result<()> {
+    let project = ProjectConfig::load(Path::new("."))?;
+    for pat in &project.lint_exclude.paths {
+        cmd.arg("--globs").arg(format!("!{pat}"));
+    }
+    Ok(())
+}
+
 fn run_native(args: &AstGrepArgs) -> Result<()> {
     let mut cmd = Command::new("ast-grep");
     cmd.arg("scan")
@@ -79,6 +88,7 @@ fn run_native(args: &AstGrepArgs) -> Result<()> {
         .arg("sgconfig.yml")
         .arg("--report-style")
         .arg("short");
+    add_exclude_globs(&mut cmd)?;
     if args.strict {
         cmd.arg("--warning");
     }
@@ -101,6 +111,7 @@ fn run_grouped(args: &AstGrepArgs) -> Result<()> {
         .arg("--config")
         .arg("sgconfig.yml")
         .arg("--json=stream");
+    add_exclude_globs(&mut cmd)?;
     if args.strict {
         cmd.arg("--warning");
     }
@@ -113,15 +124,6 @@ fn run_grouped(args: &AstGrepArgs) -> Result<()> {
     let output = cmd.output()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Drop hits in test code, consistent with the `arch`/`style`/`idioms`
-    // namespaces. ast-grep applies per-rule `ignores:` globs itself; this is
-    // the shared `[lint_exclude].paths` safety net so test-support crates and
-    // test files are filtered uniformly even if a rule forgot them. (Inline
-    // `#[cfg(test)]` is not strippable here — ast-grep does no cfg evaluation;
-    // rules that care use a `not: inside cfg(test)` clause.)
-    let project = ProjectConfig::load(Path::new("."))?;
-    let exclude = compile_globs(&project.lint_exclude.paths);
-
     let mut by_rule: BTreeMap<String, RuleGroup> = BTreeMap::new();
     for line in stdout.lines() {
         let line = line.trim();
@@ -132,9 +134,6 @@ fn run_grouped(args: &AstGrepArgs) -> Result<()> {
             Ok(m) => m,
             Err(_) => continue,
         };
-        if matches_any(&exclude, Path::new(&m.file)) {
-            continue;
-        }
         let entry = by_rule
             .entry(m.rule_id.clone())
             .or_insert_with(|| RuleGroup {
