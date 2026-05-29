@@ -360,10 +360,13 @@ impl Default for GodModuleThreshold {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GodStructThreshold {
-    /// `fields + methods` per struct. Methods are inherent methods plus
-    /// domain trait-impl methods aggregated across every `impl` block in the
-    /// file. Methods that only satisfy a standard-library / language trait
-    /// contract (see `std_traits`) and `#[cfg(test)]` items are excluded.
+    /// Substantial methods per type, aggregated across every `impl` block of
+    /// the owning crate. "Substantial" excludes thin forwarders/accessors
+    /// (short, branch-free bodies — idiomatic facade plumbing), `#[cfg(test)]`
+    /// items, and methods that only satisfy a standard-library / language
+    /// trait contract (see `std_traits`). Field count is reported for context
+    /// but is owned by `pub_struct_open_fields`, not summed in here — so this
+    /// check measures behaviour concentration, not state size or API breadth.
     pub(crate) warn: usize,
     /// Trait names whose impl methods are standard conformance (idiomatic
     /// plumbing), not accreted responsibility — `Drop`, `Default`, `From`,

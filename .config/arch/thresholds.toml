@@ -64,14 +64,16 @@ warn = 8
 "xtask" = 20
 
 [god_struct]
-# `fields + methods` per struct. Methods are inherent (`impl X`) plus domain
-# trait-impl (`impl DomainTrait for X`) functions, aggregated across every
-# `impl` block (so a type whose surface is split across domain traits still
-# hits the threshold). Excluded from the count: `#[cfg(test)]` items and
-# methods that only satisfy a standard-library / language trait contract
-# (`Drop`, `Default`, `From`, arithmetic, ordering, IO adapters, ...) — these
-# are idiomatic plumbing, not accreted responsibility. Override the set via
-# `std_traits = [...]`. Tuple/unit structs count as zero fields.
+# Substantial methods per type, aggregated across every `impl` block of the
+# owning crate (so a type whose surface is split across sibling files is
+# counted once — moving methods between files cannot lower the count). Measures
+# behaviour concentration, NOT state size: field count is reported for context
+# but owned by `pub_struct_open_fields`, not summed here. Excluded from the
+# count: thin forwarders/accessors (short, branch-free bodies — idiomatic
+# facade plumbing), `#[cfg(test)]` items, and methods that only satisfy a
+# standard-library / language trait contract (`Drop`, `Default`, `From`,
+# arithmetic, ordering, IO adapters, ...). Override the trait set via
+# `std_traits = [...]`.
 warn = 15
 
 [god_trait]

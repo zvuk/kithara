@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use anyhow::Result;
-use syn::{Fields, ImplItem, Item, ItemImpl, ItemStruct, Type};
+use syn::{Block, Expr, Fields, ImplItem, Item, ItemImpl, ItemStruct, Stmt, Type};
 
 use super::{Check, Context};
 use crate::common::{
@@ -34,22 +34,21 @@ impl Check for GodStruct {
                 .replace('\\', "/");
 
             let mut structs: BTreeMap<String, usize> = BTreeMap::new();
-            let mut impl_fns: BTreeMap<String, usize> = BTreeMap::new();
-            collect(&file.items, &std_traits, &mut structs, &mut impl_fns);
+            let mut methods: BTreeMap<String, usize> = BTreeMap::new();
+            collect(&file.items, &std_traits, &mut structs, &mut methods);
             scans.push(FileScan {
                 rel,
                 structs,
-                impl_fns,
+                methods,
             });
         }
 
         let violations = aggregate(scans, cfg.warn)
             .into_iter()
             .map(|hit| {
-                let total = hit.fields + hit.fns;
                 let msg = format!(
-                    "{}: {} fields + {} methods = {total} (warn threshold {})",
-                    hit.name, hit.fields, hit.fns, cfg.warn
+                    "{}: {} substantial methods, {} fields (warn threshold {})",
+                    hit.name, hit.methods, hit.fields, cfg.warn
                 );
                 Violation::warn(ID, hit.key, msg)
             })
@@ -59,11 +58,13 @@ impl Check for GodStruct {
 }
 
 /// One file's contribution: structs defined here (`name -> field count`) and
-/// methods found here (`name -> count`, std-trait/test impls already filtered).
+/// substantial methods found here (`name -> count`). Thin forwarder/accessor
+/// methods, std-trait conformance, and `#[cfg(test)]` items are already
+/// filtered out by [`collect`].
 struct FileScan {
     rel: String,
     structs: BTreeMap<String, usize>,
-    impl_fns: BTreeMap<String, usize>,
+    methods: BTreeMap<String, usize>,
 }
 
 /// A flagged type after cross-file aggregation. `key` is `<def-file>::<name>`.
@@ -71,22 +72,26 @@ struct GodHit {
     key: String,
     name: String,
     fields: usize,
-    fns: usize,
+    methods: usize,
 }
 
 #[derive(Default)]
 struct CrateScan {
     /// `name -> (file where the struct is defined, field count)`.
     structs: BTreeMap<String, (String, usize)>,
-    /// `name -> methods summed across this crate's files`.
-    impl_fns: BTreeMap<String, usize>,
+    /// `name -> substantial methods summed across this crate's files`.
+    methods: BTreeMap<String, usize>,
 }
 
-/// Aggregate a type's `fields + methods` across every file of its owning crate,
-/// so a god type whose `impl` blocks are spread over sibling files is counted
-/// once by its true surface — and moving methods between files cannot lower the
-/// count. Scoped per crate (`crates/<name>`), never workspace-wide, so two
-/// same-named types in different crates stay separate.
+/// Aggregate a type's substantial-method count across every file of its owning
+/// crate, so a god type whose `impl` blocks are spread over sibling files is
+/// counted once by its true behaviour surface — and moving methods between
+/// files cannot lower the count. Scoped per crate (`crates/<name>`), never
+/// workspace-wide, so two same-named types in different crates stay separate.
+///
+/// The metric is substantial methods only. Field count is reported for context
+/// but is owned by `pub_struct_open_fields`; thin forwarders/accessors are
+/// idiomatic plumbing, not concentrated responsibility (see [`is_thin`]).
 fn aggregate(scans: Vec<FileScan>, warn: usize) -> Vec<GodHit> {
     let mut crates: BTreeMap<String, CrateScan> = BTreeMap::new();
     for scan in scans {
@@ -97,21 +102,21 @@ fn aggregate(scans: Vec<FileScan>, warn: usize) -> Vec<GodHit> {
                 .entry(name)
                 .or_insert_with(|| (scan.rel.clone(), fields));
         }
-        for (name, n) in scan.impl_fns {
-            *entry.impl_fns.entry(name).or_insert(0) += n;
+        for (name, n) in scan.methods {
+            *entry.methods.entry(name).or_insert(0) += n;
         }
     }
 
     let mut hits = Vec::new();
     for entry in crates.values() {
         for (name, (def_rel, fields)) in &entry.structs {
-            let fns = entry.impl_fns.get(name).copied().unwrap_or(0);
-            if fields + fns >= warn {
+            let methods = entry.methods.get(name).copied().unwrap_or(0);
+            if methods >= warn {
                 hits.push(GodHit {
                     key: format!("{def_rel}::{name}"),
                     name: name.clone(),
                     fields: *fields,
-                    fns,
+                    methods,
                 });
             }
         }
@@ -134,7 +139,7 @@ fn collect(
     items: &[Item],
     std_traits: &HashSet<&str>,
     structs: &mut BTreeMap<String, usize>,
-    impl_fns: &mut BTreeMap<String, usize>,
+    methods: &mut BTreeMap<String, usize>,
 ) {
     for item in items {
         match item {
@@ -146,25 +151,53 @@ fn collect(
             Item::Impl(im) if trait_name(im).is_some_and(|t| std_traits.contains(t.as_str())) => {}
             Item::Impl(im) => {
                 if let Some(name) = self_ty_name(im) {
-                    let fns = im
+                    let n = im
                         .items
                         .iter()
-                        .filter(
-                            |it| matches!(it, ImplItem::Fn(f) if !attrs_have_cfg_test(&f.attrs)),
-                        )
+                        .filter(|it| match it {
+                            ImplItem::Fn(f) => !attrs_have_cfg_test(&f.attrs) && !is_thin(&f.block),
+                            _ => false,
+                        })
                         .count();
-                    *impl_fns.entry(name).or_insert(0) += fns;
+                    *methods.entry(name).or_insert(0) += n;
                 }
             }
             Item::Mod(m) if attrs_have_cfg_test(&m.attrs) => {}
             Item::Mod(m) => {
                 if let Some((_, inner)) = &m.content {
-                    collect(inner, std_traits, structs, impl_fns);
+                    collect(inner, std_traits, structs, methods);
                 }
             }
             _ => {}
         }
     }
+}
+
+/// A method body is "thin" — a forwarder or accessor, not concentrated
+/// behaviour — when it has at most three statements and no top-level control
+/// flow. Such methods (`fn x(&self) -> u32 { self.x.load(..) }`,
+/// `fn pause(&self) { self.send(..) }`) are idiomatic facade plumbing and do
+/// not count toward the god-struct total.
+fn is_thin(block: &Block) -> bool {
+    block.stmts.len() <= 3 && !block.stmts.iter().any(stmt_has_control_flow)
+}
+
+fn stmt_has_control_flow(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Expr(e, _) => expr_is_control_flow(e),
+        Stmt::Local(l) => l
+            .init
+            .as_ref()
+            .is_some_and(|i| expr_is_control_flow(&i.expr)),
+        _ => false,
+    }
+}
+
+fn expr_is_control_flow(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::If(_) | Expr::Match(_) | Expr::While(_) | Expr::ForLoop(_) | Expr::Loop(_)
+    )
 }
 
 fn count_fields(s: &ItemStruct) -> usize {
@@ -193,83 +226,89 @@ fn trait_name(im: &ItemImpl) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// Returns `(fields, substantial_methods)` for `name` in a single source.
     fn counts(src: &str, name: &str) -> (usize, usize) {
         let std_traits: HashSet<&str> = ["Drop", "Default", "Debug", "From", "Add", "Ord"]
             .into_iter()
             .collect();
         let file: syn::File = syn::parse_str(src).expect("valid Rust source");
         let mut structs = BTreeMap::new();
-        let mut impl_fns = BTreeMap::new();
-        collect(&file.items, &std_traits, &mut structs, &mut impl_fns);
+        let mut methods = BTreeMap::new();
+        collect(&file.items, &std_traits, &mut structs, &mut methods);
         (
             structs.get(name).copied().unwrap_or(0),
-            impl_fns.get(name).copied().unwrap_or(0),
+            methods.get(name).copied().unwrap_or(0),
         )
     }
 
     #[test]
-    fn production_fields_and_methods_are_counted() {
-        let src = "struct S { a: u8, b: u8 }\n\
-                   impl S { fn one(&self) {} fn two(&self) {} }\n";
-        assert_eq!(counts(src, "S"), (2, 2));
-    }
-
-    #[test]
-    fn cfg_test_impl_and_methods_are_excluded() {
+    fn substantial_methods_count_thin_forwarders_do_not() {
+        // `tall` has a 4-statement body; `forward`/`get` are thin plumbing.
         let src = "struct S { a: u8 }\n\
-                   impl S { fn prod(&self) {} #[cfg(test)] fn helper(&self) {} }\n\
-                   #[cfg(test)]\n\
-                   impl S { fn t1(&self) {} fn t2(&self) {} }\n";
-        // Only the one production method counts; the cfg(test) method and the
-        // whole cfg(test) impl block are skipped.
+                   impl S {\n\
+                       fn tall(&self) { let a = 1; let b = 2; let c = 3; let _ = a + b + c; }\n\
+                       fn forward(&self) { self.inner.send(); }\n\
+                       fn get(&self) -> u8 { self.a }\n\
+                   }\n";
         assert_eq!(counts(src, "S"), (1, 1));
     }
 
     #[test]
-    fn std_trait_methods_are_excluded_domain_trait_methods_counted() {
-        let src = "struct S { a: u8 }\n\
-                   impl S { fn prod(&self) {} }\n\
-                   impl std::ops::Add for S { type Output = S; fn add(self, o: S) -> S { o } }\n\
-                   impl Drop for S { fn drop(&mut self) {} }\n\
-                   impl Decoder for S { fn decode(&self) {} fn reset(&self) {} }\n";
-        // 1 inherent + 2 domain-trait (Decoder); Add and Drop are std plumbing.
-        assert_eq!(counts(src, "S"), (1, 3));
+    fn control_flow_makes_a_short_method_substantial() {
+        let src = "struct S;\n\
+                   impl S {\n\
+                       fn branchy(&self) { if self.ok() { self.go() } }\n\
+                       fn loopy(&self) { for x in self.iter() { drop(x) } }\n\
+                       fn thin(&self) { self.x() }\n\
+                   }\n";
+        assert_eq!(counts(src, "S"), (0, 2));
     }
 
     #[test]
-    fn cfg_test_module_contents_are_excluded() {
-        let src = "struct S { a: u8 }\n\
-                   impl S { fn prod(&self) {} }\n\
+    fn cfg_test_impls_and_methods_are_excluded() {
+        let src = "struct S;\n\
+                   impl S { fn prod(&self) { if self.a() { self.b() } } #[cfg(test)] fn helper(&self) { if x() { y() } } }\n\
                    #[cfg(test)]\n\
-                   mod tests { impl super::S { fn t(&self) {} } }\n";
-        assert_eq!(counts(src, "S"), (1, 1));
+                   impl S { fn t1(&self) { if a() { b() } } }\n";
+        assert_eq!(counts(src, "S"), (0, 1));
     }
 
-    fn scan(rel: &str, structs: &[(&str, usize)], fns: &[(&str, usize)]) -> FileScan {
+    #[test]
+    fn std_trait_methods_excluded_domain_trait_methods_counted() {
+        let src = "struct S;\n\
+                   impl std::ops::Add for S { type Output = S; fn add(self, o: S) -> S { if x() { o } else { o } } }\n\
+                   impl Decoder for S { fn decode(&self) { while a() { b() } } fn reset(&self) { for _ in z() { w() } } }\n";
+        // Add is std plumbing (excluded); both Decoder methods are substantial.
+        assert_eq!(counts(src, "S"), (0, 2));
+    }
+
+    fn scan(rel: &str, structs: &[(&str, usize)], methods: &[(&str, usize)]) -> FileScan {
         FileScan {
             rel: rel.to_string(),
             structs: structs
                 .iter()
                 .map(|(n, c)| ((*n).to_string(), *c))
                 .collect(),
-            impl_fns: fns.iter().map(|(n, c)| ((*n).to_string(), *c)).collect(),
+            methods: methods
+                .iter()
+                .map(|(n, c)| ((*n).to_string(), *c))
+                .collect(),
         }
     }
 
     fn hit(hits: &[GodHit], key: &str) -> Option<(usize, usize)> {
         hits.iter()
             .find(|h| h.key == key)
-            .map(|h| (h.fields, h.fns))
+            .map(|h| (h.fields, h.methods))
     }
 
     #[test]
     fn methods_aggregate_across_a_crates_files() {
-        // Type defined in state.rs, impls split across state.rs + access.rs.
         let scans = vec![
             scan(
                 "crates/kithara-queue/src/queue/state.rs",
                 &[("Queue", 6)],
-                &[("Queue", 4)],
+                &[("Queue", 9)],
             ),
             scan(
                 "crates/kithara-queue/src/queue/access.rs",
@@ -278,10 +317,10 @@ mod tests {
             ),
         ];
         let hits = aggregate(scans, 15);
-        // 6 fields + (4 + 8) methods = 18, keyed by the struct-def file, once.
+        // 9 + 8 = 17 substantial methods, keyed by the struct-def file, once.
         assert_eq!(
             hit(&hits, "crates/kithara-queue/src/queue/state.rs::Queue"),
-            Some((6, 12))
+            Some((6, 17))
         );
         assert_eq!(hits.len(), 1);
     }
@@ -290,32 +329,39 @@ mod tests {
     fn moving_a_method_between_files_does_not_change_the_count() {
         let before = aggregate(
             vec![
-                scan("crates/x/src/a.rs", &[("G", 3)], &[("G", 9)]),
+                scan("crates/x/src/a.rs", &[("G", 3)], &[("G", 12)]),
                 scan("crates/x/src/b.rs", &[], &[("G", 4)]),
             ],
             15,
         );
         let after = aggregate(
             vec![
-                scan("crates/x/src/a.rs", &[("G", 3)], &[("G", 5)]),
-                scan("crates/x/src/b.rs", &[], &[("G", 8)]),
+                scan("crates/x/src/a.rs", &[("G", 3)], &[("G", 6)]),
+                scan("crates/x/src/b.rs", &[], &[("G", 10)]),
             ],
             15,
         );
-        assert_eq!(hit(&before, "crates/x/src/a.rs::G"), Some((3, 13)));
-        assert_eq!(hit(&after, "crates/x/src/a.rs::G"), Some((3, 13)));
+        assert_eq!(hit(&before, "crates/x/src/a.rs::G"), Some((3, 16)));
+        assert_eq!(hit(&after, "crates/x/src/a.rs::G"), Some((3, 16)));
+    }
+
+    #[test]
+    fn fields_alone_do_not_flag_a_struct() {
+        // 30 fields, only 2 substantial methods: a config/state struct, not a
+        // behaviour god — owned by `pub_struct_open_fields`, not god_struct.
+        let scans = vec![scan("crates/x/src/cfg.rs", &[("Cfg", 30)], &[("Cfg", 2)])];
+        assert!(aggregate(scans, 15).is_empty());
     }
 
     #[test]
     fn same_name_in_different_crates_stays_separate() {
         let scans = vec![
-            scan("crates/a/src/lib.rs", &[("Config", 20)], &[("Config", 0)]),
-            scan("crates/b/src/lib.rs", &[("Config", 2)], &[("Config", 3)]),
+            scan("crates/a/src/lib.rs", &[("Job", 0)], &[("Job", 20)]),
+            scan("crates/b/src/lib.rs", &[("Job", 2)], &[("Job", 3)]),
         ];
         let hits = aggregate(scans, 15);
-        // a::Config crosses the threshold; b::Config (5) does not — no merge.
-        assert_eq!(hit(&hits, "crates/a/src/lib.rs::Config"), Some((20, 0)));
-        assert_eq!(hit(&hits, "crates/b/src/lib.rs::Config"), None);
+        assert_eq!(hit(&hits, "crates/a/src/lib.rs::Job"), Some((0, 20)));
+        assert_eq!(hit(&hits, "crates/b/src/lib.rs::Job"), None);
     }
 
     #[test]
