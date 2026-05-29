@@ -99,7 +99,7 @@ class KitharaPlayer(config: Config = Config()) {
     val currentAudioItem: KitharaPlayerItem?
         get() {
             val ffiItem = inner.currentItem() ?: return null
-            val id = ffiItem.audioId()
+            val id = ffiItem.audioId().toString()
             return state.value.items.firstOrNull { it.id == id }
         }
 
@@ -355,12 +355,12 @@ class KitharaPlayer(config: Config = Config()) {
                 updateState { it.copy(error = KitharaError.Internal(event.error)) }
 
             is FfiPlayerEvent.CurrentItemChanged ->
-                eventsFlow.tryEmit(KitharaPlayerEvent.CurrentItemChanged(event.itemId))
+                eventsFlow.tryEmit(KitharaPlayerEvent.CurrentItemChanged(event.itemId?.toString()))
 
             is FfiPlayerEvent.TrackStatusChanged ->
                 eventsFlow.tryEmit(
                     KitharaPlayerEvent.TrackStatusChanged(
-                        event.itemId,
+                        event.itemId.toString(),
                         event.status.toTrackStatus(),
                     )
                 )
@@ -368,6 +368,8 @@ class KitharaPlayer(config: Config = Config()) {
             is FfiPlayerEvent.QueueEnded ->
                 eventsFlow.tryEmit(KitharaPlayerEvent.QueueEnded)
 
+            // Per-track failure is surfaced via TrackStatusChanged(Failed) and item-side DidFail.
+            is FfiPlayerEvent.ItemDidFail,
             is FfiPlayerEvent.TimeControlStatusChanged,
             is FfiPlayerEvent.VolumeChanged,
             is FfiPlayerEvent.MuteChanged,
