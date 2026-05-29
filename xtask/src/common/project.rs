@@ -15,6 +15,20 @@ pub(crate) struct ProjectConfig {
     pub(crate) project: ProjectIdentity,
     pub(crate) health: HealthConfig,
     pub(crate) publish: PublishConfig,
+    pub(crate) lint_exclude: LintExcludeConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct LintExcludeConfig {
+    /// Workspace-relative globs whose violations are dropped from every lint
+    /// namespace (`arch`, `style`, `idioms`) so baselines measure production
+    /// debt, not test code. `#[cfg(test)]` blocks are stripped automatically
+    /// (AST) on top of this — no glob can match inline test modules.
+    pub(crate) paths: Vec<String>,
+    /// Inline-module names / `::`-paths whose violations are dropped from every
+    /// lint namespace, regardless of file.
+    pub(crate) modules: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

@@ -3,20 +3,9 @@
 # guard_cascade limits trimmed to surface more hot-path branch-prediction
 # offenders (see plan: Bug #2 hot-path optimization).
 
-# Workspace-relative globs whose violations are dropped from every idioms
-# check before baseline-write and ratchet-diff. Idioms target production
-# runtime quality; test code, compile-time test-infra crates, and build
-# scripts (compile-time, never on a runtime path) are exempt (per project
-# policy).
-exclude_paths = [
-    "**/tests/**",
-    "**/tests.rs",
-    "**/*_test.rs",
-    "**/test_*.rs",
-    "crates/kithara-test-utils/**",
-    "crates/kithara-test-macros/**",
-    "**/build.rs",
-]
+# Test-code / build-script exclusion is now shared across all lint namespaces
+# via `.config/xtask.toml` [lint_exclude] (paths + automatic #[cfg(test)] AST
+# stripping). This file only carries idioms-specific thresholds.
 
 [branch_chains]
 # Strongest match-conversion hint — homogeneous chains test the same

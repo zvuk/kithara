@@ -19,20 +19,6 @@ impl IdiomsConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ThresholdsConfig {
-    /// Workspace-relative glob patterns whose matching violations are
-    /// dropped from every idioms check before baseline-write and
-    /// ratchet-diff. Idioms target production runtime quality; test code
-    /// and compile-time test-infra crates are exempt.
-    #[serde(default)]
-    pub(crate) exclude_paths: Vec<String>,
-    /// Inline-module names / `::`-paths whose violations are dropped from
-    /// every idioms check, regardless of file. Complements `exclude_paths`
-    /// (file-glob) and the built-in `#[cfg(test)]` exclusion: lets a project
-    /// scope out a whole `mod legacy {}` / `mod compat {}` block without
-    /// listing every file. A pattern matches a `mod` item if it globs the
-    /// module's leaf name or its file-relative `::`-path.
-    #[serde(default)]
-    pub(crate) exclude_modules: Vec<String>,
     #[serde(default)]
     pub(crate) branch_chains: BranchChainsConfig,
     #[serde(default)]

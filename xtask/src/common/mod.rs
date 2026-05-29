@@ -8,6 +8,7 @@
 //! - `report` — markdown / JSON renderers
 
 pub(crate) mod baseline;
+pub(crate) mod exclude;
 pub(crate) mod fix;
 pub(crate) mod parse;
 pub(crate) mod project;
