@@ -37,3 +37,22 @@ count_if_let = false
 # flow that the parallel-compute+tuple-match remedy does not improve; the
 # decision-table anti-pattern is meaningful at 4+. See module docs.
 warn_streak = 4
+
+[retry_fallback]
+# retry_fallback flags retry/fallback vocabulary (max_retries, should_retry,
+# attempt, ...) to catch try-A-else-B chains that paper over state bugs. The
+# files below legitimately OWN that vocabulary and are not fallback chains, so
+# they are out of scope (AGENTS.md permits justified degraded-mode operation):
+#   - kithara-net retry subsystem: bounded HTTP backoff on 5xx/429/timeout
+#     (RetryPolicy / should_retry / RetryExhausted) — degraded-mode network I/O.
+#   - seek/recreate FSM + SeekRejected event: `attempt`/`attempts` are bounded
+#     state-machine counters and telemetry, not control-flow fallbacks.
+exempt_files = [
+    "**/tests/**",
+    "**/benches/**",
+    "crates/kithara-net/src/error.rs",
+    "crates/kithara-net/src/retry.rs",
+    "crates/kithara-net/src/types.rs",
+    "crates/kithara-audio/src/pipeline/track_fsm.rs",
+    "crates/kithara-events/src/audio.rs",
+]

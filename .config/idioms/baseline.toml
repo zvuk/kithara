@@ -38,14 +38,3 @@ schema_version = 1
 "crates/kithara-encode/src/ffmpeg/flac.rs:294:19" = 1
 "crates/kithara-ffi/src/player.rs:186:34" = 1
 "crates/kithara-play/src/impls/player.rs:425:21" = 1
-
-[retry_fallback]
-"crates/kithara-audio/src/pipeline/track_fsm.rs:51:attempt" = 1
-"crates/kithara-audio/src/pipeline/track_fsm.rs:90:attempt" = 1
-"crates/kithara-events/src/audio.rs:107:attempts" = 1
-"crates/kithara-net/src/error.rs:16:max_retries" = 1
-"crates/kithara-net/src/error.rs:44:is_retryable" = 1
-"crates/kithara-net/src/retry.rs:140:max_attempts" = 1
-"crates/kithara-net/src/retry.rs:144:should_retry" = 1
-"crates/kithara-net/src/retry.rs:36:should_retry" = 1
-"crates/kithara-net/src/types.rs:87:max_retries" = 1
