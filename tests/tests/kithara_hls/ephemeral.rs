@@ -3,7 +3,7 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::{fs, path::Path};
 
-use kithara::assets::{AssetStoreBuilder, ResourceHandle, ResourceKey};
+use kithara::assets::{AssetStoreBuilder, ResourceHandle};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
     assets::StoreOptions,
@@ -41,16 +41,17 @@ fn backend_resource_path_follows_ephemeral_flag(
     #[case] expect_path: bool,
 ) {
     let temp = TestTempDir::new();
-    let mut builder = AssetStoreBuilder::new()
-        .asset_root(Some("test"))
-        .ephemeral(ephemeral);
+    let mut builder = AssetStoreBuilder::new().ephemeral(ephemeral);
     if !ephemeral {
         builder = builder.root_dir(temp.path());
     }
-    let backend = builder.build();
+    let scope = builder.build().scope("test");
 
-    let key = ResourceKey::new("seg_0.m4s");
-    let res = backend.acquire_resource(&key).expect("open resource");
+    let key = scope.key("seg_0.m4s");
+    let res = scope
+        .store()
+        .acquire_resource(&key, None)
+        .expect("open resource");
 
     assert_eq!(
         res.path().is_some(),

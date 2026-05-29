@@ -42,21 +42,111 @@ pub(crate) fn apply_effects(
     Some(chunk)
 }
 
-/// Flush effects chain at end of stream.
-pub(crate) fn flush_effects(effects: &mut [Box<dyn AudioEffect>]) -> Option<PcmChunk> {
-    let mut chunk: Option<PcmChunk> = None;
+/// Fully drain the effect chain at the end of the stream.
+///
+/// A buffering effect can hold a tail that needs several `flush()` pulls, and that tail must
+/// still pass through every downstream effect.
+pub(crate) fn drain_effects(effects: &mut [Box<dyn AudioEffect>]) -> Vec<PcmChunk> {
+    let mut carry: Vec<PcmChunk> = Vec::new();
     for effect in &mut *effects {
-        chunk = match chunk.take() {
-            Some(input) => effect.process(input),
-            None => effect.flush(),
-        };
+        let mut produced: Vec<PcmChunk> = Vec::new();
+        for chunk in carry.drain(..) {
+            if let Some(out) = effect.process(chunk) {
+                produced.push(out);
+            }
+        }
+        while let Some(out) = effect.flush() {
+            produced.push(out);
+        }
+        carry = produced;
     }
-    chunk
+    carry
 }
 
 /// Reset effects chain (e.g. after seek).
 pub(crate) fn reset_effects(effects: &mut [Box<dyn AudioEffect>]) {
     for effect in &mut *effects {
         effect.reset();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_bufpool::PcmPool;
+    use kithara_decode::{PcmMeta, PcmSpec};
+    use kithara_test_utils::kithara;
+    use unimock::{MockFn, Unimock, matching};
+
+    use super::*;
+    use crate::traits::AudioEffectMock;
+
+    const SPEC: PcmSpec = PcmSpec {
+        channels: 1,
+        sample_rate: 48_000,
+    };
+
+    fn chunk(range: std::ops::Range<u32>) -> PcmChunk {
+        let samples: Vec<f32> = range.map(|i| i as f32).collect();
+        PcmChunk::new(
+            PcmMeta {
+                spec: SPEC,
+                frames: u32::try_from(samples.len()).unwrap(),
+                ..Default::default()
+            },
+            PcmPool::default().attach(samples),
+        )
+    }
+
+    #[kithara::test]
+    fn drain_effects_extracts_full_multi_stage_tail() {
+        // Stage 0's tail comes out over 3 `flush()` pulls; each must be
+        // fed through stage 1's `process()`, then stage 1 must itself
+        // be flushed to exhaustion. A single-pass flush would stop after
+        // the first stage-0 chunk and truncate the rest.
+        let stage0 = Box::new(Unimock::new((
+            AudioEffectMock::flush
+                .next_call(matching!())
+                .returns(Some(chunk(0..200))),
+            AudioEffectMock::flush
+                .next_call(matching!())
+                .returns(Some(chunk(200..400))),
+            AudioEffectMock::flush
+                .next_call(matching!())
+                .returns(Some(chunk(400..600))),
+            AudioEffectMock::flush.next_call(matching!()).returns(None),
+        )));
+        let stage1 = Box::new(Unimock::new((
+            AudioEffectMock::process
+                .each_call(matching!())
+                .returns(None), // buffers all 3 carried chunks
+            AudioEffectMock::flush
+                .next_call(matching!())
+                .returns(Some(chunk(0..250))),
+            AudioEffectMock::flush
+                .next_call(matching!())
+                .returns(Some(chunk(250..500))),
+            AudioEffectMock::flush
+                .next_call(matching!())
+                .returns(Some(chunk(500..600))),
+            AudioEffectMock::flush.next_call(matching!()).returns(None),
+        )));
+
+        let mut chain: Vec<Box<dyn AudioEffect>> = vec![stage0, stage1];
+        let out = drain_effects(&mut chain);
+        let total: Vec<f32> = out.iter().flat_map(|c| c.pcm.iter().copied()).collect();
+
+        assert!(
+            out.len() > 1,
+            "tail spans multiple flush pulls (got {})",
+            out.len()
+        );
+        let expected: Vec<f32> = (0..600).map(|i| i as f32).collect();
+        assert_eq!(total, expected, "no tail truncation across the chain");
+    }
+
+    #[kithara::test]
+    fn drain_effects_empty_chain_for_non_buffering() {
+        let mut chain: Vec<Box<dyn AudioEffect>> = Vec::new();
+        assert!(drain_effects(&mut chain).is_empty());
     }
 }

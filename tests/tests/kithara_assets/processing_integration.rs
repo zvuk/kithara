@@ -7,7 +7,7 @@ use std::sync::{
 
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::EvictConfig;
-use kithara::assets::{AssetStoreBuilder, ProcessChunkFn, ResourceHandle, ResourceKey};
+use kithara::assets::{AssetScope, AssetStoreBuilder, ProcessChunkFn, ResourceHandle};
 use kithara_integration_tests::temp_dir;
 use kithara_platform::time::Duration;
 
@@ -31,14 +31,12 @@ fn create_xor_chunk_callback(call_count: Arc<AtomicUsize>) -> ProcessChunkFn<Tes
     )
 }
 
-fn build_test_processing_store(
+fn build_test_processing_scope(
     temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
     process_fn: ProcessChunkFn<TestContext>,
-) -> kithara::assets::AssetStore<TestContext> {
-    let builder = AssetStoreBuilder::new()
-        .asset_root(Some(asset_root))
-        .process_fn(process_fn);
+) -> AssetScope<TestContext> {
+    let builder = AssetStoreBuilder::new().process_fn(process_fn);
     #[cfg(not(target_arch = "wasm32"))]
     {
         builder
@@ -48,36 +46,37 @@ fn build_test_processing_store(
                 max_bytes: None,
             })
             .build()
+            .scope(asset_root)
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = temp_dir;
-        builder.ephemeral(true).build()
+        builder.ephemeral(true).build().scope(asset_root)
     }
 }
 
-fn build_test_store_no_processing(
+fn build_test_scope_no_processing(
     temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
-) -> kithara::assets::AssetStore {
+) -> AssetScope {
     #[cfg(not(target_arch = "wasm32"))]
     {
         AssetStoreBuilder::new()
             .root_dir(temp_dir.path())
-            .asset_root(Some(asset_root))
             .evict_config(EvictConfig {
                 max_assets: None,
                 max_bytes: None,
             })
             .build()
+            .scope(asset_root)
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = temp_dir;
         AssetStoreBuilder::new()
             .ephemeral(true)
-            .asset_root(Some(asset_root))
             .build()
+            .scope(asset_root)
     }
 }
 
@@ -85,19 +84,20 @@ fn build_test_store_no_processing(
 fn processing_transforms_data_on_commit(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    let store = build_test_processing_store(
+    let scope = build_test_processing_scope(
         &temp_dir,
         "test-processing",
         create_xor_chunk_callback(Arc::clone(&call_count)),
     );
 
-    let key = ResourceKey::new("data.bin");
+    let key = scope.key("data.bin");
 
     let original_data = b"Hello, World! This is test data for processing.";
     let ctx = TestContext { xor_key: 0x42 };
     {
-        let res = store
-            .acquire_resource_with_ctx(&key, Some(ctx.clone()))
+        let res = scope
+            .store()
+            .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
             .unwrap();
         res.write_at(0, original_data).unwrap();
 
@@ -106,7 +106,10 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_integration_tests::Tes
 
     assert!(call_count.load(Ordering::SeqCst) > 0);
 
-    let processed_res = store.open_resource_with_ctx(&key, Some(ctx)).unwrap();
+    let processed_res = scope
+        .store()
+        .open_resource_with_ctx(&key, None, Some(ctx))
+        .unwrap();
 
     let mut buf = vec![0u8; original_data.len()];
     let n = processed_res.read_at(0, &mut buf).unwrap();
@@ -120,27 +123,29 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_integration_tests::Tes
 fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    let store = build_test_processing_store(
+    let scope = build_test_processing_scope(
         &temp_dir,
         "test-cache",
         create_xor_chunk_callback(Arc::clone(&call_count)),
     );
 
-    let key = ResourceKey::new("cached.bin");
+    let key = scope.key("cached.bin");
     let ctx = TestContext { xor_key: 0xAB };
 
     let original_data = b"Data for caching test";
     {
-        let res = store
-            .acquire_resource_with_ctx(&key, Some(ctx.clone()))
+        let res = scope
+            .store()
+            .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
             .unwrap();
         res.write_at(0, original_data).unwrap();
         res.commit(Some(original_data.len() as u64)).unwrap();
     }
     let count_after_commit = call_count.load(Ordering::SeqCst);
 
-    let processed_res = store
-        .open_resource_with_ctx(&key, Some(ctx.clone()))
+    let processed_res = scope
+        .store()
+        .open_resource_with_ctx(&key, None, Some(ctx.clone()))
         .unwrap();
     let mut buf1 = vec![0u8; original_data.len()];
     processed_res.read_at(0, &mut buf1).unwrap();
@@ -161,25 +166,29 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_integration_te
 fn processing_partial_reads_work_correctly(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    let store = build_test_processing_store(
+    let scope = build_test_processing_scope(
         &temp_dir,
         "test-partial",
         create_xor_chunk_callback(Arc::clone(&call_count)),
     );
 
-    let key = ResourceKey::new("partial.bin");
+    let key = scope.key("partial.bin");
     let ctx = TestContext { xor_key: 0xFF };
 
     let original_data: Vec<u8> = (0..100).collect();
     {
-        let res = store
-            .acquire_resource_with_ctx(&key, Some(ctx.clone()))
+        let res = scope
+            .store()
+            .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
             .unwrap();
         res.write_at(0, &original_data).unwrap();
         res.commit(Some(original_data.len() as u64)).unwrap();
     }
 
-    let processed_res = store.open_resource_with_ctx(&key, Some(ctx)).unwrap();
+    let processed_res = scope
+        .store()
+        .open_resource_with_ctx(&key, None, Some(ctx))
+        .unwrap();
 
     let mut buf = vec![0u8; 20];
     let n = processed_res.read_at(40, &mut buf).unwrap();
@@ -200,25 +209,29 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_integration_tests::
 fn processing_read_past_end_returns_zero(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    let store = build_test_processing_store(
+    let scope = build_test_processing_scope(
         &temp_dir,
         "test-eof",
         create_xor_chunk_callback(Arc::clone(&call_count)),
     );
 
-    let key = ResourceKey::new("eof.bin");
+    let key = scope.key("eof.bin");
     let ctx = TestContext { xor_key: 0x00 };
 
     let original_data = b"short";
     {
-        let res = store
-            .acquire_resource_with_ctx(&key, Some(ctx.clone()))
+        let res = scope
+            .store()
+            .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
             .unwrap();
         res.write_at(0, original_data).unwrap();
         res.commit(Some(original_data.len() as u64)).unwrap();
     }
 
-    let processed_res = store.open_resource_with_ctx(&key, Some(ctx)).unwrap();
+    let processed_res = scope
+        .store()
+        .open_resource_with_ctx(&key, None, Some(ctx))
+        .unwrap();
 
     let mut buf = vec![0u8; 100];
     let n = processed_res.read_at(100, &mut buf).unwrap();
@@ -227,17 +240,17 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_integration_tests::Te
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn store_without_processing_works_normally(temp_dir: kithara_integration_tests::TestTempDir) {
-    let store = build_test_store_no_processing(&temp_dir, "no-processing");
+    let scope = build_test_scope_no_processing(&temp_dir, "no-processing");
 
-    let key = ResourceKey::new("test.bin");
+    let key = scope.key("test.bin");
 
     {
-        let res = store.acquire_resource(&key).unwrap();
+        let res = scope.store().acquire_resource(&key, None).unwrap();
         res.write_at(0, b"data").unwrap();
         res.commit(Some(4)).unwrap();
     }
 
-    let res = store.open_resource(&key).unwrap();
+    let res = scope.store().open_resource(&key, None).unwrap();
     let mut buf = vec![0u8; 4];
     let n = res.read_at(0, &mut buf).unwrap();
     assert_eq!(n, 4);

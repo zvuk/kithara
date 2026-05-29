@@ -302,7 +302,7 @@ core-foundation-sys = "0.8"
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
 
 # UI frameworks
-iced = { version = "0.14", features = ["tokio", "svg"] }
+iced = { version = "0.14", features = ["tokio", "svg", "canvas"] }
 iced_aw = { version = "0.14.1", default-features = false, features = ["tabs", "tab_bar", "selection_list"] }
 
 # CLI

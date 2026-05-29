@@ -165,7 +165,7 @@ mod tests {
             .send()
             .await
             .unwrap();
-        assert_eq!(full.status(), reqwest::StatusCode::OK);
+        assert_eq!(full.status(), StatusCode::OK);
         assert_eq!(full.headers()["content-type"], "audio/mpeg");
         assert_eq!(full.bytes().await.unwrap().as_ref(), b"0123456789");
 
@@ -175,7 +175,7 @@ mod tests {
             .send()
             .await
             .unwrap();
-        assert_eq!(part.status(), reqwest::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(part.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(part.bytes().await.unwrap().as_ref(), b"2345");
 
         assert_eq!(state.behavior_hits(&token), Some(2));
@@ -193,7 +193,7 @@ mod tests {
         let resp = reqwest::get(server.url(&format!("/behavior/{token}")))
             .await
             .unwrap();
-        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.headers()["content-type"], "text/html");
         assert!(resp.text().await.unwrap().contains("captive portal"));
 
@@ -221,8 +221,8 @@ mod tests {
             .await;
         let body = match resp {
             Ok(resp) => {
-                assert_eq!(resp.status(), reqwest::StatusCode::OK);
-                assert_eq!(resp.headers()[reqwest::header::CONTENT_LENGTH], "1000");
+                assert_eq!(resp.status(), StatusCode::OK);
+                assert_eq!(resp.headers()[header::CONTENT_LENGTH], "1000");
                 resp.bytes().await
             }
             Err(err) => Err(err),
@@ -238,7 +238,7 @@ mod tests {
             .send()
             .await
             .unwrap();
-        assert_eq!(part.status(), reqwest::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(part.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(part.bytes().await.unwrap().len(), 100);
     }
 
@@ -259,7 +259,7 @@ mod tests {
         let resp = reqwest::get(server.url(&format!("/behavior/{token}")))
             .await
             .unwrap();
-        assert_eq!(resp.headers()[reqwest::header::CONTENT_LENGTH], "50");
+        assert_eq!(resp.headers()[header::CONTENT_LENGTH], "50");
         assert_eq!(resp.bytes().await.unwrap().len(), 50);
     }
 
@@ -277,7 +277,7 @@ mod tests {
         let resp = reqwest::get(server.url(&format!("/behavior/{token}/x.mp3")))
             .await
             .unwrap();
-        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.bytes().await.unwrap().as_ref(), b"abcdef");
         assert_eq!(state.behavior_hits(&token), Some(1));
     }

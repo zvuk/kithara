@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use bytes::Bytes;
-use kithara_assets::{AssetStore, ResourceHandle, ResourceKey};
+use kithara_assets::{AssetScope, ResourceHandle, ResourceKey};
 use kithara_bufpool::BytePool;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
@@ -24,30 +24,30 @@ use crate::{HlsError, HlsResult};
 /// commit.
 pub(crate) async fn fetch_atomic_body(
     downloader: &PeerHandle,
-    backend: &AssetStore<DecryptContext>,
+    scope: &AssetScope<DecryptContext>,
     byte_pool: &BytePool,
     headers: Option<Headers>,
     url: &Url,
     rel_path: &str,
     resource_kind: &str,
 ) -> HlsResult<Bytes> {
-    let key = ResourceKey::from(url);
-    if let Some(bytes) = try_read_cached(backend, byte_pool, &key, url, rel_path, resource_kind)? {
+    let key = scope.key(rel_path);
+    if let Some(bytes) = try_read_cached(scope, byte_pool, &key, url, rel_path, resource_kind)? {
         return Ok(bytes);
     }
 
     debug!(
         url = %url,
-        asset_root = %backend.asset_root(),
+        asset_root = %scope.asset_root(),
         rel_path = %rel_path,
         resource_kind,
         "kithara-hls: cache miss -> fetching from network"
     );
 
-    let res = backend.acquire_resource(&key)?.retain();
+    let res = scope.store().acquire_resource(&key, None)?.retain();
     let bytes = download_atomic_bytes(downloader, url.clone(), headers).await?;
 
-    write_back_cache(&res, &bytes, backend, url, rel_path, resource_kind);
+    write_back_cache(&res, &bytes, scope, url, rel_path, resource_kind);
 
     Ok(bytes)
 }
@@ -55,14 +55,14 @@ pub(crate) async fn fetch_atomic_body(
 /// Try to read the resource from the cache. Returns `Ok(Some(bytes))`
 /// on a cache hit, `Ok(None)` on miss.
 pub(crate) fn try_read_cached(
-    backend: &AssetStore<DecryptContext>,
+    scope: &AssetScope<DecryptContext>,
     byte_pool: &BytePool,
     key: &ResourceKey,
     url: &Url,
     rel_path: &str,
     resource_kind: &str,
 ) -> HlsResult<Option<Bytes>> {
-    let Ok(res) = backend.open_resource(key) else {
+    let Ok(res) = scope.store().open_resource(key, None) else {
         return Ok(None);
     };
     let mut buf = byte_pool.get();
@@ -73,7 +73,7 @@ pub(crate) fn try_read_cached(
     let _pinned = res.retain();
     debug!(
         url = %url,
-        asset_root = %backend.asset_root(),
+        asset_root = %scope.asset_root(),
         rel_path = %rel_path,
         bytes = n,
         resource_kind,
@@ -89,7 +89,7 @@ pub(crate) fn try_read_cached(
 pub(crate) fn write_back_cache(
     res: &kithara_assets::AssetResource<DecryptContext>,
     bytes: &Bytes,
-    backend: &AssetStore<DecryptContext>,
+    scope: &AssetScope<DecryptContext>,
     url: &Url,
     rel_path: &str,
     resource_kind: &str,
@@ -104,7 +104,7 @@ pub(crate) fn write_back_cache(
     } else {
         debug!(
             url = %url,
-            asset_root = %backend.asset_root(),
+            asset_root = %scope.asset_root(),
             rel_path = %rel_path,
             bytes = bytes.len(),
             resource_kind,

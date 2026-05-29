@@ -20,13 +20,12 @@ pub(crate) trait AssetDeleter: Send + Sync + std::fmt::Debug {
     /// different mem backend instance and are unreachable from here.
     fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
 
-    /// Remove a single resource identified by (`asset_root`, `key`).
+    /// Remove a single resource identified by `key`.
     ///
     /// Disk impl: `fs::remove_file` of the resolved path, then
-    /// `availability.remove(asset_root, key)`.
+    /// `availability.remove(key)`.
     ///
-    /// Mem impl: drop the matching `active_resources` entry (only when
-    /// `asset_root` matches the backend's own root — mem backends are
-    /// scoped to a single `asset_root`), then `availability.remove`.
-    fn remove_resource(&self, asset_root: &str, key: &ResourceKey) -> AssetsResult<()>;
+    /// Mem impl: drop the matching `active_resources` entry, then
+    /// `availability.remove(key)`.
+    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
 }

@@ -7,7 +7,7 @@ use std::{
 
 use bytes::Bytes;
 use dashmap::DashMap;
-use kithara_assets::{AssetStore, ResourceHandle, ResourceKey};
+use kithara_assets::{AssetScope, ResourceHandle};
 use kithara_drm::{DecryptContext, KeyProcessorRegistry};
 use kithara_net::Headers;
 use kithara_stream::dl::{FetchCmd, PeerHandle};
@@ -35,7 +35,7 @@ pub struct KeyManager {
     /// persist; the on-the-wire response is encrypted with a fresh
     /// per-session seed and never touches disk.
     decrypted_keys: Arc<DashMap<Url, Bytes>>,
-    backend: AssetStore<DecryptContext>,
+    scope: AssetScope<DecryptContext>,
     /// Byte buffer pool for reading cached key bodies.
     byte_pool: kithara_bufpool::BytePool,
     /// Cache-wide headers (typically equal to `HlsConfig::headers`).
@@ -61,14 +61,14 @@ impl KeyManager {
     #[must_use]
     pub fn new(
         downloader: PeerHandle,
-        backend: AssetStore<DecryptContext>,
+        scope: AssetScope<DecryptContext>,
         base_headers: Option<Headers>,
         key_registry: Option<KeyProcessorRegistry>,
         byte_pool: kithara_bufpool::BytePool,
     ) -> Self {
         Self {
             downloader,
-            backend,
+            scope,
             base_headers,
             key_registry,
             byte_pool,
@@ -123,11 +123,12 @@ impl KeyManager {
                 .ok_or_else(|| HlsError::KeyProcessing(format!("DRM key not prefetched: {url}")));
         }
 
-        let cache_key = ResourceKey::from(url);
+        let cache_key = self.scope.key(rel_path_from_url(url).as_str());
         let res = self
-            .backend
-            .open_resource(&cache_key)
-            .map_err(|e| HlsError::KeyProcessing(format!("key not in cache: {url} — {e}")))?;
+            .scope
+            .store()
+            .open_resource(&cache_key, None)
+            .map_err(|e| HlsError::KeyProcessing(format!("key not in cache: {url} - {e}")))?;
         let mut buf = self.byte_pool.get();
         let n = res.read_into(&mut buf).map_err(|e| {
             HlsError::KeyProcessing(format!("failed to read cached key: {url} — {e}"))
@@ -166,7 +167,7 @@ impl KeyManager {
             let rel_path = rel_path_from_url(url);
             return fetch_atomic_body(
                 &self.downloader,
-                &self.backend,
+                &self.scope,
                 &self.byte_pool,
                 headers,
                 url,
@@ -181,10 +182,10 @@ impl KeyManager {
             return Ok(cached);
         }
 
-        let cache_key = ResourceKey::from(url);
         let rel_path = rel_path_from_url(url);
+        let cache_key = self.scope.key(rel_path.as_str());
         if let Some(bytes) = super::atomic_fetch::try_read_cached(
-            &self.backend,
+            &self.scope,
             &self.byte_pool,
             &cache_key,
             url,
@@ -231,11 +232,15 @@ impl KeyManager {
             "drm key: fetched + decrypted, caching to asset store"
         );
 
-        let res = self.backend.acquire_resource(&cache_key)?.retain();
+        let res = self
+            .scope
+            .store()
+            .acquire_resource(&cache_key, None)?
+            .retain();
         super::atomic_fetch::write_back_cache(
             &res,
             &decrypted,
-            &self.backend,
+            &self.scope,
             url,
             rel_path.as_str(),
             Self::RESOURCE_KIND,
@@ -407,14 +412,14 @@ impl KeyManager {
     #[must_use]
     pub fn with_options(
         downloader: PeerHandle,
-        backend: AssetStore<DecryptContext>,
+        scope: AssetScope<DecryptContext>,
         base_headers: Option<Headers>,
         options: crate::config::KeyOptions,
         byte_pool: kithara_bufpool::BytePool,
     ) -> Self {
         Self::new(
             downloader,
-            backend,
+            scope,
             base_headers,
             options.key_registry,
             byte_pool,

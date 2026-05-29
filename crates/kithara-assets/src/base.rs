@@ -4,7 +4,9 @@ use std::{fmt::Debug, hash::Hash, ops::Range, path::Path};
 
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 
-use crate::{error::AssetsResult, key::ResourceKey, state::AssetResourceState};
+use crate::{
+    error::AssetsResult, identity::RequestIdentity, key::ResourceKey, state::AssetResourceState,
+};
 
 /// Unified resource-access contract for the asset decorator stack.
 ///
@@ -163,16 +165,7 @@ bitflags::bitflags! {
 
 /// Explicit public contract for the assets abstraction.
 ///
-/// `kithara-assets` is about *assets* and their *resources*:
-/// - an **asset** is a logical unit that may consist of multiple files/resources,
-/// - a **resource** is addressed by [`ResourceKey`] and is opened as a unified
-///   resource supporting both streaming and atomic access patterns.
-///
-/// The `Context` associated type allows decorators to pass additional processing
-/// context (e.g. encryption info) when opening resources. Use `()` for no context.
-///
-/// `IndexRes` is the resource type used for internal index persistence (pins, LRU).
-/// Disk-backed stores use `MmapResource`; in-memory stores use `MemResource`.
+/// See crate `README.md` for the asset / resource / identity model.
 pub trait Assets: Clone + Send + Sync + 'static {
     /// Context type for resource processing. Use `()` for no context.
     type Context: Clone + Send + Sync + Hash + Eq + Debug + 'static;
@@ -182,97 +175,82 @@ pub trait Assets: Clone + Send + Sync + 'static {
     /// Type returned by `open_resource`. Must be Clone for caching.
     type Res: ResourceHandle + Clone + Send + Sync + Debug + 'static;
 
-    /// Convenience method - acquire a resource without context.
+    /// Acquire a resource for mutation (no identity, no context).
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the resource key is invalid or the underlying
-    /// storage cannot be opened or created.
-    fn acquire_resource(&self, key: &ResourceKey) -> AssetsResult<Self::Res> {
-        self.acquire_resource_with_ctx(key, None)
+    /// Returns `AssetsError` if the resource cannot be opened.
+    fn acquire_resource(
+        &self,
+        key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
+    ) -> AssetsResult<Self::Res> {
+        self.acquire_resource_with_ctx(key, identity, None)
     }
 
-    /// Acquire a resource for mutation.
-    ///
-    /// Backends may create the resource when it does not exist yet.
+    /// Acquire a resource for mutation with optional processing context.
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the resource key is invalid or the underlying
-    /// storage cannot be opened or created.
+    /// Returns `AssetsError` if the resource cannot be opened.
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
-        self.open_resource_with_ctx(key, ctx)
+        self.open_resource_with_ctx(key, identity, ctx)
     }
 
-    /// Return the asset root identifier for this store.
-    fn asset_root(&self) -> &str;
-
     /// Decorator capabilities supported by this backend.
-    ///
-    /// Decorators check the relevant [`Capabilities`] bit before activating.
-    /// The default returns all capabilities enabled.
     #[must_use]
     fn capabilities(&self) -> Capabilities {
         Capabilities::all()
     }
 
-    /// Delete the entire asset (all resources under this store's `asset_root`).
+    /// Delete the entire asset (all resources under `asset_root`).
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the asset directory cannot be removed (I/O error
-    /// or cancellation).
-    fn delete_asset(&self) -> AssetsResult<()>;
+    /// Returns `AssetsError` if the asset directory cannot be removed.
+    fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
 
     /// Open the resource used for persisting the LRU index.
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the index resource cannot be opened (I/O or storage error).
+    /// Returns `AssetsError` if the index resource cannot be opened.
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
 
     /// Open the resource used for persisting the pins index.
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the index resource cannot be opened (I/O or storage error).
+    /// Returns `AssetsError` if the index resource cannot be opened.
     fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
 
-    /// Convenience method - open a resource without context.
+    /// Open a resource for read (no context).
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the resource key is invalid or the underlying
-    /// storage cannot be opened.
-    fn open_resource(&self, key: &ResourceKey) -> AssetsResult<Self::Res> {
-        self.open_resource_with_ctx(key, None)
+    /// Returns `AssetsError` if the resource cannot be opened.
+    fn open_resource(
+        &self,
+        key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
+    ) -> AssetsResult<Self::Res> {
+        self.open_resource_with_ctx(key, identity, None)
     }
 
-    /// Open a resource with optional context (main method).
+    /// Open a resource for read with optional processing context.
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the resource key is invalid or the underlying
-    /// storage cannot be opened (e.g. I/O failure, cancellation).
+    /// Returns `AssetsError` if the resource cannot be opened.
     fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res>;
 
-    /// Remove a single resource by key.
-    ///
-    /// Default implementation is a no-op (suitable for disk stores where
-    /// resources are managed by filesystem eviction). In-memory stores
-    /// override this to free memory.
+    /// Remove a single resource by `key`.
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the resource cannot be removed from the store.
+    /// Returns `AssetsError` if the resource cannot be removed.
     fn remove_resource(&self, _key: &ResourceKey) -> AssetsResult<()> {
         Ok(())
     }
@@ -280,9 +258,7 @@ pub trait Assets: Clone + Send + Sync + 'static {
     /// Inspect the current resource state without creating or mutating it.
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the resource key is invalid or the backend
-    /// cannot inspect the resource.
+    /// Returns `AssetsError` if the resource cannot be inspected.
     fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState>;
 
     /// Return the root directory for disk-backed implementations.

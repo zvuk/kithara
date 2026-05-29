@@ -3,12 +3,47 @@ use std::sync::Arc;
 use iced::{Size, window};
 use kithara_queue::Queue;
 
-use super::{app::Kithara, update, view};
+use super::{app::Kithara, fonts, update, view};
 use crate::{
     config::AppConfig,
     frontend::{Frontend, FrontendError},
     theme::gui,
 };
+
+/// Compact-player window size in logical pixels.
+const COMPACT_WIDTH: f32 = 448.0;
+const COMPACT_HEIGHT: f32 = 784.0;
+const COMPACT_MIN_WIDTH: f32 = 420.0;
+const COMPACT_MIN_HEIGHT: f32 = 760.0;
+
+/// DJ Studio window size in logical pixels.
+const STUDIO_WIDTH: f32 = 980.0;
+const STUDIO_HEIGHT: f32 = 600.0;
+const STUDIO_MIN_WIDTH: f32 = 820.0;
+const STUDIO_MIN_HEIGHT: f32 = 520.0;
+
+/// Window settings per mode. A mode swap opens a fresh window rather than
+/// resizing the live one. Close is handled via `close_requests()`, so the
+/// programmatic swap-close does not exit the app.
+pub(crate) fn window_settings(dj: bool) -> window::Settings {
+    let (size, min_size) = if dj {
+        (
+            Size::new(STUDIO_WIDTH, STUDIO_HEIGHT),
+            Size::new(STUDIO_MIN_WIDTH, STUDIO_MIN_HEIGHT),
+        )
+    } else {
+        (
+            Size::new(COMPACT_WIDTH, COMPACT_HEIGHT),
+            Size::new(COMPACT_MIN_WIDTH, COMPACT_MIN_HEIGHT),
+        )
+    };
+    window::Settings {
+        size,
+        min_size: Some(min_size),
+        exit_on_close_request: false,
+        ..window::Settings::default()
+    }
+}
 
 /// GUI frontend using iced.
 pub struct GuiFrontend {
@@ -25,25 +60,6 @@ impl Frontend for GuiFrontend {
     }
 
     fn run_loop(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError> {
-        /// Default window width in logical pixels.
-        const WINDOW_WIDTH: f32 = 448.0;
-
-        /// Default window height in logical pixels.
-        const WINDOW_HEIGHT: f32 = 734.0;
-
-        /// Minimum window width — keeps the EQ row at full ten-band
-        /// density (10·28 + 9·2 = 298 px inside the panel) plus the
-        /// 18 px outer padding × 2 and the 12 px panel padding × 2.
-        const MIN_WIDTH: f32 = 420.0;
-
-        /// Minimum window height. The fixed sections above the tabs
-        /// (header + URL + now-playing + seek + transport + rate row +
-        /// volume + tabs strip + outer paddings) eat ≈540 px on their
-        /// own; the remainder must still leave the EQ row and a couple
-        /// of playlist entries readable, so we anchor the floor at
-        /// 720 px.
-        const MIN_HEIGHT: f32 = 720.0;
-
         let palette = self.palette;
         let config = self.config.clone();
 
@@ -52,22 +68,30 @@ impl Frontend for GuiFrontend {
         let _guard = rt.enter();
 
         queue.set_tracks(crate::sources::build_sources(&config));
-        let controller = Arc::new(crate::state::StateController::new(Arc::clone(&queue)));
+        let controller = Arc::new(crate::state::StateController::new(
+            Arc::clone(&queue),
+            config.clone(),
+            config.cancel.child_token(),
+        ));
 
-        iced::application(
+        let result = iced::daemon(
             move || Kithara::new(Arc::clone(&controller), palette),
             update::update,
             view::view,
         )
-        .title("Kithara")
+        .title(Kithara::title)
         .theme(Kithara::theme)
         .subscription(Kithara::subscription)
-        .window(window::Settings {
-            size: Size::new(WINDOW_WIDTH, WINDOW_HEIGHT),
-            min_size: Some(Size::new(MIN_WIDTH, MIN_HEIGHT)),
-            ..window::Settings::default()
-        })
-        .run()?;
+        .default_font(fonts::SANS)
+        .font(fonts::INTER_BYTES)
+        .font(fonts::SPACE_GROTESK_BYTES)
+        .font(fonts::JETBRAINS_MONO_REGULAR_BYTES)
+        .font(fonts::JETBRAINS_MONO_MEDIUM_BYTES)
+        .font(fonts::JETBRAINS_MONO_SEMIBOLD_BYTES)
+        .run();
+
+        config.cancel.cancel();
+        result?;
 
         Ok(())
     }

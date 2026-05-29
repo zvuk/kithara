@@ -7,13 +7,13 @@ use std::{
 
 use bon::Builder;
 use kithara_abr::AbrMode;
-use kithara_assets::{FlushHub, StoreOptions};
+use kithara_assets::{AssetStore, FlushHub, StoreOptions};
 use kithara_audio::{AudioConfig, AudioWorkerHandle, ResamplerQuality};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{DecodeError, DecoderBackend};
 use kithara_events::EventBus;
 use kithara_file::{FileConfig, FileSrc};
-use kithara_hls::{HlsConfig, KeyOptions, SizeProbeMethod};
+use kithara_hls::{HlsConfig, HlsStore, KeyOptions, SizeProbeMethod};
 use kithara_net::Headers;
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use portable_atomic::AtomicF32;
@@ -102,6 +102,14 @@ pub struct ResourceConfig {
     pub downloader: Option<Downloader>,
     /// Shared flush coordinator for `AssetStore` on-disk indexes.
     pub flush_hub: Option<Arc<FlushHub>>,
+    /// App-wide shared file store. When present, file resources for the
+    /// same URL share one download and cached byte surface (player +
+    /// waveform dedup). `None` builds a private per-resource store.
+    pub file_asset_store: Option<Arc<AssetStore>>,
+    /// App-wide shared HLS store (shared cache + DRM `process_fn` +
+    /// per-`asset_root` eviction routing). `None` builds a private
+    /// per-resource store.
+    pub hls_asset_store: Option<HlsStore>,
     /// Additional HTTP headers to include in all network requests.
     pub headers: Option<Headers>,
     /// Optional format hint (file extension like "mp3", "wav").
@@ -192,6 +200,7 @@ impl ResourceConfig {
         let file_config = FileConfig::for_src(file_src)
             .store(store)
             .downloader(downloader)
+            .maybe_asset_store(self.file_asset_store.clone())
             .maybe_look_ahead_bytes(self.look_ahead_bytes)
             .maybe_headers(self.headers.clone())
             .maybe_name(self.name.clone())
@@ -234,6 +243,7 @@ impl ResourceConfig {
             .build();
         let hls_config = HlsConfig::for_url(url)
             .store(store)
+            .maybe_asset_store(self.hls_asset_store)
             .keys(self.keys)
             .maybe_downloader(self.downloader)
             .initial_abr_mode(self.initial_abr_mode)

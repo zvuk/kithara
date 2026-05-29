@@ -463,7 +463,7 @@ mod tests {
     #[test]
     fn l2_payload_roundtrips_bytes_and_content_type() {
         let enc = EncodedSignal {
-            bytes: std::sync::Arc::new(b"RIFFxxxx".to_vec()),
+            bytes: Arc::new(b"RIFFxxxx".to_vec()),
             content_type: "audio/wav",
         };
         let blob = encode_l2_blob(&enc);

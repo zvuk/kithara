@@ -8,10 +8,7 @@ use std::{
     time::Duration,
 };
 
-use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, DiskAssetStore, EvictConfig},
-    bufpool::BytePool,
-};
+use kithara::{assets::DiskAssetStore, bufpool::BytePool};
 use kithara_integration_tests::{asset_fixture::PinsIndex, temp_dir};
 use tokio_util::sync::CancellationToken;
 
@@ -20,22 +17,9 @@ fn pins_path(root: &Path) -> PathBuf {
 }
 
 #[kithara::fixture]
-fn asset_store_no_limits(temp_dir: kithara_integration_tests::TestTempDir) -> AssetStore {
-    AssetStoreBuilder::new()
-        .root_dir(temp_dir.path())
-        .asset_root(Some("test-asset"))
-        .evict_config(EvictConfig {
-            max_assets: None,
-            max_bytes: None,
-        })
-        .build()
-}
-
-#[kithara::fixture]
 fn disk_asset_store(temp_dir: kithara_integration_tests::TestTempDir) -> DiskAssetStore {
     DiskAssetStore::new(
         temp_dir.path(),
-        "test-asset",
         CancellationToken::new(),
         &BytePool::default(),
     )
@@ -195,7 +179,7 @@ fn pins_index_persists_across_store_instances(temp_dir: kithara_integration_test
     let dir = temp_dir.path();
     let cancel = CancellationToken::new();
 
-    let base1 = DiskAssetStore::new(dir, "test-asset", cancel.clone(), &BytePool::default());
+    let base1 = DiskAssetStore::new(dir, cancel.clone(), &BytePool::default());
     let idx1 = PinsIndex::open(&base1, &BytePool::default()).unwrap();
 
     let mut pins = HashSet::new();
@@ -204,7 +188,7 @@ fn pins_index_persists_across_store_instances(temp_dir: kithara_integration_test
 
     idx1.store(&pins).unwrap();
 
-    let base2 = DiskAssetStore::new(dir, "test-asset", cancel, &BytePool::default());
+    let base2 = DiskAssetStore::new(dir, cancel, &BytePool::default());
     let idx2 = PinsIndex::open(&base2, &BytePool::default()).unwrap();
 
     let loaded = idx2.load().unwrap();

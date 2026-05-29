@@ -29,7 +29,10 @@ impl Frontend for TuiFrontend {
             .enable_all()
             .build()?;
 
-        rt.block_on(runner::run_tui(queue, &self.config))
+        let result = rt.block_on(runner::run_tui(queue, &self.config));
+
+        self.config.cancel.cancel();
+        result
     }
 
     fn shutdown(&mut self) -> Result<(), FrontendError> {

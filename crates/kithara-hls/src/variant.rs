@@ -13,7 +13,7 @@ use std::{
 };
 
 use kithara_assets::{
-    AssetResource, AssetResourceState, AssetStore, AssetsError, ResourceHandle, ResourceKey,
+    AssetResource, AssetResourceState, AssetScope, AssetsError, ResourceHandle, ResourceKey,
 };
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, NetError};
@@ -319,12 +319,12 @@ impl InitEntry {
     /// `size == 0`, so [`HlsVariant::rebuild`] never enqueues `Init`
     /// (we only enqueue when `size > 0`). The `url`/`resource_id`
     /// placeholders are never read.
-    fn empty() -> Self {
+    fn empty(scope: &AssetScope<DecryptContext>) -> Self {
         let url: Url = "about:blank"
             .parse()
             .expect("static placeholder URL parses");
         Self {
-            resource_id: ResourceKey::from(&url),
+            resource_id: scope.key_from_url(&url),
             url,
             state: SegmentSlotState::loaded(),
             size: AtomicU64::new(0),
@@ -343,7 +343,7 @@ enum PlannedFetch {
 }
 
 pub(crate) struct PlanCtx {
-    pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
+    pub(crate) scope: AssetScope<DecryptContext>,
     pub(crate) master_cancel: CancellationToken,
     /// Per-resource HTTP headers applied to every init/segment fetch.
     /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
@@ -376,7 +376,7 @@ pub(crate) struct HlsVariant {
     /// `PlanCtx`) for `acquire_resource`. Cloned from `PlanCtx` at
     /// construction so reader-side methods don't have to thread `ctx`
     /// through.
-    asset_store: Arc<AssetStore<DecryptContext>>,
+    scope: AssetScope<DecryptContext>,
     /// Parsed master/media-playlist data. Owned by `Arc` so multiple
     /// variants share a single immutable view; used by
     /// `seek_time_anchor` (`find_seek_point_for_time`) and as the
@@ -487,12 +487,18 @@ impl HlsVariant {
         decrypt_contexts: &[Option<DecryptContext>],
         ctx: &PlanCtx,
     ) -> Arc<Self> {
-        let init = Self::build_init_entry(playlist_state.as_ref(), variant, init_decrypt_ctx);
+        let init = Self::build_init_entry(
+            playlist_state.as_ref(),
+            variant,
+            init_decrypt_ctx,
+            &ctx.scope,
+        );
         let segments = Self::build_segment_entries(
             playlist_state.as_ref(),
             decrypt_contexts,
             variant,
             init.size.load(Ordering::Acquire),
+            &ctx.scope,
         );
         let codec = playlist_state.variant_codec(variant);
         let container = playlist_state.variant_container(variant);
@@ -624,12 +630,14 @@ impl HlsVariant {
     fn build_init_cmd(self: &Arc<Self>, ctx: &PlanCtx, handle: Segment<Downloading>) -> FetchCmd {
         let resource = match &self.init.content {
             SegmentContent::Plain => ctx
-                .asset_store
-                .acquire_resource(&self.init.resource_id)
+                .scope
+                .store()
+                .acquire_resource(&self.init.resource_id, None)
                 .expect("acquire_resource for init must succeed"),
             SegmentContent::Encrypted(c) => ctx
-                .asset_store
-                .acquire_resource_with_ctx(&self.init.resource_id, Some(c.clone()))
+                .scope
+                .store()
+                .acquire_resource_with_ctx(&self.init.resource_id, None, Some(c.clone()))
                 .expect("acquire_resource_with_ctx for init must succeed"),
         };
         self.build_cmd(self.init.url.clone(), resource, handle)
@@ -639,16 +647,18 @@ impl HlsVariant {
         playlist_state: &PlaylistState,
         variant_idx: usize,
         decrypt_ctx: Option<DecryptContext>,
+        scope: &AssetScope<DecryptContext>,
     ) -> InitEntry {
-        playlist_state
-            .init_url(variant_idx)
-            .map_or_else(InitEntry::empty, |url| InitEntry {
-                resource_id: ResourceKey::from(&url),
+        playlist_state.init_url(variant_idx).map_or_else(
+            || InitEntry::empty(scope),
+            |url| InitEntry {
+                resource_id: scope.key_from_url(&url),
                 url,
                 state: SegmentSlotState::missing(),
                 size: AtomicU64::new(playlist_state.init_size(variant_idx)),
                 content: SegmentContent::from(decrypt_ctx),
-            })
+            },
+        )
     }
 
     /// Builds per-segment metadata. Segment 0's `segment_byte_offset` from
@@ -662,6 +672,7 @@ impl HlsVariant {
         decrypt_contexts: &[Option<DecryptContext>],
         variant_idx: usize,
         init_size: u64,
+        scope: &AssetScope<DecryptContext>,
     ) -> Vec<SegmentEntry> {
         let Some(num) = playlist_state.num_segments(variant_idx) else {
             return Vec::new();
@@ -690,7 +701,7 @@ impl HlsVariant {
                 .map_or(Duration::ZERO, |(start, end)| end.saturating_sub(start));
             let decrypt_ctx = decrypt_contexts.get(seg_idx).cloned().flatten();
             entries.push(SegmentEntry {
-                resource_id: ResourceKey::from(&url),
+                resource_id: scope.key_from_url(&url),
                 url,
                 state: SegmentSlotState::missing(),
                 size: AtomicU64::new(media_size),
@@ -731,7 +742,7 @@ impl HlsVariant {
     /// Without that apply, the announced/estimated size and the on-disk
     /// size disagree and `range_ready` deadlocks on a cache-hot resource.
     fn committed_final_len(ctx: &PlanCtx, key: &ResourceKey) -> Option<u64> {
-        match ctx.asset_store.resource_state(key) {
+        match ctx.scope.store().resource_state(key) {
             Ok(AssetResourceState::Committed { final_len }) => final_len,
             _ => None,
         }
@@ -881,10 +892,12 @@ impl HlsVariant {
     ) -> Option<FetchCmd> {
         let entry = &self.segments[seg_idx as usize];
         let acquire = match &entry.content {
-            SegmentContent::Plain => ctx.asset_store.acquire_resource(&entry.resource_id),
-            SegmentContent::Encrypted(c) => ctx
-                .asset_store
-                .acquire_resource_with_ctx(&entry.resource_id, Some(c.clone())),
+            SegmentContent::Plain => ctx.scope.store().acquire_resource(&entry.resource_id, None),
+            SegmentContent::Encrypted(c) => ctx.scope.store().acquire_resource_with_ctx(
+                &entry.resource_id,
+                None,
+                Some(c.clone()),
+            ),
         };
         let resource = match acquire {
             Ok(r) => r,
@@ -966,7 +979,7 @@ impl HlsVariant {
         let num = u32::try_from(parts.segments.len()).unwrap_or(u32::MAX);
         let variant_ref = Self {
             variant,
-            asset_store: Arc::clone(&ctx.asset_store),
+            scope: ctx.scope.clone(),
             playlist_state: parts.playlist_state,
             timeline: parts.timeline,
             peer_wake: OnceLock::new(),
@@ -1178,7 +1191,11 @@ impl HlsVariant {
             let slice_end = end.min(init_range.end);
             let local_start = cursor - init_range.start;
             let local_end = slice_end - init_range.start;
-            if !self.asset_store.contains_range(key, local_start..local_end) {
+            if !self
+                .scope
+                .store()
+                .contains_range(key, local_start..local_end)
+            {
                 return false;
             }
             cursor = slice_end;
@@ -1198,7 +1215,11 @@ impl HlsVariant {
             let slice_end = end.min(seg_end);
             let local_start = cursor - seg_off;
             let local_end = slice_end - seg_off;
-            if !self.asset_store.contains_range(key, local_start..local_end) {
+            if !self
+                .scope
+                .store()
+                .contains_range(key, local_start..local_end)
+            {
                 return false;
             }
             cursor = slice_end;
@@ -1275,7 +1296,7 @@ impl HlsVariant {
         range: Range<u64>,
         dst: &mut [u8],
     ) -> StreamResult<Option<usize>> {
-        let resource = match self.asset_store.open_resource(key) {
+        let resource = match self.scope.store().open_resource(key, None) {
             Ok(res) => res,
             Err(AssetsError::Io(e)) if e.kind() == ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(StreamError::Source(HlsError::from(e).into())),

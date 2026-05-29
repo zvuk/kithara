@@ -316,19 +316,22 @@ impl AudioPlayerItem {
             return;
         };
         let snapshot = *self.state.lock_sync();
-        if snapshot.is_failed {
-            observer.on_event(crate::types::FfiItemEvent::StatusChanged {
-                status: crate::types::FfiItemStatus::Failed,
-            });
-        } else if snapshot.is_ready_to_play {
-            observer.on_event(crate::types::FfiItemEvent::StatusChanged {
-                status: crate::types::FfiItemStatus::ReadyToPlay,
-            });
+        match snapshot.loading {
+            LoadingState::Failed => {
+                observer.on_event(crate::types::FfiItemEvent::StatusChanged {
+                    status: crate::types::FfiItemStatus::Failed,
+                });
+            }
+            LoadingState::Ready { .. } => {
+                observer.on_event(crate::types::FfiItemEvent::StatusChanged {
+                    status: crate::types::FfiItemStatus::ReadyToPlay,
+                });
+            }
+            LoadingState::Pending => {}
         }
-        if snapshot.duration_sec > 0.0 {
-            observer.on_event(crate::types::FfiItemEvent::DurationChanged {
-                seconds: snapshot.duration_sec,
-            });
+        let duration = snapshot.duration_sec();
+        if duration > 0.0 {
+            observer.on_event(crate::types::FfiItemEvent::DurationChanged { seconds: duration });
         }
     }
 

@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use bytes::Bytes;
-use kithara::assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceHandle, ResourceKey};
+use kithara::assets::{AssetScope, AssetStoreBuilder, EvictConfig, ResourceHandle};
 use kithara_integration_tests::{cancel_token, temp_dir};
 use kithara_platform::time::{Duration, sleep};
 use tokio_util::sync::CancellationToken;
@@ -16,21 +16,21 @@ fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn asset_store_with_root_and_limit(
+fn asset_scope_with_root_and_limit(
     temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
     max_bytes: Option<u64>,
     cancel: CancellationToken,
-) -> AssetStore {
+) -> AssetScope {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
-        .asset_root(Some(asset_root))
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes,
         })
         .cancel(cancel)
         .build()
+        .scope(asset_root)
 }
 
 #[kithara::test(
@@ -54,14 +54,14 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     let dir = temp_dir.path().to_path_buf();
 
     {
-        let store_a = asset_store_with_root_and_limit(
+        let scope_a = asset_scope_with_root_and_limit(
             &temp_dir,
             asset_a_name,
             Some(100),
             cancel_token.clone(),
         );
-        let key_a = ResourceKey::new("media/a.bin");
-        let res_a = store_a.acquire_resource(&key_a).unwrap();
+        let key_a = scope_a.key("media/a.bin");
+        let res_a = scope_a.store().acquire_resource(&key_a, None).unwrap();
 
         res_a
             .write_all(&Bytes::from(vec![0xAAu8; bytes_a]))
@@ -71,14 +71,14 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     sleep(Duration::from_millis(50)).await;
 
     {
-        let store_b = asset_store_with_root_and_limit(
+        let scope_b = asset_scope_with_root_and_limit(
             &temp_dir,
             asset_b_name,
             Some(100),
             cancel_token.clone(),
         );
-        let key_b = ResourceKey::new("media/b.bin");
-        let res_b = store_b.acquire_resource(&key_b).unwrap();
+        let key_b = scope_b.key("media/b.bin");
+        let res_b = scope_b.store().acquire_resource(&key_b, None).unwrap();
 
         res_b
             .write_all(&Bytes::from(vec![0xBBu8; bytes_b]))
@@ -88,14 +88,14 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     sleep(Duration::from_millis(50)).await;
 
     {
-        let store_c = asset_store_with_root_and_limit(
+        let scope_c = asset_scope_with_root_and_limit(
             &temp_dir,
             asset_c_name,
             Some(100),
             cancel_token.clone(),
         );
-        let key_c = ResourceKey::new("media/c.bin");
-        let res_c = store_c.acquire_resource(&key_c).unwrap();
+        let key_c = scope_c.key("media/c.bin");
+        let res_c = scope_c.store().acquire_resource(&key_c, None).unwrap();
 
         res_c.write_all(b"C").unwrap();
     }
@@ -148,42 +148,42 @@ fn eviction_corner_cases_different_byte_limits(
     let asset_names = vec!["asset-corner-1", "asset-corner-2"];
 
     for (i, (size, name)) in asset_sizes.iter().zip(asset_names.iter()).enumerate() {
-        let store = asset_store_with_root_and_limit(
+        let scope = asset_scope_with_root_and_limit(
             &temp_dir,
             name,
             Some(max_bytes as u64),
             cancel.clone(),
         );
-        let key = ResourceKey::new(format!("data{}.bin", i));
+        let key = scope.key(format!("data{}.bin", i));
 
-        let res = store.acquire_resource(&key).unwrap();
+        let res = scope.store().acquire_resource(&key, None).unwrap();
         res.write_all(&Bytes::from(vec![0x11 * (i + 1) as u8; *size]))
             .unwrap();
     }
 
     {
-        let store = asset_store_with_root_and_limit(
+        let scope = asset_scope_with_root_and_limit(
             &temp_dir,
             "asset-trigger",
             Some(max_bytes as u64),
             cancel.clone(),
         );
-        let trigger_key = ResourceKey::new("trigger.bin");
+        let trigger_key = scope.key("trigger.bin");
 
-        let res = store.acquire_resource(&trigger_key).unwrap();
+        let res = scope.store().acquire_resource(&trigger_key, None).unwrap();
         res.write_all(&Bytes::from(vec![0xFF; new_asset_size]))
             .unwrap();
     }
 
     {
-        let store = asset_store_with_root_and_limit(
+        let scope = asset_scope_with_root_and_limit(
             &temp_dir,
             "asset-probe",
             Some(max_bytes as u64),
             cancel.clone(),
         );
-        let probe_key = ResourceKey::new("probe.bin");
-        let probe = store.acquire_resource(&probe_key).unwrap();
+        let probe_key = scope.key("probe.bin");
+        let probe = scope.store().acquire_resource(&probe_key, None).unwrap();
         probe.write_all(b"P").unwrap();
     }
 

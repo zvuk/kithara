@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use iced::{
-    Alignment, Background, Border, Color, Element, Length, Padding, Theme,
+    Alignment, Background, Border, Color, Degrees, Element, Gradient, Length, Padding, Theme,
+    font::Weight,
+    gradient::Linear,
     widget::{
         Space, button,
         button::{Status as ButtonStatus, Style as ButtonStyle},
@@ -13,42 +15,42 @@ use iced::{
             Status as SliderStatus, Style as SliderStyle,
         },
         svg::{Handle as SvgHandle, Svg},
-        text, text_input, vertical_slider,
+        text, vertical_slider,
     },
 };
+use kithara_queue::RepeatMode;
 use num_traits::cast::ToPrimitive;
 
 use super::{
     app::Kithara,
+    dj::DjMsg,
+    fonts,
     icons::Icon,
     message::{Message, Tab},
+    tokens::Gap,
+    widgets,
 };
 use crate::{theme::gui::GuiPalette, track::TrackRow};
 
+const ALBUM_PLACEHOLDER_SVG: &[u8] = include_bytes!("../../assets/album-placeholder.svg");
+
 struct Consts;
 impl Consts {
-    const ABR_BUTTON_PADDING_X: u16 = 6;
-    const ABR_BUTTON_PADDING_Y: u16 = 2;
-    const ALPHA_ACCENT_BORDER: f32 = 0.25;
     const ALPHA_GHOST_DISABLED: f32 = 0.3;
     const ALPHA_GHOST_HOVER: f32 = 0.85;
     const ALPHA_GHOST_PRESSED: f32 = 0.2;
-    const ALPHA_MAIN_BORDER: f32 = 0.2;
-    const ALPHA_MAIN_DISABLED: f32 = 0.4;
-    const ALPHA_MAIN_HOVER: f32 = 0.95;
-    const ALPHA_MAIN_PRESSED: f32 = 0.75;
-    const ALPHA_PLAYLIST_CURRENT: f32 = 0.18;
-    const ALPHA_PLAYLIST_CURRENT_HOVER: f32 = 0.24;
-    const ALPHA_PLAYLIST_CURRENT_PRESSED: f32 = 0.32;
     const ALPHA_PLAYLIST_DISABLED: f32 = 0.25;
     const ALPHA_PLAYLIST_INACTIVE_HOVER: f32 = 0.75;
     const ALPHA_PLAYLIST_INACTIVE_PRESSED: f32 = 0.14;
+    const ALPHA_PLAYLIST_SELECTED: f32 = 0.18;
+    const ALPHA_PLAYLIST_SELECTED_HOVER: f32 = 0.24;
+    const ALPHA_PLAYLIST_SELECTED_PRESSED: f32 = 0.32;
     const ALPHA_SECTION_BG: f32 = 0.45;
-    const ALPHA_SECTION_BORDER: f32 = 0.2;
     const ALPHA_SLIDER_ACTIVE_RAIL: f32 = 0.95;
     const ALPHA_SLIDER_DRAGGED_RAIL: f32 = 0.85;
     const ALPHA_SLIDER_HANDLE_BORDER: f32 = 0.65;
     const ALPHA_SLIDER_INACTIVE_RAIL: f32 = 0.35;
+    const ALPHA_SPEED_FILL: f32 = 0.4;
 
     const ALPHA_TAB_ACTIVE_BASE: f32 = 0.12;
     const ALPHA_TAB_ACTIVE_HOVER: f32 = 0.2;
@@ -56,6 +58,7 @@ impl Consts {
     const ALPHA_TAB_DISABLED: f32 = 0.2;
     const ALPHA_TAB_INACTIVE_HOVER: f32 = 0.8;
     const ALPHA_TAB_INACTIVE_PRESSED: f32 = 0.12;
+    const ALPHA_TAB_STRIP_FILL: f32 = 0.5;
     const BLINK_DIVISOR: u8 = 5;
     const BLINK_PERIOD: u64 = 2;
     const BORDER_RADIUS: f32 = 12.0;
@@ -64,12 +67,13 @@ impl Consts {
     const BORDER_RADIUS_PILL: f32 = 4.0;
     const BORDER_RADIUS_SECTION: f32 = 10.0;
     const BORDER_WIDTH: f32 = 1.0;
-    const CAPTION_FONT: f32 = 14.0;
-    const COMPACT_SPACING: f32 = 6.0;
     /// Crossfade slider upper bound — mirrors the iOS reference (0…8s).
     const CROSSFADE_MAX: f32 = 8.0;
     const CROSSFADE_STEP: f32 = 0.5;
-    const ELEMENT_SPACING: f32 = 10.0;
+    const DJ_LAUNCH_GAP: f32 = 7.0;
+    const DJ_LAUNCH_ICON: f32 = 14.0;
+    const DJ_LAUNCH_PADDING_X: f32 = 10.0;
+    const DJ_LAUNCH_PADDING_Y: f32 = 7.0;
     const EMPTY_PLAYLIST_FONT: f32 = 14.0;
     /// Minimum gap between bands. Anything beyond it gets soaked up by
     /// `Space::Fill` spacers so the row reads as "evenly spread".
@@ -88,17 +92,16 @@ impl Consts {
     const EQ_RESET_PADDING_Y: f32 = 4.0;
     const EQ_SIMPLE_LABEL_THRESHOLD: usize = 3;
 
-    const EQ_SPACING: f32 = 6.0;
     const EQ_STEP: f32 = 0.5;
     const EQ_VALUE_FONT: f32 = 9.0;
 
     const EQ_ZERO_THRESHOLD: f32 = 0.05;
     const HEADING_FONT: f32 = 16.0;
-    const LOGO_SIZE: f32 = 48.0;
-    const MAIN_BUTTON_PADDING: f32 = 14.0;
-
-    const MAIN_TRANSPORT_ICON_SIZE: f32 = 35.0;
-    const MUSIC_NOTE_SIZE: f32 = 20.0;
+    const NOW_BITRATE_DOT_SIZE: f32 = 4.0;
+    const NOW_BITRATE_FONT: f32 = 10.0;
+    const NOW_COVER_SIZE: f32 = 88.0;
+    const NOW_GRADIENT_END_ALPHA: f32 = 0.9;
+    const NOW_GRADIENT_START_ALPHA: f32 = 0.8;
 
     const OUTER_PADDING: f32 = 18.0;
     const PLAYLIST_INDEX_FONT: f32 = 13.0;
@@ -107,37 +110,36 @@ impl Consts {
 
     const PLAYLIST_MAX_NAME_CHARS: usize = 40;
 
-    const PLAYLIST_SPACING: f32 = 6.0;
+    const PILL_PADDING_X: f32 = 8.0;
+    const PILL_PADDING_Y: f32 = 4.0;
     const PLAYLIST_TRACK_FONT: f32 = 15.0;
-    const PLAYRATE_PADDING_X: u16 = 6;
-    const PLAYRATE_PADDING_Y: u16 = 3;
-    const PLAYRATE_SPACING: f32 = 4.0;
     const SECONDS_PER_MINUTE: u32 = 60;
 
     const SECTION_PADDING: f32 = 12.0;
-    const SECTION_SPACING: f32 = 12.0;
     const SEEK_STEP: f32 = 0.1;
     const SETTINGS_BODY_FONT: f32 = 13.0;
-    const SETTINGS_SPACING: f32 = 8.0;
+    const SETTINGS_LABEL_FONT: f32 = 10.0;
     const SLIDER_HANDLE_BORDER: f32 = 1.0;
     const SLIDER_HANDLE_RADIUS: f32 = 7.0;
     const SLIDER_RAIL_RADIUS: f32 = 4.0;
     const SLIDER_RAIL_WIDTH: f32 = 4.0;
     const SMALL_FONT: f32 = 13.0;
+    const SPEED_PADDING_X: f32 = 12.0;
+    const SPEED_PADDING_Y: f32 = 8.0;
     const SUBTITLE_FONT: f32 = 12.0;
-    const TABS_PADDING_Y: f32 = 4.0;
+    const TABS_PADDING_Y: f32 = 6.0;
     const TAB_CONTENT_PADDING_X: f32 = 8.0;
     const TAB_CONTENT_PADDING_Y: f32 = 8.0;
     const TAB_ICON_SIZE: f32 = 18.0;
-    const TITLE_FONT: f32 = 28.0;
-    const TITLE_SPACING: f32 = 2.0;
     const TOGGLE_ICON_PADDING: f32 = 6.0;
-    const TRACK_NAME_FONT: f32 = 22.0;
-    const TRANSPORT_BUTTON_SPACING: f32 = 20.0;
-    const TRANSPORT_ICON_PADDING: f32 = 8.0;
-    const TRANSPORT_ICON_SIZE: f32 = 30.0;
-
-    const UNDERLINE_HEIGHT: f32 = 2.0;
+    const TRACK_NAME_FONT: f32 = 20.0;
+    const TRANSPORT_BTN_BASE: f32 = 36.0;
+    const TRANSPORT_BTN_LG: f32 = 44.0;
+    const TRANSPORT_GAP: f32 = 14.0;
+    const TRANSPORT_PRIMARY_ICON: f32 = 22.0;
+    const TRANSPORT_TOGGLE_ICON: f32 = 18.0;
+    const ALPHA_TRANSPORT_HOVER: f32 = 0.6;
+    const ALPHA_TRANSPORT_PRESSED: f32 = 0.45;
 
     const VOLUME_ICON_SIZE: f32 = 20.0;
     const VOLUME_LOW_THRESHOLD: f32 = 0.5;
@@ -147,14 +149,19 @@ impl Consts {
     const VOLUME_STEP_SIZE: f32 = 0.01;
 }
 
-pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
+pub(crate) fn view(state: &Kithara, _window: iced::window::Id) -> Element<'_, Message> {
+    if state.dj.open {
+        return super::studio::view_dj_studio(state);
+    }
+
     let p = state.palette;
     let content = column![
         view_header(state),
-        view_url_input(state),
+        super::url_bar::view(state),
         view_now_playing(state),
         view_seek(state),
         view_transport(state),
+        view_speed(state),
         view_volume(state),
         view_tabs(state),
         container(view_tab_content(state))
@@ -165,7 +172,7 @@ pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
     ]
     .width(Length::Fill)
     .height(Length::Fill)
-    .spacing(Consts::SECTION_SPACING);
+    .spacing(Gap::SECTION);
 
     container(content)
         .width(Length::Fill)
@@ -175,7 +182,7 @@ pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
         .into()
 }
 
-fn format_time(seconds: f64) -> String {
+pub(crate) fn format_time(seconds: f64) -> String {
     let total = seconds.max(0.0).floor().to_u32().unwrap_or(u32::MAX);
     let minutes = total / Consts::SECONDS_PER_MINUTE;
     let remaining = total % Consts::SECONDS_PER_MINUTE;
@@ -184,59 +191,34 @@ fn format_time(seconds: f64) -> String {
 
 fn view_header(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    let logo = Svg::new(SvgHandle::from_memory(
-        include_bytes!("../../assets/logo.svg") as &[u8],
-    ))
-    .width(Length::Fixed(Consts::LOGO_SIZE))
-    .height(Length::Fixed(Consts::LOGO_SIZE));
-
-    let title_color = if state.ui_state.playing {
-        p.accent
-    } else {
-        p.text
-    };
-
-    let title = column![
-        text("Kithara").size(Consts::TITLE_FONT).color(title_color),
-        text("Player").size(Consts::SUBTITLE_FONT).color(p.muted)
-    ]
-    .spacing(Consts::TITLE_SPACING);
 
     container(
-        row![logo, title,]
-            .align_y(Alignment::Center)
-            .spacing(Consts::SECTION_SPACING),
+        row![
+            super::studio::brand_mark(p, "PLAYER"),
+            Space::new().width(Length::Fill),
+            dj_studio_button(p),
+        ]
+        .align_y(Alignment::Center)
+        .spacing(Gap::SECTION),
     )
     .width(Length::Fill)
-    .padding(Consts::SECTION_PADDING)
-    .style(panel_style(p))
     .into()
 }
 
-fn view_url_input(state: &Kithara) -> Element<'_, Message> {
-    let p = state.palette;
-
-    let input = text_input("Audio URL", &state.url_text)
-        .on_input(Message::UrlChanged)
-        .on_submit(Message::AddUrl)
-        .padding(10);
-
-    let add_btn = button(text("Add").size(Consts::SMALL_FONT).color(p.bg))
-        .padding([8.0, 16.0])
-        .style(move |_theme, _status| button::Style {
-            background: Some(p.accent.into()),
-            text_color: p.bg,
-            border: Border::default().rounded(Consts::BORDER_RADIUS_BUTTON),
-            ..Default::default()
-        })
-        .on_press(Message::AddUrl);
-
-    container(
-        row![input, add_btn,]
-            .spacing(Consts::ELEMENT_SPACING)
-            .align_y(Alignment::Center),
+/// Compact-header entry point to the DJ Studio. The studio has no tab of
+/// its own on this layout, so this button is the only way in.
+fn dj_studio_button(p: GuiPalette) -> Element<'static, Message> {
+    button(
+        row![
+            Icon::Disc.view(Consts::DJ_LAUNCH_ICON, p.accent),
+            text("DJ Studio").size(Consts::SMALL_FONT).color(p.text),
+        ]
+        .spacing(Consts::DJ_LAUNCH_GAP)
+        .align_y(Alignment::Center),
     )
-    .width(Length::Fill)
+    .padding([Consts::DJ_LAUNCH_PADDING_Y, Consts::DJ_LAUNCH_PADDING_X])
+    .style(super::studio::ghost_button_style(p))
+    .on_press(Message::Dj(DjMsg::Toggle))
     .into()
 }
 
@@ -250,30 +232,50 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
 
     let subtitle = track_subtitle(state);
 
-    let mut col = column![
-        row![
-            Icon::MusicNote.view(Consts::MUSIC_NOTE_SIZE, p.accent),
-            text(track_name).size(Consts::TRACK_NAME_FONT).color(p.text)
-        ]
-        .spacing(Consts::ELEMENT_SPACING)
-        .align_y(Alignment::Center),
-        text(subtitle).size(Consts::CAPTION_FONT).color(p.muted)
+    let cover = Svg::new(SvgHandle::from_memory(ALBUM_PLACEHOLDER_SVG))
+        .width(Length::Fixed(Consts::NOW_COVER_SIZE))
+        .height(Length::Fixed(Consts::NOW_COVER_SIZE));
+
+    let mut meta = column![
+        text(track_name)
+            .size(Consts::TRACK_NAME_FONT)
+            .font(fonts::display(Weight::Semibold))
+            .color(p.text),
+        text(subtitle)
+            .size(Consts::SMALL_FONT)
+            .font(fonts::SANS)
+            .color(p.text_dim),
     ]
-    .spacing(Consts::COMPACT_SPACING);
+    .spacing(Gap::INLINE_TIGHT)
+    .width(Length::Fill);
 
-    let variant_text = if state.ui_state.variant_label.is_empty() {
-        "—"
-    } else {
-        &state.ui_state.variant_label
-    };
+    if !state.ui_state.variant_label.is_empty() {
+        let dot = container(Space::new())
+            .width(Length::Fixed(Consts::NOW_BITRATE_DOT_SIZE))
+            .height(Length::Fixed(Consts::NOW_BITRATE_DOT_SIZE))
+            .style(dot_style(p));
+        meta = meta.push(
+            row![
+                dot,
+                text(state.ui_state.variant_label.clone())
+                    .size(Consts::NOW_BITRATE_FONT)
+                    .font(fonts::MONO)
+                    .color(p.muted),
+            ]
+            .spacing(Gap::INLINE_WIDE)
+            .align_y(Alignment::Center),
+        );
+    }
 
-    col = col.push(text(variant_text).size(Consts::CAPTION_FONT).color(p.muted));
-
-    container(col)
-        .width(Length::Fill)
-        .padding(Consts::SECTION_PADDING)
-        .style(section_style(p))
-        .into()
+    container(
+        row![cover, meta]
+            .spacing(Gap::SECTION_ROOMY)
+            .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .padding(Gap::SECTION_ROOMY)
+    .style(now_card_style(p))
+    .into()
 }
 
 fn view_seek(state: &Kithara) -> Element<'_, Message> {
@@ -297,13 +299,15 @@ fn view_seek(state: &Kithara) -> Element<'_, Message> {
         row![
             text(format_time(progress))
                 .size(Consts::SMALL_FONT)
+                .font(fonts::MONO)
                 .color(p.muted),
             seek,
             text(format_time(duration))
                 .size(Consts::SMALL_FONT)
+                .font(fonts::MONO)
                 .color(p.muted)
         ]
-        .spacing(Consts::ELEMENT_SPACING)
+        .spacing(Gap::CONTENT)
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)
@@ -312,80 +316,99 @@ fn view_seek(state: &Kithara) -> Element<'_, Message> {
 
 fn view_transport(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    let play_icon = if state.ui_state.playing {
-        Icon::Pause
-    } else {
-        Icon::Play
+
+    let shuffle_active = state.ui_state.shuffle_enabled;
+    // `RepeatMode` is non_exhaustive; anything other than `Off` reads as an
+    // active loop. `One` gets the distinct single-repeat glyph.
+    let repeat_active = !matches!(state.ui_state.repeat_mode, RepeatMode::Off);
+    let repeat_icon = match state.ui_state.repeat_mode {
+        RepeatMode::One => Icon::RepeatOnce,
+        _ => Icon::Repeat,
     };
 
     let transport_row = row![
-        icon_button(
-            Icon::SkipPrev,
-            Consts::TRANSPORT_ICON_SIZE,
-            p.text,
-            Consts::TRANSPORT_ICON_PADDING,
-            Message::Prev
+        transport_square_button(
+            Icon::Shuffle,
+            Consts::TRANSPORT_TOGGLE_ICON,
+            Consts::TRANSPORT_BTN_BASE,
+            p,
+            shuffle_active,
+            Message::ToggleShuffle,
         ),
-        main_transport_button(play_icon, Message::TogglePlayPause, p),
-        icon_button(
+        transport_square_button(
+            Icon::SkipPrev,
+            Consts::TRANSPORT_PRIMARY_ICON,
+            Consts::TRANSPORT_BTN_LG,
+            p,
+            false,
+            Message::Prev,
+        ),
+        widgets::play_button(state.ui_state.playing, p, Message::TogglePlayPause),
+        transport_square_button(
             Icon::SkipNext,
-            Consts::TRANSPORT_ICON_SIZE,
-            p.text,
-            Consts::TRANSPORT_ICON_PADDING,
-            Message::Next
+            Consts::TRANSPORT_PRIMARY_ICON,
+            Consts::TRANSPORT_BTN_LG,
+            p,
+            false,
+            Message::Next,
+        ),
+        transport_square_button(
+            repeat_icon,
+            Consts::TRANSPORT_TOGGLE_ICON,
+            Consts::TRANSPORT_BTN_BASE,
+            p,
+            repeat_active,
+            Message::ToggleRepeat,
         ),
     ]
-    .spacing(Consts::TRANSPORT_BUTTON_SPACING)
+    .spacing(Consts::TRANSPORT_GAP)
     .align_y(Alignment::Center);
 
-    container(
-        column![transport_row, view_playrate(state)]
-            .spacing(Consts::ELEMENT_SPACING)
-            .align_x(Alignment::Center),
-    )
-    .width(Length::Fill)
-    .center_x(Length::Fill)
-    .into()
+    container(transport_row)
+        .width(Length::Fill)
+        .center_x(Length::Fill)
+        .into()
 }
 
-fn view_playrate(state: &Kithara) -> Element<'_, Message> {
-    const RATES: [f32; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+fn view_speed(state: &Kithara) -> Element<'_, Message> {
+    // A dead-band around 1.0x keeps the RESET pill from flickering while
+    // dragging through unity.
+    const RESET_DEADBAND: f32 = 0.06;
     let p = state.palette;
+    let rate = state.ui_state.selected_rate;
 
-    let buttons = RATES.iter().map(|&rate| {
-        let is_selected = (state.ui_state.selected_rate - rate).abs() < f32::EPSILON;
-        let label = if rate == rate.floor() {
-            let rate_u8 = rate.to_u8().unwrap_or(u8::MAX);
-            format!("{rate_u8}x")
-        } else {
-            format!("{rate:.2}x")
-        };
-        let btn_text =
-            text(label)
-                .size(Consts::SMALL_FONT)
-                .color(if is_selected { p.bg } else { p.muted });
-        let btn = button(btn_text)
-            .style(move |_theme, _status| button::Style {
-                background: Some(if is_selected {
-                    p.accent.into()
-                } else {
-                    p.bg_panel.into()
-                }),
-                text_color: if is_selected { p.bg } else { p.muted },
-                border: Border {
-                    radius: Consts::BORDER_RADIUS_PILL.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .padding([Consts::PLAYRATE_PADDING_Y, Consts::PLAYRATE_PADDING_X])
-            .on_press(Message::PlayRateChanged(rate));
-        Element::from(btn)
-    });
+    let mut controls = row![
+        text("SPEED")
+            .size(Consts::SUBTITLE_FONT)
+            .font(fonts::mono(Weight::Medium))
+            .color(p.text_dim),
+        widgets::speed_slider(rate, p),
+        text(format!("{rate:.2}\u{00d7}"))
+            .size(Consts::SMALL_FONT)
+            .font(fonts::mono(Weight::Medium))
+            .color(p.accent),
+    ]
+    .spacing(Gap::CONTENT)
+    .align_y(Alignment::Center);
 
-    row(buttons)
-        .spacing(Consts::PLAYRATE_SPACING)
-        .align_y(Alignment::Center)
+    if (rate - 1.0).abs() > RESET_DEADBAND {
+        controls = controls.push(
+            button(
+                text("RESET")
+                    .size(Consts::EQ_RESET_FONT)
+                    .font(fonts::mono(Weight::Medium))
+                    .color(p.muted),
+            )
+            .padding([Consts::EQ_RESET_PADDING_Y, Consts::EQ_RESET_PADDING_X])
+            .style(ghost_button_style(p))
+            .on_press(Message::PlayRateChanged(1.0)),
+        );
+    }
+
+    container(controls)
+        .width(Length::Fill)
+        .padding([Consts::SPEED_PADDING_Y, Consts::SPEED_PADDING_X])
+        .style(speed_control_style(p))
         .into()
 }
 
@@ -427,14 +450,15 @@ fn view_volume(state: &Kithara) -> Element<'_, Message> {
                 Message::ToggleMute
             ),
             slider,
-            text(volume_pct).size(Consts::SMALL_FONT).color(p.muted)
+            text(volume_pct)
+                .size(Consts::SMALL_FONT)
+                .font(fonts::MONO)
+                .color(p.muted)
         ]
-        .spacing(Consts::ELEMENT_SPACING)
+        .spacing(Gap::CONTENT)
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)
-    .padding(Consts::SECTION_PADDING)
-    .style(section_style(p))
     .into()
 }
 
@@ -445,13 +469,13 @@ fn view_tabs(state: &Kithara) -> Element<'_, Message> {
         tab_button(state, Tab::Equalizer, Icon::Equalizer, "EQ"),
         tab_button(state, Tab::Settings, Icon::Settings, "Settings"),
     ]
-    .spacing(Consts::COMPACT_SPACING)
+    .spacing(Gap::INLINE)
     .width(Length::Fill);
 
     container(tabs)
         .width(Length::Fill)
-        .padding([Consts::TABS_PADDING_Y, 0.0])
-        .style(section_style(p))
+        .padding(Consts::TABS_PADDING_Y)
+        .style(tab_strip_style(p))
         .into()
 }
 
@@ -478,9 +502,7 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
         .into();
     }
 
-    let mut tracks = column![]
-        .spacing(Consts::PLAYLIST_SPACING)
-        .width(Length::Fill);
+    let mut tracks = column![].spacing(Gap::INLINE).width(Length::Fill);
 
     for (index, entry) in state.ui_state.tracks.iter().enumerate() {
         let is_current = state.ui_state.current_track_index == Some(index);
@@ -520,12 +542,14 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
             row![
                 text(format!("{:02}", index + 1))
                     .size(Consts::PLAYLIST_INDEX_FONT)
+                    .font(fonts::MONO)
                     .color(index_color),
                 text(track_name)
                     .size(Consts::PLAYLIST_TRACK_FONT)
+                    .font(fonts::display(Weight::Medium))
                     .color(text_color),
             ]
-            .spacing(Consts::ELEMENT_SPACING)
+            .spacing(Gap::CONTENT)
             .align_y(Alignment::Center),
         )
         .width(Length::Fill)
@@ -533,7 +557,7 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
             Consts::PLAYLIST_ITEM_PADDING_Y,
             Consts::PLAYLIST_ITEM_PADDING_X,
         ])
-        .style(move |_theme, status| playlist_item_style(p, is_current, is_selected, status))
+        .style(move |_theme, status| playlist_item_style(p, is_selected, status))
         .on_press(Message::SelectTrack(index));
 
         tracks = tracks.push(item);
@@ -560,6 +584,7 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
         let band = column![
             text(format!("{value:+.0}"))
                 .size(Consts::EQ_VALUE_FONT)
+                .font(fonts::mono(Weight::Medium))
                 .color(value_color),
             container(
                 vertical_slider(Consts::EQ_MIN_DB..=Consts::EQ_MAX_DB, value, move |v| {
@@ -573,9 +598,12 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
             .width(Length::Fill)
             .height(Length::Fill)
             .center_x(Length::Fill),
-            text(label).size(Consts::EQ_LABEL_FONT).color(p.text),
+            text(label)
+                .size(Consts::EQ_LABEL_FONT)
+                .font(fonts::mono(Weight::Medium))
+                .color(p.text),
         ]
-        .spacing(Consts::EQ_SPACING)
+        .spacing(Gap::INLINE)
         .align_x(Alignment::Center)
         .width(Length::Fixed(Consts::EQ_BAND_WIDTH))
         .height(Length::Fill);
@@ -590,19 +618,27 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
     container(
         column![
             row![
-                text(title).size(Consts::HEADING_FONT).color(p.text),
+                text(title)
+                    .size(Consts::HEADING_FONT)
+                    .font(fonts::display(Weight::Semibold))
+                    .color(p.text),
                 Space::new().width(Length::Fill),
-                button(text("Reset All").size(Consts::EQ_RESET_FONT).color(p.muted))
-                    .padding([Consts::EQ_RESET_PADDING_Y, Consts::EQ_RESET_PADDING_X])
-                    .style(ghost_button_style(p))
-                    .on_press(Message::EqResetAll)
+                button(
+                    text("Reset All")
+                        .size(Consts::EQ_RESET_FONT)
+                        .font(fonts::mono(Weight::Medium))
+                        .color(p.muted)
+                )
+                .padding([Consts::EQ_RESET_PADDING_Y, Consts::EQ_RESET_PADDING_X])
+                .style(ghost_button_style(p))
+                .on_press(Message::EqResetAll)
             ]
             .align_y(Alignment::Center),
             container(bands_row)
                 .width(Length::Fill)
                 .height(Length::Fill)
         ]
-        .spacing(Consts::SECTION_SPACING)
+        .spacing(Gap::SECTION)
         .width(Length::Fill)
         .height(Length::Fill),
     )
@@ -615,7 +651,7 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
 /// reference: a log-spaced frequency between 30 Hz and 18 kHz is
 /// rendered as `60`, `200`, `1k`, `12k`, etc.; tiny EQs (≤3 bands) get
 /// the friendlier `Low`/`Mid`/`High` triplet.
-fn eq_band_label(index: usize, total: usize) -> String {
+pub(crate) fn eq_band_label(index: usize, total: usize) -> String {
     /// Lower bound of the log-spaced label range, in Hz.
     const MIN_FREQ_HZ: f32 = 30.0;
     /// Upper bound of the log-spaced label range, in Hz.
@@ -646,16 +682,23 @@ fn eq_band_label(index: usize, total: usize) -> String {
 
 fn view_settings(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    let mut col = column![text("Settings").size(Consts::HEADING_FONT).color(p.text),]
-        .spacing(Consts::SETTINGS_SPACING);
+    let mut col = column![
+        text("Settings")
+            .size(Consts::HEADING_FONT)
+            .font(fonts::display(Weight::Semibold))
+            .color(p.text),
+    ]
+    .spacing(Gap::INLINE_WIDE)
+    .width(Length::Fill);
 
     col = col.push(
-        text("Quality")
-            .size(Consts::SETTINGS_BODY_FONT)
-            .color(p.text),
+        text("QUALITY")
+            .size(Consts::SETTINGS_LABEL_FONT)
+            .font(fonts::MONO)
+            .color(p.muted),
     );
-    let mut quality_row = row![].spacing(Consts::COMPACT_SPACING);
-    quality_row = quality_row.push(abr_button(
+    let mut quality_row = row![].spacing(Gap::INLINE);
+    quality_row = quality_row.push(pill_button(
         "Auto",
         state.ui_state.abr_mode_is_auto,
         p,
@@ -663,7 +706,7 @@ fn view_settings(state: &Kithara) -> Element<'_, Message> {
     ));
     for (idx, label) in &state.ui_state.abr_variants {
         let active = state.ui_state.selected_variant == Some(*idx);
-        quality_row = quality_row.push(abr_button(
+        quality_row = quality_row.push(pill_button(
             label,
             active,
             p,
@@ -673,15 +716,17 @@ fn view_settings(state: &Kithara) -> Element<'_, Message> {
     col = col.push(quality_row);
 
     let secs = state.ui_state.crossfade.clamp(0.0, Consts::CROSSFADE_MAX);
-    col = col.push(Space::new().height(Length::Fixed(Consts::SECTION_SPACING)));
+    col = col.push(Space::new().height(Length::Fixed(Gap::SECTION)));
     col = col.push(
         row![
-            text("Crossfade")
-                .size(Consts::SETTINGS_BODY_FONT)
-                .color(p.text),
+            text("CROSSFADE")
+                .size(Consts::SETTINGS_LABEL_FONT)
+                .font(fonts::MONO)
+                .color(p.muted),
             Space::new().width(Length::Fill),
             text(format!("{secs:.1}s"))
                 .size(Consts::SETTINGS_BODY_FONT)
+                .font(fonts::mono(Weight::Medium))
                 .color(p.accent),
         ]
         .align_y(Alignment::Center),
@@ -689,6 +734,7 @@ fn view_settings(state: &Kithara) -> Element<'_, Message> {
 
     let cf_slider = slider(0.0..=Consts::CROSSFADE_MAX, secs, Message::CrossfadeChanged)
         .step(Consts::CROSSFADE_STEP)
+        .width(Length::Fill)
         .style(slider_style(p));
     col = col.push(cf_slider);
 
@@ -722,58 +768,73 @@ fn icon_button(
         .into()
 }
 
-fn main_transport_button(icon: Icon, message: Message, p: GuiPalette) -> Element<'static, Message> {
-    button(icon.view(Consts::MAIN_TRANSPORT_ICON_SIZE, p.bg))
-        .padding(Consts::MAIN_BUTTON_PADDING)
-        .style(move |_theme, status| {
-            let background = match status {
-                ButtonStatus::Hovered => with_alpha(p.accent, Consts::ALPHA_MAIN_HOVER),
-                ButtonStatus::Pressed => with_alpha(p.accent, Consts::ALPHA_MAIN_PRESSED),
-                ButtonStatus::Active => p.accent,
-                ButtonStatus::Disabled => with_alpha(p.accent, Consts::ALPHA_MAIN_DISABLED),
-            };
+/// Secondary / toggle transport button: a fixed-size rounded square. `active`
+/// drives the toggle highlight (accent fill) for shuffle and repeat; prev/next
+/// pass `false`. Hover paints a faint panel fill so the target reads as live.
+fn transport_square_button(
+    icon: Icon,
+    icon_size: f32,
+    box_size: f32,
+    p: GuiPalette,
+    active: bool,
+    message: Message,
+) -> Element<'static, Message> {
+    let icon_color = if active { p.accent } else { p.text_dim };
+    button(
+        container(icon.view(icon_size, icon_color))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .width(Length::Fixed(box_size))
+    .height(Length::Fixed(box_size))
+    .padding(0)
+    .style(move |_theme, status| transport_square_style(p, active, status))
+    .on_press(message)
+    .into()
+}
 
-            ButtonStyle {
-                background: Some(Background::Color(background)),
-                text_color: p.text,
-                border: Border::default()
-                    .rounded(Consts::BORDER_RADIUS_CIRCLE)
-                    .width(Consts::BORDER_WIDTH)
-                    .color(with_alpha(p.text, Consts::ALPHA_MAIN_BORDER)),
-                ..ButtonStyle::default()
-            }
-        })
-        .on_press(message)
-        .into()
+fn transport_square_style(p: GuiPalette, active: bool, status: ButtonStatus) -> ButtonStyle {
+    let background = if active {
+        match status {
+            ButtonStatus::Pressed => with_alpha(p.accent, Consts::ALPHA_TAB_ACTIVE_PRESSED),
+            _ => p.accent_soft,
+        }
+    } else {
+        match status {
+            ButtonStatus::Hovered => with_alpha(p.bg_panel_2, Consts::ALPHA_TRANSPORT_HOVER),
+            ButtonStatus::Pressed => with_alpha(p.bg_panel_2, Consts::ALPHA_TRANSPORT_PRESSED),
+            ButtonStatus::Active | ButtonStatus::Disabled => Color::TRANSPARENT,
+        }
+    };
+
+    ButtonStyle {
+        background: Some(Background::Color(background)),
+        text_color: if active { p.accent } else { p.text_dim },
+        border: Border::default()
+            .rounded(Consts::BORDER_RADIUS_BUTTON)
+            .width(Consts::BORDER_WIDTH)
+            .color(Color::TRANSPARENT),
+        ..ButtonStyle::default()
+    }
 }
 
 fn tab_button(state: &Kithara, tab: Tab, icon: Icon, label: &str) -> Element<'static, Message> {
     let p = state.palette;
     let active = state.active_tab == tab;
-    let icon_color = if active { p.accent } else { p.muted };
-    let label_color = if active { p.text } else { p.muted };
-    let underline_color = if active { p.accent } else { Color::TRANSPARENT };
+    let icon_color = if active { p.accent } else { p.text_dim };
+    let label_color = if active { p.accent } else { p.text_dim };
 
-    let content = column![
-        row![
-            icon.view(Consts::TAB_ICON_SIZE, icon_color),
-            text(label.to_string())
-                .size(Consts::SMALL_FONT)
-                .color(label_color)
-        ]
-        .spacing(Consts::COMPACT_SPACING)
-        .align_y(Alignment::Center),
-        container(
-            Space::new()
-                .height(Length::Fixed(Consts::UNDERLINE_HEIGHT))
-                .width(Length::Fill)
-        )
-        .style(move |_theme| ContainerStyle::default().background(underline_color))
+    let content = row![
+        icon.view(Consts::TAB_ICON_SIZE, icon_color),
+        text(label.to_string())
+            .size(Consts::SMALL_FONT)
+            .font(fonts::sans(Weight::Semibold))
+            .color(label_color)
     ]
-    .spacing(Consts::COMPACT_SPACING)
-    .align_x(Alignment::Center);
+    .spacing(Gap::INLINE)
+    .align_y(Alignment::Center);
 
-    button(content)
+    button(container(content).center_x(Length::Fill))
         .width(Length::FillPortion(1))
         .padding([Consts::TAB_CONTENT_PADDING_Y, Consts::TAB_CONTENT_PADDING_X])
         .style(move |_theme, status| tab_button_style(p, active, status))
@@ -794,21 +855,65 @@ fn panel_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
                 Border::default()
                     .rounded(Consts::BORDER_RADIUS)
                     .width(Consts::BORDER_WIDTH)
-                    .color(with_alpha(p.accent, Consts::ALPHA_ACCENT_BORDER)),
+                    .color(p.line),
             )
     }
 }
 
-fn section_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
+fn now_card_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
     move |_theme| {
+        let fill = Background::Gradient(Gradient::Linear(
+            Linear::new(Degrees(180.0))
+                .add_stop(
+                    0.0,
+                    with_alpha(p.bg_panel_2, Consts::NOW_GRADIENT_START_ALPHA),
+                )
+                .add_stop(1.0, with_alpha(p.bg_panel, Consts::NOW_GRADIENT_END_ALPHA)),
+        ));
         ContainerStyle::default()
-            .background(with_alpha(p.bg_panel, Consts::ALPHA_SECTION_BG))
+            .background(fill)
             .color(p.text)
             .border(
                 Border::default()
                     .rounded(Consts::BORDER_RADIUS_SECTION)
                     .width(Consts::BORDER_WIDTH)
-                    .color(with_alpha(p.muted, Consts::ALPHA_SECTION_BORDER)),
+                    .color(p.line),
+            )
+    }
+}
+
+fn dot_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
+    move |_theme| {
+        ContainerStyle::default()
+            .background(p.accent)
+            .border(Border::default().rounded(Consts::BORDER_RADIUS_CIRCLE))
+    }
+}
+
+fn speed_control_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
+    move |_theme| {
+        ContainerStyle::default()
+            .background(with_alpha(p.bg_inset, Consts::ALPHA_SPEED_FILL))
+            .color(p.text)
+            .border(
+                Border::default()
+                    .rounded(Consts::BORDER_RADIUS_BUTTON)
+                    .width(Consts::BORDER_WIDTH)
+                    .color(p.line_soft),
+            )
+    }
+}
+
+fn tab_strip_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
+    move |_theme| {
+        ContainerStyle::default()
+            .background(with_alpha(p.bg_inset, Consts::ALPHA_TAB_STRIP_FILL))
+            .color(p.text)
+            .border(
+                Border::default()
+                    .rounded(Consts::BORDER_RADIUS_SECTION)
+                    .width(Consts::BORDER_WIDTH)
+                    .color(p.line),
             )
     }
 }
@@ -859,8 +964,18 @@ fn tab_button_style(p: GuiPalette, active: bool, status: ButtonStatus) -> Button
         with_alpha(p.accent, Consts::ALPHA_TAB_INACTIVE_PRESSED)
     };
 
+    let active_fill = Background::Gradient(Gradient::Linear(
+        Linear::new(Degrees(180.0))
+            .add_stop(0.0, with_alpha(p.accent, 0.16))
+            .add_stop(1.0, with_alpha(p.accent, 0.08)),
+    ));
+
     let background = match status {
-        ButtonStatus::Active => Some(Background::Color(base_bg)),
+        ButtonStatus::Active => Some(if active {
+            active_fill
+        } else {
+            Background::Color(base_bg)
+        }),
         ButtonStatus::Hovered => Some(Background::Color(hover_bg)),
         ButtonStatus::Pressed => Some(Background::Color(pressed_bg)),
         ButtonStatus::Disabled => Some(Background::Color(with_alpha(
@@ -871,34 +986,34 @@ fn tab_button_style(p: GuiPalette, active: bool, status: ButtonStatus) -> Button
 
     ButtonStyle {
         background,
-        text_color: p.text,
-        border: Border::default().rounded(Consts::BORDER_RADIUS_BUTTON),
+        text_color: if active { p.accent } else { p.text_dim },
+        border: Border::default()
+            .rounded(Consts::BORDER_RADIUS_BUTTON)
+            .width(Consts::BORDER_WIDTH)
+            .color(if active {
+                with_alpha(p.accent, 0.30)
+            } else {
+                Color::TRANSPARENT
+            }),
         ..ButtonStyle::default()
     }
 }
 
-fn playlist_item_style(
-    p: GuiPalette,
-    current: bool,
-    selected: bool,
-    status: ButtonStatus,
-) -> ButtonStyle {
-    let active_bg = if current {
-        with_alpha(p.accent, Consts::ALPHA_PLAYLIST_CURRENT)
-    } else if selected {
-        with_alpha(p.accent, Consts::ALPHA_PLAYLIST_INACTIVE_PRESSED)
+fn playlist_item_style(p: GuiPalette, selected: bool, status: ButtonStatus) -> ButtonStyle {
+    let active_bg = if selected {
+        with_alpha(p.accent, Consts::ALPHA_PLAYLIST_SELECTED)
     } else {
         Color::TRANSPARENT
     };
 
-    let hover_bg = if current || selected {
-        with_alpha(p.accent, Consts::ALPHA_PLAYLIST_CURRENT_HOVER)
+    let hover_bg = if selected {
+        with_alpha(p.accent, Consts::ALPHA_PLAYLIST_SELECTED_HOVER)
     } else {
         with_alpha(p.bg_panel, Consts::ALPHA_PLAYLIST_INACTIVE_HOVER)
     };
 
-    let pressed_bg = if current || selected {
-        with_alpha(p.accent, Consts::ALPHA_PLAYLIST_CURRENT_PRESSED)
+    let pressed_bg = if selected {
+        with_alpha(p.accent, Consts::ALPHA_PLAYLIST_SELECTED_PRESSED)
     } else {
         with_alpha(p.accent, Consts::ALPHA_PLAYLIST_INACTIVE_PRESSED)
     };
@@ -950,23 +1065,48 @@ fn slider_style(p: GuiPalette) -> impl Fn(&Theme, SliderStatus) -> SliderStyle {
     }
 }
 
-fn abr_button<'a>(label: &str, active: bool, p: GuiPalette, msg: Message) -> Element<'a, Message> {
-    let text_color = if active { p.accent } else { p.muted };
+/// A selectable pill (Quality presets). Active = accent text + accent ring;
+/// inactive = dim text on a faint fill, matching the tab-strip active
+/// language.
+fn pill_button<'a>(label: &str, active: bool, p: GuiPalette, msg: Message) -> Element<'a, Message> {
+    let text_color = if active { p.accent } else { p.text_dim };
     button(
         text(label.to_string())
-            .size(Consts::CAPTION_FONT)
+            .size(Consts::SMALL_FONT)
+            .font(fonts::sans(Weight::Semibold))
             .color(text_color),
     )
     .on_press(msg)
     .padding(Padding::from([
-        Consts::ABR_BUTTON_PADDING_Y,
-        Consts::ABR_BUTTON_PADDING_X,
+        Consts::PILL_PADDING_Y,
+        Consts::PILL_PADDING_X,
     ]))
-    .style(ghost_button_style(p))
+    .style(move |_theme, status| {
+        let background = match status {
+            ButtonStatus::Hovered => with_alpha(p.bg_panel_2, Consts::ALPHA_TAB_INACTIVE_HOVER),
+            ButtonStatus::Pressed => with_alpha(p.accent, Consts::ALPHA_TAB_ACTIVE_PRESSED),
+            ButtonStatus::Active | ButtonStatus::Disabled => {
+                if active {
+                    with_alpha(p.accent, Consts::ALPHA_TAB_ACTIVE_BASE)
+                } else {
+                    with_alpha(p.bg_panel, Consts::ALPHA_SECTION_BG)
+                }
+            }
+        };
+        ButtonStyle {
+            background: Some(Background::Color(background)),
+            text_color,
+            border: Border::default()
+                .rounded(Consts::BORDER_RADIUS_PILL)
+                .width(Consts::BORDER_WIDTH)
+                .color(if active { p.accent } else { p.line }),
+            ..ButtonStyle::default()
+        }
+    })
     .into()
 }
 
-fn track_subtitle(state: &Kithara) -> String {
+pub(crate) fn track_subtitle(state: &Kithara) -> String {
     let Some(index) = state.ui_state.current_track_index else {
         return "Artist / Album unavailable".to_string();
     };
@@ -997,6 +1137,18 @@ fn track_subtitle(state: &Kithara) -> String {
     }
 }
 
-fn with_alpha(color: Color, alpha: f32) -> Color {
+pub(crate) fn with_alpha(color: Color, alpha: f32) -> Color {
     Color { a: alpha, ..color }
+}
+
+/// Linearly interpolate `base` toward `tint` by `amount` in `[0, 1]`
+/// (channels and alpha). Shared color-mix helper for the GUI.
+pub(crate) fn mix_colors(base: Color, tint: Color, amount: f32) -> Color {
+    let amount = amount.clamp(0.0, 1.0);
+    Color::from_rgba(
+        base.r + (tint.r - base.r) * amount,
+        base.g + (tint.g - base.g) * amount,
+        base.b + (tint.b - base.b) * amount,
+        base.a + (tint.a - base.a) * amount,
+    )
 }

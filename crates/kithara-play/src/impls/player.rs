@@ -714,7 +714,12 @@ impl PlayerImpl {
         config: super::config::ResourceConfig,
     ) -> super::config::ResourceConfig {
         let bus = config.bus.or_else(|| Some(self.bus.scoped()));
-        let cancel = config.cancel.or_else(|| Some(self.cancel.child_token()));
+        // Give each prepared resource a fresh per-instance child so one
+        // track's teardown never cancels a sibling. Derives from the
+        // caller-provided parent (e.g. the app/queue master) or from this
+        // player's master when none was supplied.
+        let parent = config.cancel.unwrap_or_else(|| self.cancel.clone());
+        let cancel = Some(parent.child_token());
         super::config::ResourceConfig {
             bus,
             cancel,

@@ -1,7 +1,12 @@
+use std::sync::PoisonError;
+
 use kithara_events::{EventReceiver, TrackId};
 
 use super::Queue;
-use crate::{navigation::RepeatMode, track::TrackEntry};
+use crate::{
+    navigation::RepeatMode,
+    track::{TrackEntry, TrackSource},
+};
 
 impl Queue {
     /// The currently playing track entry, if any.
@@ -95,5 +100,16 @@ impl Queue {
     #[must_use]
     pub fn tracks(&self) -> Vec<TrackEntry> {
         self.lock_tracks().clone()
+    }
+
+    /// The original [`TrackSource`] for `id`, if still queued. Lets callers
+    /// rebuild a resource by track identity rather than by queue position.
+    #[must_use]
+    pub fn track_source(&self, id: TrackId) -> Option<TrackSource> {
+        self.sources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&id)
+            .cloned()
     }
 }

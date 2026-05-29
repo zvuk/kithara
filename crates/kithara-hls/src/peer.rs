@@ -104,7 +104,7 @@ impl HlsPeer {
                 prefetch_budget,
                 look_ahead_bytes,
                 master_cancel: coord.cancel.clone(),
-                asset_store: Arc::clone(&coord.asset_store),
+                scope: coord.scope.clone(),
                 headers: coord.headers.clone(),
                 seek_epoch: coord.timeline.seek_epoch(),
             };
@@ -224,7 +224,7 @@ impl Peer for HlsPeer {
         let outcome = match self.poll_state_phase(cx) {
             PollPhase::NotActivated => return Poll::Pending,
             PollPhase::Terminated => return Poll::Ready(None),
-            PollPhase::Continue(o) => o,
+            PollPhase::Continue(o) => *o,
         };
 
         for key in outcome.evictions {
@@ -261,7 +261,7 @@ impl Peer for HlsPeer {
 enum PollPhase {
     NotActivated,
     Terminated,
-    Continue(PollOutcome),
+    Continue(Box<PollOutcome>),
 }
 
 struct PollOutcome {
@@ -297,12 +297,12 @@ impl HlsPeer {
         drop(guard);
         coord.sync_abr_lock();
 
-        PollPhase::Continue(PollOutcome {
+        PollPhase::Continue(Box::new(PollOutcome {
             coord,
             ctx,
             evictions,
             seg_at_reader,
-        })
+        }))
     }
 }
 
@@ -387,7 +387,7 @@ impl HlsTrackState {
     fn plan_ctx(&self) -> PlanCtx {
         PlanCtx {
             master_cancel: self.coord.cancel.clone(),
-            asset_store: Arc::clone(&self.coord.asset_store),
+            scope: self.coord.scope.clone(),
             headers: self.coord.headers.clone(),
             prefetch_budget: self.prefetch_budget,
             seek_epoch: self.coord.timeline.seek_epoch(),

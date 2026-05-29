@@ -111,17 +111,17 @@ mod tests {
             store.get("signal", b"spec").as_deref(),
             Some(b"hello-bytes".as_slice())
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn corrupt_or_empty_entry_is_a_miss() {
         let dir = std::env::temp_dir().join(format!("fixcache-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&dir).unwrap();
         let store = FixtureCache::from_dir(Some(dir.clone()));
         let path = dir.join(format!("{}.bin", cache_key("signal", b"spec")));
-        std::fs::write(&path, b"").unwrap();
+        fs::write(&path, b"").unwrap();
         assert!(store.get("signal", b"spec").is_none());
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

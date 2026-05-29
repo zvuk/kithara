@@ -51,6 +51,13 @@ impl FileCoord {
         self.read_pos.load(Ordering::Acquire)
     }
 
+    /// Shared reader-position cell handed to the demand index so the
+    /// elected producer can read the consumer's advances directly.
+    #[must_use]
+    pub(crate) fn read_pos_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.read_pos)
+    }
+
     pub(crate) fn set_download_pos(&self, value: u64) {
         self.timeline.set_download_position(value);
     }

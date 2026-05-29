@@ -40,10 +40,19 @@ mod kithara_decode {
     mod timeline_tests;
 }
 
+mod kithara_app {
+    #[cfg(not(target_arch = "wasm32"))]
+    mod waveform_analyzer;
+}
+
 mod kithara_file {
     mod early_stream_close;
     mod file_source;
     mod html_error_cleanup;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod shared_download;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod waveform_shared_download;
 }
 
 mod kithara_hls {

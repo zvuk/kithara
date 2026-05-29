@@ -16,7 +16,7 @@ use crate::{
     cache::{CachedAssets, CachedResource},
     evict::EvictAssets,
     flush::{FlushHub, FlushPolicy},
-    index::{AvailabilityIndex, EvictConfig},
+    index::{AvailabilityIndex, DemandIndex, EvictConfig},
     key::ResourceKey,
     lease::{LeaseAssets, LeaseGuard, LeaseResource},
     mem_store::MemAssetStore,
@@ -159,10 +159,32 @@ pub(crate) type MemStore<Ctx = ()> =
 
 /// Constructor for the ready-to-use [`AssetStore`].
 ///
-/// See the crate `README.md` "Usage" for builder examples and
-/// "Decorator Chain" for the normative decorator order.
+/// ## Usage
+///
+/// One store services every asset under `root_dir`. A scope binds the
+/// `asset_root` and mints self-contained keys; per-resource ops live on
+/// the store.
+/// ```ignore
+/// // Without processing:
+/// let store = AssetStoreBuilder::new()
+///     .root_dir("/path/to/cache")
+///     .build();
+/// let scope = store.scope(asset_root_for_url(&url, None));
+/// let res = store.acquire_resource(&scope.key_from_url(&url), None)?;
+///
+/// // With processing callback:
+/// let store = AssetStoreBuilder::new()
+///     .root_dir("/path/to/cache")
+///     .process_fn(my_decrypt_callback)
+///     .build();
+/// ```
+///
+/// ## Decorator order (normative)
+/// - `EvictAssets` is applied first (evaluates eviction at "asset creation time")
+/// - `CachedAssets` caches opened resources in memory
+/// - `LeaseAssets` provides RAII pinning for opened resources (outermost)
+/// - `ProcessingAssets` (if configured) wraps resources for transformation
 pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()> {
-    asset_root: Option<String>,
     cache_capacity: Option<NonZeroUsize>,
     cancel: Option<CancellationToken>,
     evict_config: Option<EvictConfig>,
@@ -203,7 +225,6 @@ impl AssetStoreBuilder<()> {
             pool: None,
             process_fn: Some(dummy_process),
             root_dir: None,
-            asset_root: None,
         }
     }
 }
@@ -212,16 +233,6 @@ impl<Ctx> AssetStoreBuilder<Ctx>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + fmt::Debug + 'static,
 {
-    /// Set the asset root identifier (e.g. from `asset_root_for_url`).
-    ///
-    /// Pass `None` when the store will only be used with absolute keys
-    /// (e.g. local file playback). Relative keys will fail with `InvalidKey`
-    /// when `asset_root` is `None`.
-    pub fn asset_root(mut self, asset_root: Option<&str>) -> Self {
-        self.asset_root = asset_root.map(str::to_string);
-        self
-    }
-
     /// Build the storage backend.
     ///
     /// Returns `AssetStore::Disk` for persistent storage or
@@ -236,31 +247,46 @@ where
     #[must_use]
     pub fn build(self) -> AssetStore<Ctx> {
         let availability = AvailabilityIndex::new();
+        // The demand index is a consumer-driven sibling of `availability`:
+        // no observer / decorator threading, just a shared field. Each
+        // slot's `producer_cancel` is a child of this store cancel.
+        let demand = DemandIndex::new(self.cancel.clone().unwrap_or_default());
         #[cfg(target_arch = "wasm32")]
         {
-            let store = self.build_ephemeral_with_availability(availability.clone());
+            let store = self.build_ephemeral_with_availability(&availability);
             AssetStore::Mem {
                 store,
                 availability,
+                demand,
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.ephemeral {
-                let store = self.build_ephemeral_with_availability(availability.clone());
+                let store = self.build_ephemeral_with_availability(&availability);
                 AssetStore::Mem {
                     store,
                     availability,
+                    demand,
                 }
             } else {
                 let (store, base) = self.build_disk_with_availability(availability.clone());
                 AssetStore::Disk {
                     store,
                     availability,
+                    demand,
                     base: Some(base),
                 }
             }
         }
+    }
+
+    /// Build a disk-backed `AssetStore` chain with a fresh availability index.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn build_disk(self) -> DiskStore<Ctx> {
+        let (chain, _base) = self.build_disk_with_availability(AvailabilityIndex::new());
+        chain
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -273,7 +299,6 @@ where
                 .expect("BUG: failed to create AssetStore temp dir")
                 .keep()
         });
-        let asset_root = self.asset_root.unwrap_or_default();
         let evict_cfg = self.evict_config.unwrap_or_default();
         let cancel = self.cancel.unwrap_or_default();
 
@@ -308,7 +333,6 @@ where
 
         let disk = Arc::new(DiskAssetStore::with_availability_and_deleter(
             root_dir,
-            asset_root,
             cancel.clone(),
             availability,
             Arc::clone(&deleter),
@@ -330,7 +354,12 @@ where
         let capacity = self
             .cache_capacity
             .unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
-        let cached = Arc::new(CachedAssets::new(processing, capacity, self.on_invalidated));
+        let cached = Arc::new(CachedAssets::new(
+            processing,
+            capacity,
+            self.on_invalidated,
+            false,
+        ));
         let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> =
             Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>);
         let _ = pool;
@@ -342,11 +371,10 @@ where
     /// unshared [`AvailabilityIndex`].
     #[cfg(test)]
     fn build_ephemeral(self) -> MemStore<Ctx> {
-        self.build_ephemeral_with_availability(AvailabilityIndex::new())
+        self.build_ephemeral_with_availability(&AvailabilityIndex::new())
     }
 
-    fn build_ephemeral_with_availability(self, availability: AvailabilityIndex) -> MemStore<Ctx> {
-        let asset_root = self.asset_root.unwrap_or_default();
+    fn build_ephemeral_with_availability(self, availability: &AvailabilityIndex) -> MemStore<Ctx> {
         let cancel = self.cancel.unwrap_or_default();
         let evict_cfg = self.evict_config.unwrap_or_default();
         let process_fn = self
@@ -354,7 +382,6 @@ where
             .expect("BUG: process_fn is required for AssetStoreBuilder");
         let pool = self.pool.unwrap_or_else(|| BytePool::default().clone());
 
-        let asset_root_clone = asset_root.clone();
         let hub = self
             .flush_hub
             .clone()
@@ -366,14 +393,12 @@ where
         let active_resources = Arc::new(DashMap::new());
         let deleter: Arc<dyn crate::deleter::AssetDeleter> =
             Arc::new(crate::mem_store::MemAssetDeleter::new(
-                asset_root.clone(),
                 availability.clone(),
                 pins.clone(),
                 lru.clone(),
                 Arc::clone(&active_resources),
             ));
         let mem = Arc::new(MemAssetStore::with_availability_and_deleter(
-            asset_root,
             cancel.clone(),
             self.mem_resource_capacity,
             availability.clone(),
@@ -397,8 +422,9 @@ where
             pool.clone(),
         ));
         let user_on_invalidated = self.on_invalidated;
+        let availability_for_hook = availability.clone();
         let hooked_on_invalidated: OnInvalidatedFn = Arc::new(move |key: &ResourceKey| {
-            availability.remove(&asset_root_clone, key);
+            availability_for_hook.remove(key);
             if let Some(ref cb) = user_on_invalidated {
                 cb(key);
             }
@@ -407,6 +433,7 @@ where
             processing,
             capacity,
             Some(hooked_on_invalidated),
+            true,
         ));
         LeaseAssets::new(cached, cancel, pins)
     }
@@ -548,7 +575,6 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
             pool: self.pool,
             process_fn: Some(f),
             root_dir: self.root_dir,
-            asset_root: self.asset_root,
         }
     }
 }
@@ -581,19 +607,18 @@ mod tests {
         "<non-string panic>".to_string()
     }
 
+    const ROOT: &str = "test_asset";
+
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn builder_local_mode_decorators_inactive() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test.bin");
         fs::write(&file_path, b"data").unwrap();
 
-        let store = AssetStoreBuilder::new()
-            .root_dir(dir.path())
-            .asset_root(None)
-            .build();
+        let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
 
         let key = ResourceKey::absolute(&file_path);
-        let res = store.open_resource(&key).unwrap();
+        let res = store.open_resource(&key, None).unwrap();
 
         let mut buf = [0u8; 4];
         let n = res.read_at(0, &mut buf).unwrap();
@@ -604,13 +629,10 @@ mod tests {
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn builder_defaults_all_enabled() {
         let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::new()
-            .root_dir(dir.path())
-            .asset_root(Some("test_asset"))
-            .build();
+        let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
 
-        let key = ResourceKey::new("test.bin");
-        let res = store.acquire_resource(&key).unwrap();
+        let key = ResourceKey::relative(ROOT, "test.bin");
+        let res = store.acquire_resource(&key, None).unwrap();
         res.write_at(0, b"hello").unwrap();
 
         let mut buf = [0u8; 5];
@@ -621,18 +643,15 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn open_resource_write_ops_panic() {
-        let store = AssetStoreBuilder::new()
-            .asset_root(Some("test"))
-            .ephemeral(true)
-            .build();
-        let key = ResourceKey::new("test.bin");
+        let store = AssetStoreBuilder::new().ephemeral(true).build();
+        let key = ResourceKey::relative(ROOT, "test.bin");
 
-        let write_handle = store.acquire_resource(&key).unwrap();
+        let write_handle = store.acquire_resource(&key, None).unwrap();
         write_handle.write_at(0, b"x").unwrap();
         write_handle.commit(Some(1)).unwrap();
         drop(write_handle);
 
-        let read_handle = store.open_resource(&key).unwrap();
+        let read_handle = store.open_resource(&key, None).unwrap();
 
         let err = catch_unwind(AssertUnwindSafe(|| {
             let _ = read_handle.write_at(0, b"x");
@@ -655,18 +674,15 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn open_resource_commit_and_reactivate_panic() {
-        let store = AssetStoreBuilder::new()
-            .asset_root(Some("test"))
-            .ephemeral(true)
-            .build();
-        let key = ResourceKey::new("test.bin");
+        let store = AssetStoreBuilder::new().ephemeral(true).build();
+        let key = ResourceKey::relative(ROOT, "test.bin");
 
-        let write_handle = store.acquire_resource(&key).unwrap();
+        let write_handle = store.acquire_resource(&key, None).unwrap();
         write_handle.write_at(0, b"abcd").unwrap();
         write_handle.commit(Some(4)).unwrap();
         drop(write_handle);
 
-        let read_handle = store.open_resource(&key).unwrap();
+        let read_handle = store.open_resource(&key, None).unwrap();
 
         let err = catch_unwind(AssertUnwindSafe(|| {
             let _ = read_handle.commit(Some(4));
@@ -688,52 +704,30 @@ mod tests {
     }
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
-    fn builder_no_asset_root_with_absolute_key() {
+    fn builder_absolute_key_via_arbitrary_root() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("song.mp3");
         fs::write(&file_path, b"test data").unwrap();
 
-        let store = AssetStoreBuilder::new()
-            .root_dir(dir.path())
-            .asset_root(None)
-            .build();
+        let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
 
         let key = ResourceKey::absolute(&file_path);
-        let res = store.open_resource(&key).unwrap();
+        let res = store.open_resource(&key, None).unwrap();
 
         let mut buf = [0u8; 9];
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(&buf[..n], b"test data");
     }
 
-    #[kithara::test(native, timeout(Duration::from_secs(5)))]
-    fn builder_no_asset_root_rejects_relative_key() {
-        let dir = tempdir().unwrap();
-
-        let store = AssetStoreBuilder::new()
-            .root_dir(dir.path())
-            .asset_root(None)
-            .build();
-
-        let key = ResourceKey::new("test.bin");
-        let result = store.open_resource(&key);
-        assert!(result.is_err());
-    }
-
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn build_ephemeral_returns_mem() {
-        let backend = AssetStoreBuilder::new()
-            .asset_root(Some("test"))
-            .ephemeral(true)
-            .build();
-        assert!(matches!(backend, AssetStore::Mem { .. }));
+        let backend = AssetStoreBuilder::new().ephemeral(true).build();
+        assert!(backend.is_ephemeral());
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn ephemeral_capabilities_lack_evict_and_lease() {
-        let store = AssetStoreBuilder::new()
-            .asset_root(Some("test"))
-            .build_ephemeral();
+        let store = AssetStoreBuilder::new().build_ephemeral();
         let caps = store.capabilities();
         assert!(caps.contains(Capabilities::CACHE));
         assert!(caps.contains(Capabilities::PROCESSING));
@@ -745,24 +739,8 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn disk_defaults_all_capabilities() {
         let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::new()
-            .root_dir(dir.path())
-            .asset_root(Some("test"))
-            .build_disk_with_availability(AvailabilityIndex::new())
-            .0;
+        let store = AssetStoreBuilder::new().root_dir(dir.path()).build_disk();
         assert_eq!(store.capabilities(), Capabilities::all());
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn disk_local_mode_only_processing() {
-        let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::new()
-            .root_dir(dir.path())
-            .asset_root(None)
-            .build_disk_with_availability(AvailabilityIndex::new())
-            .0;
-        assert_eq!(store.capabilities(), Capabilities::PROCESSING);
     }
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
@@ -770,7 +748,6 @@ mod tests {
         let dir = tempdir().unwrap();
         let backend = AssetStoreBuilder::new()
             .root_dir(dir.path())
-            .asset_root(Some("test"))
             .ephemeral(false)
             .build();
         assert!(matches!(backend, AssetStore::Disk { .. }));
@@ -779,22 +756,21 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn ephemeral_retains_data_within_cache_capacity() {
         let backend = AssetStoreBuilder::new()
-            .asset_root(Some("test"))
             .cache_capacity(NonZeroUsize::new(5).unwrap())
             .ephemeral(true)
             .build();
 
         let keys: Vec<ResourceKey> = (0..4)
-            .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
+            .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
             .collect();
 
         for key in &keys {
-            let res = backend.acquire_resource(key).unwrap();
+            let res = backend.acquire_resource(key, None).unwrap();
             res.write_at(0, b"data").unwrap();
             res.commit(Some(4)).unwrap();
         }
 
-        let reopened = backend.open_resource(&keys[0]).unwrap();
+        let reopened = backend.open_resource(&keys[0], None).unwrap();
         assert_eq!(
             reopened.len(),
             Some(4),
@@ -805,23 +781,22 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn ephemeral_evicts_data_beyond_cache_capacity() {
         let backend = AssetStoreBuilder::new()
-            .asset_root(Some("test"))
             .cache_capacity(NonZeroUsize::new(3).unwrap())
             .ephemeral(true)
             .build();
 
         let keys: Vec<ResourceKey> = (0..4)
-            .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
+            .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
             .collect();
 
         for key in &keys {
-            let res = backend.acquire_resource(key).unwrap();
+            let res = backend.acquire_resource(key, None).unwrap();
             res.write_at(0, b"data").unwrap();
             res.commit(Some(4)).unwrap();
         }
 
         assert!(
-            backend.open_resource(&keys[0]).is_err(),
+            backend.open_resource(&keys[0], None).is_err(),
             "evicted resource should be gone in ephemeral mode"
         );
     }
@@ -830,11 +805,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn from_asset_store() {
         let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::new()
-            .root_dir(dir.path())
-            .asset_root(Some("test"))
-            .build_disk_with_availability(AvailabilityIndex::new())
-            .0;
+        let store = AssetStoreBuilder::new().root_dir(dir.path()).build_disk();
         let backend: AssetStore = store.into();
         assert!(matches!(backend, AssetStore::Disk { .. }));
     }
@@ -848,24 +819,22 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn red_test_lease_resource_drop_strands_availability_index() {
         let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::new()
-            .root_dir(dir.path())
-            .asset_root(Some("seg_root"))
-            .build();
+        let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+        let seg_root = "seg_root";
 
-        let target = ResourceKey::new("v0_15.m4s");
+        let target = ResourceKey::relative(seg_root, "v0_15.m4s");
 
         {
-            let writer = store.acquire_resource(&target).unwrap();
+            let writer = store.acquire_resource(&target, None).unwrap();
             writer.write_at(0, b"data").unwrap();
             writer.commit(Some(4)).unwrap();
         }
         assert!(store.contains_range(&target, 0..4));
-        let path = dir.path().join("seg_root").join("v0_15.m4s");
+        let path = dir.path().join(seg_root).join("v0_15.m4s");
         assert!(path.exists(), "file must exist after commit");
 
         {
-            let writer2 = store.acquire_resource(&target).unwrap();
+            let writer2 = store.acquire_resource(&target, None).unwrap();
             writer2.reactivate().expect("BUG: reactivate committed");
         }
 
@@ -897,28 +866,26 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn red_test_delete_asset_strands_availability_index() {
         let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::new()
-            .root_dir(dir.path())
-            .asset_root(Some("seg_root"))
-            .build();
+        let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+        let seg_root = "seg_root";
 
-        let key_a = ResourceKey::new("v0_15.m4s");
-        let key_b = ResourceKey::new("v0_16.m4s");
+        let key_a = ResourceKey::relative(seg_root, "v0_15.m4s");
+        let key_b = ResourceKey::relative(seg_root, "v0_16.m4s");
 
         for (key, payload) in [(&key_a, &b"aaaa"[..]), (&key_b, &b"bbbbb"[..])] {
-            let writer = store.acquire_resource(key).unwrap();
+            let writer = store.acquire_resource(key, None).unwrap();
             writer.write_at(0, payload).unwrap();
             writer.commit(Some(payload.len() as u64)).unwrap();
         }
         assert!(store.contains_range(&key_a, 0..4));
         assert!(store.contains_range(&key_b, 0..5));
 
-        let path_a = dir.path().join("seg_root").join("v0_15.m4s");
-        let path_b = dir.path().join("seg_root").join("v0_16.m4s");
+        let path_a = dir.path().join(seg_root).join("v0_15.m4s");
+        let path_b = dir.path().join(seg_root).join("v0_16.m4s");
         assert!(path_a.exists());
         assert!(path_b.exists());
 
-        store.delete_asset().unwrap();
+        store.delete_asset(seg_root).unwrap();
 
         assert!(!path_a.exists(), "delete_asset must remove file A");
         assert!(!path_b.exists(), "delete_asset must remove file B");

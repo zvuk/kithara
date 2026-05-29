@@ -102,7 +102,6 @@ impl StorageResource {
     /// Committed length, if known.
     #[must_use]
     pub fn len(&self) -> Option<u64> {
-        // ast-grep-ignore: idioms.match-self-conversion
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.len(),
@@ -123,7 +122,6 @@ impl StorageResource {
     /// Backing file path, if any.
     #[must_use]
     pub fn path(&self) -> Option<&Path> {
-        // ast-grep-ignore: idioms.match-self-conversion
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.path(),
@@ -136,7 +134,6 @@ impl StorageResource {
     /// # Errors
     /// Returns error if the resource is cancelled or the backend cannot reopen.
     pub fn reactivate(&self) -> StorageResult<()> {
-        // ast-grep-ignore: idioms.match-self-conversion
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.reactivate(),
@@ -171,7 +168,6 @@ impl StorageResource {
     /// Current runtime status.
     #[must_use]
     pub fn status(&self) -> ResourceStatus {
-        // ast-grep-ignore: idioms.match-self-conversion
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.status(),

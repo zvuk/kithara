@@ -11,12 +11,15 @@ use cbc::{
     Encryptor,
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceHandle, ResourceKey};
+use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceHandle};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_platform::time::Duration;
 use kithara_storage::ResourceStatus;
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
+
+const ROOT: &str = "processed-asset";
+const DRM_ROOT: &str = "processed-drm-asset";
 
 fn xor_process_fn(call_count: Arc<AtomicUsize>) -> ProcessChunkFn<()> {
     Arc::new(move |input, output, _ctx: &mut (), _is_last| {
@@ -51,18 +54,21 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
     let call_count = Arc::new(AtomicUsize::new(0));
     let store = AssetStoreBuilder::new()
         .root_dir(dir.path())
-        .asset_root(Some("processed-asset"))
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .process_fn(xor_process_fn(Arc::clone(&call_count)))
         .build();
+    let scope = store.scope(ROOT);
 
-    let key0 = ResourceKey::new("segments/0000.bin");
-    let key1 = ResourceKey::new("segments/0001.bin");
+    let key0 = scope.key("segments/0000.bin");
+    let key1 = scope.key("segments/0001.bin");
     let plaintext = b"segment-0-payload";
     let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5A).collect();
 
     {
-        let res = store.acquire_resource_with_ctx(&key0, Some(())).unwrap();
+        let res = scope
+            .store()
+            .acquire_resource_with_ctx(&key0, None, Some(()))
+            .unwrap();
         res.write_at(0, plaintext).unwrap();
         res.commit(Some(plaintext.len() as u64)).unwrap();
     }
@@ -71,7 +77,10 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
     assert!(calls_after_first_commit > 0);
 
     {
-        let res = store.acquire_resource_with_ctx(&key1, Some(())).unwrap();
+        let res = scope
+            .store()
+            .acquire_resource_with_ctx(&key1, None, Some(()))
+            .unwrap();
         res.write_at(0, b"other-segment").unwrap();
         res.commit(Some(13)).unwrap();
     }
@@ -79,7 +88,10 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
     let calls_after_eviction = call_count.load(Ordering::SeqCst);
     assert!(calls_after_eviction > calls_after_first_commit);
 
-    let reopened = store.open_resource_with_ctx(&key0, Some(())).unwrap();
+    let reopened = scope
+        .store()
+        .open_resource_with_ctx(&key0, None, Some(()))
+        .unwrap();
     assert!(
         matches!(reopened.status(), ResourceStatus::Committed { .. }),
         "reopened processed resource must stay committed after cache eviction"
@@ -103,29 +115,35 @@ fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
     let call_count = Arc::new(AtomicUsize::new(0));
     let store = AssetStoreBuilder::new()
         .root_dir(dir.path())
-        .asset_root(Some("processed-asset"))
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .process_fn(xor_process_fn(Arc::clone(&call_count)))
         .build();
+    let scope = store.scope(ROOT);
 
-    let key0 = ResourceKey::new("segments/0000.bin");
-    let key1 = ResourceKey::new("segments/0001.bin");
+    let key0 = scope.key("segments/0000.bin");
+    let key1 = scope.key("segments/0001.bin");
     let plaintext = b"segment-0-payload";
     let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5A).collect();
 
     {
-        let res = store.acquire_resource_with_ctx(&key0, Some(())).unwrap();
+        let res = scope
+            .store()
+            .acquire_resource_with_ctx(&key0, None, Some(()))
+            .unwrap();
         res.write_at(0, plaintext).unwrap();
         res.commit(Some(plaintext.len() as u64)).unwrap();
     }
 
     {
-        let res = store.acquire_resource_with_ctx(&key1, Some(())).unwrap();
+        let res = scope
+            .store()
+            .acquire_resource_with_ctx(&key1, None, Some(()))
+            .unwrap();
         res.write_at(0, b"other-segment").unwrap();
         res.commit(Some(13)).unwrap();
     }
 
-    let reopened = store.open_resource(&key0).unwrap();
+    let reopened = scope.store().open_resource(&key0, None).unwrap();
     assert!(
         matches!(reopened.status(), ResourceStatus::Committed { .. }),
         "reopened processed resource must stay committed after cache eviction"
@@ -144,29 +162,35 @@ fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes
     let call_count = Arc::new(AtomicUsize::new(0));
     let store = AssetStoreBuilder::new()
         .root_dir(dir.path())
-        .asset_root(Some("processed-asset"))
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .process_fn(xor_process_fn(Arc::clone(&call_count)))
         .build();
+    let scope = store.scope(ROOT);
 
-    let key0 = ResourceKey::new("segments/0000.bin");
-    let key1 = ResourceKey::new("segments/0001.bin");
+    let key0 = scope.key("segments/0000.bin");
+    let key1 = scope.key("segments/0001.bin");
     let plaintext: Vec<u8> = (0u8..=u8::MAX).cycle().take(512 * 1024 + 37).collect();
     let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5A).collect();
 
     {
-        let res = store.acquire_resource_with_ctx(&key0, Some(())).unwrap();
+        let res = scope
+            .store()
+            .acquire_resource_with_ctx(&key0, None, Some(()))
+            .unwrap();
         res.write_at(0, &plaintext).unwrap();
         res.commit(Some(plaintext.len() as u64)).unwrap();
     }
 
     {
-        let res = store.acquire_resource_with_ctx(&key1, Some(())).unwrap();
+        let res = scope
+            .store()
+            .acquire_resource_with_ctx(&key1, None, Some(()))
+            .unwrap();
         res.write_at(0, b"other-segment").unwrap();
         res.commit(Some(13)).unwrap();
     }
 
-    let reopened = store.open_resource(&key0).unwrap();
+    let reopened = scope.store().open_resource(&key0, None).unwrap();
     assert!(
         matches!(reopened.status(), ResourceStatus::Committed { .. }),
         "reopened processed resource must stay committed after cache eviction"
@@ -184,37 +208,39 @@ fn reopened_large_committed_drm_processed_resource_without_ctx_reads_committed_b
     let dir = tempdir().unwrap();
     let store = AssetStoreBuilder::new()
         .root_dir(dir.path())
-        .asset_root(Some("processed-drm-asset"))
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .process_fn(drm_process_fn())
         .build();
+    let scope = store.scope(DRM_ROOT);
 
     let key = [0x41u8; 16];
     let iv = [0x17u8; 16];
-    let key0 = ResourceKey::new("segments/0000.bin");
-    let key1 = ResourceKey::new("segments/0001.bin");
+    let key0 = scope.key("segments/0000.bin");
+    let key1 = scope.key("segments/0001.bin");
     let plaintext: Vec<u8> = (0u8..=u8::MAX).cycle().take(512 * 1024 + 37).collect();
     let ciphertext = encrypt_aes128_cbc(&plaintext, &key, &iv);
     let other_plaintext = b"other-segment";
     let other_ciphertext = encrypt_aes128_cbc(other_plaintext, &key, &iv);
 
     {
-        let res = store
-            .acquire_resource_with_ctx(&key0, Some(DecryptContext::new(key, iv)))
+        let res = scope
+            .store()
+            .acquire_resource_with_ctx(&key0, None, Some(DecryptContext::new(key, iv)))
             .unwrap();
         res.write_at(0, &ciphertext).unwrap();
         res.commit(Some(ciphertext.len() as u64)).unwrap();
     }
 
     {
-        let res = store
-            .acquire_resource_with_ctx(&key1, Some(DecryptContext::new(key, iv)))
+        let res = scope
+            .store()
+            .acquire_resource_with_ctx(&key1, None, Some(DecryptContext::new(key, iv)))
             .unwrap();
         res.write_at(0, &other_ciphertext).unwrap();
         res.commit(Some(other_ciphertext.len() as u64)).unwrap();
     }
 
-    let reopened = store.open_resource(&key0).unwrap();
+    let reopened = scope.store().open_resource(&key0, None).unwrap();
     assert!(
         matches!(reopened.status(), ResourceStatus::Committed { .. }),
         "reopened DRM processed resource must stay committed after cache eviction"

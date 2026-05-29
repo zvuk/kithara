@@ -176,6 +176,20 @@ impl FlushHub {
     /// Returns the first per-source flush error encountered (others
     /// are logged through `tracing::warn!` and the source's `dirty`
     /// flag is restored so the next cycle retries).
+    /// Number of live (still-strong) sources registered with this hub.
+    /// GC-drops dead `Weak`s while counting so the result reflects only
+    /// indexes whose `AssetStore` is still alive.
+    #[must_use]
+    pub fn live_source_count(&self) -> usize {
+        let mut g = self.sources.lock_sync();
+        g.retain(|w| w.strong_count() > 0);
+        g.len()
+    }
+
+    /// Force an immediate synchronous flush of all dirty indexes.
+    ///
+    /// # Errors
+    /// Returns `AssetsError` if persisting any index resource fails.
     pub fn flush_now(&self) -> AssetsResult<()> {
         let _g = self.flush_lock.lock_sync();
         {

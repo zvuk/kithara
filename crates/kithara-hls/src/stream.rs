@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
+use dashmap::DashMap;
 use kithara_assets::{
-    AssetStore, AssetStoreBuilder, EvictConfig, OnInvalidatedFn, ProcessChunkFn, ResourceKey,
-    asset_root_for_url,
+    AssetStore, AssetStoreBuilder, BytePool, EvictConfig, OnInvalidatedFn, ProcessChunkFn,
+    ResourceKey, StoreOptions, asset_root_for_url,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::EventBus;
@@ -18,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     config::HlsConfig,
     coord::{HlsCoord, HlsCoordEnv},
+    invalidation::{HlsInvalidationGuard, HlsInvalidationRegistry, HlsStore},
     loading::{KeyManager, PlaylistCache},
     parsing::{MediaPlaylist, variant_info_from_master},
     peer::HlsPeer,
@@ -48,6 +50,7 @@ impl StreamType for Hls {
 
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
         let asset_root = asset_root_for_url(&config.url, config.name.as_deref());
+        let asset_root_arc: Arc<str> = Arc::from(asset_root.as_str());
         let cancel = config.cancel.clone().unwrap_or_default();
 
         let bus = config
@@ -68,12 +71,29 @@ impl StreamType for Hls {
         });
 
         let (evict_tx, evict_rx) = mpsc::unbounded_channel::<ResourceKey>();
-        let backend = build_asset_store(&config, &asset_root, cancel.clone(), evict_tx);
+        // App-wide shared store: reuse the injected backend and register
+        // this stream's eviction channel in the routing registry. Without
+        // injection, build a private per-stream store whose
+        // `on_invalidated` feeds this single eviction channel directly.
+        let (scope, invalidation_guard) = if let Some(shared) = config.asset_store.as_ref() {
+            let guard = HlsInvalidationGuard::install(
+                Arc::clone(&shared.registry),
+                Arc::clone(&asset_root_arc),
+                evict_tx,
+            );
+            (
+                shared.backend.scope(Arc::clone(&asset_root_arc)),
+                Some(guard),
+            )
+        } else {
+            let backend = build_asset_store(&config, cancel.clone(), evict_tx);
+            (backend.scope(Arc::clone(&asset_root_arc)), None)
+        };
 
         let byte_pool = config
             .pool
             .clone()
-            .unwrap_or_else(|| kithara_bufpool::BytePool::default().clone());
+            .unwrap_or_else(|| BytePool::default().clone());
 
         let timeline = Timeline::new();
         let hls_peer = Arc::new(HlsPeer::new(timeline.clone(), config.initial_abr_mode));
@@ -82,14 +102,14 @@ impl StreamType for Hls {
             .with_bus(bus.clone());
 
         let playlist_cache =
-            PlaylistCache::new(backend.clone(), peer_handle.clone(), byte_pool.clone());
+            PlaylistCache::new(scope.clone(), peer_handle.clone(), byte_pool.clone());
         playlist_cache.set_master_url(config.url.clone());
         playlist_cache.set_base_url(config.base_url.clone());
         playlist_cache.set_headers(config.headers.clone());
 
         let key_manager = KeyManager::with_options(
             peer_handle.clone(),
-            backend.clone(),
+            scope.clone(),
             config.headers.clone(),
             config.keys.clone(),
             byte_pool.clone(),
@@ -134,10 +154,9 @@ impl StreamType for Hls {
 
         timeline.set_total_duration(playlist_state.track_duration());
 
-        let asset_store = Arc::new(backend);
         let plan_ctx = PlanCtx {
             master_cancel: cancel.clone(),
-            asset_store: Arc::clone(&asset_store),
+            scope: scope.clone(),
             headers: config.headers.clone(),
             prefetch_budget: config.download_batch_size.max(1),
             seek_epoch: timeline.seek_epoch(),
@@ -169,7 +188,7 @@ impl StreamType for Hls {
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {
                 cancel: cancel.clone(),
-                asset_store: Arc::clone(&asset_store),
+                scope: scope.clone(),
                 headers: config.headers.clone(),
             },
             timeline,
@@ -193,6 +212,7 @@ impl StreamType for Hls {
 
         source.set_peer_handle(peer_handle);
         source.set_hls_peer(hls_peer);
+        source.set_invalidation_guard(invalidation_guard);
 
         Ok(source)
     }
@@ -204,7 +224,6 @@ impl StreamType for Hls {
 
 fn build_asset_store(
     config: &HlsConfig,
-    asset_root: &str,
     cancel: CancellationToken,
     evict_tx: mpsc::UnboundedSender<ResourceKey>,
 ) -> AssetStore<DecryptContext> {
@@ -216,7 +235,6 @@ fn build_asset_store(
 
     let mut builder = AssetStoreBuilder::new()
         .process_fn(drm_process_fn)
-        .asset_root(Some(asset_root))
         .cancel(cancel)
         .on_invalidated(on_invalidated)
         .root_dir(&config.store.cache_dir)
@@ -232,4 +250,65 @@ fn build_asset_store(
         builder = builder.flush_hub(Arc::clone(hub));
     }
     builder.build()
+}
+
+/// Build an app-wide shared HLS asset store: one
+/// `AssetStore<DecryptContext>` (DRM `process_fn`, cache, flush hub) plus
+/// a routing registry that steers per-`asset_root` invalidations to the
+/// owning stream. Inject the result into every [`HlsConfig::asset_store`]
+/// that should cooperate on a single cache. `cancel` must be a child of
+/// the app master so a shutdown cascades through the store.
+#[must_use]
+pub fn build_shared_asset_store(
+    store: &StoreOptions,
+    pool: Option<BytePool>,
+    cancel: CancellationToken,
+) -> HlsStore {
+    let registry: HlsInvalidationRegistry = Arc::new(DashMap::new());
+    let drm_process_fn: ProcessChunkFn<DecryptContext> =
+        Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
+            aes128_cbc_process_chunk(input, output, ctx, is_last)
+        });
+    let on_invalidated =
+        registry_eviction_callback(Arc::clone(&registry), store.on_invalidated.clone());
+
+    let mut builder = AssetStoreBuilder::new()
+        .process_fn(drm_process_fn)
+        .cancel(cancel)
+        .on_invalidated(on_invalidated)
+        .root_dir(&store.cache_dir)
+        .evict_config(EvictConfig::from(store))
+        .ephemeral(store.is_ephemeral);
+    if let Some(pool) = pool {
+        builder = builder.pool(pool);
+    }
+    if let Some(cap) = store.cache_capacity {
+        builder = builder.cache_capacity(cap);
+    }
+    if let Some(ref hub) = store.flush_hub {
+        builder = builder.flush_hub(Arc::clone(hub));
+    }
+
+    HlsStore {
+        backend: Arc::new(builder.build()),
+        registry,
+    }
+}
+
+/// Shared-store invalidation callback: route an evicted key to the live
+/// stream that owns its `asset_root`, then chain any caller callback.
+fn registry_eviction_callback(
+    registry: HlsInvalidationRegistry,
+    next: Option<OnInvalidatedFn>,
+) -> OnInvalidatedFn {
+    Arc::new(move |key: &ResourceKey| {
+        if let Some(root) = key.asset_root()
+            && let Some(tx) = registry.get(root)
+        {
+            let _ = tx.send(key.clone());
+        }
+        if let Some(ref callback) = next {
+            callback(key);
+        }
+    })
 }

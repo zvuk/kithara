@@ -68,15 +68,13 @@ fn route_to_item(queue_view: &Arc<Mutex<QueueView>>, event: &FfiPlayerEvent) {
 }
 
 fn update_item_state(item: &Arc<AudioPlayerItem>, status: &FfiTrackStatus) {
-    let mut state = item.state.lock_sync();
     match status {
         FfiTrackStatus::Loaded => {
-            state.is_ready_to_play = true;
-            state.is_failed = false;
+            let duration = item.duration_sec();
+            item.state.lock_sync().resolve_duration(duration);
         }
         FfiTrackStatus::Failed { .. } => {
-            state.is_ready_to_play = false;
-            state.is_failed = true;
+            item.state.lock_sync().mark_failed();
         }
         _ => {}
     }

@@ -2,6 +2,7 @@ use std::{fmt, num::NonZeroUsize, sync::Arc};
 
 use bon::Builder;
 use kithara_play::PlayerImpl;
+use tokio_util::sync::CancellationToken;
 
 /// Default parallelism cap for async track loads.
 pub(crate) const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
@@ -42,6 +43,12 @@ pub struct QueueConfig {
     /// Externally-owned player. `None` means Queue builds a default.
     pub player: Option<Arc<PlayerImpl>>,
 
+    /// Master cancel for the queue. `Some` threads the app master so the
+    /// queue subtree cascades from one app-wide owner; `None` falls back
+    /// to a fresh standalone token (test / library use). Must never be
+    /// `None` on the production app path.
+    pub cancel: Option<CancellationToken>,
+
     /// Whether the queue auto-advances to the next track at EOF.
     #[builder(default = true)]
     pub should_autoplay: bool,
@@ -80,6 +87,28 @@ impl QueueConfig {
     #[must_use]
     pub fn with_player(mut self, player: Arc<PlayerImpl>) -> Self {
         self.player = Some(player);
+        self
+    }
+
+    /// Thread an app-wide master cancel so the queue subtree derives from
+    /// a single owner instead of minting its own root.
+    #[must_use]
+    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    /// Set the prefetch lead-time (seconds) before EOF.
+    #[must_use]
+    pub fn with_prefetch_duration(mut self, secs: f32) -> Self {
+        self.prefetch_duration = secs;
+        self
+    }
+
+    /// Set whether the queue auto-advances at EOF.
+    #[must_use]
+    pub fn with_should_autoplay(mut self, value: bool) -> Self {
+        self.should_autoplay = value;
         self
     }
 }
