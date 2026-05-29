@@ -23,8 +23,8 @@ impl Check for GodStruct {
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let cfg = &ctx.config.thresholds.god_struct;
         let std_traits: HashSet<&str> = cfg.std_traits.iter().map(String::as_str).collect();
-        let mut violations = Vec::new();
 
+        let mut scans: Vec<FileScan> = Vec::new();
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let Ok(file) = parse_file(&path) else {
                 continue;
@@ -36,22 +36,98 @@ impl Check for GodStruct {
             let mut structs: BTreeMap<String, usize> = BTreeMap::new();
             let mut impl_fns: BTreeMap<String, usize> = BTreeMap::new();
             collect(&file.items, &std_traits, &mut structs, &mut impl_fns);
-
-            for (name, fields) in &structs {
-                let fns = impl_fns.get(name).copied().unwrap_or(0);
-                let total = fields + fns;
-                if total >= cfg.warn {
-                    let key = format!("{rel}::{name}");
-                    let msg = format!(
-                        "{name}: {fields} fields + {fns} methods = {total} (warn threshold {})",
-                        cfg.warn
-                    );
-                    violations.push(Violation::warn(ID, key, msg));
-                }
-            }
+            scans.push(FileScan {
+                rel,
+                structs,
+                impl_fns,
+            });
         }
+
+        let violations = aggregate(scans, cfg.warn)
+            .into_iter()
+            .map(|hit| {
+                let total = hit.fields + hit.fns;
+                let msg = format!(
+                    "{}: {} fields + {} methods = {total} (warn threshold {})",
+                    hit.name, hit.fields, hit.fns, cfg.warn
+                );
+                Violation::warn(ID, hit.key, msg)
+            })
+            .collect();
         Ok(violations)
     }
+}
+
+/// One file's contribution: structs defined here (`name -> field count`) and
+/// methods found here (`name -> count`, std-trait/test impls already filtered).
+struct FileScan {
+    rel: String,
+    structs: BTreeMap<String, usize>,
+    impl_fns: BTreeMap<String, usize>,
+}
+
+/// A flagged type after cross-file aggregation. `key` is `<def-file>::<name>`.
+struct GodHit {
+    key: String,
+    name: String,
+    fields: usize,
+    fns: usize,
+}
+
+#[derive(Default)]
+struct CrateScan {
+    /// `name -> (file where the struct is defined, field count)`.
+    structs: BTreeMap<String, (String, usize)>,
+    /// `name -> methods summed across this crate's files`.
+    impl_fns: BTreeMap<String, usize>,
+}
+
+/// Aggregate a type's `fields + methods` across every file of its owning crate,
+/// so a god type whose `impl` blocks are spread over sibling files is counted
+/// once by its true surface — and moving methods between files cannot lower the
+/// count. Scoped per crate (`crates/<name>`), never workspace-wide, so two
+/// same-named types in different crates stay separate.
+fn aggregate(scans: Vec<FileScan>, warn: usize) -> Vec<GodHit> {
+    let mut crates: BTreeMap<String, CrateScan> = BTreeMap::new();
+    for scan in scans {
+        let entry = crates.entry(crate_key(&scan.rel).to_string()).or_default();
+        for (name, fields) in scan.structs {
+            entry
+                .structs
+                .entry(name)
+                .or_insert_with(|| (scan.rel.clone(), fields));
+        }
+        for (name, n) in scan.impl_fns {
+            *entry.impl_fns.entry(name).or_insert(0) += n;
+        }
+    }
+
+    let mut hits = Vec::new();
+    for entry in crates.values() {
+        for (name, (def_rel, fields)) in &entry.structs {
+            let fns = entry.impl_fns.get(name).copied().unwrap_or(0);
+            if fields + fns >= warn {
+                hits.push(GodHit {
+                    key: format!("{def_rel}::{name}"),
+                    name: name.clone(),
+                    fields: *fields,
+                    fns,
+                });
+            }
+        }
+    }
+    hits
+}
+
+/// Owning-crate root (`crates/<name>`) used to scope per-type aggregation.
+/// Paths outside `crates/` fall back to the file itself (per-file scope).
+fn crate_key(rel: &str) -> &str {
+    if let Some(rest) = rel.strip_prefix("crates/")
+        && let Some(slash) = rest.find('/')
+    {
+        return &rel[.."crates/".len() + slash];
+    }
+    rel
 }
 
 fn collect(
@@ -167,5 +243,87 @@ mod tests {
                    #[cfg(test)]\n\
                    mod tests { impl super::S { fn t(&self) {} } }\n";
         assert_eq!(counts(src, "S"), (1, 1));
+    }
+
+    fn scan(rel: &str, structs: &[(&str, usize)], fns: &[(&str, usize)]) -> FileScan {
+        FileScan {
+            rel: rel.to_string(),
+            structs: structs
+                .iter()
+                .map(|(n, c)| ((*n).to_string(), *c))
+                .collect(),
+            impl_fns: fns.iter().map(|(n, c)| ((*n).to_string(), *c)).collect(),
+        }
+    }
+
+    fn hit(hits: &[GodHit], key: &str) -> Option<(usize, usize)> {
+        hits.iter()
+            .find(|h| h.key == key)
+            .map(|h| (h.fields, h.fns))
+    }
+
+    #[test]
+    fn methods_aggregate_across_a_crates_files() {
+        // Type defined in state.rs, impls split across state.rs + access.rs.
+        let scans = vec![
+            scan(
+                "crates/kithara-queue/src/queue/state.rs",
+                &[("Queue", 6)],
+                &[("Queue", 4)],
+            ),
+            scan(
+                "crates/kithara-queue/src/queue/access.rs",
+                &[],
+                &[("Queue", 8)],
+            ),
+        ];
+        let hits = aggregate(scans, 15);
+        // 6 fields + (4 + 8) methods = 18, keyed by the struct-def file, once.
+        assert_eq!(
+            hit(&hits, "crates/kithara-queue/src/queue/state.rs::Queue"),
+            Some((6, 12))
+        );
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn moving_a_method_between_files_does_not_change_the_count() {
+        let before = aggregate(
+            vec![
+                scan("crates/x/src/a.rs", &[("G", 3)], &[("G", 9)]),
+                scan("crates/x/src/b.rs", &[], &[("G", 4)]),
+            ],
+            15,
+        );
+        let after = aggregate(
+            vec![
+                scan("crates/x/src/a.rs", &[("G", 3)], &[("G", 5)]),
+                scan("crates/x/src/b.rs", &[], &[("G", 8)]),
+            ],
+            15,
+        );
+        assert_eq!(hit(&before, "crates/x/src/a.rs::G"), Some((3, 13)));
+        assert_eq!(hit(&after, "crates/x/src/a.rs::G"), Some((3, 13)));
+    }
+
+    #[test]
+    fn same_name_in_different_crates_stays_separate() {
+        let scans = vec![
+            scan("crates/a/src/lib.rs", &[("Config", 20)], &[("Config", 0)]),
+            scan("crates/b/src/lib.rs", &[("Config", 2)], &[("Config", 3)]),
+        ];
+        let hits = aggregate(scans, 15);
+        // a::Config crosses the threshold; b::Config (5) does not — no merge.
+        assert_eq!(hit(&hits, "crates/a/src/lib.rs::Config"), Some((20, 0)));
+        assert_eq!(hit(&hits, "crates/b/src/lib.rs::Config"), None);
+    }
+
+    #[test]
+    fn crate_key_scopes_to_crate_root_else_whole_path() {
+        assert_eq!(
+            crate_key("crates/kithara-hls/src/variant.rs"),
+            "crates/kithara-hls"
+        );
+        assert_eq!(crate_key("xtask/src/main.rs"), "xtask/src/main.rs");
     }
 }

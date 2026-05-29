@@ -220,6 +220,7 @@ schema_version = 1
 "crates/kithara-assets/src/cache.rs::CachedAssets" = 1
 "crates/kithara-assets/src/disk_store.rs::DiskAssetStore" = 1
 "crates/kithara-assets/src/evict.rs::EvictAssets" = 1
+"crates/kithara-assets/src/index/availability/core.rs::AvailabilityIndex" = 1
 "crates/kithara-assets/src/lease.rs::LeaseAssets" = 1
 "crates/kithara-assets/src/lease.rs::LeaseResource" = 1
 "crates/kithara-assets/src/mem_store.rs::MemAssetStore" = 1
@@ -258,6 +259,7 @@ schema_version = 1
 "crates/kithara-play/src/impls/player_track.rs::PlayerTrack" = 1
 "crates/kithara-play/src/impls/resource.rs::Resource" = 1
 "crates/kithara-queue/src/queue/state.rs::Queue" = 1
+"crates/kithara-storage/src/backend/resource/state.rs::Resource" = 1
 "crates/kithara-storage/src/decorator/chunked/core.rs::AtomicChunked" = 1
 "crates/kithara-stream/src/timeline.rs::Timeline" = 1
 
