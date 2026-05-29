@@ -16,6 +16,7 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use cargo_metadata::MetadataCommand;
 use clap::Args;
+use glob::Pattern;
 use syn::{ImplItem, Item, Meta, spanned::Spanned};
 
 mod checks;
@@ -96,6 +97,11 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
 
     apply_exclude_paths(&mut report, &config.thresholds.exclude_paths);
     apply_cfg_test_exclusion(&mut report, &workspace_root);
+    apply_exclude_modules(
+        &mut report,
+        &config.thresholds.exclude_modules,
+        &workspace_root,
+    );
 
     if args.update_baseline {
         let new_baseline = Baseline::from_report(&report);
@@ -203,6 +209,67 @@ fn apply_cfg_test_exclusion(report: &mut Report, workspace_root: &Path) {
             .get(key_path(&v.key))
             .is_none_or(|rs| !rs.iter().any(|r| r.contains(&line)))
     });
+}
+
+/// Drop violations that land inside an inline `mod` whose leaf name or
+/// file-relative `::`-path matches an `exclude_modules` glob. Complements the
+/// path-glob and `#[cfg(test)]` passes with sub-file, module-scoped exclusion
+/// (e.g. scope out a whole `mod legacy {}` without listing files). A no-op when
+/// `patterns` is empty.
+fn apply_exclude_modules(report: &mut Report, patterns: &[String], workspace_root: &Path) {
+    if patterns.is_empty() {
+        return;
+    }
+    let globs = compile_globs(patterns);
+    let mut files: BTreeSet<String> = BTreeSet::new();
+    for v in &report.violations {
+        files.insert(key_path(&v.key).to_string());
+    }
+
+    let ranges: BTreeMap<String, Vec<RangeInclusive<usize>>> = files
+        .into_iter()
+        .filter_map(|rel| {
+            let file = parse_file(&workspace_root.join(&rel)).ok()?;
+            let mut out = Vec::new();
+            collect_module_ranges(&file.items, &mut Vec::new(), &globs, &mut out);
+            (!out.is_empty()).then_some((rel, out))
+        })
+        .collect();
+
+    report.violations.retain(|v| {
+        let Some(line) = key_line(&v.key) else {
+            return true;
+        };
+        ranges
+            .get(key_path(&v.key))
+            .is_none_or(|rs| !rs.iter().any(|r| r.contains(&line)))
+    });
+}
+
+/// Record the line range of every inline `mod` whose leaf name or `::`-path
+/// (joined from the file root) matches one of the compiled globs. Recurses so
+/// nested modules match at any depth.
+fn collect_module_ranges(
+    items: &[Item],
+    path: &mut Vec<String>,
+    globs: &[Pattern],
+    out: &mut Vec<RangeInclusive<usize>>,
+) {
+    for item in items {
+        let Item::Mod(m) = item else {
+            continue;
+        };
+        let leaf = m.ident.to_string();
+        path.push(leaf.clone());
+        let full = path.join("::");
+        if matches_any(globs, Path::new(&leaf)) || matches_any(globs, Path::new(&full)) {
+            out.push(m.span().start().line..=m.span().end().line);
+        }
+        if let Some((_, inner)) = &m.content {
+            collect_module_ranges(inner, path, globs, out);
+        }
+        path.pop();
+    }
 }
 
 /// Walk items recursively, recording the line range of every item whose
@@ -513,6 +580,79 @@ mod tests {
         )]);
 
         apply_cfg_test_exclusion(&mut report, tmp.path());
+        assert_eq!(report.violations.len(), 1);
+    }
+
+    fn module_ranges(src: &str, patterns: &[&str]) -> Vec<(usize, usize)> {
+        let file: syn::File = syn::parse_str(src).expect("valid Rust source");
+        let globs = compile_globs(
+            &patterns
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect::<Vec<_>>(),
+        );
+        let mut out = Vec::new();
+        collect_module_ranges(&file.items, &mut Vec::new(), &globs, &mut out);
+        out.iter().map(|r| (*r.start(), *r.end())).collect()
+    }
+
+    #[test]
+    fn collect_module_ranges_matches_leaf_and_nested_path() {
+        let src = "mod keep {\n\
+                   \x20\x20\x20\x20fn a() {}\n\
+                   }\n\
+                   mod outer {\n\
+                       mod legacy {\n\
+                       \x20\x20\x20\x20fn b() {}\n\
+                       }\n\
+                   }\n";
+        // Leaf-name match drops `legacy` (lines 5-7), not `keep`/`outer`.
+        assert_eq!(module_ranges(src, &["legacy"]), [(5, 7)]);
+        // `::`-path glob targets the nested module specifically.
+        assert_eq!(module_ranges(src, &["outer::legacy"]), [(5, 7)]);
+        // A pattern matching nothing yields no ranges.
+        assert!(module_ranges(src, &["missing"]).is_empty());
+    }
+
+    #[test]
+    fn apply_exclude_modules_filters_named_module() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let rel = "crates/x/src/foo.rs";
+        let src = "fn prod() {\n\
+                   \x20\x20\x20\x20for _ in 0..1 {}\n\
+                   }\n\
+                   mod legacy {\n\
+                       fn old() {\n\
+                       \x20\x20\x20\x20for _ in 0..1 {}\n\
+                       }\n\
+                   }\n";
+        let path = tmp.path().join(rel);
+        fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        fs::write(&path, src).expect("write fixture");
+
+        let mut report = Report::default();
+        report.extend([
+            // production loop on line 2 — must stay.
+            Violation::warn("fat_loop_body", format!("{rel}:2:for_body"), "prod"),
+            // loop on line 6 inside `mod legacy` — must drop.
+            Violation::warn("fat_loop_body", format!("{rel}:6:for_body"), "legacy"),
+        ]);
+
+        apply_exclude_modules(&mut report, &["legacy".to_string()], tmp.path());
+
+        let keys: Vec<&str> = report.violations.iter().map(|v| v.key.as_str()).collect();
+        assert_eq!(keys, [format!("{rel}:2:for_body")]);
+    }
+
+    #[test]
+    fn apply_exclude_modules_empty_is_noop() {
+        let mut report = Report::default();
+        report.extend([Violation::warn(
+            "fat_loop_body",
+            "crates/x/src/foo.rs:6:for_body",
+            "kept",
+        )]);
+        apply_exclude_modules(&mut report, &[], Path::new("/nonexistent"));
         assert_eq!(report.violations.len(), 1);
     }
 }
