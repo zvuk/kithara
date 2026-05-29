@@ -11,10 +11,10 @@ use cbc::{
     Encryptor,
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
+use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceHandle, ResourceKey};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_platform::time::Duration;
-use kithara_storage::{ResourceExt, ResourceStatus};
+use kithara_storage::ResourceStatus;
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 

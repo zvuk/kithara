@@ -6,7 +6,7 @@ use kithara_platform::{Mutex, tokio, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    item::ItemState,
+    item::ItemView,
     observer::ItemObserver,
     types::{FfiError, FfiItemEvent, FfiItemStatus, FfiTimeRange},
 };
@@ -50,18 +50,14 @@ impl ItemEventBridge {
         duration_seconds: &mut Option<f64>,
         last_buffered: &mut Option<f64>,
         variants: &mut Vec<crate::types::FfiVariant>,
-        state: &Arc<Mutex<ItemState>>,
+        state: &Arc<Mutex<ItemView>>,
     ) {
         if let Some(duration) = Self::duration_from_event(event)
             && duration_seconds
                 .is_none_or(|current| (current - duration).abs() > Self::UPDATE_THRESHOLD)
         {
             *duration_seconds = Some(duration);
-            {
-                let mut s = state.lock_sync();
-                s.duration_sec = duration;
-                s.is_ready_to_play = true;
-            }
+            state.lock_sync().resolve_duration(duration);
             observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
         }
 
@@ -84,7 +80,7 @@ impl ItemEventBridge {
         Self::dispatch_variant_events(observer, event, variants);
 
         if let Some(error) = Self::error_from_event(event) {
-            state.lock_sync().is_failed = true;
+            state.lock_sync().mark_failed();
             observer.on_event(FfiItemEvent::StatusChanged {
                 status: FfiItemStatus::Failed,
             });
@@ -218,17 +214,17 @@ impl ItemEventBridge {
     }
 
     /// Spawn a task that translates resource events into item callbacks
-    /// and refreshes the shared [`ItemState`] cache backing the item's
+    /// and refreshes the shared [`ItemView`] cache backing the item's
     /// synchronous getters (`duration_sec`, `is_live_stream`, …).
     pub(crate) fn spawn(
         rx: kithara_events::EventReceiver,
         observer: Arc<dyn ItemObserver>,
         duration_seconds: Option<f64>,
-        state: Arc<Mutex<ItemState>>,
+        state: Arc<Mutex<ItemView>>,
         cancel: CancellationToken,
     ) -> Self {
         if let Some(duration) = duration_seconds {
-            state.lock_sync().duration_sec = duration;
+            state.lock_sync().resolve_duration(duration);
             observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
         }
         Self::spawn_event_task(rx, observer, duration_seconds, state, cancel.clone());
@@ -239,7 +235,7 @@ impl ItemEventBridge {
         mut rx: kithara_events::EventReceiver,
         observer: Arc<dyn ItemObserver>,
         mut duration_seconds: Option<f64>,
-        state: Arc<Mutex<ItemState>>,
+        state: Arc<Mutex<ItemView>>,
         cancel: CancellationToken,
     ) {
         crate::FFI_RUNTIME.spawn(async move {

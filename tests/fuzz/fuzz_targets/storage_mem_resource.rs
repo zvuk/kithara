@@ -1,7 +1,7 @@
 #![no_main]
 
 use arbitrary::{Arbitrary, Unstructured};
-use kithara_storage::{MemResource, ResourceExt};
+use kithara_storage::{MemResource, StorageResource};
 use libfuzzer_sys::fuzz_target;
 use tokio_util::sync::CancellationToken;
 
@@ -44,7 +44,7 @@ impl<'a> Arbitrary<'a> for Input {
 }
 
 fuzz_target!(|input: Input| {
-    let res = MemResource::new(CancellationToken::new());
+    let res = StorageResource::from(MemResource::new(CancellationToken::new()));
     let mut oracle = vec![0u8; 8192];
     let mut written_len = 0usize;
     let mut committed = false;

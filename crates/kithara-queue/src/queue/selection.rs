@@ -5,7 +5,7 @@ use tracing::{debug, warn};
 
 use super::{
     Queue,
-    types::{PendingSelect, Transition},
+    types::{PendingSelect, SelectPhase, Transition},
 };
 use crate::{error::QueueError, track::TrackSource};
 
@@ -30,10 +30,10 @@ impl Queue {
         let stale = {
             let mut p = self.lock_pending_select_mut();
             let result = match *p {
-                Some(prev) if prev.id != applying_id => Some(prev.id),
+                SelectPhase::Pending(prev) if prev.id != applying_id => Some(prev.id),
                 _ => None,
             };
-            *p = None;
+            *p = SelectPhase::Idle;
             result
         };
         if let Some(stale_id) = stale {
@@ -98,10 +98,10 @@ impl Queue {
     pub(super) fn override_pending_select(&self, new: PendingSelect) {
         let mut p = self.lock_pending_select_mut();
         let prev_id = match *p {
-            Some(prev) if prev.id != new.id => Some(prev.id),
+            SelectPhase::Pending(prev) if prev.id != new.id => Some(prev.id),
             _ => None,
         };
-        *p = Some(new);
+        *p = SelectPhase::Pending(new);
         drop(p);
         if let Some(prev_id) = prev_id {
             self.set_status(prev_id, TrackStatus::Cancelled);
@@ -233,8 +233,8 @@ impl Queue {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
                 let result = match *p {
-                    Some(pending) if pending.id == id => {
-                        *p = None;
+                    SelectPhase::Pending(pending) if pending.id == id => {
+                        *p = SelectPhase::Idle;
                         Some(pending.transition)
                     }
                     _ => None,
@@ -339,14 +339,17 @@ mod tests {
         let queue = make_queue();
         let id = queue.append("https://example.com/a.mp3");
         let _ = queue.select(id, Transition::None);
-        let pending = queue
+        let phase = *queue
             .pending_select
             .lock()
-            .expect("BUG: pending_select Mutex is not held across await")
-            .to_owned();
-        let pending = pending.expect("BUG: select stashes pending entry");
-        assert_eq!(pending.id, id);
-        assert_eq!(pending.transition, Transition::None);
+            .expect("BUG: pending_select Mutex is not held across await");
+        match phase {
+            SelectPhase::Pending(pending) => {
+                assert_eq!(pending.id, id);
+                assert_eq!(pending.transition, Transition::None);
+            }
+            SelectPhase::Idle => panic!("BUG: select stashes pending entry"),
+        }
     }
 
     #[kithara::test(tokio)]

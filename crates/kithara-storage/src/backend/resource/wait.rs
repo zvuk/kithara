@@ -11,11 +11,11 @@ use tracing::debug;
 
 use crate::{
     StorageError, StorageResult,
-    backend::{resource::state::Resource, traits::DriverIo},
+    backend::{resource::state::ResourceCore, traits::DriverIo},
     resource::{WaitOutcome, range_covered_by},
 };
 
-impl<D: DriverIo> Resource<D> {
+impl<D: DriverIo> ResourceCore<D> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara::hang_watchdog]
     pub(super) fn wait_range_inner(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {

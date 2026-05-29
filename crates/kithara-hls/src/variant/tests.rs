@@ -9,7 +9,8 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use super::{
-    HlsVariant, InitEntry, PlanCtx, PlannedFetch, SegmentEntry, SegmentState, VariantParts,
+    HlsVariant, InitEntry, PlanCtx, PlannedFetch, SegmentContent, SegmentEntry, SegmentSlotState,
+    VariantParts,
 };
 use crate::playlist::PlaylistState;
 
@@ -46,9 +47,9 @@ fn make_init(size: u64) -> InitEntry {
     InitEntry {
         url,
         resource_id,
-        state: SegmentState::Missing.into(),
+        state: SegmentSlotState::missing(),
         size: AtomicU64::new(size),
-        decrypt_ctx: None,
+        content: SegmentContent::Plain,
     }
 }
 
@@ -60,9 +61,9 @@ fn make_seg(idx: u32, size: u64) -> SegmentEntry {
     SegmentEntry {
         url,
         resource_id,
-        state: SegmentState::Missing.into(),
+        state: SegmentSlotState::missing(),
         size: AtomicU64::new(size),
-        decrypt_ctx: None,
+        content: SegmentContent::Plain,
         decode_time: Duration::from_millis(u64::from(idx) * 2000),
         duration: Duration::from_secs(2),
     }
@@ -298,30 +299,29 @@ fn dispatch_respects_budget() {
 fn dispatch_skips_non_missing_segments() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
-    v.init.set_state(SegmentState::Loaded);
-    v.segments[1].set_state(SegmentState::Loaded);
+    v.init.state.mark_loaded();
+    v.segments[1].state.mark_loaded();
     v.queue.lock_sync().clear();
     for seg in 0..3_u32 {
         push_planned(&v, seg);
     }
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 2);
-    assert_eq!(v.segments[1].state(), SegmentState::Loaded);
+    assert!(v.segments[1].state.is_loaded());
 }
 
 #[kithara::test]
 fn on_evict_returns_minus_one_for_init() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[100, 100, 100], &ctx);
-    v.init.set_state(SegmentState::Loaded);
-    v.segments[1].set_state(SegmentState::Loaded);
+    v.init.state.mark_loaded();
+    v.segments[1].state.mark_loaded();
     let key = v.init.resource_id.clone();
     let res = v.on_evict(&key);
     assert_eq!(res, Some(-1));
-    assert_eq!(v.init.state(), SegmentState::Missing);
-    assert_eq!(
-        v.segments[1].state(),
-        SegmentState::Loaded,
+    assert!(!v.init.state.is_loaded());
+    assert!(
+        v.segments[1].state.is_loaded(),
         "init eviction must not touch segment states"
     );
 }
@@ -330,11 +330,11 @@ fn on_evict_returns_minus_one_for_init() {
 fn on_evict_returns_seg_idx_for_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
-    v.segments[1].set_state(SegmentState::Loaded);
+    v.segments[1].state.mark_loaded();
     let key = v.segments[1].resource_id.clone();
     let res = v.on_evict(&key);
     assert_eq!(res, Some(1));
-    assert_eq!(v.segments[1].state(), SegmentState::Missing);
+    assert!(!v.segments[1].state.is_loaded());
 }
 
 #[kithara::test]
@@ -366,16 +366,16 @@ fn skeleton_types_instantiate() {
 fn dispatch_drm_segment_routes_through_with_ctx() {
     let ctx = test_ctx(3);
     let init = make_init(0);
-    init.set_state(SegmentState::Loaded);
+    init.state.mark_loaded();
     let url: Url = "https://example.com/seg0.m4s".parse().expect("valid url");
     let resource_id = ResourceKey::from(&url);
     let key = *b"0123456789abcdef";
     let seg = SegmentEntry {
         url,
         resource_id,
-        state: SegmentState::Missing.into(),
+        state: SegmentSlotState::missing(),
         size: AtomicU64::new(100),
-        decrypt_ctx: Some(DecryptContext::new(key, [0u8; 16])),
+        content: SegmentContent::Encrypted(DecryptContext::new(key, [0u8; 16])),
         decode_time: Duration::ZERO,
         duration: Duration::from_secs(2),
     };
@@ -395,7 +395,30 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 1);
     assert!(cmds[0].cancel.is_some());
-    assert_eq!(v.segments[0].state(), SegmentState::Downloading);
+    push_planned(&v, 0);
+    assert!(
+        v.dispatch(&ctx, 10).is_empty(),
+        "claimed (in-flight) segment must not be re-dispatched"
+    );
+}
+
+#[kithara::test]
+fn dropped_fetch_cmd_reverts_segment_to_missing() {
+    let ctx = test_ctx(5);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    push_planned(&v, 0);
+    let cmds = v.dispatch(&ctx, 10);
+    assert_eq!(cmds.len(), 1, "first dispatch claims and emits seg 0");
+    // Drop the command without running its `on_complete`: the owned
+    // download handle is dropped without a settle, so the Drop safety
+    // net must revert the slot to Missing rather than strand it.
+    drop(cmds);
+    push_planned(&v, 0);
+    assert_eq!(
+        v.dispatch(&ctx, 10).len(),
+        1,
+        "dropped claim must revert the slot to Missing so it re-dispatches"
+    );
 }
 
 #[kithara::test]
@@ -439,7 +462,7 @@ fn position_advances_are_strictly_monotonic() {
 fn dispatch_cmd_cancel_shares_cancellation_with_variant_cancel() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100], &ctx);
-    v.init.set_state(SegmentState::Loaded);
+    v.init.state.mark_loaded();
     let variant_cancel = v.cancel_handle();
     for seg in 0..2_u32 {
         push_planned(&v, seg);
@@ -464,8 +487,8 @@ fn variant_flip_cancels_v_old_and_keeps_v_new_token_live() {
     let ctx = test_ctx(3);
     let v_old = make_var(0, 0, &[100; 20], &ctx);
     let v_new = make_var(1, 0, &[200; 20], &ctx);
-    v_old.init.set_state(SegmentState::Loaded);
-    v_new.init.set_state(SegmentState::Loaded);
+    v_old.init.state.mark_loaded();
+    v_new.init.state.mark_loaded();
     let v_old_token = v_old.cancel_handle();
     let v_new_token = v_new.cancel_handle();
 
@@ -490,7 +513,7 @@ fn variant_flip_cancels_v_old_and_keeps_v_new_token_live() {
 fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100; 20], &ctx);
-    v.segments[10].set_state(SegmentState::Loaded);
+    v.segments[10].state.mark_loaded();
 
     v.rebuild(&ctx, 10);
     let cmds = v.dispatch(&ctx, 3);

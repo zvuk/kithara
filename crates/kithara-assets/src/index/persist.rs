@@ -2,7 +2,9 @@
 
 use std::{path::Path, sync::OnceLock};
 
-use kithara_storage::{Atomic, MmapOptions, MmapResource, OpenMode, Resource, StorageError};
+use kithara_storage::{
+    Atomic, MmapDriver, MmapOptions, MmapResource, OpenMode, Resource, StorageError,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{AssetsError, AssetsResult};
@@ -50,10 +52,10 @@ pub(super) fn open_for_write(
 /// freshly-opened resource is dropped immediately; the winning
 /// resource is returned to both.
 pub(super) fn init_atomic<'a>(
-    cell: &'a OnceLock<Atomic<MmapResource>>,
+    cell: &'a OnceLock<Atomic<MmapDriver>>,
     path: &Path,
     cancel: &CancellationToken,
-) -> AssetsResult<&'a Atomic<MmapResource>> {
+) -> AssetsResult<&'a Atomic<MmapDriver>> {
     if let Some(a) = cell.get() {
         return Ok(a);
     }

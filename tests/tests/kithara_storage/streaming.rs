@@ -8,7 +8,7 @@ use kithara::storage::MemResource;
 use kithara::storage::Resource;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::storage::{MmapOptions, MmapResource};
-use kithara::storage::{ResourceExt, ResourceStatus, StorageError, WaitOutcome};
+use kithara::storage::{ResourceRead, ResourceStatus, StorageError, StorageResource, WaitOutcome};
 #[cfg(target_arch = "wasm32")]
 use kithara_integration_tests::storage_ext::mem_resource_with_bytes;
 use kithara_integration_tests::{TestTempDir, cancel_token, temp_dir};
@@ -62,7 +62,7 @@ fn open_mmap_at(
 }
 
 /// Helper to read bytes from resource into a new Vec.
-fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
+fn read_bytes<R: ResourceRead>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
     let n = res.read_at(offset, &mut buf).unwrap_or(0);
     buf.truncate(n);
@@ -223,7 +223,7 @@ fn streaming_resource_zero_length_commit() {
 
     let resource = open_test_resource(&temp_dir, "zero.dat", cancel_token);
 
-    resource.commit(Some(0)).unwrap();
+    let resource = resource.commit(Some(0)).unwrap();
 
     let status = resource.status();
     assert_eq!(status, ResourceStatus::Committed { final_len: Some(0) });
@@ -251,7 +251,7 @@ fn streaming_resource_edge_case_ranges() {
     let data = read_bytes(&resource, 0, 0);
     assert!(data.is_empty());
 
-    resource.commit(Some(1)).unwrap();
+    let resource = resource.commit(Some(1)).unwrap();
     let data = read_bytes(&resource, 0, 10);
     assert_eq!(&data, b"X");
 }
@@ -265,8 +265,8 @@ fn streaming_resource_concurrent_wait_and_write() {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let resource_clone = resource.clone();
-        let wait_handle = thread::spawn(move || resource_clone.wait_range(0..10));
+        let reader = resource.reader();
+        let wait_handle = thread::spawn(move || reader.wait_range(0..10));
 
         thread::sleep(Duration::from_millis(10));
 
@@ -301,7 +301,7 @@ fn streaming_resource_reopen_round_trip(
         {
             let resource = open_mmap_at(file_path.clone(), None, cancel_token.clone());
             resource.write_at(0, payload).unwrap();
-            resource.commit(Some(payload.len() as u64)).unwrap();
+            let resource = resource.commit(Some(payload.len() as u64)).unwrap();
             resource.wait_range(0..payload.len() as u64).unwrap();
 
             if !wait_after_reopen {
@@ -344,13 +344,13 @@ fn streaming_resource_wait_range_partial_coverage() {
 
     resource.write_at(0, b"Hello").unwrap();
 
-    let resource_clone = resource.clone();
-    let wait_handle = thread::spawn(move || resource_clone.wait_range(0..10));
+    let reader = resource.reader();
+    let wait_handle = thread::spawn(move || reader.wait_range(0..10));
 
     assert_wait_times_out(&wait_handle, Duration::from_millis(100));
 
     resource.write_at(5, b", World!").unwrap();
-    resource.commit(Some(13)).unwrap();
+    let resource = resource.commit(Some(13)).unwrap();
 
     resource.wait_range(0..13).unwrap();
 }
@@ -364,7 +364,7 @@ fn streaming_resource_commit_and_eof(temp_dir: TestTempDir, cancel_token: Cancel
     let outcome = resource.wait_range(0..5).unwrap();
     assert_eq!(outcome, WaitOutcome::Ready);
 
-    resource.commit(Some(5)).unwrap();
+    let resource = resource.commit(Some(5)).unwrap();
 
     let outcome = resource.wait_range(5..10).unwrap();
     assert_eq!(outcome, WaitOutcome::Eof);
@@ -381,7 +381,7 @@ fn streaming_resource_commit_without_final_len() {
     let resource = open_test_resource(&temp_dir, "commit_no_len.dat", cancel_token);
 
     resource.write_at(0, b"Hello").unwrap();
-    resource.commit(None).unwrap();
+    let resource = resource.commit(None).unwrap();
 
     let status = resource.status();
     assert_eq!(status, ResourceStatus::Committed { final_len: None });
@@ -397,13 +397,13 @@ fn streaming_resource_sealed_after_commit() {
 
     let resource = open_test_resource(&temp_dir, "sealed.dat", cancel_token);
 
-    resource.commit(Some(0)).unwrap();
+    let resource = resource.commit(Some(0)).unwrap();
 
-    if resource.write_at(0, b"data").is_err() {
-        resource.reactivate().unwrap();
-        resource.write_at(0, b"data").unwrap();
-    }
-    resource.commit(Some(4)).unwrap();
+    // Writing on a `Committed` handle is now a compile error: reactivate the
+    // typed handle back to a writer first.
+    let resource = resource.reactivate().unwrap();
+    resource.write_at(0, b"data").unwrap();
+    let resource = resource.commit(Some(4)).unwrap();
 
     let data = read_bytes(&resource, 0, 4);
     assert_eq!(&data, b"data");
@@ -418,8 +418,8 @@ fn streaming_resource_cancel_during_wait() {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let resource_clone = resource.clone();
-        let wait_handle = thread::spawn(move || resource_clone.wait_range(0..10));
+        let reader = resource.reader();
+        let wait_handle = thread::spawn(move || reader.wait_range(0..10));
 
         thread::sleep(Duration::from_millis(50));
         cancel_token.cancel();
@@ -443,9 +443,10 @@ fn streaming_resource_fail_wakes_waiters() {
     let cancel_token = CancellationToken::new();
 
     let resource = open_test_resource(&temp_dir, "fail_waiters.dat", cancel_token);
-    let resource_clone = resource.clone();
+    let reader = resource.reader();
     resource.fail("test failure".to_string());
-    assert!(matches!(resource.status(), ResourceStatus::Failed(_)));
+    assert!(matches!(reader.status(), ResourceStatus::Failed(_)));
+    let resource_clone = reader.clone();
 
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -467,7 +468,20 @@ fn streaming_resource_concurrent_operations() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
 
-    let resource = open_test_resource(&temp_dir, "concurrent_ops.dat", cancel_token);
+    // Concurrent writers need a shared, cloneable handle: use the
+    // `StorageResource` facade (the single-owner `ResourceWriter` is not Clone).
+    let resource = StorageResource::from(open_test_resource(
+        &temp_dir,
+        "concurrent_ops.dat",
+        cancel_token,
+    ));
+
+    let read_all = |res: &StorageResource| {
+        let mut data = vec![0u8; 10];
+        let n = res.read_at(0, &mut data).unwrap_or(0);
+        data.truncate(n);
+        data
+    };
 
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -488,7 +502,7 @@ fn streaming_resource_concurrent_operations() {
         let outcome = resource.wait_range(0..10).unwrap();
         assert_eq!(outcome, WaitOutcome::Ready);
 
-        let data = read_bytes(&resource, 0, 10);
+        let data = read_all(&resource);
         assert_eq!(&data[..5], b"Hello");
         assert_eq!(&data[5..], b"World");
         return;
@@ -503,7 +517,7 @@ fn streaming_resource_concurrent_operations() {
         let outcome = resource.wait_range(0..10).unwrap();
         assert_eq!(outcome, WaitOutcome::Ready);
 
-        let data = read_bytes(&resource, 0, 10);
+        let data = read_all(&resource);
         assert_eq!(&data[..5], b"Hello");
         assert_eq!(&data[5..], b"World");
     }
@@ -537,7 +551,7 @@ fn streaming_resource_whole_object_operations() {
     let resource = open_test_resource(&temp_dir, "whole_object.dat", cancel_token);
 
     resource.write_at(0, b"Hello, World!").unwrap();
-    resource.commit(Some(13)).unwrap();
+    let resource = resource.commit(Some(13)).unwrap();
 
     let status = resource.status();
     assert_eq!(
@@ -564,7 +578,7 @@ fn streaming_resource_empty_operations() {
     let data = read_bytes(&resource, 0, 0);
     assert!(data.is_empty());
 
-    resource.commit(Some(0)).unwrap();
+    let resource = resource.commit(Some(0)).unwrap();
 
     let data = read_bytes(&resource, 0, 0);
     assert!(data.is_empty());
@@ -580,8 +594,8 @@ fn streaming_resource_complex_range_scenario() {
     resource.write_at(0, b"0123456789").unwrap();
     resource.write_at(20, b"0123456789").unwrap();
 
-    let resource_clone = resource.clone();
-    let wait_handle = thread::spawn(move || resource_clone.wait_range(0..15));
+    let reader = resource.reader();
+    let wait_handle = thread::spawn(move || reader.wait_range(0..15));
 
     assert_wait_times_out(&wait_handle, Duration::from_millis(100));
 
@@ -594,7 +608,7 @@ fn streaming_resource_complex_range_scenario() {
     assert_eq!(&data[10..20], b"ABCDEFGHIJ");
     assert_eq!(&data[20..30], b"0123456789");
 
-    resource.commit(Some(30)).unwrap();
+    let resource = resource.commit(Some(30)).unwrap();
 
     let outcome = resource.wait_range(30..40).unwrap();
     assert_eq!(outcome, WaitOutcome::Eof);
@@ -616,7 +630,7 @@ fn streaming_resource_initial_len_hint() {
     };
 
     resource.write_at(0, b"real data").unwrap();
-    resource.commit(Some(9)).unwrap();
+    let resource = resource.commit(Some(9)).unwrap();
 
     let data = read_bytes(&resource, 0, 9);
     assert_eq!(&data, b"real data");

@@ -15,12 +15,12 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use super::core::{AtomicChunked, OpenIntent, make_tmp_path};
-use crate::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
+use crate::{MmapDriver, MmapOptions, OpenMode, Resource};
 
-fn open_chunked(dir: &TempDir, name: &str) -> (AtomicChunked<MmapResource>, PathBuf, PathBuf) {
+fn open_chunked(dir: &TempDir, name: &str) -> (AtomicChunked<MmapDriver>, PathBuf, PathBuf) {
     let canonical = dir.path().join(name);
     let cancel = CancellationToken::new();
-    let res = AtomicChunked::<MmapResource>::open(canonical.clone(), move |target, intent| {
+    let res = AtomicChunked::<MmapDriver>::open(canonical.clone(), move |target, intent| {
         let mode = match intent {
             OpenIntent::Fresh => OpenMode::ReadWrite,
             OpenIntent::Reopen => OpenMode::ReadOnly,
@@ -112,7 +112,7 @@ fn open_rejects_when_stale_tmp_blocks_claim() {
         }
     };
 
-    let err = AtomicChunked::<MmapResource>::open(canonical.clone(), factory)
+    let err = AtomicChunked::<MmapDriver>::open(canonical.clone(), factory)
         .expect_err("stale tmp must block atomic claim");
     assert!(
         matches!(err, crate::StorageError::TmpClaimed(_)),
@@ -144,10 +144,10 @@ fn concurrent_open_atomic_claim_returns_tmp_claimed() {
         }
     };
 
-    let _holder = AtomicChunked::<MmapResource>::open(canonical.clone(), factory.clone())
+    let _holder = AtomicChunked::<MmapDriver>::open(canonical.clone(), factory.clone())
         .expect("first open claims tmp");
 
-    let err = AtomicChunked::<MmapResource>::open(canonical.clone(), factory)
+    let err = AtomicChunked::<MmapDriver>::open(canonical.clone(), factory)
         .expect_err("second concurrent open must be rejected");
     assert!(
         matches!(err, crate::StorageError::TmpClaimed(_)),

@@ -9,8 +9,8 @@ use std::{
 };
 
 use kithara_storage::{
-    AtomicChunked, AvailabilityObserver, MmapOptions, MmapResource, OpenIntent, OpenMode, Resource,
-    ResourceExt, ResourceStatus, StorageError, StorageResource,
+    AtomicChunked, AvailabilityObserver, MmapDriver, MmapOptions, MmapResource, OpenIntent,
+    OpenMode, Resource, ResourceRead, ResourceStatus, StorageError, StorageResource,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -162,7 +162,7 @@ impl DiskAssetStore {
         &self,
         key: &ResourceKey,
         path: PathBuf,
-    ) -> AssetsResult<AtomicChunked<MmapResource>> {
+    ) -> AssetsResult<AtomicChunked<MmapDriver>> {
         let observer = self.scoped_observer(key);
         let cancel = self.cancel.clone();
         let chunked = AtomicChunked::open(path, move |target, intent| {
@@ -277,7 +277,7 @@ impl DiskAssetStore {
 
 impl Assets for DiskAssetStore {
     type Context = ();
-    type IndexRes = MmapResource;
+    type IndexRes = StorageResource;
     type Res = StorageResource;
 
     fn acquire_resource_with_ctx(
@@ -318,14 +318,14 @@ impl Assets for DiskAssetStore {
         self.deleter.delete_asset(&self.asset_root)
     }
 
-    fn open_lru_index_resource(&self) -> AssetsResult<MmapResource> {
+    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
         let path = self.lru_index_path();
-        self.open_index_resource(path)
+        Ok(StorageResource::from(self.open_index_resource(path)?))
     }
 
-    fn open_pins_index_resource(&self) -> AssetsResult<MmapResource> {
+    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
         let path = self.pins_index_path();
-        self.open_index_resource(path)
+        Ok(StorageResource::from(self.open_index_resource(path)?))
     }
 
     fn open_resource_with_ctx(
@@ -383,7 +383,7 @@ pub(crate) fn sanitize_rel(input: &str) -> Result<String, ()> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_storage::{ResourceExt, ResourceStatus};
+    use kithara_storage::ResourceStatus;
     use kithara_test_utils::kithara;
     use tokio_util::sync::CancellationToken;
 

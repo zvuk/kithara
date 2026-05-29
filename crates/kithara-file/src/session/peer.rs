@@ -8,9 +8,10 @@ use std::{
 };
 
 use kithara_abr::Abr;
+use kithara_assets::ResourceHandle;
 use kithara_events::{FileError, FileEvent};
-use kithara_net::{Headers, NetError, RangeSpec};
-use kithara_storage::{ResourceExt, ResourceStatus};
+use kithara_net::{Headers, NetError, RangeSpec, Retryability};
+use kithara_storage::ResourceStatus;
 use kithara_stream::{
     MediaInfo,
     dl::{FetchCmd, Peer, RequestPriority, reject_html_response},
@@ -166,7 +167,8 @@ impl FileInner {
     /// first byte sees the seeded coord the instant `write_at` fires.
     fn finalize_fetch(&self, resume_from: u64, bytes_written: u64, err: Option<&NetError>) {
         if let Some(e) = err {
-            let terminal = !e.is_retryable() || (resume_from == 0 && bytes_written == 0);
+            let terminal =
+                e.retryability() == Retryability::Fatal || (resume_from == 0 && bytes_written == 0);
             if terminal {
                 let msg = e.to_string();
                 self.fail_and_evict(&msg);

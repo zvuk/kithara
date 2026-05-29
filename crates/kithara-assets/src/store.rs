@@ -561,12 +561,12 @@ mod tests {
     };
 
     use kithara_platform::time::Duration;
-    use kithara_storage::ResourceExt;
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
 
     use super::*;
     use crate::{
+        ResourceHandle,
         base::{Assets, Capabilities},
         key::ResourceKey,
     };

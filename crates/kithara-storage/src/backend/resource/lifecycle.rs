@@ -4,11 +4,11 @@ use std::{ops::Range, path::Path};
 
 use crate::{
     StorageResult,
-    backend::{resource::state::Resource, traits::DriverIo},
+    backend::{resource::state::ResourceCore, traits::DriverIo},
     resource::{ResourceStatus, range_covered_by},
 };
 
-impl<D: DriverIo> Resource<D> {
+impl<D: DriverIo> ResourceCore<D> {
     pub(super) fn commit_inner(&self, final_len: Option<u64>) -> StorageResult<()> {
         self.check_health()?;
 
@@ -97,6 +97,17 @@ impl<D: DriverIo> Resource<D> {
         }
         self.inner.condvar.notify_all();
         Ok(())
+    }
+
+    /// Whether dropping an uncommitted writer should mark the core failed.
+    /// `false` once the resource is committed, already failed, or cancelled
+    /// (cancellation is a routine shutdown, not a writer error).
+    pub(super) fn should_fail_on_drop(&self) -> bool {
+        if self.inner.cancel.is_cancelled() {
+            return false;
+        }
+        let state = self.inner.state.lock_sync();
+        !state.committed && state.failed.is_none()
     }
 
     pub(super) fn status_inner(&self) -> ResourceStatus {

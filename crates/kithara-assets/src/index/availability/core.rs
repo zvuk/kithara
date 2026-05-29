@@ -75,7 +75,7 @@ pub(super) struct InnerIndex {
     pub(super) hub: OnceLock<Arc<FlushHub>>,
     /// Disk-backed persist target. Set once via
     /// `AvailabilityIndex::enable_persistence`; later flushes reuse
-    /// the cached `Atomic<MmapResource>` handle. Native only.
+    /// the cached `Atomic<MmapDriver>` handle. Native only.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) persist: OnceLock<super::disk::AvailabilityPersist>,
 }
@@ -304,7 +304,7 @@ impl AvailabilityObserver for ScopedAvailabilityObserver {
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use kithara_platform::time::Duration;
-    use kithara_storage::{Atomic, MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
+    use kithara_storage::{Atomic, MmapOptions, MmapResource, OpenMode, Resource};
     use kithara_test_utils::kithara;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;

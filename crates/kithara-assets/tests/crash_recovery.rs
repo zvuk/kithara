@@ -2,9 +2,8 @@
 
 use std::{fs, path::Path};
 
-use kithara_assets::{AssetStoreBuilder, FlushHub, FlushPolicy, ResourceKey};
+use kithara_assets::{AssetStoreBuilder, FlushHub, FlushPolicy, ResourceHandle, ResourceKey};
 use kithara_platform::time::Duration;
-use kithara_storage::ResourceExt;
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;

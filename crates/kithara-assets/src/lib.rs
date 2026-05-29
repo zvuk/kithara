@@ -21,7 +21,7 @@ mod state;
 mod store;
 mod unified;
 
-pub use base::Assets;
+pub use base::{Assets, ResourceHandle};
 pub use cache::{CachedAssets, CachedResource};
 #[cfg(not(target_arch = "wasm32"))]
 pub use disk_store::DiskAssetStore;

@@ -2,10 +2,10 @@
 
 use crate::{
     StorageError, StorageResult,
-    backend::{resource::state::Resource, traits::DriverIo},
+    backend::{resource::state::ResourceCore, traits::DriverIo},
 };
 
-impl<D: DriverIo> Resource<D> {
+impl<D: DriverIo> ResourceCore<D> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(super) fn read_at_inner(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
         if buf.is_empty() {

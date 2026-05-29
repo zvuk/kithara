@@ -3,10 +3,9 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 
-use kithara_assets::{AssetResource, AssetStore, ResourceKey};
+use kithara_assets::{AssetResource, AssetStore, ResourceHandle, ResourceKey};
 use kithara_events::EventBus;
 use kithara_net::Headers;
-use kithara_storage::ResourceExt;
 use kithara_stream::MediaInfo;
 use tokio_util::sync::CancellationToken;
 use url::Url;

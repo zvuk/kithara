@@ -24,7 +24,6 @@ pub use effects::eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_l
 pub use pipeline::{
     config::AudioConfig,
     fetch::{EpochValidator, Fetch},
-    track_fsm::TrackPhaseTag,
 };
 pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
 pub use traits::{

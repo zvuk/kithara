@@ -1,40 +1,171 @@
+use std::marker::PhantomData;
+
 use kithara_decode::{DecodeError, Decoder};
 use kithara_platform::time::Duration;
 use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor};
 
 use crate::pipeline::fetch::Fetch;
 
-/// Explicit state machine for a single audio track in the worker thread.
+mod sealed {
+    pub(crate) trait Sealed {}
+}
+
+/// Phase marker for the worker-thread track FSM.
 ///
-/// Each variant carries exactly the context needed for that phase.
-/// Transitions happen inside `step_track()` — one transition per call.
-pub(crate) enum TrackState {
-    /// Normal decoding — produce PCM chunks.
-    Decoding,
+/// Each phase owns exactly the data it needs via [`TrackPhase::Data`].
+/// Per-phase behaviour lives in `impl Track<Phase>` blocks (in
+/// `pipeline/source.rs`, same module as the worker helpers), so an
+/// operation only valid in one phase simply does not exist on the other
+/// `Track<_>` types — a misuse becomes a compile error instead of a
+/// runtime `match self.state` re-check.
+pub(crate) trait TrackPhase: sealed::Sealed {
+    type Data;
+}
 
-    /// Consumer requested a seek; not yet applied.
-    SeekRequested(SeekRequest),
+/// Normal decoding — produce PCM chunks.
+pub(crate) struct Decoding;
+/// Consumer requested a seek; not yet applied.
+pub(crate) struct SeekRequested;
+/// Waiting for the underlying source to become ready.
+pub(crate) struct WaitingForSource;
+/// Actively applying a seek to the decoder.
+pub(crate) struct ApplyingSeek;
+/// Recreating the decoder (format boundary, codec change, seek recovery).
+pub(crate) struct RecreatingDecoder;
+/// Decoder recreated / seek applied; waiting for first valid chunk.
+pub(crate) struct AwaitingResume;
+/// End of stream reached.
+pub(crate) struct AtEof;
+/// Terminal failure.
+pub(crate) struct Failed;
 
-    /// Waiting for the underlying source to become ready.
-    WaitingForSource {
-        context: WaitContext,
-        reason: WaitingReason,
-    },
+impl sealed::Sealed for Decoding {}
+impl sealed::Sealed for SeekRequested {}
+impl sealed::Sealed for WaitingForSource {}
+impl sealed::Sealed for ApplyingSeek {}
+impl sealed::Sealed for RecreatingDecoder {}
+impl sealed::Sealed for AwaitingResume {}
+impl sealed::Sealed for AtEof {}
+impl sealed::Sealed for Failed {}
 
-    /// Actively applying a seek to the decoder.
-    ApplyingSeek(ApplySeekState),
+impl TrackPhase for Decoding {
+    type Data = ();
+}
+impl TrackPhase for SeekRequested {
+    type Data = SeekRequest;
+}
+impl TrackPhase for WaitingForSource {
+    type Data = WaitState;
+}
+impl TrackPhase for ApplyingSeek {
+    type Data = ApplySeekState;
+}
+impl TrackPhase for RecreatingDecoder {
+    type Data = RecreateState;
+}
+impl TrackPhase for AwaitingResume {
+    type Data = ResumeState;
+}
+impl TrackPhase for AtEof {
+    type Data = ();
+}
+impl TrackPhase for Failed {
+    type Data = TrackFailure;
+}
 
-    /// Recreating the decoder (format boundary, codec change, seek recovery).
-    RecreatingDecoder(RecreateState),
+/// Phantom-typed handle for a single FSM phase. Owns the phase's data;
+/// transitions consume `self` and produce the next phase. Stored,
+/// type-erased, in [`CurrentFsm`].
+pub(crate) struct Track<S: TrackPhase> {
+    data: S::Data,
+    _phase: PhantomData<S>,
+}
 
-    /// Decoder recreated / seek applied; waiting for first valid chunk.
-    AwaitingResume(ResumeState),
+impl<S: TrackPhase> Track<S> {
+    pub(crate) fn new(data: S::Data) -> Self {
+        Self {
+            data,
+            _phase: PhantomData,
+        }
+    }
 
-    /// End of stream reached.
-    AtEof,
+    pub(crate) fn data(&self) -> &S::Data {
+        &self.data
+    }
 
-    /// Terminal failure.
-    Failed(TrackFailure),
+    pub(crate) fn data_mut(&mut self) -> &mut S::Data {
+        &mut self.data
+    }
+
+    pub(crate) fn into_inner(self) -> S::Data {
+        self.data
+    }
+}
+
+/// Data carried by the [`WaitingForSource`] phase (was the inline
+/// `TrackState::WaitingForSource { context, reason }` variant payload).
+pub(crate) struct WaitState {
+    pub(crate) context: WaitContext,
+    pub(crate) reason: WaitingReason,
+}
+
+/// Type-erased FSM phase, stored in `StreamAudioSource.state`.
+///
+/// A field is mono-typed, so a runtime FSM whose phase changes per
+/// transition cannot store a `Track<S>` directly — this sum type is the
+/// erasure boundary. Phase-specific behaviour stays on the typed
+/// `Track<S>` handles reached by matching here.
+pub(crate) enum CurrentFsm {
+    Decoding(Track<Decoding>),
+    SeekRequested(Track<SeekRequested>),
+    WaitingForSource(Track<WaitingForSource>),
+    ApplyingSeek(Track<ApplyingSeek>),
+    RecreatingDecoder(Track<RecreatingDecoder>),
+    AwaitingResume(Track<AwaitingResume>),
+    AtEof(Track<AtEof>),
+    Failed(Track<Failed>),
+}
+
+impl CurrentFsm {
+    pub(crate) fn decoding() -> Self {
+        Self::Decoding(Track::new(()))
+    }
+
+    pub(crate) fn at_eof() -> Self {
+        Self::AtEof(Track::new(()))
+    }
+
+    pub(crate) fn seek_requested(request: SeekRequest) -> Self {
+        Self::SeekRequested(Track::new(request))
+    }
+
+    pub(crate) fn waiting(context: WaitContext, reason: WaitingReason) -> Self {
+        Self::WaitingForSource(Track::new(WaitState { context, reason }))
+    }
+
+    pub(crate) fn applying_seek(state: ApplySeekState) -> Self {
+        Self::ApplyingSeek(Track::new(state))
+    }
+
+    pub(crate) fn recreating(state: RecreateState) -> Self {
+        Self::RecreatingDecoder(Track::new(state))
+    }
+
+    pub(crate) fn awaiting_resume(state: ResumeState) -> Self {
+        Self::AwaitingResume(Track::new(state))
+    }
+
+    pub(crate) fn failed(failure: TrackFailure) -> Self {
+        Self::Failed(Track::new(failure))
+    }
+
+    /// Returns `true` for terminal phases that will never transition.
+    ///
+    /// `AtEof` is NOT terminal — seek-after-EOF is a valid transition.
+    /// Only `Failed` is truly terminal (track will be removed).
+    pub(crate) fn is_terminal(&self) -> bool {
+        matches!(self, Self::Failed(_))
+    }
 }
 
 /// Context for a pending seek, carried through multiple states.
@@ -196,20 +327,7 @@ pub enum TrackStep<C> {
     StateChanged,
     /// End of stream.
     Eof,
-    /// Terminal failure — details available via `TrackState::Failed`.
-    Failed,
-}
-
-/// Fieldless discriminant of [`TrackState`] for external phase queries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrackPhaseTag {
-    Decoding,
-    SeekRequested,
-    WaitingForSource,
-    ApplyingSeek,
-    RecreatingDecoder,
-    AwaitingResume,
-    AtEof,
+    /// Terminal failure — details available via `CurrentFsm::Failed`.
     Failed,
 }
 
@@ -226,32 +344,6 @@ pub(crate) enum ConsumerPhase {
     AtEof,
     /// Unrecoverable failure.
     Failed,
-}
-
-impl TrackState {
-    /// Returns `true` for terminal states that will never transition.
-    ///
-    /// `AtEof` is NOT terminal — seek-after-EOF is a valid transition.
-    /// Only `Failed` is truly terminal (track will be removed).
-    pub(crate) fn is_terminal(&self) -> bool {
-        matches!(self, Self::Failed(_))
-    }
-}
-
-impl From<&TrackState> for TrackPhaseTag {
-    #[inline(always)]
-    fn from(state: &TrackState) -> Self {
-        match state {
-            TrackState::Decoding => Self::Decoding,
-            TrackState::SeekRequested(_) => Self::SeekRequested,
-            TrackState::WaitingForSource { .. } => Self::WaitingForSource,
-            TrackState::ApplyingSeek(_) => Self::ApplyingSeek,
-            TrackState::RecreatingDecoder(_) => Self::RecreatingDecoder,
-            TrackState::AwaitingResume(_) => Self::AwaitingResume,
-            TrackState::AtEof => Self::AtEof,
-            TrackState::Failed(_) => Self::Failed,
-        }
-    }
 }
 
 impl ConsumerPhase {
@@ -281,39 +373,34 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test]
-    fn is_terminal_for_each_state() {
-        let non_terminal = [
-            TrackState::Decoding,
-            TrackState::SeekRequested(SeekRequest {
-                seek: SeekContext {
-                    epoch: 1,
-                    target: Duration::from_secs(5),
-                },
-                ..Default::default()
-            }),
-            TrackState::WaitingForSource {
-                context: WaitContext::Playback,
-                reason: WaitingReason::Waiting,
+    fn seek_at(secs: u64) -> SeekRequest {
+        SeekRequest {
+            seek: SeekContext {
+                epoch: 1,
+                target: Duration::from_secs(secs),
             },
-            TrackState::ApplyingSeek(ApplySeekState {
+            ..Default::default()
+        }
+    }
+
+    #[kithara::test]
+    fn is_terminal_for_each_phase() {
+        let non_terminal = [
+            CurrentFsm::decoding(),
+            CurrentFsm::seek_requested(seek_at(5)),
+            CurrentFsm::waiting(WaitContext::Playback, WaitingReason::Waiting),
+            CurrentFsm::applying_seek(ApplySeekState {
                 mode: SeekMode::Direct { target_byte: None },
-                request: SeekRequest {
-                    seek: SeekContext {
-                        epoch: 1,
-                        target: Duration::from_secs(5),
-                    },
-                    ..Default::default()
-                },
+                request: seek_at(5),
             }),
-            TrackState::RecreatingDecoder(RecreateState {
+            CurrentFsm::recreating(RecreateState {
                 attempt: 0,
                 cause: RecreateCause::FormatBoundary,
                 media_info: MediaInfo::default(),
                 next: RecreateNext::Decode,
                 offset: 0,
             }),
-            TrackState::AwaitingResume(ResumeState {
+            CurrentFsm::awaiting_resume(ResumeState {
                 recover_attempts: 0,
                 seek: SeekContext {
                     epoch: 1,
@@ -322,91 +409,13 @@ mod tests {
                 anchor_offset: None,
                 skip: None,
             }),
-            TrackState::AtEof,
+            CurrentFsm::at_eof(),
         ];
-        for state in &non_terminal {
-            assert!(
-                !state.is_terminal(),
-                "expected non-terminal for {:?}",
-                TrackPhaseTag::from(state)
-            );
+        for (idx, fsm) in non_terminal.iter().enumerate() {
+            assert!(!fsm.is_terminal(), "expected non-terminal phase #{idx}");
         }
 
-        assert!(TrackState::Failed(TrackFailure::SourceCancelled).is_terminal());
-    }
-
-    #[kithara::test]
-    fn phase_tag_preserves_discriminant() {
-        assert_eq!(
-            TrackPhaseTag::from(&TrackState::Decoding),
-            TrackPhaseTag::Decoding
-        );
-        assert_eq!(
-            TrackPhaseTag::from(&TrackState::SeekRequested(SeekRequest {
-                seek: SeekContext {
-                    epoch: 1,
-                    target: Duration::ZERO,
-                },
-                ..Default::default()
-            })),
-            TrackPhaseTag::SeekRequested
-        );
-        assert_eq!(
-            TrackPhaseTag::from(&TrackState::WaitingForSource {
-                context: WaitContext::Playback,
-                reason: WaitingReason::WaitingDemand,
-            }),
-            TrackPhaseTag::WaitingForSource
-        );
-        assert_eq!(
-            TrackPhaseTag::from(&TrackState::ApplyingSeek(ApplySeekState {
-                mode: SeekMode::Direct { target_byte: None },
-                request: SeekRequest {
-                    seek: SeekContext {
-                        epoch: 1,
-                        target: Duration::ZERO,
-                    },
-                    ..Default::default()
-                },
-            })),
-            TrackPhaseTag::ApplyingSeek
-        );
-        assert_eq!(
-            TrackPhaseTag::from(&TrackState::RecreatingDecoder(RecreateState {
-                attempt: 1,
-                cause: RecreateCause::VariantSwitch,
-                media_info: MediaInfo::default(),
-                next: RecreateNext::ApplySeek(SeekRequest {
-                    attempt: 1,
-                    seek: SeekContext {
-                        epoch: 1,
-                        target: Duration::from_secs(10),
-                    },
-                }),
-                offset: 100,
-            })),
-            TrackPhaseTag::RecreatingDecoder
-        );
-        assert_eq!(
-            TrackPhaseTag::from(&TrackState::AwaitingResume(ResumeState {
-                recover_attempts: 0,
-                seek: SeekContext {
-                    epoch: 1,
-                    target: Duration::from_secs(10),
-                },
-                anchor_offset: None,
-                skip: None,
-            })),
-            TrackPhaseTag::AwaitingResume
-        );
-        assert_eq!(
-            TrackPhaseTag::from(&TrackState::AtEof),
-            TrackPhaseTag::AtEof
-        );
-        assert_eq!(
-            TrackPhaseTag::from(&TrackState::Failed(TrackFailure::SourceCancelled)),
-            TrackPhaseTag::Failed
-        );
+        assert!(CurrentFsm::failed(TrackFailure::SourceCancelled).is_terminal());
     }
 
     #[kithara::test]
@@ -453,8 +462,8 @@ mod tests {
 
     #[kithara::test]
     fn at_eof_allows_seek_transition() {
-        let state = TrackState::AtEof;
-        assert!(!state.is_terminal());
-        assert_eq!(TrackPhaseTag::from(&state), TrackPhaseTag::AtEof);
+        let fsm = CurrentFsm::at_eof();
+        assert!(!fsm.is_terminal());
+        assert!(matches!(fsm, CurrentFsm::AtEof(_)));
     }
 }

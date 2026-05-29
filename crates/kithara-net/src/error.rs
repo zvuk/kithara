@@ -1,25 +1,28 @@
-use std::fmt::Write;
+use std::{fmt::Write, num::NonZeroU16};
 
 use reqwest::{Error as ReqwestError, Url};
 use thiserror::Error;
 
 pub type NetResult<T> = Result<T, NetError>;
 
-/// Centralized error type for kithara-net
+/// Centralized error type for kithara-net.
+#[non_exhaustive]
 #[derive(Debug, Error, Clone)]
 pub enum NetError {
-    #[error("HTTP request failed: {0}")]
-    Http(String),
-    #[error("Timeout")]
-    Timeout,
-    #[error("Request failed after {max_retries} retries: {source}")]
-    RetryExhausted { max_retries: u32, source: Box<Self> },
     #[error("HTTP {status}: {body:?} for URL: {url:?}")]
-    HttpError {
-        status: u16,
-        url: Url,
+    Status {
+        status: NonZeroU16,
+        url: Option<Url>,
         body: Option<String>,
     },
+    #[error("Timeout")]
+    Timeout,
+    #[error("Network error: {0}")]
+    Network(String),
+    #[error("Decode error: {0}")]
+    Decode(String),
+    #[error("Request failed after {max_retries} retries: {source}")]
+    RetryExhausted { max_retries: u32, source: Box<Self> },
     #[error("not implemented")]
     Unimplemented,
     #[error("Cancelled")]
@@ -28,51 +31,59 @@ pub enum NetError {
     InvalidContentType(String),
 }
 
+/// Whether a failed request is worth retrying. Decided from the typed
+/// [`NetError`] discriminant, never from substring matching on the message.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retryability {
+    Transient,
+    Fatal,
+}
+
 impl NetError {
     /// HTTP 408 Request Timeout.
     const HTTP_REQUEST_TIMEOUT: u16 = 408;
 
-    /// Minimum HTTP status code for server errors (5xx).
-    const HTTP_SERVER_ERROR_MIN: u16 = 500;
-
     /// HTTP 429 Too Many Requests.
     const HTTP_TOO_MANY_REQUESTS: u16 = 429;
 
-    /// Checks if this error is considered retryable
+    /// Minimum HTTP status code for server errors (5xx).
+    const HTTP_SERVER_ERROR_MIN: u16 = 500;
+
+    /// Classifies the error for retry decisioning via its typed variant.
     #[must_use]
-    // ast-grep-ignore: idioms.match-self-conversion
-    pub fn is_retryable(&self) -> bool {
-        match self {
-            Self::Http(http_err_str) => {
-                http_err_str.contains("500")
-                    || http_err_str.contains("502")
-                    || http_err_str.contains("503")
-                    || http_err_str.contains("504")
-                    || http_err_str.contains("429")
-                    || http_err_str.contains("408")
-                    || http_err_str.contains("timeout")
-                    || http_err_str.contains("connection")
-                    || http_err_str.contains("network")
-                    || http_err_str.contains("decoding")
-                    || http_err_str.contains("body")
-            }
-            Self::Timeout => true,
-            Self::HttpError { status, .. } => {
-                *status >= Self::HTTP_SERVER_ERROR_MIN
-                    || *status == Self::HTTP_TOO_MANY_REQUESTS
-                    || *status == Self::HTTP_REQUEST_TIMEOUT
-            }
-            Self::RetryExhausted { .. }
-            | Self::Unimplemented
-            | Self::Cancelled
-            | Self::InvalidContentType(_) => false,
-        }
+    pub fn retryability(&self) -> Retryability {
+        self.into()
     }
 
-    /// Creates a timeout error
+    /// Creates a timeout error.
     #[must_use]
     pub fn timeout() -> Self {
         Self::Timeout
+    }
+}
+
+impl From<&NetError> for Retryability {
+    fn from(error: &NetError) -> Self {
+        match error {
+            NetError::Status { status, .. } => {
+                let code = status.get();
+                if code >= NetError::HTTP_SERVER_ERROR_MIN
+                    || code == NetError::HTTP_TOO_MANY_REQUESTS
+                    || code == NetError::HTTP_REQUEST_TIMEOUT
+                {
+                    Self::Transient
+                } else {
+                    Self::Fatal
+                }
+            }
+            NetError::Timeout | NetError::Network(_) => Self::Transient,
+            NetError::Decode(_)
+            | NetError::RetryExhausted { .. }
+            | NetError::Unimplemented
+            | NetError::Cancelled
+            | NetError::InvalidContentType(_) => Self::Fatal,
+        }
     }
 }
 
@@ -81,14 +92,28 @@ impl From<ReqwestError> for NetError {
         if e.is_timeout() {
             return Self::Timeout;
         }
-        let mut msg = e.to_string();
-        let mut current: &dyn std::error::Error = &e;
-        while let Some(source) = current.source() {
-            let _ = write!(msg, ": {source}");
-            current = source;
-        }
-        Self::Http(msg)
+        // WHY: non-status reqwest errors (connect, body-EOF, decode) stay retryable so an early stream close can resume; fatal Decode is for a local sink write (dl/response.rs).
+        e.status()
+            .and_then(|s| NonZeroU16::new(s.as_u16()))
+            .map_or_else(
+                || Self::Network(error_chain(&e)),
+                |status| Self::Status {
+                    status,
+                    url: e.url().cloned(),
+                    body: None,
+                },
+            )
     }
+}
+
+fn error_chain(e: &ReqwestError) -> String {
+    let mut msg = e.to_string();
+    let mut current: &dyn std::error::Error = e;
+    while let Some(source) = current.source() {
+        let _ = write!(msg, ": {source}");
+        current = source;
+    }
+    msg
 }
 
 #[cfg(test)]
@@ -101,6 +126,10 @@ mod tests {
 
     fn test_url(raw: &str) -> Url {
         Url::parse(raw).expect("BUG: hard-coded test URL is valid")
+    }
+
+    fn nz(status: u16) -> NonZeroU16 {
+        NonZeroU16::new(status).expect("BUG: hard-coded test status is non-zero")
     }
 
     #[kithara::test(tokio)]
@@ -116,27 +145,27 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    #[case::timeout(NetError::Timeout, true)]
-    #[case::http_500(NetError::HttpError { status: 500, url: test_url("http://example.com"), body: None }, true)]
-    #[case::http_429(NetError::HttpError { status: 429, url: test_url("http://example.com"), body: None }, true)]
-    #[case::http_404(NetError::HttpError { status: 404, url: test_url("http://example.com"), body: None }, false)]
-    #[case::unimplemented(NetError::Unimplemented, false)]
-    #[case::retry_exhausted(NetError::RetryExhausted { max_retries: 3, source: Box::new(NetError::Timeout) }, false)]
-    #[case::invalid_content_type(NetError::InvalidContentType("text/html".to_string()), false)]
-    async fn test_is_retryable(#[case] error: NetError, #[case] expected_retryable: bool) {
-        assert_eq!(error.is_retryable(), expected_retryable);
+    #[case::timeout(NetError::Timeout, Retryability::Transient)]
+    #[case::network(NetError::Network("connection reset".to_string()), Retryability::Transient)]
+    #[case::status_500(NetError::Status { status: nz(500), url: Some(test_url("http://example.com")), body: None }, Retryability::Transient)]
+    #[case::status_429(NetError::Status { status: nz(429), url: Some(test_url("http://example.com")), body: None }, Retryability::Transient)]
+    #[case::status_408(NetError::Status { status: nz(408), url: Some(test_url("http://example.com")), body: None }, Retryability::Transient)]
+    #[case::status_404(NetError::Status { status: nz(404), url: Some(test_url("http://example.com")), body: None }, Retryability::Fatal)]
+    #[case::decode(NetError::Decode("invalid body".to_string()), Retryability::Fatal)]
+    #[case::unimplemented(NetError::Unimplemented, Retryability::Fatal)]
+    #[case::retry_exhausted(NetError::RetryExhausted { max_retries: 3, source: Box::new(NetError::Timeout) }, Retryability::Fatal)]
+    #[case::invalid_content_type(NetError::InvalidContentType("text/html".to_string()), Retryability::Fatal)]
+    async fn test_retryability(#[case] error: NetError, #[case] expected: Retryability) {
+        assert_eq!(error.retryability(), expected);
     }
 
     #[kithara::test(tokio)]
-    #[case::http_error(
-        NetError::Http("connection failed".to_string()),
-        "HTTP request failed: connection failed"
-    )]
     #[case::timeout(NetError::Timeout, "Timeout")]
     #[case::unimplemented(NetError::Unimplemented, "not implemented")]
-    #[case::http_error_with_details(
-        NetError::HttpError { status: 404, url: test_url("http://example.com/test"), body: Some("Not found".to_string()) },
-        "HTTP 404: Some(\"Not found\") for URL: Url { scheme: \"http\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"example.com\")), port: None, path: \"/test\", query: None, fragment: None }"
+    #[case::network(NetError::Network("dns failure".to_string()), "Network error: dns failure")]
+    #[case::status_with_details(
+        NetError::Status { status: nz(404), url: Some(test_url("http://example.com/test")), body: Some("Not found".to_string()) },
+        "HTTP 404: Some(\"Not found\") for URL: Some("
     )]
     async fn test_error_display(#[case] error: NetError, #[case] expected_prefix: &str) {
         let display = error.to_string();
@@ -162,7 +191,8 @@ mod tests {
 
     #[kithara::test(tokio)]
     #[case::timeout(NetError::Timeout)]
-    #[case::http_error(NetError::HttpError { status: 500, url: test_url("http://example.com"), body: None })]
+    #[case::status(NetError::Status { status: nz(500), url: Some(test_url("http://example.com")), body: None })]
+    #[case::network(NetError::Network("reset".to_string()))]
     #[case::unimplemented(NetError::Unimplemented)]
     #[case::retry_exhausted(NetError::RetryExhausted { max_retries: 3, source: Box::new(NetError::Timeout) })]
     async fn test_error_cloning(#[case] error: NetError) {
@@ -170,18 +200,18 @@ mod tests {
 
         assert_eq!(error.to_string(), cloned.to_string());
 
-        assert_eq!(error.is_retryable(), cloned.is_retryable());
+        assert_eq!(error.retryability(), cloned.retryability());
     }
 
     #[kithara::test(tokio)]
     #[case::timeout(NetError::Timeout)]
-    #[case::http_error(NetError::HttpError { status: 404, url: test_url("http://example.com"), body: None })]
+    #[case::status(NetError::Status { status: nz(404), url: Some(test_url("http://example.com")), body: None })]
     async fn test_error_debug(#[case] error: NetError) {
         let debug_output = format!("{:?}", error);
 
         match error {
             NetError::Timeout => assert!(debug_output.contains("Timeout")),
-            NetError::HttpError { .. } => assert!(debug_output.contains("HttpError")),
+            NetError::Status { .. } => assert!(debug_output.contains("Status")),
             _ => (),
         }
     }
@@ -199,42 +229,5 @@ mod tests {
             Err(NetError::Timeout) => (),
             _ => panic!("Expected Timeout error"),
         }
-    }
-
-    #[kithara::test(tokio)]
-    #[case("500 Internal Server Error", true)]
-    #[case("502 Bad Gateway", true)]
-    #[case("503 Service Unavailable", true)]
-    #[case("504 Gateway Timeout", true)]
-    #[case("429 Too Many Requests", true)]
-    #[case("408 Request Timeout", true)]
-    #[case("timeout while connecting", true)]
-    #[case("network error", true)]
-    #[case("connection reset", true)]
-    #[case("404 Not Found", false)]
-    #[case("400 Bad Request", false)]
-    #[case("403 Forbidden", false)]
-    #[case("401 Unauthorized", false)]
-    async fn test_http_error_string_parsing(
-        #[case] error_string: &str,
-        #[case] expected_retryable: bool,
-    ) {
-        let error = NetError::Http(error_string.to_string());
-        assert_eq!(error.is_retryable(), expected_retryable);
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_error_equality() {
-        let timeout1 = NetError::Timeout;
-        let timeout2 = NetError::Timeout;
-        assert_eq!(timeout1.to_string(), timeout2.to_string());
-
-        let http1 = NetError::Http("test".to_string());
-        let http2 = NetError::Http("test".to_string());
-        assert_eq!(http1.to_string(), http2.to_string());
-
-        let http3 = NetError::Http("error1".to_string());
-        let http4 = NetError::Http("error2".to_string());
-        assert_ne!(http3.to_string(), http4.to_string());
     }
 }

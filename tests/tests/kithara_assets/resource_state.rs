@@ -2,11 +2,10 @@ use std::{collections::HashSet, num::NonZeroUsize, path::Path, sync::Arc};
 
 use kithara_assets::{
     AssetResourceState, AssetStoreBuilder, BytePool, DiskAssetStore, EvictConfig, ProcessChunkFn,
-    ResourceKey,
+    ResourceHandle, ResourceKey,
 };
 use kithara_integration_tests::{asset_fixture::PinsIndex, assets_ext::AssetStoreTestExt};
 use kithara_platform::time::Duration;
-use kithara_storage::ResourceExt;
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;

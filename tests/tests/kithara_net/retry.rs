@@ -1,6 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{
+    num::NonZeroU16,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -94,8 +95,16 @@ async fn try_with_retry(
     retry_net.get_bytes(test_url(), None).await
 }
 
+fn status(code: u16) -> NetError {
+    NetError::Status {
+        status: NonZeroU16::new(code).expect("BUG: hard-coded test status is non-zero"),
+        url: None,
+        body: None,
+    }
+}
+
 fn http_500() -> NetError {
-    NetError::Http("500 Internal Server Error".to_string())
+    status(500)
 }
 
 #[kithara::test(tokio)]
@@ -120,12 +129,12 @@ async fn test_retryable_errors_success_after_retries(#[case] failures_before_suc
 async fn test_non_retryable_errors_no_retry(#[case] failures_before_success: usize) {
     let result = try_with_retry(
         failures_before_success,
-        NetError::Http("400 Bad Request".to_string()),
+        status(400),
         failures_before_success as u32,
         Duration::from_millis(10),
     )
     .await;
-    assert!(matches!(result, Err(NetError::Http(_))));
+    assert!(matches!(result, Err(NetError::Status { .. })));
 }
 
 #[kithara::test(tokio)]
@@ -140,7 +149,7 @@ async fn test_retry_exhaustion(#[case] failures_before_success: usize, #[case] m
         Duration::from_millis(10),
     )
     .await;
-    assert!(matches!(result, Err(NetError::Http(_))));
+    assert!(matches!(result, Err(NetError::Status { .. })));
 }
 
 #[kithara::test(tokio)]
@@ -193,7 +202,7 @@ async fn test_timeout_retry_chaining(#[case] failures_before_success: usize) {
 #[kithara::test(tokio)]
 async fn test_zero_max_retries() {
     let result = try_with_retry(1, http_500(), 0, Duration::from_millis(10)).await;
-    assert!(matches!(result, Err(NetError::Http(_))));
+    assert!(matches!(result, Err(NetError::Status { .. })));
 }
 
 #[kithara::test(tokio)]

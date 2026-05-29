@@ -11,7 +11,7 @@ use rangemap::RangeSet;
 use crate::{
     StorageResult,
     backend::{
-        resource::Resource,
+        resource::ResourceWriter,
         traits::{Driver, DriverState},
     },
     resource::OpenMode,
@@ -166,8 +166,8 @@ impl Driver for MmapDriver {
 
 /// Mmap-backed storage resource.
 ///
-/// Type alias for [`Resource<MmapDriver>`].
-pub type MmapResource = Resource<MmapDriver>;
+/// Type alias for [`ResourceWriter<MmapDriver>`].
+pub type MmapResource = ResourceWriter<MmapDriver>;
 
 #[cfg(test)]
 mod tests {
@@ -181,8 +181,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        StorageError,
-        resource::{ResourceExt, ResourceStatus, WaitOutcome},
+        Resource, ResourceRead, StorageError,
+        resource::{ResourceStatus, WaitOutcome},
     };
 
     fn create_resource(dir: &TempDir) -> MmapResource {
@@ -216,7 +216,7 @@ mod tests {
         let res = create_resource(&dir);
 
         res.write_at(0, b"hello world").unwrap();
-        res.commit(Some(11)).unwrap();
+        let res = res.commit(Some(11)).unwrap();
 
         let mut buf = [0u8; 11];
         let n = res.read_at(0, &mut buf).unwrap();
@@ -229,7 +229,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
 
-        res.write_all(b"atomic data").unwrap();
+        let res = res.write_all(b"atomic data").unwrap();
 
         let mut buf = Vec::new();
         let n = res.read_into(&mut buf).unwrap();
@@ -252,16 +252,20 @@ mod tests {
     fn test_wait_range_blocks_then_ready() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
-        let res2 = res.clone();
+        let reader = res.reader();
 
+        // Return the writer from the thread so it outlives the read: dropping an
+        // uncommitted writer now marks the resource failed (anti-hang), which
+        // would otherwise race the availability notify.
         let handle = thread::spawn(move || {
             thread::sleep(Duration::from_millis(50));
-            res2.write_at(0, b"delayed data").unwrap();
+            res.write_at(0, b"delayed data").unwrap();
+            res
         });
 
-        let outcome = res.wait_range(0..12).unwrap();
+        let outcome = reader.wait_range(0..12).unwrap();
         assert_eq!(outcome, WaitOutcome::Ready);
-        handle.join().unwrap();
+        let _writer = handle.join().unwrap();
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -270,7 +274,7 @@ mod tests {
         let res = create_resource(&dir);
 
         res.write_at(0, b"short").unwrap();
-        res.commit(Some(5)).unwrap();
+        let res = res.commit(Some(5)).unwrap();
 
         let outcome = res.wait_range(5..10).unwrap();
         assert_eq!(outcome, WaitOutcome::Eof);
@@ -280,14 +284,14 @@ mod tests {
     fn test_fail_wakes_waiters() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
-        let res2 = res.clone();
+        let reader = res.reader();
 
         let handle = thread::spawn(move || {
             thread::sleep(Duration::from_millis(50));
-            res2.fail("test error".to_string());
+            res.fail("test error".to_string());
         });
 
-        let result = res.wait_range(0..100);
+        let result = reader.wait_range(0..100);
         assert!(result.is_err());
         handle.join().unwrap();
     }
@@ -367,7 +371,7 @@ mod tests {
 
         let big_data = vec![42u8; 1024];
         res.write_at(0, &big_data).unwrap();
-        res.commit(Some(1024)).unwrap();
+        let res = res.commit(Some(1024)).unwrap();
 
         let mut buf = vec![0u8; 1024];
         let n = res.read_at(0, &mut buf).unwrap();
@@ -385,7 +389,7 @@ mod tests {
         res.write_at(0, b"data").unwrap();
         assert_eq!(res.status(), ResourceStatus::Active);
 
-        res.commit(Some(4)).unwrap();
+        let res = res.commit(Some(4)).unwrap();
         assert_eq!(
             res.status(),
             ResourceStatus::Committed { final_len: Some(4) }
@@ -396,8 +400,9 @@ mod tests {
     fn test_status_failed() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
+        let reader = res.reader();
 
         res.fail("boom".to_string());
-        assert_eq!(res.status(), ResourceStatus::Failed("boom".to_string()));
+        assert_eq!(reader.status(), ResourceStatus::Failed("boom".to_string()));
     }
 }

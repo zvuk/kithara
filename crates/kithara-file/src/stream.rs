@@ -1,11 +1,12 @@
 use std::{path::PathBuf, sync::Arc};
 
 use kithara_assets::{
-    AssetResource, AssetStoreBuilder, AssetsError, EvictConfig, ResourceKey, asset_root_for_url,
+    AssetResource, AssetStoreBuilder, AssetsError, EvictConfig, ResourceHandle, ResourceKey,
+    asset_root_for_url,
 };
 use kithara_events::EventBus;
 use kithara_platform::{time::Duration, tokio};
-use kithara_storage::{ResourceExt, ResourceStatus, StorageError};
+use kithara_storage::{ResourceStatus, StorageError};
 use kithara_stream::{
     AudioCodec, SourceError as StreamSourceError, StreamType, Timeline,
     dl::{Downloader, DownloaderConfig},

@@ -1,6 +1,5 @@
-use kithara_assets::{AssetStoreBuilder, ResourceKey};
+use kithara_assets::{AssetStoreBuilder, ResourceHandle, ResourceKey};
 use kithara_platform::time::Duration;
-use kithara_storage::ResourceExt;
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 

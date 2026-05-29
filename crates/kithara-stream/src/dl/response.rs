@@ -121,7 +121,7 @@ impl BodyStream {
         let mut total: u64 = 0;
         while let Some(chunk) = self.next().await {
             let data = chunk?;
-            writer(data.as_ref()).map_err(|e| NetError::Http(e.to_string()))?;
+            writer(data.as_ref()).map_err(|e| NetError::Decode(e.to_string()))?;
             total += data.len() as u64;
         }
         Ok(total)
