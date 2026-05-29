@@ -5,38 +5,14 @@ schema_version = 1
 "crates/kithara-decode/src/gapless/trimmer/core.rs:443:12" = 1
 
 [fat_loop_body]
-"crates/kithara-app/src/gui/view.rs:485:for_body" = 1
-"crates/kithara-app/src/tui/dashboard.rs:234:for_body" = 1
 "crates/kithara-app/src/tui/runner.rs:98:loop_body" = 1
-"crates/kithara-assets/src/flush/worker.rs:65:loop_body" = 1
-"crates/kithara-assets/src/flush/worker.rs:79:loop_body" = 1
-"crates/kithara-assets/src/process.rs:211:while_body" = 1
 "crates/kithara-audio/src/audio.rs:543:loop_body" = 1
 "crates/kithara-audio/src/runtime/scheduler.rs:178:loop_body" = 1
-"crates/kithara-audio/src/runtime/scheduler.rs:262:for_body" = 1
-"crates/kithara-audio/src/runtime/wake.rs:38:loop_body" = 1
 "crates/kithara-decode/src/composed.rs:166:loop_body" = 1
-"crates/kithara-decode/src/fmp4/demuxer.rs:158:loop_body" = 1
-"crates/kithara-decode/src/fmp4/parsing.rs:493:for_body" = 1
 "crates/kithara-decode/src/fmp4/source_io.rs:116:loop_body" = 1
-"crates/kithara-decode/src/gapless/trimmer/core.rs:423:for_body" = 1
-"crates/kithara-decode/src/gapless/trimmer/core.rs:613:for_body" = 1
-"crates/kithara-decode/src/gapless/trimmer/core.rs:675:for_body" = 1
-"crates/kithara-decode/src/symphonia/demuxer.rs:208:loop_body" = 1
-"crates/kithara-encode/src/fdk/aac_he_v2.rs:88:loop_body" = 1
-"crates/kithara-encode/src/ffmpeg/aac.rs:170:while_body" = 1
-"crates/kithara-encode/src/ffmpeg/flac.rs:281:while_body" = 1
 "crates/kithara-encode/src/ffmpeg/pcm.rs:25:while_body" = 1
-"crates/kithara-hls/src/variant.rs:1013:while_body" = 1
-"crates/kithara-hls/src/variant.rs:1032:while_body" = 1
-"crates/kithara-hls/src/variant.rs:1060:while_body" = 1
-"crates/kithara-hls/src/variant.rs:1085:while_body" = 1
 "crates/kithara-hls/src/variant.rs:1391:loop_body" = 1
-"crates/kithara-hls/src/variant.rs:514:for_body" = 1
-"crates/kithara-play/src/impls/player_processor.rs:532:for_body" = 1
-"crates/kithara-play/src/impls/player_resource.rs:95:while_body" = 1
 "crates/kithara-storage/src/backend/resource/wait.rs:35:loop_body" = 1
-"crates/kithara-stream/src/dl/registry.rs:208:for_body" = 1
 "crates/kithara-stream/src/stream.rs:344:loop_body" = 1
 
 [function_branch_density]
