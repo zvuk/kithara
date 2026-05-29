@@ -21,16 +21,16 @@ use crate::{
 /// Everything needed to register a track with the shared worker.
 pub(crate) struct TrackRegistration {
     pub(crate) preload_notify: Arc<Notify>,
+    /// Shared priority hint. The real-time consumer writes it wait-free
+    /// (`Audio::set_service_class`); the worker scheduler reads it each pass.
+    pub(crate) service_class: Arc<AtomicServiceClass>,
     pub(crate) source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
-    pub(crate) outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
     /// Spent-chunk return ring: the real-time consumer ([`crate::Audio`])
     /// hands every consumed `PcmChunk` here instead of dropping it, so the
     /// pooled buffer is freed/recycled on the worker thread rather than on
     /// the audio thread. See `crates/kithara-audio/README.md`.
     pub(crate) trash_inlet: crate::runtime::Inlet<PcmChunk>,
-    /// Shared priority hint. The real-time consumer writes it wait-free
-    /// (`Audio::set_service_class`); the worker scheduler reads it each pass.
-    pub(crate) service_class: Arc<AtomicServiceClass>,
+    pub(crate) outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
     pub(crate) preload_chunks: usize,
 }
 

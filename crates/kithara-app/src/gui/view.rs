@@ -16,7 +16,6 @@ use iced::{
         text, text_input, vertical_slider,
     },
 };
-use kithara_queue::TrackStatus;
 use num_traits::cast::ToPrimitive;
 
 use super::{
@@ -24,7 +23,7 @@ use super::{
     icons::Icon,
     message::{Message, Tab},
 };
-use crate::theme::gui::GuiPalette;
+use crate::{theme::gui::GuiPalette, track::TrackRow};
 
 struct Consts;
 impl Consts {
@@ -486,31 +485,34 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
     for (index, entry) in state.ui_state.tracks.iter().enumerate() {
         let is_current = state.ui_state.current_track_index == Some(index);
         let is_selected = state.selected_track_index == Some(index);
-        let is_failed = matches!(entry.status, TrackStatus::Failed(_));
-        let is_slow = matches!(entry.status, TrackStatus::Slow);
         let blink_on = u64::from(state.blink_counter / Consts::BLINK_DIVISOR)
             .is_multiple_of(Consts::BLINK_PERIOD);
-        let text_color = if is_failed {
-            p.danger
-        } else if is_slow && is_current {
-            if blink_on { p.warning } else { p.muted }
-        } else if is_slow {
-            p.warning
-        } else if is_current {
-            p.accent
-        } else {
-            p.text
+        let row = TrackRow::classify(&entry.status, is_current);
+        let text_color = match &row {
+            TrackRow::Failed => p.danger,
+            TrackRow::SlowCurrent => {
+                if blink_on {
+                    p.warning
+                } else {
+                    p.muted
+                }
+            }
+            TrackRow::Slow => p.warning,
+            TrackRow::Current => p.accent,
+            TrackRow::Normal => p.text,
         };
-        let index_color = if is_failed {
-            p.danger
-        } else if is_slow && is_current {
-            if blink_on { p.warning } else { p.muted }
-        } else if is_slow {
-            p.warning
-        } else if is_current {
-            p.accent
-        } else {
-            p.muted
+        let index_color = match &row {
+            TrackRow::Failed => p.danger,
+            TrackRow::SlowCurrent => {
+                if blink_on {
+                    p.warning
+                } else {
+                    p.muted
+                }
+            }
+            TrackRow::Slow => p.warning,
+            TrackRow::Current => p.accent,
+            TrackRow::Normal => p.muted,
         };
         let track_name = truncate_name(&entry.name, Consts::PLAYLIST_MAX_NAME_CHARS);
 

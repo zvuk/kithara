@@ -58,6 +58,12 @@ time::sleep(std::time::Duration::from_millis(10)).await;
 
 On native these delegate to `tokio` runtime primitives, on wasm they use `setTimeout`-based scheduling.
 
+## Trait Bridges
+
+- `CancellationToken` → `CancelGroup` (`From`) — single-token group
+- `Vec<CancellationToken>` → `CancelGroup` (`From`) — multi-token group
+- `NotAvailable` / `TimeoutError` / `JoinError` / `TryCurrentError` (`Display`) — human-readable error rendering
+
 ## Integration
 
 Foundation crate used across the workspace (`kithara-storage`, `kithara-assets`, `kithara-stream`, `kithara-play`, `kithara-wasm`, and test infrastructure) to keep platform-specific branching isolated in one place.

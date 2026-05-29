@@ -272,9 +272,11 @@ fn decode_pcm16_into(bytes: &[u8], out: &mut PcmBuf) -> DecodeResult<()> {
 fn decode_pcm_float_into(bytes: &[u8], out: &mut PcmBuf) -> DecodeResult<()> {
     let count = bytes.len() / 4;
     out.ensure_len(count)?;
-    for (dst, chunk) in out.iter_mut().zip(bytes.chunks_exact(4)) {
-        *dst = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-    }
+    out.iter_mut()
+        .zip(bytes.chunks_exact(4))
+        .for_each(|(dst, chunk)| {
+            *dst = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        });
     out.truncate(count);
     Ok(())
 }

@@ -17,9 +17,6 @@ use super::{
     player_resource::{PlayerResource, ReadOutcome},
 };
 
-/// Minimum number of channels required for stereo processing.
-const MIN_STEREO_CHANNELS: usize = 2;
-
 /// State machine for a single track's lifecycle.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum TrackState {
@@ -153,19 +150,19 @@ impl PlayerTrack {
         };
         let track = Self {
             resource,
+            fade_curve,
+            fade_duration,
+            item_id,
+            src,
             state: TrackState::Preloading,
             state_dirty: false,
             notified_track_requested: false,
             notified_prefetch_requested: false,
             mix: MixDSP::new(Mix::FULLY_WET, fade_curve, fade_conf, sample_rate),
-            fade_curve,
-            fade_duration,
             prefetch_duration: prefetch_duration.max(0.0),
             sample_rate: sample_rate.get(),
             served_frames: 0,
             observed_duration: 0.0,
-            item_id,
-            src,
         };
         track.update_service_class(TrackState::Preloading);
         track
@@ -396,6 +393,8 @@ impl PlayerTrack {
         range: Range<usize>,
         notification_tx: &Mutex<HeapProd<PlayerNotification>>,
     ) -> TrackReadOutcome {
+        /// Minimum number of channels required for stereo processing.
+        const MIN_STEREO_CHANNELS: usize = 2;
         if self.state == TrackState::Finished {
             return TrackReadOutcome::Eof;
         }

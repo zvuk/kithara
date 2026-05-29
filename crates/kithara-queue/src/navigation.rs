@@ -53,26 +53,22 @@ impl NavigationState {
     /// reached with [`RepeatMode::Off`]. With [`RepeatMode::All`] wraps to
     /// index `0`. With [`RepeatMode::One`] returns the current index.
     pub fn next(&mut self, len: usize) -> Option<usize> {
-        if len == 0 {
-            return None;
-        }
-        let Some(current) = self.current_index else {
-            self.current_index = Some(0);
-            return Some(0);
+        let current = match (len, self.current_index, self.repeat_mode) {
+            (0, _, _) => return None,
+            (_, None, _) => {
+                self.current_index = Some(0);
+                return Some(0);
+            }
+            (_, Some(current), RepeatMode::One) => return Some(current),
+            (_, Some(current), _) => current,
         };
-        if self.repeat_mode == RepeatMode::One {
-            return Some(current);
-        }
         add_to_history(&mut self.history, current);
-        let next = if current + 1 < len {
-            current + 1
-        } else {
-            match self.repeat_mode {
-                RepeatMode::All => 0,
-                RepeatMode::Off | RepeatMode::One => {
-                    self.current_index = None;
-                    return None;
-                }
+        let next = match self.repeat_mode {
+            _ if current + 1 < len => current + 1,
+            RepeatMode::All => 0,
+            RepeatMode::Off | RepeatMode::One => {
+                self.current_index = None;
+                return None;
             }
         };
         self.current_index = Some(next);

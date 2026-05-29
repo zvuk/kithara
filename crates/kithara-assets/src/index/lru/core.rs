@@ -232,28 +232,26 @@ impl LruState {
         let mut candidates: Vec<_> = self.by_root.iter().collect();
         candidates.sort_by_key(|(_, e)| e.last_touch);
 
-        let mut out = Vec::new();
-        let mut simulated_assets = total_assets;
-        let mut simulated_bytes = total_bytes;
+        let within_limits = |assets: usize, bytes: u64| {
+            max_assets.is_none_or(|max| assets <= max) && max_bytes.is_none_or(|max| bytes <= max)
+        };
 
-        for (root, entry) in candidates {
-            if pinned.contains(root) {
-                continue;
-            }
-
-            out.push(root.clone());
-            simulated_assets = simulated_assets.saturating_sub(1);
-            simulated_bytes = simulated_bytes.saturating_sub(entry.bytes.unwrap_or(0));
-
-            let under_asset_limit = max_assets.is_none_or(|max| simulated_assets <= max);
-            let under_byte_limit = max_bytes.is_none_or(|max| simulated_bytes <= max);
-
-            if under_asset_limit && under_byte_limit {
-                break;
-            }
-        }
-
-        out
+        candidates
+            .into_iter()
+            .filter(|(root, _)| !pinned.contains(*root))
+            .scan(
+                (total_assets, total_bytes, false),
+                |(assets, bytes, done), (root, entry)| {
+                    if *done {
+                        return None;
+                    }
+                    *assets = assets.saturating_sub(1);
+                    *bytes = bytes.saturating_sub(entry.bytes.unwrap_or(0));
+                    *done = within_limits(*assets, *bytes);
+                    Some(root.clone())
+                },
+            )
+            .collect()
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -271,8 +269,8 @@ impl LruState {
 
         if let Some(e) = self.by_root.get_mut(asset_root) {
             e.last_touch = self.clock;
-            if let Some(b) = bytes_hint {
-                e.bytes = Some(b);
+            if bytes_hint.is_some() {
+                e.bytes = bytes_hint;
             }
             false
         } else {

@@ -360,15 +360,99 @@ impl Default for GodModuleThreshold {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GodStructThreshold {
-    /// `fields + methods` per struct. Methods include both inherent and
-    /// trait-impl methods aggregated from all `impl` blocks in the file.
+    /// Substantial methods per type, aggregated across every `impl` block of
+    /// the owning crate. "Substantial" excludes thin forwarders/accessors
+    /// (short, branch-free bodies — idiomatic facade plumbing), `#[cfg(test)]`
+    /// items, and methods that only satisfy a standard-library / language
+    /// trait contract (see `std_traits`). Field count is reported for context
+    /// but is owned by `pub_struct_open_fields`, not summed in here — so this
+    /// check measures behaviour concentration, not state size or API breadth.
     pub(crate) warn: usize,
+    /// Trait names whose impl methods are standard conformance (idiomatic
+    /// plumbing), not accreted responsibility — `Drop`, `Default`, `From`,
+    /// arithmetic, ordering, IO adapters, ... Matched on the trait's last
+    /// path segment. Methods from these impls do not count toward the total;
+    /// domain-trait methods still do.
+    #[serde(default = "default_std_traits")]
+    pub(crate) std_traits: Vec<String>,
 }
 
 impl Default for GodStructThreshold {
     fn default() -> Self {
-        Self { warn: 15 }
+        Self {
+            warn: 15,
+            std_traits: default_std_traits(),
+        }
     }
+}
+
+fn default_std_traits() -> Vec<String> {
+    [
+        "Drop",
+        "Default",
+        "Clone",
+        "Copy",
+        "Debug",
+        "Display",
+        "PartialEq",
+        "Eq",
+        "PartialOrd",
+        "Ord",
+        "Hash",
+        "From",
+        "Into",
+        "TryFrom",
+        "TryInto",
+        "AsRef",
+        "AsMut",
+        "Borrow",
+        "BorrowMut",
+        "Deref",
+        "DerefMut",
+        "Add",
+        "Sub",
+        "Mul",
+        "Div",
+        "Rem",
+        "Neg",
+        "AddAssign",
+        "SubAssign",
+        "MulAssign",
+        "DivAssign",
+        "RemAssign",
+        "Not",
+        "BitAnd",
+        "BitOr",
+        "BitXor",
+        "Shl",
+        "Shr",
+        "BitAndAssign",
+        "BitOrAssign",
+        "BitXorAssign",
+        "ShlAssign",
+        "ShrAssign",
+        "Index",
+        "IndexMut",
+        "Read",
+        "Write",
+        "Seek",
+        "BufRead",
+        "Iterator",
+        "IntoIterator",
+        "DoubleEndedIterator",
+        "ExactSizeIterator",
+        "FromIterator",
+        "Extend",
+        "FromStr",
+        "ToString",
+        "ToOwned",
+        "Send",
+        "Sync",
+        "Unpin",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -435,66 +519,25 @@ impl Default for ModuleFanOutThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NoLibStaticsThreshold {
     /// Crate names exempt from the rule. App / FFI / wasm / xtask / test
     /// support crates legitimately own singletons; lib crates do not.
+    /// Project-specific — supplied via config.
     #[serde(default)]
     pub(crate) exempt_crates: Vec<String>,
 }
 
-impl Default for NoLibStaticsThreshold {
-    fn default() -> Self {
-        Self {
-            exempt_crates: default_no_lib_statics_exempt_crates(),
-        }
-    }
-}
-
-fn default_no_lib_statics_exempt_crates() -> Vec<String> {
-    [
-        "kithara-app",
-        "kithara-ffi",
-        "xtask",
-        "kithara-test-utils",
-        "kithara-test-macros",
-        "kithara-probe-macros",
-    ]
-    .iter()
-    .map(|s| (*s).to_string())
-    .collect()
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CancelHierarchyThreshold {
     /// Crates whose production *is* test scaffolding (helpers, mocks).
     /// Their hard-coded `CancellationToken::new()` calls are
     /// indistinguishable from test fixtures and don't violate the
-    /// hierarchy contract.
-    #[serde(default = "default_cancel_hierarchy_exempt_crates")]
+    /// hierarchy contract. Project-specific — supplied via config.
+    #[serde(default)]
     pub(crate) exempt_crates: Vec<String>,
-}
-
-impl Default for CancelHierarchyThreshold {
-    fn default() -> Self {
-        Self {
-            exempt_crates: default_cancel_hierarchy_exempt_crates(),
-        }
-    }
-}
-
-fn default_cancel_hierarchy_exempt_crates() -> Vec<String> {
-    [
-        "kithara-test-utils",
-        "kithara-test-macros",
-        "kithara-probe-macros",
-        "xtask",
-    ]
-    .iter()
-    .map(|s| (*s).to_string())
-    .collect()
 }
 
 #[derive(Debug, Deserialize)]

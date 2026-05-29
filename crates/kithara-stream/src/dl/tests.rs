@@ -13,6 +13,7 @@ use axum::{
     routing::{get, head},
 };
 use bytes::Bytes;
+use dashmap::DashSet;
 use futures::stream::iter as stream_iter;
 use kithara_abr::Abr;
 use kithara_events::{DownloaderEvent, Event, EventBus};
@@ -28,19 +29,11 @@ use url::Url;
 
 use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority};
 
-const POLL_MS: u64 = 50;
-const REQUEST_TIMEOUT_SECS: u64 = 60;
-const CANCEL_GUARD_SECS: u64 = 2;
 const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
 const FLOOD_BATCH_SIZE: usize = 10;
-const FLOOD_DEADLINE_SECS: u64 = 20;
 const FLOOD_POLL_MS: u64 = 100;
 const PORT_STRESS_TIMEOUT_SECS: u64 = 60;
-const SLOW_SERVER_DELAY_MS: u64 = 500;
-const SOFT_TIMEOUT_MS: u64 = 50;
-const EVENT_BUS_CAPACITY: usize = 64;
 const SLOW_DEADLINE_SECS: u64 = 5;
-const SLOW_POLL_TIMEOUT_MS: u64 = 200;
 
 struct MockPeer;
 
@@ -130,6 +123,9 @@ async fn peer_handle_cancel_fires_on_last_clone_drop() {
 
 #[kithara::test(tokio)]
 async fn peer_handle_execute_returns_error_on_unreachable() {
+    const POLL_MS: u64 = 50;
+    const REQUEST_TIMEOUT_SECS: u64 = 60;
+    const CANCEL_GUARD_SECS: u64 = 2;
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .total_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
@@ -346,6 +342,7 @@ async fn poll_next_respects_max_concurrent() {
     const MAX_CONCURRENT: usize = 5;
     const TOTAL_CMDS: usize = 1000;
     const HANDLER_DELAY_MS: u64 = 5;
+    const FLOOD_DEADLINE_SECS: u64 = 20;
 
     let concurrent = Arc::new(AtomicUsize::new(0));
     let peak = Arc::new(AtomicUsize::new(0));
@@ -490,8 +487,7 @@ async fn shared_client_keepalive_bounds_socket_count() {
 
     let total_served = Arc::new(AtomicUsize::new(0));
     let total_served_c = Arc::clone(&total_served);
-    let unique_ports: Arc<Mutex<std::collections::HashSet<u16>>> =
-        Arc::new(Mutex::new(std::collections::HashSet::new()));
+    let unique_ports: Arc<DashSet<u16>> = Arc::new(DashSet::new());
     let unique_ports_c = Arc::clone(&unique_ports);
 
     let app = Router::new()
@@ -510,7 +506,7 @@ async fn shared_client_keepalive_bounds_socket_count() {
                         .extensions()
                         .get::<axum::extract::ConnectInfo<SocketAddr>>()
                     {
-                        unique.lock_sync().insert(info.0.port());
+                        unique.insert(info.0.port());
                     }
                     next.run(req).await
                 }
@@ -547,8 +543,8 @@ async fn shared_client_keepalive_bounds_socket_count() {
             let dl_idx = wave * PARALLEL_DLS + slot;
             tasks.push(tokio_spawn(async move {
                 let config = DownloaderConfig {
-                    max_concurrent: MAX_CONCURRENT,
                     client,
+                    max_concurrent: MAX_CONCURRENT,
                     ..test_config()
                 };
                 let dl = Downloader::new(config);
@@ -578,7 +574,7 @@ async fn shared_client_keepalive_bounds_socket_count() {
     }
 
     let expected = total_dls * REQUESTS_PER_DL;
-    let unique = unique_ports.lock_sync().len();
+    let unique = unique_ports.len();
     assert!(
         all_failures.is_empty(),
         "shared client should not produce HTTP failures: {total_ok}/{expected} ok, \
@@ -600,6 +596,10 @@ async fn shared_client_keepalive_bounds_socket_count() {
 /// `kithara_queue::Loader` would set up) receives it.
 #[kithara::test(tokio, timeout(Duration::from_secs(SLOW_DEADLINE_SECS + SLOW_DEADLINE_SECS)))]
 async fn soft_timeout_publishes_load_slow_on_peer_bus() {
+    const SLOW_SERVER_DELAY_MS: u64 = 500;
+    const SOFT_TIMEOUT_MS: u64 = 50;
+    const EVENT_BUS_CAPACITY: usize = 64;
+    const SLOW_POLL_TIMEOUT_MS: u64 = 200;
     let app = Router::new().route(
         "/slow",
         get(|| async {

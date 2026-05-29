@@ -15,26 +15,8 @@ use crate::{
 
 /// In-memory + best-effort disk-backed index of pinned `asset_root`s.
 ///
-/// Architecturally symmetric to [`AvailabilityIndex`](super::AvailabilityIndex):
-/// the `Arc` is encapsulated **inside** the type, [`Clone`] is cheap
-/// (atomic refcount bump), every mutation that crosses the
-/// pinned/unpinned boundary immediately flushes to the optional
-/// disk-backed [`Atomic`] tempfile.
-///
-/// Each `asset_root` is tracked by a refcount: concurrent leases on the
-/// same root increment it, drops decrement it. The on-disk pinned set
-/// only changes (and only flushes) on the 0→1 and 1→0 transitions —
-/// intermediate increments/decrements are pure in-memory updates.
-///
-/// Persistence is **lazy**: the disk file is materialised only on the
-/// first [`Self::flush`]. A pre-existing on-disk file from a previous
-/// run is opened eagerly during `Self::with_persist_at` (native only)
-/// for hydration. On wasm32 the index is always ephemeral.
-///
-/// Three call-sites share a single instance per `cache_dir`:
-///   * `LeaseAssets` (pin/unpin on resource lifecycle),
-///   * `EvictAssets` (read pinned set when picking eviction candidates),
-///   * `DiskAssetDeleter` (drop pin when an `asset_root` is fully removed).
+/// Refcounted per root, lazily persisted, flushed only on 0→1 / 1→0
+/// transitions. See the crate `README.md` "Pins index" for the contract.
 #[derive(Clone)]
 pub struct PinsIndex {
     pub(super) inner: Arc<PinsInner>,
@@ -279,21 +261,11 @@ mod tests {
             &BytePool::default(),
         );
 
-        let mut transitions_in = 0;
-        for _ in 0..5 {
-            if idx.add("hot_asset").unwrap() {
-                transitions_in += 1;
-            }
-        }
+        let transitions_in = (0..5).filter(|_| idx.add("hot_asset").unwrap()).count();
         assert_eq!(transitions_in, 1, "only the 0→1 transition counts");
         assert!(idx.contains("hot_asset"));
 
-        let mut transitions_out = 0;
-        for _ in 0..4 {
-            if idx.remove("hot_asset").unwrap() {
-                transitions_out += 1;
-            }
-        }
+        let transitions_out = (0..4).filter(|_| idx.remove("hot_asset").unwrap()).count();
         assert_eq!(transitions_out, 0, "intermediate decrements stay in-memory");
         assert!(idx.contains("hot_asset"), "refcount=1 keeps the pin alive");
 

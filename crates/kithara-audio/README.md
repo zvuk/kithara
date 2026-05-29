@@ -116,6 +116,23 @@ On an ABR variant switch, the `DecoderNode` detects the format change via `Sourc
 - Decoder is recreated when a stream format changes (codec/container boundary) or when post-seek decode reports a recoverable format mismatch.
 - Recreate path is metadata-first (`MediaInfo`) with native Symphonia probe fallback from a fresh source.
 - Decoder recreate always uses seek target anchor/base offset from timeline/source, so new decoder starts from stream timeline truth.
+- **Seek-epoch suppression**: `detect_format_change` returns `NoChange` while a seek is pending and the session was installed at that same seek epoch. The decoder is already aligned with the seek's landing variant, so a second cross-variant recreate inside one seek epoch is wasted work and would discard the freshly-built decoder before it emits a sample.
+
+### Recreate readiness gating
+
+`recreate_ready_range` defines the byte range whose readiness gates decoder recreation. The same range is shared by the gate (`source_ready_for_recreate`) and the wait path (`wait_for_source_on_recreate` / `WaitContext::Recreation`) so the two never disagree on what "ready" means — a mismatch livelocks the worker (the `recv_outcome_blocking` hang on HE-AAC v2 variant switch).
+
+- **Separate init segment** (CMAF `EXT-X-MAP` init box, typically well under `DEFAULT_READ_AHEAD_BYTES`): gate on the init range alone. The factory probe needs only the init to rebuild the codec, and the post-recreate `Seek`/`ApplySeek`/`Decode` repositions via `decoder_seek_safe`. Gating on the wider seg-0 window is unsafe because after a backwards seek the HLS scheduler emits segments around the reader byte cursor and never schedules `[0..DEFAULT_READ_AHEAD)`, which hangs.
+- **No separate init** (raw containers like WAV, where `format_change_segment_range` falls back to the full seg-0 range): fall through to the `[offset..offset + DEFAULT_READ_AHEAD)` window, which the scheduler actively keeps in flight around the reader.
+
+### Seek error recovery
+
+A failed `decoder.seek()` routes through one shared recovery path that splits by `DecodeError` variant (not string match):
+
+- **Decoder internal-state corruption** (e.g. Symphonia's moof fragment table holding stale offsets after a variant switch) — fresh decoder state resolves this, so recreate is the right cure. This is the default class for any error that is not a typed out-of-range.
+- **Caller-side invalid target** (`DecodeError::SeekOutOfRange`: seek past EOF, or a target timestamp outside the stream's known duration) — recreate cannot fix this, since a freshly built decoder has the same `duration()` and rejects the same target. Retrying loops forever (the "перемотка не работает" prod bug), so these route directly to `fail_seek` with no recreate and no retry.
+
+Init-bearing containers (fMP4/MP4/WAV/MKV/CAF) must recreate at the source's init segment range; a mid-segment recreate would land on bytes with no ftyp/RIFF/EBML header and the factory would fail silently. Mid-stream-decodable containers (MPEG-ES/ADTS/FLAC/Ogg/MPEG-TS) and unknown containers recreate at the offset directly. The recovery path also calls `fail_seek` on missing `MediaInfo` or when an init-bearing container has no available init range.
 
 ## Epoch-Based Seek
 

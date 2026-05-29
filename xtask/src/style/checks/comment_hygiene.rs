@@ -829,10 +829,24 @@ mod tests {
     }
 
     #[test]
-    fn category_kithara_marker_ok() {
+    fn category_configured_custom_marker_ok() {
+        // A project-specific marker is config-driven: flagged with the
+        // default markers, accepted once the project adds it to the
+        // allowed list (here, the cancel-hierarchy marker).
         let src = "fn f() {\n    let _ = 1; // kithara:cancel:owner\n}\n";
-        let vs = run_all(src);
-        assert!(vs.is_empty(), "got: {vs:?}");
+        let file = parse(src);
+
+        let mut default_out = Vec::new();
+        scan_file(&cfg(), "fixture.rs", src, &file, &mut default_out);
+        assert_eq!(keys(&default_out), vec!["fixture.rs:2:category"]);
+
+        let mut cfg_custom = cfg();
+        cfg_custom
+            .allowed_inline_markers
+            .push("kithara:".to_owned());
+        let mut custom_out = Vec::new();
+        scan_file(&cfg_custom, "fixture.rs", src, &file, &mut custom_out);
+        assert!(custom_out.is_empty(), "got: {custom_out:?}");
     }
 
     #[test]

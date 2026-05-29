@@ -23,9 +23,6 @@ use crate::{
     state::AssetResourceState,
 };
 
-/// Initial mmap file size for index resources (4 KB).
-const INDEX_INITIAL_SIZE: u64 = 4096;
-
 /// Concrete on-disk [`Assets`] implementation for a single asset.
 ///
 /// Maps [`ResourceKey`] to disk paths under a root directory.
@@ -185,6 +182,8 @@ impl DiskAssetStore {
     }
 
     fn open_index_resource(&self, path: PathBuf) -> AssetsResult<MmapResource> {
+        /// Initial mmap file size for index resources (4 KB).
+        const INDEX_INITIAL_SIZE: u64 = 4096;
         Ok(Resource::open(
             self.cancel.clone(),
             MmapOptions::for_path(path)

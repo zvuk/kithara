@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    path::Path,
     process::{Command, Stdio},
 };
 
@@ -7,7 +8,7 @@ use anyhow::{Result, bail};
 use clap::Args;
 use serde::Deserialize;
 
-use crate::util::ensure_clean_tree;
+use crate::{common::project::ProjectConfig, util::ensure_clean_tree};
 
 #[derive(Debug, Args)]
 pub(crate) struct AstGrepArgs {
@@ -65,6 +66,21 @@ pub(crate) fn run(args: &AstGrepArgs) -> Result<()> {
     run_grouped(args)
 }
 
+/// Exclude test code from ast-grep at the source, consistent with the
+/// `arch`/`style`/`idioms` namespaces. Each `[lint_exclude].paths` glob is
+/// passed as a negated `--globs` so ast-grep skips those files for scanning
+/// AND `--fix`, uniformly across all rules (per-rule `ignores:` blocks vary).
+/// ast-grep's `--globs` "always overrides any other ignore logic". (Inline
+/// `#[cfg(test)]` is not handled — ast-grep does no cfg evaluation; rules that
+/// care use a `not: inside cfg(test)` clause.)
+fn add_exclude_globs(cmd: &mut Command) -> Result<()> {
+    let project = ProjectConfig::load(Path::new("."))?;
+    for pat in &project.lint_exclude.paths {
+        cmd.arg("--globs").arg(format!("!{pat}"));
+    }
+    Ok(())
+}
+
 fn run_native(args: &AstGrepArgs) -> Result<()> {
     let mut cmd = Command::new("ast-grep");
     cmd.arg("scan")
@@ -72,6 +88,7 @@ fn run_native(args: &AstGrepArgs) -> Result<()> {
         .arg("sgconfig.yml")
         .arg("--report-style")
         .arg("short");
+    add_exclude_globs(&mut cmd)?;
     if args.strict {
         cmd.arg("--warning");
     }
@@ -94,6 +111,7 @@ fn run_grouped(args: &AstGrepArgs) -> Result<()> {
         .arg("--config")
         .arg("sgconfig.yml")
         .arg("--json=stream");
+    add_exclude_globs(&mut cmd)?;
     if args.strict {
         cmd.arg("--warning");
     }

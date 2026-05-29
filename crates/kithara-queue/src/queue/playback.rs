@@ -100,13 +100,13 @@ impl Queue {
     /// real crossfade.
     fn maybe_arm_crossfade(&self) {
         let crossfade = self.player.crossfade_duration();
-        let Some(dur) = self.player.duration_seconds() else {
+        let (Some(dur), Some(pos), Some(entry)) = (
+            self.player.duration_seconds(),
+            self.position_seconds(),
+            self.current(),
+        ) else {
             return;
         };
-        let Some(pos) = self.position_seconds() else {
-            return;
-        };
-        let Some(entry) = self.current() else { return };
         let armed_for = self.read_armed_for();
         let time = super::types::PlaybackTime { dur, pos };
         if !super::types::should_arm_crossfade(time, crossfade, entry.id, armed_for) {

@@ -65,6 +65,13 @@ Two independent limits in `NetOptions`, applied to **all** methods (`get_bytes`,
 The `TimeoutNet` decorator can wrap any `Net` with an additional
 `tokio::time::timeout` over the whole call.
 
+## Trait Bridges
+
+- `&RangeSpec` → `String` (`Display`) — HTTP Range header rendering
+- `HashMap<String, String>` → `Headers` (`From`) — build header set from a map
+- `Compression` → `Vec<ClientBuilderMod>` (`From`) — map compression flags to reqwest builder mods
+- `ReqwestError` → `NetError` (`From`) — wrap transport errors into typed `NetError`
+
 ## Integration
 
 Used by `kithara-file` and `kithara-hls` for all HTTP operations. `MockNet` (behind the `mock` feature) enables deterministic testing without network access.

@@ -26,6 +26,20 @@ impl WorkerSlot {
         self.handle.get().is_some()
     }
 
+    /// Cancel-driven shutdown join. Joins the worker thread so it is
+    /// gone by the time the hub drops — except when `Drop` is itself
+    /// running on the worker thread (the worker upgraded the last
+    /// `Arc<FlushHub>` during a flush and is dropping it), where a join
+    /// would self-deadlock; there the thread is already unwinding to
+    /// exit, so the handle is simply detached.
+    pub(super) fn shutdown_join(&mut self) {
+        if let Some(handle) = self.handle.take()
+            && handle.thread().id() != std::thread::current().id()
+        {
+            let _ = handle.join();
+        }
+    }
+
     /// Spawn the worker once. The thread holds a `Weak<FlushHub>` plus
     /// clones of the wait cell, cancel token, and policy — never a
     /// strong `Arc<FlushHub>` — so the hub can reach refcount zero and
@@ -40,20 +54,6 @@ impl WorkerSlot {
                 run(&weak, &wait, &cancel, &policy);
             })
         });
-    }
-
-    /// Cancel-driven shutdown join. Joins the worker thread so it is
-    /// gone by the time the hub drops — except when `Drop` is itself
-    /// running on the worker thread (the worker upgraded the last
-    /// `Arc<FlushHub>` during a flush and is dropping it), where a join
-    /// would self-deadlock; there the thread is already unwinding to
-    /// exit, so the handle is simply detached.
-    pub(super) fn shutdown_join(&mut self) {
-        if let Some(handle) = self.handle.take()
-            && handle.thread().id() != std::thread::current().id()
-        {
-            let _ = handle.join();
-        }
     }
 }
 

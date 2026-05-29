@@ -28,6 +28,23 @@ let key = ResourceKey::new("segments/001.m4s");
 let resource = store.open_resource(&key)?;
 ```
 
+## Public contract
+
+The explicit public contract is the unified `AssetStore` type. Everything else should be considered an implementation detail (even if currently `pub`), and constructors must propagate the shared cancellation token (use `AssetStoreBuilder`).
+
+## Key mapping (normative)
+
+Resources are addressed by strings chosen by higher layers:
+
+- `asset_root`: e.g. `hex(hash(canonical_url))`
+- `rel_path`: e.g. `media/audio.mp3`, `segments/0001.m4s`
+
+Disk mapping is `<cache_root>/<asset_root>/<rel_path>`. Assets does not "invent" paths; it only enforces safety (no absolute paths, no `..`, no empty segments).
+
+Auto-pin (lease) semantics: all resources opened through the leasing decorator (`LeaseAssets`) are automatically pinned by `asset_root` for the lifetime of the returned handle. The pin is an RAII guard stored inside `LeaseResource`; drop the handle to release the pin.
+
+The global index (`_index/*`) stores small best-effort metadata files. The filesystem remains the source of truth; indexes may be missing and can be rebuilt later.
+
 ## Decorator Chain
 
 Requests flow through five layers (outermost to innermost):
@@ -108,6 +125,14 @@ Three index types are persisted under `_index/` for crash recovery:
 
 All indices use `postcard` serialization with `Atomic<R>` for crash-safe writes. The availability index is **explicit only** — persisted via `AssetStore::checkpoint()`, never from a `Drop` hook or background timer.
 
+### Pins index
+
+`PinsIndex` is the in-memory + best-effort disk-backed index of pinned `asset_root`s. It is architecturally symmetric to `AvailabilityIndex`: the `Arc` is encapsulated inside the type, `Clone` is a cheap atomic refcount bump, and every mutation that crosses the pinned/unpinned boundary immediately flushes to the optional disk-backed `Atomic` tempfile.
+
+- Each `asset_root` is tracked by a refcount. Concurrent leases on the same root increment it and drops decrement it. The on-disk pinned set only changes (and only flushes) on the 0→1 and 1→0 transitions; intermediate increments/decrements are pure in-memory updates.
+- Persistence is lazy: the disk file is materialised only on the first `flush`. A pre-existing on-disk file from a previous run is opened eagerly during `with_persist_at` (native only) for hydration. On wasm32 the index is always ephemeral.
+- Three call-sites share a single instance per `cache_dir`: `LeaseAssets` (pin/unpin on resource lifecycle), `EvictAssets` (read pinned set when picking eviction candidates), and `DiskAssetDeleter` (drop pin when an `asset_root` is fully removed).
+
 ## Byte Availability — single source of truth
 
 `AssetStore` is the sole authoritative answer to "which bytes of this resource are present?". Callers query it through three read-only methods that are safe to invoke from high-frequency hot paths (e.g. the HLS decoder read loop):
@@ -125,6 +150,20 @@ Internally these sit on top of an aggregate `AvailabilityIndex` (`DashMap<Resour
 - **Persisted** on demand via `AssetStore::checkpoint()` to `_index/availability.bin`. Missing / corrupt / wrong-version files are silently treated as an empty seed on rebuild.
 
 `Resource<D>::CommonState.available` remains the per-resource byte map inside `kithara-storage`, but it is an implementation detail — consumers outside `kithara-storage` must query through `AssetStore`, not through `resource.contains_range()` on an ad-hoc `open_resource` call.
+
+## Processing & readiness gate
+
+`ProcessedResource` wraps a resource and transforms its content on `commit`: it reads raw content in chunks, transforms each chunk via the callback (no allocation), and writes the processed chunks back to disk. `read_at` then returns already-processed data directly from disk. Processing only happens when `ctx` is `Some`; with `ctx = None` (playlists, keys) `commit` just delegates to the inner resource.
+
+`inner.wait_range` reports `Ready` as soon as bytes hit disk via `write_at`, but for an active processor those bytes are still encrypted until `commit` runs `process_and_write`. A reader that saw `wait_range = Ready` and immediately called `read_at` would race the processor and hit `StorageError::NotReadable` (the symptom behind the `local_queue_playlist_behavior_*` post-seek hang under DRM). `ProcessedResource` therefore owns a `ReadinessGate` pairing the `processed` flag with a `Condvar`: `commit` flips the flag and notifies, and `wait_range`/`read_at` block on the gate so callers cannot see "ready bytes" until processing has finished.
+
+## Trait Bridges
+
+- `&Url` → `ResourceKey` (`From`) — derive a unique key from a URL, query-aware
+- `&StoreOptions` → `EvictConfig` (`From`) — extract eviction config from store options
+- `ResourceStatus` → `AssetResourceState` (`From`) — map storage status to asset state
+- `&LruState` ↔ `LruIndexFile` (`From` both ways) — LRU index persistence round-trip
+- `DiskStore<Ctx>` / `MemStore<Ctx>` → `AssetStore<Ctx>` (`From`) — wrap a backend into the unified store
 
 ## Integration
 

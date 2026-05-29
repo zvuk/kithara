@@ -52,6 +52,18 @@ impl SegmentReadState {
         }
     }
 
+    /// Resize `buffer` to the current `total()` and report whether the
+    /// segment is already fully filled. Every fill checkpoint runs this
+    /// after a live-range re-resolve that may have grown or shrunk the
+    /// target.
+    fn sync_buffer_ready(&mut self) -> bool {
+        let total = self.total();
+        if self.buffer.len() != total {
+            self.buffer.resize(total, 0);
+        }
+        self.filled >= total
+    }
+
     pub(crate) fn total(&self) -> usize {
         usize::try_from(self.range.end - self.range.start)
             .expect("BUG: segment range fits usize on supported targets")
@@ -103,11 +115,7 @@ pub(crate) fn fill_segment_buffer(
 ) -> DecodeResult<FillStatus> {
     loop {
         refresh_range(state, live);
-        let total = state.total();
-        if state.buffer.len() != total {
-            state.buffer.resize(total, 0);
-        }
-        if state.filled >= total {
+        if state.sync_buffer_ready() {
             return Ok(FillStatus::Ready);
         }
 
@@ -136,14 +144,8 @@ pub(crate) fn fill_segment_buffer(
                 if state.filled == state.total() {
                     return Ok(FillStatus::Ready);
                 }
-                if refresh_range(state, live) {
-                    let new_total = state.total();
-                    if state.buffer.len() != new_total {
-                        state.buffer.resize(new_total, 0);
-                    }
-                    if state.filled >= new_total {
-                        return Ok(FillStatus::Ready);
-                    }
+                if refresh_range(state, live) && state.sync_buffer_ready() {
+                    return Ok(FillStatus::Ready);
                 }
                 return Err(DecodeError::InvalidData(format!(
                     "unexpected EOF before segment buffer filled: {} / {}",

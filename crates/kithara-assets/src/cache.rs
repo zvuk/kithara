@@ -137,10 +137,10 @@ where
     ) -> Self {
         Self {
             inner,
-            cache: Arc::new(Mutex::new(LruCache::new(capacity))),
-            pinned: Arc::new(DashSet::new()),
             capacity,
             on_invalidated,
+            cache: Arc::new(Mutex::new(LruCache::new(capacity))),
+            pinned: Arc::new(DashSet::new()),
         }
     }
 

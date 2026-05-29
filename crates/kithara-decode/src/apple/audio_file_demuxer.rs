@@ -69,6 +69,29 @@ impl AppleAudioFileDemuxer {
     /// to keep the in-flight buffer bounded.
     const CBR_BATCH_TARGET_BYTES: u32 = 16 * 1024;
 
+    /// Single source of truth: maps `(codec, container)` to the
+    /// `kAudioFileXxxType` four-cc hint `AudioFileServices` needs.
+    /// Returns `None` when Apple's standalone file path can't handle the
+    /// combination — the factory consults this through [`Self::supports`]
+    /// before dispatching, so any new (codec, container) only needs one
+    /// match arm here.
+    fn file_type_id(codec: AudioCodec, container: ContainerFormat) -> Option<u32> {
+        Some(match (codec, container) {
+            (AudioCodec::Pcm, ContainerFormat::Wav) => Consts::kAudioFileWAVEType,
+            (AudioCodec::Mp3, ContainerFormat::MpegAudio) => Consts::kAudioFileMP3Type,
+            (AudioCodec::Alac, ContainerFormat::Mp4) => Consts::kAudioFileM4AType,
+            (AudioCodec::Alac, ContainerFormat::Caf) => Consts::kAudioFileCAFType,
+            (AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2, ContainerFormat::Mp4) => {
+                Consts::kAudioFileM4AType
+            }
+            (
+                AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
+                ContainerFormat::Adts,
+            ) => Consts::kAudioFileAAC_ADTSType,
+            _ => return None,
+        })
+    }
+
     fn open(source: BoxedSource, hint: Option<u32>, codec: AudioCodec) -> DecodeResult<Self> {
         let file = AppleAudioFile::open(source, hint)?;
         let asbd = file.data_format();
@@ -134,37 +157,6 @@ impl AppleAudioFileDemuxer {
         })
     }
 
-    /// Single source of truth: maps `(codec, container)` to the
-    /// `kAudioFileXxxType` four-cc hint `AudioFileServices` needs.
-    /// Returns `None` when Apple's standalone file path can't handle the
-    /// combination — the factory consults this through [`Self::supports`]
-    /// before dispatching, so any new (codec, container) only needs one
-    /// match arm here.
-    fn file_type_id(codec: AudioCodec, container: ContainerFormat) -> Option<u32> {
-        Some(match (codec, container) {
-            (AudioCodec::Pcm, ContainerFormat::Wav) => Consts::kAudioFileWAVEType,
-            (AudioCodec::Mp3, ContainerFormat::MpegAudio) => Consts::kAudioFileMP3Type,
-            (AudioCodec::Alac, ContainerFormat::Mp4) => Consts::kAudioFileM4AType,
-            (AudioCodec::Alac, ContainerFormat::Caf) => Consts::kAudioFileCAFType,
-            (AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2, ContainerFormat::Mp4) => {
-                Consts::kAudioFileM4AType
-            }
-            (
-                AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
-                ContainerFormat::Adts,
-            ) => Consts::kAudioFileAAC_ADTSType,
-            _ => return None,
-        })
-    }
-
-    /// Whether Apple's standalone file path supports this `(codec,
-    /// container)` pair. Used by the factory to gate dispatch into
-    /// [`Self::open_for`]; mirrors [`Self::file_type_id`].
-    #[must_use]
-    pub(crate) fn supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
-        container.is_some_and(|c| Self::file_type_id(codec, c).is_some())
-    }
-
     /// Open a track for the given `(codec, container)` pair, picking the
     /// `AudioFileServices` file-type hint internally. The caller is
     /// expected to have checked [`Self::supports`] (the factory does);
@@ -187,6 +179,14 @@ impl AppleAudioFileDemuxer {
     /// captured trim counts through here.
     pub(crate) fn set_gapless(&mut self, gapless: Option<GaplessInfo>) {
         self.track_info.gapless = gapless;
+    }
+
+    /// Whether Apple's standalone file path supports this `(codec,
+    /// container)` pair. Used by the factory to gate dispatch into
+    /// [`Self::open_for`]; mirrors [`Self::file_type_id`].
+    #[must_use]
+    pub(crate) fn supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
+        container.is_some_and(|c| Self::file_type_id(codec, c).is_some())
     }
 }
 

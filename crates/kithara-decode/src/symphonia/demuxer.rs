@@ -247,18 +247,7 @@ impl Demuxer for SymphoniaDemuxer {
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
-        // For MDCT codecs park the cursor before the user-requested target so
-        // the `pending_seek_target` guard in `ComposedDecoder` can trim frames
-        // to the exact sub-packet boundary. Backup magnitude covers two needs:
-        //
-        // 1. `priming.frames` sample-domain warmup — Apple-style codecs that
-        //    need pre-target packets fed through to prime MDCT/SBR state.
-        // 2. At least 1 codec packet for sample-accurate trim — composed.rs
-        //    pending_seek_target/frames_to_trim relies on landing on a packet
-        //    whose pts < target.
-        //
-        // Both are derived from codec facts (1024 frames/packet for AAC,
-        // 1152 for MP3) and the actual track sample_rate — no magic ms.
+        // WHY: park before target by max(priming warmup, one codec packet) so the trim guard lands on a packet boundary (README "Seek pre-roll and trim").
         let sr = f64::from(self.track_info.sample_rate.max(1));
         let priming_secs = f64::from(u32::try_from(priming.frames).unwrap_or(u32::MAX)) / sr;
         let packet_secs = f64::from(mdct_packet_frames(self.track_info.codec)) / sr;

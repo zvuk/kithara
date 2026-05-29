@@ -251,17 +251,17 @@ impl ResamplerProcessor {
 
         let mut processor = Self {
             channels,
+            output_spec,
+            source_rate,
             chunk_size: params.chunk_size,
             current_playback_rate: initial_playback_rate,
             current_ratio: 1.0,
             host_sample_rate: params.host_sample_rate,
             input_buffer: smallvec_new_vecs(channels),
-            output_spec,
             playback_rate: params.playback_rate,
             pool: params.pool.unwrap_or_else(|| PcmPool::default().clone()),
             quality: params.quality,
             resampler: None,
-            source_rate,
             temp_deinterleave: smallvec_new_vecs(channels),
             temp_input_slice: smallvec_new_vecs(channels),
             temp_output_all: smallvec_new_vecs(channels),
@@ -528,9 +528,9 @@ impl ResamplerProcessor {
     /// Pad input buffer with zeros so a final block can be processed.
     fn pad_input_for_flush(&mut self, input_frames: usize, buffered: usize) {
         let padding_needed = input_frames.saturating_sub(buffered);
-        for buf in &mut self.input_buffer {
-            buf.extend(iter::repeat_n(0.0, padding_needed));
-        }
+        self.input_buffer
+            .iter_mut()
+            .for_each(|buf| buf.extend(iter::repeat_n(0.0, padding_needed)));
         debug!(buffered, padding_needed, "Flushing resampler buffer");
     }
 

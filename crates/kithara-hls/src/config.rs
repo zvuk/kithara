@@ -3,7 +3,7 @@
 use std::fmt;
 
 use bon::Builder;
-pub use kithara_abr::AbrMode;
+use kithara_abr::AbrMode;
 use kithara_assets::{BytePool, StoreOptions};
 use kithara_drm::KeyProcessorRegistry;
 use kithara_events::EventBus;

@@ -202,10 +202,7 @@ impl Demuxer for Fmp4SegmentDemuxer {
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
-        // Back the seek into the previous segment(s) when the codec needs
-        // SBR/PS pre-roll: landing at `target - warmup` means a boundary
-        // seek decodes the tail of the prior segment to converge SBR state,
-        // and `ComposedDecoder::pending_seek_target` drops it up to `target`.
+        // WHY: back off to `target - warmup` for SBR/PS pre-roll (README "Seek pre-roll and trim").
         let seek_target =
             warmup_backoff(self.track_info.codec, self.track_info.sample_rate, &priming)
                 .map_or(target, |backoff| target.saturating_sub(backoff));
@@ -245,8 +242,8 @@ impl Demuxer for Fmp4SegmentDemuxer {
         });
         Ok(DemuxSeekOutcome::Landed {
             landed_at,
-            landed_byte: Some(landed_byte),
             preroll,
+            landed_byte: Some(landed_byte),
         })
     }
 

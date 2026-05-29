@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use reqwest::{Error as ReqwestError, Url};
 use thiserror::Error;
 
@@ -82,7 +84,7 @@ impl From<ReqwestError> for NetError {
         let mut msg = e.to_string();
         let mut current: &dyn std::error::Error = &e;
         while let Some(source) = current.source() {
-            msg += &format!(": {source}");
+            let _ = write!(msg, ": {source}");
             current = source;
         }
         Self::Http(msg)

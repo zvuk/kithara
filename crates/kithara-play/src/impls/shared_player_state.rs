@@ -36,12 +36,12 @@ pub struct SharedPlayerState {
     pub notification_rx: Mutex<HeapCons<PlayerNotification>>,
     /// Sender for processor-to-main-thread notifications.
     pub notification_tx: Mutex<HeapProd<PlayerNotification>>,
-    /// Audio-thread side of the deferred-drop channel: evicted tracks are
-    /// pushed here instead of being dropped inline.
-    pub trash_tx: Mutex<HeapProd<PlayerTrack>>,
     /// Main-thread side of the deferred-drop channel: drained and dropped
     /// off the audio thread.
     pub trash_rx: Mutex<HeapCons<PlayerTrack>>,
+    /// Audio-thread side of the deferred-drop channel: evicted tracks are
+    /// pushed here instead of being dropped inline.
+    pub trash_tx: Mutex<HeapProd<PlayerTrack>>,
 }
 
 impl Default for SharedPlayerState {
@@ -84,12 +84,6 @@ impl SharedPlayerState {
         }
     }
 
-    pub(crate) fn next_seek_epoch(&self) -> u64 {
-        self.seek_epoch
-            .fetch_add(1, Ordering::AcqRel)
-            .wrapping_add(1)
-    }
-
     /// Hand an evicted track to the deferred-drop channel so its heap is
     /// freed by the main thread, never on the audio thread. If the channel is
     /// full the track drops here as a bounded degraded path.
@@ -102,6 +96,12 @@ impl SharedPlayerState {
     pub(crate) fn drain_trash(&self) {
         let mut rx = self.trash_rx.lock_sync();
         while rx.try_pop().is_some() {}
+    }
+
+    pub(crate) fn next_seek_epoch(&self) -> u64 {
+        self.seek_epoch
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1)
     }
 }
 

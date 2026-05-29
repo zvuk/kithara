@@ -30,36 +30,25 @@ pub(super) fn resolve_codec_container(
 /// 3. MIME type mapping
 /// 4. Container format hint (can suggest likely codec)
 pub(super) fn probe_codec(hint: &ProbeHint) -> DecodeResult<AudioCodec> {
-    if let Some(codec) = hint.codec {
-        return Ok(codec);
-    }
-
-    if let Some(ref ext) = hint.extension
-        && let Some(codec) = codec_from_extension(ext)
-    {
-        return Ok(codec);
-    }
-
-    if let Some(ref mime) = hint.mime
-        && let Some(codec) = AudioCodec::parse_mime(mime)
-    {
-        return Ok(codec);
-    }
-
-    if let Some(ref mime) = hint.mime
-        && let Some(container) = container_from_mime(mime)
-        && let Some(codec) = codec_from_container(container)
-    {
-        return Ok(codec);
-    }
-
-    if let Some(container) = hint.container
-        && let Some(codec) = codec_from_container(container)
-    {
-        return Ok(codec);
-    }
-
-    Err(DecodeError::ProbeFailed)
+    hint.codec
+        .or_else(|| {
+            hint.extension
+                .as_ref()
+                .and_then(|ext| codec_from_extension(ext))
+        })
+        .or_else(|| {
+            hint.mime
+                .as_ref()
+                .and_then(|mime| AudioCodec::parse_mime(mime))
+        })
+        .or_else(|| {
+            hint.mime
+                .as_ref()
+                .and_then(|mime| container_from_mime(mime))
+                .and_then(codec_from_container)
+        })
+        .or_else(|| hint.container.and_then(codec_from_container))
+        .ok_or(DecodeError::ProbeFailed)
 }
 
 /// Map file extension to codec.

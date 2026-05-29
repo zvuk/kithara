@@ -387,7 +387,7 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
     let DeliveryContext {
         target,
         result,
-        mut writer,
+        writer,
         on_complete_cb,
         on_response_cb,
         abr,
@@ -414,33 +414,34 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
         }
         ResponseTarget::Streaming => match result {
             Ok(resp) => {
-                if let Some(ref mut w) = writer {
-                    let headers = resp.headers.clone();
-                    if let Some(cb) = on_response_cb {
-                        cb(&headers);
-                    }
-                    let write_result = resp.body.write_all(|chunk| w(chunk)).await;
-                    let elapsed = started.elapsed();
-                    match write_result {
-                        Ok(total) => {
-                            finish_request(bus.as_ref(), &abr, peer_id, request_id, total, elapsed);
-                            if let Some(cb) = on_complete_cb {
-                                cb(total, Some(&headers), None);
-                            }
+                let Some(mut w) = writer else {
+                    return;
+                };
+                let headers = resp.headers.clone();
+                if let Some(cb) = on_response_cb {
+                    cb(&headers);
+                }
+                let write_result = resp.body.write_all(|chunk| w(chunk)).await;
+                let elapsed = started.elapsed();
+                match write_result {
+                    Ok(total) => {
+                        finish_request(bus.as_ref(), &abr, peer_id, request_id, total, elapsed);
+                        if let Some(cb) = on_complete_cb {
+                            cb(total, Some(&headers), None);
                         }
-                        Err(ref e) => {
-                            publish_failure_or_cancel(
-                                bus.as_ref(),
-                                request_id,
-                                e,
-                                0,
-                                peer_cancel,
-                                epoch_cancel,
-                                downloader_cancel,
-                            );
-                            if let Some(cb) = on_complete_cb {
-                                cb(0, Some(&headers), Some(e));
-                            }
+                    }
+                    Err(ref e) => {
+                        publish_failure_or_cancel(
+                            bus.as_ref(),
+                            request_id,
+                            e,
+                            0,
+                            peer_cancel,
+                            epoch_cancel,
+                            downloader_cancel,
+                        );
+                        if let Some(cb) = on_complete_cb {
+                            cb(0, Some(&headers), Some(e));
                         }
                     }
                 }

@@ -270,14 +270,13 @@ mod tests {
 
     struct StatefulPeer {
         state: Arc<AbrState>,
-        variants: Vec<VariantInfo>,
     }
     impl Abr for StatefulPeer {
         fn state(&self) -> Option<Arc<AbrState>> {
             Some(Arc::clone(&self.state))
         }
         fn variants(&self) -> Vec<VariantInfo> {
-            self.variants.clone()
+            test_variants_3()
         }
     }
 
@@ -290,7 +289,6 @@ mod tests {
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
-            variants: test_variants_3(),
         });
         let handle = controller.register(&peer);
 
@@ -317,7 +315,6 @@ mod tests {
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
-            variants: test_variants_3(),
         });
         let handle = controller.register(&peer);
 
@@ -341,7 +338,6 @@ mod tests {
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(1))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
-            variants: test_variants_3(),
         });
         let handle = controller.register(&peer);
 
@@ -378,7 +374,6 @@ mod tests {
         let handle = {
             let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
                 state: Arc::clone(&state),
-                variants: test_variants_3(),
             });
             let h = controller.register(&peer);
             assert_eq!(h.variants().len(), 3);
@@ -400,7 +395,6 @@ mod tests {
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
-            variants: test_variants_3(),
         });
 
         let bus = EventBus::new(DEFAULT_EVENT_BUS_CAPACITY);
@@ -414,16 +408,16 @@ mod tests {
         };
         handle.notify_commit(decision, 0, Duration::ZERO, Instant::now());
 
-        let mut seen = false;
-        while let Ok(event) = rx.try_recv() {
+        let found = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| {
             if let Event::Abr(AbrEvent::VariantApplied { from, to, reason }) = event {
                 assert_eq!(from, 0);
                 assert_eq!(to, 2);
                 assert_eq!(reason, AbrReason::UpSwitch);
-                seen = true;
-                break;
+                Some(())
+            } else {
+                None
             }
-        }
-        assert!(seen, "expected VariantApplied event on the bus");
+        });
+        assert!(found.is_some(), "expected VariantApplied event on the bus");
     }
 }

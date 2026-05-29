@@ -1,9 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use anyhow::Result;
 use syn::{
-    BinOp, Expr, ExprBinary, ExprCall, ExprIf, ExprMatch, ExprMethodCall, ExprTry, ImplItem, Item,
-    ItemImpl, Local, Stmt, Visibility,
+    BinOp, ExprBinary, ExprIf, ExprMatch, ImplItem, Item, ItemImpl, Local, Stmt,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -19,23 +18,6 @@ pub(crate) const ID: &str = "function_branch_density";
 
 pub(crate) struct FunctionBranchDensity;
 
-#[derive(Debug, Clone)]
-struct FnInfo {
-    /// Branches in *this* function's body (no descent).
-    own_branches: usize,
-    /// Names of called functions (last path segment / method ident).
-    calls: Vec<String>,
-    /// `(rel_path, line, col)` for the function declaration.
-    span: (String, usize, usize),
-    /// `pub` / `pub(crate)` / `pub(super)` etc. — only public entries
-    /// drive the walk.
-    is_public: bool,
-    /// Function name (used as registry key; collisions across the
-    /// workspace are conservative — both implementations get walked,
-    /// inflating but never deflating the metric).
-    name: String,
-}
-
 impl Check for FunctionBranchDensity {
     fn id(&self) -> &'static str {
         ID
@@ -44,105 +26,44 @@ impl Check for FunctionBranchDensity {
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let cfg = &ctx.config.thresholds.function_branch_density;
         let exempt = compile_globs(&cfg.exempt_files);
-        let mut registry: HashMap<String, Vec<FnInfo>> = HashMap::new();
+        let mut violations = Vec::new();
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let rel_path = relative_to(ctx.workspace_root, &path).to_path_buf();
             let rel = rel_path.to_string_lossy().replace('\\', "/");
-            if matches_any(&exempt, std::path::Path::new(&rel)) {
+            if matches_any(&exempt, Path::new(&rel)) {
                 continue;
             }
             let Ok(file) = parse_file(&path) else {
                 continue;
             };
-            collect_functions(&file, &rel, &mut registry);
-        }
-
-        let mut violations = Vec::new();
-        for entries in registry.values() {
-            for entry in entries.iter().filter(|e| e.is_public) {
-                let mut visited: HashSet<&str> = HashSet::new();
-                let (longest, total) = walk_density(entry, &registry, &mut visited);
-                let path_breach = longest > cfg.warn_path;
-                let total_breach = total > cfg.warn_total;
-                if !path_breach && !total_breach {
-                    continue;
-                }
-                let (rel, line, col) = &entry.span;
-                let key = format!("{}:{}:{}", rel, line, col);
-                let msg = format!(
-                    "`{}` reachable branch density is {longest} along the deepest execution path \
-                     and {total} across the whole call graph. Cumulative branches stress the \
-                     branch predictor regardless of how the if/else statements are split across \
-                     helper functions — extracting them into helpers does not reduce the number \
-                     of conditional jumps the CPU sees. Consider caching predicate state \
-                     (compute once when it changes, read once on the hot path), eliminating \
-                     redundant work, or using a tag-enum + match instead of branch ladders.",
-                    entry.name
-                );
-                violations.push(Violation::warn(ID, key, msg));
-            }
+            collect_dense_fns(&file.items, &rel, cfg.warn_own, &mut violations);
         }
         violations.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(violations)
     }
 }
 
-/// DFS through the call graph counting branches. Returns
-/// `(longest_path_branches, total_branches)`.
-fn walk_density<'a>(
-    entry: &'a FnInfo,
-    registry: &'a HashMap<String, Vec<FnInfo>>,
-    visited: &mut HashSet<&'a str>,
-) -> (usize, usize) {
-    if !visited.insert(entry.name.as_str()) {
-        return (0, 0);
-    }
-    let mut deepest_callee_path = 0;
-    let mut callee_total = 0;
-    for callee_name in &entry.calls {
-        let Some(targets) = registry.get(callee_name) else {
-            continue;
-        };
-        for target in targets {
-            let (path, total) = walk_density(target, registry, visited);
-            if path > deepest_callee_path {
-                deepest_callee_path = path;
-            }
-            callee_total += total;
-        }
-    }
-    (
-        entry.own_branches + deepest_callee_path,
-        entry.own_branches + callee_total,
-    )
-}
-
-/// Walk a parsed file once and stash every function/method definition
-/// into the registry keyed by name.
-fn collect_functions(file: &syn::File, rel: &str, registry: &mut HashMap<String, Vec<FnInfo>>) {
-    for item in &file.items {
+/// Walk every function / method definition in `items`, attributing branch
+/// density to the function that *owns* the branches (no call-graph descent).
+/// A thin entry point that merely calls into dense callees is not flagged; the
+/// dense callee is, at its own declaration span.
+fn collect_dense_fns(items: &[Item], rel: &str, warn_own: usize, out: &mut Vec<Violation>) {
+    for item in items {
         match item {
             Item::Fn(item_fn) => {
-                let info = build_fn_info(
+                flag_if_dense(
                     rel,
                     &item_fn.sig.ident.to_string(),
-                    is_public_visibility(&item_fn.vis),
                     item_fn.span(),
                     &item_fn.block.stmts,
+                    warn_own,
+                    out,
                 );
-                registry.entry(info.name.clone()).or_default().push(info);
             }
-            Item::Impl(item_impl) => {
-                walk_impl(rel, item_impl, registry);
-            }
+            Item::Impl(item_impl) => walk_impl(rel, item_impl, warn_own, out),
             Item::Mod(m) => {
                 if let Some((_, items)) = &m.content {
-                    let synthetic = syn::File {
-                        shebang: None,
-                        attrs: Vec::new(),
-                        items: items.clone(),
-                    };
-                    collect_functions(&synthetic, rel, registry);
+                    collect_dense_fns(items, rel, warn_own, out);
                 }
             }
             _ => {}
@@ -150,67 +71,60 @@ fn collect_functions(file: &syn::File, rel: &str, registry: &mut HashMap<String,
     }
 }
 
-fn walk_impl(rel: &str, item: &ItemImpl, registry: &mut HashMap<String, Vec<FnInfo>>) {
-    let trait_impl = item.trait_.is_some();
+fn walk_impl(rel: &str, item: &ItemImpl, warn_own: usize, out: &mut Vec<Violation>) {
     for impl_item in &item.items {
         if let ImplItem::Fn(method) = impl_item {
-            let is_public = trait_impl || is_public_visibility(&method.vis);
-            let info = build_fn_info(
+            flag_if_dense(
                 rel,
                 &method.sig.ident.to_string(),
-                is_public,
                 method.span(),
                 &method.block.stmts,
+                warn_own,
+                out,
             );
-            registry.entry(info.name.clone()).or_default().push(info);
             for stmt in &method.block.stmts {
                 if let Stmt::Item(Item::Mod(m)) = stmt
                     && let Some((_, items)) = &m.content
                 {
-                    let synthetic = syn::File {
-                        shebang: None,
-                        attrs: Vec::new(),
-                        items: items.clone(),
-                    };
-                    collect_functions(&synthetic, rel, registry);
+                    collect_dense_fns(items, rel, warn_own, out);
                 }
             }
         }
     }
 }
 
-fn build_fn_info(
+fn flag_if_dense(
     rel: &str,
     name: &str,
-    is_public: bool,
     span: proc_macro2::Span,
     body: &[Stmt],
-) -> FnInfo {
-    let mut counter = BodyCounter {
-        own_branches: 0,
-        calls: Vec::new(),
-    };
+    warn_own: usize,
+    out: &mut Vec<Violation>,
+) {
+    let mut counter = BranchCounter { own_branches: 0 };
     counter.visit_stmts(body);
-    let s = span.start();
-    FnInfo {
-        own_branches: counter.own_branches,
-        calls: counter.calls,
-        span: (rel.to_string(), s.line, s.column),
-        is_public,
-        name: name.to_string(),
+    if counter.own_branches <= warn_own {
+        return;
     }
+    let s = span.start();
+    let key = format!("{rel}:{}:{}", s.line, s.column);
+    let msg = format!(
+        "`{name}` has {} branch decisions in its own body (if / match-dispatch / loop / \
+         && / || / let-else). A single function this branch-dense stresses the branch \
+         predictor and reader. Consider a tag-enum + match dispatch, caching predicate state \
+         (compute once when it changes, read once on the hot path), or splitting genuinely \
+         independent responsibilities. Extracting the branches into helpers called from here \
+         does not reduce the count — the same conditional jumps still execute.",
+        counter.own_branches
+    );
+    out.push(Violation::warn(ID, key, msg));
 }
 
-fn is_public_visibility(vis: &Visibility) -> bool {
-    !matches!(vis, Visibility::Inherited)
-}
-
-struct BodyCounter {
+struct BranchCounter {
     own_branches: usize,
-    calls: Vec<String>,
 }
 
-impl BodyCounter {
+impl BranchCounter {
     fn visit_stmts(&mut self, stmts: &[Stmt]) {
         for s in stmts {
             self.visit_stmt(s);
@@ -218,17 +132,24 @@ impl BodyCounter {
     }
 }
 
-impl<'ast> Visit<'ast> for BodyCounter {
+impl<'ast> Visit<'ast> for BranchCounter {
     fn visit_expr_if(&mut self, node: &'ast ExprIf) {
         self.own_branches += 1;
         visit::visit_expr_if(self, node);
     }
 
     fn visit_expr_match(&mut self, node: &'ast ExprMatch) {
-        let arms = node.arms.len();
-        if arms > 1 {
-            self.own_branches += arms - 1;
+        // A `match` lowers to a jump table / balanced decision tree, not an
+        // `if/else-if` ladder: variant dispatch is one control-flow decision
+        // regardless of arm count, so count it as a single branch (like an
+        // `if`). Each arm *guard* is a sequential conditional the CPU
+        // evaluates in arm order, so it counts +1 — a guard-ladder disguised
+        // as a `match` is still measured. Nested control flow in arm bodies
+        // and guards is counted by descent.
+        if node.arms.len() > 1 {
+            self.own_branches += 1;
         }
+        self.own_branches += node.arms.iter().filter(|arm| arm.guard.is_some()).count();
         visit::visit_expr_match(self, node);
     }
 
@@ -247,8 +168,13 @@ impl<'ast> Visit<'ast> for BodyCounter {
         visit::visit_expr_loop(self, node);
     }
 
-    fn visit_expr_try(&mut self, node: &'ast ExprTry) {
-        self.own_branches += 1;
+    fn visit_expr_try(&mut self, node: &'ast syn::ExprTry) {
+        // `?` lowers to a discriminant test + cold early-return. LLVM marks
+        // the Err/None arm `unlikely` and the branch predictor nails a
+        // consistently-not-taken branch at ~zero cost, so error-plumbing
+        // does not contribute the hot-path pressure this check measures. It
+        // is not counted; real data-dependent control flow inside the
+        // fallible expression is still counted by descent.
         visit::visit_expr_try(self, node);
     }
 
@@ -267,20 +193,6 @@ impl<'ast> Visit<'ast> for BodyCounter {
         }
         visit::visit_local(self, node);
     }
-
-    fn visit_expr_call(&mut self, node: &'ast ExprCall) {
-        if let Expr::Path(path) = node.func.as_ref()
-            && let Some(seg) = path.path.segments.last()
-        {
-            self.calls.push(seg.ident.to_string());
-        }
-        visit::visit_expr_call(self, node);
-    }
-
-    fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
-        self.calls.push(node.method.to_string());
-        visit::visit_expr_method_call(self, node);
-    }
 }
 
 #[cfg(test)]
@@ -289,10 +201,7 @@ mod tests {
 
     fn count_body(body: &str) -> usize {
         let block: syn::Block = syn::parse_str(body).expect("valid Rust block");
-        let mut counter = BodyCounter {
-            own_branches: 0,
-            calls: Vec::new(),
-        };
+        let mut counter = BranchCounter { own_branches: 0 };
         counter.visit_stmts(&block.stmts);
         counter.own_branches
     }
@@ -308,7 +217,9 @@ mod tests {
     }
 
     #[test]
-    fn counts_match_arms_minus_one() {
+    fn guardless_match_dispatch_counts_as_one() {
+        // A guardless `match` is a single jump-table dispatch, not an
+        // `if/else-if` ladder — arm count must not inflate the score.
         let n = count_body(
             r#"{
                 match x {
@@ -318,37 +229,79 @@ mod tests {
                 };
             }"#,
         );
-        assert_eq!(n, 2);
+        assert_eq!(n, 1);
     }
 
     #[test]
-    fn counts_let_else_question_mark_and_logical_ops() {
+    fn match_arm_guards_each_count_as_a_branch() {
+        // Guards are sequential conditionals the CPU evaluates in arm
+        // order: 1 dispatch + 2 guards = 3.
+        let n = count_body(
+            r#"{
+                match x {
+                    A if a => 1,
+                    B if b => 2,
+                    _ => 3,
+                };
+            }"#,
+        );
+        assert_eq!(n, 3);
+    }
+
+    #[test]
+    fn counts_let_else_and_logical_ops_but_not_question_mark() {
+        // let-else (+1), if (+1), && (+1) count; the `?` is a predictable
+        // cold early-return and is not counted.
         let n = count_body(
             r#"{
                 let Some(_a) = opt else { return; };
                 if x && y { run()?; }
             }"#,
         );
-        assert_eq!(n, 4);
+        assert_eq!(n, 3);
     }
 
     #[test]
-    fn collects_call_targets() {
-        let block: syn::Block = syn::parse_str(
+    fn question_mark_alone_counts_zero() {
+        // A bare `?` is a predictable cold early-return — no hot-path
+        // branch-predictor pressure, so it must not score.
+        let n = count_body(
             r#"{
-                helper(a);
-                obj.method(b);
-                module::path::call(c);
+                let _v = run()?;
+                let _w = step()?;
             }"#,
-        )
-        .unwrap();
-        let mut counter = BodyCounter {
-            own_branches: 0,
-            calls: Vec::new(),
-        };
-        counter.visit_stmts(&block.stmts);
-        assert!(counter.calls.contains(&"helper".to_string()));
-        assert!(counter.calls.contains(&"method".to_string()));
-        assert!(counter.calls.contains(&"call".to_string()));
+        );
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn nested_control_flow_is_counted_by_descent() {
+        // Branch density is the owner's whole-body count: nested loops and
+        // conditionals inside the function body all accrue to this function,
+        // since extracting them into helpers would not reduce the jumps.
+        let n = count_body(
+            r#"{
+                for _x in xs {
+                    if a { run(); }
+                    match k { A => 1, B => 2, _ => 3 };
+                }
+            }"#,
+        );
+        // for (1) + if (1) + match dispatch (1) = 3.
+        assert_eq!(n, 3);
+    }
+
+    #[test]
+    fn straight_line_body_scores_zero() {
+        // A thin pass-through / data-plumbing body owns no branches even if it
+        // calls into dense callees — owner-attribution does not blame it.
+        let n = count_body(
+            r#"{
+                let a = first();
+                let b = second(a);
+                third(a, b)
+            }"#,
+        );
+        assert_eq!(n, 0);
     }
 }

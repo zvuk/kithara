@@ -11,6 +11,9 @@ pub mod state;
 pub mod theme;
 pub mod tracing_init;
 
+#[cfg(any(feature = "tui", feature = "gui"))]
+mod track;
+
 #[cfg(feature = "tui")]
 pub mod tui;
 

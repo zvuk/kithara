@@ -34,6 +34,10 @@ where
         self.values.get(idx)
     }
 
+    pub(crate) fn get_by_index_mut(&mut self, idx: Index) -> Option<&mut V> {
+        self.values.get_mut(idx)
+    }
+
     pub(crate) fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,

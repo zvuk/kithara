@@ -169,6 +169,9 @@ impl Registry {
         inner.fetch_waker.register(cx.waker());
 
         for (idx, entry) in &mut self.peers {
+            if entry.peer_cancel.is_cancelled() {
+                to_remove.push(idx);
+            }
             while let Poll::Ready(Some(mut cmd)) = entry.cmd_rx.poll_recv(cx) {
                 let peer_prio = entry.peer.priority();
                 let slot = slot_index(peer_prio, cmd.priority);
@@ -247,11 +250,6 @@ impl Registry {
             }
         }
 
-        for (idx, entry) in &self.peers {
-            if entry.peer_cancel.is_cancelled() {
-                to_remove.push(idx);
-            }
-        }
         for idx in to_remove {
             self.peers.remove(idx);
         }

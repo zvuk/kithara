@@ -232,6 +232,16 @@ fn check_expr_struct(
     if e.fields.len() < 2 {
         return;
     }
+    // Mirror the autofix safety model: a `..base` rest or a shorthand field
+    // read by an earlier explicit initializer makes reordering to
+    // declaration order a move-before-read (use-after-move) — the fix
+    // refuses these, so detection must not flag them either.
+    if e.dot2_token.is_some() || e.rest.is_some() {
+        return;
+    }
+    if has_shorthand_use_def_conflict(&e.fields) {
+        return;
+    }
     let actual: Vec<InitKey> = e
         .fields
         .iter()
@@ -543,5 +553,102 @@ fn make(value: u32, label: String) -> Self {
         let value_pos = out.find("value,").expect("value");
         let label_pos = out.find("label: label.clone()").expect("label");
         assert!(value_pos < label_pos, "shorthand first:\n{out}");
+    }
+}
+
+#[cfg(test)]
+mod detect_tests {
+    use syn::visit::Visit;
+
+    use super::*;
+
+    fn default_cfg() -> StructInitOrderConfig {
+        StructInitOrderConfig {
+            shorthand_first: true,
+        }
+    }
+
+    /// Run the detection visitor over a snippet and return the keys of the
+    /// violations it reports.
+    fn detect(src: &str) -> Vec<String> {
+        let cfg = default_cfg();
+        let file = syn::parse_file(src).unwrap_or_else(|e| panic!("parse failed: {e}\n---\n{src}"));
+        let mut out = Vec::new();
+        let mut v = InitVisitor {
+            cfg: &cfg,
+            rel: "fixture.rs",
+            out: &mut out,
+        };
+        v.visit_file(&file);
+        out.into_iter().map(|viol| viol.key).collect()
+    }
+
+    #[test]
+    fn out_of_order_explicit_is_flagged() {
+        let src = "fn main() { let _ = Foo { x: 1, y, }; }";
+        assert_eq!(
+            detect(src).len(),
+            1,
+            "genuinely reorderable literal must fire"
+        );
+    }
+
+    #[test]
+    fn shorthand_use_def_conflict_is_not_flagged() {
+        let src = "\
+fn make(pcm: Pcm) -> Self {
+    Self {
+        spec: pcm.spec(),
+        pcm,
+    }
+}
+";
+        assert!(
+            detect(src).is_empty(),
+            "reordering would move `pcm` before `spec` reads it — must not flag"
+        );
+    }
+
+    #[test]
+    fn rest_base_is_not_flagged() {
+        let src = "fn main() { let base = Foo::default(); let _ = Foo { x: 1, y, ..base }; }";
+        assert!(
+            detect(src).is_empty(),
+            "`..base` literals are skipped by the fix and must not be flagged"
+        );
+    }
+
+    #[test]
+    fn ui_state_use_def_conflict_is_not_flagged() {
+        let src = "\
+fn build(ui_state: UiState, controller: Controller) -> Self {
+    Self {
+        controller,
+        previous_volume: ui_state.volume.max(0.01),
+        ui_state,
+    }
+}
+";
+        assert!(
+            detect(src).is_empty(),
+            "shorthand `ui_state` is read by an earlier explicit field — must not flag"
+        );
+    }
+
+    #[test]
+    fn unrelated_shorthand_is_still_flagged() {
+        let src = "\
+fn make(value: u32, label: String) -> Self {
+    Self {
+        label: label.clone(),
+        value,
+    }
+}
+";
+        assert_eq!(
+            detect(src).len(),
+            1,
+            "no use-def conflict: `value` is not read by `label`'s init — must still flag"
+        );
     }
 }

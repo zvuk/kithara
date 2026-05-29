@@ -102,25 +102,10 @@ impl<R: ResourceExt> AtomicChunked<R> {
         Arc::clone(&self.inner.lock_sync())
     }
 
-    /// Open a fresh chunked-atomic resource at `canonical_path`.
-    /// The provided `factory` opens the inner at a given filesystem
-    /// path; it is called once with the temp path during this
-    /// constructor and once more with the canonical path after the
-    /// atomic rename in [`ResourceExt::commit`].
-    ///
-    /// Atomically claims `<canonical>.tmp` via `OpenOptions::create_new`
-    /// — the filesystem rejects the second concurrent open of the same
-    /// tmp path. Returns [`StorageError::TmpClaimed`] if another
-    /// `AssetStore` instance (or another process) is already writing
-    /// the same canonical path; the caller should poll until the
-    /// holder releases (commit or drop) and either retry or take a
-    /// passthrough view of the canonical once committed.
-    ///
-    /// Stale temp left from a prior crashed run is **not** auto-wiped:
-    /// liveness is signalled by tmp existence alone, and a leftover
-    /// from a `kill -9` would block subsequent opens until cleaned up
-    /// explicitly. Maintenance task is the caller's responsibility (a
-    /// future enhancement may add PID-aware cleanup).
+    /// Open a fresh chunked-atomic resource at `canonical_path`, claiming
+    /// `<canonical>.tmp` via `OpenOptions::create_new`. See the crate
+    /// `README.md` "Chunked atomic claim" for the `factory`, claim, and
+    /// stale-temp semantics.
     ///
     /// # Errors
     ///
@@ -181,26 +166,26 @@ impl<R: ResourceExt> ResourceExt for AtomicChunked<R> {
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         self.inner_clone().commit(final_len)?;
 
-        let tmp = self.tmp_path.lock_sync().take();
-        if let Some(tmp) = tmp {
-            let f = OpenOptions::new().write(true).open(&tmp).map_err(|e| {
-                StorageError::Failed(format!("AtomicChunked commit: open tmp {tmp:?}: {e}"))
-            })?;
-            f.sync_data().map_err(|e| {
-                StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
-            })?;
-            drop(f);
-            fs::rename(&tmp, &self.canonical_path).map_err(|e| {
-                StorageError::Failed(format!(
-                    "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
-                    self.canonical_path
-                ))
-            })?;
+        let Some(tmp) = self.tmp_path.lock_sync().take() else {
+            return Ok(());
+        };
+        let f = OpenOptions::new().write(true).open(&tmp).map_err(|e| {
+            StorageError::Failed(format!("AtomicChunked commit: open tmp {tmp:?}: {e}"))
+        })?;
+        f.sync_data().map_err(|e| {
+            StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
+        })?;
+        drop(f);
+        fs::rename(&tmp, &self.canonical_path).map_err(|e| {
+            StorageError::Failed(format!(
+                "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
+                self.canonical_path
+            ))
+        })?;
 
-            if let Some(factory) = self.factory.as_ref() {
-                let new_inner = Arc::new(factory(&self.canonical_path, OpenIntent::Reopen)?);
-                *self.inner.lock_sync() = new_inner;
-            }
+        if let Some(factory) = self.factory.as_ref() {
+            let new_inner = Arc::new(factory(&self.canonical_path, OpenIntent::Reopen)?);
+            *self.inner.lock_sync() = new_inner;
         }
         Ok(())
     }

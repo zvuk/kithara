@@ -163,22 +163,16 @@ where
     /// discoverable even before the Phase P-3 observer wires in.
     #[must_use]
     pub fn contains_range(&self, key: &ResourceKey, range: Range<u64>) -> bool {
-        if range.start >= range.end {
-            return true;
-        }
-        if self
-            .availability()
-            .contains_range(self.asset_root(), key, range.clone())
-        {
-            return true;
-        }
-        if let Ok(AssetResourceState::Committed {
-            final_len: Some(len),
-        }) = self.resource_state(key)
-        {
-            return range.end <= len;
-        }
-        false
+        range.start >= range.end
+            || self
+                .availability()
+                .contains_range(self.asset_root(), key, range.clone())
+            || matches!(
+                self.resource_state(key),
+                Ok(AssetResourceState::Committed {
+                    final_len: Some(len),
+                }) if range.end <= len
+            )
     }
 
     /// Delete the entire asset directory.

@@ -1,0 +1,36 @@
+# Project-specific identity and per-tool settings for the reusable xtask.
+# The xtask code carries no project names; everything here is what a new
+# project edits to adopt it.
+
+[project]
+name = "kithara"
+
+[health]
+# Crates excluded from `cargo hack --feature-powerset` (too many features).
+feature_powerset_exclude = ["kithara-play", "kithara-app", "kithara-fuzz"]
+# Crates excluded from whole-workspace stages (fuzz target needs cargo-fuzz).
+workspace_exclude = ["kithara-fuzz"]
+
+[publish]
+workspace_hack_crate = "kithara-workspace-hack"
+user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
+
+[lint_exclude]
+# Test code dropped from EVERY lint namespace (arch, style, idioms) so baselines
+# show production debt only. `#[cfg(test)]` blocks (inline `mod tests {}`, test
+# `fn`/`impl`) are stripped automatically via AST on top of these globs.
+# build.rs is compile-time, never a production-runtime path, so it is excluded too.
+paths = [
+    "**/tests/**",
+    "**/tests.rs",
+    "**/*_test.rs",
+    "**/*_tests.rs",
+    "**/test_*.rs",
+    "**/benches/**",
+    "**/build.rs",
+    "crates/kithara-test-utils/**",
+    "crates/kithara-test-macros/**",
+    "crates/kithara-integration-tests/**",
+    "crates/kithara-fuzz/**",
+]
+modules = []

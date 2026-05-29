@@ -57,8 +57,7 @@ fn analyze_file(rel: &str, file: &syn::File, sup: &Suppressions, out: &mut Vec<V
                         key,
                         "for-loop is a pointwise binary op over zipped iterators; \
                          replace with `.for_each(|(a, &b)| *a OP= b)`. In hot paths \
-                         consider a SIMD primitive (`kithara-audio` already provides \
-                         `fast_interleave`/etc.). If the iterator chain ends in \
+                         consider a SIMD primitive. If the iterator chain ends in \
                          `.take(N)`, also slice the operands to `[..N]` first to \
                          enable bounds-check elision."
                             .to_string(),

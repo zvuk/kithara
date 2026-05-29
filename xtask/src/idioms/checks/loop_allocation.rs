@@ -1,7 +1,7 @@
 use anyhow::Result;
 use syn::{
-    Expr, ExprCall, ExprForLoop, ExprLoop, ExprMacro, ExprMethodCall, ExprPath, ExprWhile, Macro,
-    Path,
+    Expr, ExprBreak, ExprCall, ExprForLoop, ExprLoop, ExprMacro, ExprMethodCall, ExprPath,
+    ExprReturn, ExprWhile, Macro, Path,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -70,6 +70,7 @@ impl Check for LoopAllocation {
                 rel: &rel,
                 suppress: &suppress,
                 inside_loop: 0,
+                cold_depth: 0,
                 out: &mut violations,
             };
             v.visit_file(&file);
@@ -85,6 +86,11 @@ struct LoopVisitor<'a> {
     /// Depth of enclosing for/while/loop scopes. Allocation expressions
     /// only flag when this is > 0.
     inside_loop: usize,
+    /// Depth of enclosing error / early-exit contexts: `return`/`break`
+    /// values and `map_err` closures. Allocations there run at most once
+    /// (or only on the error path), not per loop iteration — flag only
+    /// when this is 0.
+    cold_depth: usize,
     out: &'a mut Vec<Violation>,
 }
 
@@ -122,6 +128,7 @@ impl<'ast> Visit<'ast> for LoopVisitor<'_> {
 
     fn visit_expr_macro(&mut self, m: &'ast ExprMacro) {
         if self.inside_loop > 0
+            && self.cold_depth == 0
             && let Some(msg) = format_macro_message(&m.mac)
         {
             let s = m.span().start();
@@ -132,6 +139,7 @@ impl<'ast> Visit<'ast> for LoopVisitor<'_> {
 
     fn visit_expr_call(&mut self, c: &'ast ExprCall) {
         if self.inside_loop > 0
+            && self.cold_depth == 0
             && let Some(msg) = call_path_message(c)
         {
             let s = c.span().start();
@@ -142,12 +150,39 @@ impl<'ast> Visit<'ast> for LoopVisitor<'_> {
 
     fn visit_expr_method_call(&mut self, mc: &'ast ExprMethodCall) {
         if self.inside_loop > 0
+            && self.cold_depth == 0
             && let Some(msg) = method_message(mc)
         {
             let s = mc.span().start();
             self.report(s.line, s.column, msg);
         }
-        visit::visit_expr_method_call(self, mc);
+        self.visit_expr(&mc.receiver);
+        let cold_args = mc.method == "map_err";
+        if cold_args {
+            self.cold_depth += 1;
+        }
+        for arg in &mc.args {
+            self.visit_expr(arg);
+        }
+        if cold_args {
+            self.cold_depth -= 1;
+        }
+    }
+
+    fn visit_expr_return(&mut self, e: &'ast ExprReturn) {
+        self.cold_depth += 1;
+        if let Some(inner) = &e.expr {
+            self.visit_expr(inner);
+        }
+        self.cold_depth -= 1;
+    }
+
+    fn visit_expr_break(&mut self, e: &'ast ExprBreak) {
+        self.cold_depth += 1;
+        if let Some(inner) = &e.expr {
+            self.visit_expr(inner);
+        }
+        self.cold_depth -= 1;
     }
 }
 
@@ -282,6 +317,7 @@ mod tests {
             rel: "fixture.rs",
             suppress: &suppress,
             inside_loop: 0,
+            cold_depth: 0,
             out: &mut out,
         };
         v.visit_file(&file);
@@ -361,6 +397,44 @@ mod tests {
     fn nested_loops_count_once() {
         let n = count_in(
             r#"fn f() { for _ in 0..10 { for _ in 0..10 { let s = format!("x"); drop(s); } } }"#,
+        );
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn format_in_map_err_closure_not_flagged() {
+        let n = count_in(
+            r#"fn f() -> Result<(), String> { for i in 0..10 { step(i).map_err(|e| format!("step {i}: {e}"))?; } Ok(()) }"#,
+        );
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn to_string_in_map_err_closure_not_flagged() {
+        let n = count_in(
+            r#"fn f() -> Result<(), String> { for i in 0..10 { step(i).map_err(|e| e.to_string())?; } Ok(()) }"#,
+        );
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn format_in_return_err_not_flagged() {
+        let n = count_in(
+            r#"fn f() -> Result<(), String> { for i in 0..10 { if bad(i) { return Err(format!("bad {i}")); } } Ok(()) }"#,
+        );
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn format_in_break_value_not_flagged() {
+        let n = count_in(r#"fn f() -> String { loop { if done() { break format!("done"); } } }"#);
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn hot_path_format_still_flagged_alongside_cold_map_err() {
+        let n = count_in(
+            r#"fn f() -> Result<(), String> { for i in 0..10 { let hot = format!("frame {i}"); log(&hot); step(i).map_err(|e| format!("cold {e}"))?; } Ok(()) }"#,
         );
         assert_eq!(n, 1);
     }

@@ -10,7 +10,7 @@ use std::{
 use kithara_abr::Abr;
 use kithara_events::{FileError, FileEvent};
 use kithara_net::{Headers, NetError, RangeSpec};
-use kithara_storage::ResourceExt;
+use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{
     MediaInfo,
     dl::{FetchCmd, Peer, RequestPriority, reject_html_response},
@@ -86,6 +86,18 @@ impl FilePeer {
             .on_complete(on_complete)
             .build()
     }
+
+    /// Start of the next byte range worth fetching, or `None` when the
+    /// resource is terminal (neither `Active` nor `Committed`) or already
+    /// fully covered. The gap walk only runs once the status check passes.
+    fn next_fetchable_gap(&self) -> Option<u64> {
+        matches!(
+            self.inner.asset.res.status(),
+            ResourceStatus::Active | ResourceStatus::Committed { .. }
+        )
+        .then(|| self.inner.next_gap_start())
+        .flatten()
+    }
 }
 
 impl Abr for FilePeer {}
@@ -95,14 +107,7 @@ impl Peer for FilePeer {
         if self.inflight.load(Ordering::Acquire) {
             return Poll::Pending;
         }
-        if !matches!(
-            self.inner.asset.res.status(),
-            kithara_storage::ResourceStatus::Active
-                | kithara_storage::ResourceStatus::Committed { .. }
-        ) {
-            return Poll::Ready(None);
-        }
-        let Some(gap_start) = self.inner.next_gap_start() else {
+        let Some(gap_start) = self.next_fetchable_gap() else {
             return Poll::Ready(None);
         };
         self.inflight.store(true, Ordering::Release);

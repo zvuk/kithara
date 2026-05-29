@@ -109,11 +109,11 @@ pub(in crate::flush) struct HubWait {
 ///
 /// See module docs for the worker / sync-fallback semantics.
 pub struct FlushHub {
+    pub(in crate::flush) wait: Arc<HubWait>,
     pub(in crate::flush) cancel: CancellationToken,
     pub(in crate::flush) policy: FlushPolicy,
     pub(in crate::flush) flush_lock: Mutex<()>,
     pub(in crate::flush) sources: Mutex<Vec<Weak<dyn Flushable>>>,
-    pub(in crate::flush) wait: Arc<HubWait>,
     pub(in crate::flush) worker: WorkerSlot,
 }
 
@@ -122,10 +122,8 @@ impl FlushHub {
     /// synchronously through [`Self::flush_now`].
     #[must_use]
     pub fn new(cancel: CancellationToken, policy: FlushPolicy) -> Arc<Self> {
+        // NOTE: `cancel` is a caller-owned child token; `Drop` cancels it to stop the worker.
         Arc::new(Self {
-            // The caller passes a child token it owns exclusively (see
-            // the cancel-hierarchy rule): `Drop` cancels it to stop the
-            // worker without touching the shared parent (storage, app).
             cancel,
             policy,
             flush_lock: Mutex::new(()),
@@ -203,14 +201,6 @@ impl FlushHub {
         self.start_worker();
     }
 
-    /// Lazily spawn the background flush worker (idempotent). Called on
-    /// the first source registration, mirroring the downloader / audio
-    /// worker lazy-start. The thread is torn down by [`FlushHub`]'s
-    /// `Drop`.
-    pub(crate) fn start_worker(self: &Arc<Self>) {
-        self.worker.start_with(self);
-    }
-
     /// Wake the worker to coalesce a burst of mutations into one
     /// background flush. Bumps the operation counter so a sustained
     /// burst eventually bypasses the debounce. The availability index
@@ -224,6 +214,14 @@ impl FlushHub {
             s.op_count = s.op_count.saturating_add(1);
         }
         self.wait.cv.notify_one();
+    }
+
+    /// Lazily spawn the background flush worker (idempotent). Called on
+    /// the first source registration, mirroring the downloader / audio
+    /// worker lazy-start. The thread is torn down by [`FlushHub`]'s
+    /// `Drop`.
+    pub(crate) fn start_worker(self: &Arc<Self>) {
+        self.worker.start_with(self);
     }
 }
 

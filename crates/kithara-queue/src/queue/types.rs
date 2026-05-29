@@ -80,16 +80,11 @@ pub(crate) fn should_arm_crossfade(
     armed_for: Option<TrackId>,
 ) -> bool {
     let PlaybackTime { pos, dur } = time;
-    if crossfade <= 0.0 {
-        return false;
-    }
-    if dur <= 0.0 || pos <= 0.0 {
-        return false;
-    }
-    if dur - pos > f64::from(crossfade) {
-        return false;
-    }
-    armed_for != Some(current_id)
+    crossfade > 0.0
+        && dur > 0.0
+        && pos > 0.0
+        && dur - pos <= f64::from(crossfade)
+        && armed_for != Some(current_id)
 }
 
 pub(super) fn extract_track_name(source: &TrackSource) -> String {

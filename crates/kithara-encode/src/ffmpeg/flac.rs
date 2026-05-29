@@ -37,21 +37,7 @@ impl FlacFFmpegEncoder {
     pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
 
     pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
-        if request.timescale == 0 {
-            return Err(EncodeError::InvalidInput(
-                "timescale must be > 0".to_owned(),
-            ));
-        }
-        if request.packets_per_segment == 0 {
-            return Err(EncodeError::InvalidInput(
-                "packets_per_segment must be > 0".to_owned(),
-            ));
-        }
-        if request.pcm.total_byte_len().is_none() {
-            return Err(EncodeError::InvalidInput(
-                "PCM source must have a finite length".to_owned(),
-            ));
-        }
+        request.validate()?;
 
         ensure_ffmpeg_initialized()?;
         let codec_config = extract_flac_codec_config(request.pcm)?;

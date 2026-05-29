@@ -27,12 +27,11 @@ impl Serialize for NoContext {
     }
 }
 
-// xtask-lint-ignore: retry_fallback
-pub(crate) const FALLBACK_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Watchdog timeout, from `KITHARA_HANG_TIMEOUT_SECS` (native) or the
-/// [`FALLBACK_TIMEOUT`] when unset.
+/// Watchdog timeout, from `KITHARA_HANG_TIMEOUT_SECS` (native) or a built-in
+/// fallback when unset.
 #[must_use]
 pub fn default_timeout() -> Duration {
+    // xtask-lint-ignore: retry_fallback
+    const FALLBACK_TIMEOUT: Duration = Duration::from_secs(10);
     super::platform::env_timeout().unwrap_or(FALLBACK_TIMEOUT)
 }
