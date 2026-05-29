@@ -59,7 +59,6 @@ pub(super) enum MmapState {
 }
 
 impl MmapState {
-    // ast-grep-ignore: idioms.match-self-conversion
     pub(super) fn as_readable(&self) -> Option<&MemoryMappedFile> {
         match self {
             Self::Active(m) | Self::Committed(m) => Some(m),

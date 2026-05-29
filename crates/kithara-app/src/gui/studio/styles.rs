@@ -8,7 +8,7 @@ use iced::{
     },
 };
 
-use super::tokens::StudioRadius;
+use super::tokens::studio_radius;
 pub(super) use crate::gui::view::mix_colors;
 use crate::{
     gui::{message::Message, view::with_alpha},
@@ -48,7 +48,7 @@ pub(crate) fn ghost_button_style(p: GuiPalette) -> impl Fn(&Theme, ButtonStatus)
             background,
             text_color: p.text,
             border: Border::default()
-                .rounded(StudioRadius::BUTTON)
+                .rounded(studio_radius::BUTTON)
                 .width(1.0)
                 .color(p.line_soft),
             ..ButtonStyle::default()

@@ -62,7 +62,7 @@ schema_version = 1
 "crates/kithara-assets/src/key.rs:119:11::matches_url" = 1
 "crates/kithara-assets/src/key.rs:44:18::serialize" = 1
 "crates/kithara-assets/src/lease.rs:123:11::flush_pins" = 1
-"crates/kithara-assets/src/unified.rs:226:11::is_ephemeral" = 1
+"crates/kithara-assets/src/unified.rs:225:11::is_ephemeral" = 1
 "crates/kithara-queue/src/config.rs:103:11::with_prefetch_duration" = 1
 "crates/kithara-queue/src/config.rs:110:11::with_should_autoplay" = 1
 
@@ -459,7 +459,7 @@ schema_version = 1
 [redundant_reexport]
 "crates/kithara-hls/stream.rs:49:9::Hls::Source" = 1
 "crates/kithara-storage/backend/memory/driver.rs:59:9::MemDriver::Options" = 1
-"crates/kithara-storage/backend/mmap/driver.rs:109:9::MmapDriver::Options" = 1
+"crates/kithara-storage/backend/mmap/driver.rs:108:9::MmapDriver::Options" = 1
 
 [shared_state]
 "crates/kithara-app/src/state.rs" = 1

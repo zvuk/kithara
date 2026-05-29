@@ -13,9 +13,14 @@ pub(crate) const JETBRAINS_MONO_SEMIBOLD_BYTES: &[u8] =
 pub(crate) const SPACE_GROTESK_BYTES: &[u8] =
     include_bytes!("../../assets/fonts/SpaceGrotesk-Variable.ttf");
 
-const INTER_FAMILY: Family = Family::Name("Inter");
-const JETBRAINS_MONO_FAMILY: Family = Family::Name("JetBrains Mono");
-const SPACE_GROTESK_FAMILY: Family = Family::Name("Space Grotesk");
+mod consts {
+    use iced::font::Family;
+
+    pub(super) const INTER_FAMILY: Family = Family::Name("Inter");
+    pub(super) const JETBRAINS_MONO_FAMILY: Family = Family::Name("JetBrains Mono");
+    pub(super) const SPACE_GROTESK_FAMILY: Family = Family::Name("Space Grotesk");
+}
+use consts::{INTER_FAMILY, JETBRAINS_MONO_FAMILY, SPACE_GROTESK_FAMILY};
 
 pub(crate) const SANS: Font = font(INTER_FAMILY, Weight::Normal);
 pub(crate) const MONO: Font = font(JETBRAINS_MONO_FAMILY, Weight::Normal);

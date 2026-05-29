@@ -88,7 +88,6 @@ impl fmt::Display for StreamReadError {
 }
 
 impl StdError for StreamReadError {
-    // ast-grep-ignore: idioms.match-self-conversion
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Source(e) => Some(e),

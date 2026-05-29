@@ -6,10 +6,13 @@ use iced::{
 
 use crate::{gui::message::Message, theme::gui::GuiPalette};
 
-const SNAPS: [f32; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
-const MIN: f32 = 0.5;
-const MAX: f32 = 2.0;
-const HANDLE: f32 = 16.0;
+mod consts {
+    pub(super) const SNAPS: [f32; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+    pub(super) const MIN: f32 = 0.5;
+    pub(super) const MAX: f32 = 2.0;
+    pub(super) const HANDLE: f32 = 16.0;
+}
+use consts::*;
 
 /// Horizontal speed scrubber: the gold fill spans from 1.0x to the
 /// current value, snap targets sit at `SNAPS` (within 0.04) and round

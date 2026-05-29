@@ -7,8 +7,8 @@ use std::{ops::Deref, sync::Arc};
 #[derive(Debug, Clone)]
 pub struct Envelope(Arc<[f32]>);
 
-impl Envelope {
-    pub(crate) fn from_peaks(peaks: Vec<f32>) -> Self {
+impl From<Vec<f32>> for Envelope {
+    fn from(peaks: Vec<f32>) -> Self {
         Self(Arc::from(peaks))
     }
 }

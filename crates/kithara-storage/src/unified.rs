@@ -101,6 +101,7 @@ impl StorageResource {
 
     /// Committed length, if known.
     #[must_use]
+    // ast-grep-ignore: idioms.match-self-conversion
     pub fn len(&self) -> Option<u64> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -133,6 +134,7 @@ impl StorageResource {
     ///
     /// # Errors
     /// Returns error if the resource is cancelled or the backend cannot reopen.
+    // ast-grep-ignore: idioms.match-self-conversion
     pub fn reactivate(&self) -> StorageResult<()> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -167,6 +169,7 @@ impl StorageResource {
 
     /// Current runtime status.
     #[must_use]
+    // ast-grep-ignore: idioms.match-self-conversion
     pub fn status(&self) -> ResourceStatus {
         match self {
             #[cfg(not(target_arch = "wasm32"))]

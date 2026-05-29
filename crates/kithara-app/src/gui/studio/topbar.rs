@@ -12,21 +12,21 @@ use iced::{
 
 use super::{
     styles::{ghost_button_style, linear_background, mix_colors, vertical_divider},
-    tokens::{StudioSize, StudioSpace, StudioType},
+    tokens::{studio_size, studio_space, studio_type},
 };
 use crate::{
-    gui::{dj::DjMsg, fonts, message::Message, tokens::Gap},
+    gui::{dj::DjMsg, fonts, message::Message, tokens::gap},
     theme::gui::GuiPalette,
 };
 
 pub(super) fn view_topbar(p: GuiPalette) -> Element<'static, Message> {
     let exit = button(
         text("Back to compact")
-            .size(StudioType::BODY_MD)
+            .size(studio_type::BODY_MD)
             .font(fonts::mono(Weight::Medium))
             .color(p.text),
     )
-    .padding(StudioSpace::BUTTON)
+    .padding(studio_space::BUTTON)
     .style(ghost_button_style(p))
     .on_press(Message::Dj(DjMsg::Toggle));
 
@@ -37,9 +37,9 @@ pub(super) fn view_topbar(p: GuiPalette) -> Element<'static, Message> {
             exit
         ]
         .align_y(Alignment::Center)
-        .spacing(Gap::SECTION_ROOMY),
+        .spacing(gap::SECTION_ROOMY),
     )
-    .padding(StudioSpace::TOPBAR)
+    .padding(studio_space::TOPBAR)
     .style(topbar_style(p))
     .into()
 }
@@ -48,8 +48,8 @@ pub(crate) fn brand_mark(p: GuiPalette, sub: &'static str) -> Element<'static, M
     let logo = Svg::new(SvgHandle::from_memory(
         include_bytes!("../../../assets/logo.svg") as &[u8],
     ))
-    .width(Length::Fixed(StudioSize::BRAND_LOGO))
-    .height(Length::Fixed(StudioSize::BRAND_LOGO))
+    .width(Length::Fixed(studio_size::BRAND_LOGO))
+    .height(Length::Fixed(studio_size::BRAND_LOGO))
     .style(move |_theme, _status| svg::Style {
         color: Some(p.accent),
     });
@@ -57,21 +57,21 @@ pub(crate) fn brand_mark(p: GuiPalette, sub: &'static str) -> Element<'static, M
     row![
         logo,
         text("Kithara")
-            .size(StudioType::BRAND)
+            .size(studio_type::BRAND)
             .font(fonts::display(Weight::Semibold))
             .color(p.text),
         vertical_divider(
-            StudioSize::DIVIDER,
-            StudioSize::BRAND_DIVIDER_HEIGHT,
+            studio_size::DIVIDER,
+            studio_size::BRAND_DIVIDER_HEIGHT,
             p.line
         ),
         text(sub)
-            .size(StudioType::MONO_XS)
+            .size(studio_type::MONO_XS)
             .font(fonts::mono(Weight::Medium))
             .color(p.muted),
     ]
     .align_y(Alignment::Center)
-    .spacing(Gap::CONTENT)
+    .spacing(gap::CONTENT)
     .into()
 }
 

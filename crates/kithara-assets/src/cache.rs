@@ -537,8 +537,8 @@ mod tests {
         inner: MemAssetStore,
     }
 
-    impl ContextMemStore {
-        fn new() -> Self {
+    impl Default for ContextMemStore {
+        fn default() -> Self {
             Self {
                 inner: MemAssetStore::new(
                     CancellationToken::new(),
@@ -857,7 +857,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn context_aware_caching_separates_keys() {
-        let store = ContextMemStore::new();
+        let store = ContextMemStore::default();
         let cached = CachedAssets::new(Arc::new(store), NonZeroUsize::new(5).unwrap(), None, true);
         let key = ResourceKey::relative("ctx_test", "seg.m4s");
 
@@ -911,7 +911,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn open_resource_with_none_context_finds_committed() {
-        let store = ContextMemStore::new();
+        let store = ContextMemStore::default();
         let cached = CachedAssets::new(Arc::new(store), NonZeroUsize::new(5).unwrap(), None, true);
         let key = ResourceKey::relative("ctx_test2", "seg.m4s");
 

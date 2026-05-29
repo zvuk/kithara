@@ -1,6 +1,5 @@
 /// Semantic spacing scale shared across the compact player and the studio.
-pub(crate) struct Gap;
-impl Gap {
+pub(crate) mod gap {
     pub(crate) const TEXT_STACK: f32 = 2.0;
     pub(crate) const INLINE_TIGHT: f32 = 4.0;
     pub(crate) const INLINE: f32 = 6.0;

@@ -9,9 +9,9 @@ use iced::{
     },
 };
 
-use super::tokens::{StudioRadius, StudioSize, StudioSpace, StudioType};
+use super::tokens::{studio_radius, studio_size, studio_space, studio_type};
 use crate::{
-    gui::{app::Kithara, fonts, icons::Icon, message::Message, tokens::Gap, view::with_alpha},
+    gui::{app::Kithara, fonts, icons::Icon, message::Message, tokens::gap, view::with_alpha},
     theme::gui::GuiPalette,
 };
 
@@ -54,7 +54,7 @@ pub(super) fn view_library(state: &Kithara) -> Element<'_, Message> {
         .width(Length::Fill)
         .height(Length::Fill),
     )
-    .width(Length::Fixed(StudioSize::LIBRARY_WIDTH))
+    .width(Length::Fixed(studio_size::LIBRARY_WIDTH))
     .height(Length::Fill)
     .style(library_style(p))
     .into()
@@ -75,7 +75,7 @@ fn library_tabs(shuffle_on: bool, p: GuiPalette) -> Element<'static, Message> {
         .spacing(0.0),
     )
     .width(Length::Fill)
-    .padding(StudioSpace::LIBRARY_RAIL)
+    .padding(studio_space::LIBRARY_RAIL)
     .style(tabs_style(p))
     .into()
 }
@@ -85,7 +85,7 @@ fn library_label(p: GuiPalette) -> Element<'static, Message> {
         row![
             Icon::Playlist.view(12.0, p.accent),
             text("LIBRARY")
-                .size(StudioType::MONO_SM)
+                .size(studio_type::MONO_SM)
                 .font(fonts::mono(Weight::Medium))
                 .color(p.accent),
         ]
@@ -106,7 +106,7 @@ fn shuffle_button_style(p: GuiPalette, status: button::Status) -> ButtonStyle {
     ButtonStyle {
         background,
         text_color: p.text,
-        border: Border::default().rounded(StudioRadius::BUTTON),
+        border: Border::default().rounded(studio_radius::BUTTON),
         ..ButtonStyle::default()
     }
 }
@@ -120,10 +120,10 @@ fn library_head_row(p: GuiPalette) -> Element<'static, Message> {
             head_cell("TIME", Length::Fixed(48.0), p),
         ]
         .align_y(Alignment::Center)
-        .spacing(Gap::CONTENT),
+        .spacing(gap::CONTENT),
     )
-    .height(Length::Fixed(StudioSize::LIB_HEAD_HEIGHT))
-    .padding(StudioSpace::LIBRARY_ROW)
+    .height(Length::Fixed(studio_size::LIB_HEAD_HEIGHT))
+    .padding(studio_space::LIBRARY_ROW)
     .style(head_style(p))
     .into()
 }
@@ -165,11 +165,11 @@ fn library_row(
                 ),
             ]
             .align_y(Alignment::Center)
-            .spacing(Gap::CONTENT),
+            .spacing(gap::CONTENT),
         )
         .width(Length::Fill)
-        .height(Length::Fixed(StudioSize::LIB_ROW_HEIGHT))
-        .padding(StudioSpace::LIBRARY_ROW),
+        .height(Length::Fixed(studio_size::LIB_ROW_HEIGHT))
+        .padding(studio_space::LIBRARY_ROW),
     )
     .width(Length::Fill)
     .padding(0)
@@ -181,7 +181,7 @@ fn library_row(
 fn head_cell(label: &str, width: Length, p: GuiPalette) -> Element<'static, Message> {
     container(
         text(label.to_string())
-            .size(StudioType::MONO_XS)
+            .size(studio_type::MONO_XS)
             .font(fonts::mono(Weight::Medium))
             .color(p.muted),
     )
@@ -197,7 +197,7 @@ fn body_cell(
 ) -> Element<'static, Message> {
     container(
         text(label)
-            .size(StudioType::BODY_SM)
+            .size(studio_type::BODY_SM)
             .font(font)
             .color(color),
     )
@@ -270,7 +270,7 @@ fn row_style(p: GuiPalette, current: bool, selected: bool, status: button::Statu
     ButtonStyle {
         background,
         text_color: p.text,
-        border: Border::default().rounded(StudioRadius::BUTTON),
+        border: Border::default().rounded(studio_radius::BUTTON),
         ..ButtonStyle::default()
     }
 }

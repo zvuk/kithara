@@ -128,7 +128,7 @@ pub(crate) fn create_effects(
 
     let resampler_rate = match tempo_ratio {
         Some(_) => {
-            chain.push(Box::new(TimeStretchProcessor::new()));
+            chain.push(Box::new(TimeStretchProcessor));
             Arc::new(AtomicF32::new(1.0))
         }
         None => Arc::clone(playback_rate),

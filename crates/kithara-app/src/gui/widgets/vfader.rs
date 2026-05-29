@@ -18,8 +18,11 @@ struct VFader {
     p: GuiPalette,
 }
 
-const RAIL_W: f32 = 5.0;
-const HANDLE: f32 = 13.0;
+mod consts {
+    pub(super) const RAIL_W: f32 = 5.0;
+    pub(super) const HANDLE: f32 = 13.0;
+}
+use consts::*;
 
 /// Gain at the pointer for a fader of pixel `height` and the cursor at
 /// `local_y` (relative to the widget top). Top of the rail is `max`, bottom
@@ -197,9 +200,12 @@ pub(crate) fn vfader<'a>(
 mod tests {
     use super::{value_at, y_of};
 
-    const MIN: f32 = -24.0;
-    const MAX: f32 = 6.0;
-    const H: f32 = 120.0;
+    mod consts {
+        pub(super) const MIN: f32 = -24.0;
+        pub(super) const MAX: f32 = 6.0;
+        pub(super) const H: f32 = 120.0;
+    }
+    use consts::*;
 
     #[test]
     fn top_of_rail_reads_max_gain() {

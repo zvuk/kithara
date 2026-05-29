@@ -60,4 +60,8 @@ rule:
 constraints:
   RET:
     not:
-      regex: "Self"
+      # `Self` returns are already idiomatic; reference returns (`&T`,
+      # `Option<&T>`, ...) provably cannot be a `From` impl, which consumes
+      # `self` and returns an owned value, so they are accessors, not
+      # conversions. Excluding both keeps the rule on owned `self -> Other`.
+      regex: "Self|&"

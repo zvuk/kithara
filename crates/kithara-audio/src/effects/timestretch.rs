@@ -9,14 +9,6 @@ use crate::traits::AudioEffect;
 #[derive(Default)]
 pub struct TimeStretchProcessor;
 
-impl TimeStretchProcessor {
-    /// Create the (currently passthrough) slot.
-    #[must_use]
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 impl AudioEffect for TimeStretchProcessor {
     fn flush(&mut self) -> Option<PcmChunk> {
         None
@@ -54,7 +46,7 @@ mod tests {
 
     #[kithara::test]
     fn passthrough_preserves_samples_and_meta() {
-        let mut fx = TimeStretchProcessor::new();
+        let mut fx = TimeStretchProcessor;
         let input = chunk();
         let out = fx.process(input.clone()).expect("passthrough emits");
         assert_eq!(&out.pcm[..], &input.pcm[..]);
