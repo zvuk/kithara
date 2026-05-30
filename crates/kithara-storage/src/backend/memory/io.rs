@@ -2,6 +2,8 @@
 
 use std::{path::Path, sync::Arc};
 
+use kithara_bufpool::BytePool;
+
 use crate::{
     StorageError, StorageResult,
     backend::{memory::driver::MemDriver, traits::DriverIo},
@@ -30,8 +32,14 @@ impl DriverIo for MemDriver {
             let snapshot = state.buf[..end_usize].to_vec();
             self.committed.store(Some(Arc::new(snapshot)));
         }
-        state.buf.clear();
-        state.buf.shrink_to_fit();
+        // Release the working buffer THROUGH THE POOL: replacing it drops the
+        // old `PooledOwned`, whose `Drop` returns the buffer to the pool and
+        // credits its bytes back to the byte budget (and trims it). A manual
+        // `clear`/`shrink_to_fit` via `DerefMut` would free the memory but leak
+        // the budget — `ensure_len` charges the pool on growth and only `put`
+        // (on drop) releases it — eventually exhausting the budget and stalling
+        // later allocations. Shrink `state.len` to the committed length.
+        state.buf = BytePool::default().get();
         state.len = end;
         drop(state);
         Ok(())
@@ -320,21 +328,19 @@ mod tests {
         driver
             .write_at(0, b"hello world", false)
             .expect("active write must succeed");
-
-        let cap_before = driver.state.lock_sync().buf.capacity();
-        assert!(
-            cap_before >= 11,
-            "expected capacity >= 11, got {cap_before}"
-        );
+        assert_eq!(driver.state.lock_sync().buf.len(), 11);
 
         driver.commit(Some(11)).expect("commit must succeed");
 
-        let cap_after = driver.state.lock_sync().buf.capacity();
-        assert!(
-            cap_after < cap_before,
-            "working buffer not released on commit (cap_before={cap_before}, cap_after={cap_after})"
+        // The committed bytes live in the snapshot, not the working buffer: the
+        // working buffer is released back to the pool (replaced by an empty one),
+        // so it no longer holds a second copy. (Asserting `len`, not `capacity`,
+        // since the pool retains/recycles capacity for reuse — see `Reuse`.)
+        assert_eq!(
+            driver.state.lock_sync().buf.len(),
+            0,
+            "working buffer not released on commit"
         );
-        assert_eq!(cap_after, 0, "shrink_to_fit must reach capacity 0");
 
         assert_eq!(driver.committed_len(), Some(11));
 
