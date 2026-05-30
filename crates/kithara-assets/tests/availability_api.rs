@@ -1,7 +1,7 @@
 //! Phase P-2 smoke tests for `AssetStore::{contains_range,
 //! available_ranges, final_len}`.
 
-use kithara_assets::{AssetStoreBuilder, ResourceHandle};
+use kithara_assets::{AcquisitionResult, AssetStoreBuilder, WriteSide};
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
@@ -42,10 +42,11 @@ fn disk_store_slow_path_finds_committed_file() {
     let scope = store.scope(ROOT);
 
     let key = scope.key("segments/0001.bin");
-    let res = scope.store().acquire_resource(&key, None).unwrap();
+    let AcquisitionResult::Pending(res) = scope.store().acquire_resource(&key, None).unwrap() else {
+        panic!("fresh acquire must be Pending");
+    };
     res.write_at(0, b"hello world").unwrap();
-    res.commit(Some(11)).unwrap();
-    drop(res);
+    drop(res.commit(Some(11)).unwrap());
 
     assert_eq!(scope.store().final_len(&key), Some(11));
     assert!(scope.store().contains_range(&key, 0..11));
@@ -76,10 +77,11 @@ fn remove_resource_clears_aggregate_remove_call() {
     let scope = store.scope(ROOT);
 
     let key = scope.key("segments/0001.bin");
-    let res = scope.store().acquire_resource(&key, None).unwrap();
+    let AcquisitionResult::Pending(res) = scope.store().acquire_resource(&key, None).unwrap() else {
+        panic!("fresh acquire must be Pending");
+    };
     res.write_at(0, b"data").unwrap();
-    res.commit(Some(4)).unwrap();
-    drop(res);
+    drop(res.commit(Some(4)).unwrap());
 
     scope.store().remove_resource(&key);
     assert_eq!(scope.store().final_len(&key), None);

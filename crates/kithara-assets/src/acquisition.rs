@@ -1,8 +1,37 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt::Debug, ops::Range, path::Path};
+use std::{fmt, fmt::Debug, ops::Range, path::Path, sync::Arc};
 
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
+
+/// A clone-able raw-byte write handle, decoupled from the non-`Clone` commit
+/// owner. A streaming download closure holds one to write *pre-processing*
+/// (e.g. ciphertext) bytes into the backing storage while the [`WriteSide`]
+/// writer retains sole ownership of [`commit`](WriteSide::commit). Writes land
+/// on the same generation the writer will commit.
+#[derive(Clone)]
+pub struct RawWriteHandle(Arc<dyn Fn(u64, &[u8]) -> StorageResult<()> + Send + Sync>);
+
+impl RawWriteHandle {
+    /// Build a handle from a raw write closure.
+    pub fn new(f: impl Fn(u64, &[u8]) -> StorageResult<()> + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    /// Write `data` at `offset` to the backing storage.
+    ///
+    /// # Errors
+    /// Propagates the backing write error.
+    pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        (self.0)(offset, data)
+    }
+}
+
+impl Debug for RawWriteHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RawWriteHandle")
+    }
+}
 
 /// Outcome of an acquire/open through the [`Assets`](crate::Assets) stack.
 ///
@@ -33,6 +62,9 @@ impl<A, R> AcquisitionResult<A, R> {
 /// ([`CachedResource`](crate::CachedResource), [`LeaseResource`](crate::LeaseResource))
 /// delegate through this trait to stay generic over the inner reader.
 pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
+    /// The writer phase produced by [`reactivate`](Self::reactivate).
+    type Writer: WriteSide<Reader = Self>;
+
     /// Read already-readable bytes at `offset`.
     ///
     /// # Errors
@@ -61,11 +93,40 @@ pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
     /// First gap in available data starting at `from`, up to `limit`.
     fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
 
+    /// Read the entire resource into a caller buffer; returns bytes read.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
+        let Some(len) = self.len() else {
+            let mut probe = [0u8; 1];
+            let _ = self.read_at(0, &mut probe)?;
+            return Ok(0);
+        };
+        if len == 0 {
+            buf.clear();
+            return Ok(0);
+        }
+        let len_usize = usize::try_from(len).unwrap_or(usize::MAX);
+        buf.resize(len_usize, 0);
+        let n = self.read_at(0, buf)?;
+        buf.truncate(n);
+        Ok(n)
+    }
+
     /// Backing file path, if any.
     fn path(&self) -> Option<&Path>;
 
     /// Current runtime lifecycle status of the backing resource.
     fn status(&self) -> ResourceStatus;
+
+    /// Consume this reader and reopen the backing resource for writing, minting
+    /// a **fresh** generation (a new readiness gate). Other clones of this
+    /// reader keep their own generation and are never poisoned.
+    ///
+    /// # Errors
+    /// Propagates the backing reactivate error.
+    fn reactivate(self) -> StorageResult<Self::Writer>;
 }
 
 /// Write capability of a resource handle — the `Pending` phase.
@@ -82,6 +143,18 @@ pub trait WriteSide: Send + Sync + Debug + 'static {
     /// # Errors
     /// Propagates the backing write error.
     fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+
+    /// A shared read view of this writer's generation. The view is `Clone`;
+    /// the writer is not. For a processed (encrypted) writer the view blocks in
+    /// [`wait_range`](ReadSide::wait_range) until this writer
+    /// [`commit`](Self::commit)s.
+    fn reader(&self) -> Self::Reader;
+
+    /// A clone-able raw-write handle for streaming pre-processing bytes into
+    /// this writer's generation (see [`RawWriteHandle`]). Lets a `'static`
+    /// download closure write while the writer keeps sole ownership of
+    /// `commit`.
+    fn raw_write_handle(&self) -> RawWriteHandle;
 
     /// Finalize the resource (running any processing) and consume the writer
     /// into a [`ReadSide`] reader.

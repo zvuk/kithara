@@ -2,10 +2,27 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_assets::{AssetStoreBuilder, ResourceHandle};
+use kithara_assets::{AcquisitionResult, AssetStoreBuilder, WriteSide};
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
+
+/// Stream `data` through a Pending writer and commit it.
+fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8]) {
+    let AcquisitionResult::Pending(w) = acq else {
+        panic!("expected a Pending writer");
+    };
+    w.write_at(0, data).unwrap();
+    drop(w.commit(Some(data.len() as u64)).unwrap());
+}
+
+/// Extract the Pending writer or panic.
+fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
+    let AcquisitionResult::Pending(w) = acq else {
+        panic!("expected a Pending writer");
+    };
+    w
+}
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_checkpoint_persists_committed_resource_across_rebuild() {
@@ -16,10 +33,10 @@ fn disk_checkpoint_persists_committed_resource_across_rebuild() {
         let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
         let scope = store.scope(root);
         let key = scope.key("segments/0001.bin");
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_at(0, b"hello world").unwrap();
-        res.commit(Some(11)).unwrap();
-        drop(res);
+        write_commit(
+            scope.store().acquire_resource(&key, None).unwrap(),
+            b"hello world",
+        );
         store.checkpoint().unwrap();
     }
 
@@ -44,7 +61,7 @@ fn disk_checkpoint_drops_partial_writes_when_writer_abandons_without_commit() {
         let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
         let scope = store.scope(root);
         let key = scope.key("segments/partial.bin");
-        let res = scope.store().acquire_resource(&key, None).unwrap();
+        let res = pending(scope.store().acquire_resource(&key, None).unwrap());
         res.write_at(0, b"aaa").unwrap();
         res.write_at(10, b"bbb").unwrap();
         drop(res);
@@ -91,10 +108,7 @@ fn disk_rebuild_without_checkpoint_falls_back_to_slow_path() {
         let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
         let scope = store.scope(root);
         let key = scope.key("segments/slow.bin");
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_at(0, b"xyz").unwrap();
-        res.commit(Some(3)).unwrap();
-        drop(res);
+        write_commit(scope.store().acquire_resource(&key, None).unwrap(), b"xyz");
     }
 
     let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
@@ -113,9 +127,7 @@ fn mem_checkpoint_is_noop_and_aggregate_is_ephemeral() {
         let store = AssetStoreBuilder::new().ephemeral(true).build();
         let scope = store.scope(root);
         let key = scope.key("segments/mem.bin");
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_at(0, b"abcd").unwrap();
-        res.commit(Some(4)).unwrap();
+        write_commit(scope.store().acquire_resource(&key, None).unwrap(), b"abcd");
         store.checkpoint().unwrap();
     }
 
@@ -134,10 +146,10 @@ fn disk_checkpoint_is_idempotent() {
     let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
     let scope = store.scope(root);
     let key = scope.key("segments/idempotent.bin");
-    let res = scope.store().acquire_resource(&key, None).unwrap();
-    res.write_at(0, b"hello").unwrap();
-    res.commit(Some(5)).unwrap();
-    drop(res);
+    write_commit(
+        scope.store().acquire_resource(&key, None).unwrap(),
+        b"hello",
+    );
 
     store.checkpoint().unwrap();
     store.checkpoint().unwrap();

@@ -2,11 +2,30 @@
 
 use std::{fs, path::Path};
 
-use kithara_assets::{AssetStoreBuilder, FlushHub, FlushPolicy, ResourceHandle};
+use kithara_assets::{
+    AcquisitionResult, AssetStoreBuilder, FlushHub, FlushPolicy, ReadSide, WriteSide,
+};
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
+
+/// Stream `data` through a Pending writer and commit it.
+fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8]) {
+    let AcquisitionResult::Pending(w) = acq else {
+        panic!("expected a Pending writer");
+    };
+    w.write_at(0, data).unwrap();
+    drop(w.commit(Some(data.len() as u64)).unwrap());
+}
+
+/// Extract the Pending writer or panic.
+fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
+    let AcquisitionResult::Pending(w) = acq else {
+        panic!("expected a Pending writer");
+    };
+    w
+}
 
 struct Consts;
 
@@ -39,10 +58,7 @@ fn seed_clean_state_then(dir: &Path, mangle: impl FnOnce(&Path)) {
     let store = AssetStoreBuilder::new().root_dir(dir).build();
     let scope = store.scope(Consts::ASSET_ROOT);
     let key = scope.key(Consts::KEY_NAME);
-    let res = store.acquire_resource(&key, None).expect("acquire");
-    res.write_at(0, b"hello-world!").expect("write_at");
-    res.commit(Some(12)).expect("commit");
-    drop(res);
+    write_commit(store.acquire_resource(&key, None).expect("acquire"), b"hello-world!");
     store.checkpoint().expect("checkpoint");
     mangle(dir);
 }
@@ -130,9 +146,13 @@ fn segment_deleted_externally_after_checkpoint_degrades_gracefully() {
     );
 
     match scope.store().acquire_resource(&key, None) {
-        Ok(res) => {
+        Ok(acq) => {
             let mut buf = Vec::new();
-            let _ = res.read_into(&mut buf);
+            let _ = match acq {
+                AcquisitionResult::Pending(w) => w.reader().read_into(&mut buf),
+                AcquisitionResult::Ready(r) => r.read_into(&mut buf),
+                _ => Ok(0),
+            };
         }
         Err(e) => {
             tracing::debug!(error = %e, "stale-claim resource correctly errored on acquire");
@@ -147,9 +167,11 @@ fn partial_segment_with_no_commit_and_no_checkpoint_is_invisible_after_crash() {
     {
         let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
         let scope = store.scope(Consts::ASSET_ROOT);
-        let res = store
-            .acquire_resource(&scope.key(Consts::KEY_NAME), None)
-            .unwrap();
+        let res = pending(
+            store
+                .acquire_resource(&scope.key(Consts::KEY_NAME), None)
+                .unwrap(),
+        );
         res.write_at(0, b"partial-bytes").unwrap();
         drop(res);
     }
@@ -169,12 +191,12 @@ fn commit_then_crash_before_checkpoint_recovers_via_slow_path() {
     {
         let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
         let scope = store.scope(Consts::ASSET_ROOT);
-        let res = store
-            .acquire_resource(&scope.key(Consts::KEY_NAME), None)
-            .unwrap();
-        res.write_at(0, b"durable-data").unwrap();
-        res.commit(Some(12)).unwrap();
-        drop(res);
+        write_commit(
+            store
+                .acquire_resource(&scope.key(Consts::KEY_NAME), None)
+                .unwrap(),
+            b"durable-data",
+        );
     }
 
     let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
@@ -204,20 +226,20 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
             .build();
 
         let scope_a = store_a.scope("track-a");
-        let res_a = store_a
-            .acquire_resource(&scope_a.key(Consts::KEY_NAME), None)
-            .unwrap();
-        res_a.write_at(0, b"alpha-data!!").unwrap();
-        res_a.commit(Some(12)).unwrap();
-        drop(res_a);
+        write_commit(
+            store_a
+                .acquire_resource(&scope_a.key(Consts::KEY_NAME), None)
+                .unwrap(),
+            b"alpha-data!!",
+        );
 
         let scope_b = store_b.scope("track-b");
-        let res_b = store_b
-            .acquire_resource(&scope_b.key(Consts::KEY_NAME), None)
-            .unwrap();
-        res_b.write_at(0, b"bravo-data!!").unwrap();
-        res_b.commit(Some(12)).unwrap();
-        drop(res_b);
+        write_commit(
+            store_b
+                .acquire_resource(&scope_b.key(Consts::KEY_NAME), None)
+                .unwrap(),
+            b"bravo-data!!",
+        );
 
         store_a.checkpoint().unwrap();
     }
@@ -244,9 +266,11 @@ fn red_segment_file_must_not_be_visible_at_canonical_path_before_commit() {
     let dir = tempdir().unwrap();
     let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
     let scope = store.scope(Consts::ASSET_ROOT);
-    let res = store
-        .acquire_resource(&scope.key(Consts::KEY_NAME), None)
-        .unwrap();
+    let res = pending(
+        store
+            .acquire_resource(&scope.key(Consts::KEY_NAME), None)
+            .unwrap(),
+    );
     res.write_at(0, b"partial-bytes").unwrap();
 
     let canonical = segment_path(dir.path());
@@ -264,9 +288,11 @@ fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
     {
         let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
         let scope = store.scope(Consts::ASSET_ROOT);
-        let res = store
-            .acquire_resource(&scope.key(Consts::KEY_NAME), None)
-            .unwrap();
+        let res = pending(
+            store
+                .acquire_resource(&scope.key(Consts::KEY_NAME), None)
+                .unwrap(),
+        );
         res.write_at(0, b"partial-bytes-from-killed-writer")
             .unwrap();
         std::mem::forget(res);
@@ -299,9 +325,11 @@ fn red_canonical_path_must_have_exact_bytes_after_commit_no_initial_mmap_padding
     let payload = b"exactly-12-b";
     let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
     let scope = store.scope(Consts::ASSET_ROOT);
-    let res = store
-        .acquire_resource(&scope.key(Consts::KEY_NAME), None)
-        .unwrap();
+    let res = pending(
+        store
+            .acquire_resource(&scope.key(Consts::KEY_NAME), None)
+            .unwrap(),
+    );
     res.write_at(0, payload).unwrap();
 
     let canonical = segment_path(dir.path());
@@ -311,8 +339,7 @@ fn red_canonical_path_must_have_exact_bytes_after_commit_no_initial_mmap_padding
         "mid-write the canonical path must contain zero observable bytes (got {mid_write_size})"
     );
 
-    res.commit(Some(payload.len() as u64)).unwrap();
-    drop(res);
+    drop(res.commit(Some(payload.len() as u64)).unwrap());
 
     let on_disk = fs::read(&canonical).expect("canonical exists post-commit");
     assert_eq!(

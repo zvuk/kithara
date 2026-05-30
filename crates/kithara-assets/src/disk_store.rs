@@ -15,7 +15,8 @@ use kithara_storage::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    base::{Assets, Capabilities},
+    acquisition::AcquisitionResult,
+    base::{Assets, BaseReader, BaseWriter, Capabilities},
     deleter::AssetDeleter,
     error::{AssetsError, AssetsResult},
     identity::RequestIdentity,
@@ -268,16 +269,17 @@ impl DiskAssetStore {
 }
 
 impl Assets for DiskAssetStore {
+    type ActiveRes = BaseWriter;
     type Context = ();
     type IndexRes = StorageResource;
-    type Res = StorageResource;
+    type ReadyRes = BaseReader;
 
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
         _identity: Option<&RequestIdentity>,
         _ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
+    ) -> AssetsResult<AcquisitionResult<BaseWriter, BaseReader>> {
         let path = self.resource_path(key)?;
         if key.is_absolute() || (path.exists() && path.metadata().is_ok_and(|m| m.len() > 0)) {
             let mode = if key.is_absolute() {
@@ -285,11 +287,16 @@ impl Assets for DiskAssetStore {
             } else {
                 OpenMode::Auto
             };
-            let mmap = self.open_storage_resource(key, path, mode)?;
-            return Ok(mmap.into());
+            let storage = StorageResource::from(self.open_storage_resource(key, path, mode)?);
+            if matches!(storage.status(), ResourceStatus::Committed { .. }) {
+                return Ok(AcquisitionResult::Ready(BaseReader::new(storage)));
+            }
+            return Ok(AcquisitionResult::Pending(BaseWriter::new(storage)));
         }
         let chunked = self.open_atomic_chunked_resource(key, path)?;
-        Ok(StorageResource::from(chunked))
+        Ok(AcquisitionResult::Pending(BaseWriter::new(
+            StorageResource::from(chunked),
+        )))
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -318,13 +325,13 @@ impl Assets for DiskAssetStore {
         key: &ResourceKey,
         _identity: Option<&RequestIdentity>,
         _ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
+    ) -> AssetsResult<BaseReader> {
         let path = self.resource_path(key)?;
         if !path.exists() {
             return Err(IoError::new(ErrorKind::NotFound, "resource missing").into());
         }
         let mmap = self.open_storage_resource(key, path, OpenMode::ReadOnly)?;
-        Ok(mmap.into())
+        Ok(BaseReader::new(StorageResource::from(mmap)))
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
@@ -374,6 +381,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+    use crate::acquisition::ReadSide;
 
     #[kithara::test]
     #[case("valid.txt", true, "Simple filename")]

@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     AssetResourceState,
+    acquisition::AcquisitionResult,
     base::Assets,
     deleter::AssetDeleter,
     error::AssetsResult,
@@ -211,16 +212,17 @@ impl<A> Assets for EvictAssets<A>
 where
     A: Assets,
 {
+    type ActiveRes = A::ActiveRes;
     type Context = A::Context;
     type IndexRes = A::IndexRes;
-    type Res = A::Res;
+    type ReadyRes = A::ReadyRes;
 
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
+    ) -> AssetsResult<AcquisitionResult<Self::ActiveRes, Self::ReadyRes>> {
         if let Some(asset_root) = key.asset_root() {
             self.touch_and_maybe_evict(asset_root, None);
         }
@@ -232,7 +234,7 @@ where
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
+    ) -> AssetsResult<Self::ReadyRes> {
         if let Some(asset_root) = key.asset_root() {
             self.touch_and_maybe_evict(asset_root, None);
         }

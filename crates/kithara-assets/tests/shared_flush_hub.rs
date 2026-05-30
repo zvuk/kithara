@@ -1,12 +1,21 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_assets::{AssetStoreBuilder, FlushHub, FlushPolicy, ResourceHandle};
+use kithara_assets::{AcquisitionResult, AssetStoreBuilder, FlushHub, FlushPolicy, WriteSide};
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
 const INDEXES_PER_DISK_STORE: usize = 3;
+
+/// Stream `data` through a Pending writer and commit it.
+fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8]) {
+    let AcquisitionResult::Pending(w) = acq else {
+        panic!("expected a Pending writer");
+    };
+    w.write_at(0, data).unwrap();
+    drop(w.commit(Some(data.len() as u64)).unwrap());
+}
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn shared_hub_registers_three_indexes_per_store() {
@@ -100,18 +109,18 @@ fn shared_hub_flush_now_persists_every_store() {
 
     let scope_a = store_a.scope("track-a");
     let scope_b = store_b.scope("track-b");
-    let res_a = store_a
-        .acquire_resource(&scope_a.key("payload.bin"), None)
-        .unwrap();
-    res_a.write_at(0, b"alpha").unwrap();
-    res_a.commit(Some(5)).unwrap();
-    let res_b = store_b
-        .acquire_resource(&scope_b.key("payload.bin"), None)
-        .unwrap();
-    res_b.write_at(0, b"bravo").unwrap();
-    res_b.commit(Some(5)).unwrap();
-    drop(res_a);
-    drop(res_b);
+    write_commit(
+        store_a
+            .acquire_resource(&scope_a.key("payload.bin"), None)
+            .unwrap(),
+        b"alpha",
+    );
+    write_commit(
+        store_b
+            .acquire_resource(&scope_b.key("payload.bin"), None)
+            .unwrap(),
+        b"bravo",
+    );
 
     let avail_a = dir.path().join("a/_index/availability.bin");
     let avail_b = dir.path().join("b/_index/availability.bin");

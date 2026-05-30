@@ -7,20 +7,21 @@ use std::{fmt, hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use bon::Builder;
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
-use kithara_storage::StorageResource;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::disk_store::DiskAssetStore;
 use crate::{
-    cache::{CachedAssets, CachedResource},
+    acquisition::AcquisitionResult,
+    base::{BaseReader, BaseWriter},
+    cache::{CachedAssets, CachedReader, CachedWriter},
     evict::EvictAssets,
     flush::{FlushHub, FlushPolicy},
     index::{AvailabilityIndex, DemandIndex, EvictConfig},
     key::ResourceKey,
-    lease::{LeaseAssets, LeaseGuard, LeaseResource},
+    lease::{LeaseAssets, LeaseGuard, LeaseReader, LeaseWriter},
     mem_store::MemAssetStore,
-    process::{ProcessChunkFn, ProcessedResource, ProcessingAssets},
+    process::{ProcessChunkFn, ProcessedReader, ProcessedWriter, ProcessingAssets},
     unified::AssetStore,
 };
 
@@ -143,13 +144,21 @@ impl From<&StoreOptions> for EvictConfig {
 pub(crate) type DiskStore<Ctx = ()> =
     LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
-/// Resource handle returned by [`AssetStore::open_resource`].
-///
-/// Wraps `StorageResource` with processing and lease semantics.
-/// Implements `ResourceExt` for read/write/commit operations.
-/// Both disk and memory variants return this same type.
-pub type AssetResource<Ctx = ()> =
-    LeaseResource<CachedResource<ProcessedResource<StorageResource, Ctx>>, LeaseGuard>;
+/// Pending (writer) handle returned by the `Pending` arm of
+/// [`AssetStore::acquire_resource`]. Owns the streaming write + decrypt-on-commit
+/// capability; consumes itself on `commit` into an [`AssetReader`].
+pub type AssetWriter<Ctx = ()> =
+    LeaseWriter<CachedWriter<ProcessedWriter<BaseWriter, Ctx>>, LeaseGuard>;
+
+/// Ready (reader) handle returned by [`AssetStore::open_resource`] and the
+/// `Ready` arm of [`AssetStore::acquire_resource`]. Cheap to clone.
+pub type AssetReader<Ctx = ()> =
+    LeaseReader<CachedReader<ProcessedReader<BaseReader, Ctx>>, LeaseGuard>;
+
+/// Phase-typed acquisition outcome returned by
+/// [`AssetStore::acquire_resource`]: a `Pending` [`AssetWriter`] to stream and
+/// commit, or a `Ready` [`AssetReader`] when the resource is already committed.
+pub type AssetResource<Ctx = ()> = AcquisitionResult<AssetWriter<Ctx>, AssetReader<Ctx>>;
 
 /// In-memory asset store with disabled decorators.
 ///
@@ -581,10 +590,7 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        panic::{AssertUnwindSafe, catch_unwind},
-    };
+    use std::fs;
 
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
@@ -592,22 +598,29 @@ mod tests {
 
     use super::*;
     use crate::{
-        ResourceHandle,
+        acquisition::{AcquisitionResult, ReadSide, WriteSide},
         base::{Assets, Capabilities},
         key::ResourceKey,
     };
 
-    fn panic_message(err: &(dyn std::any::Any + Send)) -> String {
-        if let Some(msg) = err.downcast_ref::<String>() {
-            return msg.clone();
-        }
-        if let Some(msg) = err.downcast_ref::<&str>() {
-            return (*msg).to_string();
-        }
-        "<non-string panic>".to_string()
+    const ROOT: &str = "test_asset";
+
+    /// Stream `data` through the Pending writer and commit it.
+    fn write_commit(acq: AssetResource, data: &[u8]) {
+        let AcquisitionResult::Pending(w) = acq else {
+            panic!("expected a Pending writer");
+        };
+        w.write_at(0, data).unwrap();
+        w.commit(Some(data.len() as u64)).unwrap();
     }
 
-    const ROOT: &str = "test_asset";
+    /// Extract the Pending writer or panic.
+    fn pending(acq: AssetResource) -> AssetWriter {
+        match acq {
+            AcquisitionResult::Pending(w) => w,
+            AcquisitionResult::Ready(_) => panic!("expected a Pending writer"),
+        }
+    }
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn builder_local_mode_decorators_inactive() {
@@ -632,75 +645,14 @@ mod tests {
         let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
 
         let key = ResourceKey::relative(ROOT, "test.bin");
-        let res = store.acquire_resource(&key, None).unwrap();
-        res.write_at(0, b"hello").unwrap();
+        let writer = pending(store.acquire_resource(&key, None).unwrap());
+        writer.write_at(0, b"hello").unwrap();
 
+        let reader = writer.reader();
         let mut buf = [0u8; 5];
-        let n = res.read_at(0, &mut buf).unwrap();
+        let n = reader.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 5);
         assert_eq!(&buf, b"hello");
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn open_resource_write_ops_panic() {
-        let store = AssetStoreBuilder::new().ephemeral(true).build();
-        let key = ResourceKey::relative(ROOT, "test.bin");
-
-        let write_handle = store.acquire_resource(&key, None).unwrap();
-        write_handle.write_at(0, b"x").unwrap();
-        write_handle.commit(Some(1)).unwrap();
-        drop(write_handle);
-
-        let read_handle = store.open_resource(&key, None).unwrap();
-
-        let err = catch_unwind(AssertUnwindSafe(|| {
-            let _ = read_handle.write_at(0, b"x");
-        }))
-        .expect_err("write_at via open_resource must panic");
-        assert!(
-            panic_message(&*err).contains("write_at requires acquire_resource*"),
-            "panic must point to acquire_resource"
-        );
-
-        let err = catch_unwind(AssertUnwindSafe(|| {
-            read_handle.fail("boom".to_string());
-        }))
-        .expect_err("fail via open_resource must panic");
-        assert!(
-            panic_message(&*err).contains("fail requires acquire_resource*"),
-            "panic must point to acquire_resource"
-        );
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn open_resource_commit_and_reactivate_panic() {
-        let store = AssetStoreBuilder::new().ephemeral(true).build();
-        let key = ResourceKey::relative(ROOT, "test.bin");
-
-        let write_handle = store.acquire_resource(&key, None).unwrap();
-        write_handle.write_at(0, b"abcd").unwrap();
-        write_handle.commit(Some(4)).unwrap();
-        drop(write_handle);
-
-        let read_handle = store.open_resource(&key, None).unwrap();
-
-        let err = catch_unwind(AssertUnwindSafe(|| {
-            let _ = read_handle.commit(Some(4));
-        }))
-        .expect_err("commit via open_resource must panic");
-        assert!(
-            panic_message(&*err).contains("commit requires acquire_resource*"),
-            "panic must point to acquire_resource"
-        );
-
-        let err = catch_unwind(AssertUnwindSafe(|| {
-            let _ = read_handle.reactivate();
-        }))
-        .expect_err("reactivate via open_resource must panic");
-        assert!(
-            panic_message(&*err).contains("reactivate requires acquire_resource*"),
-            "panic must point to acquire_resource"
-        );
     }
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
@@ -765,9 +717,7 @@ mod tests {
             .collect();
 
         for key in &keys {
-            let res = backend.acquire_resource(key, None).unwrap();
-            res.write_at(0, b"data").unwrap();
-            res.commit(Some(4)).unwrap();
+            write_commit(backend.acquire_resource(key, None).unwrap(), b"data");
         }
 
         let reopened = backend.open_resource(&keys[0], None).unwrap();
@@ -790,9 +740,7 @@ mod tests {
             .collect();
 
         for key in &keys {
-            let res = backend.acquire_resource(key, None).unwrap();
-            res.write_at(0, b"data").unwrap();
-            res.commit(Some(4)).unwrap();
+            write_commit(backend.acquire_resource(key, None).unwrap(), b"data");
         }
 
         assert!(
@@ -824,18 +772,18 @@ mod tests {
 
         let target = ResourceKey::relative(seg_root, "v0_15.m4s");
 
-        {
-            let writer = store.acquire_resource(&target, None).unwrap();
-            writer.write_at(0, b"data").unwrap();
-            writer.commit(Some(4)).unwrap();
-        }
+        write_commit(store.acquire_resource(&target, None).unwrap(), b"data");
         assert!(store.contains_range(&target, 0..4));
         let path = dir.path().join(seg_root).join("v0_15.m4s");
         assert!(path.exists(), "file must exist after commit");
 
         {
-            let writer2 = store.acquire_resource(&target, None).unwrap();
-            writer2.reactivate().expect("BUG: reactivate committed");
+            let AcquisitionResult::Ready(reader) = store.acquire_resource(&target, None).unwrap()
+            else {
+                panic!("committed resource must acquire as Ready");
+            };
+            let _writer2 = reader.reactivate().expect("BUG: reactivate committed");
+            // dropped without commit → LeaseWriter cleanup removes the file
         }
 
         assert!(
@@ -873,9 +821,7 @@ mod tests {
         let key_b = ResourceKey::relative(seg_root, "v0_16.m4s");
 
         for (key, payload) in [(&key_a, &b"aaaa"[..]), (&key_b, &b"bbbbb"[..])] {
-            let writer = store.acquire_resource(key, None).unwrap();
-            writer.write_at(0, payload).unwrap();
-            writer.commit(Some(payload.len() as u64)).unwrap();
+            write_commit(store.acquire_resource(key, None).unwrap(), payload);
         }
         assert!(store.contains_range(&key_a, 0..4));
         assert!(store.contains_range(&key_b, 0..5));

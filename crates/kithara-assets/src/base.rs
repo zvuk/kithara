@@ -5,149 +5,105 @@ use std::{fmt::Debug, hash::Hash, ops::Range, path::Path};
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 
 use crate::{
-    error::AssetsResult, identity::RequestIdentity, key::ResourceKey, state::AssetResourceState,
+    acquisition::{AcquisitionResult, RawWriteHandle, ReadSide, WriteSide},
+    error::AssetsResult,
+    identity::RequestIdentity,
+    key::ResourceKey,
+    state::AssetResourceState,
 };
 
-/// Unified resource-access contract for the asset decorator stack — the
-/// **runtime** facade over a storage resource whose lifecycle phase (active
-/// while downloading, committed once written, reactivated on re-fetch) varies
-/// at runtime and is observed by concurrent readers. [`status`](ResourceHandle::status)
-/// is the correct representation for that shared, concurrently-mutated axis
-/// (mirrors the `CurrentFsm` erasure boundary in the audio worker); the genuine
-/// storage write/read typestate lives one layer down in
-/// `kithara_storage::Resource<S>`.
+/// Base-layer writer over a `kithara_storage::StorageResource`.
 ///
-/// The orthogonal *decrypt-readiness* axis is **type-carried**, not on this
-/// trait: acquisition mints a Pending `ProcessedWriter` or a Ready
-/// `ProcessedReader` (surfaced through `AcquisitionResult`). Reads are reachable
-/// only on the Ready reader; `commit(self)` consumes the writer into a reader;
-/// `reactivate` mints a fresh readiness gate so a re-fetching writer never
-/// poisons an extant reader. See the crate README "Processing & readiness gate".
+/// The decrypt-readiness typestate lives one layer up (in `ProcessedWriter` /
+/// `ProcessedReader`). This newtype is the **storage** seam: it carries the
+/// write capability of a freshly-acquired (uncommitted) resource and consumes
+/// itself on [`commit`](WriteSide::commit) into a [`BaseReader`]. It is not
+/// `Clone` — a single producer owns the write side.
+#[derive(Debug)]
+pub struct BaseWriter(kithara_storage::StorageResource);
+
+/// Base-layer reader over a `kithara_storage::StorageResource`.
 ///
-/// Implemented by `StorageResource` and the cache/lease decorator wrappers.
-pub trait ResourceHandle: Send + Sync + 'static {
-    /// Commit the resource as fully written.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the backend
-    /// cannot finalize.
-    fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
+/// Cheap to clone (the underlying `StorageResource` is `Arc`-backed). Reads see
+/// whatever the storage layer has committed; the processed/decrypt gate is
+/// applied by `ProcessedReader` above.
+#[derive(Clone, Debug)]
+pub struct BaseReader(kithara_storage::StorageResource);
 
-    /// Whether the given byte range is fully covered by available data.
-    fn contains_range(&self, range: Range<u64>) -> bool;
-
-    /// Mark the resource as failed.
-    fn fail(&self, reason: String);
-
-    /// Returns `true` if the resource has been committed with zero length.
-    fn is_empty(&self) -> bool {
-        self.len() == Some(0)
+impl BaseWriter {
+    /// Wrap a freshly-acquired (uncommitted) storage resource.
+    pub(crate) fn new(inner: kithara_storage::StorageResource) -> Self {
+        Self(inner)
     }
-
-    /// Committed length, if known.
-    fn len(&self) -> Option<u64>;
-
-    /// First gap in available data starting at `from`, up to `limit`.
-    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
-
-    /// Backing file path, if any.
-    fn path(&self) -> Option<&Path>;
-
-    /// Reactivate a committed resource for continued writing.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled or the backend cannot reopen.
-    fn reactivate(&self) -> StorageResult<()>;
-
-    /// Read data at the given offset into `buf`; returns bytes read.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the read fails.
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-
-    /// Read the entire resource into a caller buffer; returns bytes read.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the read fails.
-    fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
-        let Some(len) = self.len() else {
-            let mut probe = [0u8; 1];
-            let _ = self.read_at(0, &mut probe)?;
-            return Ok(0);
-        };
-        if len == 0 {
-            buf.clear();
-            return Ok(0);
-        }
-        let len_usize = usize::try_from(len).unwrap_or(usize::MAX);
-        buf.resize(len_usize, 0);
-        let n = self.read_at(0, buf)?;
-        buf.truncate(n);
-        Ok(n)
-    }
-
-    /// Current runtime lifecycle status.
-    fn status(&self) -> ResourceStatus;
-
-    /// Wait until the given byte range is available.
-    ///
-    /// # Errors
-    /// Returns error if the range is invalid, the resource is cancelled, or the
-    /// resource has failed.
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
-
-    /// Write entire contents and commit atomically.
-    ///
-    /// # Errors
-    /// Returns error if the write or commit fails.
-    fn write_all(&self, data: &[u8]) -> StorageResult<()> {
-        self.write_at(0, data)?;
-        self.commit(Some(data.len() as u64))
-    }
-
-    /// Write data at the given offset.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the write fails.
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
 }
 
-impl ResourceHandle for kithara_storage::StorageResource {
-    fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        Self::commit(self, final_len)
+impl BaseReader {
+    /// Wrap a committed (or in-flight shared) storage resource for reading.
+    pub(crate) fn new(inner: kithara_storage::StorageResource) -> Self {
+        Self(inner)
     }
-    fn contains_range(&self, range: Range<u64>) -> bool {
-        Self::contains_range(self, range)
-    }
-    fn fail(&self, reason: String) {
-        Self::fail(self, reason);
-    }
-    fn len(&self) -> Option<u64> {
-        Self::len(self)
-    }
-    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
-        Self::next_gap(self, from, limit)
-    }
-    fn path(&self) -> Option<&Path> {
-        Self::path(self)
-    }
-    fn reactivate(&self) -> StorageResult<()> {
-        Self::reactivate(self)
-    }
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        Self::read_at(self, offset, buf)
-    }
-    fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
-        Self::read_into(self, buf)
-    }
-    fn status(&self) -> ResourceStatus {
-        Self::status(self)
-    }
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        Self::wait_range(self, range)
-    }
+}
+
+impl WriteSide for BaseWriter {
+    type Reader = BaseReader;
+
     fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        Self::write_at(self, offset, data)
+        self.0.write_at(offset, data)
+    }
+
+    fn reader(&self) -> BaseReader {
+        BaseReader(self.0.clone())
+    }
+
+    fn raw_write_handle(&self) -> RawWriteHandle {
+        let storage = self.0.clone();
+        RawWriteHandle::new(move |offset, data| storage.write_at(offset, data))
+    }
+
+    fn commit(self, final_len: Option<u64>) -> StorageResult<BaseReader> {
+        self.0.commit(final_len)?;
+        Ok(BaseReader(self.0))
+    }
+
+    fn fail(self, reason: String) {
+        self.0.fail(reason);
+    }
+}
+
+impl ReadSide for BaseReader {
+    type Writer = BaseWriter;
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        self.0.read_at(offset, buf)
+    }
+
+    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
+        self.0.wait_range(range)
+    }
+
+    fn contains_range(&self, range: Range<u64>) -> bool {
+        self.0.contains_range(range)
+    }
+
+    fn len(&self) -> Option<u64> {
+        self.0.len()
+    }
+
+    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
+        self.0.next_gap(from, limit)
+    }
+
+    fn path(&self) -> Option<&Path> {
+        self.0.path()
+    }
+
+    fn status(&self) -> ResourceStatus {
+        self.0.status()
+    }
+
+    fn reactivate(self) -> StorageResult<BaseWriter> {
+        self.0.reactivate()?;
+        Ok(BaseWriter(self.0))
     }
 }
 
@@ -171,15 +127,25 @@ bitflags::bitflags! {
 
 /// Explicit public contract for the assets abstraction.
 ///
-/// See crate `README.md` for the asset / resource / identity model.
+/// Acquisition is **phase-typed**: `acquire_resource*` hands back an
+/// [`AcquisitionResult`] — a `Pending` [`WriteSide`] writer that must
+/// `commit` before any read, or a `Ready` [`ReadSide`] reader when the
+/// resource is already committed. `open_resource*` always returns a `Ready`
+/// reader. The decrypt-readiness gate is carried in these types, not behind a
+/// runtime `is_readable()` probe; storage lifecycle `status()` stays a runtime
+/// facade on the reader. See crate `README.md` for the asset / resource /
+/// identity model.
 pub trait Assets: Clone + Send + Sync + 'static {
     /// Context type for resource processing. Use `()` for no context.
     type Context: Clone + Send + Sync + Hash + Eq + Debug + 'static;
     /// Resource type for index persistence (pins, LRU). Cached and cloned by
     /// the cache decorator; no resource API is invoked on it directly.
     type IndexRes: Clone + Send + Sync + Debug + 'static;
-    /// Type returned by `open_resource`. Must be Clone for caching.
-    type Res: ResourceHandle + Clone + Send + Sync + Debug + 'static;
+    /// Writer (Pending) phase returned by `acquire_resource*`.
+    type ActiveRes: WriteSide<Reader = Self::ReadyRes>;
+    /// Reader (Ready) phase returned by `open_resource*` and by the `Ready`
+    /// arm of `acquire_resource*`.
+    type ReadyRes: ReadSide<Writer = Self::ActiveRes>;
 
     /// Acquire a resource for mutation (no identity, no context).
     ///
@@ -189,7 +155,7 @@ pub trait Assets: Clone + Send + Sync + 'static {
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
-    ) -> AssetsResult<Self::Res> {
+    ) -> AssetsResult<AcquisitionResult<Self::ActiveRes, Self::ReadyRes>> {
         self.acquire_resource_with_ctx(key, identity, None)
     }
 
@@ -202,9 +168,7 @@ pub trait Assets: Clone + Send + Sync + 'static {
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
-        self.open_resource_with_ctx(key, identity, ctx)
-    }
+    ) -> AssetsResult<AcquisitionResult<Self::ActiveRes, Self::ReadyRes>>;
 
     /// Decorator capabilities supported by this backend.
     #[must_use]
@@ -238,7 +202,7 @@ pub trait Assets: Clone + Send + Sync + 'static {
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
-    ) -> AssetsResult<Self::Res> {
+    ) -> AssetsResult<Self::ReadyRes> {
         self.open_resource_with_ctx(key, identity, None)
     }
 
@@ -251,7 +215,7 @@ pub trait Assets: Clone + Send + Sync + 'static {
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res>;
+    ) -> AssetsResult<Self::ReadyRes>;
 
     /// Remove a single resource by `key`.
     ///

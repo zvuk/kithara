@@ -22,7 +22,7 @@ use crate::{
     index::{AvailabilityIndex, DemandEntry, DemandIndex, DemandLease, ProducerHandle},
     key::ResourceKey,
     scope::AssetScope,
-    store::{AssetResource, MemStore},
+    store::{AssetReader, AssetResource, MemStore},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{disk_store::DiskAssetStore, store::DiskStore};
@@ -257,7 +257,7 @@ where
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
-    ) -> AssetsResult<AssetResource<Ctx>> {
+    ) -> AssetsResult<AssetReader<Ctx>> {
         delegate_to_store!(self, open_resource, key, identity)
     }
 
@@ -270,7 +270,7 @@ where
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         ctx: Option<Ctx>,
-    ) -> AssetsResult<AssetResource<Ctx>> {
+    ) -> AssetsResult<AssetReader<Ctx>> {
         delegate_to_store!(self, open_resource_with_ctx, key, identity, ctx)
     }
 

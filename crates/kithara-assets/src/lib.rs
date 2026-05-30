@@ -24,9 +24,9 @@ mod state;
 mod store;
 mod unified;
 
-pub use acquisition::{AcquisitionResult, ReadSide, WriteSide};
-pub use base::{Assets, ResourceHandle};
-pub use cache::{CachedAssets, CachedResource};
+pub use acquisition::{AcquisitionResult, RawWriteHandle, ReadSide, WriteSide};
+pub use base::{Assets, BaseReader, BaseWriter};
+pub use cache::{CachedAssets, CachedReader, CachedWriter};
 #[cfg(not(target_arch = "wasm32"))]
 pub use disk_store::DiskAssetStore;
 pub use error::{AssetsError, AssetsResult};
@@ -37,12 +37,12 @@ pub use index::{DemandLease, EvictConfig, ProducerHandle};
 pub use key::{ResourceKey, asset_root_for_url};
 #[doc(hidden)]
 pub use kithara_bufpool::BytePool;
-pub use lease::{LeaseAssets, LeaseGuard, LeaseResource};
+pub use lease::{LeaseAssets, LeaseGuard, LeaseReader, LeaseWriter};
 pub use mem_store::MemAssetStore;
-pub use process::{
-    ProcessChunkFn, ProcessedReader, ProcessedResource, ProcessedWriter, ProcessingAssets,
-};
+pub use process::{ProcessChunkFn, ProcessedReader, ProcessedWriter, ProcessingAssets};
 pub use scope::AssetScope;
 pub use state::AssetResourceState;
-pub use store::{AssetResource, AssetStoreBuilder, OnInvalidatedFn, StoreOptions};
+pub use store::{
+    AssetReader, AssetResource, AssetStoreBuilder, AssetWriter, OnInvalidatedFn, StoreOptions,
+};
 pub use unified::AssetStore;

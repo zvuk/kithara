@@ -7,11 +7,21 @@
 //!
 //! See `.docs/plans/2026-05-20-inflight-asset-sharing.md` step 1.
 
-use kithara_assets::{AssetStoreBuilder, RequestIdentity, ResourceHandle};
+use kithara_assets::{
+    AcquisitionResult, AssetStoreBuilder, ReadSide, RequestIdentity, WriteSide,
+};
 use kithara_platform::time::Duration;
 use kithara_storage::ResourceStatus;
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
+
+/// Extract the Pending writer or panic.
+fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
+    let AcquisitionResult::Pending(w) = acq else {
+        panic!("expected a Pending writer");
+    };
+    w
+}
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn one_store_same_url_same_identity_shares_inner() {
@@ -20,11 +30,12 @@ fn one_store_same_url_same_identity_shares_inner() {
     let key = scope.key("audio.mp3");
     let id = RequestIdentity::from_headers([("authorization", b"Bearer x".as_slice())]);
 
-    let r1 = scope.store().acquire_resource(&key, Some(&id)).unwrap();
-    let r2 = scope.store().acquire_resource(&key, Some(&id)).unwrap();
+    let w = pending(scope.store().acquire_resource(&key, Some(&id)).unwrap());
+    w.write_at(0, b"hello").unwrap();
 
-    r1.write_at(0, b"hello").unwrap();
-
+    // A read view opened for the same (url, identity) must observe the write
+    // through the shared inner storage.
+    let r2 = scope.store().open_resource(&key, Some(&id)).unwrap();
     let mut buf = [0u8; 5];
     let n = r2.read_at(0, &mut buf).unwrap();
     assert_eq!(
@@ -42,18 +53,21 @@ fn one_store_same_url_different_identity_yields_different_inner() {
     let id1 = RequestIdentity::from_headers([("authorization", b"Bearer a".as_slice())]);
     let id2 = RequestIdentity::from_headers([("authorization", b"Bearer b".as_slice())]);
 
-    let r1 = scope.store().acquire_resource(&key, Some(&id1)).unwrap();
-    let r2 = scope.store().acquire_resource(&key, Some(&id2)).unwrap();
+    let w = pending(scope.store().acquire_resource(&key, Some(&id1)).unwrap());
+    w.write_at(0, b"hello").unwrap();
 
-    r1.write_at(0, b"hello").unwrap();
-
-    let mut buf = [0u8; 5];
-    let result = r2.read_at(0, &mut buf);
-    // distinct identity must NOT see writes from the other identity
-    assert!(
-        result.map(|n| n == 0).unwrap_or(true),
-        "second identity must not observe writes from first identity"
-    );
+    // A distinct identity has no shared inner: opening it must not surface the
+    // first identity's write (missing resource, or an empty read).
+    match scope.store().open_resource(&key, Some(&id2)) {
+        Err(_) => {}
+        Ok(r2) => {
+            let mut buf = [0u8; 5];
+            assert!(
+                r2.read_at(0, &mut buf).map(|n| n == 0).unwrap_or(true),
+                "second identity must not observe writes from first identity"
+            );
+        }
+    }
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -63,21 +77,23 @@ fn one_store_two_asset_roots_isolated() {
     let scope_b = store.scope("root_b");
     let id = RequestIdentity::empty();
 
-    let r_a = store
-        .acquire_resource(&scope_a.key("audio.mp3"), Some(&id))
-        .unwrap();
-    let r_b = store
-        .acquire_resource(&scope_b.key("audio.mp3"), Some(&id))
-        .unwrap();
-
-    r_a.write_at(0, b"hello").unwrap();
-
-    let mut buf = [0u8; 5];
-    let result = r_b.read_at(0, &mut buf);
-    assert!(
-        result.map(|n| n == 0).unwrap_or(true),
-        "different asset_root within one store must remain isolated"
+    let w_a = pending(
+        store
+            .acquire_resource(&scope_a.key("audio.mp3"), Some(&id))
+            .unwrap(),
     );
+    w_a.write_at(0, b"hello").unwrap();
+
+    match store.open_resource(&scope_b.key("audio.mp3"), Some(&id)) {
+        Err(_) => {}
+        Ok(r_b) => {
+            let mut buf = [0u8; 5];
+            assert!(
+                r_b.read_at(0, &mut buf).map(|n| n == 0).unwrap_or(true),
+                "different asset_root within one store must remain isolated"
+            );
+        }
+    }
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -88,21 +104,23 @@ fn two_stores_isolated_even_with_same_identity() {
     let scope_b = store_b.scope("root");
     let id = RequestIdentity::empty();
 
-    let r_a = store_a
-        .acquire_resource(&scope_a.key("audio.mp3"), Some(&id))
-        .unwrap();
-    let r_b = store_b
-        .acquire_resource(&scope_b.key("audio.mp3"), Some(&id))
-        .unwrap();
-
-    r_a.write_at(0, b"hello").unwrap();
-
-    let mut buf = [0u8; 5];
-    let result = r_b.read_at(0, &mut buf);
-    assert!(
-        result.map(|n| n == 0).unwrap_or(true),
-        "distinct AssetStore instances must be fully isolated"
+    let w_a = pending(
+        store_a
+            .acquire_resource(&scope_a.key("audio.mp3"), Some(&id))
+            .unwrap(),
     );
+    w_a.write_at(0, b"hello").unwrap();
+
+    match store_b.open_resource(&scope_b.key("audio.mp3"), Some(&id)) {
+        Err(_) => {}
+        Ok(r_b) => {
+            let mut buf = [0u8; 5];
+            assert!(
+                r_b.read_at(0, &mut buf).map(|n| n == 0).unwrap_or(true),
+                "distinct AssetStore instances must be fully isolated"
+            );
+        }
+    }
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -113,13 +131,15 @@ fn drop_first_leaves_second_alive() {
     let key = scope.key("audio.mp3");
     let id = RequestIdentity::empty();
 
-    let r1 = scope.store().acquire_resource(&key, Some(&id)).unwrap();
-    let r2 = scope.store().acquire_resource(&key, Some(&id)).unwrap();
+    let w1 = pending(scope.store().acquire_resource(&key, Some(&id)).unwrap());
+    let r2 = w1.reader();
 
-    r1.write_at(0, b"hello").unwrap();
-    r1.commit(Some(5)).unwrap();
-    drop(r1);
+    w1.write_at(0, b"hello").unwrap();
+    let committed = w1.commit(Some(5)).unwrap();
+    drop(committed);
 
+    // The read view acquired before commit stays alive after the writer's
+    // committed reader drops, and observes the committed bytes.
     let mut buf = [0u8; 5];
     let n = r2.read_at(0, &mut buf).unwrap();
     assert_eq!(n, 5);
@@ -139,11 +159,11 @@ fn shared_inner_propagates_commit_and_final_len() {
     let scope = store.scope("asset_a");
     let key = scope.key("audio.mp3");
 
-    let r1 = scope.store().acquire_resource(&key, None).unwrap();
-    let r2 = scope.store().acquire_resource(&key, None).unwrap();
+    let w1 = pending(scope.store().acquire_resource(&key, None).unwrap());
+    let r2 = w1.reader();
 
-    r1.write_at(0, b"hello").unwrap();
-    r1.commit(Some(5)).unwrap();
+    w1.write_at(0, b"hello").unwrap();
+    let _committed = w1.commit(Some(5)).unwrap();
 
     assert!(
         matches!(r2.status(), ResourceStatus::Committed { .. }),
