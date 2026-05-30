@@ -137,6 +137,8 @@ async fn abr_auto_switch_during_playback(
         .await
         .expect("create Audio<Stream<Hls>>");
 
+    let abr = audio.abr_handle();
+
     let result = spawn_blocking(move || {
         let mut buf = vec![0.0f32; 4096];
         let mut total_samples = 0u64;
@@ -161,11 +163,21 @@ async fn abr_auto_switch_during_playback(
     .expect("spawn_blocking");
 
     let switch_count = switches.load(Ordering::Relaxed);
-    info!(switch_count, total_samples = result, "test complete");
+    let final_variant = abr.and_then(|h| h.current_variant_index());
+    info!(
+        switch_count,
+        ?final_variant,
+        total_samples = result,
+        "test complete"
+    );
 
     assert!(result > 0, "expected audio output, got 0 samples");
+    // Assert on the authoritative ABR state, not the VariantApplied event
+    // count: the event rides a bounded broadcast and can be dropped under
+    // full-suite load, but the committed variant index is lossless.
     assert!(
-        switch_count > 0,
-        "ABR must switch variant at least once during playback, got 0 switches"
+        final_variant.is_some_and(|v| v != 0),
+        "ABR must down-switch away from the slow variant 0 during playback; \
+         final variant index = {final_variant:?} (observed {switch_count} VariantApplied events)"
     );
 }
