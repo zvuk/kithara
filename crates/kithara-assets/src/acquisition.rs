@@ -65,8 +65,18 @@ impl<A, R> AcquisitionResult<A, R> {
 /// Read capability of a resource handle — the `Ready` phase.
 ///
 /// Cheap to clone (a shared read view). Decorator wrappers
-/// ([`CachedResource`](crate::CachedResource), [`LeaseResource`](crate::LeaseResource))
+/// ([`CachedReader`](crate::CachedReader), [`LeaseReader`](crate::LeaseReader))
 /// delegate through this trait to stay generic over the inner reader.
+///
+/// A reader is already committed, so it has **no write/commit methods** — the
+/// typestate makes that a compile error rather than a runtime panic:
+///
+/// ```compile_fail
+/// use kithara_assets::ReadSide;
+/// fn reader_cannot_commit<R: ReadSide>(reader: R) {
+///     reader.commit(None); // ERROR: `commit` lives on WriteSide, not ReadSide
+/// }
+/// ```
 pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
     /// The writer phase produced by [`reactivate`](Self::reactivate).
     type Writer: WriteSide<Reader = Self>;
@@ -138,8 +148,16 @@ pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
 /// Write capability of a resource handle — the `Pending` phase.
 ///
 /// **Not `Clone`**: a single producer owns it and consumes it on
-/// [`commit`](Self::commit) / [`fail`](Self::fail). Has no read methods, so
-/// reading a not-yet-committed handle is a compile error.
+/// [`commit`](Self::commit) / [`fail`](Self::fail). Has **no read methods**, so
+/// reading a not-yet-committed handle is a compile error, not a runtime
+/// `NotReadable`:
+///
+/// ```compile_fail
+/// use kithara_assets::WriteSide;
+/// fn writer_cannot_read<W: WriteSide>(writer: &W, buf: &mut [u8]) {
+///     writer.read_at(0, buf); // ERROR: `read_at` lives on ReadSide, not WriteSide
+/// }
+/// ```
 pub trait WriteSide: Send + Sync + Debug + 'static {
     /// The reader phase produced by [`commit`](Self::commit).
     type Reader: ReadSide;
