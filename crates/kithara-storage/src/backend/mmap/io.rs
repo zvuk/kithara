@@ -4,6 +4,7 @@ use std::{
     fs::{self, OpenOptions},
     ops::Range,
     path::Path,
+    sync::Arc,
 };
 
 use mmap_io::MemoryMappedFile;
@@ -42,9 +43,11 @@ impl DriverIo for MmapDriver {
                     }
                 }
 
-                let ro = MemoryMappedFile::open_ro(&self.path)?;
-                *mmap_guard = MmapState::Committed(ro);
+                let arc = Arc::new(MemoryMappedFile::open_ro(&self.path)?);
+                *mmap_guard = MmapState::Committed(Arc::clone(&arc));
+                self.committed.store(Some(arc));
             } else {
+                self.committed.store(None);
                 *mmap_guard = MmapState::Empty;
                 let _ = fs::write(&self.path, b"");
             }
@@ -53,14 +56,19 @@ impl DriverIo for MmapDriver {
             if is_active {
                 *mmap_guard = MmapState::Empty;
                 if self.path.exists() && fs::metadata(&self.path).is_ok_and(|m| m.len() > 0) {
-                    let ro = MemoryMappedFile::open_ro(&self.path)?;
-                    *mmap_guard = MmapState::Committed(ro);
+                    let arc = Arc::new(MemoryMappedFile::open_ro(&self.path)?);
+                    *mmap_guard = MmapState::Committed(Arc::clone(&arc));
+                    self.committed.store(Some(arc));
                 }
             }
         }
 
         drop(mmap_guard);
         Ok(())
+    }
+
+    fn committed_len(&self) -> Option<u64> {
+        self.committed.load().as_ref().map(|m| m.len())
     }
 
     fn notify_write(&self, range: &Range<u64>) {
@@ -77,6 +85,7 @@ impl DriverIo for MmapDriver {
         match &*mmap_guard {
             MmapState::Active(_) => {}
             MmapState::Committed(_) | MmapState::Empty => {
+                self.committed.store(None);
                 *mmap_guard = MmapState::Empty;
                 if self.path.exists() && fs::metadata(&self.path).is_ok_and(|m| m.len() > 0) {
                     let rw = MemoryMappedFile::open_rw(&self.path)?;
@@ -100,6 +109,34 @@ impl DriverIo for MmapDriver {
         Ok(buf.len())
     }
 
+    fn read_committed(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        let snapshot = self.committed.load();
+        let Some(mmap) = snapshot.as_ref() else {
+            return Err(StorageError::Failed(
+                "read_committed without a published committed snapshot".into(),
+            ));
+        };
+
+        let len = mmap.len();
+        if offset >= len {
+            return Ok(0);
+        }
+
+        let buf_len = u64::try_from(buf.len()).map_err(|err| {
+            StorageError::Failed(format!(
+                "mmap read_committed: buf len {} does not fit u64: {err}",
+                buf.len()
+            ))
+        })?;
+        let to_read = usize::try_from((len - offset).min(buf_len)).map_err(|err| {
+            StorageError::Failed(format!(
+                "mmap read_committed: read count does not fit usize: {err}"
+            ))
+        })?;
+        mmap.read_into(offset, &mut buf[..to_read])?;
+        Ok(to_read)
+    }
+
     fn storage_len(&self) -> u64 {
         let mmap_guard = self.mmap.lock_sync();
         mmap_guard.len()
@@ -118,6 +155,7 @@ impl DriverIo for MmapDriver {
         if committed {
             match (&*mmap_guard, self.mode) {
                 (MmapState::Committed(_), OpenMode::ReadWrite) => {
+                    self.committed.store(None);
                     *mmap_guard = MmapState::Empty;
                     let rw = MemoryMappedFile::open_rw(&self.path)?;
                     *mmap_guard = MmapState::Active(rw);

@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt, fs, ops::Range, path::PathBuf};
+use std::{fmt, fs, ops::Range, path::PathBuf, sync::Arc};
 
+use arc_swap::ArcSwapOption;
 use bon::Builder;
 use crossbeam_queue::SegQueue;
 use kithara_platform::Mutex;
@@ -54,21 +55,23 @@ impl MmapOptions {
 /// - `Empty`: zero-length committed resource (no mmap needed).
 pub(super) enum MmapState {
     Active(MemoryMappedFile),
-    Committed(MemoryMappedFile),
+    Committed(Arc<MemoryMappedFile>),
     Empty,
 }
 
 impl MmapState {
     pub(super) fn as_readable(&self) -> Option<&MemoryMappedFile> {
         match self {
-            Self::Active(m) | Self::Committed(m) => Some(m),
+            Self::Active(m) => Some(m),
+            Self::Committed(m) => Some(m.as_ref()),
             Self::Empty => None,
         }
     }
     // ast-grep-ignore: idioms.match-self-conversion
     pub(super) fn len(&self) -> u64 {
         match self {
-            Self::Active(m) | Self::Committed(m) => m.len(),
+            Self::Active(m) => m.len(),
+            Self::Committed(m) => m.len(),
             Self::Empty => 0,
         }
     }
@@ -84,6 +87,8 @@ pub struct MmapDriver {
     pub(super) path: PathBuf,
     /// Lock-free queue for fast-path range notifications.
     pub(super) ready_ranges: SegQueue<Range<u64>>,
+    /// Immutable committed snapshot for the lock-free read fast path.
+    pub(super) committed: ArcSwapOption<MemoryMappedFile>,
 }
 
 impl fmt::Debug for MmapDriver {
@@ -91,6 +96,7 @@ impl fmt::Debug for MmapDriver {
         f.debug_struct("MmapDriver")
             .field("path", &self.path)
             .field("mode", &self.mode)
+            .field("committed", &self.committed.load().is_some())
             .finish_non_exhaustive()
     }
 }
@@ -110,53 +116,56 @@ impl Driver for MmapDriver {
     fn open(opts: MmapOptions) -> StorageResult<(Self, DriverState)> {
         let mode = opts.mode;
 
-        let (mmap_state, init) = if opts.path.exists() && fs::metadata(&opts.path)?.len() > 0 {
-            let len;
-            let mmap_state = if mode == OpenMode::ReadWrite {
-                let mmap = MemoryMappedFile::open_rw(&opts.path)?;
-                len = mmap.len();
-                MmapState::Active(mmap)
-            } else {
-                let mmap = MemoryMappedFile::open_ro(&opts.path)?;
-                len = mmap.len();
-                MmapState::Committed(mmap)
-            };
-            let mut available = RangeSet::new();
-            available.insert(0..len);
-            let init = DriverState {
-                available,
-                is_committed: true,
-                final_len: Some(len),
-            };
-            (mmap_state, init)
-        } else if mode == OpenMode::ReadOnly {
-            (
-                MmapState::Empty,
-                DriverState {
-                    available: RangeSet::new(),
+        let (mmap_state, init, committed) =
+            if opts.path.exists() && fs::metadata(&opts.path)?.len() > 0 {
+                let len;
+                let (mmap_state, snapshot) = if mode == OpenMode::ReadWrite {
+                    let mmap = MemoryMappedFile::open_rw(&opts.path)?;
+                    len = mmap.len();
+                    (MmapState::Active(mmap), None)
+                } else {
+                    let arc = Arc::new(MemoryMappedFile::open_ro(&opts.path)?);
+                    len = arc.len();
+                    (MmapState::Committed(Arc::clone(&arc)), Some(arc))
+                };
+                let mut available = RangeSet::new();
+                available.insert(0..len);
+                let init = DriverState {
+                    available,
                     is_committed: true,
-                    final_len: Some(0),
-                },
-            )
-        } else {
-            if let Some(parent) = opts.path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let size = opts.initial_len.unwrap_or(Consts::DEFAULT_INITIAL_SIZE);
-            let mmap_state = if size == 0 {
-                MmapState::Empty
+                    final_len: Some(len),
+                };
+                (mmap_state, init, ArcSwapOption::from(snapshot))
+            } else if mode == OpenMode::ReadOnly {
+                (
+                    MmapState::Empty,
+                    DriverState {
+                        available: RangeSet::new(),
+                        is_committed: true,
+                        final_len: Some(0),
+                    },
+                    ArcSwapOption::empty(),
+                )
             } else {
-                let mmap = MemoryMappedFile::create_rw(&opts.path, size)?;
-                MmapState::Active(mmap)
+                if let Some(parent) = opts.path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let size = opts.initial_len.unwrap_or(Consts::DEFAULT_INITIAL_SIZE);
+                let mmap_state = if size == 0 {
+                    MmapState::Empty
+                } else {
+                    let mmap = MemoryMappedFile::create_rw(&opts.path, size)?;
+                    MmapState::Active(mmap)
+                };
+                (mmap_state, DriverState::default(), ArcSwapOption::empty())
             };
-            (mmap_state, DriverState::default())
-        };
 
         let driver = Self {
             mode,
             mmap: Mutex::new(mmap_state),
             path: opts.path,
             ready_ranges: SegQueue::new(),
+            committed,
         };
 
         Ok((driver, init))
