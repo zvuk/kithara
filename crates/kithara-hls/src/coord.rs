@@ -12,6 +12,7 @@ use delegate::delegate;
 use kithara_abr::AbrHandle;
 use kithara_assets::{AssetScope, ResourceKey};
 use kithara_drm::DecryptContext;
+use kithara_events::AbrReason;
 use kithara_platform::{
     time::{Duration, Instant},
     tokio::sync::Notify,
@@ -245,6 +246,52 @@ impl HlsCoord {
         self.abr
             .notify_commit(decision, current_before, reader_pt, Instant::now());
         true
+    }
+
+    /// Break the urgent-down-switch / blocked-reader deadlock: when the
+    /// active (slow) variant cannot deliver the next segment the reader
+    /// needs, an Auto-mode commit would otherwise wait for a boundary
+    /// cross that the undelivered segment prevents. Return the segment to
+    /// commit at (`download_head - 1`, so `commit_variant_switch`'s
+    /// `from_seg + 1` lands `switch_at = download_head`) when a proactive
+    /// rescue is both warranted and continuity-safe; otherwise `None`.
+    ///
+    /// Guards (all required):
+    /// - a pending decision exists and its reason is
+    ///   [`AbrReason::UrgentDownSwitch`] — only the rescue path commits
+    ///   early; opportunistic up/down-switches keep boundary-cross
+    ///   gating so `v_new` is not pinned prematurely;
+    /// - the target is a WAV byte-continuity variant — the structured
+    ///   recreate path reseeds by time and is not subject to this
+    ///   circular dependency;
+    /// - `download_head` is strictly ahead of the reader's current
+    ///   segment (`reader_seg`). This keeps the switch on a clean
+    ///   segment boundary the reader has not begun consuming: the
+    ///   reader finishes its fully-loaded current segment on `v_old`,
+    ///   `v_new` takes over at `download_head`. When
+    ///   `download_head == reader_seg` the reader is mid an undelivered
+    ///   segment, so handing it to `v_new` would be a mid-segment
+    ///   cross-bitrate switch (sample shift) — never rescue there;
+    /// - `download_head < num_segments`, i.e. `v_old` genuinely has
+    ///   un-downloaded tail (otherwise there is nothing to rescue from).
+    pub(crate) fn urgent_rescue_boundary(&self, reader_seg: u32) -> Option<u32> {
+        let decision = self.abr.peek_pending_decision()?;
+        if decision.reason != AbrReason::UrgentDownSwitch {
+            return None;
+        }
+        if !matches!(
+            self.playlist_state
+                .variant_container(decision.target_variant_index),
+            Some(ContainerFormat::Wav)
+        ) {
+            return None;
+        }
+        let head = self.download_head();
+        let active = self.active()?;
+        if head >= active.num_segments() || head <= reader_seg {
+            return None;
+        }
+        Some(head.saturating_sub(1))
     }
 
     /// Cross-variant segment lookup. Mirrors [`Self::variant_serving`]'s

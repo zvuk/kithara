@@ -341,6 +341,8 @@ impl HlsTrackState {
         let manual_mode = matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_)));
         let switch_landed = if boundary_crossed || manual_mode {
             coord.commit_variant_switch(ctx, resolved)
+        } else if let Some(rescue_seg) = coord.urgent_rescue_boundary(resolved) {
+            coord.commit_variant_switch(ctx, rescue_seg)
         } else {
             false
         };
