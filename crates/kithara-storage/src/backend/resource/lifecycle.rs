@@ -47,6 +47,13 @@ impl<D: DriverIo> ResourceCore<D> {
         if range.is_empty() {
             return true;
         }
+        // Lock-free committed fast path. A published committed snapshot covers the
+        // whole `[0, committed_len)` (both drivers are linear — `valid_window()` is
+        // `None`, no eviction — so a snapshot implies no gaps), so coverage reduces
+        // to a bound check.
+        if let Some(committed_len) = self.inner.driver.committed_len() {
+            return range.end <= committed_len;
+        }
         let state = self.inner.state.lock_sync();
         range_covered_by(&state.available, &range)
     }
@@ -60,6 +67,9 @@ impl<D: DriverIo> ResourceCore<D> {
     }
 
     pub(super) fn len_inner(&self) -> Option<u64> {
+        if let Some(committed_len) = self.inner.driver.committed_len() {
+            return Some(committed_len);
+        }
         let state = self.inner.state.lock_sync();
         state.final_len
     }

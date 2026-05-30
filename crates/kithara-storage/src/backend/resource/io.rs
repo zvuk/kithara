@@ -154,4 +154,48 @@ mod tests {
         assert_eq!(n, 11);
         assert_eq!(&buf, b"hello world");
     }
+
+    /// A committed resource's `len_inner`/`contains_range_inner` must answer
+    /// WITHOUT taking the `inner.state` mutex. Mirrors the read fast-path test:
+    /// the state mutex is held on this thread while a worker queries length and
+    /// coverage; a lock-free path completes immediately, a locking path blocks
+    /// on the held guard and times out.
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn committed_len_and_contains_do_not_take_state_mutex() {
+        let core: ResourceCore<MemDriver> = ResourceCore::open(
+            CancellationToken::new(),
+            MemOptions {
+                initial_data: Some(b"hello world".to_vec()),
+                capacity: 0,
+            },
+        )
+        .expect("BUG: MemDriver::open with initial_data is infallible");
+
+        assert_eq!(core.inner.driver.committed_len(), Some(11));
+
+        let guard = core.inner.state.lock_sync();
+
+        let (tx, rx) = mpsc::channel();
+        let worker = core.clone();
+        thread::spawn(move || {
+            let len = worker.len_inner();
+            let covers_exact = worker.contains_range_inner(0..11);
+            let covers_over = worker.contains_range_inner(0..12);
+            let _ = tx.send((len, covers_exact, covers_over));
+        });
+
+        let (len, covers_exact, covers_over) = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("committed len/contains blocked on the state mutex");
+
+        drop(guard);
+
+        assert_eq!(len, Some(11));
+        assert!(covers_exact);
+        assert!(!covers_over);
+
+        assert_eq!(core.len_inner(), Some(11));
+        assert!(core.contains_range_inner(0..11));
+        assert!(!core.contains_range_inner(0..12));
+    }
 }
