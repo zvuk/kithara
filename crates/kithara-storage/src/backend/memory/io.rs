@@ -16,25 +16,24 @@ impl DriverIo for MemDriver {
                 "memory commit: len {end} does not fit usize: {err}"
             ))
         })?;
+        // Publish (or clear) the snapshot AND release the working buffer
+        // atomically under the state lock, then shrink `state.len` to the
+        // committed length. `read_at` re-checks `committed` under this same
+        // lock, so a concurrent slow-path read can never observe `committed ==
+        // None` together with a freed buffer (the bug a non-atomic publish
+        // caused). `shrink_to_fit` actually frees the heap (plain `clear` keeps
+        // the capacity). Zero-length committed publishes no snapshot — matching
+        // the mmap `Empty` contract (`committed_len()` → `None`).
         if end_usize == 0 {
-            // Release the working buffer's heap; the committed snapshot is the
-            // single source of committed bytes. `shrink_to_fit` actually frees
-            // (plain `clear` would retain the capacity).
-            state.buf.clear();
-            state.buf.shrink_to_fit();
-            drop(state);
-            // Zero-length committed: no snapshot (matches the mmap `Empty`
-            // contract — `committed_len()` reports `None`, reads use the slow path).
             self.committed.store(None);
-            return Ok(());
+        } else {
+            let snapshot = state.buf[..end_usize].to_vec();
+            self.committed.store(Some(Arc::new(snapshot)));
         }
-        // Snapshot the committed bytes first, then release the working buffer's
-        // heap so committed mem resources hold a single copy (the snapshot).
-        let snapshot = state.buf[..end_usize].to_vec();
         state.buf.clear();
         state.buf.shrink_to_fit();
+        state.len = end;
         drop(state);
-        self.committed.store(Some(Arc::new(snapshot)));
         Ok(())
     }
 
@@ -75,15 +74,17 @@ impl DriverIo for MemDriver {
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
-        // A committed resource's working buffer has been released; serve from the
-        // immutable snapshot. This also covers a commit that completed while this
-        // read was in flight (the fast path checked `committed_len()` before the
-        // snapshot was published), preventing a read against the freed buffer.
-        if self.committed.load().is_some() {
-            return self.read_committed(offset, buf);
-        }
-
         let state = self.state.lock_sync();
+
+        // Re-check `committed` UNDER the lock: `commit` publishes the snapshot
+        // and frees the working buffer atomically under this same lock, so if a
+        // snapshot exists the working buffer is gone and we must read from the
+        // snapshot. Holding the `Arc` (via `load_full`) keeps it valid even if a
+        // later `reactivate` clears `committed` after we drop the lock.
+        if let Some(snapshot) = self.committed.load_full() {
+            drop(state);
+            return Self::read_slice(snapshot.as_slice(), offset, buf);
+        }
 
         if offset >= state.len {
             return Ok(0);
@@ -115,33 +116,7 @@ impl DriverIo for MemDriver {
                 "read_committed without a published committed snapshot".into(),
             ));
         };
-
-        let len = u64::try_from(data.len()).map_err(|err| {
-            StorageError::Failed(format!(
-                "memory read_committed: len {} does not fit u64: {err}",
-                data.len()
-            ))
-        })?;
-        if offset >= len {
-            return Ok(0);
-        }
-
-        let available = usize::try_from(len - offset).map_err(|err| {
-            StorageError::Failed(format!(
-                "memory read_committed: available {} does not fit usize: {err}",
-                len - offset
-            ))
-        })?;
-        let to_read = buf.len().min(available);
-
-        let start = usize::try_from(offset).map_err(|err| {
-            StorageError::Failed(format!(
-                "memory read_committed: offset {offset} does not fit usize: {err}"
-            ))
-        })?;
-        buf[..to_read].copy_from_slice(&data[start..start + to_read]);
-
-        Ok(to_read)
+        Self::read_slice(data.as_slice(), offset, buf)
     }
 
     fn storage_len(&self) -> u64 {
@@ -187,11 +162,52 @@ impl DriverIo for MemDriver {
     }
 }
 
+impl MemDriver {
+    /// Copy `min(buf.len(), data.len() - offset)` bytes from `data` at `offset`
+    /// into `buf`, returning the count. Shared by the committed branch of
+    /// `read_at` and by `read_committed`.
+    fn read_slice(data: &[u8], offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        let len = u64::try_from(data.len()).map_err(|err| {
+            StorageError::Failed(format!(
+                "memory read: snapshot len {} does not fit u64: {err}",
+                data.len()
+            ))
+        })?;
+        if offset >= len {
+            return Ok(0);
+        }
+        let available = usize::try_from(len - offset).map_err(|err| {
+            StorageError::Failed(format!(
+                "memory read: available {} does not fit usize: {err}",
+                len - offset
+            ))
+        })?;
+        let to_read = buf.len().min(available);
+        let start = usize::try_from(offset).map_err(|err| {
+            StorageError::Failed(format!(
+                "memory read: offset {offset} does not fit usize: {err}"
+            ))
+        })?;
+        buf[..to_read].copy_from_slice(&data[start..start + to_read]);
+        Ok(to_read)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     mod kithara {
         pub(crate) use kithara_test_macros::test;
     }
+
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        thread,
+    };
+
+    use kithara_platform::time::Duration;
 
     use crate::{
         StorageError,
@@ -224,6 +240,56 @@ mod tests {
             .expect("mid-offset read_committed must succeed");
         assert_eq!(n, 5);
         assert_eq!(&buf6, b"world");
+    }
+
+    /// Regression: `commit` frees the working buffer, so a slow-path `read_at`
+    /// racing the commit/reactivate transition must never index a freed buffer.
+    /// The publish/free is atomic under the state lock and `read_at` re-checks
+    /// `committed` under the same lock; if that ordering regresses this panics
+    /// (index out of range) on a reader thread.
+    #[kithara::test(timeout(Duration::from_secs(30)))]
+    fn concurrent_commit_reactivate_and_reads_never_panic() {
+        let (driver, _state) = MemDriver::open(MemOptions {
+            initial_data: None,
+            capacity: 0,
+        })
+        .expect("open must succeed");
+        driver
+            .write_at(0, b"hello world", false)
+            .expect("active write must succeed");
+
+        let driver = Arc::new(driver);
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                let d = Arc::clone(&driver);
+                let s = Arc::clone(&stop);
+                thread::spawn(move || {
+                    while !s.load(Ordering::Relaxed) {
+                        let mut buf = [0u8; 11];
+                        let n = d
+                            .read_at(0, &mut buf, 11)
+                            .expect("read_at must not error during transition");
+                        assert_eq!(
+                            &buf[..n],
+                            &b"hello world"[..n],
+                            "read_at returned wrong bytes during transition"
+                        );
+                    }
+                })
+            })
+            .collect();
+
+        // Toggle commit/reactivate to keep reopening the transition window.
+        for _ in 0..256 {
+            driver.commit(Some(11)).expect("commit must succeed");
+            driver.reactivate().expect("reactivate must succeed");
+        }
+        stop.store(true, Ordering::Relaxed);
+        for r in readers {
+            r.join().expect("reader thread panicked");
+        }
     }
 
     #[kithara::test]
