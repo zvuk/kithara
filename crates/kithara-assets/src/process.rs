@@ -1,6 +1,16 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt, fmt::Debug, hash::Hash, ops::Range, path::Path, sync::Arc};
+use std::{
+    fmt,
+    fmt::Debug,
+    hash::Hash,
+    ops::Range,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use kithara_bufpool::BytePool;
 use kithara_platform::{
@@ -11,6 +21,7 @@ use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
 use crate::{
     AssetResourceState, AssetsResult, ResourceKey,
+    acquisition::{ReadSide, WriteSide},
     base::{Assets, ResourceHandle},
     identity::RequestIdentity,
 };
@@ -68,6 +79,7 @@ pub struct ProcessedResource<R, Ctx> {
 struct ReadinessGate {
     cv: Condvar,
     processed: Mutex<bool>,
+    failed: AtomicBool,
 }
 
 impl ReadinessGate {
@@ -75,11 +87,26 @@ impl ReadinessGate {
         Self {
             processed: Mutex::new(initial),
             cv: Condvar::new(),
+            failed: AtomicBool::new(false),
         }
     }
 
     fn is_ready(&self) -> bool {
         *self.processed.lock_sync()
+    }
+
+    fn is_failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
+
+    /// Fail the gate: wake every waiter so a writer dropped without
+    /// `commit` cannot deadlock a reader parked in [`Self::wait_until_ready`].
+    /// Waiters observe [`Self::is_failed`] and abort. `processed` is left
+    /// untouched so [`Self::is_ready`] stays `false` — a failed (never
+    /// committed) resource must not read as valid via `read_at`.
+    fn fail(&self) {
+        self.failed.store(true, Ordering::Release);
+        self.cv.notify_all();
     }
 
     /// Reset to "not ready" — used by [`ProcessedResource::reactivate`]
@@ -104,19 +131,22 @@ impl ReadinessGate {
         /// CPU on tight polling.
         const COND_WAIT_MS: u64 = 100;
         loop {
+            if self.is_failed() {
+                return false;
+            }
             let ready = {
                 let guard = self.processed.lock_sync();
                 if *guard {
-                    return true;
+                    return !self.is_failed();
                 }
                 let deadline = Instant::now() + Duration::from_millis(COND_WAIT_MS);
                 let next = self.cv.wait_sync_timeout(guard, deadline);
                 *next
             };
             if ready {
-                return true;
+                return !self.is_failed();
             }
-            if should_abort() {
+            if self.is_failed() || should_abort() {
                 return false;
             }
         }
@@ -200,47 +230,63 @@ where
     /// This may be less than `final_len` when the processor removes padding
     /// (e.g. PKCS7 unpadding in AES-128-CBC decryption).
     fn process_and_write(&self, final_len: u64) -> StorageResult<u64> {
-        let Some(ctx) = &self.ctx else {
-            return Ok(final_len);
-        };
+        self.ctx.as_ref().map_or(Ok(final_len), |ctx| {
+            run_process(&self.inner, ctx, &self.process, &self.pool, final_len)
+        })
+    }
+}
 
-        let mut ctx = ctx.clone();
+/// Stream `inner`'s raw bytes through `process` chunk-by-chunk and write the
+/// transformed bytes back in place. Returns the processed byte count, which may
+/// shrink below `final_len` (e.g. PKCS7 unpadding). Shared by the legacy
+/// [`ProcessedResource`] and the [`ProcessedWriter`] commit path.
+fn run_process<R, Ctx>(
+    inner: &R,
+    ctx: &Ctx,
+    process: &ProcessChunkFn<Ctx>,
+    pool: &BytePool,
+    final_len: u64,
+) -> StorageResult<u64>
+where
+    R: ResourceHandle,
+    Ctx: Clone,
+{
+    let mut ctx = ctx.clone();
 
-        let mut input_buf = self.pool.get_with(|b| b.resize(Consts::CHUNK_SIZE, 0));
-        let mut output_buf = self.pool.get_with(|b| b.resize(Consts::CHUNK_SIZE, 0));
+    let mut input_buf = pool.get_with(|b| b.resize(Consts::CHUNK_SIZE, 0));
+    let mut output_buf = pool.get_with(|b| b.resize(Consts::CHUNK_SIZE, 0));
 
-        let mut read_offset = 0u64;
-        let mut write_offset = 0u64;
+    let mut read_offset = 0u64;
+    let mut write_offset = 0u64;
 
-        while read_offset < final_len {
-            let remaining_u64 = (final_len - read_offset).min(Consts::CHUNK_SIZE_U64);
-            let to_read = usize::try_from(remaining_u64).map_err(|err| {
-                StorageError::Failed(format!(
-                    "process_and_write: chunk size {remaining_u64} does not fit usize: {err}"
-                ))
-            })?;
-            let is_last = read_offset + remaining_u64 >= final_len;
+    while read_offset < final_len {
+        let remaining_u64 = (final_len - read_offset).min(Consts::CHUNK_SIZE_U64);
+        let to_read = usize::try_from(remaining_u64).map_err(|err| {
+            StorageError::Failed(format!(
+                "process_and_write: chunk size {remaining_u64} does not fit usize: {err}"
+            ))
+        })?;
+        let is_last = read_offset + remaining_u64 >= final_len;
 
-            let n = self.inner.read_at(read_offset, &mut input_buf[..to_read])?;
-            if n == 0 {
-                break;
-            }
-
-            let written = (self.process)(&input_buf[..n], &mut output_buf[..n], &mut ctx, is_last)
-                .map_err(StorageError::Failed)?;
-
-            self.inner.write_at(write_offset, &output_buf[..written])?;
-
-            read_offset += n as u64;
-            write_offset += u64::try_from(written).map_err(|err| {
-                StorageError::Failed(format!(
-                    "process_and_write: written {written} does not fit u64: {err}"
-                ))
-            })?;
+        let n = inner.read_at(read_offset, &mut input_buf[..to_read])?;
+        if n == 0 {
+            break;
         }
 
-        Ok(write_offset)
+        let written = (process)(&input_buf[..n], &mut output_buf[..n], &mut ctx, is_last)
+            .map_err(StorageError::Failed)?;
+
+        inner.write_at(write_offset, &output_buf[..written])?;
+
+        read_offset += n as u64;
+        write_offset += u64::try_from(written).map_err(|err| {
+            StorageError::Failed(format!(
+                "process_and_write: written {written} does not fit u64: {err}"
+            ))
+        })?;
     }
+
+    Ok(write_offset)
 }
 
 impl<R, Ctx> ResourceHandle for ProcessedResource<R, Ctx>
@@ -308,6 +354,242 @@ where
             fn status(&self) -> ResourceStatus;
             fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
         }
+    }
+}
+
+/// Pending (writer) phase of a processed resource — the sole producer handle.
+///
+/// Owns the write+decrypt capability and a fresh per-generation
+/// [`ReadinessGate`]. Has **no read methods**, so reading a not-yet-committed
+/// handle is a compile error. [`commit`](Self::commit) consumes the writer into
+/// a [`ProcessedReader`]; dropping without `commit`/`fail` fails the gate so a
+/// waiting reader cannot deadlock. See the crate `README.md`.
+pub struct ProcessedWriter<R, Ctx> {
+    readiness: Arc<ReadinessGate>,
+    pool: BytePool,
+    ctx: Option<Ctx>,
+    process: ProcessChunkFn<Ctx>,
+    inner: R,
+    settled: bool,
+}
+
+/// Ready (reader) phase of a processed resource — a cheap-to-clone read view.
+///
+/// Reads return already-processed bytes. It carries its generation's
+/// [`ReadinessGate`]: a view shared with an in-flight writer (via
+/// [`ProcessedWriter::reader`]) still blocks in [`wait_range`](Self::wait_range)
+/// until that writer commits. [`reactivate`](Self::reactivate) consumes the
+/// reader into a fresh [`ProcessedWriter`] with a **new** gate, so reacquiring
+/// never poisons other reader clones of the prior generation.
+pub struct ProcessedReader<R, Ctx> {
+    readiness: Arc<ReadinessGate>,
+    pool: BytePool,
+    ctx: Option<Ctx>,
+    process: ProcessChunkFn<Ctx>,
+    inner: R,
+}
+
+impl<R, Ctx> Clone for ProcessedReader<R, Ctx>
+where
+    R: Clone,
+    Ctx: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            readiness: Arc::clone(&self.readiness),
+            pool: self.pool.clone(),
+            ctx: self.ctx.clone(),
+            process: Arc::clone(&self.process),
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<R: Debug, Ctx: Debug> Debug for ProcessedWriter<R, Ctx> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProcessedWriter")
+            .field("inner", &self.inner)
+            .field("ctx", &self.ctx)
+            .field("ready", &self.readiness.is_ready())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R: Debug, Ctx: Debug> Debug for ProcessedReader<R, Ctx> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProcessedReader")
+            .field("inner", &self.inner)
+            .field("ctx", &self.ctx)
+            .field("ready", &self.readiness.is_ready())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R, Ctx> Drop for ProcessedWriter<R, Ctx> {
+    fn drop(&mut self) {
+        if !self.settled {
+            self.readiness.fail();
+        }
+    }
+}
+
+impl<R, Ctx> ProcessedWriter<R, Ctx>
+where
+    R: ResourceHandle + Clone + Debug,
+    Ctx: Clone + Debug,
+{
+    /// Create a fresh pending writer. The gate starts ready only when no
+    /// processing is required (`ctx` is `None`); an encrypted writer is pending
+    /// until [`commit`](WriteSide::commit).
+    pub fn new(inner: R, ctx: Option<Ctx>, process: ProcessChunkFn<Ctx>, pool: BytePool) -> Self {
+        let ready = ctx.is_none();
+        Self {
+            inner,
+            ctx,
+            process,
+            pool,
+            readiness: Arc::new(ReadinessGate::new(ready)),
+            settled: false,
+        }
+    }
+
+    /// A read view sharing this writer's generation gate; reads block in
+    /// [`wait_range`](ReadSide::wait_range) until this writer commits. The view
+    /// is `Clone`, the writer is not.
+    #[must_use]
+    pub fn reader(&self) -> ProcessedReader<R, Ctx> {
+        ProcessedReader {
+            readiness: Arc::clone(&self.readiness),
+            pool: self.pool.clone(),
+            ctx: self.ctx.clone(),
+            process: Arc::clone(&self.process),
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<R, Ctx> ProcessedReader<R, Ctx>
+where
+    R: ResourceHandle + Clone + Debug,
+    Ctx: Clone + Debug,
+{
+    fn is_readable(&self) -> bool {
+        self.ctx.is_none() || self.readiness.is_ready()
+    }
+
+    /// A waiter must abort when the gate failed (writer dropped) or the backing
+    /// resource reached a terminal state — neither will ever flip ready.
+    fn inner_terminal(&self) -> bool {
+        self.readiness.is_failed()
+            || matches!(
+                self.inner.status(),
+                ResourceStatus::Failed(_) | ResourceStatus::Cancelled
+            )
+    }
+
+    /// Consume the reader and reopen for writing with a **fresh** gate, so a
+    /// concurrent reader clone of the prior generation is never poisoned.
+    ///
+    /// # Errors
+    /// Propagates the backing reactivate error.
+    pub fn reactivate(self) -> StorageResult<ProcessedWriter<R, Ctx>> {
+        self.inner.reactivate()?;
+        let ready = self.ctx.is_none();
+        Ok(ProcessedWriter {
+            readiness: Arc::new(ReadinessGate::new(ready)),
+            pool: self.pool,
+            ctx: self.ctx,
+            process: self.process,
+            inner: self.inner,
+            settled: false,
+        })
+    }
+}
+
+impl<R, Ctx> WriteSide for ProcessedWriter<R, Ctx>
+where
+    R: ResourceHandle + Clone + Send + Sync + Debug + 'static,
+    Ctx: Clone + Send + Sync + Debug + 'static,
+{
+    type Reader = ProcessedReader<R, Ctx>;
+
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.inner.write_at(offset, data)
+    }
+
+    fn commit(mut self, final_len: Option<u64>) -> StorageResult<ProcessedReader<R, Ctx>> {
+        let needs_processing = self.ctx.is_some() && !self.readiness.is_ready();
+        let actual_len = match (needs_processing, final_len) {
+            (true, Some(len)) if len > 0 => match &self.ctx {
+                Some(ctx) => Some(run_process(
+                    &self.inner,
+                    ctx,
+                    &self.process,
+                    &self.pool,
+                    len,
+                )?),
+                None => final_len,
+            },
+            _ => final_len,
+        };
+
+        self.inner.commit(actual_len)?;
+        if needs_processing {
+            self.readiness.mark_ready();
+        }
+        self.settled = true;
+        Ok(self.reader())
+    }
+
+    fn fail(mut self, reason: String) {
+        self.inner.fail(reason);
+        self.readiness.fail();
+        self.settled = true;
+    }
+}
+
+impl<R, Ctx> ReadSide for ProcessedReader<R, Ctx>
+where
+    R: ResourceHandle + Clone + Send + Sync + Debug + 'static,
+    Ctx: Clone + Send + Sync + Debug + 'static,
+{
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        if !self.is_readable() {
+            return Err(StorageError::NotReadable);
+        }
+        self.inner.read_at(offset, buf)
+    }
+
+    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
+        let outcome = self.inner.wait_range(range)?;
+        if self.ctx.is_none() || outcome != WaitOutcome::Ready {
+            return Ok(outcome);
+        }
+        if self.readiness.wait_until_ready(&|| self.inner_terminal()) {
+            Ok(WaitOutcome::Ready)
+        } else {
+            Ok(WaitOutcome::Interrupted)
+        }
+    }
+
+    fn contains_range(&self, range: Range<u64>) -> bool {
+        self.is_readable() && self.inner.contains_range(range)
+    }
+
+    fn len(&self) -> Option<u64> {
+        self.inner.len()
+    }
+
+    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
+        self.inner.next_gap(from, limit)
+    }
+
+    fn path(&self) -> Option<&Path> {
+        self.inner.path()
+    }
+
+    fn status(&self) -> ResourceStatus {
+        self.inner.status()
     }
 }
 
@@ -905,6 +1187,174 @@ mod tests {
             call_count.load(Ordering::SeqCst),
             0,
             "processor must not have run after cancellation"
+        );
+    }
+
+    #[kithara::test]
+    fn writer_commit_returns_readable_reader() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
+        let (resource, _dir) = mock_resource(b"test content");
+
+        let writer = ProcessedWriter::new(resource, Some(()), process_fn, test_pool());
+        let reader = writer.commit(Some(b"test content".len() as u64)).unwrap();
+        assert!(call_count.load(Ordering::SeqCst) > 0);
+
+        let mut buf = vec![0u8; 12];
+        let n = reader.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 12);
+        let expected: Vec<u8> = b"test content".iter().map(|b| b ^ 0x42).collect();
+        assert_eq!(buf, expected);
+    }
+
+    #[kithara::test]
+    fn ctx_none_writer_commits_straight_through_to_readable() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
+        let (resource, _dir) = mock_resource(b"plain bytes!");
+
+        let writer: ProcessedWriter<StorageResource, ()> =
+            ProcessedWriter::new(resource, None, process_fn, test_pool());
+        let reader = writer.commit(Some(12)).unwrap();
+
+        let mut buf = vec![0u8; 12];
+        let n = reader.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 12);
+        assert_eq!(&buf, b"plain bytes!", "ctx=None reads raw, unprocessed");
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            0,
+            "no processor runs for ctx=None"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn reader_view_blocks_until_writer_commits() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x55, Arc::clone(&call_count));
+        let raw: Vec<u8> = (0..32u8).collect();
+        let (resource, _dir) = mock_resource(&raw);
+
+        let writer = ProcessedWriter::new(resource, Some(()), process_fn, test_pool());
+        let reader = writer.reader();
+        let raw_len = raw.len() as u64;
+
+        let handle = std::thread::spawn(move || {
+            let outcome = reader.wait_range(0..raw_len).unwrap();
+            assert_eq!(outcome, WaitOutcome::Ready);
+            let mut buf = vec![0u8; 32];
+            reader.read_at(0, &mut buf).unwrap();
+            buf
+        });
+
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            0,
+            "process must not run before commit"
+        );
+        let _committed = writer.commit(Some(raw_len)).unwrap();
+
+        let read = handle.join().unwrap();
+        let expected: Vec<u8> = (0..32u8).map(|b| b ^ 0x55).collect();
+        assert_eq!(read, expected, "reader view must observe processed bytes");
+    }
+
+    #[kithara::test]
+    fn reactivate_forks_fresh_gate_without_poisoning_reader() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
+        let plaintext = b"hello drm world";
+        let ciphertext: Vec<u8> = plaintext.iter().map(|b| b ^ 0x42).collect();
+        let (resource, _dir) = mock_resource(&ciphertext);
+
+        let writer = ProcessedWriter::new(resource, Some(()), process_fn, test_pool());
+        let reader_a = writer.commit(Some(ciphertext.len() as u64)).unwrap();
+
+        let mut buf = vec![0u8; ciphertext.len()];
+        reader_a.read_at(0, &mut buf).unwrap();
+        assert_eq!(&buf[..], plaintext, "committed reader sees plaintext");
+
+        let reader_b = reader_a.clone();
+        let _writer_b = reader_a
+            .reactivate()
+            .expect("reactivate mints a fresh-gate writer");
+
+        let mut buf2 = vec![0u8; ciphertext.len()];
+        let n = reader_b
+            .read_at(0, &mut buf2)
+            .expect("reader clone must keep reading committed plaintext across a reactivate");
+        assert_eq!(
+            &buf2[..n],
+            plaintext,
+            "fresh-gate reactivate must not poison a prior-generation reader clone \
+             (the structural root of live_ephemeral_small_cache_playback_drm)"
+        );
+    }
+
+    #[kithara::test]
+    fn reactivate_then_commit_reruns_processor() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
+        let first: Vec<u8> = b"first  payload".iter().map(|b| b ^ 0x42).collect();
+        let second: Vec<u8> = b"second payload".iter().map(|b| b ^ 0x42).collect();
+        assert_eq!(first.len(), second.len());
+        let (resource, _dir) = mock_resource(&first);
+
+        let writer = ProcessedWriter::new(resource, Some(()), process_fn, test_pool());
+        let len = first.len() as u64;
+        let reader = writer.commit(Some(len)).expect("first commit");
+        let first_count = call_count.load(Ordering::SeqCst);
+        assert!(first_count > 0, "first commit runs the processor");
+
+        let writer2 = reader.reactivate().expect("reactivate after commit");
+        writer2.write_at(0, &second).expect("re-write ciphertext");
+        let reader2 = writer2.commit(Some(len)).expect("second commit");
+        assert!(
+            call_count.load(Ordering::SeqCst) > first_count,
+            "fresh gate -> second commit reruns the processor (decrypt not skipped)"
+        );
+
+        let mut out = vec![0u8; second.len()];
+        reader2
+            .read_at(0, &mut out)
+            .expect("read after second commit");
+        assert_eq!(&out[..], b"second payload");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn writer_drop_without_commit_fails_gate() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x00, Arc::clone(&call_count));
+        let (resource, _dir) = mock_resource(&[7u8; 16]);
+
+        let writer = ProcessedWriter::new(resource, Some(()), process_fn, test_pool());
+        writer.write_at(0, &[7u8; 16]).unwrap();
+        let reader = writer.reader();
+        let reader_probe = reader.clone();
+
+        let handle = std::thread::spawn(move || reader.wait_range(0..16));
+        std::thread::sleep(Duration::from_millis(50));
+        drop(writer);
+
+        let outcome = handle
+            .join()
+            .expect("BUG: reader thread panicked")
+            .expect("BUG: wait_range must not surface a hard error on gate fail");
+        assert_eq!(
+            outcome,
+            WaitOutcome::Interrupted,
+            "dropping a writer without commit must wake a parked reader, not deadlock"
+        );
+
+        let mut buf = [0u8; 16];
+        assert!(
+            matches!(
+                reader_probe.read_at(0, &mut buf),
+                Err(StorageError::NotReadable)
+            ),
+            "a failed (never-committed) encrypted resource must reject read_at, \
+             not return raw/partial bytes"
         );
     }
 }

@@ -8,17 +8,23 @@ use crate::{
     error::AssetsResult, identity::RequestIdentity, key::ResourceKey, state::AssetResourceState,
 };
 
-/// Unified resource-access contract for the asset decorator stack.
+/// Unified resource-access contract for the asset decorator stack — the
+/// **runtime** facade over a storage resource whose lifecycle phase (active
+/// while downloading, committed once written, reactivated on re-fetch) varies
+/// at runtime and is observed by concurrent readers. [`status`](ResourceHandle::status)
+/// is the correct representation for that shared, concurrently-mutated axis
+/// (mirrors the `CurrentFsm` erasure boundary in the audio worker); the genuine
+/// storage write/read typestate lives one layer down in
+/// `kithara_storage::Resource<S>`.
 ///
-/// This is the assets-layer facade over a storage resource whose lifecycle
-/// phase varies at runtime (active while downloading, committed once written,
-/// reactivated on re-fetch) and is observed by concurrent readers. The genuine
-/// compile-time write/read typestate lives one layer down in
-/// `kithara_storage::Resource<S>`; at the cache layer the resource is a shared,
-/// concurrently-observed runtime state, so a `&self` facade with a runtime
-/// [`status`](ResourceHandle::status) is the correct representation (mirrors the
-/// `CurrentFsm` erasure boundary in the audio worker). Implemented by
-/// `StorageResource` and the cache/lease/processing decorator wrappers.
+/// The orthogonal *decrypt-readiness* axis is **type-carried**, not on this
+/// trait: acquisition mints a Pending `ProcessedWriter` or a Ready
+/// `ProcessedReader` (surfaced through `AcquisitionResult`). Reads are reachable
+/// only on the Ready reader; `commit(self)` consumes the writer into a reader;
+/// `reactivate` mints a fresh readiness gate so a re-fetching writer never
+/// poisons an extant reader. See the crate README "Processing & readiness gate".
+///
+/// Implemented by `StorageResource` and the cache/lease decorator wrappers.
 pub trait ResourceHandle: Send + Sync + 'static {
     /// Commit the resource as fully written.
     ///

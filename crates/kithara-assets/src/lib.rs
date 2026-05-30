@@ -5,6 +5,7 @@
 //! The public contract is the unified [`AssetStore`] type. See the crate
 //! `README.md` for key mapping, lease/pin semantics, and the global index.
 
+mod acquisition;
 mod base;
 pub(crate) mod cache;
 mod deleter;
@@ -23,6 +24,7 @@ mod state;
 mod store;
 mod unified;
 
+pub use acquisition::{AcquisitionResult, ReadSide, WriteSide};
 pub use base::{Assets, ResourceHandle};
 pub use cache::{CachedAssets, CachedResource};
 #[cfg(not(target_arch = "wasm32"))]
@@ -37,7 +39,9 @@ pub use key::{ResourceKey, asset_root_for_url};
 pub use kithara_bufpool::BytePool;
 pub use lease::{LeaseAssets, LeaseGuard, LeaseResource};
 pub use mem_store::MemAssetStore;
-pub use process::{ProcessChunkFn, ProcessedResource, ProcessingAssets};
+pub use process::{
+    ProcessChunkFn, ProcessedReader, ProcessedResource, ProcessedWriter, ProcessingAssets,
+};
 pub use scope::AssetScope;
 pub use state::AssetResourceState;
 pub use store::{AssetResource, AssetStoreBuilder, OnInvalidatedFn, StoreOptions};
