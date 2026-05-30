@@ -215,7 +215,9 @@ impl Assets for MemAssetStore {
         self.active_resources
             .insert(cache_key, Arc::downgrade(&shared));
 
-        Ok(AcquisitionResult::Pending(BaseWriter::new((*shared).clone())))
+        Ok(AcquisitionResult::Pending(BaseWriter::new(
+            (*shared).clone(),
+        )))
     }
 
     fn capabilities(&self) -> Capabilities {

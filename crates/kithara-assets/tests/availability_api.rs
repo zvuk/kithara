@@ -42,7 +42,8 @@ fn disk_store_slow_path_finds_committed_file() {
     let scope = store.scope(ROOT);
 
     let key = scope.key("segments/0001.bin");
-    let AcquisitionResult::Pending(res) = scope.store().acquire_resource(&key, None).unwrap() else {
+    let AcquisitionResult::Pending(res) = scope.store().acquire_resource(&key, None).unwrap()
+    else {
         panic!("fresh acquire must be Pending");
     };
     res.write_at(0, b"hello world").unwrap();
@@ -77,7 +78,8 @@ fn remove_resource_clears_aggregate_remove_call() {
     let scope = store.scope(ROOT);
 
     let key = scope.key("segments/0001.bin");
-    let AcquisitionResult::Pending(res) = scope.store().acquire_resource(&key, None).unwrap() else {
+    let AcquisitionResult::Pending(res) = scope.store().acquire_resource(&key, None).unwrap()
+    else {
         panic!("fresh acquire must be Pending");
     };
     res.write_at(0, b"data").unwrap();

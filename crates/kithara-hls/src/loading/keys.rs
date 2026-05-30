@@ -7,7 +7,7 @@ use std::{
 
 use bytes::Bytes;
 use dashmap::DashMap;
-use kithara_assets::{AssetScope, ResourceHandle};
+use kithara_assets::{AcquisitionResult, AssetScope, ReadSide};
 use kithara_drm::{DecryptContext, KeyProcessorRegistry};
 use kithara_net::Headers;
 use kithara_stream::dl::{FetchCmd, PeerHandle};
@@ -232,19 +232,18 @@ impl KeyManager {
             "drm key: fetched + decrypted, caching to asset store"
         );
 
-        let res = self
-            .scope
-            .store()
-            .acquire_resource(&cache_key, None)?
-            .retain();
-        super::atomic_fetch::write_back_cache(
-            &res,
-            &decrypted,
-            &self.scope,
-            url,
-            rel_path.as_str(),
-            Self::RESOURCE_KIND,
-        );
+        if let AcquisitionResult::Pending(writer) =
+            self.scope.store().acquire_resource(&cache_key, None)?
+        {
+            super::atomic_fetch::write_back_cache(
+                writer.retain(),
+                &decrypted,
+                &self.scope,
+                url,
+                rel_path.as_str(),
+                Self::RESOURCE_KIND,
+            );
+        }
 
         self.decrypted_keys.insert(url.clone(), decrypted.clone());
         Ok(decrypted)

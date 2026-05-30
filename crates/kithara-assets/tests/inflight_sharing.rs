@@ -7,9 +7,7 @@
 //!
 //! See `.docs/plans/2026-05-20-inflight-asset-sharing.md` step 1.
 
-use kithara_assets::{
-    AcquisitionResult, AssetStoreBuilder, ReadSide, RequestIdentity, WriteSide,
-};
+use kithara_assets::{AcquisitionResult, AssetStoreBuilder, ReadSide, RequestIdentity, WriteSide};
 use kithara_platform::time::Duration;
 use kithara_storage::ResourceStatus;
 use kithara_test_utils::kithara;

@@ -13,7 +13,8 @@ use std::{
 };
 
 use kithara_assets::{
-    AssetResource, AssetResourceState, AssetScope, AssetsError, ResourceHandle, ResourceKey,
+    AcquisitionResult, AssetReader, AssetResource, AssetResourceState, AssetScope, AssetWriter,
+    AssetsError, RawWriteHandle, ReadSide, ResourceKey, WriteSide,
 };
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, NetError};
@@ -610,24 +611,53 @@ impl HlsVariant {
     fn build_cmd(
         self: &Arc<Self>,
         url: Url,
-        resource: AssetResource<DecryptContext>,
+        acq: AssetResource<DecryptContext>,
         handle: Segment<Downloading>,
-    ) -> FetchCmd {
+    ) -> Option<FetchCmd> {
+        let writer = match acq {
+            AcquisitionResult::Pending(writer) => writer,
+            // Committed between the skip-fetch probe and acquire — no download.
+            // Mirror `settle_success`: mark the segment loaded at its on-disk
+            // length so announced/estimated sizes match the bytes on disk.
+            AcquisitionResult::Ready(reader) => {
+                match reader.status() {
+                    ResourceStatus::Committed { final_len: Some(n) } => {
+                        handle.into_loaded(n);
+                    }
+                    _ => {
+                        handle.into_loaded_no_apply();
+                    }
+                }
+                return None;
+            }
+            _ => {
+                handle.into_missing();
+                return None;
+            }
+        };
         let cancel = self.cancel_handle();
         let slot = FetchSlot {
             handle,
-            resource,
+            reader: writer.reader(),
+            raw: writer.raw_write_handle(),
+            writer,
             cancel: cancel.clone(),
         };
-        FetchCmd::get(url)
-            .cancel(cancel)
-            .maybe_headers(self.headers.clone())
-            .writer(slot.writer())
-            .on_complete(OnCompleteFn::from(slot))
-            .build()
+        Some(
+            FetchCmd::get(url)
+                .cancel(cancel)
+                .maybe_headers(self.headers.clone())
+                .writer(slot.writer())
+                .on_complete(OnCompleteFn::from(slot))
+                .build(),
+        )
     }
 
-    fn build_init_cmd(self: &Arc<Self>, ctx: &PlanCtx, handle: Segment<Downloading>) -> FetchCmd {
+    fn build_init_cmd(
+        self: &Arc<Self>,
+        ctx: &PlanCtx,
+        handle: Segment<Downloading>,
+    ) -> Option<FetchCmd> {
         let resource = match &self.init.content {
             SegmentContent::Plain => ctx
                 .scope
@@ -839,7 +869,7 @@ impl HlsVariant {
                         handle.into_loaded(actual);
                         continue;
                     }
-                    out.push(self.build_init_cmd(ctx, handle));
+                    out.extend(self.build_init_cmd(ctx, handle));
                 }
                 PlannedFetch::Segment(seg_idx) => {
                     let Some(entry) = self.segments.get(seg_idx as usize) else {
@@ -912,7 +942,7 @@ impl HlsVariant {
                 return None;
             }
         };
-        Some(self.build_cmd(entry.url.clone(), resource, handle))
+        self.build_cmd(entry.url.clone(), resource, handle)
     }
 
     /// Reader-facing lookup in **virtual** byte space. Subtracts the
@@ -1627,7 +1657,13 @@ impl HlsVariant {
 /// peer doesn't keep the variant alive past teardown.
 struct FetchSlot {
     handle: Segment<Downloading>,
-    resource: AssetResource<DecryptContext>,
+    /// Sole commit owner (non-`Clone`); consumed in `settle`.
+    writer: AssetWriter<DecryptContext>,
+    /// Read view of the writer's generation — used to observe a
+    /// committed-by-race status before deciding the terminal transition.
+    reader: AssetReader<DecryptContext>,
+    /// Clone-able streaming-write handle for the fetch body closure.
+    raw: RawWriteHandle,
     cancel: CancellationToken,
 }
 
@@ -1663,72 +1699,80 @@ impl FetchSlot {
 
     fn settle_cancelled(self, bytes_written: u64) {
         let Self {
-            handle, resource, ..
+            handle,
+            writer,
+            reader,
+            ..
         } = self;
-        let committed = matches!(resource.status(), ResourceStatus::Committed { .. });
+        let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
         debug!(target: "kithara_hls::settle", bytes_written, committed, "stale (cancelled)");
         if committed {
+            // Committed by the new epoch's writer — dropping our (stale)
+            // writer fails only its own generation's gate; the cleanup is
+            // race-safe (skips removal when the live state is Committed).
+            drop(writer);
             handle.abandon();
         } else {
-            resource.fail("fetch cancelled before completion".into());
+            writer.fail("fetch cancelled before completion".into());
             handle.into_missing();
         }
     }
 
     fn settle_failure(self, e: &NetError) {
         let Self {
-            handle, resource, ..
+            handle,
+            writer,
+            reader,
+            ..
         } = self;
-        let committed = matches!(resource.status(), ResourceStatus::Committed { .. });
+        let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
         debug!(target: "kithara_hls::settle", err = %e, committed, "fail-path");
         if committed {
-            match resource.status() {
-                ResourceStatus::Committed { final_len: Some(n) } => {
-                    handle.into_loaded(n);
-                }
-                _ => {
-                    handle.into_loaded_no_apply();
-                }
+            // Committed by the new epoch's writer; ours never wrote — drop it
+            // (cleanup is race-safe) and adopt the on-disk length.
+            drop(writer);
+            if let ResourceStatus::Committed { final_len: Some(n) } = reader.status() {
+                handle.into_loaded(n);
+            } else {
+                handle.into_loaded_no_apply();
             }
         } else {
-            resource.fail(e.to_string());
+            writer.fail(e.to_string());
             handle.into_missing();
         }
     }
 
     fn settle_success(self, bytes_written: u64) {
-        let Self {
-            handle, resource, ..
-        } = self;
-        let commit_result = resource.commit(Some(bytes_written));
-        let commit_ok = commit_result.is_ok();
-        match &commit_result {
-            Ok(()) => debug!(target: "kithara_hls::settle", commit_ok, bytes_written, "success"),
-            Err(e) => debug!(
-                target: "kithara_hls::settle",
-                commit_ok,
-                bytes_written,
-                err = %e,
-                "success-but-commit-failed"
-            ),
+        let Self { handle, writer, .. } = self;
+        // Consume-self commit returns the Ready reader; read `final_len` off it
+        // (PKCS7 unpad shrinks DRM segments below the HEAD estimate).
+        match writer.commit(Some(bytes_written)) {
+            Ok(reader) => {
+                debug!(target: "kithara_hls::settle", bytes_written, "success");
+                let actual = match reader.status() {
+                    ResourceStatus::Committed { final_len: Some(n) } => n,
+                    _ => bytes_written,
+                };
+                handle.into_loaded(actual);
+            }
+            Err(e) => {
+                debug!(
+                    target: "kithara_hls::settle",
+                    bytes_written,
+                    err = %e,
+                    "success-but-commit-failed"
+                );
+                handle.into_missing();
+            }
         }
-        if !commit_ok {
-            handle.into_missing();
-            return;
-        }
-        let actual = match resource.status() {
-            ResourceStatus::Committed { final_len: Some(n) } => n,
-            _ => bytes_written,
-        };
-        handle.into_loaded(actual);
     }
 
     fn writer(&self) -> WriterFn {
-        let resource = self.resource.clone();
+        let raw = self.raw.clone();
         let offset = Arc::new(AtomicU64::new(0));
         Box::new(move |chunk: &[u8]| {
             let pos = offset.fetch_add(chunk.len() as u64, Ordering::Relaxed);
-            resource.write_at(pos, chunk).map_err(IoError::other)
+            raw.write_at(pos, chunk).map_err(IoError::other)
         })
     }
 }

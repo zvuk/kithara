@@ -337,9 +337,13 @@ where
     fn commit(mut self, final_len: Option<u64>) -> StorageResult<ProcessedReader<W::Reader, Ctx>> {
         let needs_processing = self.ctx.is_some() && !self.guard.readiness.is_ready();
         let actual_len = match (needs_processing, final_len, self.ctx.as_ref()) {
-            (true, Some(len), Some(ctx)) if len > 0 => {
-                Some(run_process(&self.inner, ctx, &self.process, &self.pool, len)?)
-            }
+            (true, Some(len), Some(ctx)) if len > 0 => Some(run_process(
+                &self.inner,
+                ctx,
+                &self.process,
+                &self.pool,
+                len,
+            )?),
             _ => final_len,
         };
 
@@ -498,7 +502,11 @@ where
         &self.inner
     }
 
-    fn wrap_ready(&self, inner: A::ReadyRes, ctx: Option<Ctx>) -> ProcessedReader<A::ReadyRes, Ctx> {
+    fn wrap_ready(
+        &self,
+        inner: A::ReadyRes,
+        ctx: Option<Ctx>,
+    ) -> ProcessedReader<A::ReadyRes, Ctx> {
         ProcessedReader::wrap_ready(inner, ctx, Arc::clone(&self.process), self.pool.clone())
     }
 }

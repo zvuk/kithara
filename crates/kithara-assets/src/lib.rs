@@ -19,13 +19,14 @@ mod key;
 mod lease;
 mod mem_store;
 mod process;
+mod resource;
 mod scope;
 mod state;
 mod store;
 mod unified;
 
 pub use acquisition::{AcquisitionResult, RawWriteHandle, ReadSide, WriteSide};
-pub use base::{Assets, BaseReader, BaseWriter};
+pub use base::Assets;
 pub use cache::{CachedAssets, CachedReader, CachedWriter};
 #[cfg(not(target_arch = "wasm32"))]
 pub use disk_store::DiskAssetStore;
@@ -40,6 +41,7 @@ pub use kithara_bufpool::BytePool;
 pub use lease::{LeaseAssets, LeaseGuard, LeaseReader, LeaseWriter};
 pub use mem_store::MemAssetStore;
 pub use process::{ProcessChunkFn, ProcessedReader, ProcessedWriter, ProcessingAssets};
+pub use resource::{BaseReader, BaseWriter};
 pub use scope::AssetScope;
 pub use state::AssetResourceState;
 pub use store::{

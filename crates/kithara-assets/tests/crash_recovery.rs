@@ -58,7 +58,10 @@ fn seed_clean_state_then(dir: &Path, mangle: impl FnOnce(&Path)) {
     let store = AssetStoreBuilder::new().root_dir(dir).build();
     let scope = store.scope(Consts::ASSET_ROOT);
     let key = scope.key(Consts::KEY_NAME);
-    write_commit(store.acquire_resource(&key, None).expect("acquire"), b"hello-world!");
+    write_commit(
+        store.acquire_resource(&key, None).expect("acquire"),
+        b"hello-world!",
+    );
     store.checkpoint().expect("checkpoint");
     mangle(dir);
 }

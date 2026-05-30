@@ -1,12 +1,12 @@
 use std::{path::PathBuf, sync::Arc};
 
 use kithara_assets::{
-    AssetResource, AssetStore, AssetStoreBuilder, AssetsError, EvictConfig, ResourceHandle,
-    ResourceKey, StoreOptions, asset_root_for_url,
+    AcquisitionResult, AssetReader, AssetStore, AssetStoreBuilder, AssetsError, EvictConfig,
+    ReadSide, ResourceKey, StoreOptions, WriteSide, asset_root_for_url,
 };
 use kithara_events::EventBus;
-use kithara_platform::{time::Duration, tokio};
-use kithara_storage::{ResourceStatus, StorageError};
+use kithara_platform::{Mutex, time::Duration, tokio};
+use kithara_storage::StorageError;
 use kithara_stream::{
     AudioCodec, SourceError as StreamSourceError, StreamType, Timeline,
     dl::{Downloader, DownloaderConfig},
@@ -65,10 +65,10 @@ impl File {
         let store = Arc::new(AssetStoreBuilder::new().cancel(cancel.clone()).build());
 
         let key = ResourceKey::absolute(path);
-        let res = store
+        let reader = store
             .open_resource(&key, None)
             .map_err(SourceError::Assets)?;
-        let len = res.len();
+        let len = reader.len();
 
         let bus = config
             .bus
@@ -80,10 +80,10 @@ impl File {
         let total = len.unwrap_or(0);
         coord.set_download_pos(total);
 
-        let cached_codec = sniff_codec(&res);
+        let cached_codec = sniff_codec(&reader);
 
         Ok(FileSource::local(
-            res,
+            reader,
             coord,
             bus,
             store,
@@ -128,7 +128,12 @@ impl File {
             .unwrap_or_else(|| build_shared_asset_store(&config.store, cancel.clone()));
 
         let key = backend.scope(asset_root.as_str()).key_from_url(&url);
-        let state = FileStreamState::create(
+        let FileStreamState {
+            backend,
+            acq,
+            bus,
+            key,
+        } = FileStreamState::create(
             &backend,
             key,
             config.bus.clone(),
@@ -137,25 +142,34 @@ impl File {
 
         let timeline = Timeline::new();
         let coord = Arc::new(FileCoord::new(timeline));
-        coord.set_total_bytes(state.res.len());
 
-        if matches!(state.res.status(), ResourceStatus::Committed { .. }) {
-            tracing::debug!("file already cached, skipping download");
-            let total = coord.total_bytes().unwrap_or(0);
-            coord.set_download_pos(total);
+        // `Ready` means the file is already committed in the cache — no
+        // download. `Pending` hands the single non-Clone commit owner to the
+        // download path. The phase replaces the old runtime `status()` probe.
+        let writer = match acq {
+            AcquisitionResult::Ready(reader) => {
+                tracing::debug!("file already cached, skipping download");
+                coord.set_total_bytes(reader.len());
+                let total = coord.total_bytes().unwrap_or(0);
+                coord.set_download_pos(total);
+                let cached_codec = sniff_codec(&reader);
+                return Ok(FileSource::local(
+                    reader,
+                    coord,
+                    bus,
+                    backend,
+                    key,
+                    cancel.child_token(),
+                    cached_codec,
+                ));
+            }
+            AcquisitionResult::Pending(writer) => writer,
+            _ => unreachable!("AcquisitionResult is Pending | Ready"),
+        };
 
-            let cached_codec = sniff_codec(&state.res);
-
-            return Ok(FileSource::local(
-                state.res.clone(),
-                coord,
-                state.bus.clone(),
-                Arc::clone(&state.backend),
-                state.key.clone(),
-                cancel.child_token(),
-                cached_codec,
-            ));
-        }
+        let reader = writer.reader();
+        let raw = writer.raw_write_handle();
+        coord.set_total_bytes(reader.len());
 
         // Attach this consumer's download demand on the shared resource.
         // The CAS winner gets the producer handle and drives the GET; a
@@ -163,24 +177,23 @@ impl File {
         // loses and reads the shared bytes instead of issuing its own
         // download. With a private per-stream store this is a single
         // consumer that always wins.
-        let (demand_lease, producer) = state.backend.attach_demand(
-            &state.key,
-            coord.read_pos_handle(),
-            config.look_ahead_bytes,
-        );
+        let (demand_lease, producer) =
+            backend.attach_demand(&key, coord.read_pos_handle(), config.look_ahead_bytes);
 
         let inner = Arc::new(FileInner::new(
             FileSourceCtx {
                 cancel,
                 coord: Arc::clone(&coord),
-                bus: state.bus.clone(),
+                bus: bus.clone(),
             },
             FileAssetCtx {
                 url,
                 headers: config.headers,
-                backend: Arc::clone(&state.backend),
-                res: state.res.clone(),
-                key: state.key.clone(),
+                backend: Arc::clone(&backend),
+                reader,
+                writer: Mutex::new(Some(writer)),
+                raw: Some(raw),
+                key: key.clone(),
             },
             FilePhase::Init,
             Some(demand_lease),
@@ -188,7 +201,7 @@ impl File {
 
         let peer_handle = downloader
             .register(Arc::new(FilePeer::new(Arc::clone(&inner), producer)))
-            .with_bus(state.bus.clone());
+            .with_bus(bus.clone());
 
         let mut source = FileSource::with_inner(inner, coord);
         source.set_peer_handle(peer_handle);
@@ -264,8 +277,8 @@ pub fn build_shared_asset_store(
 /// itself fails or the prefix doesn't match a known signature — callers
 /// must treat both as "no hint available" and fall back to the regular
 /// probe path.
-fn sniff_codec(res: &AssetResource) -> Option<AudioCodec> {
+fn sniff_codec(reader: &AssetReader) -> Option<AudioCodec> {
     let mut buf = [0u8; 16];
-    let read = res.read_at(0, &mut buf).ok()?;
+    let read = reader.read_at(0, &mut buf).ok()?;
     AudioCodec::try_from(&buf[..read]).ok()
 }

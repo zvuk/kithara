@@ -8,7 +8,7 @@ use std::{
 };
 
 use kithara_abr::Abr;
-use kithara_assets::{ProducerHandle, ResourceHandle};
+use kithara_assets::{ProducerHandle, ReadSide, WriteSide};
 use kithara_events::{FileError, FileEvent};
 use kithara_net::{Headers, NetError, RangeSpec, Retryability};
 use kithara_platform::Mutex;
@@ -79,13 +79,18 @@ impl FilePeer {
         let headers = self.inner.asset.headers.clone();
         let cancel = self.inner.source.cancel.clone();
 
-        let resource = self.inner.asset.res.clone();
+        let raw = self.inner.asset.raw.clone();
         let coord_writer = Arc::clone(&self.inner.source.coord);
         let offset = Arc::new(AtomicU64::new(resume_from));
         let writer_offset = Arc::clone(&offset);
         let writer = Box::new(move |chunk: &[u8]| -> io::Result<()> {
             let pos = writer_offset.fetch_add(chunk.len() as u64, Ordering::Relaxed);
-            resource.write_at(pos, chunk).map_err(io::Error::other)?;
+            let Some(raw) = raw.as_ref() else {
+                return Err(io::Error::other(
+                    "file resource has no writer (already committed or read-only)",
+                ));
+            };
+            raw.write_at(pos, chunk).map_err(io::Error::other)?;
             coord_writer.set_download_pos(pos + chunk.len() as u64);
             Ok(())
         });
@@ -124,7 +129,7 @@ impl FilePeer {
     /// fully covered. The gap walk only runs once the status check passes.
     fn next_fetchable_gap(&self) -> Option<u64> {
         matches!(
-            self.inner.asset.res.status(),
+            self.inner.asset.reader.status(),
             ResourceStatus::Active | ResourceStatus::Committed { .. }
         )
         .then(|| self.inner.next_gap_start())
@@ -227,8 +232,14 @@ impl FileInner {
             .coord
             .total_bytes()
             .unwrap_or(resume_from + bytes_written);
-        match self.asset.res.commit(Some(final_len)) {
-            Ok(()) => self.set_phase(FilePhase::Complete),
+        let Some(writer) = self.take_writer() else {
+            // Writer already consumed (committed by a sibling/race) — the
+            // resource is final; just advance the FSM.
+            self.set_phase(FilePhase::Complete);
+            return;
+        };
+        match writer.commit(Some(final_len)) {
+            Ok(_reader) => self.set_phase(FilePhase::Complete),
             Err(e) => {
                 let msg = e.to_string();
                 self.fail_and_evict(&msg);
@@ -248,10 +259,10 @@ impl FileInner {
     fn next_gap_start(&self) -> Option<u64> {
         let upper = self
             .asset
-            .res
+            .reader
             .len()
             .or_else(|| self.source.coord.total_bytes())
             .unwrap_or(u64::MAX);
-        self.asset.res.next_gap(0, upper).map(|gap| gap.start)
+        self.asset.reader.next_gap(0, upper).map(|gap| gap.start)
     }
 }

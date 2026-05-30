@@ -26,6 +26,9 @@ use crate::{
 
 type RemoveFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
 
+/// Pin guard + removal channel + byte recorder resolved for one resource key.
+type LeaseBindings = (LeaseGuard, Option<RemoveFn>, Option<Arc<dyn ByteRecorder>>);
+
 /// Shared registry of live (non-dropped) lease resources keyed by
 /// `ResourceKey` (which carries its own `asset_root`). Per-shard locks
 /// via `DashMap`; contention is bounded by lease churn rate and shard
@@ -249,9 +252,8 @@ pub struct LeaseWriter<W: WriteSide, L> {
     inner: W,
     _lease: L,
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
-    remove: Option<RemoveFn>,
-    live: Option<Arc<LiveResource>>,
-    resource_key: Option<ResourceKey>,
+    /// Owns the removal channel, resource key, drop-token and live mirror —
+    /// the single home for those, also read by `commit`/`reader`/`fail`.
     cleanup: WriterCleanup,
 }
 
@@ -288,7 +290,7 @@ impl<W: WriteSide, L> Debug for LeaseWriter<W, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LeaseWriter")
             .field("inner", &self.inner)
-            .field("key", &self.resource_key)
+            .field("key", &self.cleanup.resource_key)
             .finish_non_exhaustive()
     }
 }
@@ -340,9 +342,9 @@ where
             inner: self.inner.reader(),
             lease: self._lease.clone(),
             byte_recorder: self.byte_recorder.clone(),
-            remove: self.remove.clone(),
-            live: self.live.clone(),
-            resource_key: self.resource_key.clone(),
+            remove: self.cleanup.remove.clone(),
+            live: self.cleanup.live.clone(),
+            resource_key: self.cleanup.resource_key.clone(),
         }
     }
 
@@ -352,11 +354,15 @@ where
 
     fn commit(mut self, final_len: Option<u64>) -> StorageResult<LeaseReader<W::Reader, L>> {
         let reader_inner = self.inner.commit(final_len)?;
-        if let Some(live) = &self.live {
+        if let Some(live) = &self.cleanup.live {
             live.set(AssetResourceState::from(reader_inner.status()));
         }
         if let Some(ref recorder) = self.byte_recorder
-            && let Some(asset_root) = self.resource_key.as_ref().and_then(ResourceKey::asset_root)
+            && let Some(asset_root) = self
+                .cleanup
+                .resource_key
+                .as_ref()
+                .and_then(ResourceKey::asset_root)
             && let Some(path) = reader_inner.path()
             && let Ok(metadata) = fs::metadata(path)
             && metadata.is_file()
@@ -368,15 +374,15 @@ where
             inner: reader_inner,
             lease: self._lease.clone(),
             byte_recorder: self.byte_recorder.clone(),
-            remove: self.remove.clone(),
-            live: self.live.clone(),
-            resource_key: self.resource_key.clone(),
+            remove: self.cleanup.remove.clone(),
+            live: self.cleanup.live.clone(),
+            resource_key: self.cleanup.resource_key.clone(),
         })
     }
 
     fn fail(self, reason: String) {
         self.inner.fail(reason.clone());
-        if let Some(live) = &self.live {
+        if let Some(live) = &self.cleanup.live {
             live.set(AssetResourceState::Failed(reason));
         }
         // cleanup stays armed: a failed (non-committed) resource is removed on drop.
@@ -397,11 +403,8 @@ where
         }
         Ok(LeaseWriter {
             inner: writer_inner,
-            _lease: self.lease.clone(),
-            byte_recorder: self.byte_recorder.clone(),
-            remove: self.remove.clone(),
-            live: self.live.clone(),
-            resource_key: self.resource_key.clone(),
+            _lease: self.lease,
+            byte_recorder: self.byte_recorder,
             cleanup: WriterCleanup {
                 remove: self.remove,
                 resource_key: self.resource_key,
@@ -488,10 +491,7 @@ where
 {
     /// Resolve the pin guard + removal channel + byte recorder for `key`.
     /// Absolute keys (and the bypass capability) yield a no-op lease.
-    fn lease_for(
-        &self,
-        key: &ResourceKey,
-    ) -> AssetsResult<(LeaseGuard, Option<RemoveFn>, Option<Arc<dyn ByteRecorder>>)> {
+    fn lease_for(&self, key: &ResourceKey) -> AssetsResult<LeaseBindings> {
         let pin = (self.is_active() && !key.is_absolute())
             .then(|| key.asset_root())
             .flatten();
@@ -519,9 +519,6 @@ where
             inner,
             _lease: lease,
             byte_recorder,
-            remove: remove.clone(),
-            live: Some(Arc::clone(&live)),
-            resource_key: Some(key.clone()),
             cleanup: WriterCleanup {
                 remove,
                 resource_key: Some(key.clone()),

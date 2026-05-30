@@ -3,9 +3,13 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 
-use kithara_assets::{AssetResource, AssetStore, DemandLease, ResourceHandle, ResourceKey};
+use kithara_assets::{
+    AssetReader, AssetResource, AssetStore, AssetWriter, DemandLease, RawWriteHandle, ReadSide,
+    ResourceKey, WriteSide,
+};
 use kithara_events::EventBus;
 use kithara_net::Headers;
+use kithara_platform::Mutex;
 use kithara_stream::MediaInfo;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -14,11 +18,12 @@ use super::segments::FileSegmentIndex;
 use crate::{coord::FileCoord, error::SourceError};
 
 /// Creation helper: acquire the asset resource and prepare the event bus
-/// before constructing a remote `FileSource`.
-#[derive(Debug, Clone)]
+/// before constructing a remote `FileSource`. The phase-typed acquisition
+/// (`Pending` writer to download / `Ready` reader already cached) is decided
+/// by the caller.
 pub(crate) struct FileStreamState {
     pub(crate) backend: Arc<AssetStore>,
-    pub(crate) res: AssetResource,
+    pub(crate) acq: AssetResource,
     pub(crate) bus: EventBus,
     pub(crate) key: ResourceKey,
 }
@@ -30,14 +35,14 @@ impl FileStreamState {
         bus: Option<EventBus>,
         event_channel_capacity: usize,
     ) -> Result<Self, SourceError> {
-        let res = assets
+        let acq = assets
             .acquire_resource(&key, None)
             .map_err(SourceError::Assets)?;
         let bus = bus.unwrap_or_else(|| EventBus::new(event_channel_capacity));
         Ok(Self {
             bus,
             key,
-            res,
+            acq,
             backend: Arc::clone(assets),
         })
     }
@@ -64,9 +69,16 @@ pub(crate) struct FileSourceCtx {
 }
 
 /// Data-plane handles describing where the file lives and how to fetch it.
+///
+/// The resource is phase-split: `reader` serves the synchronous read path;
+/// `writer` is the single non-`Clone` commit owner (taken on commit/fail),
+/// present only on the download path; `raw` is the clone-able streaming-write
+/// handle a fetch closure uses to land bytes into the writer's generation.
 pub(crate) struct FileAssetCtx {
     pub(crate) backend: Arc<AssetStore>,
-    pub(crate) res: AssetResource,
+    pub(crate) reader: AssetReader,
+    pub(crate) writer: Mutex<Option<AssetWriter>>,
+    pub(crate) raw: Option<RawWriteHandle>,
     pub(crate) headers: Option<Headers>,
     pub(crate) key: ResourceKey,
     pub(crate) url: Url,
@@ -124,25 +136,33 @@ impl FileInner {
     /// Read the fully cached file bytes and parse a fragmented-mp4 index,
     /// or `None` when the file is not yet complete or not fragmented mp4.
     fn build_segment_index_from_cache(&self) -> Option<FileSegmentIndex> {
-        let total = self.asset.res.len()?;
-        if total == 0 || !self.asset.res.contains_range(0..total) {
+        let total = self.asset.reader.len()?;
+        if total == 0 || !self.asset.reader.contains_range(0..total) {
             return None;
         }
         let total_usize = usize::try_from(total).ok()?;
         let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
-        self.asset.res.read_at(0, &mut buf).ok()?;
+        self.asset.reader.read_at(0, &mut buf).ok()?;
         FileSegmentIndex::try_build(&buf)
+    }
+
+    /// Take the single commit-owning writer, if this is a download path and it
+    /// has not been consumed yet.
+    pub(crate) fn take_writer(&self) -> Option<AssetWriter> {
+        self.asset.writer.lock_sync().take()
     }
 
     /// Mark the resource failed and evict the pre-allocated cache file.
     ///
     /// Call on any terminal download error so the file is gone from disk
-    /// before the task returns — without this the clone in `FileInner.asset.res`
+    /// before the task returns — without this the reader in `FileInner.asset`
     /// keeps the mmap parked in the cache directory for the full lifetime
     /// of the holding `Stream<File>`.
     pub(crate) fn fail_and_evict(&self, reason: &str) {
         self.set_phase(FilePhase::Complete);
-        self.asset.res.fail(reason.to_string());
+        if let Some(writer) = self.take_writer() {
+            writer.fail(reason.to_string());
+        }
         self.asset.backend.remove_resource(&self.asset.key);
     }
 

@@ -10,11 +10,17 @@ use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 /// writer retains sole ownership of [`commit`](WriteSide::commit). Writes land
 /// on the same generation the writer will commit.
 #[derive(Clone)]
-pub struct RawWriteHandle(Arc<dyn Fn(u64, &[u8]) -> StorageResult<()> + Send + Sync>);
+pub struct RawWriteHandle(RawWriteFn);
+
+/// Shared raw-byte write closure backing a [`RawWriteHandle`].
+type RawWriteFn = Arc<dyn Fn(u64, &[u8]) -> StorageResult<()> + Send + Sync>;
 
 impl RawWriteHandle {
     /// Build a handle from a raw write closure.
-    pub fn new(f: impl Fn(u64, &[u8]) -> StorageResult<()> + Send + Sync + 'static) -> Self {
+    pub fn new<F>(f: F) -> Self
+    where
+        F: Fn(u64, &[u8]) -> StorageResult<()> + Send + Sync + 'static,
+    {
         Self(Arc::new(f))
     }
 

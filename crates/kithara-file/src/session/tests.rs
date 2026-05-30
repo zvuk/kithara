@@ -1,6 +1,6 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
-use kithara_assets::{AssetResource, AssetStoreBuilder, ResourceHandle};
+use kithara_assets::{AcquisitionResult, AssetReader, AssetStoreBuilder, WriteSide};
 use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
@@ -19,7 +19,7 @@ fn make_coord(timeline: Timeline) -> Arc<FileCoord> {
     Arc::new(FileCoord::new(timeline))
 }
 
-fn make_source(res: AssetResource, coord: Arc<FileCoord>, bus: EventBus) -> FileSource {
+fn make_source(reader: AssetReader, coord: Arc<FileCoord>, bus: EventBus) -> FileSource {
     let backend = Arc::new(
         AssetStoreBuilder::new()
             .cancel(CancellationToken::new())
@@ -27,7 +27,7 @@ fn make_source(res: AssetResource, coord: Arc<FileCoord>, bus: EventBus) -> File
     );
     let key = backend.scope("test").key("test-source");
     FileSource::local(
-        res,
+        reader,
         coord,
         bus,
         backend,
@@ -71,17 +71,18 @@ fn file_coord_total_bytes_roundtrip() {
     assert_eq!(coord.total_bytes(), None);
 }
 
-fn create_committed_resource(data: &[u8]) -> AssetResource {
+fn create_committed_resource(data: &[u8]) -> AssetReader {
     let store = AssetStoreBuilder::new()
         .ephemeral(true)
         .cancel(CancellationToken::new())
         .build();
 
     let key = store.scope("test").key("test.dat");
-    let res = store.acquire_resource(&key, None).unwrap();
-    res.write_at(0, data).unwrap();
-    res.commit(Some(data.len() as u64)).unwrap();
-    res
+    let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
+        panic!("fresh acquire must be Pending");
+    };
+    writer.write_at(0, data).unwrap();
+    writer.commit(Some(data.len() as u64)).unwrap()
 }
 
 #[kithara::test]

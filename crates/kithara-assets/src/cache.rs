@@ -433,7 +433,10 @@ where
         ctx: Option<Self::Context>,
     ) -> AssetsResult<AcquisitionResult<Self::ActiveRes, Self::ReadyRes>> {
         if !self.is_active() || key.is_absolute() {
-            return Ok(self.wrap_acq(key, self.inner.acquire_resource_with_ctx(key, identity, ctx)?));
+            return Ok(self.wrap_acq(
+                key,
+                self.inner.acquire_resource_with_ctx(key, identity, ctx)?,
+            ));
         }
 
         let cache_key = CacheKey::Resource {
@@ -466,8 +469,11 @@ where
             AcquisitionResult::Pending(w) => w.reader(),
             AcquisitionResult::Ready(r) => r.clone(),
         };
-        let displaced =
-            self.cache_entry(&mut cache, cache_key, CacheEntry::Resource(reader_for_cache));
+        let displaced = self.cache_entry(
+            &mut cache,
+            cache_key,
+            CacheEntry::Resource(reader_for_cache),
+        );
         let on_invalidated = self.on_invalidated.clone();
         drop(cache);
 
@@ -519,7 +525,9 @@ where
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::ReadyRes> {
         if !self.is_active() || key.is_absolute() {
-            return Ok(self.wrap_reader(key, self.inner.open_resource_with_ctx(key, identity, ctx)?));
+            return Ok(
+                self.wrap_reader(key, self.inner.open_resource_with_ctx(key, identity, ctx)?)
+            );
         }
 
         let cache_key = CacheKey::Resource {
