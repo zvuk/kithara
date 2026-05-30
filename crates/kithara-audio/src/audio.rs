@@ -171,11 +171,22 @@ pub struct Audio<S> {
 
     /// Whether `preload()` has been called (enables non-blocking mode).
     preloaded: bool,
+
+    /// `(seek_epoch, position_ms)` of the last emitted `PlaybackProgress`.
+    /// Throttles high-frequency progress telemetry within an epoch so it
+    /// cannot starve low-frequency control events on the shared bounded bus;
+    /// a new seek epoch always emits.
+    last_progress_emit: Option<(u64, u64)>,
 }
 
 impl<S> Audio<S> {
     /// Probe buffer size in bytes for initial stream detection.
     const PROBE_BUFFER_SIZE: usize = 1024;
+
+    /// Minimum playback-position advance (ms) between `PlaybackProgress`
+    /// emissions. Caps progress telemetry to ~10/s so it cannot flood the
+    /// shared bounded event bus and drop control events.
+    const PROGRESS_EMIT_MIN_DELTA_MS: u64 = 100;
 
     /// Backoff duration between receive attempts.
     const RECV_BACKOFF: Duration = Duration::from_micros(100);
@@ -256,8 +267,17 @@ impl<S> Audio<S> {
         self.bus.publish(event);
     }
 
-    fn emit_playback_progress(&self) {
+    fn emit_playback_progress(&mut self) {
         let position_ms = clamp_u128_to_u64_millis(self.position().as_millis());
+        let epoch = self.validator.epoch;
+        if let Some((last_epoch, last_ms)) = self.last_progress_emit
+            && last_epoch == epoch
+            && position_ms.abs_diff(last_ms) < Self::PROGRESS_EMIT_MIN_DELTA_MS
+        {
+            return;
+        }
+        self.last_progress_emit = Some((epoch, position_ms));
+
         let total_ms = self
             .timeline
             .total_duration()
@@ -905,6 +925,7 @@ where
             interleaved: Some(interleaved),
             pcm_pool: pool.clone(),
             preloaded: false,
+            last_progress_emit: None,
             track_id: Some(track_id),
             worker: Some(worker),
             is_standalone_worker: is_standalone,
@@ -1363,6 +1384,7 @@ mod tests {
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             preload_notify: Arc::new(Notify::new()),
             preloaded: false,
+            last_progress_emit: None,
             track_id: None,
             worker: None,
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
@@ -1423,6 +1445,7 @@ mod tests {
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             preload_notify: Arc::new(Notify::new()),
             preloaded: true,
+            last_progress_emit: None,
             track_id: None,
             worker: None,
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),

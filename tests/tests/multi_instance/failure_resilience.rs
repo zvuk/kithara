@@ -123,7 +123,11 @@ async fn create_hls_audio(
         .expect("create Audio<Stream<Hls>>")
 }
 
-/// Spawn a reader instance that optionally has its cancel fired after `delay_ms`.
+/// Spawn a reader instance whose cancel, when `cancel_after` is set, fires
+/// `delay_ms` after creation completes — modelling a peer cancelled mid
+/// playback. The timer is armed only once `create_hls_audio` returns so a
+/// slow create under load cannot race the cancel into `Audio::new` and
+/// surface as `source error: cancelled` from creation itself.
 async fn spawn_instance(
     id: usize,
     wav_data: &Arc<Vec<u8>>,
@@ -134,6 +138,8 @@ async fn spawn_instance(
     let cancel = CancellationToken::new();
     let healthy = cancel_after.is_none();
 
+    let audio = create_hls_audio(&server, temp.path(), cancel.clone()).await;
+
     if let Some(delay_ms) = cancel_after {
         let cancel_clone = cancel.clone();
         spawn(async move {
@@ -141,8 +147,6 @@ async fn spawn_instance(
             cancel_clone.cancel();
         });
     }
-
-    let audio = create_hls_audio(&server, temp.path(), cancel).await;
 
     spawn_blocking(move || {
         let _server = server;

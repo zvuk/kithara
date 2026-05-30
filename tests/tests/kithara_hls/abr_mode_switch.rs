@@ -314,6 +314,100 @@ async fn vod_manual_switch_affects_future_segments() {
     );
 }
 
+/// Deterministic regression for the urgent-down-switch reader-stall hang.
+///
+/// V0's tail (segment >= 5) is delayed far longer than the hang budget, so
+/// once the reader reaches the segment-4/5 boundary it blocks on a V0 segment
+/// V0 cannot deliver in time. The ABR raises an `UrgentDownSwitch` to the fast
+/// V1, but the Auto-mode commit historically fired only on a reader
+/// segment-boundary cross — which the undelivered segment prevents. That
+/// circular dependency stalled the reader past `KITHARA_HANG_TIMEOUT_SECS`
+/// and tripped the watchdog (the production freeze). The proactive rescue
+/// (`HlsCoord::urgent_rescue_boundary`) hands the undelivered tail to V1 at
+/// the segment boundary, so the reader finishes V0's loaded prefix and reads
+/// the rest from V1. With the delay (10s) >> hang budget (5s) the stall is
+/// deterministic: pre-fix this test trips the watchdog; post-fix it completes
+/// the full track via V1.
+#[kithara::test(
+    native,
+    tokio,
+    serial,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
+async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
+    let segment_count = 30;
+    let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
+    let pcm_data = Arc::new(create_pcm_segments(segment_count));
+
+    let server = HlsTestServer::new(HlsTestServerConfig {
+        variant_count: 2,
+        segments_per_variant: segment_count,
+        segment_size: D.segment_size,
+        segment_duration_secs: segment_duration_secs(),
+        custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
+        init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
+        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+        codecs: Some("wav".to_string()),
+        delay_rules: vec![DelayRule {
+            variant: Some(0),
+            segment_gte: Some(5),
+            delay_ms: 10_000,
+            ..Default::default()
+        }],
+        ..Default::default()
+    })
+    .await;
+
+    let url = server.url("/master.m3u8");
+    let temp_dir = TestTempDir::new();
+    let cancel = CancellationToken::new();
+    let bus = EventBus::new(8192);
+    let collector = EventCollector::new(&bus);
+
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(auto(0))
+        .build();
+
+    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus)
+        .media_info(wav_info)
+        .build();
+    let mut audio = Audio::<Stream<Hls>>::new(config)
+        .await
+        .expect("create audio");
+
+    let total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(20)))
+        .await
+        .expect("read");
+
+    let segments = collector.segments();
+    let switches = collector.switch_count();
+    let net_v1 = segments
+        .iter()
+        .filter(|s| s.variant == 1 && !s.cached)
+        .count();
+    info!(switches, net_v1, total, "urgent rescue test result");
+
+    // The reader must finish the whole track via V1, not stall on V0's
+    // undeliverable tail. A full WAV track is `segment_count * segment_size`
+    // PCM bytes; require the bulk of it (the rescue can drop at most the
+    // boundary segment to a short read, never the tail).
+    let full_frames = (segment_count * D.segment_size) as u64 / u64::from(D.channels) / 2;
+    assert!(
+        total >= full_frames * 9 / 10,
+        "reader must finish the track via V1 after the urgent rescue; \
+         got {total} frames, expected >= {} (90% of {full_frames})",
+        full_frames * 9 / 10
+    );
+    assert!(switches > 0, "an urgent down-switch must commit");
+    assert!(net_v1 > 0, "V1 must serve the tail after the rescue");
+}
+
 /// Multi-track shared ABR: quality persists across tracks, cache serves on replay.
 ///
 /// 1. Track 1, Auto(Some(0)) → plays V0 (1 Mbps); the default

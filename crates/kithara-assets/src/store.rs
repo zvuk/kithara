@@ -813,7 +813,7 @@ mod tests {
     /// Pins the `local_queue_playlist_behavior_*` HLS+AES128 hang: a single-resource
     /// disk deletion via `LeaseResource::drop` must invalidate `AvailabilityIndex`
     /// synchronously. Otherwise `contains_range` keeps claiming a committed range
-    /// whose file is gone, and the HLS reader spins on wait_range=Ready / read_at=Retry
+    /// whose file is gone, and the HLS reader spins on `wait_range=Ready` / `read_at=Retry`
     /// until the hang detector fires.
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -861,7 +861,7 @@ mod tests {
     /// `asset_root` directory (`delete_asset` and the two LRU-eviction paths) must
     /// also clear the per-resource `AvailabilityIndex` entries. Otherwise stale
     /// `contains_range`/`final_len` answers strand a deleted resource and the reader
-    /// spins on wait_range=Ready / read_at=Retry until the hang detector fires.
+    /// spins on `wait_range=Ready` / `read_at=Retry` until the hang detector fires.
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn red_test_delete_asset_strands_availability_index() {
