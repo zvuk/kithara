@@ -132,19 +132,19 @@ async fn build_resource(
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
-#[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::Manual(0))]
-#[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::Manual(2))]
+#[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
+#[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple_auto(DecoderBackend::Apple, AbrMode::Auto(None))
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::apple_locked_low(DecoderBackend::Apple, AbrMode::Manual(0))
+    case::apple_locked_low(DecoderBackend::Apple, AbrMode::manual(0))
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::apple_locked_high(DecoderBackend::Apple, AbrMode::Manual(2))
+    case::apple_locked_high(DecoderBackend::Apple, AbrMode::manual(2))
 )]
 #[cfg_attr(
     target_os = "android",

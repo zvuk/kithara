@@ -188,7 +188,7 @@ impl StateController {
             .unwrap_or_default();
         st.abr_variants = variants
             .iter()
-            .map(|v| (v.variant_index, variant_short_label(v)))
+            .map(|v| (v.variant_index.get(), variant_short_label(v)))
             .collect();
         st.abr_mode_is_auto = match mode {
             Some(AbrMode::Manual(_)) => false,

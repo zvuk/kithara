@@ -9,7 +9,7 @@ use kithara_audio::{Audio, AudioConfig};
 use kithara_events::{AudioEvent, Event, EventBus, SeekLifecycleStage};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_integration_tests::{
-    HlsFixtureBuilder, SAW_PERIOD, TestServerHelper,
+    HlsFixtureBuilder, SAW_PERIOD, TestServerHelper, auto,
     fixture_protocol::{DataMode, InitMode},
     phase_distance, phase_from_f32,
 };
@@ -122,7 +122,7 @@ async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
         .events(bus)
         .store(StoreOptions::default_builder().is_ephemeral(true).build())
         .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
+            mode: auto(0),
             ..Default::default()
         })
         .build();

@@ -103,9 +103,9 @@ impl ItemEventBridge {
                 let ffi_variants: Vec<crate::types::FfiVariant> = v
                     .iter()
                     .filter_map(|vi| {
-                        let Ok(index) = u32::try_from(vi.variant_index) else {
+                        let Ok(index) = u32::try_from(vi.variant_index.get()) else {
                             tracing::error!(
-                                idx = vi.variant_index,
+                                idx = vi.variant_index.get(),
                                 "BUG: HLS variant index exceeds u32::MAX, dropped from FFI list"
                             );
                             return None;
@@ -121,9 +121,9 @@ impl ItemEventBridge {
                 observer.on_event(FfiItemEvent::VariantsDiscovered {
                     variants: ffi_variants,
                 });
-                let Ok(initial_u32) = u32::try_from(*initial) else {
+                let Ok(initial_u32) = u32::try_from(initial.get()) else {
                     tracing::error!(
-                        idx = *initial,
+                        idx = initial.get(),
                         "BUG: initial HLS variant index exceeds u32::MAX, skipping initial VariantApplied"
                     );
                     return;
@@ -137,9 +137,9 @@ impl ItemEventBridge {
             Event::Abr(AbrEvent::ModeChanged {
                 mode: AbrMode::Manual(idx),
             }) => {
-                let Ok(idx_u32) = u32::try_from(*idx) else {
+                let Ok(idx_u32) = u32::try_from(idx.get()) else {
                     tracing::error!(
-                        idx = *idx,
+                        idx = idx.get(),
                         "BUG: manual variant index exceeds u32::MAX, skipping VariantSelected"
                     );
                     return;
@@ -156,9 +156,9 @@ impl ItemEventBridge {
                 observer.on_event(FfiItemEvent::VariantSelected { variant });
             }
             Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
-                let Ok(idx_u32) = u32::try_from(*to) else {
+                let Ok(idx_u32) = u32::try_from(to.get()) else {
                     tracing::error!(
-                        idx = *to,
+                        idx = to.get(),
                         "BUG: applied variant index exceeds u32::MAX, skipping VariantApplied"
                     );
                     return;

@@ -110,7 +110,7 @@ async fn create_hls_audio(
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(cache_dir))
         .cancel(cancel)
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));

@@ -66,7 +66,7 @@ async fn seek_beyond_head_total_within_actual_total(
     let config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel_token)
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();

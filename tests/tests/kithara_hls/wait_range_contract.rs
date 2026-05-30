@@ -51,7 +51,7 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     let config = HlsConfig::for_url(url)
         .store(store)
         .cancel(CancellationToken::new())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
     let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
 
@@ -163,7 +163,7 @@ async fn ephemeral_small_cache_reads_entire_stream() {
     let config = HlsConfig::for_url(url)
         .store(store)
         .cancel(CancellationToken::new())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
     let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
 

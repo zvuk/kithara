@@ -127,8 +127,8 @@ async fn run_case(
     );
 
     let initial_mode = match scenario {
-        Scenario::SustainedFlac => AbrMode::Manual(TOP_VARIANT),
-        Scenario::SwitchToFlac => AbrMode::Manual(0),
+        Scenario::SustainedFlac => AbrMode::manual(TOP_VARIANT),
+        Scenario::SwitchToFlac => AbrMode::manual(0),
     };
     let cfg = ResourceConfig::for_src(master.as_str())
         .expect("valid master URL")
@@ -166,7 +166,7 @@ async fn run_case(
             .await;
             let switch_at_frame = (pcm.len() / chan) as u64;
             let handle = abr.as_ref().expect("HLS resource exposes an ABR handle");
-            if let Err(e) = handle.set_mode(AbrMode::Manual(TOP_VARIANT)) {
+            if let Err(e) = handle.set_mode(AbrMode::manual(TOP_VARIANT)) {
                 warn!(?e, "switch to FLAC top failed");
             }
             render_into(

@@ -9,7 +9,7 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::{TestServerHelper, TestTempDir, abr_fast, temp_dir};
+use kithara_integration_tests::{TestServerHelper, TestTempDir, abr_fast, auto, temp_dir};
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
@@ -43,7 +43,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config).build();
 
@@ -174,7 +174,7 @@ async fn seek_sequence_from_log_real_stream(
     let url = server.asset(path);
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
     let config = AudioConfig::<Hls>::new(hls_config);
     let mut audio = Audio::<Stream<Hls>>::new(config)

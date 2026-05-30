@@ -440,7 +440,7 @@ impl NativeInner {
         };
         let abr_mode = match mode {
             FfiAbrMode::Auto => AbrMode::Auto(None),
-            FfiAbrMode::Manual { variant_index } => AbrMode::Manual(variant_index as usize),
+            FfiAbrMode::Manual { variant_index } => AbrMode::manual(variant_index as usize),
         };
         if let Err(err) = handle.set_mode(abr_mode) {
             tracing::warn!(?err, "set_abr_mode rejected by ABR state");
@@ -573,7 +573,7 @@ fn build_source_for_item(
     let scoped = inner.queue.bus().scoped();
     let abr_mode = item.abr_mode().map(|mode| match mode {
         FfiAbrMode::Auto => AbrMode::Auto(None),
-        FfiAbrMode::Manual { variant_index } => AbrMode::Manual(variant_index as usize),
+        FfiAbrMode::Manual { variant_index } => AbrMode::manual(variant_index as usize),
     });
     let mut config = ResourceConfig::for_src(item.url())
         .map_err(|e| FfiError::InvalidArgument {

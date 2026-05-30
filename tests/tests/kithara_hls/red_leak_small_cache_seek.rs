@@ -41,7 +41,7 @@ async fn build_small_cache_stream(
     let config = HlsConfig::for_url(url)
         .store(store)
         .cancel(cancel)
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
     Stream::<Hls>::new(config)
         .await

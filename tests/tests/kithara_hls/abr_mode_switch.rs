@@ -15,7 +15,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir,
+    TestServerHelper, TestTempDir, auto,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     signal_pcm::{Finite, SignalPcm, signal},
@@ -128,7 +128,7 @@ impl EventCollector {
                         read_bg.lock_sync().push((*variant, *segment_index));
                     }
                     Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
-                        info!(to = to, ?reason, "VariantApplied");
+                        info!(to = to.get(), ?reason, "VariantApplied");
                         sw_bg.fetch_add(1, Ordering::Release);
                     }
                     _ => {}
@@ -244,7 +244,7 @@ async fn vod_manual_switch_affects_future_segments() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
@@ -379,7 +379,7 @@ async fn multi_track_shared_abr_with_cache() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(CancellationToken::new())
         .events(bus1.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let config1 = AudioConfig::<Hls>::for_stream(hls1)
@@ -415,7 +415,7 @@ async fn multi_track_shared_abr_with_cache() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(CancellationToken::new())
         .events(bus2.clone())
-        .initial_abr_mode(AbrMode::Manual(1))
+        .initial_abr_mode(AbrMode::manual(1))
         .build();
 
     let config2 = AudioConfig::<Hls>::for_stream(hls2)
@@ -450,7 +450,7 @@ async fn multi_track_shared_abr_with_cache() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(CancellationToken::new())
         .events(bus3.clone())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let config3 = AudioConfig::<Hls>::for_stream(hls3)
@@ -541,7 +541,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
@@ -631,7 +631,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
@@ -661,7 +661,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
     handle
-        .set_mode(AbrMode::Manual(2))
+        .set_mode(AbrMode::manual(2))
         .expect("Manual(2) target is in the variant list");
 
     let post_total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(15)))
@@ -727,7 +727,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock_sync().push(to);
+                applied_bg.lock_sync().push(to.get());
             }
         }
     });
@@ -736,7 +736,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
@@ -765,7 +765,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
     handle
-        .set_mode(AbrMode::Manual(3))
+        .set_mode(AbrMode::manual(3))
         .expect("Manual(3) (FLAC variant) target must be valid");
 
     // Read for several seconds after the flip — if the decoder hangs on
@@ -848,7 +848,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .download_batch_size(segment_count * 2)
         .build();
 
@@ -898,7 +898,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
         .expect("HLS stream must expose AbrHandle");
     let pre_switch = collector.switch_count();
     handle
-        .set_mode(AbrMode::Manual(1))
+        .set_mode(AbrMode::manual(1))
         .expect("Manual(1) target must be valid");
 
     // Give the controller a moment to react. If `set_mode` correctly
@@ -977,7 +977,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .download_batch_size(segment_count * 2)
         .build();
 
@@ -1035,7 +1035,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
         .expect("HLS stream must expose AbrHandle");
     let pre_switch = collector.switch_count();
     handle
-        .set_mode(AbrMode::Manual(1))
+        .set_mode(AbrMode::manual(1))
         .expect("Manual(1) target must be valid");
 
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -1134,7 +1134,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
@@ -1232,7 +1232,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock_sync().push(to);
+                applied_bg.lock_sync().push(to.get());
             }
         }
     });
@@ -1241,7 +1241,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
@@ -1270,7 +1270,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
 
     // First switch: cross-codec to FLAC. Closes the variant_generation fence.
     handle
-        .set_mode(AbrMode::Manual(3))
+        .set_mode(AbrMode::manual(3))
         .expect("Manual(3) (FLAC) target valid");
 
     // Race window: same-codec switch must land BEFORE
@@ -1284,7 +1284,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     // bump fence, but shrinks `served_until` on whatever variant is
     // active and activates v=1 with `served_from = switch_at`.
     handle
-        .set_mode(AbrMode::Manual(1))
+        .set_mode(AbrMode::manual(1))
         .expect("Manual(1) (AAC sibling) target valid");
 
     // Read for 15s. Without the fix, decoder hits false EOF inside this
@@ -1383,7 +1383,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock_sync().push(to);
+                applied_bg.lock_sync().push(to.get());
             }
         }
     });
@@ -1392,7 +1392,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Manual(2))
+        .initial_abr_mode(AbrMode::manual(2))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
@@ -1462,7 +1462,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
     handle
-        .set_mode(AbrMode::Manual(0))
+        .set_mode(AbrMode::manual(0))
         .expect("Manual(0) (slq AAC) target valid");
 
     // Phase 4 — read 10 s post-switch. Bug repro: decoder emits a
@@ -1593,7 +1593,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         loop {
             match applied_rx.recv().await {
                 Ok(Event::Abr(AbrEvent::VariantApplied { to, .. })) => {
-                    applied_bg.lock_sync().push(to);
+                    applied_bg.lock_sync().push(to.get());
                 }
                 Ok(_) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -1606,7 +1606,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
@@ -1652,7 +1652,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
     handle
-        .set_mode(AbrMode::Manual(target_variant))
+        .set_mode(AbrMode::manual(target_variant))
         .expect("Manual target valid");
 
     // Mirror the production gap between `set_mode` and seek so the

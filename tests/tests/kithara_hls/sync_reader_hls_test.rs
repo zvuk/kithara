@@ -33,7 +33,7 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
     let config = HlsConfig::for_url(url.clone())
         .cancel(cancel_token.clone())
         .store(StoreOptions::new(temp_dir.path()))
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();

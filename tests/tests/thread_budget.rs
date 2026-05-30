@@ -70,7 +70,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel.clone())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config).build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -119,7 +119,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
         .store(shared_store())
         .cancel(cancel.clone())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
     let config: AudioConfig<Hls> = AudioConfig::for_stream(hls_config)
         .worker(shared_worker.clone())
@@ -129,7 +129,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let hls_config2 = HlsConfig::for_url(server.asset("hls/master.m3u8"))
         .store(shared_store())
         .cancel(cancel.clone())
-        .initial_abr_mode(AbrMode::Manual(1))
+        .initial_abr_mode(AbrMode::manual(1))
         .build();
     let config: AudioConfig<Hls> = AudioConfig::for_stream(hls_config2)
         .worker(shared_worker.clone())
@@ -139,7 +139,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let drm_config = HlsConfig::for_url(server.asset("drm/master.m3u8"))
         .store(shared_store())
         .cancel(cancel.clone())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
     let config: AudioConfig<Hls> = AudioConfig::for_stream(drm_config)
         .worker(shared_worker.clone())

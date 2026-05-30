@@ -8,7 +8,7 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
+use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
@@ -159,9 +159,9 @@ async fn drm_stream_byte_integrity(
     }
 
     let abr_mode = if abr_variant == 99 {
-        AbrMode::Auto(Some(0))
+        auto(0)
     } else {
-        AbrMode::Manual(abr_variant)
+        AbrMode::manual(abr_variant)
     };
 
     let hls_config = HlsConfig::for_url(url)

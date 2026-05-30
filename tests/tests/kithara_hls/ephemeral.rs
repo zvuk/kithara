@@ -127,7 +127,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
                 .build(),
         )
         .cancel(cancel)
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));

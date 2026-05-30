@@ -1,6 +1,8 @@
 use std::{sync::Arc, time::Duration as StdDuration};
 
-use kithara_events::{AbrMode, AbrReason, BandwidthSource, VariantDuration, VariantInfo};
+use kithara_events::{
+    AbrMode, AbrReason, BandwidthSource, VariantDuration, VariantIndex, VariantInfo,
+};
 use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;
 use proptest::prelude::*;
@@ -13,7 +15,7 @@ use crate::{Abr, AbrController, AbrSettings, ThroughputEstimator};
 fn test_variants_3() -> Vec<VariantInfo> {
     vec![
         VariantInfo {
-            variant_index: 0,
+            variant_index: VariantIndex::new(0),
             bandwidth_bps: Some(256_000),
             duration: VariantDuration::Unknown,
             name: None,
@@ -21,7 +23,7 @@ fn test_variants_3() -> Vec<VariantInfo> {
             container: None,
         },
         VariantInfo {
-            variant_index: 1,
+            variant_index: VariantIndex::new(1),
             bandwidth_bps: Some(512_000),
             duration: VariantDuration::Unknown,
             name: None,
@@ -29,7 +31,7 @@ fn test_variants_3() -> Vec<VariantInfo> {
             container: None,
         },
         VariantInfo {
-            variant_index: 2,
+            variant_index: VariantIndex::new(2),
             bandwidth_bps: Some(1_024_000),
             duration: VariantDuration::Unknown,
             name: None,
@@ -63,19 +65,19 @@ fn view_with_bw<'a>(
 
 #[kithara::test]
 fn decide_locked_never_switches() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     state.lock();
     let variants = test_variants_3();
     let settings = settings_fast();
     let view = view_with_bw(Some(10_000_000), &variants, &settings);
     let d = state.decide(&view, Instant::now());
-    assert!(!d.did_change);
-    assert_eq!(d.reason, AbrReason::Locked);
+    assert!(!d.changed());
+    assert_eq!(d.reason(), AbrReason::Locked);
 }
 
 #[kithara::test]
 fn decide_many_samples_during_lock_never_switches() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let initial = state.current_variant_index();
     state.lock();
     let variants = test_variants_3();
@@ -89,51 +91,51 @@ fn decide_many_samples_during_lock_never_switches() {
 
 #[kithara::test]
 fn decide_manual_mode_always_target() {
-    let state = AbrState::new(AbrMode::Manual(2));
+    let state = AbrState::new(AbrMode::Manual(VariantIndex::new(2)));
     let variants = test_variants_3();
     let settings = settings_fast();
     let view = view_with_bw(None, &variants, &settings);
     let d = state.decide(&view, Instant::now());
-    assert_eq!(d.reason, AbrReason::ManualOverride);
-    assert_eq!(d.target_variant_index, 2);
+    assert_eq!(d.reason(), AbrReason::ManualOverride);
+    assert_eq!(d.target(), VariantIndex::new(2));
 }
 
 #[kithara::test]
 fn decide_no_estimate_stays_put() {
-    let state = AbrState::new(AbrMode::Auto(Some(1)));
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1))));
     let variants = test_variants_3();
     let settings = settings_fast();
     let view = view_with_bw(None, &variants, &settings);
     let d = state.decide(&view, Instant::now());
-    assert_eq!(d.reason, AbrReason::NoEstimate);
-    assert!(!d.did_change);
+    assert_eq!(d.reason(), AbrReason::NoEstimate);
+    assert!(!d.changed());
 }
 
 #[kithara::test]
 fn decide_upswitch_when_bandwidth_allows() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let variants = test_variants_3();
     let settings = settings_fast();
     let view = view_with_bw(Some(3_000_000), &variants, &settings);
     let d = state.decide(&view, Instant::now());
-    assert_eq!(d.reason, AbrReason::UpSwitch);
-    assert_eq!(d.target_variant_index, 2);
+    assert_eq!(d.reason(), AbrReason::UpSwitch);
+    assert_eq!(d.target(), VariantIndex::new(2));
 }
 
 #[kithara::test]
 fn decide_downswitch_when_bandwidth_drops() {
-    let state = AbrState::new(AbrMode::Auto(Some(2)));
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2))));
     let variants = test_variants_3();
     let settings = settings_fast();
     let view = view_with_bw(Some(300_000), &variants, &settings);
     let d = state.decide(&view, Instant::now());
-    assert_eq!(d.reason, AbrReason::DownSwitch);
-    assert_eq!(d.target_variant_index, 0);
+    assert_eq!(d.reason(), AbrReason::DownSwitch);
+    assert_eq!(d.target(), VariantIndex::new(0));
 }
 
 #[kithara::test]
 fn decide_urgent_downswitch_when_buffer_low() {
-    let state = AbrState::new(AbrMode::Auto(Some(2)));
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2))));
     let variants = test_variants_3();
     let settings = AbrSettings {
         urgent_downswitch_buffer: Duration::from_secs(5),
@@ -149,12 +151,12 @@ fn decide_urgent_downswitch_when_buffer_low() {
         settings: &settings,
     };
     let d = state.decide(&view, Instant::now());
-    assert_eq!(d.reason, AbrReason::UrgentDownSwitch);
+    assert_eq!(d.reason(), AbrReason::UrgentDownSwitch);
 }
 
 #[kithara::test]
 fn decide_buffer_too_low_for_upswitch() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let variants = test_variants_3();
     let settings = AbrSettings {
         min_buffer_for_up_switch: Duration::from_secs(10),
@@ -169,36 +171,35 @@ fn decide_buffer_too_low_for_upswitch() {
         settings: &settings,
     };
     let d = state.decide(&view, Instant::now());
-    assert_eq!(d.reason, AbrReason::BufferTooLowForUpSwitch);
-    assert!(!d.did_change);
+    assert_eq!(d.reason(), AbrReason::BufferTooLowForUpSwitch);
+    assert!(!d.changed());
 }
 
 #[kithara::test]
 fn apply_updates_current_variant_and_timestamp() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
-    state.apply(
-        &AbrDecision {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.apply_decision(
+        &AbrDecision::UpSwitch {
+            from: VariantIndex::new(0),
+            to: VariantIndex::new(2),
             reason: AbrReason::UpSwitch,
-            did_change: true,
-            target_variant_index: 2,
         },
         Instant::now(),
     );
-    assert_eq!(state.current_variant_index(), 2);
+    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
 }
 
 #[kithara::test]
-fn apply_noop_when_same_variant() {
-    let state = AbrState::new(AbrMode::Auto(Some(1)));
-    state.apply(
-        &AbrDecision {
+fn apply_decision_stay_is_noop() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1))));
+    state.apply_decision(
+        &AbrDecision::Stay {
+            current: VariantIndex::new(1),
             reason: AbrReason::AlreadyOptimal,
-            did_change: false,
-            target_variant_index: 1,
         },
         Instant::now(),
     );
-    assert_eq!(state.current_variant_index(), 1);
+    assert_eq!(state.current_variant_index(), VariantIndex::new(1));
 }
 
 #[kithara::test]
@@ -215,68 +216,72 @@ fn lock_is_refcounted() {
 
 #[kithara::test]
 fn pending_target_is_empty_on_fresh_state() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     assert_eq!(state.pending_target(), None);
 }
 
 #[kithara::test]
 fn request_target_records_intent_without_committing() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
-    state.request_target(2, AbrReason::UpSwitch);
-    assert_eq!(state.pending_target(), Some(2));
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
     assert_eq!(
         state.current_variant_index(),
-        0,
+        VariantIndex::new(0),
         "request_target must not move current_variant; commit_pending owns that step"
     );
 }
 
 #[kithara::test]
 fn request_target_replace_pending_latest_wins() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
-    state.request_target(1, AbrReason::UpSwitch);
-    state.request_target(2, AbrReason::UpSwitch);
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
     assert_eq!(
         state.pending_target(),
-        Some(2),
+        Some(VariantIndex::new(2)),
         "second request_target must replace the first (latest-wins semantics)"
     );
 }
 
 #[kithara::test]
 fn peek_pending_decision_returns_none_when_no_request() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
-    assert!(state.peek_pending_decision(0).is_none());
-    assert_eq!(state.current_variant_index(), 0);
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    assert!(state.peek_pending_decision(VariantIndex::new(0)).is_none());
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
 }
 
 #[kithara::test]
 fn peek_pending_decision_does_not_mutate_current_variant() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
-    state.request_target(2, AbrReason::UpSwitch);
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
     let decision = state
-        .peek_pending_decision(0)
+        .peek_pending_decision(VariantIndex::new(0))
         .expect("pending request must produce a decision");
-    assert_eq!(decision.target_variant_index, 2);
-    assert_eq!(decision.reason, AbrReason::UpSwitch);
-    assert!(decision.did_change);
-    assert_eq!(state.current_variant_index(), 0, "peek must not mutate");
+    assert_eq!(decision.target(), VariantIndex::new(2));
+    assert_eq!(decision.reason(), AbrReason::UpSwitch);
+    assert!(decision.changed());
+    assert_eq!(
+        state.current_variant_index(),
+        VariantIndex::new(0),
+        "peek must not mutate"
+    );
     assert_eq!(
         state.pending_target(),
-        Some(2),
+        Some(VariantIndex::new(2)),
         "peek must not consume pending"
     );
 }
 
 #[kithara::test]
 fn apply_decision_publishes_and_clears_matching_pending() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
-    state.request_target(2, AbrReason::UpSwitch);
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
     let decision = state
-        .peek_pending_decision(0)
+        .peek_pending_decision(VariantIndex::new(0))
         .expect("pending request must produce a decision");
     state.apply_decision(&decision, Instant::now());
-    assert_eq!(state.current_variant_index(), 2);
+    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
     assert_eq!(
         state.pending_target(),
         None,
@@ -286,71 +291,71 @@ fn apply_decision_publishes_and_clears_matching_pending() {
 
 #[kithara::test]
 fn apply_decision_preserves_pending_overwritten_after_peek() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
-    state.request_target(2, AbrReason::UpSwitch);
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
     let decision = state
-        .peek_pending_decision(0)
+        .peek_pending_decision(VariantIndex::new(0))
         .expect("pending request must produce a decision");
-    state.request_target(3, AbrReason::DownSwitch);
+    state.request_target(VariantIndex::new(3), AbrReason::DownSwitch);
     state.apply_decision(&decision, Instant::now());
     assert_eq!(
         state.current_variant_index(),
-        2,
+        VariantIndex::new(2),
         "captured decision applies regardless of later pending overwrite"
     );
     assert_eq!(
         state.pending_target(),
-        Some(3),
+        Some(VariantIndex::new(3)),
         "new pending must survive an apply for a different target"
     );
 }
 
 #[kithara::test]
 fn peek_pending_decision_honors_is_locked() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
-    state.request_target(2, AbrReason::UpSwitch);
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
     state.lock();
     assert!(
-        state.peek_pending_decision(0).is_none(),
+        state.peek_pending_decision(VariantIndex::new(0)).is_none(),
         "locked state must not surface pending decisions"
     );
-    assert_eq!(state.current_variant_index(), 0);
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
     assert_eq!(
         state.pending_target(),
-        Some(2),
+        Some(VariantIndex::new(2)),
         "deferred decision must remain pending until unlock"
     );
 }
 
 #[kithara::test]
 fn peek_pending_decision_returns_none_when_target_equals_current() {
-    let state = AbrState::new(AbrMode::Auto(Some(1)));
-    state.request_target(1, AbrReason::AlreadyOptimal);
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1))));
+    state.request_target(VariantIndex::new(1), AbrReason::AlreadyOptimal);
     assert!(
-        state.peek_pending_decision(1).is_none(),
+        state.peek_pending_decision(VariantIndex::new(1)).is_none(),
         "self-switch (target == current) must not produce a decision"
     );
-    assert_eq!(state.current_variant_index(), 1);
+    assert_eq!(state.current_variant_index(), VariantIndex::new(1));
 }
 
 #[kithara::test]
 fn apply_decision_after_unlock_applies_still_pending_intent() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     state.lock();
-    state.request_target(2, AbrReason::UpSwitch);
-    assert!(state.peek_pending_decision(0).is_none());
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+    assert!(state.peek_pending_decision(VariantIndex::new(0)).is_none());
     state.unlock();
     let decision = state
-        .peek_pending_decision(0)
+        .peek_pending_decision(VariantIndex::new(0))
         .expect("post-unlock peek must surface the still-pending intent");
     state.apply_decision(&decision, Instant::now());
-    assert_eq!(decision.target_variant_index, 2);
-    assert_eq!(state.current_variant_index(), 2);
+    assert_eq!(decision.target(), VariantIndex::new(2));
+    assert_eq!(state.current_variant_index(), VariantIndex::new(2));
 }
 
 #[kithara::test]
 fn min_switch_interval_prevents_oscillation() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let variants = test_variants_3();
     let settings = AbrSettings {
         min_switch_interval: Duration::from_secs(30),
@@ -366,10 +371,10 @@ fn min_switch_interval_prevents_oscillation() {
         settings: &settings,
     };
     let d1 = state.decide(&view, now);
-    assert!(d1.did_change);
-    state.apply(&d1, now);
+    assert!(d1.changed());
+    state.apply_decision(&d1, now);
     let d2 = state.decide(&view, now + Duration::from_secs(1));
-    assert_eq!(d2.reason, AbrReason::MinInterval);
+    assert_eq!(d2.reason(), AbrReason::MinInterval);
 }
 
 /// A locked `AbrState` must never change variant, regardless of bandwidth
@@ -386,16 +391,19 @@ fn locked_state_rejects_switch(
 ) {
     let variants = test_variants_3();
     let settings = settings_fast();
-    let state = AbrState::new(AbrMode::Auto(Some(locked_variant)));
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(locked_variant))));
     state.lock();
 
     let now = Instant::now();
     for i in 0..50u64 {
         let v = view_with_bw(Some(base_bps + i * step_bps), &variants, &settings);
         let d = state.decide(&v, now + StdDuration::from_millis(i));
-        assert!(!d.did_change, "locked state decided to switch at iter {i}");
+        assert!(!d.changed(), "locked state decided to switch at iter {i}");
     }
-    assert_eq!(state.current_variant_index(), locked_variant);
+    assert_eq!(
+        state.current_variant_index(),
+        VariantIndex::new(locked_variant)
+    );
 }
 
 struct SeedPeer {
@@ -417,7 +425,7 @@ fn audio_variants_4tier() -> Vec<VariantInfo> {
         .into_iter()
         .enumerate()
         .map(|(i, bps)| VariantInfo {
-            variant_index: i,
+            variant_index: VariantIndex::new(i),
             bandwidth_bps: Some(bps),
             duration: VariantDuration::Unknown,
             name: None,
@@ -450,7 +458,7 @@ async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
     controller.tick(handle.peer_id(), Instant::now());
     assert_eq!(
         state.pending_target(),
-        Some(3),
+        Some(VariantIndex::new(3)),
         "cold-start with default 2 Mbps seed must request the top variant"
     );
     drop(handle);
@@ -476,7 +484,7 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
     });
     let handle = controller.register(&peer);
     controller.tick(handle.peer_id(), Instant::now());
-    assert_eq!(state.current_variant_index(), 0);
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
     assert_eq!(state.pending_target(), None);
     drop(handle);
 }
@@ -499,7 +507,7 @@ async fn lock_refcount_holds_across_record_bandwidth() {
             self.variants.clone()
         }
     }
-    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     state.lock();
     let peer: Arc<dyn Abr> = Arc::new(LockedPeer {
         state: Arc::clone(&state),
@@ -515,7 +523,7 @@ async fn lock_refcount_holds_across_record_bandwidth() {
             BandwidthSource::Network,
         );
     }
-    assert_eq!(state.current_variant_index(), 0);
+    assert_eq!(state.current_variant_index(), VariantIndex::new(0));
     assert!(state.is_locked());
 
     state.unlock();
@@ -543,9 +551,9 @@ enum ModeOp {
 fn mode_from(op: ModeOp) -> AbrMode {
     match op {
         ModeOp::Auto => AbrMode::Auto(None),
-        ModeOp::ManualOne => AbrMode::Manual(1),
-        ModeOp::ManualTwo => AbrMode::Manual(2),
-        ModeOp::ManualZero => AbrMode::Manual(0),
+        ModeOp::ManualOne => AbrMode::Manual(VariantIndex::new(1)),
+        ModeOp::ManualTwo => AbrMode::Manual(VariantIndex::new(2)),
+        ModeOp::ManualZero => AbrMode::Manual(VariantIndex::new(0)),
     }
 }
 
@@ -577,7 +585,7 @@ proptest! {
     fn abr_state_respects_invariants(ops in proptest::collection::vec(arb_op(), 1..80)) {
         let variants = test_variants_3();
         let settings = settings_fast();
-        let state = AbrState::new(AbrMode::Auto(Some(0)));
+        let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
 
         let mut lock_depth = 0usize;
         let mut variant_at_lock = None;
@@ -615,8 +623,8 @@ proptest! {
                 Op::Tick => {
                     let view = view_with_bw(current_bps, &variants, &settings);
                     let d = state.decide(&view, now);
-                    if d.did_change {
-                        state.apply(&d, now);
+                    if d.changed() {
+                        state.apply_decision(&d, now);
                     }
                 }
             }
@@ -632,13 +640,13 @@ proptest! {
             }
 
             if let AbrMode::Manual(idx) = state.mode()
-                && idx < variants.len()
+                && idx.get() < variants.len()
                 && lock_depth == 0
             {
                 let view = view_with_bw(current_bps, &variants, &settings);
                 let d = state.decide(&view, now);
-                if d.did_change {
-                    state.apply(&d, now);
+                if d.changed() {
+                    state.apply_decision(&d, now);
                 }
                 prop_assert_eq!(
                     state.current_variant_index(),
@@ -657,10 +665,10 @@ proptest! {
     ) {
         let variants = test_variants_3();
         let settings = settings_fast();
-        let state = AbrState::new(AbrMode::Auto(Some(0)));
+        let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
 
         let mut cumulative_bps: u64 = 0;
-        let mut prev_variant: Option<usize> = None;
+        let mut prev_variant: Option<VariantIndex> = None;
         let base_now = Instant::now();
 
         for (tick, delta) in steps.into_iter().enumerate() {
@@ -668,14 +676,14 @@ proptest! {
             let now = base_now + StdDuration::from_millis((tick as u64).saturating_add(1) * 10);
             let view = view_with_bw(Some(cumulative_bps), &variants, &settings);
             let d = state.decide(&view, now);
-            if d.did_change && d.reason == AbrReason::DownSwitch {
+            if d.changed() && d.reason() == AbrReason::DownSwitch {
                 prop_assert!(
                     false,
                     "DownSwitch must not fire under monotonic bandwidth: bps={cumulative_bps}",
                 );
             }
-            if d.did_change {
-                state.apply(&d, now);
+            if d.changed() {
+                state.apply_decision(&d, now);
             }
             let current = state.current_variant_index();
             if let Some(prev) = prev_variant {

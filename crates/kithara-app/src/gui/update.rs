@@ -226,7 +226,7 @@ fn handle_set_abr_mode(state: &Kithara, variant: Option<usize>) {
         "GUI: SetAbrMode received"
     );
     if let Some(handle) = handle {
-        let mode = variant.map_or(AbrMode::Auto(None), AbrMode::Manual);
+        let mode = variant.map_or(AbrMode::Auto(None), AbrMode::manual);
         match handle.set_mode(mode) {
             Ok(()) => info!(?variant, ?mode, "GUI: set_mode accepted"),
             Err(err) => error!(?err, ?variant, "SetAbrMode rejected by ABR state"),

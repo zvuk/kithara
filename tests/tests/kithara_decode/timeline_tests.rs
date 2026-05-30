@@ -126,7 +126,7 @@ mod hls_timeline {
         let hls_config = HlsConfig::for_url(url)
             .store(StoreOptions::new(temp_dir.path()))
             .cancel(cancel)
-            .initial_abr_mode(AbrMode::Manual(0))
+            .initial_abr_mode(AbrMode::manual(0))
             .build();
 
         let stream = Stream::<Hls>::new(hls_config).await.unwrap();

@@ -12,7 +12,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir,
+    TestTempDir, auto,
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
@@ -62,7 +62,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
         .cancel(cancel_token.clone())
         .events(bus)
         .store(StoreOptions::new(temp_dir.path()))
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     info!("Opening HLS stream with ABR enabled");
@@ -77,7 +77,10 @@ async fn test_abr_variant_switch_no_byte_glitches(
             match ev {
                 Event::Abr(AbrEvent::VariantApplied { from, to, .. }) => {
                     info!("Variant switch detected: {} -> {}", from, to);
-                    variant_switches_clone.lock().unwrap().push((from, to));
+                    variant_switches_clone
+                        .lock()
+                        .unwrap()
+                        .push((from.get(), to.get()));
                 }
                 Event::Hls(HlsEvent::EndOfStream) => break,
                 _ => {}
@@ -168,7 +171,7 @@ async fn test_basic_multi_segment_reading(
     let config = HlsConfig::for_url(url)
         .cancel(cancel_token.clone())
         .store(StoreOptions::new(temp_dir.path()))
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let mut stream = Stream::<Hls>::new(config).await?;
@@ -239,7 +242,7 @@ async fn test_abr_variant_switch_with_seek_backward(
         .cancel(cancel_token.clone())
         .events(bus)
         .store(StoreOptions::new(temp_dir.path()))
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     println!("\nCreating HLS stream with ABR");

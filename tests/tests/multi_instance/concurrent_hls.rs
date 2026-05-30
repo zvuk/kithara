@@ -7,7 +7,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    TestTempDir,
+    TestTempDir, auto,
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
@@ -107,10 +107,10 @@ async fn run_concurrent_hls(n: usize, abr: AbrMode, variants: usize) {
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
-#[case::n2_manual(2, AbrMode::Manual(0), 1)]
-#[case::n4_manual(4, AbrMode::Manual(0), 1)]
-#[case::n8_manual(8, AbrMode::Manual(0), 1)]
-#[case::n4_auto_abr(4, AbrMode::Auto(Some(0)), 2)]
+#[case::n2_manual(2, AbrMode::manual(0), 1)]
+#[case::n4_manual(4, AbrMode::manual(0), 1)]
+#[case::n8_manual(8, AbrMode::manual(0), 1)]
+#[case::n4_auto_abr(4, auto(0), 2)]
 async fn concurrent_hls_instances(
     #[case] instances: usize,
     #[case] abr: AbrMode,

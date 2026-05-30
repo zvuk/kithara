@@ -2,7 +2,7 @@
 
 use kithara::hls::{MasterPlaylist, parse_master_playlist};
 use kithara_abr::{AbrController, AbrMode, AbrSettings};
-use kithara_events::{VariantDuration, VariantInfo};
+use kithara_events::{VariantDuration, VariantIndex, VariantInfo};
 use kithara_platform::time::Duration;
 
 /// Convert HLS master playlist variants to ABR variant list (test helper).
@@ -11,7 +11,7 @@ fn variants_from_master(master: &MasterPlaylist) -> Vec<VariantInfo> {
         .variants
         .iter()
         .map(|v| VariantInfo {
-            variant_index: v.id.0,
+            variant_index: VariantIndex::new(v.id.0),
             bandwidth_bps: Some(v.bandwidth.unwrap_or(0)),
             duration: VariantDuration::Total(Duration::ZERO),
             name: None,
@@ -66,7 +66,7 @@ fn test_manual_selector_different_indices(
 ) {
     let _ = AbrController::new(AbrSettings::default());
     assert_eq!(variants_from_parsed_playlist.len(), 3);
-    let _ = AbrMode::Manual(selector_index);
+    let _ = AbrMode::manual(selector_index);
 }
 
 #[kithara::test]
@@ -111,9 +111,9 @@ fn test_variants_from_master_structure(parsed_master_playlist: MasterPlaylist) {
     assert_eq!(variants[1].bandwidth_bps, Some(1000000));
     assert_eq!(variants[2].bandwidth_bps, Some(500000));
 
-    assert_eq!(variants[0].variant_index, 0);
-    assert_eq!(variants[1].variant_index, 1);
-    assert_eq!(variants[2].variant_index, 2);
+    assert_eq!(variants[0].variant_index.get(), 0);
+    assert_eq!(variants[1].variant_index.get(), 1);
+    assert_eq!(variants[2].variant_index.get(), 2);
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
@@ -123,5 +123,5 @@ fn test_abr_controller_async_usage() {
     // `test_abr_controller_no_selector`) — `is_some()` keeps the
     // assertion stable against the exact seed value.
     assert!(controller.settings().initial_throughput_bps.is_some());
-    let _ = AbrMode::Manual(0);
+    let _ = AbrMode::manual(0);
 }

@@ -1,9 +1,9 @@
-use kithara_abr::{AbrMode, AbrReason, AbrState};
+use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
 fn fresh_state(initial: usize) -> AbrState {
-    AbrState::new(AbrMode::Auto(Some(initial)))
+    AbrState::new(AbrMode::Auto(Some(VariantIndex::new(initial))))
 }
 
 /// A seek epoch drops a pending switch that was chosen against pre-seek
@@ -24,10 +24,10 @@ const SEEK_DURABLE: [AbrReason; 2] = [AbrReason::ManualOverride, AbrReason::Init
 async fn seek_invalidates_throughput_driven_pending() {
     for reason in THROUGHPUT_DRIVEN {
         let state = fresh_state(0);
-        state.request_target(3, reason);
+        state.request_target(VariantIndex::new(3), reason);
         assert_eq!(
             state.pending_target(),
-            Some(3),
+            Some(VariantIndex::new(3)),
             "{reason:?}: request_target must record the pending intent"
         );
 
@@ -51,20 +51,20 @@ async fn seek_invalidates_throughput_driven_pending() {
 async fn seek_preserves_user_and_initial_pending() {
     for reason in SEEK_DURABLE {
         let state = fresh_state(0);
-        state.request_target(3, reason);
+        state.request_target(VariantIndex::new(3), reason);
 
         state.invalidate_pending();
 
         assert_eq!(
             state.pending_target(),
-            Some(3),
+            Some(VariantIndex::new(3)),
             "{reason:?}: a seek must not invalidate user-driven / first-pick intent"
         );
         let decision = state
             .peek_pending_decision(state.current_variant_index())
             .expect("preserved pending must still surface a boundary decision");
-        assert_eq!(decision.target_variant_index, 3);
-        assert_eq!(decision.reason, reason);
+        assert_eq!(decision.target(), VariantIndex::new(3));
+        assert_eq!(decision.reason(), reason);
     }
 }
 
@@ -75,7 +75,7 @@ async fn lock_then_invalidate_drops_stale_throughput_across_unlock() {
     // pending invalidated while locked must stay gone after unlock — the
     // lock must not resurrect a stale pre-seek up-switch.
     let state = fresh_state(0);
-    state.request_target(2, AbrReason::UpSwitch);
+    state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
 
     state.lock();
     assert!(

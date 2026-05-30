@@ -9,7 +9,7 @@ use std::{
 use kithara_abr::{AbrController, AbrMode, AbrSettings, AbrState, ThroughputEstimator};
 use kithara_events::{
     AbrEvent, AbrProgressSnapshot, BandwidthSource, DEFAULT_EVENT_BUS_CAPACITY, Event, EventBus,
-    VariantDuration, VariantInfo,
+    VariantDuration, VariantIndex, VariantInfo,
 };
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
@@ -60,7 +60,7 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
         .iter()
         .enumerate()
         .map(|(i, bps)| VariantInfo {
-            variant_index: i,
+            variant_index: VariantIndex::new(i),
             bandwidth_bps: Some(*bps),
             duration: VariantDuration::Segmented(durations.clone()),
             name: None,
@@ -69,7 +69,7 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
         })
         .collect();
 
-    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let reader = Arc::new(AtomicUsize::new(0));
     let committed = Arc::new(AtomicUsize::new(3));
     let peer: Arc<dyn kithara_abr::Abr> = Arc::new(AdvancingPeer {

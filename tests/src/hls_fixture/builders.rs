@@ -2,6 +2,7 @@ use std::path::Path;
 
 use kithara::{
     assets::StoreOptions,
+    events::VariantIndex,
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
@@ -33,7 +34,7 @@ impl HlsStreamBuilder {
     pub fn new() -> Self {
         Self {
             master_path: "/master.m3u8",
-            initial_abr_mode: AbrMode::Manual(0),
+            initial_abr_mode: AbrMode::Manual(VariantIndex::new(0)),
             store_subdir: None,
             max_assets: None,
             max_bytes: None,
@@ -42,7 +43,7 @@ impl HlsStreamBuilder {
 
     /// Set the ABR variant index (default: `Manual(0)`).
     pub fn variant(mut self, variant: usize) -> Self {
-        self.initial_abr_mode = AbrMode::Manual(variant);
+        self.initial_abr_mode = AbrMode::Manual(VariantIndex::new(variant));
         self
     }
 

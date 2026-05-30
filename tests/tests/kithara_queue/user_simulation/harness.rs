@@ -354,7 +354,7 @@ impl SimHarness {
         let pre_track = self.current_track_id();
         let pre_pos = self.position();
         let bounded = idx % 4;
-        if let Err(e) = handle.set_mode(AbrMode::Manual(bounded)) {
+        if let Err(e) = handle.set_mode(AbrMode::manual(bounded)) {
             // Out-of-bounds is acceptable — fixtures with fewer
             // variants reject the request; this is expected user
             // input on a track that doesn't expose that quality.

@@ -11,7 +11,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir, cancel_token,
+    TestTempDir, auto, cancel_token,
     hls_server::{
         TestServer,
         abr::{AbrTestServer, master_playlist},
@@ -50,7 +50,7 @@ async fn test_driver_seek_after_playlist_finished(
     let config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel_token)
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
@@ -120,7 +120,7 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: Canc
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel_token)
         .events(bus)
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();

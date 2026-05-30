@@ -240,13 +240,13 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
     "https://stream.silvercomet.top/hls/master.m3u8",
     42,
     DecoderBackend::Symphonia,
-    AbrMode::Manual(0)
+    AbrMode::manual(0)
 )]
 #[case::silvercomet_hls_symphonia_locked_high(
     "https://stream.silvercomet.top/hls/master.m3u8",
     42,
     DecoderBackend::Symphonia,
-    AbrMode::Manual(2)
+    AbrMode::manual(2)
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -263,7 +263,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         "https://stream.silvercomet.top/hls/master.m3u8",
         42,
         DecoderBackend::Apple,
-        AbrMode::Manual(0)
+        AbrMode::manual(0)
     )
 )]
 #[cfg_attr(
@@ -272,7 +272,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         "https://stream.silvercomet.top/hls/master.m3u8",
         42,
         DecoderBackend::Apple,
-        AbrMode::Manual(2)
+        AbrMode::manual(2)
     )
 )]
 #[cfg_attr(
@@ -294,13 +294,13 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
     "https://stream.silvercomet.top/drm/master.m3u8",
     42,
     DecoderBackend::Symphonia,
-    AbrMode::Manual(0)
+    AbrMode::manual(0)
 )]
 #[case::silvercomet_drm_symphonia_locked_high(
     "https://stream.silvercomet.top/drm/master.m3u8",
     42,
     DecoderBackend::Symphonia,
-    AbrMode::Manual(2)
+    AbrMode::manual(2)
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -317,7 +317,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         "https://stream.silvercomet.top/drm/master.m3u8",
         42,
         DecoderBackend::Apple,
-        AbrMode::Manual(0)
+        AbrMode::manual(0)
     )
 )]
 #[cfg_attr(
@@ -326,7 +326,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         "https://stream.silvercomet.top/drm/master.m3u8",
         42,
         DecoderBackend::Apple,
-        AbrMode::Manual(2)
+        AbrMode::manual(2)
     )
 )]
 #[cfg_attr(

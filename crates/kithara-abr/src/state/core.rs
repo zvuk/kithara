@@ -3,12 +3,11 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
-use kithara_events::{AbrMode, AbrReason};
+use kithara_events::{AbrMode, AbrReason, VariantIndex};
 use kithara_platform::{
     Mutex,
     time::{Duration, Instant},
 };
-use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{decision::AbrDecision, view::AbrView};
@@ -41,7 +40,7 @@ pub struct AbrState {
 #[derive(Clone, Copy, Debug)]
 struct PendingApply {
     reason: AbrReason,
-    target: usize,
+    target: VariantIndex,
 }
 
 /// `true` for `AbrReason` variants that originate from a throughput
@@ -55,6 +54,21 @@ fn is_throughput_driven(reason: AbrReason) -> bool {
     )
 }
 
+/// Rebuild the typed [`AbrDecision`] a pending boundary-commit publishes,
+/// using the live `from` and the reason captured at `request_target`. The
+/// only reasons that reach a pending slot are switch-class (a `Stay` never
+/// requests a target), so a non-down, non-manual reason classifies as an
+/// up-switch.
+fn pending_decision(from: VariantIndex, to: VariantIndex, reason: AbrReason) -> AbrDecision {
+    match reason {
+        AbrReason::ManualOverride => AbrDecision::Manual { from, to },
+        AbrReason::DownSwitch | AbrReason::UrgentDownSwitch => {
+            AbrDecision::DownSwitch { from, to, reason }
+        }
+        _ => AbrDecision::UpSwitch { from, to, reason },
+    }
+}
+
 impl AbrState {
     const NO_BANDWIDTH_CAP: u64 = 0;
     const NO_SWITCH: u64 = 0;
@@ -63,7 +77,7 @@ impl AbrState {
     #[must_use]
     pub fn new(mode: AbrMode) -> Self {
         let initial_variant = match mode {
-            AbrMode::Auto(Some(idx)) | AbrMode::Manual(idx) => idx,
+            AbrMode::Auto(Some(idx)) | AbrMode::Manual(idx) => idx.get(),
             AbrMode::Auto(None) => 0,
         };
         Self {
@@ -77,29 +91,10 @@ impl AbrState {
         }
     }
 
-    /// Commit a decision — record the new variant and the switch timestamp.
-    ///
-    /// Two legitimate callers write through this entry point:
-    /// 1. [`AbrController::tick`](crate::AbrController) when the controller
-    ///    decides on a new variant via the auto-mode FSM;
-    /// 2. `kithara-hls` scheduler when the user manually selects a variant —
-    ///    HLS holds `Arc<AbrState>` and applies a `Manual` decision so the
-    ///    layout switch and the ABR state stay in sync.
-    #[kithara::probe(d)]
-    pub fn apply(&self, d: &AbrDecision, now: Instant) {
-        let current = self.current_variant.load(Ordering::Acquire);
-        if d.target_variant_index == current {
-            return;
-        }
-        self.current_variant
-            .store(d.target_variant_index, Ordering::Release);
-        self.record_switch(now);
-    }
-
-    /// Publish the switch: atomically clear the pending slot **iff** it
-    /// still references the same target as `decision`, then store
-    /// `current_variant := decision.target_variant_index` and record
-    /// the switch timestamp.
+    /// Publish the switch: a [`AbrDecision::Stay`] is a no-op; otherwise
+    /// atomically clear the pending slot **iff** it still references the
+    /// same target as `decision`, then store `current_variant :=
+    /// decision.target()` and record the switch timestamp.
     ///
     /// The "iff" rule preserves the replace-pending semantic: if an
     /// external `request_target` overwrote the slot with a different
@@ -108,16 +103,16 @@ impl AbrState {
     /// boundary commits it. The captured `decision` still publishes —
     /// the caller has already prepared `v_new` for that target.
     pub fn apply_decision(&self, decision: &AbrDecision, now: Instant) {
+        if !decision.changed() {
+            return;
+        }
+        let target = decision.target();
         let mut slot = self.pending.lock_sync();
-        if slot
-            .as_ref()
-            .is_some_and(|p| p.target == decision.target_variant_index)
-        {
+        if slot.as_ref().is_some_and(|p| p.target == target) {
             *slot = None;
         }
         drop(slot);
-        self.current_variant
-            .store(decision.target_variant_index, Ordering::Release);
+        self.current_variant.store(target.get(), Ordering::Release);
         self.record_switch(now);
     }
 
@@ -131,8 +126,8 @@ impl AbrState {
     }
 
     #[must_use]
-    pub fn current_variant_index(&self) -> usize {
-        self.current_variant.load(Ordering::Acquire)
+    pub fn current_variant_index(&self) -> VariantIndex {
+        VariantIndex::new(self.current_variant.load(Ordering::Acquire))
     }
 
     /// Produce a decision without mutating state.
@@ -227,7 +222,7 @@ impl AbrState {
     /// `self.current_variant_index()` if you do not need an externally
     /// pinned snapshot.
     #[must_use]
-    pub fn peek_pending_decision(&self, current: usize) -> Option<AbrDecision> {
+    pub fn peek_pending_decision(&self, current: VariantIndex) -> Option<AbrDecision> {
         if self.is_locked() {
             return None;
         }
@@ -235,17 +230,13 @@ impl AbrState {
         if pending.target == current {
             return None;
         }
-        Some(AbrDecision {
-            target_variant_index: pending.target,
-            reason: pending.reason,
-            did_change: true,
-        })
+        Some(pending_decision(current, pending.target, pending.reason))
     }
 
     /// Phase 2 read-only view of the unobserved pending switch (if any).
     /// Used by the Phase 3 scheduler boundary check and by tests.
     #[must_use]
-    pub fn pending_target(&self) -> Option<usize> {
+    pub fn pending_target(&self) -> Option<VariantIndex> {
         self.pending.lock_sync().as_ref().map(|p| p.target)
     }
 
@@ -272,7 +263,7 @@ impl AbrState {
     /// post-unlock. Destructive drop of stale pre-seek intents is the
     /// job of [`invalidate_pending`](Self::invalidate_pending), called
     /// from `coord::reset_for_seek` on a semantic seek boundary.
-    pub fn request_target(&self, target: usize, reason: AbrReason) {
+    pub fn request_target(&self, target: VariantIndex, reason: AbrReason) {
         *self.pending.lock_sync() = Some(PendingApply { reason, target });
     }
 

@@ -201,7 +201,7 @@ fn apply_abr_mode(queue: &Rc<Queue>, variant_index: Option<u32>) {
         return;
     };
     let mode = variant_index.map_or(AbrMode::Auto(None), |index| {
-        AbrMode::Manual(num_traits::cast(index).unwrap_or(0))
+        AbrMode::manual(num_traits::cast(index).unwrap_or(0))
     });
     if let Err(err) = handle.set_mode(mode) {
         clog!("[WORKER] set_abr_mode rejected by ABR state: {err:?}");

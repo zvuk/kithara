@@ -9,7 +9,7 @@ use kithara::{
 };
 use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, auto,
     fixture_protocol::{EncryptionRequest, PackagedSignal},
 };
 use kithara_platform::tokio::task::spawn_blocking;
@@ -59,7 +59,7 @@ fn e2e(mode: AbrMode) -> Vec<(AbrMode, f64)> {
 
 /// Single seek, no variant change (legacy `*_1seek` coverage).
 fn one_seek() -> Vec<(AbrMode, f64)> {
-    vec![(AbrMode::Manual(0), 0.0), (AbrMode::Manual(0), 0.5)]
+    vec![(AbrMode::manual(0), 0.0), (AbrMode::manual(0), 0.5)]
 }
 
 /// Play the lower variant through the first half, then switch to the top
@@ -67,8 +67,8 @@ fn one_seek() -> Vec<(AbrMode, f64)> {
 /// production "switch to highest quality" AAC→FLAC change.
 fn switch_to_top_mid() -> Vec<(AbrMode, f64)> {
     vec![
-        (AbrMode::Manual(0), 0.0),
-        (AbrMode::Manual(TOP_VARIANT), 0.5),
+        (AbrMode::manual(0), 0.0),
+        (AbrMode::manual(TOP_VARIANT), 0.5),
     ]
 }
 
@@ -77,14 +77,14 @@ fn switch_to_top_mid() -> Vec<(AbrMode, f64)> {
 /// legacy `*_10seek` random cycling with a deterministic, switch-heavy script.
 fn multi_switch() -> Vec<(AbrMode, f64)> {
     vec![
-        (AbrMode::Manual(0), 0.05),
-        (AbrMode::Manual(TOP_VARIANT), 0.18),
-        (AbrMode::Manual(1), 0.31),
-        (AbrMode::Manual(TOP_VARIANT), 0.44),
-        (AbrMode::Manual(0), 0.57),
-        (AbrMode::Manual(TOP_VARIANT), 0.70),
-        (AbrMode::Manual(1), 0.83),
-        (AbrMode::Manual(TOP_VARIANT), 0.93),
+        (AbrMode::manual(0), 0.05),
+        (AbrMode::manual(TOP_VARIANT), 0.18),
+        (AbrMode::manual(1), 0.31),
+        (AbrMode::manual(TOP_VARIANT), 0.44),
+        (AbrMode::manual(0), 0.57),
+        (AbrMode::manual(TOP_VARIANT), 0.70),
+        (AbrMode::manual(1), 0.83),
+        (AbrMode::manual(TOP_VARIANT), 0.93),
     ]
 }
 
@@ -241,7 +241,7 @@ async fn run_case(
         DecoderBackend::Apple,
         true,
         false,
-        e2e(AbrMode::Manual(0)),
+        e2e(AbrMode::manual(0)),
         None,
     )
 )]
@@ -263,7 +263,7 @@ async fn run_case(
         DecoderBackend::Apple,
         true,
         false,
-        e2e(AbrMode::Manual(0)),
+        e2e(AbrMode::manual(0)),
         Some(320_000),
     )
 )]
@@ -285,7 +285,7 @@ async fn run_case(
         DecoderBackend::Apple,
         true,
         false,
-        e2e(AbrMode::Manual(0)),
+        e2e(AbrMode::manual(0)),
         None,
     )
 )]
@@ -302,7 +302,7 @@ async fn run_case(
     DecoderBackend::Symphonia,
     true,
     false,
-    e2e(AbrMode::Manual(0)),
+    e2e(AbrMode::manual(0)),
     None
 )]
 #[case::aac_lc_symphonia_eph_manual_multi(
@@ -318,7 +318,7 @@ async fn run_case(
     DecoderBackend::Symphonia,
     true,
     false,
-    e2e(AbrMode::Manual(0)),
+    e2e(AbrMode::manual(0)),
     Some(320_000)
 )]
 #[cfg_attr(
@@ -328,7 +328,7 @@ async fn run_case(
         DecoderBackend::Apple,
         true,
         false,
-        seeks_no_switch(AbrMode::Auto(Some(1))),
+        seeks_no_switch(auto(1)),
         None,
     )
 )]
@@ -339,7 +339,7 @@ async fn run_case(
         DecoderBackend::Apple,
         true,
         false,
-        e2e(AbrMode::Auto(Some(1))),
+        e2e(auto(1)),
         None,
     )
 )]
@@ -359,7 +359,7 @@ async fn run_case(
     DecoderBackend::Symphonia,
     true,
     false,
-    e2e(AbrMode::Manual(TOP_VARIANT)),
+    e2e(AbrMode::manual(TOP_VARIANT)),
     None
 )]
 #[case::flac_only_top_sustained_symphonia(
@@ -367,7 +367,7 @@ async fn run_case(
     DecoderBackend::Symphonia,
     true,
     false,
-    e2e(AbrMode::Manual(TOP_VARIANT)),
+    e2e(AbrMode::manual(TOP_VARIANT)),
     None
 )]
 #[cfg_attr(
@@ -388,7 +388,7 @@ async fn run_case(
         DecoderBackend::Android,
         true,
         false,
-        e2e(AbrMode::Manual(0)),
+        e2e(AbrMode::manual(0)),
         None,
     )
 )]
@@ -421,7 +421,7 @@ async fn run_case(
         DecoderBackend::Android,
         true,
         false,
-        seeks_no_switch(AbrMode::Auto(Some(1))),
+        seeks_no_switch(auto(1)),
         None,
     )
 )]

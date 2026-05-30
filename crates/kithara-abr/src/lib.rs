@@ -29,5 +29,5 @@ pub use handle::AbrHandle;
 pub use state::{AbrError, AbrState, AbrView};
 pub use types::{
     AbrDecision, AbrMode, AbrPeerId, AbrProgressSnapshot, AbrReason, AbrSettings, BandwidthSource,
-    VariantDuration, VariantInfo,
+    BoundsError, VariantDuration, VariantIndex, VariantInfo,
 };

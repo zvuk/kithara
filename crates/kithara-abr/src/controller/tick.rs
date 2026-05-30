@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use kithara_events::{AbrEvent, AbrReason, BandwidthSource};
+use kithara_events::{AbrEvent, AbrReason, BandwidthSource, VariantIndex};
 use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;
 use tracing::{debug, trace};
@@ -10,7 +10,7 @@ use super::{
     peer::PeerEntry,
     throttle::bytes_per_second,
 };
-use crate::state::AbrView;
+use crate::state::{AbrDecision, AbrView};
 
 impl AbrController {
     /// Record a bandwidth sample for `peer_id`. Called by the Downloader
@@ -84,7 +84,7 @@ impl AbrController {
                 .entry
                 .state
                 .as_ref()
-                .map_or(0, |s| s.current_variant_index());
+                .map_or(VariantIndex::new(0), |s| s.current_variant_index());
             bus.publish(AbrEvent::VariantsRegistered {
                 initial,
                 variants: variants.clone(),
@@ -109,22 +109,27 @@ impl AbrController {
         };
         let decision = state.decide(&view, now);
 
-        if decision.did_change {
-            state.request_target(decision.target_variant_index, decision.reason);
-            ctx.peer.wake();
-        } else if decision.reason != AbrReason::AlreadyOptimal
-            && let Some(ref bus) = bus
-        {
-            bus.publish(AbrEvent::DecisionSkipped {
-                reason: decision.reason,
-            });
+        match decision {
+            AbrDecision::Stay {
+                reason: AbrReason::AlreadyOptimal,
+                ..
+            } => {}
+            AbrDecision::Stay { reason, .. } => {
+                if let Some(ref bus) = bus {
+                    bus.publish(AbrEvent::DecisionSkipped { reason });
+                }
+            }
+            change => {
+                state.request_target(change.target(), change.reason());
+                ctx.peer.wake();
+            }
         }
 
         trace!(
             ?peer_id,
-            reason = ?decision.reason,
-            did_change = decision.did_change,
-            target = decision.target_variant_index,
+            reason = ?decision.reason(),
+            did_change = decision.changed(),
+            target = decision.target().get(),
             estimate_bps,
             mode = ?state.mode(),
             pending_target_after = ?state.pending_target(),

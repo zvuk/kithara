@@ -126,7 +126,7 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
         .name("t0".to_string())
         .store(StoreOptions::new(temp.path()))
         .decoder_backend(backend)
-        .initial_abr_mode(AbrMode::Manual(TOP_VARIANT))
+        .initial_abr_mode(AbrMode::manual(TOP_VARIANT))
         .build();
 
     let resource = Resource::new(cfg)

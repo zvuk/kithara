@@ -1,7 +1,16 @@
 use std::time::Duration;
 
-use kithara_abr::{AbrMode, AbrSettings};
+use kithara_abr::{AbrMode, AbrSettings, VariantIndex};
 use kithara_test_utils::kithara;
+
+/// Auto ABR mode seeded with initial variant `idx`. Test-only shorthand for
+/// `AbrMode::Auto(Some(VariantIndex::new(idx)))`; production code only ever
+/// seeds `Auto(None)`, so this helper lives in the test-support crate rather
+/// than on `AbrMode` (keeps the production surface free of test-only API).
+#[must_use]
+pub const fn auto(idx: usize) -> AbrMode {
+    AbrMode::Auto(Some(VariantIndex::new(idx)))
+}
 
 /// ABR settings tuned for tests that want variant switches to fire on
 /// every sample without hysteresis or interval gates.

@@ -181,7 +181,7 @@ impl HlsCoord {
         let Some(decision) = self.abr.peek_pending_decision() else {
             return false;
         };
-        let new_v = decision.target_variant_index;
+        let new_v = decision.target().get();
         let Some(v_new) = self.variants.get(new_v) else {
             return false;
         };
@@ -197,7 +197,7 @@ impl HlsCoord {
             from_seg,
             reader_pos = reader_pos_at_entry,
             needs_byte_continuity,
-            reason = ?decision.reason,
+            reason = ?decision.reason(),
             "HlsCoord: commit_variant_switch"
         );
         if needs_byte_continuity {

@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration as StdDuration};
 
 use kithara_abr::{AbrMode, AbrSettings, AbrState, AbrView};
-use kithara_events::{VariantDuration, VariantInfo};
+use kithara_events::{VariantDuration, VariantIndex, VariantInfo};
 use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;
 
@@ -18,7 +18,7 @@ fn variants_for(bitrates: &[u64]) -> Vec<VariantInfo> {
         .iter()
         .enumerate()
         .map(|(i, bps)| VariantInfo {
-            variant_index: i,
+            variant_index: VariantIndex::new(i),
             bandwidth_bps: Some(*bps),
             duration: VariantDuration::Unknown,
             name: None,
@@ -32,7 +32,7 @@ fn variants_for(bitrates: &[u64]) -> Vec<VariantInfo> {
 fn manual_switch_wins_over_in_flight_auto_decisions() {
     let variants = variants_for(&[300_000, 1_000_000, 3_000_000]);
     let settings = fast_settings();
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
 
     let now = Instant::now();
     let view = AbrView {
@@ -43,16 +43,16 @@ fn manual_switch_wins_over_in_flight_auto_decisions() {
         settings: &settings,
     };
     let d = state.decide(&view, now);
-    assert!(d.did_change);
+    assert!(d.changed());
 
-    state.set_mode(AbrMode::Manual(0));
+    state.set_mode(AbrMode::Manual(VariantIndex::new(0)));
 
-    state.apply(&d, now + StdDuration::from_millis(1));
+    state.apply_decision(&d, now + StdDuration::from_millis(1));
     let d2 = state.decide(&view, now + StdDuration::from_millis(2));
-    state.apply(&d2, now + StdDuration::from_millis(3));
+    state.apply_decision(&d2, now + StdDuration::from_millis(3));
 
     assert_eq!(
-        state.current_variant_index(),
+        state.current_variant_index().get(),
         0,
         "manual override must dominate a stale auto decision"
     );
@@ -60,7 +60,7 @@ fn manual_switch_wins_over_in_flight_auto_decisions() {
 
 #[kithara::test]
 fn variants_snapshot_is_stable_for_decide() {
-    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let settings = fast_settings();
 
     let variants_small = variants_for(&[300_000, 900_000]);
@@ -73,6 +73,6 @@ fn variants_snapshot_is_stable_for_decide() {
         settings: &settings,
     };
     let d = state.decide(&view, Instant::now());
-    state.apply(&d, Instant::now());
-    assert!(state.current_variant_index() < 2);
+    state.apply_decision(&d, Instant::now());
+    assert!(state.current_variant_index().get() < 2);
 }
