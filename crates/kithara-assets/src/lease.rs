@@ -380,12 +380,16 @@ where
         })
     }
 
-    fn fail(self, reason: String) {
+    fn fail(mut self, reason: String) {
         self.inner.fail(reason.clone());
         if let Some(live) = &self.cleanup.live {
             live.set(AssetResourceState::Failed(reason));
         }
-        // cleanup stays armed: a failed (non-committed) resource is removed on drop.
+        // Explicit failure is a *terminal, observable* `Failed` state — disarm
+        // the abandon-cleanup so the resource is not removed out from under a
+        // `resource_state` query. Only a writer dropped WITHOUT commit/fail
+        // (silent abandonment) triggers the partial-resource removal.
+        self.cleanup.disarm();
     }
 }
 

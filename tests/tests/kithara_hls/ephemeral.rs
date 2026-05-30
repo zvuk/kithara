@@ -3,7 +3,7 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::{fs, path::Path};
 
-use kithara::assets::{AssetStoreBuilder, ResourceHandle};
+use kithara::assets::{AcquisitionResult, AssetStoreBuilder, ReadSide, WriteSide};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
     assets::StoreOptions,
@@ -48,13 +48,17 @@ fn backend_resource_path_follows_ephemeral_flag(
     let scope = builder.build().scope("test");
 
     let key = scope.key("seg_0.m4s");
-    let res = scope
+    let AcquisitionResult::Pending(writer) = scope
         .store()
         .acquire_resource(&key, None)
-        .expect("open resource");
+        .expect("open resource")
+    else {
+        panic!("fresh acquire must be Pending");
+    };
+    let reader = writer.reader();
 
     assert_eq!(
-        res.path().is_some(),
+        reader.path().is_some(),
         expect_path,
         "resource path presence must match ephemeral flag: ephemeral={ephemeral}",
     );
