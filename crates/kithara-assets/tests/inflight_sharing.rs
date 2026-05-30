@@ -128,7 +128,7 @@ fn drop_first_leaves_second_alive() {
 }
 
 /// Test A from the shared-AssetStore plan: pins the shared-availability
-/// contract. One store, one asset_root, two handles acquired before any
+/// contract. One store, one `asset_root`, two handles acquired before any
 /// commit — write+commit through the first must surface as `Committed`
 /// status on the second and a populated `final_len` on the store.
 /// Regressing this would mean shared playback+waveform stops seeing the
