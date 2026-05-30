@@ -4518,6 +4518,7 @@ dependencies = [
 name = "kithara-storage"
 version = "0.0.1-alpha2"
 dependencies = [
+ "arc-swap",
  "bon",
  "crossbeam-queue",
  "delegate",

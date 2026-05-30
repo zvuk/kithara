@@ -32,6 +32,7 @@ kithara-test-utils = { workspace = true }
 rangemap = { workspace = true }
 kithara-platform = { workspace = true }
 crossbeam-queue = { workspace = true }
+arc-swap = { workspace = true }
 
 unimock = { workspace = true }
 hotpath = { workspace = true, optional = true }
