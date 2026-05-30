@@ -12,6 +12,24 @@ impl<D: DriverIo> ResourceCore<D> {
             return Ok(0);
         }
 
+        // Lock-free committed fast path: a committed resource exposes an
+        // immutable snapshot (`committed_len()` is the single source of truth);
+        // read straight from it with no state mutex.
+        if let Some(committed_len) = self.inner.driver.committed_len() {
+            if self.inner.cancel.is_cancelled() {
+                return Err(StorageError::Cancelled);
+            }
+            if offset >= committed_len {
+                return Ok(0);
+            }
+            let available = usize::try_from(committed_len - offset).unwrap_or(usize::MAX);
+            let to_read = buf.len().min(available);
+            return self
+                .inner
+                .driver
+                .read_committed(offset, &mut buf[..to_read]);
+        }
+
         self.check_health()?;
 
         let effective_len = {
@@ -79,5 +97,61 @@ impl<D: DriverIo> ResourceCore<D> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
+
+    use std::sync::mpsc;
+
+    use kithara_platform::{thread, time::Duration};
+    use tokio_util::sync::CancellationToken;
+
+    use crate::backend::{
+        memory::driver::{MemDriver, MemOptions},
+        resource::state::ResourceCore,
+        traits::DriverIo,
+    };
+
+    /// A committed resource's `read_at_inner` must complete WITHOUT taking the
+    /// `inner.state` mutex. The test holds the state mutex on this thread while a
+    /// worker thread reads; a lock-free fast path completes immediately, a slow
+    /// path blocks on the held guard and times out.
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn committed_read_does_not_take_state_mutex() {
+        let core: ResourceCore<MemDriver> = ResourceCore::open(
+            CancellationToken::new(),
+            MemOptions {
+                initial_data: Some(b"hello world".to_vec()),
+                capacity: 0,
+            },
+        )
+        .expect("BUG: MemDriver::open with initial_data is infallible");
+
+        assert_eq!(core.inner.driver.committed_len(), Some(11));
+
+        let guard = core.inner.state.lock_sync();
+
+        let (tx, rx) = mpsc::channel();
+        let worker = core.clone();
+        thread::spawn(move || {
+            let mut buf = [0u8; 11];
+            let result = worker.read_at_inner(0, &mut buf);
+            let _ = tx.send(result.map(|n| (n, buf)));
+        });
+
+        let received = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("committed read blocked on the state mutex");
+
+        drop(guard);
+
+        let (n, buf) = received.expect("committed read failed");
+        assert_eq!(n, 11);
+        assert_eq!(&buf, b"hello world");
     }
 }
