@@ -1390,6 +1390,15 @@ impl<T: StreamType> StreamAudioSource<T> {
             target_offset,
         } = self.detect_format_change()
         else {
+            // A seek can race in between `decode_next_chunk`'s loop-top
+            // `is_seek_pending` check and this `detect_format_change`,
+            // whose seek-epoch suppression then reports `NoChange`. The
+            // seek path owns repositioning, so defer to it (`Interrupted`
+            // re-runs the loop, which handles the seek) instead of failing
+            // the producer on this transient ordering.
+            if self.timeline.is_seek_pending() {
+                return DecodeAction::Return(Err(DecodeError::Interrupted));
+            }
             warn!(
                 ?no_change_err,
                 chunks = self.chunks_decoded,
