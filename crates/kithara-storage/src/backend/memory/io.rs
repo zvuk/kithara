@@ -9,7 +9,7 @@ use crate::{
 
 impl DriverIo for MemDriver {
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        let state = self.state.lock_sync();
+        let mut state = self.state.lock_sync();
         let end = final_len.unwrap_or(state.len).min(state.len);
         let end_usize = usize::try_from(end).map_err(|err| {
             StorageError::Failed(format!(
@@ -17,13 +17,22 @@ impl DriverIo for MemDriver {
             ))
         })?;
         if end_usize == 0 {
+            // Release the working buffer's heap; the committed snapshot is the
+            // single source of committed bytes. `shrink_to_fit` actually frees
+            // (plain `clear` would retain the capacity).
+            state.buf.clear();
+            state.buf.shrink_to_fit();
             drop(state);
             // Zero-length committed: no snapshot (matches the mmap `Empty`
             // contract — `committed_len()` reports `None`, reads use the slow path).
             self.committed.store(None);
             return Ok(());
         }
+        // Snapshot the committed bytes first, then release the working buffer's
+        // heap so committed mem resources hold a single copy (the snapshot).
         let snapshot = state.buf[..end_usize].to_vec();
+        state.buf.clear();
+        state.buf.shrink_to_fit();
         drop(state);
         self.committed.store(Some(Arc::new(snapshot)));
         Ok(())
@@ -41,12 +50,39 @@ impl DriverIo for MemDriver {
     }
 
     fn reactivate(&self) -> StorageResult<()> {
+        // Repopulate the working buffer (released on commit) and set `state.len`
+        // while `committed` is still `Some`, so concurrent reads keep taking the
+        // snapshot fast path. Only then clear the snapshot, after which reads
+        // fall to the slow path and find the repopulated buffer. Do NOT reorder.
+        if let Some(snapshot) = self.committed.load_full() {
+            let mut state = self.state.lock_sync();
+            let snap_len = snapshot.len();
+            state
+                .buf
+                .ensure_len(snap_len)
+                .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
+            state.buf[..snap_len].copy_from_slice(&snapshot);
+            state.len = u64::try_from(snap_len).map_err(|err| {
+                StorageError::Failed(format!(
+                    "memory reactivate: len {snap_len} does not fit u64: {err}"
+                ))
+            })?;
+            drop(state);
+        }
         self.committed.store(None);
         Ok(())
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
+        // A committed resource's working buffer has been released; serve from the
+        // immutable snapshot. This also covers a commit that completed while this
+        // read was in flight (the fast path checked `committed_len()` before the
+        // snapshot was published), preventing a read against the freed buffer.
+        if self.committed.load().is_some() {
+            return self.read_committed(offset, buf);
+        }
+
         let state = self.state.lock_sync();
 
         if offset >= state.len {
@@ -205,6 +241,65 @@ mod tests {
             .read_committed(0, &mut buf)
             .expect_err("read_committed without a snapshot must error");
         assert!(matches!(err, StorageError::Failed(_)));
+    }
+
+    #[kithara::test]
+    fn commit_frees_working_buffer_and_reactivate_restores_it() {
+        let (driver, _state) = MemDriver::open(MemOptions {
+            initial_data: None,
+            capacity: 0,
+        })
+        .expect("open empty must succeed");
+
+        driver
+            .write_at(0, b"hello world", false)
+            .expect("active write must succeed");
+
+        let cap_before = driver.state.lock_sync().buf.capacity();
+        assert!(
+            cap_before >= 11,
+            "expected capacity >= 11, got {cap_before}"
+        );
+
+        driver.commit(Some(11)).expect("commit must succeed");
+
+        let cap_after = driver.state.lock_sync().buf.capacity();
+        assert!(
+            cap_after < cap_before,
+            "working buffer not released on commit (cap_before={cap_before}, cap_after={cap_after})"
+        );
+        assert_eq!(cap_after, 0, "shrink_to_fit must reach capacity 0");
+
+        assert_eq!(driver.committed_len(), Some(11));
+
+        let mut buf = [0u8; 11];
+        let n = driver
+            .read_committed(0, &mut buf)
+            .expect("read_committed from snapshot must succeed");
+        assert_eq!(n, 11);
+        assert_eq!(&buf, b"hello world");
+
+        let mut buf2 = [0u8; 11];
+        let n = driver
+            .read_at(0, &mut buf2, 11)
+            .expect("snapshot-aware read_at must succeed");
+        assert_eq!(n, 11);
+        assert_eq!(&buf2, b"hello world");
+
+        driver.reactivate().expect("reactivate must succeed");
+
+        assert_eq!(driver.committed_len(), None);
+        assert!(
+            driver.state.lock_sync().buf.len() >= 11,
+            "working buffer not repopulated on reactivate"
+        );
+
+        let mut buf3 = [0u8; 11];
+        let n = driver
+            .read_at(0, &mut buf3, 11)
+            .expect("slow-path read_at after reactivate must succeed");
+        assert_eq!(n, 11);
+        assert_eq!(&buf3, b"hello world");
     }
 
     #[kithara::test]
