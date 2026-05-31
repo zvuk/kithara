@@ -57,10 +57,14 @@ impl DriverIo for MemDriver {
     }
 
     fn reactivate(&self) -> StorageResult<()> {
-        // Repopulate the working buffer (released on commit) and set `state.len`
-        // while `committed` is still `Some`, so concurrent reads keep taking the
-        // snapshot fast path. Only then clear the snapshot, after which reads
-        // fall to the slow path and find the repopulated buffer. Do NOT reorder.
+        // Repopulate the working buffer from the committed snapshot so the
+        // re-download can rewrite incrementally on top of the prior generation
+        // (e.g. extend `hello` -> `hello world`). The snapshot stays published:
+        // reads keep taking the lock-free snapshot fast path and observe the
+        // immutable prior generation until the next `commit` atomically swaps in
+        // the new one — never the half-rewritten working buffer. The lifecycle
+        // flag (`ResourceCore::committed`) is what flips to active; the snapshot
+        // is purely the read view.
         if let Some(snapshot) = self.committed.load_full() {
             let mut state = self.state.lock_sync();
             let snap_len = snapshot.len();
@@ -76,7 +80,6 @@ impl DriverIo for MemDriver {
             })?;
             drop(state);
         }
-        self.committed.store(None);
         Ok(())
     }
 
@@ -361,7 +364,11 @@ mod tests {
 
         driver.reactivate().expect("reactivate must succeed");
 
-        assert_eq!(driver.committed_len(), None);
+        // The snapshot stays PUBLISHED across reactivate: reads keep serving the
+        // immutable prior generation (a re-download rewrites the working buffer
+        // in place, so exposing it would risk a torn read). The lifecycle flips
+        // to active one layer up (`ResourceCore::committed`), not here.
+        assert_eq!(driver.committed_len(), Some(11));
         assert!(
             driver.state.lock_sync().buf.len() >= 11,
             "working buffer not repopulated on reactivate"
@@ -370,7 +377,7 @@ mod tests {
         let mut buf3 = [0u8; 11];
         let n = driver
             .read_at(0, &mut buf3, 11)
-            .expect("slow-path read_at after reactivate must succeed");
+            .expect("snapshot read_at after reactivate must succeed");
         assert_eq!(n, 11);
         assert_eq!(&buf3, b"hello world");
     }

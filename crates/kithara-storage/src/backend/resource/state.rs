@@ -2,7 +2,7 @@
 
 use std::{
     fmt::{self, Debug},
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
 };
 
 use kithara_platform::{Condvar, Mutex};
@@ -29,6 +29,13 @@ pub(super) struct Inner<D: DriverIo> {
     pub(super) driver: D,
     pub(super) state: Mutex<CommonState>,
     pub(super) observer: Option<Arc<dyn AvailabilityObserver>>,
+    /// Lock-free lifecycle flag: `true` while the resource is committed, `false`
+    /// once `reactivate` reopens it for a re-download. Distinct from the driver's
+    /// committed snapshot, which stays published across a reactivate so reads
+    /// keep serving consistent (immutable) bytes; this flag tracks the *lifecycle*
+    /// so `len()` reports `None` for an active (being-rewritten) resource without
+    /// taking the state mutex.
+    pub(super) committed: AtomicBool,
 }
 
 /// Generic storage resource state machine, parameterized by backend driver.
@@ -98,6 +105,7 @@ impl<D: Driver> ResourceCore<D> {
                 driver,
                 observer,
                 condvar: Condvar::new(),
+                committed: AtomicBool::new(init.is_committed),
                 state: Mutex::new(CommonState {
                     failed: None,
                     final_len: init.final_len,

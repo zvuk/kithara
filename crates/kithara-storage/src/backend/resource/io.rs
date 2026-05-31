@@ -113,15 +113,22 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use std::sync::mpsc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
 
     use kithara_platform::{thread, time::Duration};
     use tokio_util::sync::CancellationToken;
 
-    use crate::backend::{
-        memory::driver::{MemDriver, MemOptions},
-        resource::state::ResourceCore,
-        traits::DriverIo,
+    use crate::{
+        WaitOutcome,
+        backend::{
+            memory::driver::{MemDriver, MemOptions},
+            resource::state::ResourceCore,
+            traits::DriverIo,
+        },
     };
 
     /// A committed resource's `read_at_inner` must complete WITHOUT taking the
@@ -204,5 +211,188 @@ mod tests {
         assert_eq!(core.len_inner(), Some(11));
         assert!(core.contains_range_inner(0..11));
         assert!(!core.contains_range_inner(0..12));
+    }
+
+    /// Fill `[0, len)` with `value` in multiple `write_at_inner` calls so a
+    /// reader interleaving between chunks can observe a half-rewritten buffer.
+    fn write_generation(core: &ResourceCore<MemDriver>, value: u8, len: usize, chunk: usize) {
+        let mut off = 0usize;
+        while off < len {
+            let end = (off + chunk).min(len);
+            let data = vec![value; end - off];
+            core.write_at_inner(off as u64, &data)
+                .expect("active chunk write must succeed");
+            off = end;
+        }
+    }
+
+    /// Concurrency contract: while a writer cycles a resource through
+    /// `reactivate → multi-chunk rewrite → commit`, stamping a **distinct
+    /// byte value per generation**, a concurrent reader that gates on
+    /// `contains_range` (the real reader contract: confirm availability,
+    /// then read) must NEVER observe a *torn* read — a single read whose
+    /// bytes mix two generations.
+    ///
+    /// A torn read means the read path admitted bytes past the confirmed,
+    /// fully-written prefix (e.g. the slow path bounds by `storage_len`
+    /// instead of the committed/available prefix, or `reactivate` left
+    /// `available` reporting a range that is mid-rewrite). This is the
+    /// pure storage-layer manifestation of the data race that surfaces, one
+    /// layer up, as a decoder "producer failed" on the ephemeral DRM path.
+    /// Deterministic under stress: every generation opens a fresh tear
+    /// window and the readers hammer it.
+    #[kithara::test(timeout(Duration::from_secs(30)))]
+    fn concurrent_generation_rewrite_never_tears_a_read() {
+        const LEN: usize = 8192;
+        const CHUNK: usize = 256;
+        const GENS: u8 = 250;
+        const READERS: usize = 6;
+
+        let core: ResourceCore<MemDriver> = ResourceCore::open(
+            CancellationToken::new(),
+            MemOptions {
+                initial_data: None,
+                capacity: 0,
+            },
+        )
+        .expect("open must succeed");
+
+        write_generation(&core, 1, LEN, CHUNK);
+        core.commit_inner(Some(LEN as u64))
+            .expect("baseline commit must succeed");
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let readers: Vec<_> = (0..READERS)
+            .map(|_| {
+                let reader = core.clone();
+                let stop = Arc::clone(&stop);
+                thread::spawn(move || {
+                    let mut buf = vec![0u8; LEN];
+                    while !stop.load(Ordering::Relaxed) {
+                        if !reader.contains_range_inner(0..LEN as u64) {
+                            continue;
+                        }
+                        let n = match reader.read_at_inner(0, &mut buf) {
+                            Ok(n) => n,
+                            Err(_) => continue,
+                        };
+                        if n == 0 {
+                            continue;
+                        }
+                        let head = buf[0];
+                        if let Some(pos) = buf[..n].iter().position(|&b| b != head) {
+                            stop.store(true, Ordering::Relaxed);
+                            panic!(
+                                "TORN READ: byte[0]={head} but byte[{pos}]={} — \
+                                 a single read mixed two generations (read {n} bytes)",
+                                buf[pos]
+                            );
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for value in 2..=GENS {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            core.reactivate_inner().expect("reactivate must succeed");
+            write_generation(&core, value, LEN, CHUNK);
+            core.commit_inner(Some(LEN as u64))
+                .expect("commit must succeed");
+        }
+        stop.store(true, Ordering::Relaxed);
+
+        for reader in readers {
+            reader.join().expect("reader detected a torn read");
+        }
+    }
+
+    /// Same race, exercised through the real reader path the decode producer
+    /// uses (`wait_range` → `read_at`) and with a **varying length per
+    /// generation** — mirroring the DRM estimate→real (PKCS7 decrypt-shrink)
+    /// and variant-switch shape where a re-download commits a different length.
+    /// A `wait_range` that reports `Ready` must be followed by a `read_at` that
+    /// returns bytes from a single generation (no torn read across the
+    /// reactivate→rewrite→commit boundary). If this tears, the residual flake is
+    /// still in storage; if it stays green, the storage layer is consistent and
+    /// the residual lives one layer up (decoder recreation).
+    #[kithara::test(timeout(Duration::from_secs(30)))]
+    fn concurrent_varying_length_rewrite_via_wait_range_stays_consistent() {
+        const LONG: usize = 8192;
+        const SHORT: usize = 2731;
+        const CHUNK: usize = 256;
+        const GENS: u8 = 250;
+        const READERS: usize = 6;
+
+        let core: ResourceCore<MemDriver> = ResourceCore::open(
+            CancellationToken::new(),
+            MemOptions {
+                initial_data: None,
+                capacity: 0,
+            },
+        )
+        .expect("open must succeed");
+
+        write_generation(&core, 1, LONG, CHUNK);
+        core.commit_inner(Some(LONG as u64))
+            .expect("baseline commit must succeed");
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let readers: Vec<_> = (0..READERS)
+            .map(|_| {
+                let reader = core.clone();
+                let stop = Arc::clone(&stop);
+                thread::spawn(move || {
+                    let mut buf = vec![0u8; LONG];
+                    while !stop.load(Ordering::Relaxed) {
+                        let Some(target) = reader.len_inner() else {
+                            continue;
+                        };
+                        let target = target as usize;
+                        if target == 0 {
+                            continue;
+                        }
+                        match reader.wait_range_inner(0..target as u64) {
+                            Ok(WaitOutcome::Ready) => {}
+                            _ => continue,
+                        }
+                        let n = match reader.read_at_inner(0, &mut buf[..target]) {
+                            Ok(n) => n,
+                            Err(_) => continue,
+                        };
+                        if n == 0 {
+                            continue;
+                        }
+                        let head = buf[0];
+                        if let Some(pos) = buf[..n].iter().position(|&b| b != head) {
+                            stop.store(true, Ordering::Relaxed);
+                            panic!(
+                                "TORN READ (wait_range path): byte[0]={head} but byte[{pos}]={} — \
+                                 a single read mixed two generations (read {n} of target {target})",
+                                buf[pos]
+                            );
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for value in 2..=GENS {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            let len = if value % 2 == 0 { LONG } else { SHORT };
+            core.reactivate_inner().expect("reactivate must succeed");
+            write_generation(&core, value, len, CHUNK);
+            core.commit_inner(Some(len as u64))
+                .expect("commit must succeed");
+        }
+        stop.store(true, Ordering::Relaxed);
+
+        for reader in readers {
+            reader.join().expect("reader detected a torn read");
+        }
     }
 }

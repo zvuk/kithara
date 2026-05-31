@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Range, path::Path};
+use std::{ops::Range, path::Path, sync::atomic::Ordering};
 
 use crate::{
     StorageResult,
@@ -13,6 +13,7 @@ impl<D: DriverIo> ResourceCore<D> {
         self.check_health()?;
 
         self.inner.driver.commit(final_len)?;
+        self.inner.committed.store(true, Ordering::Release);
 
         {
             let mut state = self.inner.state.lock_sync();
@@ -67,7 +68,13 @@ impl<D: DriverIo> ResourceCore<D> {
     }
 
     pub(super) fn len_inner(&self) -> Option<u64> {
-        if let Some(committed_len) = self.inner.driver.committed_len() {
+        // The committed snapshot stays published across a `reactivate` so reads
+        // remain consistent, so confirm the *lifecycle* is still committed (the
+        // lock-free flag) before reporting its length as the resource's final
+        // length. A reactivated (being-rewritten) resource has no known total.
+        if self.inner.committed.load(Ordering::Acquire)
+            && let Some(committed_len) = self.inner.driver.committed_len()
+        {
             return Some(committed_len);
         }
         let state = self.inner.state.lock_sync();
@@ -98,6 +105,7 @@ impl<D: DriverIo> ResourceCore<D> {
         }
 
         self.inner.driver.reactivate()?;
+        self.inner.committed.store(false, Ordering::Release);
 
         {
             let mut state = self.inner.state.lock_sync();
