@@ -36,4 +36,4 @@ pub use traits::{
     SeekOutcome,
 };
 pub use waveform::{Envelope, PeakAccumulator};
-pub use worker::{AudioWorkerSource, handle::AudioWorkerHandle, types::ServiceClass};
+pub use worker::{AudioWorkerSource, PreloadGate, handle::AudioWorkerHandle, types::ServiceClass};

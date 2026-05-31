@@ -4,11 +4,10 @@ use std::sync::{
 };
 
 use kithara_decode::PcmChunk;
-use kithara_platform::tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    AudioWorkerSource,
+    AudioWorkerSource, PreloadGate,
     decoder_node::DecoderNode,
     hang_observer::HangWatchdogObserver,
     types::{TrackId, TrackIdGen},
@@ -20,7 +19,7 @@ use crate::{
 
 /// Everything needed to register a track with the shared worker.
 pub(crate) struct TrackRegistration {
-    pub(crate) preload_notify: Arc<Notify>,
+    pub(crate) preload_gate: Arc<PreloadGate>,
     /// Shared priority hint. The real-time consumer writes it wait-free
     /// (`Audio::set_service_class`); the worker scheduler reads it each pass.
     pub(crate) service_class: Arc<AtomicServiceClass>,
@@ -134,7 +133,6 @@ mod tests {
     use kithara_platform::{
         thread::sleep as thread_sleep,
         time::{Instant, timeout as platform_timeout},
-        tokio::sync::Notify,
     };
     use kithara_stream::Timeline;
     use kithara_test_utils::kithara;
@@ -208,6 +206,23 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct FailingSource {
+        timeline: Timeline,
+    }
+
+    impl AudioWorkerSource for FailingSource {
+        type Chunk = PcmChunk;
+
+        fn step_track(&mut self) -> TrackStep<PcmChunk> {
+            TrackStep::Failed
+        }
+
+        fn timeline(&self) -> &Timeline {
+            &self.timeline
+        }
+    }
+
     fn make_registration<S>(
         source: S,
         ringbuf_capacity: usize,
@@ -215,7 +230,7 @@ mod tests {
     ) -> (
         TrackRegistration,
         crate::runtime::Inlet<Fetch<PcmChunk>>,
-        Arc<Notify>,
+        Arc<PreloadGate>,
     )
     where
         S: AudioWorkerSource<Chunk = PcmChunk> + 'static,
@@ -223,17 +238,17 @@ mod tests {
         let wake = Arc::new(ThreadWake::default());
         let (outlet, inlet) = connect::<Fetch<PcmChunk>>(ringbuf_capacity, Some(wake.clone()));
         let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(ringbuf_capacity + 2, None);
-        let preload_notify = Arc::new(Notify::new());
+        let preload_gate = Arc::new(PreloadGate::default());
 
         let reg = TrackRegistration {
             outlet,
             trash_inlet,
             preload_chunks,
             source: Box::new(source),
-            preload_notify: Arc::clone(&preload_notify),
+            preload_gate: Arc::clone(&preload_gate),
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::Audible)),
         };
-        (reg, inlet, preload_notify)
+        (reg, inlet, preload_gate)
     }
 
     fn wait_for_chunks(
@@ -264,7 +279,7 @@ mod tests {
     #[kithara::test]
     fn worker_delivers_chunks() {
         let handle = AudioWorkerHandle::new();
-        let (reg, mut data_rx, _preload_notify) = make_registration(MockSource::new(10), 32, 3);
+        let (reg, mut data_rx, _preload_gate) = make_registration(MockSource::new(10), 32, 3);
 
         let _id = handle.register_track(reg);
 
@@ -376,37 +391,73 @@ mod tests {
         handle.shutdown();
     }
 
-    #[kithara::test]
-    fn worker_preload_notify_fires() {
+    #[kithara::test(tokio)]
+    async fn worker_preload_gate_fires_on_progress() {
         let handle = AudioWorkerHandle::new();
 
-        let (reg, _rx, _preload_notify) = make_registration(MockSource::new(10), 32, 3);
+        let (reg, _rx, preload_gate) = make_registration(MockSource::new(10), 32, 3);
 
         let _id = handle.register_track(reg);
 
-        thread_sleep(Duration::from_millis(200));
+        platform_timeout(Duration::from_secs(1), preload_gate.wait())
+            .await
+            .expect("preload gate must open once the preload threshold is met");
+        assert!(preload_gate.is_ready());
 
         handle.shutdown();
     }
 
     #[kithara::test(tokio)]
-    async fn worker_preload_notify_rearms_after_seek() {
+    async fn worker_preload_gate_fires_on_eof() {
         let handle = AudioWorkerHandle::new();
 
-        let (reg, _rx, preload_notify) = make_registration(MockSource::new(10), 32, 1);
+        let (reg, _rx, preload_gate) = make_registration(MockSource::new(0), 32, 8);
+
+        let _id = handle.register_track(reg);
+
+        platform_timeout(Duration::from_secs(1), preload_gate.wait())
+            .await
+            .expect("EOF before the preload threshold must still open the gate");
+        assert!(preload_gate.is_ready());
+
+        handle.shutdown();
+    }
+
+    #[kithara::test(tokio)]
+    async fn worker_preload_gate_fires_on_failure() {
+        let handle = AudioWorkerHandle::new();
+
+        let (reg, _rx, preload_gate) = make_registration(FailingSource::default(), 32, 8);
+
+        let _id = handle.register_track(reg);
+
+        platform_timeout(Duration::from_secs(1), preload_gate.wait())
+            .await
+            .expect("a decoder failure must open the gate so preload never stalls");
+        assert!(preload_gate.is_ready());
+
+        handle.shutdown();
+    }
+
+    #[kithara::test(tokio)]
+    async fn worker_preload_gate_reopens_after_seek() {
+        let handle = AudioWorkerHandle::new();
+
+        let (reg, _rx, preload_gate) = make_registration(MockSource::new(10), 32, 1);
         let timeline = reg.source.timeline().clone();
         let _id = handle.register_track(reg);
 
-        platform_timeout(Duration::from_secs(1), preload_notify.notified())
+        platform_timeout(Duration::from_secs(1), preload_gate.wait())
             .await
-            .expect("initial preload notify must fire");
+            .expect("initial preload gate must open");
+        assert!(preload_gate.is_ready());
 
         let _ = timeline.initiate_seek(Duration::from_secs(1));
         handle.wake();
 
-        platform_timeout(Duration::from_secs(1), preload_notify.notified())
+        platform_timeout(Duration::from_secs(1), preload_gate.wait())
             .await
-            .expect("seek must re-arm preload notify");
+            .expect("re-armed preload gate must reopen after the seek refills");
 
         handle.shutdown();
     }

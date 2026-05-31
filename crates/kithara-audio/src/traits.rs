@@ -7,14 +7,12 @@ use std::{
 pub use kithara_decode::{DecodeError, DecodeResult};
 use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
-use kithara_platform::tokio as platform_tokio;
-use platform_tokio::sync::Notify;
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
 }
 
-use crate::ServiceClass;
+use crate::{ServiceClass, worker::PreloadGate};
 
 /// Reason a [`ReadOutcome::Pending`] / [`ChunkOutcome::Pending`] was
 /// returned — i.e. why the reader did not advance this call. Each
@@ -197,8 +195,11 @@ pub trait PcmReader: kithara_platform::MaybeSend {
         Ok(())
     }
 
-    /// Get notify for async preload (first chunk available).
-    fn preload_notify(&self) -> Option<Arc<Notify>> {
+    /// Startup gate signalled once preload completes (first chunk
+    /// available). The async consumer awaits [`PreloadGate::wait`]; the
+    /// worker opens it with a lock-free store. `None` for readers without
+    /// a worker-backed preload (file, test fixtures).
+    fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
         None
     }
 

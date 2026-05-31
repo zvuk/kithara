@@ -15,10 +15,7 @@ use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage, SegmentLocation};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
-use kithara_platform::{
-    thread::park_timeout,
-    tokio::{sync::Notify, task::spawn_blocking},
-};
+use kithara_platform::{thread::park_timeout, tokio::task::spawn_blocking};
 use kithara_stream::{MediaInfo, Stream, StreamType, Timeline};
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
@@ -35,6 +32,7 @@ use crate::{
     runtime::AtomicServiceClass,
     traits::{ChunkOutcome, DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome},
     worker::{
+        PreloadGate,
         handle::{AudioWorkerHandle, TrackRegistration},
         thread_wake::ThreadWake,
         types::{ServiceClass, TrackId},
@@ -76,8 +74,8 @@ enum RecvOutcome {
 /// Provides a simple interface for reading decoded PCM audio, compatible
 /// with cpal and rodio backends. See the crate `README.md` "Usage".
 pub struct Audio<S> {
-    /// Notify for async preload (first chunk available).
-    pub(crate) preload_notify: Arc<Notify>,
+    /// Startup gate for async preload (first chunk available).
+    pub(crate) preload_gate: Arc<PreloadGate>,
 
     /// Consumer-side phase — replaces the old `eof: bool` flag.
     pub(crate) consumer_phase: ConsumerPhase,
@@ -884,7 +882,7 @@ where
             variant: initial_variant,
         });
 
-        let preload_notify = Arc::new(Notify::new());
+        let preload_gate = Arc::new(PreloadGate::default());
         let reader_wake = Arc::new(ThreadWake::default());
         let (data_tx, data_rx) = Self::create_channels(pcm_buffer_chunks, Arc::clone(&reader_wake));
         let (trash_tx, trash_inlet) = Self::create_trash_channel(pcm_buffer_chunks);
@@ -898,7 +896,7 @@ where
             trash_inlet,
             source: Box::new(audio_source),
             outlet: data_tx,
-            preload_notify: preload_notify.clone(),
+            preload_gate: preload_gate.clone(),
             preload_chunks: preload_chunks.get(),
             service_class: Arc::clone(&service_class),
         });
@@ -909,7 +907,7 @@ where
             bus,
             host_sample_rate,
             playback_rate,
-            preload_notify,
+            preload_gate,
             reader_wake,
             abr_handle,
             trash_tx,
@@ -1252,8 +1250,8 @@ impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
         Self::preload(self)
     }
 
-    fn preload_notify(&self) -> Option<Arc<Notify>> {
-        Some(self.preload_notify.clone())
+    fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
+        Some(self.preload_gate.clone())
     }
 
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
@@ -1382,7 +1380,7 @@ mod tests {
             pcm_pool: PcmPool::default().clone(),
             host_sample_rate: Arc::new(AtomicU32::new(0)),
             playback_rate: Arc::new(AtomicF32::new(1.0)),
-            preload_notify: Arc::new(Notify::new()),
+            preload_gate: Arc::new(PreloadGate::default()),
             preloaded: false,
             last_progress_emit: None,
             track_id: None,
@@ -1443,7 +1441,7 @@ mod tests {
             pcm_pool: PcmPool::default().clone(),
             host_sample_rate: Arc::new(AtomicU32::new(0)),
             playback_rate: Arc::new(AtomicF32::new(1.0)),
-            preload_notify: Arc::new(Notify::new()),
+            preload_gate: Arc::new(PreloadGate::default()),
             preloaded: true,
             last_progress_emit: None,
             track_id: None,
