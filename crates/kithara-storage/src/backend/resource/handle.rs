@@ -288,6 +288,16 @@ pub trait ResourceRead: sealed::Sealed + MaybeSend + MaybeSync {
     /// resource has failed.
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
 
+    /// Read the **active working storage**, bypassing the lock-free committed
+    /// snapshot. A re-download keeps the prior generation's snapshot published
+    /// for concurrent [`read_at`](Self::read_at) callers; the producer's own
+    /// in-flight read-back (e.g. decrypt on commit) reads here to observe the
+    /// freshly-written generation rather than the stale snapshot.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+
     /// Committed length, if known.
     fn len(&self) -> Option<u64>;
 
@@ -317,6 +327,9 @@ macro_rules! impl_resource_read {
         impl<D: DriverIo> ResourceRead for Resource<$phase, D> {
             fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
                 self.data.core.read_at_inner(offset, buf)
+            }
+            fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+                self.data.core.read_inflight_at(offset, buf)
             }
             fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
                 self.data.core.wait_range_inner(range)

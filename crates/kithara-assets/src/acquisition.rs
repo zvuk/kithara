@@ -89,6 +89,18 @@ pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
     /// backing read error.
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
 
+    /// Read **raw** bytes from the active working storage, bypassing both the
+    /// processing gate and any committed snapshot. This is the producer's own
+    /// in-flight read-back: a re-download keeps the prior generation's snapshot
+    /// published for concurrent [`read_at`](Self::read_at) callers, so on-commit
+    /// processing (decrypt) reads here to transform the freshly-written
+    /// generation rather than the stale snapshot. Mint it from the writer via
+    /// [`WriteSide::reader`]; external consumers use [`read_at`](Self::read_at).
+    ///
+    /// # Errors
+    /// Propagates the backing read error.
+    fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+
     /// Wait until `range` is available (and, for processed resources, processed).
     ///
     /// # Errors

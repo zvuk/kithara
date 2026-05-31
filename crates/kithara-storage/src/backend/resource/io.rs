@@ -58,6 +58,40 @@ impl<D: DriverIo> ResourceCore<D> {
             .read_at(offset, &mut buf[..to_read], effective_len)
     }
 
+    /// Read the **active working storage**, bypassing the lock-free committed
+    /// snapshot fast path used by [`read_at_inner`](Self::read_at_inner).
+    ///
+    /// A re-download keeps the prior generation's snapshot published for
+    /// concurrent readers while it rewrites the working storage. The writer's
+    /// own read-modify-write (decrypt on commit) must observe the *in-flight*
+    /// bytes it just wrote, not the stale snapshot — so it reads through here.
+    /// `driver.read_at` is working-buffer-first, so this returns the in-flight
+    /// generation while it is being written and the committed bytes otherwise.
+    pub(super) fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        self.check_health()?;
+
+        let effective_len = {
+            let final_len = self.inner.state.lock_sync().final_len;
+            let storage_len = self.inner.driver.storage_len();
+            final_len.unwrap_or(storage_len).min(storage_len)
+        };
+
+        if offset >= effective_len {
+            return Ok(0);
+        }
+
+        let available = usize::try_from(effective_len - offset).unwrap_or(usize::MAX);
+        let to_read = buf.len().min(available);
+
+        self.inner
+            .driver
+            .read_at(offset, &mut buf[..to_read], effective_len)
+    }
+
     #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(super) fn write_at_inner(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
         if data.is_empty() {
@@ -126,10 +160,41 @@ mod tests {
         WaitOutcome,
         backend::{
             memory::driver::{MemDriver, MemOptions},
+            mmap::driver::{MmapDriver, MmapOptions},
             resource::state::ResourceCore,
             traits::DriverIo,
         },
     };
+
+    /// Open a fresh, uncommitted in-memory resource for the concurrency tests.
+    fn open_mem() -> ResourceCore<MemDriver> {
+        ResourceCore::open(
+            CancellationToken::new(),
+            MemOptions {
+                initial_data: None,
+                capacity: 0,
+            },
+        )
+        .expect("open mem must succeed")
+    }
+
+    /// Open a fresh, uncommitted mmap-backed resource at `path` (mode/len at
+    /// builder defaults). The caller keeps the backing `TempDir` alive for the
+    /// duration of the test.
+    fn open_mmap(path: std::path::PathBuf) -> ResourceCore<MmapDriver> {
+        ResourceCore::open(CancellationToken::new(), MmapOptions::new(path))
+            .expect("open mmap must succeed")
+    }
+
+    /// Backend selector for the `#[case]`-parameterized concurrency tests. The
+    /// two backends differ by *type* (`ResourceCore<MemDriver>` vs
+    /// `ResourceCore<MmapDriver>`), so each case dispatches to the generic test
+    /// body with the matching driver.
+    #[derive(Debug, Clone, Copy)]
+    enum Backend {
+        Mem,
+        Mmap,
+    }
 
     /// A committed resource's `read_at_inner` must complete WITHOUT taking the
     /// `inner.state` mutex. The test holds the state mutex on this thread while a
@@ -215,7 +280,7 @@ mod tests {
 
     /// Fill `[0, len)` with `value` in multiple `write_at_inner` calls so a
     /// reader interleaving between chunks can observe a half-rewritten buffer.
-    fn write_generation(core: &ResourceCore<MemDriver>, value: u8, len: usize, chunk: usize) {
+    fn write_generation<D: DriverIo>(core: &ResourceCore<D>, value: u8, len: usize, chunk: usize) {
         let mut off = 0usize;
         while off < len {
             let end = (off + chunk).min(len);
@@ -240,22 +305,17 @@ mod tests {
     /// pure storage-layer manifestation of the data race that surfaces, one
     /// layer up, as a decoder "producer failed" on the ephemeral DRM path.
     /// Deterministic under stress: every generation opens a fresh tear
-    /// window and the readers hammer it.
-    #[kithara::test(timeout(Duration::from_secs(30)))]
-    fn concurrent_generation_rewrite_never_tears_a_read() {
+    /// window and the readers hammer it. Parameterized over both backends
+    /// (`_mem` / `_mmap`) so the contract is proven for the in-memory
+    /// (ephemeral) snapshot path AND the file-backed mmap path.
+    fn run_concurrent_generation_rewrite<D>(core: ResourceCore<D>)
+    where
+        D: DriverIo + Send + Sync + 'static,
+    {
         const LEN: usize = 8192;
         const CHUNK: usize = 256;
         const GENS: u8 = 250;
         const READERS: usize = 6;
-
-        let core: ResourceCore<MemDriver> = ResourceCore::open(
-            CancellationToken::new(),
-            MemOptions {
-                initial_data: None,
-                capacity: 0,
-            },
-        )
-        .expect("open must succeed");
 
         write_generation(&core, 1, LEN, CHUNK);
         core.commit_inner(Some(LEN as u64))
@@ -309,6 +369,19 @@ mod tests {
         }
     }
 
+    #[kithara::test(timeout(Duration::from_secs(30)))]
+    #[case::mem(Backend::Mem)]
+    #[case::mmap(Backend::Mmap)]
+    fn concurrent_generation_rewrite_never_tears_a_read(#[case] backend: Backend) {
+        match backend {
+            Backend::Mem => run_concurrent_generation_rewrite(open_mem()),
+            Backend::Mmap => {
+                let dir = tempfile::tempdir().expect("tempdir must be creatable");
+                run_concurrent_generation_rewrite(open_mmap(dir.path().join("gen.bin")));
+            }
+        }
+    }
+
     /// Same race, exercised through the real reader path the decode producer
     /// uses (`wait_range` → `read_at`) and with a **varying length per
     /// generation** — mirroring the DRM estimate→real (PKCS7 decrypt-shrink)
@@ -318,22 +391,15 @@ mod tests {
     /// reactivate→rewrite→commit boundary). If this tears, the residual flake is
     /// still in storage; if it stays green, the storage layer is consistent and
     /// the residual lives one layer up (decoder recreation).
-    #[kithara::test(timeout(Duration::from_secs(30)))]
-    fn concurrent_varying_length_rewrite_via_wait_range_stays_consistent() {
+    fn run_concurrent_varying_length_rewrite<D>(core: ResourceCore<D>)
+    where
+        D: DriverIo + Send + Sync + 'static,
+    {
         const LONG: usize = 8192;
         const SHORT: usize = 2731;
         const CHUNK: usize = 256;
         const GENS: u8 = 250;
         const READERS: usize = 6;
-
-        let core: ResourceCore<MemDriver> = ResourceCore::open(
-            CancellationToken::new(),
-            MemOptions {
-                initial_data: None,
-                capacity: 0,
-            },
-        )
-        .expect("open must succeed");
 
         write_generation(&core, 1, LONG, CHUNK);
         core.commit_inner(Some(LONG as u64))
@@ -393,6 +459,19 @@ mod tests {
 
         for reader in readers {
             reader.join().expect("reader detected a torn read");
+        }
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(30)))]
+    #[case::mem(Backend::Mem)]
+    #[case::mmap(Backend::Mmap)]
+    fn concurrent_varying_length_rewrite_via_wait_range_stays_consistent(#[case] backend: Backend) {
+        match backend {
+            Backend::Mem => run_concurrent_varying_length_rewrite(open_mem()),
+            Backend::Mmap => {
+                let dir = tempfile::tempdir().expect("tempdir must be creatable");
+                run_concurrent_varying_length_rewrite(open_mmap(dir.path().join("gen.bin")));
+            }
         }
     }
 }

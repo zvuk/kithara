@@ -253,6 +253,17 @@ impl<D: DriverIo> AtomicChunked<D> {
         self.read_view().read_at(offset, buf)
     }
 
+    /// Read the writer's own in-flight bytes from the active working storage,
+    /// bypassing the committed snapshot. Used by decrypt-on-commit read-back so
+    /// it transforms the freshly-written generation, not a prior snapshot kept
+    /// for concurrent readers during a rewrite.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    pub fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        self.read_view().read_inflight_at(offset, buf)
+    }
+
     /// Read the entire resource into a caller buffer; returns bytes read.
     ///
     /// # Errors

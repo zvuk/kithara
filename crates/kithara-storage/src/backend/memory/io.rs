@@ -20,12 +20,13 @@ impl DriverIo for MemDriver {
         })?;
         // Publish (or clear) the snapshot AND release the working buffer
         // atomically under the state lock, then shrink `state.len` to the
-        // committed length. `read_at` re-checks `committed` under this same
-        // lock, so a concurrent slow-path read can never observe `committed ==
-        // None` together with a freed buffer (the bug a non-atomic publish
-        // caused). `shrink_to_fit` actually frees the heap (plain `clear` keeps
-        // the capacity). Zero-length committed publishes no snapshot — matching
-        // the mmap `Empty` contract (`committed_len()` → `None`).
+        // committed length. `read_at` is working-buffer-first under this same
+        // lock, so a concurrent slow-path read either sees the full pre-commit
+        // buffer or — post-commit — an empty buffer (length 0) and falls through
+        // to the snapshot; it can never read a freed buffer as if it held data
+        // (the bug a non-atomic publish caused). Zero-length committed publishes
+        // no snapshot — matching the mmap `Empty` contract (`committed_len()` →
+        // `None`).
         if end_usize == 0 {
             self.committed.store(None);
         } else {
@@ -87,37 +88,35 @@ impl DriverIo for MemDriver {
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         let state = self.state.lock_sync();
 
-        // Re-check `committed` UNDER the lock: `commit` publishes the snapshot
-        // and frees the working buffer atomically under this same lock, so if a
-        // snapshot exists the working buffer is gone and we must read from the
-        // snapshot. Holding the `Arc` (via `load_full`) keeps it valid even if a
-        // later `reactivate` clears `committed` after we drop the lock.
-        if let Some(snapshot) = self.committed.load_full() {
-            drop(state);
-            return Self::read_slice(snapshot.as_slice(), offset, buf);
-        }
-
-        if offset >= state.len {
-            return Ok(0);
-        }
-
-        let available = usize::try_from(state.len - offset).map_err(|err| {
-            StorageError::Failed(format!(
-                "memory read: available {} does not fit usize: {err}",
-                state.len - offset
-            ))
-        })?;
-        let to_read = buf.len().min(available);
-
+        // Working-buffer first. While a generation is in flight (initial write,
+        // or a re-download rewriting on top of a still-published prior snapshot)
+        // the working buffer holds the *current* bytes — the writer's own
+        // read-back (decrypt on commit) must observe them, not the stale
+        // snapshot. `commit` frees the working buffer (length 0) AND publishes
+        // the snapshot atomically under this same lock, so once the buffer no
+        // longer covers `offset` the committed snapshot is the source of truth.
+        // `load_full` keeps the `Arc` valid even if a later `reactivate` clears
+        // `committed` after we drop the lock.
         let start = usize::try_from(offset).map_err(|err| {
             StorageError::Failed(format!(
                 "memory read: offset {offset} does not fit usize: {err}"
             ))
         })?;
-        buf[..to_read].copy_from_slice(&state.buf[start..start + to_read]);
+        let logical_end = usize::try_from(state.len)
+            .unwrap_or(usize::MAX)
+            .min(state.buf.len());
+        if start < logical_end {
+            let to_read = buf.len().min(logical_end - start);
+            buf[..to_read].copy_from_slice(&state.buf[start..start + to_read]);
+            drop(state);
+            return Ok(to_read);
+        }
         drop(state);
 
-        Ok(to_read)
+        if let Some(snapshot) = self.committed.load_full() {
+            return Self::read_slice(snapshot.as_slice(), offset, buf);
+        }
+        Ok(0)
     }
 
     fn read_committed(&self, offset: u64, buf: &mut [u8]) -> StorageResult<Option<usize>> {

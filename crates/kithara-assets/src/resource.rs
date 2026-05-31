@@ -71,6 +71,10 @@ impl ReadSide for BaseReader {
         self.0.read_at(offset, buf)
     }
 
+    fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        self.0.read_inflight_at(offset, buf)
+    }
+
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         self.0.wait_range(range)
     }

@@ -422,6 +422,7 @@ where
     delegate::delegate! {
         to self.inner {
             fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
             fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
             fn path(&self) -> Option<&Path>;
             fn len(&self) -> Option<u64>;

@@ -3,7 +3,7 @@
 use std::{
     fs::{self, OpenOptions},
     ops::Range,
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -22,6 +22,16 @@ impl DriverIo for MmapDriver {
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         let mut mmap_guard = self.mmap.lock_sync();
 
+        // A re-download (`reactivate`) wrote the new generation to a temp file so
+        // it never aliased the still-published committed snapshot. Detect that
+        // here: the new generation is swapped into place with an atomic rename,
+        // which keeps the old inode alive for in-flight readers holding the old
+        // RO mmap. An initial download writes `self.path` in place (no temp).
+        let rewrite_temp: Option<PathBuf> = match &*mmap_guard {
+            MmapState::Active(m) if m.path() != self.path => Some(m.path().to_path_buf()),
+            _ => None,
+        };
+
         if let Some(len) = final_len {
             if len > 0 {
                 let needs_truncate = matches!(
@@ -29,18 +39,33 @@ impl DriverIo for MmapDriver {
                     MmapState::Active(mmap) if len < mmap.len()
                 );
 
+                // Flush the temp generation's dirty pages before dropping the
+                // map and renaming, so the republished RO mmap sees them.
+                if rewrite_temp.is_some()
+                    && let MmapState::Active(m) = &*mmap_guard
+                {
+                    m.flush()?;
+                }
+
                 *mmap_guard = MmapState::Empty;
 
+                let source = rewrite_temp.as_deref().unwrap_or(&self.path);
+
                 if needs_truncate {
-                    let file_len = fs::metadata(&self.path).map_or(0, |m| m.len());
+                    let file_len = fs::metadata(source).map_or(0, |m| m.len());
                     if file_len > len {
                         let f = OpenOptions::new()
                             .write(true)
-                            .open(&self.path)
+                            .open(source)
                             .map_err(|e| StorageError::Failed(format!("truncate open: {e}")))?;
                         f.set_len(len)
                             .map_err(|e| StorageError::Failed(format!("truncate: {e}")))?;
                     }
+                }
+
+                if let Some(temp) = rewrite_temp.as_deref() {
+                    fs::rename(temp, &self.path)
+                        .map_err(|e| StorageError::Failed(format!("rewrite rename: {e}")))?;
                 }
 
                 let arc = Arc::new(MemoryMappedFile::open_ro(&self.path)?);
@@ -49,12 +74,24 @@ impl DriverIo for MmapDriver {
             } else {
                 self.committed.store(None);
                 *mmap_guard = MmapState::Empty;
+                if let Some(temp) = rewrite_temp.as_deref() {
+                    let _ = fs::remove_file(temp);
+                }
                 let _ = fs::write(&self.path, b"");
             }
         } else {
             let is_active = matches!(*mmap_guard, MmapState::Active(_));
             if is_active {
+                if rewrite_temp.is_some()
+                    && let MmapState::Active(m) = &*mmap_guard
+                {
+                    m.flush()?;
+                }
                 *mmap_guard = MmapState::Empty;
+                if let Some(temp) = rewrite_temp.as_deref() {
+                    fs::rename(temp, &self.path)
+                        .map_err(|e| StorageError::Failed(format!("rewrite rename: {e}")))?;
+                }
                 if self.path.exists() && fs::metadata(&self.path).is_ok_and(|m| m.len() > 0) {
                     let arc = Arc::new(MemoryMappedFile::open_ro(&self.path)?);
                     *mmap_guard = MmapState::Committed(Arc::clone(&arc));
@@ -83,14 +120,20 @@ impl DriverIo for MmapDriver {
         let mut mmap_guard = self.mmap.lock_sync();
 
         match &*mmap_guard {
+            // Already active (initial download in flight) — nothing to do.
             MmapState::Active(_) => {}
+            // Re-download. Keep the committed snapshot PUBLISHED so in-flight
+            // readers keep serving the immutable prior generation zero-copy via
+            // the old RO mmap. Write the new generation to a fresh temp file;
+            // `commit` atomically renames it into place. The committed file
+            // mapped by the snapshot is never overwritten in place, so a
+            // concurrent read can never tear across the generation boundary.
             MmapState::Committed(_) | MmapState::Empty => {
-                self.committed.store(None);
-                *mmap_guard = MmapState::Empty;
-                if self.path.exists() && fs::metadata(&self.path).is_ok_and(|m| m.len() > 0) {
-                    let rw = MemoryMappedFile::open_rw(&self.path)?;
-                    *mmap_guard = MmapState::Active(rw);
-                }
+                let temp = self.rewrite_temp_path();
+                // Drop any stale temp left by a previously-cancelled rewrite.
+                let _ = fs::remove_file(&temp);
+                let rw = MemoryMappedFile::create_rw(&temp, Consts::DEFAULT_INITIAL_SIZE)?;
+                *mmap_guard = MmapState::Active(rw);
             }
         }
 
@@ -198,5 +241,16 @@ impl DriverIo for MmapDriver {
 
         mmap.update_region(offset, data)?;
         Ok(())
+    }
+}
+
+impl MmapDriver {
+    /// Path the new generation of a re-download is written to, kept separate
+    /// from the committed file so the published RO snapshot is never aliased.
+    /// [`commit`](DriverIo::commit) renames it onto `self.path` atomically.
+    fn rewrite_temp_path(&self) -> PathBuf {
+        let mut name = self.path.clone().into_os_string();
+        name.push(".kithara-rewrite");
+        PathBuf::from(name)
     }
 }

@@ -155,6 +155,19 @@ impl StorageResource {
         }
     }
 
+    /// Read the writer's own in-flight bytes from the active working storage,
+    /// bypassing the committed snapshot (decrypt-on-commit read-back).
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    pub fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Mmap(r) => r.read_inflight_at(offset, buf),
+            Self::Mem(r) => r.read_inflight_at(offset, buf),
+        }
+    }
+
     /// Read the entire resource into a caller buffer; returns bytes read.
     ///
     /// # Errors

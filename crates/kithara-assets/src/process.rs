@@ -166,8 +166,10 @@ impl Drop for GateGuard {
 
 /// Stream `inner`'s raw bytes through `process` chunk-by-chunk and write the
 /// transformed bytes back in place. Returns the processed byte count, which may
-/// shrink below `final_len` (e.g. PKCS7 unpadding). Reads through a transient
-/// reader view of the writer's own generation (raw storage bytes, no gate).
+/// shrink below `final_len` (e.g. PKCS7 unpadding). Reads via
+/// [`WriteSide::read_inflight_at`] — the writer's own in-flight working storage,
+/// never a committed snapshot kept published for concurrent readers during a
+/// re-download (which would feed the processor the prior generation's bytes).
 fn run_process<W, Ctx>(
     inner: &W,
     ctx: &Ctx,
@@ -197,7 +199,7 @@ where
         })?;
         let is_last = read_offset + remaining_u64 >= final_len;
 
-        let n = raw.read_at(read_offset, &mut input_buf[..to_read])?;
+        let n = raw.read_inflight_at(read_offset, &mut input_buf[..to_read])?;
         if n == 0 {
             break;
         }
@@ -421,6 +423,14 @@ where
         self.inner.read_at(offset, buf)
     }
 
+    fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        // Raw producer read-back: deliberately bypasses the processing gate
+        // (on-commit processing reads the not-yet-processed bytes to transform
+        // them) and the committed snapshot. Not a consumer read — minted from
+        // the writer via `reader()` for `run_process`, not handed to clients.
+        self.inner.read_inflight_at(offset, buf)
+    }
+
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         let outcome = self.inner.wait_range(range)?;
         if self.ctx.is_none() || outcome != WaitOutcome::Ready {
@@ -566,7 +576,9 @@ where
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use kithara_storage::{MmapOptions, MmapResource, Resource, StorageResource};
+    use kithara_storage::{
+        MemOptions, MemResource, MmapOptions, MmapResource, Resource, StorageResource,
+    };
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
@@ -591,6 +603,21 @@ mod tests {
         let res: MmapResource = Resource::open(cancel, MmapOptions::new(path)).unwrap();
         res.write_at(0, content).unwrap();
         (BaseWriter::new(StorageResource::from(res)), dir)
+    }
+
+    /// Mem-backed mock writer, mirroring [`mock_writer`] for the ephemeral path.
+    fn mock_writer_mem(content: &[u8]) -> BaseWriter {
+        let cancel = CancellationToken::new();
+        let res: MemResource = Resource::open(
+            cancel,
+            MemOptions {
+                initial_data: None,
+                capacity: 0,
+            },
+        )
+        .unwrap();
+        res.write_at(0, content).unwrap();
+        BaseWriter::new(StorageResource::from(res))
     }
 
     /// Create XOR chunk processor (no allocation).
@@ -795,6 +822,36 @@ mod tests {
         let second: Vec<u8> = b"second payload".iter().map(|b| b ^ 0x42).collect();
         assert_eq!(first.len(), second.len());
         let (writer, _dir) = mock_writer(&first);
+
+        let writer = ProcessedWriter::new(writer, Some(()), process_fn, test_pool());
+        let len = first.len() as u64;
+        let reader = writer.commit(Some(len)).expect("first commit");
+        let first_count = call_count.load(Ordering::SeqCst);
+        assert!(first_count > 0, "first commit runs the processor");
+
+        let writer2 = reader.reactivate().expect("reactivate after commit");
+        writer2.write_at(0, &second).expect("re-write ciphertext");
+        let reader2 = writer2.commit(Some(len)).expect("second commit");
+        assert!(
+            call_count.load(Ordering::SeqCst) > first_count,
+            "fresh gate -> second commit reruns the processor (decrypt not skipped)"
+        );
+
+        let mut out = vec![0u8; second.len()];
+        reader2
+            .read_at(0, &mut out)
+            .expect("read after second commit");
+        assert_eq!(&out[..], b"second payload");
+    }
+
+    #[kithara::test]
+    fn reactivate_then_commit_reruns_processor_mem() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
+        let first: Vec<u8> = b"first  payload".iter().map(|b| b ^ 0x42).collect();
+        let second: Vec<u8> = b"second payload".iter().map(|b| b ^ 0x42).collect();
+        assert_eq!(first.len(), second.len());
+        let writer = mock_writer_mem(&first);
 
         let writer = ProcessedWriter::new(writer, Some(()), process_fn, test_pool());
         let len = first.len() as u64;
