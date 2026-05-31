@@ -2,8 +2,6 @@
 
 use std::{path::Path, sync::Arc};
 
-use kithara_bufpool::BytePool;
-
 use crate::{
     StorageError, StorageResult,
     backend::{memory::driver::MemDriver, traits::DriverIo},
@@ -18,28 +16,25 @@ impl DriverIo for MemDriver {
                 "memory commit: len {end} does not fit usize: {err}"
             ))
         })?;
-        // Publish (or clear) the snapshot AND release the working buffer
-        // atomically under the state lock, then shrink `state.len` to the
-        // committed length. `read_at` re-checks `committed` under this same
-        // lock, so a concurrent slow-path read can never observe `committed ==
-        // None` together with a freed buffer (the bug a non-atomic publish
-        // caused). `shrink_to_fit` actually frees the heap (plain `clear` keeps
-        // the capacity). Zero-length committed publishes no snapshot — matching
-        // the mmap `Empty` contract (`committed_len()` → `None`).
+        // Publish a zero-copy snapshot under the lock: when `end` covers the
+        // whole buffer (the common case) share the `Arc`, else snapshot the
+        // committed prefix. The working buffer is NOT freed — it and the
+        // snapshot share one allocation, so a committed resource holds a single
+        // copy. Zero-length committed publishes no snapshot — matching the mmap
+        // `Empty` contract (`committed_len()` → `None`).
         if end_usize == 0 {
             self.committed.store(None);
+        } else if end_usize == state.buf.len() {
+            self.committed.store(Some(Arc::clone(&state.buf)));
         } else {
-            let snapshot = state.buf[..end_usize].to_vec();
-            self.committed.store(Some(Arc::new(snapshot)));
+            // Rare: committed length shorter than the buffer — snapshot the
+            // prefix into a fresh pooled buffer so `committed_len()` is exact.
+            let mut snap = self.byte_pool.get();
+            snap.ensure_len(end_usize)
+                .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
+            snap[..end_usize].copy_from_slice(&state.buf[..end_usize]);
+            self.committed.store(Some(Arc::new(snap)));
         }
-        // Release the working buffer THROUGH THE POOL: replacing it drops the
-        // old `PooledOwned`, whose `Drop` returns the buffer to the pool and
-        // credits its bytes back to the byte budget (and trims it). A manual
-        // `clear`/`shrink_to_fit` via `DerefMut` would free the memory but leak
-        // the budget — `ensure_len` charges the pool on growth and only `put`
-        // (on drop) releases it — eventually exhausting the budget and stalling
-        // later allocations. Shrink `state.len` to the committed length.
-        state.buf = BytePool::default().get();
         state.len = end;
         drop(state);
         Ok(())
@@ -57,25 +52,11 @@ impl DriverIo for MemDriver {
     }
 
     fn reactivate(&self) -> StorageResult<()> {
-        // Repopulate the working buffer (released on commit) and set `state.len`
-        // while `committed` is still `Some`, so concurrent reads keep taking the
-        // snapshot fast path. Only then clear the snapshot, after which reads
-        // fall to the slow path and find the repopulated buffer. Do NOT reorder.
-        if let Some(snapshot) = self.committed.load_full() {
-            let mut state = self.state.lock_sync();
-            let snap_len = snapshot.len();
-            state
-                .buf
-                .ensure_len(snap_len)
-                .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
-            state.buf[..snap_len].copy_from_slice(&snapshot);
-            state.len = u64::try_from(snap_len).map_err(|err| {
-                StorageError::Failed(format!(
-                    "memory reactivate: len {snap_len} does not fit u64: {err}"
-                ))
-            })?;
-            drop(state);
-        }
+        // The working buffer is never freed (it holds the data directly), so
+        // reactivate only drops the committed snapshot. A subsequent write is
+        // copy-on-write (see `write_at`): it copies into a fresh pooled buffer
+        // only if a reader still holds the prior snapshot `Arc`, isolating the
+        // re-download from in-flight reads.
         self.committed.store(None);
         Ok(())
     }
@@ -83,16 +64,6 @@ impl DriverIo for MemDriver {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         let state = self.state.lock_sync();
-
-        // Re-check `committed` UNDER the lock: `commit` publishes the snapshot
-        // and frees the working buffer atomically under this same lock, so if a
-        // snapshot exists the working buffer is gone and we must read from the
-        // snapshot. Holding the `Arc` (via `load_full`) keeps it valid even if a
-        // later `reactivate` clears `committed` after we drop the lock.
-        if let Some(snapshot) = self.committed.load_full() {
-            drop(state);
-            return Self::read_slice(snapshot.as_slice(), offset, buf);
-        }
 
         if offset >= state.len {
             return Ok(0);
@@ -145,19 +116,35 @@ impl DriverIo for MemDriver {
             StorageError::Failed(format!("memory write: end {end} does not fit usize: {err}"))
         })?;
 
-        if end_usize > state.buf.len() {
-            state
-                .buf
-                .ensure_len(end_usize)
-                .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
-        }
-
         let start = usize::try_from(offset).map_err(|err| {
             StorageError::Failed(format!(
                 "memory write: offset {offset} does not fit usize: {err}"
             ))
         })?;
-        state.buf[start..end_usize].copy_from_slice(data);
+
+        // Copy-on-write: if a snapshot or in-flight read still holds the buffer
+        // `Arc`, copy the prior bytes into a fresh pooled buffer so those reads
+        // keep the old content while this write builds the new one.
+        if Arc::get_mut(&mut state.buf).is_none() {
+            let old_len = state.buf.len();
+            let mut fresh = self.byte_pool.get();
+            fresh
+                .ensure_len(old_len)
+                .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
+            fresh[..old_len].copy_from_slice(&state.buf[..old_len]);
+            state.buf = Arc::new(fresh);
+        }
+        let Some(pooled) = Arc::get_mut(&mut state.buf) else {
+            return Err(StorageError::Failed(
+                "memory write: buffer not unique after copy-on-write".to_string(),
+            ));
+        };
+        if end_usize > pooled.len() {
+            pooled
+                .ensure_len(end_usize)
+                .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
+        }
+        pooled[start..end_usize].copy_from_slice(data);
 
         if end > state.len {
             state.len = end;
@@ -225,6 +212,7 @@ mod tests {
         let (driver, _state) = MemDriver::open(MemOptions {
             initial_data: Some(b"hello world".to_vec()),
             capacity: 0,
+            ..Default::default()
         })
         .expect("open with initial data must succeed");
 
@@ -257,6 +245,7 @@ mod tests {
         let (driver, _state) = MemDriver::open(MemOptions {
             initial_data: None,
             capacity: 0,
+            ..Default::default()
         })
         .expect("open must succeed");
         driver
@@ -302,6 +291,7 @@ mod tests {
         let (driver, _state) = MemDriver::open(MemOptions {
             initial_data: None,
             capacity: 0,
+            ..Default::default()
         })
         .expect("open empty must succeed");
 
@@ -318,30 +308,34 @@ mod tests {
     }
 
     #[kithara::test]
-    fn commit_frees_working_buffer_and_reactivate_restores_it() {
+    fn commit_shares_snapshot_arc_and_reactivate_keeps_data() {
         let (driver, _state) = MemDriver::open(MemOptions {
             initial_data: None,
             capacity: 0,
+            ..Default::default()
         })
         .expect("open empty must succeed");
 
         driver
             .write_at(0, b"hello world", false)
             .expect("active write must succeed");
-        assert_eq!(driver.state.lock_sync().buf.len(), 11);
 
         driver.commit(Some(11)).expect("commit must succeed");
 
-        // The committed bytes live in the snapshot, not the working buffer: the
-        // working buffer is released back to the pool (replaced by an empty one),
-        // so it no longer holds a second copy. (Asserting `len`, not `capacity`,
-        // since the pool retains/recycles capacity for reuse — see `Reuse`.)
-        assert_eq!(
-            driver.state.lock_sync().buf.len(),
-            0,
-            "working buffer not released on commit"
+        // Zero-copy snapshot: the working buffer and the committed snapshot
+        // share ONE allocation, so a committed resource holds a single copy.
+        let buf_arc = {
+            let state = driver.state.lock_sync();
+            Arc::clone(&state.buf)
+        };
+        let snap = driver
+            .committed
+            .load_full()
+            .expect("snapshot must be published");
+        assert!(
+            Arc::ptr_eq(&buf_arc, &snap),
+            "commit must share the buffer Arc with the snapshot (no copy)"
         );
-
         assert_eq!(driver.committed_len(), Some(11));
 
         let mut buf = [0u8; 11];
@@ -352,27 +346,27 @@ mod tests {
         assert_eq!(n, 11);
         assert_eq!(&buf, b"hello world");
 
+        // reactivate drops the snapshot but keeps the buffer data intact.
+        driver.reactivate().expect("reactivate must succeed");
+        assert_eq!(driver.committed_len(), None);
+
         let mut buf2 = [0u8; 11];
         let n = driver
             .read_at(0, &mut buf2, 11)
-            .expect("snapshot-aware read_at must succeed");
+            .expect("read_at after reactivate must succeed");
         assert_eq!(n, 11);
         assert_eq!(&buf2, b"hello world");
 
-        driver.reactivate().expect("reactivate must succeed");
-
-        assert_eq!(driver.committed_len(), None);
-        assert!(
-            driver.state.lock_sync().buf.len() >= 11,
-            "working buffer not repopulated on reactivate"
-        );
-
-        let mut buf3 = [0u8; 11];
+        // A write after reactivate extends the buffer; prior bytes survive.
+        driver
+            .write_at(11, b"!", false)
+            .expect("write after reactivate must succeed");
+        let mut buf3 = [0u8; 12];
         let n = driver
-            .read_at(0, &mut buf3, 11)
-            .expect("slow-path read_at after reactivate must succeed");
-        assert_eq!(n, 11);
-        assert_eq!(&buf3, b"hello world");
+            .read_at(0, &mut buf3, 12)
+            .expect("read after re-write must succeed");
+        assert_eq!(n, 12);
+        assert_eq!(&buf3, b"hello world!");
     }
 
     #[kithara::test]
@@ -381,6 +375,7 @@ mod tests {
         let (driver, _state) = MemDriver::open(MemOptions {
             initial_data: Some(Vec::new()),
             capacity: 0,
+            ..Default::default()
         })
         .expect("open with empty initial data must succeed");
         assert_eq!(driver.committed_len(), None);
@@ -389,6 +384,7 @@ mod tests {
         let (driver, _state) = MemDriver::open(MemOptions {
             initial_data: None,
             capacity: 0,
+            ..Default::default()
         })
         .expect("open empty must succeed");
         driver.commit(Some(0)).expect("commit(0) must succeed");

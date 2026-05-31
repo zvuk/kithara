@@ -7,6 +7,7 @@ use std::{
 };
 
 use dashmap::DashMap;
+use kithara_bufpool::BytePool;
 use kithara_storage::{
     AvailabilityObserver, MemOptions, MemResource, Resource, ResourceStatus, StorageResource,
 };
@@ -60,6 +61,9 @@ pub struct MemAssetStore {
     availability: AvailabilityIndex,
     cancel: CancellationToken,
     mem_resource_capacity: Option<usize>,
+    /// Injected byte pool, passed to each `MemOptions` so the driver allocates
+    /// from the configured pool rather than the global accessor.
+    byte_pool: BytePool,
 }
 
 #[derive(Debug)]
@@ -110,7 +114,7 @@ impl MemAssetStore {
     pub fn new(
         cancel: CancellationToken,
         mem_resource_capacity: Option<usize>,
-        pool: &kithara_bufpool::BytePool,
+        pool: &BytePool,
     ) -> Self {
         Self::with_availability(
             cancel,
@@ -130,10 +134,9 @@ impl MemAssetStore {
         cancel: CancellationToken,
         mem_resource_capacity: Option<usize>,
         availability: AvailabilityIndex,
-        pool: &kithara_bufpool::BytePool,
+        pool: &BytePool,
     ) -> Self {
         let active_resources = Arc::new(DashMap::new());
-        let _ = pool;
         let pins = crate::index::PinsIndex::ephemeral();
         let lru = crate::index::LruIndex::ephemeral();
         let deleter: Arc<dyn AssetDeleter> = Arc::new(MemAssetDeleter::new(
@@ -148,6 +151,7 @@ impl MemAssetStore {
             availability,
             active_resources,
             deleter,
+            pool.clone(),
         )
     }
 
@@ -160,6 +164,7 @@ impl MemAssetStore {
         availability: AvailabilityIndex,
         active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
         deleter: Arc<dyn AssetDeleter>,
+        byte_pool: BytePool,
     ) -> Self {
         Self {
             active_resources,
@@ -167,6 +172,7 @@ impl MemAssetStore {
             availability,
             cancel,
             mem_resource_capacity,
+            byte_pool,
         }
     }
 }
@@ -198,7 +204,10 @@ impl Assets for MemAssetStore {
             return Ok(AcquisitionResult::Pending(BaseWriter::new(storage)));
         }
 
-        let mut options = MemOptions::default();
+        let mut options = MemOptions {
+            byte_pool: self.byte_pool.clone(),
+            ..MemOptions::default()
+        };
         if let Some(capacity) = self.mem_resource_capacity
             && capacity > 0
         {
@@ -282,7 +291,7 @@ mod tests {
     use crate::acquisition::{AcquisitionResult, ReadSide, WriteSide};
 
     fn make_mem_store() -> MemAssetStore {
-        MemAssetStore::new(CancellationToken::new(), None, &crate::BytePool::default())
+        MemAssetStore::new(CancellationToken::new(), None, &BytePool::default())
     }
 
     fn pending(acq: AcquisitionResult<BaseWriter, BaseReader>) -> BaseWriter {
