@@ -244,6 +244,7 @@ fn park_after_outcome<N: Node, O: SchedulerObserver>(wake: &SchedulerWake, outco
 #[kithara::rtsan_allow_blocking]
 fn recompute_slots_order<N: Node>(slots: &[Slot<N>], slots_order: &mut Vec<usize>) {
     slots_order.clear();
+    slots_order.reserve(slots.len());
     slots_order.extend(0..slots.len());
     slots_order.sort_by(|&a, &b| {
         let class_a = slots[a].service_class;
@@ -623,5 +624,41 @@ mod tests {
         recompute_slots_order(&slots, &mut slots_order);
 
         assert_eq!(slots_order, vec![1, 2, 0]);
+    }
+
+    #[kithara::test]
+    fn recompute_slots_order_keeps_capacity_stable() {
+        let slots: Vec<Slot<ServiceClassNode>> = (0..8)
+            .map(|id| Slot {
+                id,
+                node: ServiceClassNode {
+                    service_class: ServiceClass::Warm,
+                },
+                service_class: ServiceClass::Warm,
+                is_terminal: false,
+            })
+            .collect();
+
+        let mut slots_order: Vec<usize> = Vec::new();
+        recompute_slots_order(&slots, &mut slots_order);
+
+        let cap = slots_order.capacity();
+        let ptr = slots_order.as_ptr() as usize;
+        assert_eq!(slots_order.len(), slots.len());
+
+        for _ in 0..100 {
+            recompute_slots_order(&slots, &mut slots_order);
+        }
+
+        assert_eq!(
+            slots_order.capacity(),
+            cap,
+            "steady recompute must not grow the slots_order backing"
+        );
+        assert_eq!(
+            slots_order.as_ptr() as usize,
+            ptr,
+            "clear() retains capacity so the backing is never reallocated"
+        );
     }
 }
