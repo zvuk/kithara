@@ -65,14 +65,16 @@ pub trait DriverIo: Send + Sync + 'static {
 
     /// Read bytes at `offset` from the published committed snapshot into `buf`.
     ///
-    /// Copies `min(buf.len(), snapshot_len - offset)` bytes and returns the
-    /// count. Reads against the same snapshot length reported by
-    /// [`committed_len`](Self::committed_len).
+    /// Returns `Ok(Some(n))` where `n = min(buf.len(), snapshot_len - offset)`
+    /// when a committed snapshot is published, or `Ok(None)` when none is
+    /// (the resource is active, or a concurrent `reactivate` cleared the
+    /// snapshot between a [`committed_len`](Self::committed_len) check and this
+    /// read). The caller falls back to the locked read path on `None`.
     ///
     /// # Errors
     ///
-    /// Returns error if no committed snapshot is currently published.
-    fn read_committed(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+    /// Returns error only on a genuine backing-store read failure.
+    fn read_committed(&self, offset: u64, buf: &mut [u8]) -> StorageResult<Option<usize>>;
 
     /// Physical storage length (for `read_at` clamping).
     fn storage_len(&self) -> u64;

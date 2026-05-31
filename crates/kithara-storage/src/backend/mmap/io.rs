@@ -109,17 +109,15 @@ impl DriverIo for MmapDriver {
         Ok(buf.len())
     }
 
-    fn read_committed(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+    fn read_committed(&self, offset: u64, buf: &mut [u8]) -> StorageResult<Option<usize>> {
         let snapshot = self.committed.load();
         let Some(mmap) = snapshot.as_ref() else {
-            return Err(StorageError::Failed(
-                "read_committed without a published committed snapshot".into(),
-            ));
+            return Ok(None);
         };
 
         let len = mmap.len();
         if offset >= len {
-            return Ok(0);
+            return Ok(Some(0));
         }
 
         let buf_len = u64::try_from(buf.len()).map_err(|err| {
@@ -134,7 +132,7 @@ impl DriverIo for MmapDriver {
             ))
         })?;
         mmap.read_into(offset, &mut buf[..to_read])?;
-        Ok(to_read)
+        Ok(Some(to_read))
     }
 
     fn storage_len(&self) -> u64 {

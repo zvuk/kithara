@@ -13,8 +13,12 @@ impl<D: DriverIo> ResourceCore<D> {
         }
 
         // Lock-free committed fast path: a committed resource exposes an
-        // immutable snapshot (`committed_len()` is the single source of truth);
-        // read straight from it with no state mutex.
+        // immutable snapshot; read straight from it with no state mutex. This is
+        // an optimization over the authoritative locked slow path below: if a
+        // concurrent `reactivate` clears the snapshot between the
+        // `committed_len()` check and the read, `read_committed` returns
+        // `Ok(None)` and we fall through to the slow path (which reads correctly
+        // whether the resource is still committed or now active).
         if let Some(committed_len) = self.inner.driver.committed_len() {
             if self.inner.cancel.is_cancelled() {
                 return Err(StorageError::Cancelled);
@@ -24,10 +28,13 @@ impl<D: DriverIo> ResourceCore<D> {
             }
             let available = usize::try_from(committed_len - offset).unwrap_or(usize::MAX);
             let to_read = buf.len().min(available);
-            return self
+            if let Some(read) = self
                 .inner
                 .driver
-                .read_committed(offset, &mut buf[..to_read]);
+                .read_committed(offset, &mut buf[..to_read])?
+            {
+                return Ok(read);
+            }
         }
 
         self.check_health()?;

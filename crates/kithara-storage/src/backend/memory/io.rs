@@ -117,14 +117,12 @@ impl DriverIo for MemDriver {
         Ok(to_read)
     }
 
-    fn read_committed(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+    fn read_committed(&self, offset: u64, buf: &mut [u8]) -> StorageResult<Option<usize>> {
         let snapshot = self.committed.load();
         let Some(data) = snapshot.as_ref() else {
-            return Err(StorageError::Failed(
-                "read_committed without a published committed snapshot".into(),
-            ));
+            return Ok(None);
         };
-        Self::read_slice(data.as_slice(), offset, buf)
+        Self::read_slice(data.as_slice(), offset, buf).map(Some)
     }
 
     fn storage_len(&self) -> u64 {
@@ -217,12 +215,9 @@ mod tests {
 
     use kithara_platform::time::Duration;
 
-    use crate::{
-        StorageError,
-        backend::{
-            memory::driver::{MemDriver, MemOptions},
-            traits::{Driver, DriverIo},
-        },
+    use crate::backend::{
+        memory::driver::{MemDriver, MemOptions},
+        traits::{Driver, DriverIo},
     };
 
     #[kithara::test]
@@ -238,14 +233,16 @@ mod tests {
         let mut buf = [0u8; 11];
         let n = driver
             .read_committed(0, &mut buf)
-            .expect("read_committed from published snapshot must succeed");
+            .expect("read_committed must not error")
+            .expect("snapshot is published");
         assert_eq!(n, 11);
         assert_eq!(&buf, b"hello world");
 
         let mut buf6 = [0u8; 5];
         let n = driver
             .read_committed(6, &mut buf6)
-            .expect("mid-offset read_committed must succeed");
+            .expect("read_committed must not error")
+            .expect("snapshot is published");
         assert_eq!(n, 5);
         assert_eq!(&buf6, b"world");
     }
@@ -301,7 +298,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn read_committed_without_snapshot_errors() {
+    fn read_committed_without_snapshot_returns_none() {
         let (driver, _state) = MemDriver::open(MemOptions {
             initial_data: None,
             capacity: 0,
@@ -311,10 +308,13 @@ mod tests {
         assert_eq!(driver.committed_len(), None);
 
         let mut buf = [0u8; 4];
-        let err = driver
+        let read = driver
             .read_committed(0, &mut buf)
-            .expect_err("read_committed without a snapshot must error");
-        assert!(matches!(err, StorageError::Failed(_)));
+            .expect("read_committed must not error without a snapshot");
+        assert_eq!(
+            read, None,
+            "no snapshot must report None (caller uses slow path)"
+        );
     }
 
     #[kithara::test]
@@ -347,7 +347,8 @@ mod tests {
         let mut buf = [0u8; 11];
         let n = driver
             .read_committed(0, &mut buf)
-            .expect("read_committed from snapshot must succeed");
+            .expect("read_committed must not error")
+            .expect("snapshot is published");
         assert_eq!(n, 11);
         assert_eq!(&buf, b"hello world");
 
