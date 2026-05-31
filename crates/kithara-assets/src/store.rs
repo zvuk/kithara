@@ -413,7 +413,6 @@ where
             availability.clone(),
             active_resources,
             Arc::clone(&deleter),
-            pool.clone(),
         ));
         let evict = Arc::new(EvictAssets::new(
             mem,

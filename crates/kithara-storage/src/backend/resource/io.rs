@@ -135,7 +135,6 @@ mod tests {
             MemOptions {
                 initial_data: Some(b"hello world".to_vec()),
                 capacity: 0,
-                ..Default::default()
             },
         )
         .expect("BUG: MemDriver::open with initial_data is infallible");
@@ -175,7 +174,6 @@ mod tests {
             MemOptions {
                 initial_data: Some(b"hello world".to_vec()),
                 capacity: 0,
-                ..Default::default()
             },
         )
         .expect("BUG: MemDriver::open with initial_data is infallible");
