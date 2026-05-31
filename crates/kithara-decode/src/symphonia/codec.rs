@@ -16,7 +16,7 @@ use symphonia::core::{
         registry::CodecRegistry,
     },
     errors::Error as SymphoniaError,
-    packet::Packet,
+    packet::PacketRef,
     units::{Duration as PktDuration, Timestamp},
 };
 
@@ -182,14 +182,14 @@ impl FrameCodec for SymphoniaCodec {
     ) -> DecodeResult<u32> {
         let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate);
         let packet_pts = Timestamp::new(i64::try_from(pts_ticks).unwrap_or(i64::MAX));
-        let packet = Packet::new(
+        let packet_ref = PacketRef::new(
             Consts::TRACK_ID,
             packet_pts,
             PktDuration::new(0),
-            frame_data.to_vec(),
+            frame_data,
         );
 
-        let decoded = match self.decoder.decode(&packet) {
+        let decoded = match self.decoder.decode_ref(&packet_ref) {
             Ok(d) => d,
             Err(SymphoniaError::DecodeError(err)) => {
                 tracing::debug!(error = %err, "SymphoniaCodec: skipping undecodable frame");
@@ -310,6 +310,16 @@ fn map_codec(codec: AudioCodec) -> DecodeResult<(AudioCodecId, Option<CodecProfi
     }
 }
 
+fn duration_to_ticks(d: Duration, sample_rate: u32) -> u64 {
+    if sample_rate == 0 {
+        return 0;
+    }
+    let secs = d.as_secs();
+    let subsec_nanos = u64::from(d.subsec_nanos());
+    secs.saturating_mul(u64::from(sample_rate))
+        .saturating_add(subsec_nanos.saturating_mul(u64::from(sample_rate)) / 1_000_000_000)
+}
+
 #[cfg(test)]
 mod priming_tests {
     use kithara_stream::AudioCodec;
@@ -357,14 +367,4 @@ mod priming_tests {
             );
         }
     }
-}
-
-fn duration_to_ticks(d: Duration, sample_rate: u32) -> u64 {
-    if sample_rate == 0 {
-        return 0;
-    }
-    let secs = d.as_secs();
-    let subsec_nanos = u64::from(d.subsec_nanos());
-    secs.saturating_mul(u64::from(sample_rate))
-        .saturating_add(subsec_nanos.saturating_mul(u64::from(sample_rate)) / 1_000_000_000)
 }

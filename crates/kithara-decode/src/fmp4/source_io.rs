@@ -3,6 +3,7 @@ use std::{
     ops::Range,
 };
 
+use kithara_bufpool::PooledOwned;
 use kithara_stream::{PendingReason, SegmentLayout, StreamReadError};
 
 use crate::{
@@ -28,6 +29,12 @@ pub(crate) enum FillStatus {
     Pending(PendingReason),
 }
 
+/// Pool-backed segment read buffer. Drawn from the host `BytePool` and
+/// returned to it on drop, so a steady-state decode loop recycles one
+/// high-water allocation across segments instead of mallocing per
+/// segment. Holds 32 shards to match the workspace `BytePool`.
+pub(crate) type SegmentBuf = PooledOwned<32, Vec<u8>>;
+
 /// Resumable read of a contiguous byte range from a `Read + Seek`
 /// source into an in-memory buffer.
 ///
@@ -39,15 +46,20 @@ pub(crate) enum FillStatus {
 #[derive(Debug)]
 pub(crate) struct SegmentReadState {
     pub(crate) range: Range<u64>,
-    pub(crate) buffer: Vec<u8>,
+    pub(crate) buffer: SegmentBuf,
     pub(crate) filled: usize,
 }
 
 impl SegmentReadState {
-    pub(crate) fn new(range: Range<u64>) -> Self {
+    /// Build a read state over `range` backed by `buffer`, a buffer
+    /// freshly drawn from the host `BytePool`. The buffer's retained
+    /// capacity (high-water mark carried over from a previous segment
+    /// the pool recycled) is reused; [`Self::sync_buffer_ready`] only
+    /// reallocates when this segment is larger than any seen before.
+    pub(crate) fn new(range: Range<u64>, buffer: SegmentBuf) -> Self {
         Self {
             range,
-            buffer: Vec::new(),
+            buffer,
             filled: 0,
         }
     }
@@ -56,12 +68,27 @@ impl SegmentReadState {
     /// segment is already fully filled. Every fill checkpoint runs this
     /// after a live-range re-resolve that may have grown or shrunk the
     /// target.
-    fn sync_buffer_ready(&mut self) -> bool {
+    fn sync_buffer_ready(&mut self) -> DecodeResult<bool> {
         let total = self.total();
-        if self.buffer.len() != total {
-            self.buffer.resize(total, 0);
+        self.resize_to(total)?;
+        Ok(self.filled >= total)
+    }
+
+    /// Set `buffer` length to exactly `total`. Growth goes through the
+    /// budget-tracked [`PooledOwned::ensure_len`] (a plain `resize` via
+    /// `DerefMut` would leak the pool's byte budget); shrink uses
+    /// `truncate`, which keeps capacity so the high-water mark survives.
+    fn resize_to(&mut self, total: usize) -> DecodeResult<()> {
+        if self.buffer.len() == total {
+            return Ok(());
         }
-        self.filled >= total
+        self.buffer.ensure_len(total).map_err(|_| {
+            DecodeError::InvalidData(format!(
+                "byte-pool budget exhausted sizing segment buffer to {total} bytes"
+            ))
+        })?;
+        self.buffer.truncate(total);
+        Ok(())
     }
 
     pub(crate) fn total(&self) -> usize {
@@ -115,7 +142,7 @@ pub(crate) fn fill_segment_buffer(
 ) -> DecodeResult<FillStatus> {
     loop {
         refresh_range(state, live);
-        if state.sync_buffer_ready() {
+        if state.sync_buffer_ready()? {
             return Ok(FillStatus::Ready);
         }
 
@@ -125,7 +152,7 @@ pub(crate) fn fill_segment_buffer(
             let total_after = state.total();
             if state.buffer.len() != total_after {
                 state.buffer.clear();
-                state.buffer.resize(total_after, 0);
+                state.resize_to(total_after)?;
             }
             if state.filled >= total_after {
                 return Ok(FillStatus::Ready);
@@ -144,7 +171,7 @@ pub(crate) fn fill_segment_buffer(
                 if state.filled == state.total() {
                     return Ok(FillStatus::Ready);
                 }
-                if refresh_range(state, live) && state.sync_buffer_ready() {
+                if refresh_range(state, live) && state.sync_buffer_ready()? {
                     return Ok(FillStatus::Ready);
                 }
                 return Err(DecodeError::InvalidData(format!(
@@ -183,4 +210,133 @@ fn refresh_range(state: &mut SegmentReadState, live: LiveRange<'_>) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use kithara_bufpool::BytePool;
+    use kithara_platform::time::Duration;
+    use kithara_stream::SegmentDescriptor;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::traits::BoxedSource;
+
+    /// Fixed multi-segment layout whose `segment_at_index` returns each
+    /// segment's byte range unchanged — `fill_segment_buffer`'s live
+    /// re-resolve is a no-op, isolating the buffer-capacity behaviour.
+    struct FixedLayout {
+        segments: Vec<Range<u64>>,
+    }
+
+    impl SegmentLayout for FixedLayout {
+        fn init_segment_range(&self) -> Range<u64> {
+            0..0
+        }
+
+        fn len(&self) -> Option<u64> {
+            self.segments.last().map(|r| r.end)
+        }
+
+        fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
+            self.segments
+                .iter()
+                .position(|r| r.start >= byte_offset)
+                .map(|i| self.desc(i))
+        }
+
+        fn segment_at_index(&self, idx: u32) -> Option<SegmentDescriptor> {
+            self.segments
+                .get(idx as usize)
+                .map(|_| self.desc(idx as usize))
+        }
+
+        fn segment_at_time(&self, _t: Duration) -> Option<SegmentDescriptor> {
+            self.segments.first().map(|_| self.desc(0))
+        }
+
+        fn segment_count(&self) -> Option<u32> {
+            u32::try_from(self.segments.len()).ok()
+        }
+    }
+
+    impl FixedLayout {
+        fn desc(&self, idx: usize) -> SegmentDescriptor {
+            SegmentDescriptor::new(
+                self.segments[idx].clone(),
+                Duration::ZERO,
+                Duration::from_secs(1),
+                u32::try_from(idx).unwrap_or(0),
+                0,
+            )
+        }
+    }
+
+    /// R-fmp4buf: segment read buffers are drawn from the [`BytePool`] and
+    /// returned to it on drop, so a warm decode loop pays no per-segment
+    /// `malloc`. Once one warm-up read sizes a pooled buffer to the max
+    /// segment, every subsequent segment — larger or smaller — must reuse
+    /// it: the pool's `alloc_misses` must not grow and the recycled buffer
+    /// keeps the high-water capacity, with payload intact.
+    #[kithara::test]
+    fn pooled_segment_buffer_recycles_without_per_segment_malloc() {
+        let max_size = 400usize;
+        let sizes = [120usize, max_size, 80, max_size, 360];
+        let mut blob = Vec::new();
+        let mut ranges = Vec::new();
+        let mut at = 0u64;
+        for (i, &size) in sizes.iter().enumerate() {
+            let start = at;
+            blob.extend(std::iter::repeat_n(u8::try_from(i + 1).unwrap_or(0), size));
+            at += size as u64;
+            ranges.push(start..at);
+        }
+        let layout = FixedLayout {
+            segments: ranges.clone(),
+        };
+        let mut source: BoxedSource = Box::new(Cursor::new(blob));
+        // Dedicated pool (trim disabled) so `alloc_misses` is deterministic
+        // and recycled buffers keep their high-water capacity.
+        let pool = BytePool::new(32, 0);
+
+        // Warm the home shard with a buffer grown to the high-water size,
+        // then drop it back into the pool.
+        {
+            let mut warm = SegmentReadState::new(ranges[1].clone(), pool.get());
+            let status =
+                fill_segment_buffer(&mut source, &mut warm, LiveRange::Segment(&layout, 1))
+                    .expect("BUG: warm fill");
+            assert_eq!(status, FillStatus::Ready);
+        }
+        let warm_misses = pool.stats().alloc_misses;
+
+        for (idx, range) in ranges.iter().enumerate() {
+            let mut state = SegmentReadState::new(range.clone(), pool.get());
+            let status = fill_segment_buffer(
+                &mut source,
+                &mut state,
+                LiveRange::Segment(&layout, u32::try_from(idx).unwrap_or(0)),
+            )
+            .expect("BUG: fill segment");
+            assert_eq!(status, FillStatus::Ready);
+            assert_eq!(state.buffer.len(), sizes[idx]);
+            assert_eq!(
+                state.buffer[0],
+                u8::try_from(idx + 1).unwrap_or(0),
+                "segment {idx} payload must be intact after recycling",
+            );
+            assert!(
+                state.buffer.capacity() >= max_size,
+                "segment {idx} must reuse the high-water capacity, not realloc",
+            );
+        }
+
+        assert_eq!(
+            pool.stats().alloc_misses,
+            warm_misses,
+            "warm pool must serve every segment buffer without a fresh malloc",
+        );
+    }
 }

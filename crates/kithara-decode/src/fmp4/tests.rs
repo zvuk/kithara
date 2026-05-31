@@ -7,16 +7,19 @@ use std::{
     },
 };
 
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_platform::time::Duration;
 use kithara_stream::{SegmentDescriptor, SegmentLayout};
 use kithara_test_utils::kithara;
 
 use crate::{
-    codec::CodecPriming,
+    codec::{CodecPriming, FrameCodec},
     composed::ComposedDecoder,
-    demuxer::Demuxer,
-    fmp4::Fmp4SegmentDemuxer,
+    demuxer::{Demuxer, TrackInfo},
+    fmp4::{
+        Fmp4SegmentDemuxer,
+        parsing::{CodecConfig, parse_init, parse_segment_frames},
+    },
     symphonia::{SymphoniaCodec, SymphoniaConfig},
     traits::{BoxedSource, Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
 };
@@ -153,7 +156,8 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
         record: Arc::clone(&record),
     });
     let layout: Arc<dyn SegmentLayout> = Arc::new(segmented);
-    let demuxer = Fmp4SegmentDemuxer::open(source, layout).expect("BUG: build demuxer");
+    let demuxer =
+        Fmp4SegmentDemuxer::open(source, layout, BytePool::default()).expect("BUG: build demuxer");
     let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
         .expect("BUG: open codec");
     let decoder = ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
@@ -370,7 +374,8 @@ fn seek_emits_notneeded_for_first_segment_flac() {
     let (blob, segmented) = build_test_layout_flac(3);
     let source: BoxedSource = Box::new(Cursor::new(blob));
     let layout: Arc<dyn SegmentLayout> = Arc::new(segmented);
-    let mut demuxer = Fmp4SegmentDemuxer::open(source, layout).expect("BUG: build FLAC demuxer");
+    let mut demuxer = Fmp4SegmentDemuxer::open(source, layout, BytePool::default())
+        .expect("BUG: build FLAC demuxer");
 
     let outcome = demuxer
         .seek(Duration::ZERO, CodecPriming::default())
@@ -382,5 +387,108 @@ fn seek_emits_notneeded_for_first_segment_flac() {
         preroll,
         kithara_stream::PrerollHint::NotNeeded,
         "FLAC has warmup_frames=0, so seg-0 seek must emit NotNeeded, not FirstSegment; got {preroll:?}"
+    );
+}
+
+type AacFrameHarness = (SymphoniaCodec, Vec<u8>, Vec<(usize, usize)>);
+
+/// Build a `SymphoniaCodec` from the AAC init segment plus the raw AAC
+/// access units in segment 0. Mirrors `Fmp4SegmentDemuxer::build_track_info`
+/// so the codec is opened with the same `TrackInfo` the real demuxer would
+/// produce, then returns the per-frame `(offset, size)` access-unit ranges.
+fn aac_codec_and_frames() -> AacFrameHarness {
+    let init_bytes = read_fixture("init-slq-a1.mp4");
+    let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
+    let extra_data = match &init.config {
+        CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
+    };
+    let track = TrackInfo {
+        codec: init.codec,
+        sample_rate: init.sample_rate,
+        channels: init.channels,
+        extra_data,
+        duration: None,
+        gapless: init.gapless,
+    };
+    let codec = SymphoniaCodec::open_with_config(&track, &SymphoniaConfig::default())
+        .expect("BUG: open AAC codec");
+
+    let seg = read_fixture("segment-1-slq-a1.m4s");
+    let frames = parse_segment_frames(&init, &seg).expect("BUG: parse segment frames");
+    let ranges = frames.iter().map(|f| (f.offset, f.size)).collect();
+    (codec, seg, ranges)
+}
+
+fn decode_all_aac(
+    codec: &mut SymphoniaCodec,
+    seg: &[u8],
+    ranges: &[(usize, usize)],
+    pool: &PcmPool,
+) -> Vec<f32> {
+    let mut out_pcm = Vec::new();
+    for &(offset, size) in ranges {
+        let frame_data = &seg[offset..offset + size];
+        let mut buf = pool.get();
+        codec
+            .decode_frame(frame_data, Duration::ZERO, &[], &mut buf)
+            .expect("BUG: decode AAC frame");
+        out_pcm.extend_from_slice(&buf[..]);
+    }
+    out_pcm
+}
+
+/// R-tovec: the zero-copy `PacketRef`/`decode_ref` entry must produce
+/// PCM bit-identical to the owning `Packet::new(.., to_vec())` path it
+/// replaces. Two independent decoder passes over the same real AAC
+/// access units must yield byte-for-byte equal interleaved f32 PCM —
+/// pro-DJ zero tolerance for sample drift.
+#[kithara::test]
+fn symphonia_aac_decode_is_bit_identical_across_passes() {
+    let pool = PcmPool::default();
+    let (mut codec_a, seg, ranges) = aac_codec_and_frames();
+    let pcm_a = decode_all_aac(&mut codec_a, &seg, &ranges, &pool);
+
+    let (mut codec_b, _, _) = aac_codec_and_frames();
+    let pcm_b = decode_all_aac(&mut codec_b, &seg, &ranges, &pool);
+
+    assert!(!pcm_a.is_empty(), "decode produced no PCM");
+    assert_eq!(
+        pcm_a, pcm_b,
+        "decode_ref must be deterministic and bit-identical (no sample drift)"
+    );
+}
+
+/// R-tovec: a warm per-packet AAC decode loop must not grow the pool's
+/// `alloc_misses` after warm-up. The zero-copy `PacketRef` entry borrows
+/// the frame slice instead of cloning it into an owning `Packet`, so the
+/// per-packet heap allocation is gone; the `RTSan` lane is the malloc
+/// oracle, this guards against any accidental per-call pool growth.
+#[kithara::test]
+fn symphonia_aac_warm_decode_does_not_grow_pool_alloc_misses() {
+    let pool = PcmPool::new(32, 8192);
+    let (mut codec, seg, ranges) = aac_codec_and_frames();
+    assert!(!ranges.is_empty(), "segment yielded no AAC frames");
+
+    for &(offset, size) in ranges.iter().take(8) {
+        let mut buf = pool.get();
+        codec
+            .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
+            .expect("BUG: warm-up decode");
+    }
+    let warm_misses = pool.stats().alloc_misses;
+
+    for _ in 0..50 {
+        for &(offset, size) in &ranges {
+            let mut buf = pool.get();
+            codec
+                .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
+                .expect("BUG: warm decode");
+        }
+    }
+
+    assert_eq!(
+        pool.stats().alloc_misses,
+        warm_misses,
+        "warm AAC decode must not allocate fresh pool buffers per packet"
     );
 }

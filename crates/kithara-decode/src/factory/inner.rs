@@ -566,7 +566,8 @@ where
 {
     use crate::{composed::ComposedDecoder, demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer};
 
-    let demuxer = Fmp4SegmentDemuxer::open(source, layout)?;
+    let demuxer =
+        Fmp4SegmentDemuxer::open(source, layout, config.byte_pool.clone().unwrap_or_default())?;
     let codec = open_codec(demuxer.track_info())?;
     let pool = config
         .pcm_pool
