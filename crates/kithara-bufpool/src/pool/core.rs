@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
-use kithara_platform::{Mutex, thread::current_thread_id};
+use kithara_platform::thread::current_thread_id;
 
 use super::{reuse::Reuse, shard::PoolShard};
 use crate::growth::BudgetExhausted;
@@ -40,8 +40,9 @@ pub struct PoolStats {
 ///
 /// ## Sharding
 ///
-/// The pool is divided into multiple shards to reduce lock contention.
-/// Each thread gets assigned to a shard based on its thread ID.
+/// The pool is divided into multiple shards to reduce contention.
+/// Each thread gets assigned to a shard based on its thread ID. Each shard is
+/// a lock-free bounded queue, so `get` and `put` never take a lock.
 ///
 /// ## Memory Management
 ///
@@ -51,7 +52,7 @@ pub struct Pool<const SHARDS: usize, T>
 where
     T: Reuse,
 {
-    pub(super) shards: [Mutex<PoolShard<T>>; SHARDS],
+    shards: [PoolShard<T>; SHARDS],
     stat_alloc_misses: AtomicU64,
     stat_home_hits: AtomicU64,
     stat_put_drops: AtomicU64,
@@ -68,7 +69,7 @@ where
 {
     /// Maximum number of non-home shards to probe on a miss.
     ///
-    /// Uses `try_lock` to avoid blocking — locked shards are skipped.
+    /// Each probe is a lock-free `pop` — empty shards yield `None`.
     const MAX_PROBE: usize = 4;
 
     /// Current number of tracked bytes across all live buffers.
@@ -79,9 +80,7 @@ where
     /// Return a buffer to the pool.
     pub fn put(&self, value: T, shard_idx: usize) {
         let bytes = value.byte_size();
-        let mut shard = self.shards[shard_idx].lock_sync();
-        if !shard.try_put(value) {
-            drop(shard);
+        if !self.shards[shard_idx].try_put(value) {
             self.release_budget(bytes);
             self.stat_put_drops.fetch_add(1, Ordering::Relaxed);
         }
@@ -178,21 +177,12 @@ where
         }
     }
 
-    /// Try to steal a buffer from nearby shards using non-blocking `try_lock`.
+    /// Try to steal a buffer from nearby shards via lock-free `pop`.
     ///
     /// Probes up to [`MAX_PROBE`](Self::MAX_PROBE) shards starting from `home + 1`.
-    /// Skips shards whose lock is currently held.
     fn try_steal(&self, home: usize) -> Option<T> {
         let probe = Self::MAX_PROBE.min(SHARDS.saturating_sub(1));
-        for i in 1..=probe {
-            let idx = (home + i) % SHARDS;
-            if let Ok(mut shard) = self.shards[idx].try_lock()
-                && let Some(v) = shard.try_get()
-            {
-                return Some(v);
-            }
-        }
-        None
+        (1..=probe).find_map(|i| self.shards[(home + i) % SHARDS].try_get())
     }
 }
 
@@ -251,10 +241,7 @@ where
         F: FnOnce(&mut T),
     {
         let shard_idx = Self::shard_index();
-        let mut value = {
-            let mut shard = self.shards[shard_idx].lock_sync();
-            shard.try_get()
-        };
+        let mut value = self.shards[shard_idx].try_get();
 
         if value.is_some() {
             self.stat_home_hits.fetch_add(1, Ordering::Relaxed);
@@ -313,7 +300,7 @@ where
     /// - `max_buffers`: Maximum total buffers across all shards.
     /// - `trim_capacity`: Shrink buffers to this capacity when returning.
     /// - `budget`: Maximum total bytes tracked. Use
-    ///   [`ByteBudget::UNLIMITED`] for no cap.
+    ///   `ByteBudget(usize::MAX)` for no cap.
     ///
     /// # Panics
     ///
@@ -326,9 +313,7 @@ where
         Self {
             max_bytes: budget.0,
             allocated_bytes: AtomicUsize::new(0),
-            shards: array::from_fn(|_| {
-                Mutex::new(PoolShard::new(buffers_per_shard, trim_capacity))
-            }),
+            shards: array::from_fn(|_| PoolShard::new(buffers_per_shard, trim_capacity)),
             stat_alloc_misses: AtomicU64::new(0),
             stat_home_hits: AtomicU64::new(0),
             stat_put_drops: AtomicU64::new(0),

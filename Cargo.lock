@@ -4112,10 +4112,12 @@ dependencies = [
 name = "kithara-bufpool"
 version = "0.0.1-alpha2"
 dependencies = [
+ "crossbeam-queue",
  "hotpath",
  "kithara-bufpool",
  "kithara-platform",
  "kithara-test-macros",
+ "kithara-test-utils",
  "kithara-workspace-hack",
  "wasm-bindgen-test",
 ]

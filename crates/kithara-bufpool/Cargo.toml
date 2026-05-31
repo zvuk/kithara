@@ -11,6 +11,7 @@ categories = ["memory-management", "concurrency"]
 
 [dependencies]
 kithara-platform = { workspace = true }
+crossbeam-queue = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -25,4 +26,5 @@ workspace = true
 [dev-dependencies]
 kithara-bufpool = { path = ".", default-features = false }
 kithara-test-macros = { path = "../kithara-test-macros" }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["probe"] }
 wasm-bindgen-test = { workspace = true }
