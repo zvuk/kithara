@@ -1,5 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroUsize;
+
 use kithara_assets::{AcquisitionResult, AssetStoreBuilder, FlushHub, FlushPolicy, WriteSide};
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
@@ -7,6 +9,21 @@ use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
 const INDEXES_PER_DISK_STORE: usize = 3;
+
+/// Flush policy whose background worker never fires within a test's
+/// lifetime, so `flush_now()` is the only writer. The availability index
+/// is debounced through the worker (it rewrites on every commit), so with
+/// `FlushPolicy::default()` the worker writes `availability.bin` ~50ms
+/// after a commit on its own. A test that asserts the checkpoint-only
+/// "nothing on disk before flush_now" invariant then races that 50ms
+/// timer and flakes under load. A manual-only policy removes the race.
+fn manual_flush_policy() -> FlushPolicy {
+    FlushPolicy {
+        debounce: Duration::from_secs(3600),
+        poll_interval: Duration::from_secs(3600),
+        force_every_n_ops: NonZeroUsize::new(usize::MAX).unwrap(),
+    }
+}
 
 /// Stream `data` through a Pending writer and commit it.
 fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8]) {
@@ -96,7 +113,9 @@ fn shared_hub_gcs_dropped_store_indexes() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn shared_hub_flush_now_persists_every_store() {
     let dir = tempdir().unwrap();
-    let hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
+    // Manual-only: the background worker must not write availability before
+    // the explicit flush_now, or the checkpoint-only pre-assertion races it.
+    let hub = FlushHub::new(CancellationToken::new(), manual_flush_policy());
 
     let store_a = AssetStoreBuilder::new()
         .root_dir(dir.path().join("a"))
