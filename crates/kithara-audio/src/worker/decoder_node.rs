@@ -67,7 +67,11 @@ impl DecoderNode {
     /// Drop every spent chunk the real-time consumer returned. Each drop
     /// recycles the pooled buffer (`PooledOwned::drop` → `Pool::put`) on
     /// this worker thread, keeping that allocation work off the audio
-    /// thread.
+    /// thread. The pool may free a buffer on overflow (shard full), so this
+    /// deferred free runs in a permitted scope, off the `forbid_blocking`
+    /// produce path — the whole point of the trash ring is to move these
+    /// frees here from the audio thread.
+    #[kithara::rtsan_allow_blocking]
     fn drain_trash(&mut self) {
         while self.trash_inlet.try_pop().is_some() {}
     }

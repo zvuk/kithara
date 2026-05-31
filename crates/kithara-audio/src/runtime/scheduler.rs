@@ -181,6 +181,7 @@ fn run_loop<N: Node, O: SchedulerObserver>(
         observer.on_event(SchedulerEvent::PassStart);
 
         if cancel_and_drain(cancel, cmd_rx, &mut slots, &mut needs_reorder) {
+            dispose_on_exit(slots, slots_order);
             return;
         }
 
@@ -193,9 +194,7 @@ fn run_loop<N: Node, O: SchedulerObserver>(
 
         let outcome = step_all_slots(&mut slots, &slots_order, &mut observer);
 
-        let before = slots.len();
-        slots.retain(|slot| !slot.is_removable());
-        needs_reorder |= slots.len() < before;
+        needs_reorder |= reap_terminal_slots(&mut slots);
 
         report_outcome(&mut observer, outcome);
         observer.on_event(SchedulerEvent::PassEnd);
@@ -251,6 +250,27 @@ fn recompute_slots_order<N: Node>(slots: &[Slot<N>], slots_order: &mut Vec<usize
         let class_b = slots[b].service_class;
         class_b.cmp(&class_a)
     });
+}
+
+/// Remove and drop terminal slots, returning `true` when any were removed so
+/// the caller re-sorts. Dropping a finished node frees its decoder buffers —
+/// bounded teardown, not real-time production — so it runs in a permitted
+/// scope, off the `forbid_blocking` checked path.
+#[kithara::rtsan_allow_blocking]
+fn reap_terminal_slots<N: Node>(slots: &mut Vec<Slot<N>>) -> bool {
+    let before = slots.len();
+    slots.retain(|slot| !slot.is_removable());
+    slots.len() < before
+}
+
+/// Drop the scheduler working sets when the loop exits on cancel/shutdown.
+/// Frees node buffers and the slot vectors in a permitted scope — same
+/// rationale as [`reap_terminal_slots`]. The explicit `drop`s keep the frees
+/// inside the permit guard, ahead of the parameter scope.
+#[kithara::rtsan_allow_blocking]
+fn dispose_on_exit<N>(slots: Vec<Slot<N>>, slots_order: Vec<usize>) {
+    drop(slots);
+    drop(slots_order);
 }
 
 fn step_all_slots<N: Node, O: SchedulerObserver>(
