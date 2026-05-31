@@ -967,7 +967,7 @@ where
                 .maybe_hooks(stream.take_reader_hooks())
                 .build();
             let source = OffsetReader::new(stream.clone(), base_offset);
-            match DecoderFactory::create_from_media_info(source, info, &config) {
+            match DecoderFactory::create_from_media_info(source, info, config) {
                 Ok(d) => {
                     d.update_byte_len(byte_len);
                     Ok(d)
@@ -1010,12 +1010,12 @@ where
         let initial_media_info_for_decoder = initial_media_info;
         let decoder = spawn_blocking(move || {
             if let Some(ref info) = initial_media_info_for_decoder {
-                DecoderFactory::create_from_media_info(shared_stream, info, &decoder_config)
+                DecoderFactory::create_from_media_info(shared_stream, info, decoder_config)
             } else {
                 DecoderFactory::create_with_probe(
                     shared_stream,
                     hint_for_decoder.as_deref(),
-                    &decoder_config,
+                    decoder_config,
                 )
             }
         })

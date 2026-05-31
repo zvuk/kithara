@@ -74,7 +74,7 @@ impl<T: StreamType> SharedStream<T> {
             fn seek_time_anchor(&self, position: Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
             fn commit_seek_landing(&self, anchor: Option<SourceSeekAnchor>);
             /// Build a fresh reader-side hooks instance from the inner source.
-            pub(crate) fn take_reader_hooks(&self) -> Option<kithara_stream::SharedHooks>;
+            pub(crate) fn take_reader_hooks(&self) -> Option<kithara_stream::BoxedHooks>;
             /// Pull a clone of the optional segment-layout handle from the
             /// inner source. Used by the decoder factory to activate the
             /// segment-by-segment fMP4 path on HLS.

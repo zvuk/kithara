@@ -42,10 +42,10 @@ fn xing_partial_probe_reports_full_duration() {
     let partial = partial_slice(full);
 
     let full_decoder =
-        DecoderFactory::create_with_probe(Cursor::new(full), Some("mp3"), &decoder_config())
+        DecoderFactory::create_with_probe(Cursor::new(full), Some("mp3"), decoder_config())
             .expect("full mp3 decoder");
     let partial_decoder =
-        DecoderFactory::create_with_probe(Cursor::new(partial), Some("mp3"), &decoder_config())
+        DecoderFactory::create_with_probe(Cursor::new(partial), Some("mp3"), decoder_config())
             .expect("partial mp3 decoder");
 
     assert_eq!(
@@ -69,7 +69,7 @@ fn partial_decoder_seek_past_available_bytes_errors() {
     let partial = partial_slice(full);
 
     let mut decoder =
-        DecoderFactory::create_with_probe(Cursor::new(partial), Some("mp3"), &decoder_config())
+        DecoderFactory::create_with_probe(Cursor::new(partial), Some("mp3"), decoder_config())
             .expect("partial mp3 decoder");
     let duration = decoder.duration().expect("duration known");
 
@@ -98,7 +98,7 @@ fn full_decoder_seeks_to_same_target_without_error() {
     let full = track_mp3();
 
     let mut decoder =
-        DecoderFactory::create_with_probe(Cursor::new(full), Some("mp3"), &decoder_config())
+        DecoderFactory::create_with_probe(Cursor::new(full), Some("mp3"), decoder_config())
             .expect("full mp3 decoder");
     let duration = decoder.duration().expect("duration known");
 

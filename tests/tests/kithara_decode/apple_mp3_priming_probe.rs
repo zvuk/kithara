@@ -7,12 +7,6 @@ use reqwest::Client;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
-const SAW_PERIOD: i32 = 65_536;
-
-fn sawtooth_ref(frame: i64) -> i32 {
-    let m = frame.rem_euclid(i64::from(SAW_PERIOD));
-    i32::try_from(m).unwrap_or(0) - 32_768
-}
 
 /// Locate the LAME encoder tag inside an MP3's Xing/Info header.
 ///
@@ -69,7 +63,7 @@ fn measure_leading_silence(
     config.gapless = gapless;
     config.hint = Some("mp3".to_owned());
     let mut decoder =
-        DecoderFactory::create_with_probe(Cursor::new(mp3_bytes), Some("mp3"), &config)
+        DecoderFactory::create_with_probe(Cursor::new(mp3_bytes), Some("mp3"), config)
             .expect("probe MP3 decoder");
     let mut left = Vec::<f32>::with_capacity(SAMPLE_RATE as usize);
     let chan = usize::from(CHANNELS);

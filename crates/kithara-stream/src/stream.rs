@@ -291,7 +291,7 @@ impl<T: StreamType> Stream<T> {
             /// Commit the actual post-seek landing after `decoder.seek(...)`.
             pub fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>);
             /// Build a fresh reader-side hooks instance from the inner source.
-            pub fn take_reader_hooks(&mut self) -> Option<crate::SharedHooks>;
+            pub fn take_reader_hooks(&mut self) -> Option<crate::BoxedHooks>;
             /// Optional segment-layout handle for segment-aware decoders.
             pub fn as_segment_layout(&self) -> Option<Arc<dyn crate::SegmentLayout>>;
             /// Absolute byte-position set — used by [`Stream::seek`] callers

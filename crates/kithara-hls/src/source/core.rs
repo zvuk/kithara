@@ -7,7 +7,7 @@ use kithara_events::EventBus;
 use kithara_platform::{time::Duration, tokio::sync::Notify};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    MediaInfo, ReadOutcome, SegmentLayout, SharedHooks, Source, SourcePhase, SourceSeekAnchor,
+    BoxedHooks, MediaInfo, ReadOutcome, SegmentLayout, Source, SourcePhase, SourceSeekAnchor,
     StreamResult, Timeline,
 };
 
@@ -106,13 +106,13 @@ impl Source for HlsSource {
         Some(self.coord.media_info())
     }
 
-    fn take_reader_hooks(&mut self) -> Option<SharedHooks> {
+    fn take_reader_hooks(&mut self) -> Option<BoxedHooks> {
         let hooks = HlsReaderHooks::new(
             self.bus.clone(),
             Arc::clone(&self.coord),
             self.coord.timeline.seek_epoch_handle(),
         );
-        Some(Arc::new(std::sync::Mutex::new(hooks)))
+        Some(Box::new(hooks))
     }
 
     delegate! {

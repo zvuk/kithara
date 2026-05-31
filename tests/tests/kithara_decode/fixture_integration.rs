@@ -121,7 +121,7 @@ async fn test_signal_server_encoded_formats_are_decodable(
     let mut decoder = DecoderFactory::create_with_probe(
         Cursor::new(bytes.to_vec()),
         Some(ext),
-        &DecoderConfig::default(),
+        DecoderConfig::default(),
     )
     .unwrap();
 
@@ -168,7 +168,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
     let mut decoder = DecoderFactory::create_with_probe(
         Cursor::new(bytes.to_vec()),
         Some(ext),
-        &DecoderConfig::default(),
+        DecoderConfig::default(),
     )
     .unwrap_or_else(|error| panic!("probe {format:?} decode failed: {error}"));
 
@@ -503,11 +503,11 @@ async fn run_packaged_fmp4_decoder_check(label: &str, codec: AudioCodec, backend
         box_tags.iter().any(|tag| tag == "mdat"),
         "packaged {label} bytes must contain mdat, got {box_summaries:?}"
     );
-    let config = DecoderConfig::builder().backend(backend).build();
+    let config = || DecoderConfig::builder().backend(backend).build();
     let mut direct_decoder = DecoderFactory::create_from_media_info(
         Cursor::new(mp4_bytes.clone()),
         &media_info,
-        &config,
+        config(),
     )
     .unwrap_or_else(|error| panic!("create decoder from packaged {label} fmp4: {error}"));
 
@@ -516,7 +516,7 @@ async fn run_packaged_fmp4_decoder_check(label: &str, codec: AudioCodec, backend
         .unwrap_or_else(|error| panic!("decode first direct chunk for packaged {label}: {error}"));
     let total_len = mp4_bytes.len();
     let mut probe_decoder =
-        DecoderFactory::create_with_probe(Cursor::new(mp4_bytes.clone()), Some("m4a"), &config)
+        DecoderFactory::create_with_probe(Cursor::new(mp4_bytes.clone()), Some("m4a"), config())
             .unwrap_or_else(|error| panic!("probe packaged {label} fmp4 decode failed: {error}"));
     let probe_chunk = probe_decoder
         .next_chunk()

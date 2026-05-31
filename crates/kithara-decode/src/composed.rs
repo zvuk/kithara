@@ -7,7 +7,7 @@ use std::{
 };
 
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_stream::{AudioCodec, ReaderChunkSignal, ReaderSeekSignal, SharedHooks};
+use kithara_stream::{AudioCodec, BoxedHooks, ReaderChunkSignal, ReaderSeekSignal};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -26,11 +26,12 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     demuxer: D,
     byte_len_handle: Option<Arc<AtomicU64>>,
     duration: Option<Duration>,
-    /// Reader-side observer hooks. `None` skips the lock entirely on the
-    /// hot path; `Some(_)` emits per-chunk / per-seek signals after the
-    /// inner outcome resolves. Folded in from the former `HookedDecoder`
-    /// decorator — every decoder is hookable now.
-    hooks: Option<SharedHooks>,
+    /// Reader-side observer hooks. Single-owner `Box<dyn DecoderHooks>` —
+    /// `None` skips emission entirely; `Some(_)` calls `on_chunk` /
+    /// `on_seek` directly via `&mut` after the inner outcome resolves.
+    /// No lock on the produce-core. Folded in from the former
+    /// `HookedDecoder` decorator — every decoder is hookable now.
+    hooks: Option<BoxedHooks>,
     /// When `Some`, frames whose decode-time end is `<= target` are
     /// dropped before the next chunk is emitted. Cleared after the
     /// first frame past the target is consumed. Lets `seek(target)`
@@ -62,7 +63,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         pool: PcmPool,
         epoch: u64,
         byte_len_handle: Option<Arc<AtomicU64>>,
-        hooks: Option<SharedHooks>,
+        hooks: Option<BoxedHooks>,
     ) -> Self {
         let spec = codec.spec();
         let duration = demuxer.duration();
@@ -127,24 +128,18 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         PcmChunk::new(meta, buf)
     }
 
-    fn emit_chunk_signal(&self, outcome: &DecoderChunkOutcome) {
-        let Some(hooks) = self.hooks.as_ref() else {
-            return;
-        };
+    fn emit_chunk_signal(&mut self, outcome: &DecoderChunkOutcome) {
         let signal = match outcome {
             DecoderChunkOutcome::Chunk(_) => ReaderChunkSignal::Chunk,
             DecoderChunkOutcome::Pending(reason) => ReaderChunkSignal::Pending(*reason),
             DecoderChunkOutcome::Eof => ReaderChunkSignal::Eof,
         };
-        if let Ok(mut h) = hooks.lock() {
-            h.on_chunk(signal);
+        if let Some(hooks) = self.hooks.as_mut() {
+            hooks.on_chunk(signal);
         }
     }
 
-    fn emit_seek_signal(&self, outcome: &DecoderSeekOutcome) {
-        let Some(hooks) = self.hooks.as_ref() else {
-            return;
-        };
+    fn emit_seek_signal(&mut self, outcome: &DecoderSeekOutcome) {
         let signal = match outcome {
             DecoderSeekOutcome::Landed {
                 landed_byte,
@@ -156,8 +151,8 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             },
             DecoderSeekOutcome::PastEof { .. } => ReaderSeekSignal::PastEof,
         };
-        if let Ok(mut h) = hooks.lock() {
-            h.on_seek(signal);
+        if let Some(hooks) = self.hooks.as_mut() {
+            hooks.on_seek(signal);
         }
     }
 
@@ -732,7 +727,7 @@ mod hook_tests {
 
     use kithara_bufpool::PcmPool;
     use kithara_stream::{
-        DecoderHooks, PendingReason, ReaderChunkSignal, ReaderSeekSignal, SharedHooks,
+        BoxedHooks, DecoderHooks, PendingReason, ReaderChunkSignal, ReaderSeekSignal,
     };
     use kithara_test_utils::kithara;
 
@@ -870,7 +865,7 @@ mod hook_tests {
             },
             1,
         );
-        let hooks: SharedHooks = Arc::new(Mutex::new(LoggingHooks { log }));
+        let hooks: BoxedHooks = Box::new(LoggingHooks { log });
         ComposedDecoder::new(
             demuxer,
             codec,
@@ -926,6 +921,44 @@ mod hook_tests {
         let mut decoder = build(demuxer, Arc::clone(&log));
         let _ = decoder.seek(target).unwrap();
         assert_eq!(log.lock().unwrap().seeks, vec![expected_signal]);
+    }
+
+    #[kithara::test]
+    fn owned_hooks_fire_exactly_once_per_chunk() {
+        let log = Arc::new(Mutex::new(CallLog::default()));
+        let demuxer = StubDemuxer::with_outcomes(
+            vec![
+                StubOutcome::Frame {
+                    data: vec![0u8; 4],
+                    pts: Duration::from_millis(40),
+                    duration: Duration::from_millis(20),
+                },
+                StubOutcome::Frame {
+                    data: vec![0u8; 4],
+                    pts: Duration::from_millis(20),
+                    duration: Duration::from_millis(20),
+                },
+                StubOutcome::Frame {
+                    data: vec![0u8; 4],
+                    pts: Duration::ZERO,
+                    duration: Duration::from_millis(20),
+                },
+            ],
+            Vec::new(),
+        );
+        let mut decoder = build(demuxer, Arc::clone(&log));
+
+        for _ in 0..3 {
+            let _ = decoder.next_chunk().unwrap();
+        }
+        let _ = decoder.next_chunk().unwrap();
+
+        // WHY: single-owner Box hooks must fire once per next_chunk — three
+        // PCM chunks then one Eof, never doubled, never dropped.
+        assert_eq!(
+            log.lock().unwrap().chunks,
+            vec!["chunk", "chunk", "chunk", "eof"],
+        );
     }
 }
 

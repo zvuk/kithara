@@ -15,7 +15,7 @@ fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
     let decoder = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
-        &DecoderConfig::builder().hint("wav".into()).build(),
+        DecoderConfig::builder().hint("wav".into()).build(),
     );
     assert!(decoder.is_ok(), "decoder creation should succeed");
 
@@ -30,7 +30,7 @@ fn test_next_chunk_returns_data() {
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let mut decoder =
-        DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default())
+        DecoderFactory::create_from_media_info(cursor, &media_info, DecoderConfig::default())
             .expect("BUG: decoder");
 
     let outcome = decoder.next_chunk().unwrap();
@@ -48,7 +48,7 @@ fn test_next_chunk_eof() {
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let mut decoder =
-        DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default())
+        DecoderFactory::create_from_media_info(cursor, &media_info, DecoderConfig::default())
             .expect("BUG: decoder");
 
     while decoder.next_chunk().unwrap().is_chunk() {}
@@ -63,7 +63,7 @@ fn test_seek_to_beginning() {
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let mut decoder =
-        DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default())
+        DecoderFactory::create_from_media_info(cursor, &media_info, DecoderConfig::default())
             .expect("BUG: decoder");
 
     let _ = decoder.next_chunk().unwrap();
@@ -81,7 +81,7 @@ fn test_duration_available() {
     let cursor = Cursor::new(wav_data);
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let decoder =
-        DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default())
+        DecoderFactory::create_from_media_info(cursor, &media_info, DecoderConfig::default())
             .expect("BUG: decoder");
 
     let duration = decoder.duration();
@@ -98,7 +98,7 @@ fn test_invalid_input_fails(#[case] data: Vec<u8>) {
     let cursor = Cursor::new(data);
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let result =
-        DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default());
+        DecoderFactory::create_from_media_info(cursor, &media_info, DecoderConfig::default());
     assert!(result.is_err());
 }
 
@@ -108,6 +108,6 @@ fn test_unsupported_container_returns_error() {
     let cursor = Cursor::new(data);
     let media_info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::MpegTs));
     let result =
-        DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default());
+        DecoderFactory::create_from_media_info(cursor, &media_info, DecoderConfig::default());
     assert!(matches!(result, Err(DecodeError::UnsupportedContainer(_))));
 }

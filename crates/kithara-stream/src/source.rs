@@ -389,7 +389,7 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// instance, because decoder recreation (ABR / format change)
     /// rebuilds the wrapper and the new hook needs a clean state
     /// cursor.
-    fn take_reader_hooks(&mut self) -> Option<crate::SharedHooks> {
+    fn take_reader_hooks(&mut self) -> Option<crate::BoxedHooks> {
         None
     }
 

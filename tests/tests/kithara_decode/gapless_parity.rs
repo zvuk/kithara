@@ -171,7 +171,7 @@ fn create_decoder_from_media_info(
     DecoderFactory::create_from_media_info(
         Cursor::new(fixture.bytes.clone()),
         &fixture.media_info,
-        &config,
+        config,
     )
 }
 
@@ -180,7 +180,7 @@ fn create_decoder_with_probe(
     hint: &'static str,
     config: DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
-    DecoderFactory::create_with_probe(Cursor::new(bytes), Some(hint), &config)
+    DecoderFactory::create_with_probe(Cursor::new(bytes), Some(hint), config)
 }
 
 fn decode_visible_frames(mut decoder: Box<dyn Decoder>) -> DecodeResult<DecodedFrames> {

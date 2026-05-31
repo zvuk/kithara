@@ -33,7 +33,7 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk() {
     let mut decoder = DecoderFactory::create_with_probe(
         Cursor::new(bytes.to_vec()),
         Some("aac"),
-        &DecoderConfig::default(),
+        DecoderConfig::default(),
     )
     .expect("probe AAC decoder");
 

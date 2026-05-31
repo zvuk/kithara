@@ -22,7 +22,7 @@ mod timeline;
 pub mod mock;
 
 pub use error::{SourceError, StreamError, StreamResult};
-pub use hooks::{DecoderHooks, ReaderChunkSignal, ReaderSeekSignal, SharedHooks};
+pub use hooks::{BoxedHooks, DecoderHooks, ReaderChunkSignal, ReaderSeekSignal};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
 pub use preroll::PrerollHint;
 pub use source::{

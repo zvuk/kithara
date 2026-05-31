@@ -181,13 +181,13 @@ impl kithara_stream::Source for FileSource {
         self.coord.set_position(pos);
     }
 
-    fn take_reader_hooks(&mut self) -> Option<kithara_stream::SharedHooks> {
+    fn take_reader_hooks(&mut self) -> Option<kithara_stream::BoxedHooks> {
         let hooks = super::reader::FileReaderHooks::new(
             self.inner.source.bus.clone(),
             Arc::clone(&self.coord),
             self.coord.timeline().seek_epoch_handle(),
         );
-        Some(Arc::new(std::sync::Mutex::new(hooks)))
+        Some(Box::new(hooks))
     }
 
     fn timeline(&self) -> Timeline {

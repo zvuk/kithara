@@ -33,7 +33,7 @@ fn create_with_probe_without_hint_fails_with_probe_failed() {
     let result = DecoderFactory::create_with_probe(
         Cursor::new(TEST_MP3_BYTES.to_vec()),
         None,
-        &DecoderConfig::default(),
+        DecoderConfig::default(),
     );
     assert!(matches!(result, Err(DecodeError::ProbeFailed)));
 }
@@ -44,7 +44,7 @@ fn create_with_probe_with_mp3_hint_succeeds() {
     let decoder = DecoderFactory::create_with_probe(
         Cursor::new(TEST_MP3_BYTES.to_vec()),
         Some("mp3"),
-        &DecoderConfig::default(),
+        DecoderConfig::default(),
     )
     .expect("BUG: mp3 hint should produce a decoder");
 
@@ -61,7 +61,7 @@ fn create_from_media_info_surfaces_error_without_native_probe_fallback() {
     let media_info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4));
     let source = Cursor::new(TEST_MP3_BYTES.to_vec());
     let result =
-        DecoderFactory::create_from_media_info(source, &media_info, &DecoderConfig::default());
+        DecoderFactory::create_from_media_info(source, &media_info, DecoderConfig::default());
     assert!(
         result.is_err(),
         "create_from_media_info must propagate the typed error from the metadata-driven path \

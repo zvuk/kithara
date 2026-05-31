@@ -1,5 +1,3 @@
-use std::sync::{Arc, Mutex};
-
 use crate::{preroll::PrerollHint, source::PendingReason};
 
 /// Lightweight read-side signal fed into [`DecoderHooks::on_chunk`].
@@ -57,7 +55,9 @@ pub trait DecoderHooks: Send + Sync {
     fn on_seek(&mut self, signal: ReaderSeekSignal);
 }
 
-/// Shared, lockable hook handle. Used so that `Source::take_reader_hooks`
-/// can hand off Clone-able ownership and the hook implementation can
-/// hold `&mut self` state behind a single lock.
-pub type SharedHooks = Arc<Mutex<dyn DecoderHooks>>;
+/// Single-owner hook handle. `Source::take_reader_hooks` builds a fresh
+/// instance and relinquishes it; the decoder layer becomes the sole
+/// owner and invokes `on_chunk` / `on_seek` directly via `&mut`. No lock
+/// on the produce-core — the former `Arc<Mutex<dyn _>>` existed only for
+/// `dyn` + `&mut` ergonomics, never for real sharing.
+pub type BoxedHooks = Box<dyn DecoderHooks>;
