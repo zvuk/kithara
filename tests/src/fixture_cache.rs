@@ -21,12 +21,36 @@ fn cache_key(domain: &str, spec: &[u8]) -> String {
     hex
 }
 
-/// Env var the nextest setup script exports; absent → L2 disabled.
+/// Default L2 cache directory, used when `KITHARA_FIXTURE_CACHE` is unset.
+///
+/// Namespaced by `KITHARA_FIXTURE_BUILD` — a fingerprint of the fixture-encoding
+/// code and dependency lockfile, emitted by `build.rs` and baked into every test
+/// binary of this package. Because the value is identical across `suite_stress`,
+/// `suite_heavy`, … of one build, a fixture encoded by any binary is reused by
+/// all of them (and by repeated runs of the same build); because it changes when
+/// the encoder or its deps change, a rebuild lands in a fresh sub-dir and can
+/// never serve stale encoded bytes. Launch-independent (no `current_exe`), so
+/// nextest and direct/IDE runs of the same build share one cache.
+fn default_cache_dir() -> PathBuf {
+    let build = env!("KITHARA_FIXTURE_BUILD");
+    std::env::temp_dir()
+        .join("kithara-fixture-cache")
+        .join(build)
+}
+
+/// Overrides the default cache directory. When unset, [`FixtureCache::from_env`]
+/// falls back to a build-fingerprinted default dir (see [`default_cache_dir`]),
+/// so the L2 cache is **on by default** for every run mode — not only the
+/// opt-in `cache` profile.
 pub(crate) const CACHE_ENV: &str = "KITHARA_FIXTURE_CACHE";
 
-/// Cross-process on-disk content cache. Disabled (every op a no-op / miss) when
-/// no directory is configured, so plain `cargo test` / `just rtsan` / IDE runs
-/// fall back to the in-memory L1 cache.
+/// Cross-process on-disk content cache.
+///
+/// On by default: [`from_env`](Self::from_env) resolves to `$KITHARA_FIXTURE_CACHE`
+/// when set, otherwise to a build-fingerprinted temp dir, so plain `cargo test`,
+/// `just test`, `just rtsan`, and IDE runs all reuse encode/mux output across
+/// the per-test processes in a run. Only [`from_dir(None)`](Self::from_dir)
+/// makes every op a no-op (used for the disabled-path unit tests).
 #[derive(Clone)]
 pub(crate) struct FixtureCache {
     dir: Option<PathBuf>,
@@ -34,7 +58,8 @@ pub(crate) struct FixtureCache {
 
 impl FixtureCache {
     pub(crate) fn from_env() -> Self {
-        Self::from_dir(std::env::var_os(CACHE_ENV).map(PathBuf::from))
+        let dir = std::env::var_os(CACHE_ENV).map_or_else(default_cache_dir, PathBuf::from);
+        Self::from_dir(Some(dir))
     }
 
     pub(crate) fn from_dir(dir: Option<PathBuf>) -> Self {
@@ -94,11 +119,42 @@ mod tests {
     }
 
     #[test]
-    fn disabled_when_env_unset() {
+    fn disabled_only_via_explicit_none() {
         let store = FixtureCache::from_dir(None);
         assert!(store.get("signal", b"spec").is_none());
         store.store("signal", b"spec", b"payload");
         assert!(store.get("signal", b"spec").is_none());
+    }
+
+    #[test]
+    fn default_cache_dir_is_fingerprinted_under_temp() {
+        let dir = default_cache_dir();
+        let base = std::env::temp_dir().join("kithara-fixture-cache");
+        assert!(
+            dir.starts_with(&base),
+            "default dir {dir:?} must live under {base:?}",
+        );
+        let fingerprint = dir
+            .file_name()
+            .and_then(|f| f.to_str())
+            .expect("fingerprint component");
+        assert_eq!(fingerprint.len(), 16, "build fingerprint is u64 hex");
+        assert!(fingerprint.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn from_env_is_enabled_by_default() {
+        // Read-only env probe: under the opt-in `cache` profile the setup
+        // script exports KITHARA_FIXTURE_CACHE, so only assert the default
+        // path when nothing overrides it.
+        if std::env::var_os(CACHE_ENV).is_some() {
+            return;
+        }
+        let cache = FixtureCache::from_env();
+        assert!(
+            cache.dir.is_some(),
+            "L2 cache must be on by default when KITHARA_FIXTURE_CACHE is unset",
+        );
     }
 
     #[test]

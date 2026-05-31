@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 publish = false
 autotests = false
+build = "build.rs"
 
 [lints]
 workspace = true
