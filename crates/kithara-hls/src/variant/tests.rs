@@ -77,6 +77,16 @@ fn make_seg(idx: u32, size: u64, scope: &AssetScope<DecryptContext>) -> SegmentE
 }
 
 fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) -> Arc<HlsVariant> {
+    make_var_with_timeline(variant, init_size, media_sizes, ctx, Timeline::new())
+}
+
+fn make_var_with_timeline(
+    variant: usize,
+    init_size: u64,
+    media_sizes: &[u64],
+    ctx: &PlanCtx,
+    timeline: Timeline,
+) -> Arc<HlsVariant> {
     let init = make_init(init_size, &ctx.scope);
     let segments: Vec<SegmentEntry> = media_sizes
         .iter()
@@ -95,7 +105,7 @@ fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) 
             init,
             segments,
             playlist_state: Arc::new(PlaylistState::new(Vec::new())),
-            timeline: Timeline::new(),
+            timeline,
             codec: None,
             container: None,
         },
@@ -707,9 +717,10 @@ fn wait_range_probes_without_sleeping_and_wakes_peer() {
 #[kithara::test]
 fn wait_range_flush_short_circuits_without_sleeping() {
     let ctx = test_ctx(3);
-    let v = make_var(0, 200, &[400], &ctx);
+    let timeline = Timeline::new();
+    let v = make_var_with_timeline(0, 200, &[400], &ctx, timeline.clone());
 
-    let _ = v.timeline.initiate_seek(Duration::from_millis(10));
+    let _ = timeline.initiate_seek(Duration::from_millis(10));
     let started = Instant::now();
     let interrupted = v.wait_range(0..1, Some(Duration::from_millis(10)));
     assert!(

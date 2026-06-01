@@ -7,7 +7,7 @@ use std::{
     num::NonZeroUsize,
     ops::Range,
     sync::{
-        Arc, OnceLock, Weak,
+        Arc, Weak,
         atomic::{AtomicU8, AtomicU64, Ordering},
     },
 };
@@ -18,7 +18,7 @@ use kithara_assets::{
 };
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, NetError};
-use kithara_platform::{CancellationToken, Mutex, RwLock, time::Duration, tokio::sync::Notify};
+use kithara_platform::{CancellationToken, Mutex, time::Duration, tokio::sync::Notify};
 use kithara_storage::{ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SegmentDescriptor,
@@ -34,8 +34,12 @@ use crate::{
     playlist::{PlaylistAccess, PlaylistState},
 };
 
+mod cancel_epoch;
 mod layout;
+mod reader_runtime;
+use cancel_epoch::CancelEpoch;
 use layout::Layout;
+use reader_runtime::ReaderRuntime;
 
 #[cfg(test)]
 mod tests;
@@ -380,31 +384,27 @@ pub(crate) struct HlsVariant {
     /// `seek_time_anchor` (`find_seek_point_for_time`) and as the
     /// source for the cached [`Self::codec`] / [`Self::container`].
     playlist_state: Arc<PlaylistState>,
-    position: Arc<AtomicU64>,
+    /// Reader-side runtime: the shared byte cursor, peer wake handle, and the
+    /// timeline consulted for `is_flushing` gating. The probe-tagged
+    /// `get_position` / `set_position` stay on the facade and delegate here.
+    reader: ReaderRuntime,
     /// Coherent owner of the cross-variant byte-address-space coordinates
     /// (`byte_shift`, `served_from`, `served_until`, `init_seed`, the media
     /// offset table). A single lock guards all five so a reader never mixes
     /// the shift of one activation with the served bounds of the next.
     layout: Layout,
     prefetch_anchor: AtomicU64,
-    /// Track-level cancel parent (mirror of `coord.cancel` =
-    /// `PlanCtx::master_cancel`). Survives variant re-activation:
-    /// a cross-codec `commit_variant_switch` may flip from `v_old` to
-    /// `v_new` and back to `v_old`, and the second activation of `v_old`
-    /// must dispatch fetches under a *live* cancel — see
-    /// [`Self::rearm_cancel`]. Cancel hierarchy: `master_cancel` is the
-    /// per-track parent created by `HlsPeer`; `cancel` (below) is a
-    /// child of `master_cancel`, rotated on every re-activation.
-    master_cancel: CancellationToken,
+    /// The variant's cancel epoch: the per-track parent (mirror of
+    /// `coord.cancel` = `PlanCtx::master_cancel`) plus the rotating
+    /// per-activation child. Survives variant re-activation — a cross-codec
+    /// `commit_variant_switch` may flip from `v_old` to `v_new` and back to
+    /// `v_old`, and the second activation of `v_old` must dispatch fetches
+    /// under a *live* cancel, so [`Self::rearm_cancel`] rotates the child.
+    cancel_epoch: CancelEpoch,
     /// fMP4 init metadata. For raw TS/AAC variants `init.size == 0` and
     /// `init.state == Loaded` — `rebuild` then never enqueues `Init`.
     init: InitEntry,
     queue: Mutex<VecDeque<PlannedFetch>>,
-    /// Reader→peer wake handle, installed once when the owning `HlsPeer`
-    /// binds. `wait_range` / `seek_time_anchor` fire it so
-    /// `HlsPeer::poll_next` resumes on the next event loop tick.
-    /// Empty until [`Self::set_peer_wake`] is called by `HlsCoord`.
-    peer_wake: OnceLock<Arc<Notify>>,
     /// Cached audio codec — pulled from `playlist_state` at construction
     /// time. The reader's hot path (`media_info`) reads this without
     /// taking the playlist's per-variant `RwLock`.
@@ -416,10 +416,6 @@ pub(crate) struct HlsVariant {
     /// resource-wide auth (e.g. zvuk `X-Auth-Token`) so segment GETs
     /// reach the same authenticated endpoint as the playlist load.
     headers: Option<Headers>,
-    cancel: RwLock<CancellationToken>,
-    /// Track timeline — used by reader-path methods (`phase_at`,
-    /// `wait_range`) for `is_flushing` checks. Cheap to clone.
-    timeline: Timeline,
     segments: Vec<SegmentEntry>,
     variant: usize,
 }
@@ -515,7 +511,7 @@ impl HlsVariant {
 
     #[kithara::probe(variant = self.variant as u64, n)]
     pub(crate) fn advance(&self, n: u64) {
-        self.position.fetch_add(n, Ordering::AcqRel);
+        self.reader.advance(n);
     }
 
     /// Settle hook: shrinks the appropriate size atom to `actual` and
@@ -684,11 +680,11 @@ impl HlsVariant {
     }
 
     pub(crate) fn cancel(&self) {
-        self.cancel.lock_sync_read().cancel();
+        self.cancel_epoch.cancel();
     }
 
     pub(crate) fn cancel_handle(&self) -> CancellationToken {
-        self.cancel.lock_sync_read().clone()
+        self.cancel_epoch.handle()
     }
 
     /// Skip-fetch guard: a previously-cached resource may stay
@@ -920,8 +916,7 @@ impl HlsVariant {
             variant,
             scope: ctx.scope.clone(),
             playlist_state,
-            timeline,
-            peer_wake: OnceLock::new(),
+            reader: ReaderRuntime::new(timeline),
             layout,
             codec,
             container,
@@ -929,16 +924,14 @@ impl HlsVariant {
             segments,
             prefetch_anchor: AtomicU64::new(0),
             queue: Mutex::new(VecDeque::new()),
-            master_cancel: ctx.master_cancel.clone(),
-            cancel: RwLock::new(ctx.master_cancel.child_token()),
+            cancel_epoch: CancelEpoch::new(ctx.master_cancel.clone()),
             headers: ctx.headers.clone(),
-            position: Arc::new(AtomicU64::new(0)),
         })
     }
 
-    #[kithara::probe(variant = self.variant as u64, pos = self.position.load(Ordering::Acquire))]
+    #[kithara::probe(variant = self.variant as u64, pos = self.reader.position())]
     pub(crate) fn get_position(&self) -> u64 {
-        self.position.load(Ordering::Acquire)
+        self.reader.position()
     }
 
     /// Byte range a demuxer reads to re-establish container state after a
@@ -1078,7 +1071,7 @@ impl HlsVariant {
         if self.range_ready(&range) {
             return SourcePhase::Ready;
         }
-        if self.timeline.is_flushing() {
+        if self.reader.is_flushing() {
             return SourcePhase::Seeking;
         }
         let total = self.total_bytes();
@@ -1241,8 +1234,7 @@ impl HlsVariant {
     /// In-flight clones held by prior fetches stay cancelled (correct —
     /// they belong to the previous epoch and must not write).
     pub(crate) fn rearm_cancel(&self) {
-        let fresh = self.master_cancel.child_token();
-        *self.cancel.lock_sync_write() = fresh;
+        self.cancel_epoch.rearm();
     }
 
     #[kithara::probe(
@@ -1403,12 +1395,12 @@ impl HlsVariant {
     /// once by `HlsCoord` after the peer is bound. Subsequent calls
     /// silently keep the first registration.
     pub(crate) fn set_peer_wake(&self, notify: Arc<Notify>) {
-        let _ = self.peer_wake.set(notify);
+        self.reader.set_wake(notify);
     }
 
     #[kithara::probe(variant = self.variant as u64, pos)]
     pub(crate) fn set_position(&self, pos: u64) {
-        self.position.store(pos, Ordering::Release);
+        self.reader.set_position(pos);
     }
 
     #[kithara::probe(variant = self.variant as u64, byte)]
@@ -1445,7 +1437,7 @@ impl HlsVariant {
             hang_reset!();
             return Ok(WaitOutcome::Ready);
         }
-        if self.timeline.is_flushing() {
+        if self.reader.is_flushing() {
             return Ok(WaitOutcome::Interrupted);
         }
         let total = self.total_bytes();
@@ -1457,9 +1449,7 @@ impl HlsVariant {
     }
 
     pub(crate) fn wake_peer(&self) {
-        if let Some(notify) = self.peer_wake.get() {
-            notify.notify_one();
-        }
+        self.reader.wake();
     }
 
     fn wrap(written: usize) -> ReadOutcome {
