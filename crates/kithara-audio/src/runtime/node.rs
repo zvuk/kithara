@@ -94,6 +94,14 @@ pub(crate) trait Node: Send + 'static {
     /// the checked produce path. Default no-op.
     fn recycle(&mut self) {}
 
+    /// One-time worker-thread warmup, run by the scheduler shell when the node
+    /// is registered — before any [`tick`](Node::tick) reaches the
+    /// forbid-blocking produce core. Pre-touches lazy global thread-locals the
+    /// produce-core read path would otherwise allocate on first use (notably
+    /// `arc_swap`'s per-thread debt node, hit via the storage committed-read
+    /// snapshot). Default no-op.
+    fn warm_up(&mut self) {}
+
     /// Perform one quantum of work.
     fn tick(&mut self) -> TickResult;
 }
@@ -109,6 +117,10 @@ impl Node for Box<dyn Node> {
 
     fn recycle(&mut self) {
         (**self).recycle();
+    }
+
+    fn warm_up(&mut self) {
+        (**self).warm_up();
     }
 
     fn tick(&mut self) -> TickResult {

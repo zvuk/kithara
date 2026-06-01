@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use arc_swap::ArcSwap;
 use delegate::delegate;
 use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, ErrorClass,
@@ -530,7 +531,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.update_decoder_len_for_seek();
 
         let stream_len = self.shared_stream.len();
-        warn!(
+        debug!(
             ?position,
             epoch,
             stream_pos,
@@ -713,6 +714,18 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    // The single boundary into the upstream decoder subsystem. Every audio
+    // codec we wrap allocates per packet/frame/segment *inside* the upstream
+    // crate, with no pooled API to hook: `symphonia` format-readers box a
+    // fresh slice per `next_packet` (`AdtsReader` → `read_boxed_slice_exact`),
+    // its codecs (incl. the `fdk-aac` C decoder) allocate scratch inside
+    // `decode`, and `re_mp4` re-parses the `(moof, mdat)` box tree per fMP4
+    // segment. These are genuine upstream intrinsics — unavoidable without
+    // forking the codec crates — so the permit carves the whole
+    // `decoder.next_chunk()` call out of the forbid-blocking produce core. The
+    // kithara-audio orchestration around it (scheduler, FSM, the
+    // `decode_next_chunk` loop, gapless, seek-skip, variant-change, the
+    // resampler/effects scratch, and the lock-free storage read) stays checked.
     #[kithara::rtsan_allow_blocking]
     fn decoder_next_chunk_safe(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         let outcome: DecodeResult<DecoderChunkOutcome> =
@@ -746,6 +759,13 @@ impl<T: StreamType> StreamAudioSource<T> {
         outcome
     }
 
+    // The seek twin of [`decoder_next_chunk_safe`]: `decoder.seek()` resets the
+    // upstream codec, which re-allocates its decoder state (e.g. symphonia's
+    // `MpaDecoder::reset` rebuilds the MP3 `Layer3` tables). Like `next_chunk`,
+    // this is an upstream intrinsic with no pooled API, so the permit carves the
+    // `decoder.seek()` call out of the forbid-blocking produce core; the
+    // kithara-audio seek orchestration around it stays checked.
+    #[kithara::rtsan_allow_blocking]
     fn decoder_seek_safe(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
         let pos_before = self.shared_stream.position();
         debug!(?position, pos_before, "decoder_seek_safe: enter");
@@ -1429,7 +1449,6 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// Replaces the old `FallibleIterator::next` implementation.
     /// Called from `decode_one_fetch` to drive the decoder.
     #[kithara::hang_watchdog]
-    #[kithara::rtsan_allow_blocking]
     fn decode_next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             if self.timeline.is_flushing() || self.timeline.is_seek_pending() {
@@ -2190,6 +2209,24 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 
     fn flush_reader_events(&mut self) {
         self.session.decoder.flush_reader_signals();
+    }
+
+    fn warm_up(&mut self) {
+        // The storage committed-read fast path (`MemDriver::committed_len` /
+        // `read_committed` behind an `arc_swap::ArcSwapOption`) lazily
+        // `Box`-allocates this thread's `arc_swap` debt node on its FIRST load.
+        // Left to the produce core, that one-time alloc lands inside the
+        // forbid-blocking region (the first committed `len`/`contains_range`/
+        // read after the resource opens). The debt node is process-global per
+        // thread and shared by every `ArcSwap` regardless of payload type, so a
+        // throwaway load here — in the scheduler shell, before any checked
+        // `tick` — allocates it off the RT path and warms every real storage
+        // read. It is resource-independent, so it works even before this
+        // source's resource has been opened (the `len()` path only reaches
+        // `committed_len` once the resource is live).
+        let warm = ArcSwap::from_pointee(());
+        let _ = warm.load();
+        let _ = self.shared_stream.len();
     }
 }
 

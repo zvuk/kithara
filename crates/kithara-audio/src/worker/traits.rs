@@ -36,6 +36,12 @@ pub trait AudioWorkerSource: Send + 'static {
     /// core but defers the bus publish; the worker shell calls this once per
     /// pass to drain the deferred ring off the checked path. Default no-op.
     fn flush_reader_events(&mut self) {}
+
+    /// One-time worker-thread warmup, called from the scheduler shell when the
+    /// node registers. Pre-touches the produce-core read path so lazy global
+    /// thread-locals (the `arc_swap` committed-read debt node) allocate here,
+    /// off the forbid-blocking decode core. Default no-op.
+    fn warm_up(&mut self) {}
 }
 
 /// Apply the effect chain to the chunk.

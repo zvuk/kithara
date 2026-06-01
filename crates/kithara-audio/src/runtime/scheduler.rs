@@ -415,8 +415,18 @@ fn handle_drain_step<N: Node>(
     }
 }
 
-fn register_slot<N: Node>(slots: &mut Vec<Slot<N>>, needs_reorder: &mut bool, id: SlotId, node: N) {
+fn register_slot<N: Node>(
+    slots: &mut Vec<Slot<N>>,
+    needs_reorder: &mut bool,
+    id: SlotId,
+    mut node: N,
+) {
     debug!(slot_id = id, "scheduler: registering node");
+    // Shell-side, off the forbid-blocking produce core: let the node
+    // pre-allocate any lazy produce-core read-path thread-local (the
+    // `arc_swap` committed-read debt node) on this worker thread before its
+    // first checked `tick`.
+    node.warm_up();
     let service_class = node.service_class();
     slots.push(Slot {
         id,

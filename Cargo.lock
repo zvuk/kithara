@@ -4063,6 +4063,7 @@ name = "kithara-audio"
 version = "0.0.1-alpha2"
 dependencies = [
  "aes",
+ "arc-swap",
  "assert_no_alloc",
  "audioadapter-buffers",
  "axum",

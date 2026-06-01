@@ -127,6 +127,10 @@ impl Node for DecoderNode {
         self.source.flush_reader_events();
     }
 
+    fn warm_up(&mut self) {
+        self.source.warm_up();
+    }
+
     fn tick(&mut self) -> TickResult {
         self.sync_seek_epoch();
 
