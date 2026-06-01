@@ -147,7 +147,7 @@ pub struct Audio<S> {
 
     /// Spent-chunk return ring. Every `PcmChunk` this real-time consumer
     /// finishes with is pushed here instead of being dropped, so the pooled
-    /// buffer is recycled on the worker thread (`DecoderNode::drain_trash`)
+    /// buffer is recycled on the worker thread (`DecoderNode::recycle`)
     /// and never freed on the audio thread. Sized to outlive a full
     /// ring-drain on seek, so the lock-free push never fails on the hot path.
     trash_tx: crate::runtime::Outlet<PcmChunk>,

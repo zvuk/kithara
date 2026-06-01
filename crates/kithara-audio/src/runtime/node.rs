@@ -88,6 +88,12 @@ pub(crate) trait Node: Send + 'static {
         ServiceClass::Audible
     }
 
+    /// Reclaim deferred bookkeeping (free/recycle spent buffers) outside the
+    /// forbid-blocking produce core. Run once per pass by the scheduler shell
+    /// before [`tick`](Node::tick), so a `free` on a full pool never lands on
+    /// the checked produce path. Default no-op.
+    fn recycle(&mut self) {}
+
     /// Perform one quantum of work.
     fn tick(&mut self) -> TickResult;
 }
@@ -99,6 +105,10 @@ impl Node for Box<dyn Node> {
 
     fn service_class(&self) -> ServiceClass {
         (**self).service_class()
+    }
+
+    fn recycle(&mut self) {
+        (**self).recycle();
     }
 
     fn tick(&mut self) -> TickResult {

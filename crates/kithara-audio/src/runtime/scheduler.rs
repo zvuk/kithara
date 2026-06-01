@@ -167,7 +167,23 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
     }
 }
 
-#[kithara::rtsan_forbid_blocking]
+/// Consecutive `Produced` passes between cooperative `yield_now()` calls.
+///
+/// The produce core never parks while it is making progress; a bare
+/// per-pass `yield_now()` would still hand the scheduler off on every chunk.
+/// Yielding only every Nth straight `Produced` pass keeps the worker hot
+/// under sustained decode while still ceding the CPU often enough to stay
+/// fair to other threads. The streak resets on any non-`Produced` outcome,
+/// which already parks via `wait_timeout`.
+const FAIRNESS_YIELD_EVERY: u32 = 16;
+
+/// Unchecked scheduler shell.
+///
+/// Owns all intrinsically-blocking bookkeeping — cancel/command drain, slot
+/// reorder, the `slots`/`slots_order` Vec lifecycle (grow on register, free
+/// on `retain`), deferred buffer recycle, and the idle park. Only the
+/// produce core ([`produce_pass`]) is `#[kithara::rtsan_forbid_blocking]`,
+/// so the Vec `malloc`/`free` here never lands on the checked path.
 fn run_loop<N: Node, O: SchedulerObserver>(
     cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
     wake: &SchedulerWake,
@@ -178,12 +194,12 @@ fn run_loop<N: Node, O: SchedulerObserver>(
     let mut slots: Vec<Slot<N>> = Vec::new();
     let mut slots_order: Vec<usize> = Vec::new();
     let mut needs_reorder = false;
+    let mut produced_streak: u32 = 0;
 
     loop {
         observer.on_event(SchedulerEvent::PassStart);
 
         if cancel_and_drain(cancel, cmd_rx, &mut slots, &mut needs_reorder) {
-            dispose_on_exit(slots, slots_order);
             return;
         }
 
@@ -194,17 +210,31 @@ fn run_loop<N: Node, O: SchedulerObserver>(
             needs_reorder = false;
         }
 
-        let outcome = step_all_slots(&mut slots, &slots_order, &mut observer);
+        recycle_all(&mut slots, &slots_order);
 
-        needs_reorder |= reap_terminal_slots(&mut slots);
+        let outcome = produce_pass(&mut slots, &slots_order, &mut observer);
+
+        let before = slots.len();
+        slots.retain(|slot| !slot.is_removable());
+        needs_reorder |= slots.len() < before;
 
         report_outcome(&mut observer, outcome);
         observer.on_event(SchedulerEvent::PassEnd);
-        park_after_outcome::<N, O>(wake, outcome);
+        park_after_outcome::<N, O>(wake, outcome, &mut produced_streak);
     }
 }
 
-#[kithara::rtsan_allow_blocking]
+/// Reclaim deferred bookkeeping (spent-buffer free/recycle) for every slot
+/// before the checked produce core runs. Lives in the unchecked shell so a
+/// pooled-buffer `free` on a full pool stays off the forbid-blocking path.
+fn recycle_all<N: Node>(slots: &mut [Slot<N>], slots_order: &[usize]) {
+    for &idx in slots_order {
+        if let Some(slot) = slots.get_mut(idx) {
+            slot.node.recycle();
+        }
+    }
+}
+
 fn cancel_and_drain<N: Node>(
     cancel: &CancellationToken,
     cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
@@ -230,20 +260,30 @@ fn report_outcome<O: SchedulerObserver>(observer: &mut O, outcome: PassOutcome) 
     }
 }
 
-#[kithara::rtsan_allow_blocking]
-fn park_after_outcome<N: Node, O: SchedulerObserver>(wake: &SchedulerWake, outcome: PassOutcome) {
+fn park_after_outcome<N: Node, O: SchedulerObserver>(
+    wake: &SchedulerWake,
+    outcome: PassOutcome,
+    produced_streak: &mut u32,
+) {
     match outcome {
-        PassOutcome::Produced => yield_now(),
+        PassOutcome::Produced => {
+            *produced_streak += 1;
+            if *produced_streak >= FAIRNESS_YIELD_EVERY {
+                *produced_streak = 0;
+                yield_now();
+            }
+        }
         PassOutcome::Waiting | PassOutcome::Backpressured => {
+            *produced_streak = 0;
             wake.wait_timeout(Scheduler::<N, O>::WAITING_TIMEOUT);
         }
         PassOutcome::Idle => {
+            *produced_streak = 0;
             wake.wait_timeout(Scheduler::<N, O>::IDLE_TIMEOUT);
         }
     }
 }
 
-#[kithara::rtsan_allow_blocking]
 fn recompute_slots_order<N: Node>(slots: &[Slot<N>], slots_order: &mut Vec<usize>) {
     slots_order.clear();
     slots_order.reserve(slots.len());
@@ -255,28 +295,18 @@ fn recompute_slots_order<N: Node>(slots: &[Slot<N>], slots_order: &mut Vec<usize
     });
 }
 
-/// Remove and drop terminal slots, returning `true` when any were removed so
-/// the caller re-sorts. Dropping a finished node frees its decoder buffers —
-/// bounded teardown, not real-time production — so it runs in a permitted
-/// scope, off the `forbid_blocking` checked path.
-#[kithara::rtsan_allow_blocking]
-fn reap_terminal_slots<N: Node>(slots: &mut Vec<Slot<N>>) -> bool {
-    let before = slots.len();
-    slots.retain(|slot| !slot.is_removable());
-    slots.len() < before
-}
-
-/// Drop the scheduler working sets when the loop exits on cancel/shutdown.
-/// Frees node buffers and the slot vectors in a permitted scope — same
-/// rationale as [`reap_terminal_slots`]. The explicit `drop`s keep the frees
-/// inside the permit guard, ahead of the parameter scope.
-#[kithara::rtsan_allow_blocking]
-fn dispose_on_exit<N>(slots: Vec<Slot<N>>, slots_order: Vec<usize>) {
-    drop(slots);
-    drop(slots_order);
-}
-
-fn step_all_slots<N: Node, O: SchedulerObserver>(
+/// Forbid-blocking produce core.
+///
+/// The small, honest real-time region: iterate the ordered slots, tick each
+/// node (decode-into-buffer + ring push), and fold the per-tick results into
+/// one [`PassOutcome`]. It takes `&mut [Slot<N>]` so it can mark a slot
+/// terminal in place, but must NOT grow or free the `slots`/`slots_order`
+/// Vecs — that lifecycle stays in the unchecked shell. Marked
+/// `#[kithara::rtsan_forbid_blocking]` so a new lock/alloc on the decode
+/// path is caught; the decode subtree still carries its own permits until
+/// those residuals land.
+#[kithara::rtsan_forbid_blocking]
+fn produce_pass<N: Node, O: SchedulerObserver>(
     slots: &mut [Slot<N>],
     slots_order: &[usize],
     observer: &mut O,
@@ -473,6 +503,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::runtime::connect;
 
     struct TestObserver;
 
@@ -662,5 +693,169 @@ mod tests {
             ptr,
             "clear() retains capacity so the backing is never reallocated"
         );
+    }
+
+    /// A node that drains a spent-buffer inlet in `recycle` and pushes one
+    /// item per `tick` into a bounded PCM ring, recording the order of
+    /// recycle/produce calls and the high-water mark of un-recycled items
+    /// still queued in the trash inlet.
+    struct RecyclingNode {
+        trash: crate::runtime::Inlet<u32>,
+        pcm: crate::runtime::Outlet<usize>,
+        produced: usize,
+        max_produce: usize,
+        recycled: usize,
+        trash_high_water: usize,
+        last_call_recycle: bool,
+        recycle_before_produce: bool,
+    }
+
+    impl Node for RecyclingNode {
+        fn recycle(&mut self) {
+            let mut pending = 0usize;
+            while self.trash.try_pop().is_some() {
+                self.recycled += 1;
+                pending += 1;
+            }
+            self.trash_high_water = self.trash_high_water.max(pending);
+            self.last_call_recycle = true;
+        }
+
+        fn tick(&mut self) -> TickResult {
+            if self.last_call_recycle {
+                self.recycle_before_produce = true;
+            }
+            self.last_call_recycle = false;
+
+            if self.produced >= self.max_produce {
+                return TickResult::Done;
+            }
+            if self.pcm.try_push(self.produced).is_err() {
+                return TickResult::Backpressured;
+            }
+            self.produced += 1;
+            TickResult::Progress
+        }
+    }
+
+    #[kithara::test]
+    fn produce_pass_recycles_before_producing_and_never_backlogs_trash() {
+        const CAP: usize = 4;
+        let (mut trash_tx, trash_rx) = connect::<u32>(CAP + 2, None);
+        let (pcm_tx, mut pcm_rx) = connect::<usize>(CAP, None);
+
+        let node = RecyclingNode {
+            trash: trash_rx,
+            pcm: pcm_tx,
+            produced: 0,
+            max_produce: 64,
+            recycled: 0,
+            trash_high_water: 0,
+            last_call_recycle: false,
+            recycle_before_produce: false,
+        };
+
+        let mut slots = vec![Slot {
+            id: 1,
+            node,
+            service_class: ServiceClass::Audible,
+            is_terminal: false,
+        }];
+        let slots_order = vec![0usize];
+        let mut observer = TestObserver;
+
+        let mut total_spent = 0usize;
+        for _ in 0..32 {
+            for _ in 0..CAP {
+                if trash_tx.try_push(0).is_ok() {
+                    total_spent += 1;
+                }
+            }
+            recycle_all(&mut slots, &slots_order);
+            let _ = produce_pass(&mut slots, &slots_order, &mut observer);
+            while pcm_rx.try_pop().is_some() {}
+        }
+
+        // Simulate a seek-drain: the audio thread returns a whole ring's
+        // worth of spent buffers at once, with no produce-side consumer
+        // draining in between. The trash headroom (cap+2) must absorb the
+        // burst without dropping a buffer.
+        let mut burst_spent = 0usize;
+        while trash_tx.try_push(0).is_ok() {
+            burst_spent += 1;
+        }
+        total_spent += burst_spent;
+        assert!(
+            burst_spent >= CAP + 2,
+            "a full seek-drain burst must fit the trash headroom (cap+2): got {burst_spent}"
+        );
+
+        // Drain the burst the way the worker does: recycle, then let the
+        // producer flush its parked overflow into the freed ring, until the
+        // pipe is fully empty. No buffer is lost.
+        loop {
+            recycle_all(&mut slots, &slots_order);
+            if !trash_tx.has_pending() {
+                break;
+            }
+            trash_tx.flush();
+        }
+
+        let node = &slots[0].node;
+        assert!(
+            node.recycle_before_produce,
+            "recycle_all must run before produce_pass within a pass"
+        );
+        assert_eq!(
+            node.recycled, total_spent,
+            "every spent buffer must be recycled, none leaked across passes or the seek burst"
+        );
+        assert!(
+            node.trash_high_water >= CAP + 2,
+            "the seek-drain burst (cap+2) is absorbed and recycled: high water {}",
+            node.trash_high_water
+        );
+    }
+
+    #[kithara::test]
+    fn streak_yield_fires_only_every_n_produced_passes() {
+        let wake = SchedulerWake::default();
+        let mut streak = 0u32;
+
+        for _ in 0..FAIRNESS_YIELD_EVERY - 1 {
+            park_after_outcome::<DummyNode, TestObserver>(
+                &wake,
+                PassOutcome::Produced,
+                &mut streak,
+            );
+        }
+        assert_eq!(streak, FAIRNESS_YIELD_EVERY - 1, "streak accumulates");
+
+        park_after_outcome::<DummyNode, TestObserver>(&wake, PassOutcome::Produced, &mut streak);
+        assert_eq!(streak, 0, "streak resets to zero after the Nth yield");
+    }
+
+    #[kithara::test]
+    fn non_produced_outcome_resets_streak_and_parks() {
+        let wake = SchedulerWake::default();
+        let mut streak = 5u32;
+
+        wake.wake();
+        park_after_outcome::<DummyNode, TestObserver>(&wake, PassOutcome::Waiting, &mut streak);
+        assert_eq!(streak, 0, "Waiting resets the produced streak");
+
+        streak = 9;
+        wake.wake();
+        park_after_outcome::<DummyNode, TestObserver>(
+            &wake,
+            PassOutcome::Backpressured,
+            &mut streak,
+        );
+        assert_eq!(streak, 0, "Backpressured resets the produced streak");
+
+        streak = 3;
+        wake.wake();
+        park_after_outcome::<DummyNode, TestObserver>(&wake, PassOutcome::Idle, &mut streak);
+        assert_eq!(streak, 0, "Idle resets the produced streak");
     }
 }

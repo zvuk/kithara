@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use kithara_decode::PcmChunk;
-use kithara_test_utils::kithara;
 use tracing::trace;
 
 use super::{AudioWorkerSource, PreloadGate, handle::TrackRegistration, types::ServiceClass};
@@ -37,9 +36,10 @@ pub(crate) struct DecoderNode {
     service_class: Arc<AtomicServiceClass>,
     source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
     runtime: DecoderRuntime,
-    /// Spent chunks returned by the real-time consumer. Drained at the top
-    /// of every [`tick`](DecoderNode::tick) so the pooled buffers are
-    /// freed/recycled on this worker thread, never on the audio thread.
+    /// Spent chunks returned by the real-time consumer. Drained once per pass
+    /// by [`recycle`](DecoderNode::recycle), in the scheduler's unchecked shell
+    /// before the produce core, so the pooled buffers are freed/recycled on
+    /// this worker thread, never on the audio thread.
     trash_inlet: Inlet<PcmChunk>,
     outlet: Outlet<Fetch<PcmChunk>>,
     preload_chunks: usize,
@@ -51,18 +51,6 @@ impl DecoderNode {
             self.preload_gate.signal();
             self.runtime.preloaded = true;
         }
-    }
-
-    /// Drop every spent chunk the real-time consumer returned. Each drop
-    /// recycles the pooled buffer (`PooledOwned::drop` → `Pool::put`) on
-    /// this worker thread, keeping that allocation work off the audio
-    /// thread. The pool may free a buffer on overflow (shard full), so this
-    /// deferred free runs in a permitted scope, off the `forbid_blocking`
-    /// produce path — the whole point of the trash ring is to move these
-    /// frees here from the audio thread.
-    #[kithara::rtsan_allow_blocking]
-    fn drain_trash(&mut self) {
-        while self.trash_inlet.try_pop().is_some() {}
     }
 
     fn mark_preload_progress(&mut self) {
@@ -134,8 +122,11 @@ impl Node for DecoderNode {
         self.service_class.load()
     }
 
+    fn recycle(&mut self) {
+        while self.trash_inlet.try_pop().is_some() {}
+    }
+
     fn tick(&mut self) -> TickResult {
-        self.drain_trash();
         self.sync_seek_epoch();
 
         if !self.outlet.flush() {
