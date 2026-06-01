@@ -90,6 +90,10 @@ impl<T: StreamType> SharedStream<T> {
             /// produce core (seek-apply / finalize); the scheduler shell
             /// flushes it off the forbid-blocking path.
             pub(crate) fn peer_wake(&self) -> Option<Arc<kithara_stream::DeferredWake>>;
+            /// Real-time on-core seek (FSM recreate/boundary, decoder
+            /// `OffsetReader`): position math + cursor set, no `prime_seek_range`
+            /// spin on the forbid-blocking produce core. See [`Stream::probe_seek`].
+            pub(crate) fn probe_seek(&self, pos: SeekFrom) -> io::Result<u64>;
         }
     }
 }
@@ -128,8 +132,8 @@ pub(crate) struct OffsetReader<T: StreamType> {
 }
 
 impl<T: StreamType> OffsetReader<T> {
-    pub(crate) fn new(mut shared: SharedStream<T>, base_offset: u64) -> Self {
-        let _ = shared.seek(SeekFrom::Start(base_offset));
+    pub(crate) fn new(shared: SharedStream<T>, base_offset: u64) -> Self {
+        let _ = shared.probe_seek(SeekFrom::Start(base_offset));
         Self {
             shared,
             base_offset,
@@ -147,18 +151,20 @@ impl<T: StreamType> Read for OffsetReader<T> {
 
 impl<T: StreamType> Seek for OffsetReader<T> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        // The decoder runs on the produce core, so seek through the real-time
+        // `probe_seek` (no `prime_seek_range` spin on the forbid path).
         match pos {
             SeekFrom::Start(p) => {
                 let abs = self.base_offset + p;
-                let real_pos = self.shared.seek(SeekFrom::Start(abs))?;
+                let real_pos = self.shared.probe_seek(SeekFrom::Start(abs))?;
                 Ok(real_pos.saturating_sub(self.base_offset))
             }
             SeekFrom::Current(delta) => {
-                let real_pos = self.shared.seek(SeekFrom::Current(delta))?;
+                let real_pos = self.shared.probe_seek(SeekFrom::Current(delta))?;
                 Ok(real_pos.saturating_sub(self.base_offset))
             }
             SeekFrom::End(delta) => {
-                let real_pos = self.shared.seek(SeekFrom::End(delta))?;
+                let real_pos = self.shared.probe_seek(SeekFrom::End(delta))?;
                 Ok(real_pos.saturating_sub(self.base_offset))
             }
         }
@@ -436,7 +442,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.shared_stream.clear_variant_fence();
 
         self.shared_stream
-            .seek(SeekFrom::Start(target_offset))
+            .probe_seek(SeekFrom::Start(target_offset))
             .map_err(|e| {
                 warn!(?e, target_offset, "Failed to seek to segment boundary");
                 DecodeError::from(e)
@@ -1906,7 +1912,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.shared_stream.clear_variant_fence();
         if self
             .shared_stream
-            .seek(SeekFrom::Start(recreate.offset))
+            .probe_seek(SeekFrom::Start(recreate.offset))
             .is_err()
         {
             self.update_state(CurrentFsm::failed(TrackFailure::RecreateFailed {

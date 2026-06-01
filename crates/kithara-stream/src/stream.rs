@@ -527,6 +527,62 @@ impl<T: StreamType> Stream<T> {
             wake.notify_now();
         }
     }
+
+    /// Resolve a [`SeekFrom`] to an absolute, clamped byte target — the shared
+    /// math behind the off-RT [`Seek::seek`] and the on-core [`Self::probe_seek`].
+    ///
+    /// `len` is the known source length, resolved by the caller (`seek` primes
+    /// to discover it; `probe_seek` uses the current value); `SeekFrom::End`
+    /// errors when it is `None`. `Current` is relative to the live cursor.
+    ///
+    /// # Errors
+    ///
+    /// `Unsupported` for `SeekFrom::End` without a known length; `InvalidInput`
+    /// for a negative resulting offset.
+    fn resolve_seek_target(&self, pos: SeekFrom, len: Option<u64>) -> io::Result<u64> {
+        let new_pos: i128 = match pos {
+            SeekFrom::Start(p) => i128::from(p),
+            SeekFrom::Current(delta) => {
+                i128::from(self.source.position()).saturating_add(i128::from(delta))
+            }
+            SeekFrom::End(delta) => {
+                let Some(len) = len else {
+                    return Err(IoError::new(
+                        ErrorKind::Unsupported,
+                        "seek from end requires known length",
+                    ));
+                };
+                i128::from(len).saturating_add(i128::from(delta))
+            }
+        };
+        if new_pos < 0 {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                "negative seek position",
+            ));
+        }
+        Ok(u64::try_from(new_pos).unwrap_or(u64::MAX))
+    }
+
+    /// Real-time on-core seek: resolve + cursor set, with NO `prime_seek_range`
+    /// spin — no `yield_now`/`notify_one` on the forbid-blocking produce core.
+    /// The audio worker (the FSM's recreate/boundary seeks and the decoder's
+    /// `OffsetReader`) seeks through this; the off-RT [`Seek::seek`] adapter
+    /// primes inline instead. The seeked range's readiness is discovered by the
+    /// next `probe_read` (park-on-not-ready), and the armed peer wake — flushed
+    /// by the shell — drives the fetch.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::resolve_seek_target`].
+    pub fn probe_seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let new_pos = self.resolve_seek_target(pos, self.source.len())?;
+        self.source.set_position(new_pos);
+        // The reader cursor moved on the produce core: arm the peer so it
+        // re-targets fetches around the new position. The shell flushes it.
+        self.arm_peer_wake();
+        Ok(new_pos)
+    }
 }
 
 impl<T: StreamType> Read for Stream<T> {
@@ -603,31 +659,12 @@ impl<T: StreamType> Seek for Stream<T> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         let current = self.source.position();
 
-        let new_pos: i128 = match pos {
-            SeekFrom::Start(p) => i128::from(p),
-            SeekFrom::Current(delta) => i128::from(current).saturating_add(i128::from(delta)),
-            SeekFrom::End(delta) => {
-                if self.source.len().is_none() {
-                    self.prime_seek_range(0..1);
-                }
-                let Some(len) = self.source.len() else {
-                    return Err(IoError::new(
-                        ErrorKind::Unsupported,
-                        "seek from end requires known length",
-                    ));
-                };
-                i128::from(len).saturating_add(i128::from(delta))
-            }
-        };
-
-        if new_pos < 0 {
-            return Err(IoError::new(
-                ErrorKind::InvalidInput,
-                "negative seek position",
-            ));
+        // Off-RT consumer path: discover the length for an End-relative seek by
+        // priming (the produce-core `probe_seek` cannot, and errors instead).
+        if matches!(pos, SeekFrom::End(_)) && self.source.len().is_none() {
+            self.prime_seek_range(0..1);
         }
-
-        let new_pos = u64::try_from(new_pos).unwrap_or(u64::MAX);
+        let new_pos = self.resolve_seek_target(pos, self.source.len())?;
 
         let wait_range = match self.source.format_change_segment_range() {
             Ok(range) if range.start == new_pos => range,
@@ -907,6 +944,39 @@ mod tests {
         assert!(
             !wake.flush(),
             "the consumer path notifies immediately — nothing is left armed"
+        );
+    }
+
+    #[kithara::test]
+    fn probe_seek_moves_cursor_and_arms_without_priming() {
+        // On-core seek: set the cursor and arm the peer (the shell flushes),
+        // with NO prime_seek_range spin — so it returns immediately even when
+        // the target range is not ready (the wait script is never consulted).
+        let wake = Arc::new(DeferredWake::default());
+        let source = ScriptSource::new(
+            Timeline::new(),
+            [WaitOutcome::Interrupted, WaitOutcome::Interrupted],
+            [],
+            vec![0u8; 100],
+        )
+        .with_peer_wake(Arc::clone(&wake));
+        let mut stream = Stream::<DummyType> { source };
+
+        let started = Instant::now();
+        let pos = stream
+            .probe_seek(SeekFrom::Start(42))
+            .expect("absolute on-core seek within range");
+        let elapsed = started.elapsed();
+
+        assert_eq!(pos, 42);
+        assert_eq!(stream.source.position(), 42, "cursor moved to the target");
+        assert!(
+            elapsed < Duration::from_millis(2),
+            "probe_seek must not prime/spin (the consumer Seek would); took {elapsed:?}"
+        );
+        assert!(
+            wake.flush(),
+            "probe_seek armed the peer wake on the produce core; the shell flushes it"
         );
     }
 
