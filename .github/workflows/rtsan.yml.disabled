@@ -10,10 +10,10 @@ name: RTSan
 #
 # DISABLED (`.disabled` suffix): rename to `rtsan.yml` to enable. Runs as a
 # nightly soak with `continue-on-error: true` (advisory) — flip the jobs to
-# required once the produce-core lanes are fully green (the remaining
-# AudioEvent-emission residual, emit_seek_lifecycle -> EventBus broadcast, must
-# be moved off the produce core first; see
-# kithara-play/README.md "Real-Time Audio Thread").
+# required once the produce-core lanes hold green across a soak. The read/seek
+# path is verified kevent/yield-free (wake, on-core seek, and FSM AudioEvent
+# emission are all deferred off the forbid path); see
+# kithara-play/README.md "Real-Time Audio Thread".
 #
 # Pinned nightly: RealtimeSanitizer ABI drifts across nightlies; bump
 # deliberately with the rest of the toolchain.

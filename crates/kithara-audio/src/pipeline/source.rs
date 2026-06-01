@@ -17,7 +17,7 @@ use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, ErrorClass,
     GaplessMode, PcmChunk, PcmSpec,
 };
-use kithara_events::{AudioEvent, AudioFormat, SeekLifecycleStage, SegmentLocation};
+use kithara_events::{AudioEvent, AudioFormat, DeferredBus, SeekLifecycleStage, SegmentLocation};
 use kithara_platform::Mutex;
 use kithara_stream::{
     ContainerFormat, MediaInfo, PendingReason, SourcePhase, SourceSeekAnchor, Stream, StreamType,
@@ -206,7 +206,12 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     gapless_mode: GaplessMode,
     /// Per-track gapless trimmer adapter.
     gapless: GaplessStage,
-    emit: Option<Box<dyn Fn(AudioEvent) + Send>>,
+    /// Deferred sink for FSM lifecycle events ([`AudioEvent`]). The FSM runs on
+    /// the produce core, so `emit_event` enqueues lock-free; the scheduler shell
+    /// flushes via [`flush_deferred`](AudioWorkerSource::flush_deferred) and on
+    /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
+    /// forbid path. `None` for sources built without an event bus.
+    emit: Option<DeferredBus<AudioEvent>>,
     last_spec: Option<PcmSpec>,
     /// Reader→peer wake handle, resolved from [`Source::peer_wake`] at
     /// construction. The FSM runs on the produce core, so it `arm`s this
@@ -854,10 +859,12 @@ impl<T: StreamType> StreamAudioSource<T> {
         Duration::from_nanos(nanos_u64)
     }
 
-    /// Emit an audio event if the callback is set.
+    /// Emit an audio event if the bus is set. Runs on the produce core, so it
+    /// only *enqueues* (lock-free); the shell publishes via `flush_deferred` /
+    /// `Drop` — the `broadcast::send` is a `kevent` the forbid path must not make.
     fn emit_event(&self, event: AudioEvent) {
         if let Some(ref emit) = self.emit {
-            emit(event);
+            emit.enqueue(event);
         }
     }
 
@@ -1243,7 +1250,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         if self.chunks_decoded == 1
             && let Some(ref emit) = self.emit
         {
-            emit(AudioEvent::FormatDetected {
+            emit.enqueue(AudioEvent::FormatDetected {
                 spec: AudioFormat::new(chunk.spec().channels, chunk.spec().sample_rate),
             });
             self.last_spec = Some(chunk.spec());
@@ -1286,7 +1293,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.state = new;
     }
 
-    pub(crate) fn with_emit(mut self, emit: Box<dyn Fn(AudioEvent) + Send>) -> Self {
+    pub(crate) fn with_emit(mut self, emit: DeferredBus<AudioEvent>) -> Self {
         self.emit = Some(emit);
         self
     }
@@ -2168,6 +2175,19 @@ impl Track<WaitingForSource> {
     }
 }
 
+impl<T: StreamType> Drop for StreamAudioSource<T> {
+    fn drop(&mut self) {
+        // Publish any lifecycle event enqueued on the final produce pass before
+        // the terminal node is dropped — `scheduler::run_loop` removes a
+        // removable slot via `retain` without another `flush_deferred`, so a
+        // terminal `EndOfStream` would otherwise be lost. Runs in the unchecked
+        // shell (retain is outside `produce_pass`), off the forbid path.
+        if let Some(ref emit) = self.emit {
+            emit.flush();
+        }
+    }
+}
+
 impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
     type Chunk = PcmChunk;
 
@@ -2214,6 +2234,11 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 
     fn flush_deferred(&mut self) {
         self.session.decoder.flush_reader_signals();
+        // Publish the FSM lifecycle events the produce core enqueued this pass,
+        // off the forbid path (the `broadcast::send` is a `kevent`).
+        if let Some(ref emit) = self.emit {
+            emit.flush();
+        }
         // Deliver the peer wake the produce core armed this pass (a blocked
         // `probe_read`, a seek-apply / finalize). The `notify_one` is a
         // cross-thread `kevent` the forbid-blocking core must not make, so it

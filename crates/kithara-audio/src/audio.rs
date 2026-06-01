@@ -12,7 +12,7 @@ use std::{
 use fast_interleave::deinterleave_variable;
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
-use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage, SegmentLocation};
+use kithara_events::{AudioEvent, DeferredBus, EventBus, SeekLifecycleStage, SegmentLocation};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
 use kithara_platform::{CancellationToken, thread::park_timeout, tokio::task::spawn_blocking};
@@ -999,11 +999,14 @@ where
         })
     }
 
-    fn create_emit(bus: &EventBus) -> Box<dyn Fn(AudioEvent) + Send> {
-        let emit_bus = bus.clone();
-        Box::new(move |event: AudioEvent| {
-            emit_bus.publish(event);
-        })
+    /// Deferred sink for FSM lifecycle events. The produce core enqueues
+    /// lock-free; the scheduler shell flushes (the `broadcast::send` is a
+    /// `kevent` the forbid-blocking core must not make). Capacity covers a pass's
+    /// worth of lifecycle events with margin — flushed every pass, so under
+    /// normal lifecycle it never fills.
+    fn create_emit(bus: &EventBus) -> DeferredBus<AudioEvent> {
+        const AUDIO_EVENT_CAPACITY: usize = 64;
+        DeferredBus::new(bus.clone(), AUDIO_EVENT_CAPACITY)
     }
 
     async fn create_initial_decoder(

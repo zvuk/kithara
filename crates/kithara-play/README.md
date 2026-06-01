@@ -141,11 +141,13 @@ reader-hook + peer-wake flush (`flush_deferred`, run by `recycle`), the parked
 `wait`, and the intrinsic symphonia `next_packet` allocation are all
 **blocking-by-design in the shell**, never on the forbid path. The reader wakes
 the downloader by *arming* a lock-free flag on the core (`Stream::probe_read` /
-`probe_seek`); the shell delivers the cross-thread `notify_one`. *Known
-residual:* the FSM still publishes `AudioEvent` seek-lifecycle telemetry
-(`emit_seek_lifecycle` → `EventBus` tokio-broadcast) on the produce core, which
-`kevent`s — to be moved off-core like the reader-hooks (`DeferredBus`) before the
-CI lane flips from advisory to required.
+`probe_seek`); the shell delivers the cross-thread `notify_one`. FSM lifecycle
+telemetry (`AudioEvent` via `emit_seek_lifecycle`) is enqueued lock-free on the
+core into a `DeferredBus<AudioEvent>` and published by the shell
+(`flush_deferred` + `Drop`), so the `EventBus` tokio-broadcast send stays off
+the forbid path — like the reader-hooks. The produce-core read/seek path is
+verified kevent/yield-free; the CI lane stays advisory (soak) until that holds
+across the full lane set.
 
 **Lanes.** `just rtsan` (mock decoder, fast tripwire), `just rtsan-file`
 (real-decoder file-offline), `just rtsan-hls` (real-decoder HLS-offline). The
