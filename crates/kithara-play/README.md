@@ -123,11 +123,40 @@ marked owner/bridge sites is forbidden.
 
 ## Real-Time Audio Thread
 
-`PlayerNodeProcessor::process` and `MasterEqProcessor::process` run on the
-Firewheel audio thread and stay allocation-, free-, and lock-free: scratch
-buffers are pre-sized at stream start, and evicted tracks are handed to a bounded
-deferred-drop channel (drained on the main thread) instead of being freed on the
-audio thread. Verified by RealtimeSanitizer (`just rtsan`, gated by `--cfg rtsan`).
+Two distinct real-time surfaces carry the `#[kithara::rtsan_forbid_blocking]`
+contract; both are verified by RealtimeSanitizer (gated by `--cfg rtsan`, so
+stable/production builds are byte-identical).
+
+**Consumer `process()` — permanent.** `PlayerNodeProcessor::process` and
+`MasterEqProcessor::process` run on the Firewheel audio thread and stay
+allocation-, free-, and lock-free: scratch buffers are pre-sized at stream
+start, and evicted tracks are handed to a bounded deferred-drop channel (drained
+on the main thread) instead of being freed on the audio thread.
+
+**Worker produce-core — verified-after-refactor.** The audio worker's
+`produce_pass` (`kithara-audio` scheduler) is `#[rtsan_forbid_blocking]`: the
+decode core reads/seeks without malloc/lock/syscall. Off-core work is pushed to
+the unchecked **shell** of the run-loop — pooled-buffer free, the deferred
+reader-hook + peer-wake flush (`flush_deferred`, run by `recycle`), the parked
+`wait`, and the intrinsic symphonia `next_packet` allocation are all
+**blocking-by-design in the shell**, never on the forbid path. The reader wakes
+the downloader by *arming* a lock-free flag on the core (`Stream::probe_read` /
+`probe_seek`); the shell delivers the cross-thread `notify_one`. *Known
+residual:* the FSM still publishes `AudioEvent` seek-lifecycle telemetry
+(`emit_seek_lifecycle` → `EventBus` tokio-broadcast) on the produce core, which
+`kevent`s — to be moved off-core like the reader-hooks (`DeferredBus`) before the
+CI lane flips from advisory to required.
+
+**Lanes.** `just rtsan` (mock decoder, fast tripwire), `just rtsan-file`
+(real-decoder file-offline), `just rtsan-hls` (real-decoder HLS-offline). The
+nightly `.github/workflows/rtsan.yml.disabled` runs all three on linux+macos
+(pinned nightly + `rust-src`), `continue-on-error` until the produce-core lanes
+are green.
+
+**No `kithara-rtsan` crate.** The `permit()` / forbid-blocking macros stay in
+`kithara-test-utils` alongside the USDT probe system — it is a normal dependency
+of the production crates (most purely for probes), so splitting only the RT
+attributes would fragment the shared `kithara::` facade and shed nothing.
 
 ## Session Hosting
 

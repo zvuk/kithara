@@ -1,0 +1,76 @@
+name: RTSan
+
+# RealtimeSanitizer nightly gate for the audio produce-core.
+#
+# Compiles the player RT path under `-Zsanitizer=realtime --cfg rtsan` and runs
+# the offline-render produce-core lanes without an audio device. Any malloc /
+# lock / syscall reached inside a `#[kithara::rtsan_forbid_blocking]` region
+# (the worker produce-core, kithara-play `process()`) aborts the run unless
+# wrapped by a documented `#[kithara::rtsan_allow_blocking]`.
+#
+# DISABLED (`.disabled` suffix): rename to `rtsan.yml` to enable. Runs as a
+# nightly soak with `continue-on-error: true` (advisory) — flip the jobs to
+# required once the produce-core lanes are fully green (the remaining
+# AudioEvent-emission residual, emit_seek_lifecycle -> EventBus broadcast, must
+# be moved off the produce core first; see
+# kithara-play/README.md "Real-Time Audio Thread").
+#
+# Pinned nightly: RealtimeSanitizer ABI drifts across nightlies; bump
+# deliberately with the rest of the toolchain.
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  NIGHTLY: nightly-2026-02-15
+
+jobs:
+  rtsan:
+    name: RTSan ${{ matrix.lane }} (${{ matrix.os }})
+    # Soak phase: advisory. Flip to required once the produce-core lanes are
+    # green (drop this line and the lanes become a hard gate).
+    continue-on-error: true
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        lane:
+          - rtsan        # mock decoder (suite_light, fast tripwire)
+          - rtsan-file   # real-decoder file-offline (suite_stress)
+          - rtsan-hls    # real-decoder HLS-offline (suite_stress)
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install pinned nightly toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.NIGHTLY }}
+          components: rust-src
+
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          # Sanitizer artifacts are a distinct target dir from the normal build.
+          key: rtsan-${{ matrix.os }}
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev
+
+      - name: Run RTSan lane (${{ matrix.lane }})
+        run: just ${{ matrix.lane }}
