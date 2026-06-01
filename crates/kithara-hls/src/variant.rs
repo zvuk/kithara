@@ -1337,16 +1337,16 @@ impl HlsVariant {
     /// the incoming variant, preventing a duplicate `(v_old, from_seg)`
     /// emit when the reader cursor lingers in the boundary segment.
     pub(crate) fn set_served_until(&self, until: u32) {
-        self.layout.set_served_until(until);
+        self.layout
+            .set_served_until(until, self.store.segments(), self.init_size());
     }
 
     #[kithara::probe(
         variant = self.variant as u64,
-        total = self.layout.total_bytes(self.store.segments(), self.init_size())
+        total = self.layout.total_bytes()
     )]
     pub(crate) fn total_bytes(&self) -> u64 {
-        self.layout
-            .total_bytes(self.store.segments(), self.init_size())
+        self.layout.total_bytes()
     }
 
     #[kithara::hang_watchdog]

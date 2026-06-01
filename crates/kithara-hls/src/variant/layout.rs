@@ -1,4 +1,4 @@
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_platform::RwLock;
 
@@ -141,8 +141,15 @@ impl Frame {
 /// lock and see one activation frame; the `activate_*` / `reset` /
 /// `apply_commit` mutators take the exclusive lock and publish a new frame
 /// atomically.
+///
+/// `total` is a lock-free snapshot of `total_bytes`, republished from the
+/// frame at the end of every write-lock mutation. The produce-core read path
+/// (`wait_range` / `range_ready` / `read_at`) loads it without taking the
+/// lock — closing the contended `RwLock` spin the `rtsan` lane flagged on the
+/// decode core.
 pub(super) struct Layout {
     frame: RwLock<Frame>,
+    total: AtomicU64,
 }
 
 impl Layout {
@@ -156,8 +163,10 @@ impl Layout {
             offsets: Vec::new(),
         };
         frame.recompute(init_size, segments);
+        let total = frame.total_bytes(segments, init_size);
         Self {
             frame: RwLock::new(frame),
+            total: AtomicU64::new(total),
         }
     }
 
@@ -165,8 +174,11 @@ impl Layout {
         self.frame.lock_sync_read().served_from
     }
 
-    pub(super) fn set_served_until(&self, until: u32) {
-        self.frame.lock_sync_write().served_until = until;
+    pub(super) fn set_served_until(&self, until: u32, segments: &[SegmentEntry], init_size: u64) {
+        let mut frame = self.frame.lock_sync_write();
+        frame.served_until = until;
+        self.total
+            .store(frame.total_bytes(segments, init_size), Ordering::Release);
     }
 
     /// Coherent "is this variant historical?" check: `served_from` and
@@ -207,8 +219,11 @@ impl Layout {
             .find_virtual(byte_virtual, segments)
     }
 
-    pub(super) fn total_bytes(&self, segments: &[SegmentEntry], init_size: u64) -> u64 {
-        self.frame.lock_sync_read().total_bytes(segments, init_size)
+    /// Lock-free `total_bytes` read for the produce-core. Returns the value
+    /// published by the most recent write-lock mutation — never takes the
+    /// frame lock, so it cannot spin on a concurrent activation/commit.
+    pub(super) fn total_bytes(&self) -> u64 {
+        self.total.load(Ordering::Acquire)
     }
 
     pub(super) fn clear_init_seed(&self) {
@@ -243,6 +258,8 @@ impl Layout {
         frame.byte_shift = shift;
         frame.served_from = from_seg;
         frame.served_until = num;
+        self.total
+            .store(frame.total_bytes(segments, init_size), Ordering::Release);
     }
 
     /// Collapse to a single-variant layout: `byte_shift = 0`,
@@ -255,6 +272,8 @@ impl Layout {
         frame.served_from = 0;
         frame.served_until = num;
         frame.recompute(init_size, segments);
+        self.total
+            .store(frame.total_bytes(segments, init_size), Ordering::Release);
     }
 
     /// Apply a settled size and recompute offsets under one write-lock.
@@ -265,5 +284,7 @@ impl Layout {
         let mut frame = self.frame.lock_sync_write();
         let init_size = store();
         frame.recompute(init_size, segments);
+        self.total
+            .store(frame.total_bytes(segments, init_size), Ordering::Release);
     }
 }

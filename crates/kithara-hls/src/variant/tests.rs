@@ -323,6 +323,34 @@ fn find_at_offset_reflects_post_commit_size_shrink() {
     );
 }
 
+/// `total_bytes()` is a lock-free `AtomicU64` snapshot (RT produce-core read).
+/// It must still track every write-lock mutation — a post-commit size shrink
+/// and a `set_served_until` range narrowing both republish the cached total.
+#[kithara::test]
+fn total_bytes_lock_free_tracks_commit_and_served_until() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
+    assert_eq!(v.total_bytes(), 200 + 400 * 4, "init + 4 media segments");
+
+    v.layout.apply_commit(v.store.segments(), || {
+        v.store.segments()[0].size.store(384, Ordering::Release);
+        v.init_size()
+    });
+    assert_eq!(
+        v.total_bytes(),
+        200 + 384 + 400 * 3,
+        "lock-free total reflects the post-commit shrink of seg 0"
+    );
+
+    // Serve only [0, 2): the cached total ends at seg 1's tail.
+    v.set_served_until(2);
+    assert_eq!(
+        v.total_bytes(),
+        200 + 384 + 400,
+        "lock-free total reflects the narrowed served range"
+    );
+}
+
 /// The produce-core lookup takes only a shared read-lock on the Layout
 /// frame, so it can never resize the offset table (resize needs the
 /// exclusive lock). Verify repeated lookups stay self-consistent across
