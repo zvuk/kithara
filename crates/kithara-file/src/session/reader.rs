@@ -3,15 +3,20 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use kithara_events::{EventBus, FileEvent};
+use kithara_events::{DeferredBus, EventBus, FileEvent};
 use kithara_stream::{DecoderHooks, ReaderChunkSignal, ReaderSeekSignal};
 
 use crate::coord::FileCoord;
 
+/// Ring depth for the decode-core → shell event hand-off. A pass emits at
+/// most one progress event per decoded chunk; this bounds the worst-case
+/// post-seek skip burst without blocking the decode core.
+const READER_EVENT_CAPACITY: usize = 256;
+
 pub(crate) struct FileReaderHooks {
     coord: Arc<FileCoord>,
     seek_epoch_handle: Arc<AtomicU64>,
-    bus: EventBus,
+    bus: DeferredBus<FileEvent>,
     initial_seek_published: bool,
     /// See `HlsReaderHooks::initial_cursor` — same recreate-after-
     /// seek-failure scenario.
@@ -27,7 +32,7 @@ impl FileReaderHooks {
     ) -> Self {
         let last_cursor = coord.position();
         Self {
-            bus,
+            bus: DeferredBus::new(bus, READER_EVENT_CAPACITY),
             coord,
             last_cursor,
             seek_epoch_handle,
@@ -45,7 +50,7 @@ impl FileReaderHooks {
         if seek_epoch == 0 {
             return;
         }
-        self.bus.publish(FileEvent::ReaderSeek {
+        self.bus.enqueue(FileEvent::ReaderSeek {
             seek_epoch,
             from_offset: self.initial_cursor,
             to_offset: cursor,
@@ -61,7 +66,7 @@ impl DecoderHooks for FileReaderHooks {
         let cursor = self.coord.position();
         self.publish_initial_seek(cursor);
         self.last_cursor = cursor;
-        self.bus.publish(FileEvent::ReadProgress {
+        self.bus.enqueue(FileEvent::ReadProgress {
             position: cursor,
             total: self.coord.total_bytes(),
         });
@@ -78,10 +83,14 @@ impl DecoderHooks for FileReaderHooks {
         let from = self.last_cursor;
         self.last_cursor = to;
         let seek_epoch = self.seek_epoch_handle.load(Ordering::Acquire);
-        self.bus.publish(FileEvent::ReaderSeek {
+        self.bus.enqueue(FileEvent::ReaderSeek {
             seek_epoch,
             from_offset: from,
             to_offset: to,
         });
+    }
+
+    fn flush_pending(&mut self) {
+        self.bus.flush();
     }
 }

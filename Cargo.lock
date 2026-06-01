@@ -4186,6 +4186,7 @@ dependencies = [
 name = "kithara-events"
 version = "0.0.1-alpha2"
 dependencies = [
+ "crossbeam-queue",
  "dashmap",
  "delegate",
  "kithara-events",
@@ -4196,6 +4197,7 @@ dependencies = [
  "num-traits",
  "portable-atomic",
  "smallvec",
+ "tracing",
  "url",
  "wasm-bindgen-test",
 ]

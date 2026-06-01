@@ -29,6 +29,13 @@ pub trait AudioWorkerSource: Send + 'static {
 
     /// Access the shared timeline for epoch queries.
     fn timeline(&self) -> &Timeline;
+
+    /// Drain and publish reader-hook events queued during the decode core.
+    ///
+    /// `step_track` resolves reader-hook events on the forbid-blocking decode
+    /// core but defers the bus publish; the worker shell calls this once per
+    /// pass to drain the deferred ring off the checked path. Default no-op.
+    fn flush_reader_events(&mut self) {}
 }
 
 /// Apply the effect chain to the chunk.

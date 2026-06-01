@@ -279,6 +279,12 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
             handle.store(len, Ordering::Release);
         }
     }
+
+    fn flush_reader_signals(&mut self) {
+        if let Some(hooks) = self.hooks.as_mut() {
+            hooks.flush_pending();
+        }
+    }
 }
 
 #[cfg(all(test, feature = "symphonia"))]

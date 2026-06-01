@@ -2187,6 +2187,10 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
     fn timeline(&self) -> &Timeline {
         &self.timeline
     }
+
+    fn flush_reader_events(&mut self) {
+        self.session.decoder.flush_reader_signals();
+    }
 }
 
 /// Classify a [`CurrentFsm`] phase for the shared Timeline `PLAYING` flag.
