@@ -49,6 +49,9 @@ pub enum DecodeError {
     #[error("Backend unavailable: {backend}")]
     BackendUnavailable { backend: &'static str },
 
+    #[error("invalid sample rate: zero is not a valid audio rate ({resource})")]
+    InvalidSampleRate { resource: &'static str },
+
     /// A seek interrupted the decode operation. Not a real error —
     /// the caller should check for pending seeks and retry.
     #[error("Interrupted by seek")]

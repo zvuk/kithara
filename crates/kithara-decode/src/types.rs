@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc, time::Duration};
+use std::{fmt, num::NonZeroU32, sync::Arc, time::Duration};
 
 use kithara_bufpool::{PcmBuf, PcmPool};
 
@@ -51,6 +51,17 @@ pub struct PcmSpec {
 impl fmt::Display for PcmSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} Hz, {} channels", self.sample_rate, self.channels)
+    }
+}
+
+impl PcmSpec {
+    /// Production ctor from a validated non-zero rate.
+    #[must_use]
+    pub fn new(channels: u16, sample_rate: NonZeroU32) -> Self {
+        Self {
+            channels,
+            sample_rate: sample_rate.get(),
+        }
     }
 }
 
@@ -204,9 +215,21 @@ impl AsRef<[f32]> for PcmChunk {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    /// Build a [`PcmSpec`] from a plain `u32` Hz value for use in test fixtures.
+    ///
+    /// Panics if `hz` is zero — test rates must always be non-zero.
+    pub(super) fn pcm_spec(channels: u16, hz: u32) -> PcmSpec {
+        PcmSpec::new(
+            channels,
+            NonZeroU32::new(hz).expect("test rate must be non-zero"),
+        )
+    }
 
     fn test_chunk(spec: PcmSpec, pcm: Vec<f32>) -> PcmChunk {
         PcmChunk::new(
@@ -238,10 +261,7 @@ mod tests {
 
     #[kithara::test]
     fn test_pcm_spec_clone() {
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
+        let spec = pcm_spec(2, 44100);
         let cloned = spec;
         assert_eq!(spec, cloned);
     }
@@ -271,10 +291,7 @@ mod tests {
 
     #[kithara::test]
     fn test_pcm_spec_debug() {
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
+        let spec = pcm_spec(2, 44100);
         let debug_str = format!("{:?}", spec);
         assert!(debug_str.contains("PcmSpec"));
         assert!(debug_str.contains("44100"));
@@ -328,10 +345,7 @@ mod tests {
 
     #[kithara::test]
     fn test_pcm_meta_with_spec() {
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 48000,
-        };
+        let spec = pcm_spec(2, 48000);
         let meta = PcmMeta {
             spec,
             ..Default::default()
@@ -365,10 +379,7 @@ mod tests {
 
     #[kithara::test]
     fn test_pcm_chunk_new() {
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
+        let spec = pcm_spec(2, 44100);
         let pcm = vec![0.1f32, 0.2, 0.3, 0.4];
         let chunk = test_chunk(spec, pcm.clone());
 
@@ -407,10 +418,7 @@ mod tests {
 
     #[kithara::test]
     fn test_samples_access() {
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
+        let spec = pcm_spec(2, 44100);
         let pcm = vec![0.1, 0.2, 0.3, 0.4];
         let chunk = test_chunk(spec, pcm.clone());
 
@@ -421,10 +429,7 @@ mod tests {
 
     #[kithara::test]
     fn test_pcm_chunk_clone() {
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
+        let spec = pcm_spec(2, 44100);
         let pcm = vec![0.1, 0.2, 0.3, 0.4];
         let chunk = test_chunk(spec, pcm);
         let cloned = chunk.clone();
@@ -435,10 +440,7 @@ mod tests {
 
     #[kithara::test]
     fn test_pcm_chunk_debug() {
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
+        let spec = pcm_spec(2, 44100);
         let pcm = vec![0.1f32, 0.2];
         let chunk = test_chunk(spec, pcm);
         let debug_str = format!("{:?}", chunk);
