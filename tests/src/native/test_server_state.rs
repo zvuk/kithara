@@ -7,6 +7,7 @@ use std::{
 };
 
 use moka::sync::Cache;
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::{
@@ -57,12 +58,59 @@ struct BehaviorEntry {
     hits: AtomicU64,
 }
 
+/// A test-controlled withhold gate for one `(hls token, variant, segment)`.
+/// While unreleased, the segment's GET response parks on `released`; the
+/// `requested` counter lets a test observe that the gated GET actually reached
+/// the server before it releases. Lives in `TestServerState` (mutable,
+/// per-token) — never in the immutable Arc-cached `GeneratedHls`.
+pub(crate) struct SegmentGate {
+    released: watch::Sender<bool>,
+    requested: AtomicU64,
+}
+
+impl SegmentGate {
+    fn new() -> Self {
+        let (released, _rx) = watch::channel(false);
+        Self {
+            released,
+            requested: AtomicU64::new(0),
+        }
+    }
+
+    pub(crate) fn mark_requested(&self) {
+        self.requested.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Park until [`Self::release`] is called. Returns immediately if already
+    /// released — a fresh receiver observes the latest value first.
+    pub(crate) async fn wait_until_released(&self) {
+        let mut rx = self.released.subscribe();
+        // `Err` only if the sender was dropped (gate removed) — proceed then.
+        let _ = rx.wait_for(|released| *released).await;
+    }
+
+    /// Release the withheld segment so its GET response completes.
+    pub(crate) fn release(&self) {
+        self.released.send_replace(true);
+    }
+
+    /// In-process count of GET requests that reached this gate.
+    pub(crate) fn requested(&self) -> u64 {
+        self.requested.load(Ordering::Relaxed)
+    }
+}
+
+fn segment_gate_key(hls_token: &str, variant: usize, segment: usize) -> String {
+    format!("{hls_token}|v{variant}|s{segment}")
+}
+
 pub(crate) struct TestServerState {
     hls_cache: GeneratedHlsCache,
     hls_blobs: RwLock<HashMap<String, Arc<Vec<u8>>>>,
     tokens: RwLock<HashMap<String, StoredToken>>,
     encoded_signals: Cache<String, EncodedSignal>,
     behaviors: RwLock<HashMap<String, Arc<BehaviorEntry>>>,
+    segment_gates: RwLock<HashMap<String, Arc<SegmentGate>>>,
 }
 
 #[derive(Clone)]
@@ -79,6 +127,7 @@ impl TestServerState {
             hls_blobs: RwLock::new(HashMap::new()),
             encoded_signals: Cache::new(ENCODED_SIGNAL_CACHE_CAPACITY),
             behaviors: RwLock::new(HashMap::new()),
+            segment_gates: RwLock::new(HashMap::new()),
         })
     }
 
@@ -111,6 +160,34 @@ impl TestServerState {
     pub(crate) fn behavior_hits(&self, token: &str) -> Option<u64> {
         let map = self.behaviors.read().expect("behaviors poisoned");
         map.get(token).map(|e| e.hits.load(Ordering::Relaxed))
+    }
+
+    /// Register a withhold gate for one `(hls token, variant, segment)` and
+    /// return its handle. The matching segment GET parks until [`SegmentGate::release`].
+    pub(crate) fn register_segment_gate(
+        &self,
+        hls_token: &str,
+        variant: usize,
+        segment: usize,
+    ) -> Arc<SegmentGate> {
+        let gate = Arc::new(SegmentGate::new());
+        let mut map = self.segment_gates.write().expect("segment gates poisoned");
+        map.insert(
+            segment_gate_key(hls_token, variant, segment),
+            Arc::clone(&gate),
+        );
+        gate
+    }
+
+    pub(crate) fn segment_gate(
+        &self,
+        hls_token: &str,
+        variant: usize,
+        segment: usize,
+    ) -> Option<Arc<SegmentGate>> {
+        let map = self.segment_gates.read().expect("segment gates poisoned");
+        map.get(&segment_gate_key(hls_token, variant, segment))
+            .map(Arc::clone)
     }
 
     /// Lookup a previously encoded signal payload. Test fixture builders

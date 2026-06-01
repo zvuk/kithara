@@ -127,6 +127,13 @@ async fn serve_media_segment(
                 return inject_error(rule);
             }
             if matches!(method, SegmentMethod::Get) {
+                // Deterministic withhold gate (release-driven, not timer-driven):
+                // park the GET body until the test releases it. HEAD stays
+                // unblocked so the consumer can still learn the segment size.
+                if let Some(gate) = state.segment_gate(hls_spec, variant, segment) {
+                    gate.mark_requested();
+                    gate.wait_until_released().await;
+                }
                 let delay_ms = fixture.segment_delay_ms(variant, segment);
                 if delay_ms > 0 {
                     sleep(Duration::from_millis(delay_ms)).await;

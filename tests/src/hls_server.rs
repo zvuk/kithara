@@ -426,6 +426,28 @@ impl PackagedTestServer {
             _helper: helper,
         }
     }
+
+    /// Build a packaged server whose `plain` (3-variant AAC fMP4) fixture
+    /// withholds the GET response for one `(variant, segment)` until the
+    /// returned handle releases it. The HEAD (size) response stays unblocked,
+    /// so the consumer still learns the segment size while the body is parked.
+    ///
+    /// This is the deterministic, network-free, timer-free seam for
+    /// "segment not yet loaded" / early-seek scenarios: a test seeks into the
+    /// withheld segment, asserts the reader makes no false progress while
+    /// withheld, then `release()`s and asserts playback resumes.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub async fn with_segment_gate(
+        variant: usize,
+        segment: usize,
+    ) -> (Self, crate::SegmentGateHandle) {
+        let server = Self::new().await;
+        let handle = server
+            ._helper
+            .register_segment_gate(server.plain.token(), variant, segment);
+        (server, handle)
+    }
 }
 
 #[::kithara_test_utils::kithara::fixture]
@@ -686,4 +708,54 @@ fn aes128_plaintext_segment() -> Vec<u8> {
 
 fn test_key_data() -> Vec<u8> {
     b"TEST_KEY_DATA_123456".to_vec()
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::time::{sleep, timeout};
+
+    use super::PackagedTestServer;
+    use crate::kithara;
+
+    /// The withhold gate parks a segment GET at the server until the test
+    /// releases it, and the in-process `requested()` counter lets the test
+    /// observe that the GET actually arrived. Polling that counter under a
+    /// hard timeout is synchronization on an observable — a real stall fails
+    /// the budget rather than being masked.
+    #[kithara::test(tokio)]
+    async fn segment_gate_withholds_get_until_release() {
+        let (server, gate) = PackagedTestServer::with_segment_gate(0, 1).await;
+        let url = server.url("/seg/v0_1.m4s");
+        assert_eq!(gate.requested(), 0, "no GET before the test fires one");
+
+        let fetch = tokio::spawn(async move { reqwest::get(url).await.map(|r| r.status()) });
+
+        timeout(Duration::from_secs(5), async {
+            while gate.requested() == 0 {
+                sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("withheld segment GET should reach the server within budget");
+
+        assert!(
+            !fetch.is_finished(),
+            "withheld segment GET must not complete before release"
+        );
+
+        gate.release();
+
+        let status = timeout(Duration::from_secs(5), fetch)
+            .await
+            .expect("released GET should complete within budget")
+            .expect("segment GET task joins")
+            .expect("segment GET succeeds");
+        assert!(
+            status.is_success() || status.as_u16() == 206,
+            "released segment GET should succeed, got {status}"
+        );
+        assert_eq!(gate.requested(), 1, "exactly one GET parked on the gate");
+    }
 }

@@ -86,6 +86,6 @@ pub use signal_url::{
 };
 pub use test_server::{
     BehaviorHandle, Content, CreateHlsError, CreatedHls, Delivery, FixtureBehavior,
-    HlsFixtureBuilder, TestServerHelper,
+    HlsFixtureBuilder, SegmentGateHandle, TestServerHelper,
 };
 pub use wav::{create_test_wav, create_wav_exact_bytes};

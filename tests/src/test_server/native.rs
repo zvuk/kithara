@@ -15,7 +15,7 @@ use crate::{
     signal_spec::{SignalKind as InternalSignalKind, parse_signal_request},
     signal_url::{SignalKind, SignalSpec, signal_path},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
-    test_server_state::{FixtureBehavior, TestServerState},
+    test_server_state::{FixtureBehavior, SegmentGate, TestServerState},
 };
 
 /// Facade over the process-global shared test server.
@@ -150,6 +150,43 @@ impl TestServerHelper {
             base_url: self.base_url.clone(),
             token,
         }
+    }
+
+    /// Register a withhold gate for one media segment of the fixture behind
+    /// `hls_token`, returning a handle that releases it and reports how many
+    /// segment GETs it has parked. The matching GET response is withheld until
+    /// [`SegmentGateHandle::release`] — a deterministic, release-driven seam
+    /// (no timers) for "this segment has not arrived yet" scenarios.
+    #[must_use]
+    pub fn register_segment_gate(
+        &self,
+        hls_token: &str,
+        variant: usize,
+        segment: usize,
+    ) -> SegmentGateHandle {
+        let gate = self
+            .state
+            .register_segment_gate(hls_token, variant, segment);
+        SegmentGateHandle { gate }
+    }
+}
+
+/// Handle to a registered segment withhold gate on the shared server.
+#[derive(Clone)]
+pub struct SegmentGateHandle {
+    gate: Arc<SegmentGate>,
+}
+
+impl SegmentGateHandle {
+    /// Release the withheld segment so its parked GET response completes.
+    pub fn release(&self) {
+        self.gate.release();
+    }
+
+    /// Number of segment GETs this gate has parked, observed in-process.
+    #[must_use]
+    pub fn requested(&self) -> u64 {
+        self.gate.requested()
     }
 }
 
