@@ -1,20 +1,27 @@
-use std::sync::{Arc, atomic::AtomicU64};
+use std::sync::{
+    Arc, Barrier,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+};
 
 use kithara_assets::{AssetScope, AssetStoreBuilder, ProcessChunkFn};
 use kithara_drm::DecryptContext;
-use kithara_platform::time::Duration;
-use kithara_stream::Timeline;
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, Instant},
+};
+use kithara_storage::WaitOutcome;
+use kithara_stream::{SourceError, StreamError, Timeline};
 use kithara_test_utils::kithara;
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use super::{
-    HlsVariant, InitEntry, PlanCtx, PlannedFetch, SegmentEntry, SegmentState, VariantParts,
+    HlsVariant, InitEntry, PlanCtx, PlannedFetch, SegmentContent, SegmentEntry, SegmentSlotState,
+    VariantParts,
 };
 use crate::playlist::PlaylistState;
 
 fn test_ctx(prefetch_budget: usize) -> PlanCtx {
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let passthrough: ProcessChunkFn<DecryptContext> =
         Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
             output[..input.len()].copy_from_slice(input);
@@ -46,9 +53,9 @@ fn make_init(size: u64, scope: &AssetScope<DecryptContext>) -> InitEntry {
     InitEntry {
         url,
         resource_id,
-        state: SegmentState::Missing.into(),
+        state: SegmentSlotState::missing(),
         size: AtomicU64::new(size),
-        decrypt_ctx: None,
+        content: SegmentContent::Plain,
     }
 }
 
@@ -60,15 +67,25 @@ fn make_seg(idx: u32, size: u64, scope: &AssetScope<DecryptContext>) -> SegmentE
     SegmentEntry {
         url,
         resource_id,
-        state: SegmentState::Missing.into(),
+        state: SegmentSlotState::missing(),
         size: AtomicU64::new(size),
-        decrypt_ctx: None,
+        content: SegmentContent::Plain,
         decode_time: Duration::from_millis(u64::from(idx) * 2000),
         duration: Duration::from_secs(2),
     }
 }
 
 fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) -> Arc<HlsVariant> {
+    make_var_with_timeline(variant, init_size, media_sizes, ctx, Timeline::new())
+}
+
+fn make_var_with_timeline(
+    variant: usize,
+    init_size: u64,
+    media_sizes: &[u64],
+    ctx: &PlanCtx,
+    timeline: Timeline,
+) -> Arc<HlsVariant> {
     let init = make_init(init_size, &ctx.scope);
     let segments: Vec<SegmentEntry> = media_sizes
         .iter()
@@ -87,7 +104,7 @@ fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) 
             init,
             segments,
             playlist_state: Arc::new(PlaylistState::new(Vec::new())),
-            timeline: Timeline::new(),
+            timeline,
             codec: None,
             container: None,
         },
@@ -128,12 +145,12 @@ fn position_starts_at_zero() {
 fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
-    let pre_shift = v.byte_shift();
-    let pre_served_from = v.served_from();
-    let pre_served_until = v.served_until();
-    assert_eq!(pre_shift, 0);
-    assert_eq!(pre_served_from, 0);
-    assert_eq!(pre_served_until, v.num_segments());
+    assert_eq!(v.served_from(), 0);
+    assert_eq!(
+        v.segment_byte_offset(2),
+        Some(1_000),
+        "natural offset of seg 2 = 200 init + 400 + 400"
+    );
 
     let from_seg: u32 = 2;
     let seg_boundary: u64 = 1_500;
@@ -146,19 +163,85 @@ fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
         "served_from must equal the activation segment after return"
     );
     assert_eq!(
-        v.served_until(),
-        v.num_segments(),
-        "served_until must equal num_segments after a fresh activate"
+        v.segment_byte_offset(from_seg),
+        Some(seg_boundary),
+        "from_seg must be pinned at seg_boundary (encodes byte_shift = \
+         seg_boundary - natural_offset = 500)"
+    );
+    let seg3_virtual = v.segment_byte_offset(3).expect("seg 3 addressable");
+    assert!(
+        v.find_at_offset(seg3_virtual).is_some(),
+        "served_until must span all segments after a fresh activate"
     );
     assert_eq!(
         v.get_position(),
-        reader_pos.max(seg_boundary),
-        "position must follow the requested reader_pos / seg_boundary"
+        reader_pos,
+        "position must follow the requested reader_pos"
     );
+}
+
+/// Coordinate-frame coherence under a concurrent variant switch.
+///
+/// `find_virtual` reads `byte_shift` and the served bounds in separate
+/// steps; a reader on the decode thread races
+/// `activate_at_segment_with_shift` / `reset_to_full_range` on the
+/// scheduler thread. Byte 2000 is served by BOTH the full frame
+/// (shift 0, served [0,8) -> seg 1) and the activated frame
+/// (shift -5000, served [4,8) -> seg 6), so a coherent read always
+/// resolves it. The only way `find_virtual` returns `None` is a torn
+/// read that pairs `byte_shift == 0` (full frame) with
+/// `served_from == 4` (activated frame) -> seg 1 falls below the served
+/// range. That `(0, 4)` pairing is never a real activation frame, so
+/// every `None` is a split-lock tear. Offsets are value-identical across
+/// both frames (seed 1000, fixed sizes), isolating the tear to
+/// `byte_shift` + `served_from`.
+#[kithara::test]
+fn concurrent_switch_keeps_coordinate_reads_coherent() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 1000, &[1000; 8], &ctx);
+
+    v.reset_to_full_range();
+    assert!(
+        v.find_at_offset(2000).is_some(),
+        "full frame must serve byte 2000"
+    );
+    v.activate_at_segment_with_shift(&ctx, 4, 0, 0);
+    assert!(
+        v.find_at_offset(2000).is_some(),
+        "activated frame must serve byte 2000"
+    );
+
+    const ITERS: usize = 50_000;
+    let barrier = Barrier::new(2);
+    let torn = AtomicUsize::new(0);
+
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            barrier.wait();
+            for i in 0..ITERS {
+                if i % 2 == 0 {
+                    v.reset_to_full_range();
+                } else {
+                    v.activate_at_segment_with_shift(&ctx, 4, 0, 0);
+                }
+            }
+        });
+        s.spawn(|| {
+            barrier.wait();
+            for _ in 0..ITERS {
+                if v.find_at_offset(2000).is_none() {
+                    torn.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+    });
+
     assert_eq!(
-        v.byte_shift(),
-        500,
-        "byte_shift must reflect (seg_boundary - natural_offset)"
+        torn.load(Ordering::Relaxed),
+        0,
+        "byte 2000 is served by both activation frames; a None means \
+         find_virtual mixed byte_shift and served_from from different \
+         frames (split-lock torn read)"
     );
 }
 
@@ -208,6 +291,86 @@ fn find_at_offset_mid_segment_binary_search() {
     assert_eq!(idx, 2);
     let (idx, _, _) = v.find_at_offset(1200).expect("first byte of seg 3");
     assert_eq!(idx, 3);
+}
+
+#[kithara::test]
+fn find_at_offset_reflects_post_commit_size_shrink() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[400, 400, 400, 400], &ctx);
+
+    let (idx, off, size) = v.find_at_offset(450).expect("seg 1 before shrink");
+    assert_eq!((idx, off, size), (1, 400, 400));
+
+    v.layout.apply_commit(v.store.segments(), || {
+        v.store.segments()[0].size.store(384, Ordering::Release);
+        v.init_size()
+    });
+
+    let (idx, off, size) = v.find_at_offset(390).expect("seg 1 after shrink");
+    assert_eq!(
+        (idx, off, size),
+        (1, 384, 400),
+        "shrinking seg 0 slides seg 1 down by the stripped delta"
+    );
+    assert!(
+        v.find_at_offset(383).is_some_and(|(i, ..)| i == 0),
+        "byte 384 is seg 1's new start, so 383 is the last byte of the shrunk seg 0"
+    );
+    assert!(
+        v.find_at_offset(384).is_some_and(|(i, ..)| i == 1),
+        "byte 384 belongs to seg 1 after the shrink"
+    );
+}
+
+/// `total_bytes()` is a lock-free `AtomicU64` snapshot (RT produce-core read).
+/// It must still track every write-lock mutation — a post-commit size shrink
+/// and a `set_served_until` range narrowing both republish the cached total.
+#[kithara::test]
+fn total_bytes_lock_free_tracks_commit_and_served_until() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
+    assert_eq!(v.total_bytes(), 200 + 400 * 4, "init + 4 media segments");
+
+    v.layout.apply_commit(v.store.segments(), || {
+        v.store.segments()[0].size.store(384, Ordering::Release);
+        v.init_size()
+    });
+    assert_eq!(
+        v.total_bytes(),
+        200 + 384 + 400 * 3,
+        "lock-free total reflects the post-commit shrink of seg 0"
+    );
+
+    // Serve only [0, 2): the cached total ends at seg 1's tail.
+    v.set_served_until(2);
+    assert_eq!(
+        v.total_bytes(),
+        200 + 384 + 400,
+        "lock-free total reflects the narrowed served range"
+    );
+}
+
+/// The produce-core lookup takes only a shared read-lock on the Layout
+/// frame, so it can never resize the offset table (resize needs the
+/// exclusive lock). Verify repeated lookups stay self-consistent across
+/// the whole virtual range.
+#[kithara::test]
+fn find_at_offset_is_stable_over_repeated_lookups() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[400, 400, 400, 400], &ctx);
+
+    for byte in 0..1_600_u64 {
+        let (idx, off, size) = v.find_at_offset(byte).expect("every media byte resolves");
+        assert!(
+            off <= byte && byte < off + size,
+            "byte {byte} inside its segment"
+        );
+        assert_eq!(u64::from(idx), byte / 400, "400-byte segments map linearly");
+    }
+    assert!(
+        v.find_at_offset(1_600).is_none(),
+        "one past the last byte is EOF"
+    );
 }
 
 #[kithara::test]
@@ -274,10 +437,10 @@ fn rebuild_refills_queue_without_touching_cancel_token() {
 fn dispatch_emits_init_first_then_segments_under_budget() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400], &ctx);
-    let init_url = v.init.url.clone();
-    let seg0_url = v.segments[0].url.clone();
-    let seg1_url = v.segments[1].url.clone();
-    let seg2_url = v.segments[2].url.clone();
+    let init_url = v.store.init().url.clone();
+    let seg0_url = v.store.segments()[0].url.clone();
+    let seg1_url = v.store.segments()[1].url.clone();
+    let seg2_url = v.store.segments()[2].url.clone();
     v.rebuild(&ctx, 0);
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 4);
@@ -304,30 +467,29 @@ fn dispatch_respects_budget() {
 fn dispatch_skips_non_missing_segments() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
-    v.init.set_state(SegmentState::Loaded);
-    v.segments[1].set_state(SegmentState::Loaded);
+    v.store.init().state.mark_loaded();
+    v.store.segments()[1].state.mark_loaded();
     v.queue.lock_sync().clear();
     for seg in 0..3_u32 {
         push_planned(&v, seg);
     }
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 2);
-    assert_eq!(v.segments[1].state(), SegmentState::Loaded);
+    assert!(v.store.segments()[1].state.is_loaded());
 }
 
 #[kithara::test]
 fn on_evict_returns_minus_one_for_init() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[100, 100, 100], &ctx);
-    v.init.set_state(SegmentState::Loaded);
-    v.segments[1].set_state(SegmentState::Loaded);
-    let key = v.init.resource_id.clone();
+    v.store.init().state.mark_loaded();
+    v.store.segments()[1].state.mark_loaded();
+    let key = v.store.init().resource_id.clone();
     let res = v.on_evict(&key);
     assert_eq!(res, Some(-1));
-    assert_eq!(v.init.state(), SegmentState::Missing);
-    assert_eq!(
-        v.segments[1].state(),
-        SegmentState::Loaded,
+    assert!(!v.store.init().state.is_loaded());
+    assert!(
+        v.store.segments()[1].state.is_loaded(),
         "init eviction must not touch segment states"
     );
 }
@@ -336,11 +498,11 @@ fn on_evict_returns_minus_one_for_init() {
 fn on_evict_returns_seg_idx_for_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
-    v.segments[1].set_state(SegmentState::Loaded);
-    let key = v.segments[1].resource_id.clone();
+    v.store.segments()[1].state.mark_loaded();
+    let key = v.store.segments()[1].resource_id.clone();
     let res = v.on_evict(&key);
     assert_eq!(res, Some(1));
-    assert_eq!(v.segments[1].state(), SegmentState::Missing);
+    assert!(!v.store.segments()[1].state.is_loaded());
 }
 
 #[kithara::test]
@@ -372,16 +534,16 @@ fn skeleton_types_instantiate() {
 fn dispatch_drm_segment_routes_through_with_ctx() {
     let ctx = test_ctx(3);
     let init = make_init(0, &ctx.scope);
-    init.set_state(SegmentState::Loaded);
+    init.state.mark_loaded();
     let url: Url = "https://example.com/seg0.m4s".parse().expect("valid url");
     let resource_id = ctx.scope.key_from_url(&url);
     let key = *b"0123456789abcdef";
     let seg = SegmentEntry {
         url,
         resource_id,
-        state: SegmentState::Missing.into(),
+        state: SegmentSlotState::missing(),
         size: AtomicU64::new(100),
-        decrypt_ctx: Some(DecryptContext::new(key, [0u8; 16])),
+        content: SegmentContent::Encrypted(DecryptContext::new(key, [0u8; 16])),
         decode_time: Duration::ZERO,
         duration: Duration::from_secs(2),
     };
@@ -401,7 +563,30 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 1);
     assert!(cmds[0].cancel.is_some());
-    assert_eq!(v.segments[0].state(), SegmentState::Downloading);
+    push_planned(&v, 0);
+    assert!(
+        v.dispatch(&ctx, 10).is_empty(),
+        "claimed (in-flight) segment must not be re-dispatched"
+    );
+}
+
+#[kithara::test]
+fn dropped_fetch_cmd_reverts_segment_to_missing() {
+    let ctx = test_ctx(5);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    push_planned(&v, 0);
+    let cmds = v.dispatch(&ctx, 10);
+    assert_eq!(cmds.len(), 1, "first dispatch claims and emits seg 0");
+    // Drop the command without running its `on_complete`: the owned
+    // download handle is dropped without a settle, so the Drop safety
+    // net must revert the slot to Missing rather than strand it.
+    drop(cmds);
+    push_planned(&v, 0);
+    assert_eq!(
+        v.dispatch(&ctx, 10).len(),
+        1,
+        "dropped claim must revert the slot to Missing so it re-dispatches"
+    );
 }
 
 #[kithara::test]
@@ -445,7 +630,7 @@ fn position_advances_are_strictly_monotonic() {
 fn dispatch_cmd_cancel_shares_cancellation_with_variant_cancel() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100], &ctx);
-    v.init.set_state(SegmentState::Loaded);
+    v.store.init().state.mark_loaded();
     let variant_cancel = v.cancel_handle();
     for seg in 0..2_u32 {
         push_planned(&v, seg);
@@ -470,8 +655,8 @@ fn variant_flip_cancels_v_old_and_keeps_v_new_token_live() {
     let ctx = test_ctx(3);
     let v_old = make_var(0, 0, &[100; 20], &ctx);
     let v_new = make_var(1, 0, &[200; 20], &ctx);
-    v_old.init.set_state(SegmentState::Loaded);
-    v_new.init.set_state(SegmentState::Loaded);
+    v_old.store.init().state.mark_loaded();
+    v_new.store.init().state.mark_loaded();
     let v_old_token = v_old.cancel_handle();
     let v_new_token = v_new.cancel_handle();
 
@@ -496,14 +681,66 @@ fn variant_flip_cancels_v_old_and_keeps_v_new_token_live() {
 fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100; 20], &ctx);
-    v.segments[10].set_state(SegmentState::Loaded);
+    v.store.segments()[10].state.mark_loaded();
 
     v.rebuild(&ctx, 10);
     let cmds = v.dispatch(&ctx, 3);
     assert_eq!(cmds.len(), 3);
-    let seg10_url = v.segments[10].url.clone();
+    let seg10_url = v.store.segments()[10].url.clone();
     assert!(
         cmds.iter().all(|c| c.url != seg10_url),
         "Loaded seg 10 must not be re-emitted"
+    );
+}
+
+/// Non-blocking-pull contract: a not-ready range must make `wait_range`
+/// return `WaitBudgetExceeded` *immediately* (no internal sleep). The backoff
+/// between probes is the caller's responsibility (the worker scheduler park),
+/// so the read path never blocks on a syscall. Waking the peer downloader is
+/// the reader driver's job (`Stream::probe_read` / `read` / `prime_seek_range`,
+/// per its on-core/off-core context), not this method's. The old
+/// implementation slept 2ms per spin and looped until the 10ms budget elapsed;
+/// the probe must now return in well under that.
+#[kithara::test]
+fn wait_range_probes_without_sleeping() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400], &ctx);
+
+    let started = Instant::now();
+    let outcome = v.wait_range(0..1, Some(Duration::from_millis(10)));
+    let elapsed = started.elapsed();
+
+    assert!(
+        matches!(
+            outcome,
+            Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+        ),
+        "not-ready range must signal WaitBudgetExceeded immediately, got {outcome:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(2),
+        "probe must not sleep (old impl slept 2ms/spin up to the 10ms budget); took {elapsed:?}"
+    );
+}
+
+/// The flush short-circuit remains reachable and immediate after the
+/// non-blocking-pull conversion: a flushing timeline yields `Interrupted`
+/// without spinning on the budget signal.
+#[kithara::test]
+fn wait_range_flush_short_circuits_without_sleeping() {
+    let ctx = test_ctx(3);
+    let timeline = Timeline::new();
+    let v = make_var_with_timeline(0, 200, &[400], &ctx, timeline.clone());
+
+    let _ = timeline.initiate_seek(Duration::from_millis(10));
+    let started = Instant::now();
+    let interrupted = v.wait_range(0..1, Some(Duration::from_millis(10)));
+    assert!(
+        matches!(interrupted, Ok(WaitOutcome::Interrupted)),
+        "flushing timeline must Interrupt the probe, got {interrupted:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(2),
+        "flush short-circuit must not sleep"
     );
 }

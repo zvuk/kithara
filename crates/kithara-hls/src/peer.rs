@@ -12,19 +12,15 @@ use kithara_abr::{Abr, AbrState};
 use kithara_assets::ResourceKey;
 use kithara_events::{AbrMode, AbrProgressSnapshot, VariantDuration, VariantInfo};
 use kithara_platform::{
-    Mutex,
+    CancellationToken, Mutex,
     time::Duration,
-    tokio::{
-        self,
-        sync::{Notify, mpsc},
-    },
+    tokio::{self, sync::mpsc},
 };
 use kithara_stream::{
-    Timeline,
+    DeferredWake, Timeline,
     dl::{FetchCmd, Peer, RequestPriority},
 };
 use kithara_test_utils::kithara;
-use tokio_util::sync::CancellationToken;
 
 use crate::{coord::HlsCoord, variant::PlanCtx};
 
@@ -55,7 +51,7 @@ pub(crate) struct HlsPeer {
     /// again without waiting for the next downloader-driven wakeup. Owned
     /// here (not on `HlsCoord`) because the wake mechanism is a property
     /// of the peer, not of shared state.
-    reader_advanced: Arc<Notify>,
+    reader_advanced: Arc<DeferredWake>,
     reader_segment: Arc<AtomicUsize>,
     state: Arc<Mutex<Option<HlsTrackState>>>,
     /// Wake-up trigger for the waker-forwarding micro-task: not a
@@ -78,11 +74,11 @@ impl HlsPeer {
             timeline,
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::new(None),
-            wake_signal: CancellationToken::new(), // kithara:cancel:owner
+            wake_signal: CancellationToken::default(), // kithara:cancel:owner
             abr: Arc::new(AbrState::new(initial_mode)),
             variants: Mutex::new(Vec::new()),
             reader_segment: Arc::new(AtomicUsize::new(0)),
-            reader_advanced: Arc::new(Notify::new()),
+            reader_advanced: Arc::new(DeferredWake::default()),
         }
     }
 
@@ -152,9 +148,10 @@ impl HlsPeer {
         });
     }
 
-    /// Shared `Notify` handle that the `Source` clones to wake `poll_next`
-    /// after every reader progress event.
-    pub(crate) fn reader_wake(&self) -> Arc<Notify> {
+    /// Shared wake handle the `Source` clones to resume `poll_next` after a
+    /// reader progress event. The reader drivers arm/notify it; this micro-task
+    /// awaits [`DeferredWake::notified`].
+    pub(crate) fn reader_wake(&self) -> Arc<DeferredWake> {
         Arc::clone(&self.reader_advanced)
     }
 
@@ -214,7 +211,9 @@ impl Abr for HlsPeer {
     }
 
     fn wake(&self) {
-        self.reader_advanced.notify_one();
+        // The ABR controller runs on the downloader runtime (off the RT produce
+        // core), so wake the peer immediately rather than deferring.
+        self.reader_advanced.notify_now();
     }
 }
 
@@ -224,7 +223,7 @@ impl Peer for HlsPeer {
         let outcome = match self.poll_state_phase(cx) {
             PollPhase::NotActivated => return Poll::Pending,
             PollPhase::Terminated => return Poll::Ready(None),
-            PollPhase::Continue(o) => o,
+            PollPhase::Continue(o) => *o,
         };
 
         for key in outcome.evictions {
@@ -261,7 +260,7 @@ impl Peer for HlsPeer {
 enum PollPhase {
     NotActivated,
     Terminated,
-    Continue(PollOutcome),
+    Continue(Box<PollOutcome>),
 }
 
 struct PollOutcome {
@@ -297,12 +296,12 @@ impl HlsPeer {
         drop(guard);
         coord.sync_abr_lock();
 
-        PollPhase::Continue(PollOutcome {
+        PollPhase::Continue(Box::new(PollOutcome {
             coord,
             ctx,
             evictions,
             seg_at_reader,
-        })
+        }))
     }
 }
 
@@ -341,6 +340,8 @@ impl HlsTrackState {
         let manual_mode = matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_)));
         let switch_landed = if boundary_crossed || manual_mode {
             coord.commit_variant_switch(ctx, resolved)
+        } else if let Some(rescue_seg) = coord.urgent_rescue_boundary(resolved) {
+            coord.commit_variant_switch(ctx, rescue_seg)
         } else {
             false
         };

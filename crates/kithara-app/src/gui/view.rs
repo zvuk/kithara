@@ -18,7 +18,7 @@ use iced::{
         text, vertical_slider,
     },
 };
-use kithara_queue::TrackStatus;
+use kithara_queue::RepeatMode;
 use num_traits::cast::ToPrimitive;
 
 use super::{
@@ -27,11 +27,10 @@ use super::{
     fonts,
     icons::Icon,
     message::{Message, Tab},
-    tokens::Gap,
+    tokens::gap,
     widgets,
 };
-use crate::theme::gui::GuiPalette;
-use kithara_queue::RepeatMode;
+use crate::{theme::gui::GuiPalette, track::TrackRow};
 
 const ALBUM_PLACEHOLDER_SVG: &[u8] = include_bytes!("../../assets/album-placeholder.svg");
 
@@ -173,7 +172,7 @@ pub(crate) fn view(state: &Kithara, _window: iced::window::Id) -> Element<'_, Me
     ]
     .width(Length::Fill)
     .height(Length::Fill)
-    .spacing(Gap::SECTION);
+    .spacing(gap::SECTION);
 
     container(content)
         .width(Length::Fill)
@@ -200,7 +199,7 @@ fn view_header(state: &Kithara) -> Element<'_, Message> {
             dj_studio_button(p),
         ]
         .align_y(Alignment::Center)
-        .spacing(Gap::SECTION),
+        .spacing(gap::SECTION),
     )
     .width(Length::Fill)
     .into()
@@ -212,9 +211,7 @@ fn dj_studio_button(p: GuiPalette) -> Element<'static, Message> {
     button(
         row![
             Icon::Disc.view(Consts::DJ_LAUNCH_ICON, p.accent),
-            text("DJ Studio")
-                .size(Consts::SMALL_FONT)
-                .color(p.text),
+            text("DJ Studio").size(Consts::SMALL_FONT).color(p.text),
         ]
         .spacing(Consts::DJ_LAUNCH_GAP)
         .align_y(Alignment::Center),
@@ -222,7 +219,7 @@ fn dj_studio_button(p: GuiPalette) -> Element<'static, Message> {
     .padding([Consts::DJ_LAUNCH_PADDING_Y, Consts::DJ_LAUNCH_PADDING_X])
     .style(super::studio::ghost_button_style(p))
     .on_press(Message::Dj(DjMsg::Toggle))
-        .into()
+    .into()
 }
 
 fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
@@ -249,7 +246,7 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
             .font(fonts::SANS)
             .color(p.text_dim),
     ]
-    .spacing(Gap::INLINE_TIGHT)
+    .spacing(gap::INLINE_TIGHT)
     .width(Length::Fill);
 
     if !state.ui_state.variant_label.is_empty() {
@@ -265,18 +262,18 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
                     .font(fonts::MONO)
                     .color(p.muted),
             ]
-            .spacing(Gap::INLINE_WIDE)
+            .spacing(gap::INLINE_WIDE)
             .align_y(Alignment::Center),
         );
     }
 
     container(
         row![cover, meta]
-            .spacing(Gap::SECTION_ROOMY)
+            .spacing(gap::SECTION_ROOMY)
             .align_y(Alignment::Center),
     )
     .width(Length::Fill)
-    .padding(Gap::SECTION_ROOMY)
+    .padding(gap::SECTION_ROOMY)
     .style(now_card_style(p))
     .into()
 }
@@ -310,7 +307,7 @@ fn view_seek(state: &Kithara) -> Element<'_, Message> {
                 .font(fonts::MONO)
                 .color(p.muted)
         ]
-        .spacing(Gap::CONTENT)
+        .spacing(gap::CONTENT)
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)
@@ -391,7 +388,7 @@ fn view_speed(state: &Kithara) -> Element<'_, Message> {
             .font(fonts::mono(Weight::Medium))
             .color(p.accent),
     ]
-    .spacing(Gap::CONTENT)
+    .spacing(gap::CONTENT)
     .align_y(Alignment::Center);
 
     if (rate - 1.0).abs() > RESET_DEADBAND {
@@ -458,7 +455,7 @@ fn view_volume(state: &Kithara) -> Element<'_, Message> {
                 .font(fonts::MONO)
                 .color(p.muted)
         ]
-        .spacing(Gap::CONTENT)
+        .spacing(gap::CONTENT)
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)
@@ -472,7 +469,7 @@ fn view_tabs(state: &Kithara) -> Element<'_, Message> {
         tab_button(state, Tab::Equalizer, Icon::Equalizer, "EQ"),
         tab_button(state, Tab::Settings, Icon::Settings, "Settings"),
     ]
-    .spacing(Gap::INLINE)
+    .spacing(gap::INLINE)
     .width(Length::Fill);
 
     container(tabs)
@@ -505,38 +502,39 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
         .into();
     }
 
-    let mut tracks = column![]
-        .spacing(Gap::INLINE)
-        .width(Length::Fill);
+    let mut tracks = column![].spacing(gap::INLINE).width(Length::Fill);
 
     for (index, entry) in state.ui_state.tracks.iter().enumerate() {
         let is_current = state.ui_state.current_track_index == Some(index);
         let is_selected = state.selected_track_index == Some(index);
-        let is_failed = matches!(entry.status, TrackStatus::Failed(_));
-        let is_slow = matches!(entry.status, TrackStatus::Slow);
         let blink_on = u64::from(state.blink_counter / Consts::BLINK_DIVISOR)
             .is_multiple_of(Consts::BLINK_PERIOD);
-        let text_color = if is_failed {
-            p.danger
-        } else if is_slow && is_current {
-            if blink_on { p.warning } else { p.muted }
-        } else if is_slow {
-            p.warning
-        } else if is_current {
-            p.accent
-        } else {
-            p.text
+        let row = TrackRow::classify(&entry.status, is_current);
+        let text_color = match &row {
+            TrackRow::Failed => p.danger,
+            TrackRow::SlowCurrent => {
+                if blink_on {
+                    p.warning
+                } else {
+                    p.muted
+                }
+            }
+            TrackRow::Slow => p.warning,
+            TrackRow::Current => p.accent,
+            TrackRow::Normal => p.text,
         };
-        let index_color = if is_failed {
-            p.danger
-        } else if is_slow && is_current {
-            if blink_on { p.warning } else { p.muted }
-        } else if is_slow {
-            p.warning
-        } else if is_current {
-            p.accent
-        } else {
-            p.muted
+        let index_color = match &row {
+            TrackRow::Failed => p.danger,
+            TrackRow::SlowCurrent => {
+                if blink_on {
+                    p.warning
+                } else {
+                    p.muted
+                }
+            }
+            TrackRow::Slow => p.warning,
+            TrackRow::Current => p.accent,
+            TrackRow::Normal => p.muted,
         };
         let track_name = truncate_name(&entry.name, Consts::PLAYLIST_MAX_NAME_CHARS);
 
@@ -551,7 +549,7 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
                     .font(fonts::display(Weight::Medium))
                     .color(text_color),
             ]
-            .spacing(Gap::CONTENT)
+            .spacing(gap::CONTENT)
             .align_y(Alignment::Center),
         )
         .width(Length::Fill)
@@ -605,7 +603,7 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
                 .font(fonts::mono(Weight::Medium))
                 .color(p.text),
         ]
-        .spacing(Gap::INLINE)
+        .spacing(gap::INLINE)
         .align_x(Alignment::Center)
         .width(Length::Fixed(Consts::EQ_BAND_WIDTH))
         .height(Length::Fill);
@@ -640,7 +638,7 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
                 .width(Length::Fill)
                 .height(Length::Fill)
         ]
-        .spacing(Gap::SECTION)
+        .spacing(gap::SECTION)
         .width(Length::Fill)
         .height(Length::Fill),
     )
@@ -690,7 +688,7 @@ fn view_settings(state: &Kithara) -> Element<'_, Message> {
             .font(fonts::display(Weight::Semibold))
             .color(p.text),
     ]
-    .spacing(Gap::INLINE_WIDE)
+    .spacing(gap::INLINE_WIDE)
     .width(Length::Fill);
 
     col = col.push(
@@ -699,7 +697,7 @@ fn view_settings(state: &Kithara) -> Element<'_, Message> {
             .font(fonts::MONO)
             .color(p.muted),
     );
-    let mut quality_row = row![].spacing(Gap::INLINE);
+    let mut quality_row = row![].spacing(gap::INLINE);
     quality_row = quality_row.push(pill_button(
         "Auto",
         state.ui_state.abr_mode_is_auto,
@@ -718,7 +716,7 @@ fn view_settings(state: &Kithara) -> Element<'_, Message> {
     col = col.push(quality_row);
 
     let secs = state.ui_state.crossfade.clamp(0.0, Consts::CROSSFADE_MAX);
-    col = col.push(Space::new().height(Length::Fixed(Gap::SECTION)));
+    col = col.push(Space::new().height(Length::Fixed(gap::SECTION)));
     col = col.push(
         row![
             text("CROSSFADE")
@@ -833,7 +831,7 @@ fn tab_button(state: &Kithara, tab: Tab, icon: Icon, label: &str) -> Element<'st
             .font(fonts::sans(Weight::Semibold))
             .color(label_color)
     ]
-    .spacing(Gap::INLINE)
+    .spacing(gap::INLINE)
     .align_y(Alignment::Center);
 
     button(container(content).center_x(Length::Fill))
@@ -866,7 +864,10 @@ fn now_card_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
     move |_theme| {
         let fill = Background::Gradient(Gradient::Linear(
             Linear::new(Degrees(180.0))
-                .add_stop(0.0, with_alpha(p.bg_panel_2, Consts::NOW_GRADIENT_START_ALPHA))
+                .add_stop(
+                    0.0,
+                    with_alpha(p.bg_panel_2, Consts::NOW_GRADIENT_START_ALPHA),
+                )
                 .add_stop(1.0, with_alpha(p.bg_panel, Consts::NOW_GRADIENT_END_ALPHA)),
         ));
         ContainerStyle::default()

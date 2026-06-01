@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use anyhow::Result;
 use syn::{
-    Block, Expr, Local, Stmt,
+    Block, Expr, ExprPath, Local, PatIdent, Stmt,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -74,7 +76,7 @@ fn scan_block(cfg: &GuardCascadeConfig, rel: &str, b: &Block, out: &mut Vec<Viol
             i += 1;
         }
         let streak = i - start;
-        if streak >= cfg.warn_streak {
+        if streak >= cfg.warn_streak && !is_dependency_chain(&b.stmts[start..i]) {
             let s = b.stmts[start].span().start();
             let key = format!("{}:{}:{}", rel, s.line, s.column);
             let msg = format!(
@@ -124,7 +126,10 @@ fn block_ends_with_terminator(cfg: &GuardCascadeConfig, b: &Block) -> bool {
 
 fn is_terminator_expr(cfg: &GuardCascadeConfig, e: &Expr) -> bool {
     match e {
-        Expr::Return(_) | Expr::Break(_) | Expr::Continue(_) => true,
+        // `break`/`continue` are loop control, not a guard ladder protecting
+        // a happy path — there is no parallel-compute/tuple-match remedy for
+        // them, so they must not count as guard terminators.
+        Expr::Return(_) => true,
         Expr::Macro(m) => m
             .mac
             .path
@@ -133,6 +138,68 @@ fn is_terminator_expr(cfg: &GuardCascadeConfig, e: &Expr) -> bool {
         Expr::Block(b) => block_ends_with_terminator(cfg, &b.block),
         Expr::Unsafe(u) => block_ends_with_terminator(cfg, &u.block),
         _ => false,
+    }
+}
+
+/// True when the guards form a binding-dependency chain: some guard's test
+/// expression references an identifier bound by an earlier guard (e.g.
+/// `let Some(item) = map.get(&id) else {..}` after `let Some(id) = ..`).
+/// The only collapse for such a chain is an Option-returning resolver
+/// helper — a wrapper that inlines back to the same chain — so the cascade
+/// is not independently parallelizable and must not be flagged.
+fn is_dependency_chain(guards: &[Stmt]) -> bool {
+    let mut bound: HashSet<String> = HashSet::new();
+    for stmt in guards {
+        if let Some(test) = guard_test_expr(stmt)
+            && !collect_idents(test).is_disjoint(&bound)
+        {
+            return true;
+        }
+        for id in let_else_bound_idents(stmt) {
+            bound.insert(id);
+        }
+    }
+    false
+}
+
+fn guard_test_expr(s: &Stmt) -> Option<&Expr> {
+    match s {
+        Stmt::Expr(Expr::If(if_expr), _) => Some(&if_expr.cond),
+        Stmt::Local(local) => local.init.as_ref().map(|init| &*init.expr),
+        _ => None,
+    }
+}
+
+fn let_else_bound_idents(s: &Stmt) -> Vec<String> {
+    let Stmt::Local(local) = s else {
+        return Vec::new();
+    };
+    let mut c = PatIdentCollector(Vec::new());
+    c.visit_pat(&local.pat);
+    c.0
+}
+
+fn collect_idents(expr: &Expr) -> HashSet<String> {
+    let mut c = PathIdentCollector(HashSet::new());
+    c.visit_expr(expr);
+    c.0
+}
+
+struct PathIdentCollector(HashSet<String>);
+impl<'ast> Visit<'ast> for PathIdentCollector {
+    fn visit_expr_path(&mut self, ep: &'ast ExprPath) {
+        if let Some(id) = ep.path.get_ident() {
+            self.0.insert(id.to_string());
+        }
+        visit::visit_expr_path(self, ep);
+    }
+}
+
+struct PatIdentCollector(Vec<String>);
+impl<'ast> Visit<'ast> for PatIdentCollector {
+    fn visit_pat_ident(&mut self, pi: &'ast PatIdent) {
+        self.0.push(pi.ident.to_string());
+        visit::visit_pat_ident(self, pi);
     }
 }
 
@@ -179,7 +246,10 @@ mod tests {
     }
 
     #[test]
-    fn cascade_homogeneous_flagged() {
+    fn dependency_chain_not_flagged() {
+        // Each guard extracts from the previous binding (entry → peer →
+        // progress). The only collapse is an Option-resolver wrapper, which
+        // inlines back to the same chain — so this is not a real cascade.
         let n = count_violations(
             r#"{
                 let Some(entry) = peer_entry else { return; };
@@ -189,7 +259,54 @@ mod tests {
                 publish(progress);
             }"#,
         );
-        assert_eq!(n, 1, "homogeneous cascade must be flagged");
+        assert_eq!(n, 0, "dependency-chain cascade must NOT be flagged");
+    }
+
+    #[test]
+    fn loop_control_break_continue_not_flagged() {
+        // break/continue are loop flow, not a guard ladder to a happy path.
+        let n = count_violations(
+            r#"{
+                for x in items {
+                    let Some(entry) = lookup(x) else { continue; };
+                    if !entry.ready() { continue; }
+                    if entry.done() { break; }
+                    process(entry);
+                }
+            }"#,
+        );
+        assert_eq!(n, 0, "loop break/continue control must NOT be flagged");
+    }
+
+    #[test]
+    fn independent_if_guard_decision_table_still_flagged() {
+        // Independent checks (no inter-guard dependency) at the 4+ streak
+        // remain a genuine decision-table candidate (parallel-compute +
+        // tuple-match).
+        let n = count_violations(
+            r#"{
+                if a == 0 { return 1; }
+                if b == 0 { return 2; }
+                if c == 0 { return 3; }
+                if d == 0 { return 4; }
+                5
+            }"#,
+        );
+        assert_eq!(n, 1, "independent 4-guard decision-table must flag");
+    }
+
+    #[test]
+    fn three_independent_guards_idiomatic_not_flagged() {
+        // 3 independent validation guards are idiomatic and below threshold.
+        let n = count_violations(
+            r#"{
+                if a == 0 { return 1; }
+                if b == 0 { return 2; }
+                if c == 0 { return 3; }
+                4
+            }"#,
+        );
+        assert_eq!(n, 0, "3 idiomatic validation guards must NOT flag");
     }
 
     #[test]

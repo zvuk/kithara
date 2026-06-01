@@ -12,6 +12,9 @@ pub mod theme;
 pub mod tracing_init;
 pub mod waveform;
 
+#[cfg(any(feature = "tui", feature = "gui"))]
+mod track;
+
 #[cfg(feature = "tui")]
 pub mod tui;
 

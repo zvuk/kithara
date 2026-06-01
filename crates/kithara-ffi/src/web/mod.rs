@@ -5,7 +5,11 @@
 //! wasm-only and require no per-item gating.
 
 pub mod bindings;
+pub(crate) mod bridge;
 pub(crate) mod commands;
-pub(crate) mod js;
-pub mod player;
+pub(crate) mod inner;
+pub(crate) mod interop;
+pub(crate) mod key_processor_bridge;
+pub(crate) mod observer;
+pub mod surface;
 pub(crate) mod worker;

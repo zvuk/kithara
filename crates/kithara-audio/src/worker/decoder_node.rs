@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
 use kithara_decode::PcmChunk;
-use kithara_platform::tokio::sync::Notify;
 use tracing::trace;
 
-use super::{AudioWorkerSource, handle::TrackRegistration, types::ServiceClass};
+use super::{AudioWorkerSource, PreloadGate, handle::TrackRegistration, types::ServiceClass};
 use crate::{
     pipeline::{fetch::Fetch, track_fsm::TrackStep},
     runtime::{AtomicServiceClass, Inlet, Node, Outlet, TickResult},
@@ -31,24 +30,25 @@ pub(crate) struct DecoderRuntime {
 /// to drain that slot before producing more, so the decoder itself is
 /// stateless with respect to parked chunks.
 pub(crate) struct DecoderNode {
-    preload_notify: Arc<Notify>,
-    source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
-    runtime: DecoderRuntime,
-    outlet: Outlet<Fetch<PcmChunk>>,
-    /// Spent chunks returned by the real-time consumer. Drained at the top
-    /// of every [`tick`](DecoderNode::tick) so the pooled buffers are
-    /// freed/recycled on this worker thread, never on the audio thread.
-    trash_inlet: Inlet<PcmChunk>,
+    preload_gate: Arc<PreloadGate>,
     /// Shared priority hint written wait-free by the real-time consumer and
     /// read back here by the scheduler each pass — see [`AtomicServiceClass`].
     service_class: Arc<AtomicServiceClass>,
+    source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
+    runtime: DecoderRuntime,
+    /// Spent chunks returned by the real-time consumer. Drained once per pass
+    /// by [`recycle`](DecoderNode::recycle), in the scheduler's unchecked shell
+    /// before the produce core, so the pooled buffers are freed/recycled on
+    /// this worker thread, never on the audio thread.
+    trash_inlet: Inlet<PcmChunk>,
+    outlet: Outlet<Fetch<PcmChunk>>,
     preload_chunks: usize,
 }
 
 impl DecoderNode {
     fn complete_preload(&mut self) {
         if !self.runtime.preloaded {
-            self.preload_notify.notify_one();
+            self.preload_gate.signal();
             self.runtime.preloaded = true;
         }
     }
@@ -73,14 +73,10 @@ impl DecoderNode {
     /// cached value. The slow path still re-reads the canonical
     /// `seek_epoch` so a spurious latch consume costs at most one
     /// no-op compare.
-    /// Drop every spent chunk the real-time consumer returned. Each drop
-    /// recycles the pooled buffer (`PooledOwned::drop` → `Pool::put`) on
-    /// this worker thread, keeping that allocation work off the audio
-    /// thread.
-    fn drain_trash(&mut self) {
-        while self.trash_inlet.try_pop().is_some() {}
-    }
-
+    ///
+    /// On an actual epoch bump the preload gate is re-armed (re-closed)
+    /// so a fresh `Resource::preload().await` blocks again until the
+    /// post-seek refill re-opens it.
     fn sync_seek_epoch(&mut self) {
         if !self.source.timeline().did_take_decoder_node_seek() {
             return;
@@ -91,6 +87,7 @@ impl DecoderNode {
         }
 
         let _ = self.outlet.take_pending();
+        self.preload_gate.rearm();
         self.runtime = DecoderRuntime {
             seek_epoch: current,
             ..Default::default()
@@ -106,7 +103,7 @@ impl From<TrackRegistration> for DecoderNode {
             outlet: reg.outlet,
             trash_inlet: reg.trash_inlet,
             service_class: reg.service_class,
-            preload_notify: reg.preload_notify,
+            preload_gate: reg.preload_gate,
             preload_chunks: reg.preload_chunks,
             runtime: DecoderRuntime {
                 seek_epoch,
@@ -125,8 +122,16 @@ impl Node for DecoderNode {
         self.service_class.load()
     }
 
+    fn recycle(&mut self) {
+        while self.trash_inlet.try_pop().is_some() {}
+        self.source.flush_deferred();
+    }
+
+    fn warm_up(&mut self) {
+        self.source.warm_up();
+    }
+
     fn tick(&mut self) -> TickResult {
-        self.drain_trash();
         self.sync_seek_epoch();
 
         if !self.outlet.flush() {
@@ -194,6 +199,8 @@ impl Node for DecoderNode {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use kithara_stream::Timeline;
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
@@ -210,14 +217,14 @@ mod tests {
     fn test_node(
         source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
         outlet: Outlet<Fetch<PcmChunk>>,
-        preload_notify: Arc<Notify>,
+        preload_gate: Arc<PreloadGate>,
     ) -> DecoderNode {
         let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(4, None);
         DecoderNode {
             source,
             outlet,
             trash_inlet,
-            preload_notify,
+            preload_gate,
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
             preload_chunks: 1,
             runtime: DecoderRuntime::default(),
@@ -226,7 +233,7 @@ mod tests {
 
     #[kithara::test]
     fn decoder_node_eof_under_backpressure() {
-        let notify = Arc::new(Notify::new());
+        let gate = Arc::new(PreloadGate::default());
         let (mut outlet, _inlet) = connect::<Fetch<PcmChunk>>(1, None);
 
         outlet
@@ -247,7 +254,7 @@ mod tests {
             }),
         )));
 
-        let mut node = test_node(source, outlet, notify);
+        let mut node = test_node(source, outlet, gate);
 
         assert_eq!(node.tick(), TickResult::Backpressured);
         assert!(!node.runtime.eof_sent);
@@ -281,7 +288,7 @@ mod tests {
                 .kind
         }
 
-        let notify = Arc::new(Notify::new());
+        let gate = Arc::new(PreloadGate::default());
 
         let (eof_outlet, mut eof_inlet) = connect::<Fetch<PcmChunk>>(1, None);
         let eof_timeline = Timeline::new();
@@ -293,7 +300,7 @@ mod tests {
                 each.call(matching!()).returns(eof_timeline.clone());
             }),
         )));
-        let mut eof_node = test_node(eof_source, eof_outlet, Arc::clone(&notify));
+        let mut eof_node = test_node(eof_source, eof_outlet, Arc::clone(&gate));
         assert_eq!(eof_node.tick(), TickResult::Progress);
         let eof_kind = drain_marker_kind(&mut eof_node.outlet, &mut eof_inlet);
 
@@ -307,7 +314,7 @@ mod tests {
                 each.call(matching!()).returns(failed_timeline.clone());
             }),
         )));
-        let mut failed_node = test_node(failed_source, failed_outlet, notify);
+        let mut failed_node = test_node(failed_source, failed_outlet, gate);
         let _ = failed_node.tick();
         let failed_kind = drain_marker_kind(&mut failed_node.outlet, &mut failed_inlet);
 
@@ -322,8 +329,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn decoder_node_preload_notify_waits_for_ring() {
-        let notify = Arc::new(Notify::new());
+    fn decoder_node_preload_gate_waits_for_ring() {
+        let gate = Arc::new(PreloadGate::default());
         let (mut outlet, mut inlet) = connect::<Fetch<PcmChunk>>(1, None);
 
         outlet
@@ -349,18 +356,69 @@ mod tests {
             }),
         )));
 
-        let mut node = test_node(source, outlet, notify.clone());
+        let mut node = test_node(source, outlet, Arc::clone(&gate));
 
         assert_eq!(node.tick(), TickResult::Progress);
         assert_eq!(node.runtime.chunks_sent, 1);
         assert!(!node.runtime.preloaded);
+        assert!(!gate.is_ready());
 
         assert_eq!(node.tick(), TickResult::Backpressured);
         assert!(!node.runtime.preloaded);
+        assert!(!gate.is_ready());
 
         let _ = inlet.try_pop();
 
         assert_eq!(node.tick(), TickResult::Waiting);
         assert!(node.runtime.preloaded);
+        assert!(gate.is_ready());
+    }
+
+    #[kithara::test]
+    fn decoder_node_seek_rearms_preload_gate() {
+        let gate = Arc::new(PreloadGate::default());
+        let (outlet, mut inlet) = connect::<Fetch<PcmChunk>>(2, None);
+
+        let timeline = Timeline::new();
+        let source = Box::new(Unimock::new((
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Produced(Fetch::new(
+                    PcmChunk::default(),
+                    false,
+                    0,
+                ))),
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::StateChanged),
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Produced(Fetch::new(
+                    PcmChunk::default(),
+                    false,
+                    0,
+                ))),
+            MockAudioWorkerSource::timeline.stub(|each| {
+                each.call(matching!()).returns(timeline.clone());
+            }),
+        )));
+
+        let mut node = test_node(source, outlet, Arc::clone(&gate));
+
+        assert_eq!(node.tick(), TickResult::Progress);
+        assert!(node.runtime.preloaded);
+        assert!(gate.is_ready(), "first chunk opens the gate");
+
+        let _ = timeline.initiate_seek(Duration::from_secs(1));
+
+        assert_eq!(node.tick(), TickResult::Progress);
+        assert!(!node.runtime.preloaded, "seek resets the preload runtime");
+        assert!(!gate.is_ready(), "sync_seek_epoch re-closes the gate");
+
+        let _ = inlet.try_pop();
+
+        assert_eq!(node.tick(), TickResult::Progress);
+        assert!(node.runtime.preloaded);
+        assert!(gate.is_ready(), "post-seek refill reopens the gate");
     }
 }

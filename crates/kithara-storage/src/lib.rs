@@ -4,13 +4,16 @@
 //!
 //! Storage primitives for Kithara.
 //!
-//! Provides a generic [`Resource<D>`] parameterized by a [`Driver`]:
-//! - [`MmapResource`] — mmap-backed (filesystem), with lock-free fast path.
-//! - [`MemResource`] — in-memory `Vec<u8>` (WASM).
+//! Provides a phantom-typestate [`Resource<S, D>`] parameterized by a phase `S`
+//! and a [`Driver`] `D`:
+//! - [`ResourceWriter`] (`Resource<Active, D>`) — single-owner writeable handle.
+//! - [`Resource<Committed, D>`] — sealed, read-final handle.
+//! - [`ResourceReader`] (`Resource<Reader, D>`) — cloneable read-only view.
 //!
-//! [`StorageResource`] is a unified enum combining both backends.
+//! Backends: [`MmapResource`] (mmap, filesystem) and [`MemResource`]
+//! (in-memory, WASM). [`StorageResource`] is a unified enum combining both.
 //!
-//! The consumer-facing trait is [`ResourceExt`].
+//! The consumer-facing read API is the sealed [`ResourceRead`] trait.
 
 mod backend;
 mod decorator;
@@ -22,11 +25,12 @@ mod unified;
 pub mod mock;
 
 pub use backend::{
-    AvailabilityObserver, Driver, DriverIo, MemDriver, MemOptions, MemResource, Resource,
+    Active, AvailabilityObserver, Committed, Driver, DriverIo, MemDriver, MemOptions, MemResource,
+    Reader, Resource, ResourcePhase, ResourceRead, ResourceReader, ResourceWriter,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use backend::{MmapDriver, MmapOptions, MmapResource};
 pub use decorator::{Atomic, AtomicChunked, OpenIntent};
 pub use error::{StorageError, StorageResult};
-pub use resource::{OpenMode, ResourceExt, ResourceStatus, WaitOutcome};
+pub use resource::{OpenMode, ResourceStatus, WaitOutcome};
 pub use unified::StorageResource;

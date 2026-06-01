@@ -1,11 +1,12 @@
 #![forbid(unsafe_code)]
 
 use bytes::Bytes;
-use kithara_assets::{AssetScope, ResourceKey};
+use kithara_assets::{
+    AcquisitionResult, AssetScope, AssetWriter, ReadSide, ResourceKey, WriteSide,
+};
 use kithara_bufpool::BytePool;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
-use kithara_storage::ResourceExt;
 use kithara_stream::dl::{FetchCmd, PeerHandle, reject_html_response};
 use tracing::{debug, trace};
 use url::Url;
@@ -45,10 +46,18 @@ pub(crate) async fn fetch_atomic_body(
         "kithara-hls: cache miss -> fetching from network"
     );
 
-    let res = scope.store().acquire_resource(&key, None)?.retain();
+    let writer = match scope.store().acquire_resource(&key, None)? {
+        AcquisitionResult::Pending(writer) => Some(writer.retain()),
+        // Committed by a concurrent caller after our cache-miss probe (or any
+        // future variant) — the network bytes below are still correct; skip
+        // the redundant write.
+        _ => None,
+    };
     let bytes = download_atomic_bytes(downloader, url.clone(), headers).await?;
 
-    write_back_cache(&res, &bytes, scope, url, rel_path, resource_kind);
+    if let Some(writer) = writer {
+        write_back_cache(writer, &bytes, scope, url, rel_path, resource_kind);
+    }
 
     Ok(bytes)
 }
@@ -84,18 +93,21 @@ pub(crate) fn try_read_cached(
 }
 
 /// Best-effort cache write. Concurrent callers may race: all miss
-/// the cache, all fetch, first commits, later `write_all` calls
-/// fail because the resource is already committed. Harmless — the
-/// bytes are in memory from the network fetch.
+/// the cache, all fetch, first commits, later writes fail because the
+/// resource is already committed. Harmless — the bytes are in memory
+/// from the network fetch. Consumes the writer (commit is consume-self).
 pub(crate) fn write_back_cache(
-    res: &kithara_assets::AssetResource<DecryptContext>,
+    writer: AssetWriter<DecryptContext>,
     bytes: &Bytes,
     scope: &AssetScope<DecryptContext>,
     url: &Url,
     rel_path: &str,
     resource_kind: &str,
 ) {
-    if let Err(e) = res.write_all(bytes) {
+    let result = writer
+        .write_at(0, bytes)
+        .and_then(|()| writer.commit(Some(bytes.len() as u64)).map(|_reader| ()));
+    if let Err(e) = result {
         trace!(
             url = %url,
             error = %e,

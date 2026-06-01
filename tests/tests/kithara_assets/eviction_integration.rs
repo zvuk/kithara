@@ -3,10 +3,7 @@
 
 use std::{fs, path::Path};
 
-use kithara::{
-    assets::{AssetScope, AssetStoreBuilder, EvictConfig},
-    storage::ResourceExt,
-};
+use kithara::assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, WriteSide};
 use kithara_assets::index::schema::{ArchivedPinsIndexFile, PinsIndexFile};
 use kithara_integration_tests::temp_dir;
 use kithara_platform::{thread, time::Duration};
@@ -14,6 +11,14 @@ use kithara_platform::{thread, time::Duration};
 #[cfg(not(target_arch = "wasm32"))]
 fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {
     root.join(asset_root).exists()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
+    let AcquisitionResult::Pending(writer) = acq else {
+        panic!("fresh acquire must be Pending");
+    };
+    writer
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -52,8 +57,10 @@ fn eviction_max_assets_skips_pinned_assets(
         let scope = asset_scope_with_root(&temp_dir, &asset_root, Some(max_assets));
         let key = scope.key(format!("media/{}.bin", i));
 
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_all(format!("data-{}", i).as_bytes()).unwrap();
+        let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+        let data = format!("data-{}", i);
+        writer.write_at(0, data.as_bytes()).unwrap();
+        let res = writer.commit(Some(data.len() as u64)).unwrap();
 
         if i == create_count - 1 {
             let res_b = res;
@@ -80,11 +87,16 @@ fn eviction_max_assets_skips_pinned_assets(
             let trigger_root = format!("asset-trigger-{}", i);
             let trigger_scope = asset_scope_with_root(&temp_dir, &trigger_root, Some(max_assets));
             let key_trigger = trigger_scope.key("media/trigger.bin");
-            let res_trigger = trigger_scope
-                .store()
-                .acquire_resource(&key_trigger, None)
+            let writer_trigger = pending(
+                trigger_scope
+                    .store()
+                    .acquire_resource(&key_trigger, None)
+                    .unwrap(),
+            );
+            writer_trigger.write_at(0, b"trigger").unwrap();
+            let _res_trigger = writer_trigger
+                .commit(Some(b"trigger".len() as u64))
                 .unwrap();
-            res_trigger.write_all(b"trigger").unwrap();
 
             assert!(exists_asset_dir(&dir, &format!("asset-trigger-{}", i)));
             assert!(exists_asset_dir(&dir, &format!("asset-{}", i)));
@@ -129,8 +141,10 @@ fn eviction_ignores_missing_index(
         let scope = asset_scope_with_root(&temp_dir, &asset_root, Some(2));
         let key = scope.key(format!("data/{}.bin", i));
 
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_all(format!("data-{}", i).as_bytes()).unwrap();
+        let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+        let data = format!("data-{}", i);
+        writer.write_at(0, data.as_bytes()).unwrap();
+        let _res = writer.commit(Some(data.len() as u64)).unwrap();
     }
 
     let index_path = dir.join("_index/lru.bin");
@@ -159,8 +173,9 @@ fn eviction_with_zero_byte_assets(temp_dir: kithara_integration_tests::TestTempD
         let scope = asset_scope_with_root(&temp_dir, &asset_root, Some(2));
         let key = scope.key("empty.bin");
 
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_all(b"").unwrap();
+        let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+        writer.write_at(0, b"").unwrap();
+        let _res = writer.commit(Some(0)).unwrap();
     }
 
     let mut existing_count = 0;
@@ -198,8 +213,9 @@ fn eviction_respects_max_assets_limit(
         let asset_root = format!("asset-{}", i);
         let scope = asset_scope_with_root(&temp_dir, &asset_root, Some(max_assets));
         let key = scope.key(format!("media/{}.bin", i));
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_all(b"DATA").unwrap();
+        let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+        writer.write_at(0, b"DATA").unwrap();
+        let res = writer.commit(Some(b"DATA".len() as u64)).unwrap();
 
         if i >= create_count - pinned_count {
             pinned_handles.push((scope, res));

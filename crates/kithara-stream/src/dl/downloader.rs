@@ -4,17 +4,15 @@ use futures::task::AtomicWaker;
 use kithara_abr::{Abr, AbrController, AbrPeerId};
 use kithara_events::EventBus;
 use kithara_net::HttpClient;
-use kithara_platform::{Mutex, RwLock, time::Duration, tokio, tokio::sync::mpsc};
+use kithara_platform::{
+    CancellationToken, Mutex, RwLock, time::Duration, tokio, tokio::sync::mpsc,
+};
 use kithara_test_utils::kithara;
-use tokio_util::sync::CancellationToken;
 
 use super::{
     peer::{Peer, PeerHandle},
     registry::{FetchProgress, Registry},
 };
-
-/// Capacity of the per-peer bounded command channel.
-const PEER_CMD_CHANNEL_CAPACITY: usize = 32;
 
 /// Unified downloader — sole HTTP client owner and fetch orchestrator.
 ///
@@ -151,6 +149,8 @@ impl Downloader {
     /// and ABR state through the shared controller. The returned handle's
     /// `Drop` unregisters both.
     pub fn register(&self, peer: Arc<dyn Peer>) -> PeerHandle {
+        /// Capacity of the per-peer bounded command channel.
+        const PEER_CMD_CHANNEL_CAPACITY: usize = 32;
         self.ensure_spawned();
         let cancel = self.inner.cancel.child_token();
         let (cmd_tx, cmd_rx) = mpsc::channel(PEER_CMD_CHANNEL_CAPACITY);
@@ -238,9 +238,21 @@ impl Downloader {
         this: Self,
         rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
     ) {
-        drop(tokio::task::spawn(async move {
-            this.run(rx).await;
-        }));
+        // Run the download loop on a dedicated Web Worker (mirrors the
+        // pre-`unified-Downloader` `Backend` model). The decoder blocks the
+        // engine worker in `wait_range` (`Atomics.wait`); a `spawn_local`
+        // loop on that same worker would never be polled, so its fetches
+        // would never complete the bytes the blocking read waits for.
+        // Storage is shared linear memory and its condvar notify crosses
+        // workers via `Atomics.notify`, so the engine worker's blocked read
+        // is woken once this worker commits bytes. `keep_worker_alive` keeps
+        // the worker's event loop pumping for the page's lifetime.
+        kithara_platform::thread::spawn(move || {
+            kithara_platform::thread::keep_worker_alive();
+            drop(tokio::task::spawn(async move {
+                this.run(rx).await;
+            }));
+        });
     }
 }
 

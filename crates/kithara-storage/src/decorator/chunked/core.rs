@@ -4,14 +4,13 @@ use std::{
     fs::{self, OpenOptions},
     ops::Range,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use kithara_platform::Mutex;
 
 use crate::{
-    StorageError, StorageResult,
-    resource::{ResourceExt, ResourceStatus, WaitOutcome},
+    ResourceRead, ResourceReader, ResourceStatus, ResourceWriter, StorageError, StorageResult,
+    WaitOutcome, backend::traits::DriverIo,
 };
 
 /// Build the temp-file companion path for atomic chunked commits:
@@ -38,48 +37,47 @@ pub enum OpenIntent {
     Reopen,
 }
 
-/// Factory used to (re)open the inner resource at a given path.
+/// Factory used to (re)open the inner writer at a given path.
 ///
 /// Called twice in the atomic-chunked lifecycle:
 ///   1. With [`OpenIntent::Fresh`] — at [`AtomicChunked::open`],
 ///      opens the inner mmap on the sibling tmp path so chunked
 ///      writes accumulate there.
-///   2. With [`OpenIntent::Reopen`] — at [`ResourceExt::commit`]
+///   2. With [`OpenIntent::Reopen`] — at [`AtomicChunked::commit`]
 ///      after the atomic rename, opens a fresh read-only inner mmap
-///      on the canonical path. The caller MUST honour the intent and
+///      on the canonical path (a writer handle whose backing file is
+///      already committed). The caller MUST honour the intent and
 ///      produce a Committed-status resource, otherwise the wrapping
 ///      layer (`LeaseResource::drop`) will mistake the just-renamed
 ///      file for an abandoned writer and delete it.
-type FactoryFn<R> = Box<dyn Fn(&Path, OpenIntent) -> StorageResult<R> + Send + Sync>;
+type FactoryFn<D> =
+    Box<dyn Fn(&Path, OpenIntent) -> StorageResult<ResourceWriter<D>> + Send + Sync>;
 
-/// Decorator for crash-safe chunked writes.
+/// Decorator for crash-safe chunked writes over a single-owner
+/// [`ResourceWriter`].
 ///
 /// During the write phase the inner resource is mmapped at
 /// `<canonical>.tmp`. On `commit()` the data is durably flushed
 /// (`sync_data`), the temp file is atomically renamed to
 /// `canonical`, and the inner is reopened on the canonical path —
 /// guaranteeing that any external observer of the canonical path
-/// either sees no file or sees the fully durable committed bytes,
-/// and that the inner's internal fs operations all target the file
-/// that actually exists on disk.
-pub struct AtomicChunked<R: ResourceExt> {
-    /// Arc'd so we can clone-and-call without holding the outer
-    /// mutex during blocking ops (e.g. `wait_range`). The mutex is
-    /// only held briefly to clone the Arc or to swap the inner on
-    /// commit-rename.
-    inner: Mutex<Arc<R>>,
+/// either sees no file or sees the fully durable committed bytes.
+pub struct AtomicChunked<D: DriverIo> {
+    /// The current writer. Swapped (not cloned) on the commit-rename.
+    /// Read/wait paths mint a cheap `ResourceReader` and release the
+    /// lock before blocking.
+    inner: Mutex<ResourceWriter<D>>,
     /// `Some(<path>.tmp)` while writes are in flight; cleared on
     /// successful `commit`. `Drop` / `fail` use a still-set value to
     /// remove the orphaned temp file.
     tmp_path: Mutex<Option<PathBuf>>,
     /// Factory to reopen the inner on the canonical path post-rename.
-    /// `None` when the wrapper was constructed in passthrough mode
-    /// (no atomic rename to perform, no reopen needed).
-    factory: Option<FactoryFn<R>>,
+    /// `None` when the wrapper was constructed in passthrough mode.
+    factory: Option<FactoryFn<D>>,
     canonical_path: PathBuf,
 }
 
-impl<R: ResourceExt> std::fmt::Debug for AtomicChunked<R> {
+impl<D: DriverIo> std::fmt::Debug for AtomicChunked<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let tmp = self.tmp_path.try_lock().map(|g| g.clone());
         f.debug_struct("AtomicChunked")
@@ -90,37 +88,29 @@ impl<R: ResourceExt> std::fmt::Debug for AtomicChunked<R> {
     }
 }
 
-impl<R: ResourceExt> AtomicChunked<R> {
+impl<D: DriverIo> AtomicChunked<D> {
     /// Path the resource will land at on a successful commit.
     pub fn canonical_path(&self) -> &Path {
         &self.canonical_path
     }
 
-    /// Clone the inner Arc — caller can call any `&self` method on
-    /// the returned handle without holding the outer mutex.
-    fn inner_clone(&self) -> Arc<R> {
-        Arc::clone(&self.inner.lock_sync())
+    /// Mint a cheap read-only view without holding the inner lock during
+    /// subsequent (possibly blocking) reads.
+    fn read_view(&self) -> ResourceReader<D> {
+        self.inner.lock_sync().reader()
     }
 
     /// Open a fresh chunked-atomic resource at `canonical_path`.
     /// The provided `factory` opens the inner at a given filesystem
     /// path; it is called once with the temp path during this
     /// constructor and once more with the canonical path after the
-    /// atomic rename in [`ResourceExt::commit`].
+    /// atomic rename in [`AtomicChunked::commit`].
     ///
     /// Atomically claims `<canonical>.tmp` via `OpenOptions::create_new`
     /// — the filesystem rejects the second concurrent open of the same
     /// tmp path. Returns [`StorageError::TmpClaimed`] if another
     /// `AssetStore` instance (or another process) is already writing
-    /// the same canonical path; the caller should poll until the
-    /// holder releases (commit or drop) and either retry or take a
-    /// passthrough view of the canonical once committed.
-    ///
-    /// Stale temp left from a prior crashed run is **not** auto-wiped:
-    /// liveness is signalled by tmp existence alone, and a leftover
-    /// from a `kill -9` would block subsequent opens until cleaned up
-    /// explicitly. Maintenance task is the caller's responsibility (a
-    /// future enhancement may add PID-aware cleanup).
+    /// the same canonical path.
     ///
     /// # Errors
     ///
@@ -131,7 +121,7 @@ impl<R: ResourceExt> AtomicChunked<R> {
     ///   from the OS or from the supplied factory.
     pub fn open<F>(canonical_path: PathBuf, factory: F) -> StorageResult<Self>
     where
-        F: Fn(&Path, OpenIntent) -> StorageResult<R> + Send + Sync + 'static,
+        F: Fn(&Path, OpenIntent) -> StorageResult<ResourceWriter<D>> + Send + Sync + 'static,
     {
         let tmp_path = make_tmp_path(&canonical_path).ok_or_else(|| {
             StorageError::Failed(format!(
@@ -157,7 +147,7 @@ impl<R: ResourceExt> AtomicChunked<R> {
         let inner = factory(&tmp_path, OpenIntent::Fresh)?;
         Ok(Self {
             canonical_path,
-            inner: Mutex::new(Arc::new(inner)),
+            inner: Mutex::new(inner),
             tmp_path: Mutex::new(Some(tmp_path)),
             factory: Some(Box::new(factory)),
         })
@@ -167,19 +157,25 @@ impl<R: ResourceExt> AtomicChunked<R> {
     /// Used for memory-backed inners that have no filesystem to
     /// protect, or for re-opens of files that are already committed
     /// on disk.
-    pub fn passthrough(inner: R, canonical_path: PathBuf) -> Self {
+    #[must_use]
+    pub fn passthrough(inner: ResourceWriter<D>, canonical_path: PathBuf) -> Self {
         Self {
             canonical_path,
-            inner: Mutex::new(Arc::new(inner)),
+            inner: Mutex::new(inner),
             tmp_path: Mutex::new(None),
             factory: None,
         }
     }
-}
 
-impl<R: ResourceExt> ResourceExt for AtomicChunked<R> {
-    fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        self.inner_clone().commit(final_len)?;
+    /// Commit the accumulated chunks: durably flush + atomically rename the
+    /// temp file to the canonical path + reopen the inner on the canonical
+    /// path. Rewrites in place (the writer commits without being consumed).
+    ///
+    /// # Errors
+    /// Propagates the inner commit error and any filesystem error.
+    pub fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
+        let mut guard = self.inner.lock_sync();
+        guard.commit_in_place(final_len)?;
 
         let tmp = self.tmp_path.lock_sync().take();
         if let Some(tmp) = tmp {
@@ -198,58 +194,108 @@ impl<R: ResourceExt> ResourceExt for AtomicChunked<R> {
             })?;
 
             if let Some(factory) = self.factory.as_ref() {
-                let new_inner = Arc::new(factory(&self.canonical_path, OpenIntent::Reopen)?);
-                *self.inner.lock_sync() = new_inner;
+                let new_inner = factory(&self.canonical_path, OpenIntent::Reopen)?;
+                *guard = new_inner;
             }
         }
+        drop(guard);
         Ok(())
     }
 
-    fn contains_range(&self, range: Range<u64>) -> bool {
-        self.inner_clone().contains_range(range)
+    /// Whether the given range is fully covered by available data.
+    pub fn contains_range(&self, range: Range<u64>) -> bool {
+        self.read_view().contains_range(range)
     }
 
-    fn fail(&self, reason: String) {
-        self.inner_clone().fail(reason);
+    /// Mark the resource failed and remove the orphaned temp file.
+    pub fn fail(&self, reason: String) {
+        self.inner.lock_sync().fail_in_place(reason);
         if let Some(tmp) = self.tmp_path.lock_sync().take() {
             let _ = fs::remove_file(&tmp);
         }
     }
 
-    fn len(&self) -> Option<u64> {
-        self.inner_clone().len()
+    /// Returns `true` if the resource has been committed with zero length.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == Some(0)
     }
 
-    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
-        self.inner_clone().next_gap(from, limit)
+    /// Committed length, if known.
+    #[must_use]
+    pub fn len(&self) -> Option<u64> {
+        self.read_view().len()
     }
 
-    fn path(&self) -> Option<&Path> {
+    /// First gap in available data starting at `from`, up to `limit`.
+    pub fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
+        self.read_view().next_gap(from, limit)
+    }
+
+    /// Backing file path (the canonical path the resource lands at).
+    pub fn path(&self) -> Option<&Path> {
         Some(&self.canonical_path)
     }
 
-    fn reactivate(&self) -> StorageResult<()> {
-        self.inner_clone().reactivate()
+    /// Reactivate the inner for continued writing.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled or the backend cannot reopen.
+    pub fn reactivate(&self) -> StorageResult<()> {
+        self.inner.lock_sync().reactivate_in_place()
     }
 
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        self.inner_clone().read_at(offset, buf)
+    /// Read data at the given offset into `buf`.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        self.read_view().read_at(offset, buf)
     }
 
-    fn status(&self) -> ResourceStatus {
-        self.inner_clone().status()
+    /// Read the writer's own in-flight bytes from the active working storage,
+    /// bypassing the committed snapshot. Used by decrypt-on-commit read-back so
+    /// it transforms the freshly-written generation, not a prior snapshot kept
+    /// for concurrent readers during a rewrite.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    pub fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        self.read_view().read_inflight_at(offset, buf)
     }
 
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        self.inner_clone().wait_range(range)
+    /// Read the entire resource into a caller buffer; returns bytes read.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    pub fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
+        self.read_view().read_into(buf)
     }
 
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner_clone().write_at(offset, data)
+    /// Current runtime status.
+    pub fn status(&self) -> ResourceStatus {
+        self.read_view().status()
+    }
+
+    /// Wait until the given byte range is available.
+    ///
+    /// # Errors
+    /// Returns error if the range is invalid, the resource is cancelled, or the
+    /// resource has failed.
+    pub fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
+        self.read_view().wait_range(range)
+    }
+
+    /// Write data at the given offset.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the write fails.
+    pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.inner.lock_sync().write_at(offset, data)
     }
 }
 
-impl<R: ResourceExt> Drop for AtomicChunked<R> {
+impl<D: DriverIo> Drop for AtomicChunked<D> {
     /// Clean up the orphaned temp file when a writer is dropped
     /// without a successful commit. Best-effort: a `kill -9` skips
     /// `Drop` entirely, in which case the next `AtomicChunked::open`

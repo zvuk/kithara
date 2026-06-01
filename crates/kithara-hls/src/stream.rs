@@ -9,12 +9,11 @@ use kithara_assets::{
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::EventBus;
-use kithara_platform::tokio::sync::mpsc;
+use kithara_platform::{CancellationToken, tokio::sync::mpsc};
 use kithara_stream::{
     SourceError, StreamType, Timeline,
     dl::{Downloader, DownloaderConfig, Peer},
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::HlsConfig,
@@ -75,22 +74,19 @@ impl StreamType for Hls {
         // this stream's eviction channel in the routing registry. Without
         // injection, build a private per-stream store whose
         // `on_invalidated` feeds this single eviction channel directly.
-        let (scope, invalidation_guard) = match config.asset_store.as_ref() {
-            Some(shared) => {
-                let guard = HlsInvalidationGuard::install(
-                    Arc::clone(&shared.registry),
-                    Arc::clone(&asset_root_arc),
-                    evict_tx,
-                );
-                (
-                    shared.backend.scope(Arc::clone(&asset_root_arc)),
-                    Some(guard),
-                )
-            }
-            None => {
-                let backend = build_asset_store(&config, cancel.clone(), evict_tx);
-                (backend.scope(Arc::clone(&asset_root_arc)), None)
-            }
+        let (scope, invalidation_guard) = if let Some(shared) = config.asset_store.as_ref() {
+            let guard = HlsInvalidationGuard::install(
+                Arc::clone(&shared.registry),
+                Arc::clone(&asset_root_arc),
+                evict_tx,
+            );
+            (
+                shared.backend.scope(Arc::clone(&asset_root_arc)),
+                Some(guard),
+            )
+        } else {
+            let backend = build_asset_store(&config, cancel.clone(), evict_tx);
+            (backend.scope(Arc::clone(&asset_root_arc)), None)
         };
 
         let byte_pool = config

@@ -7,9 +7,8 @@ use std::sync::{
 
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::EvictConfig;
-use kithara::{
-    assets::{AssetScope, AssetStoreBuilder, ProcessChunkFn},
-    storage::ResourceExt,
+use kithara::assets::{
+    AcquisitionResult, AssetScope, AssetStoreBuilder, ProcessChunkFn, ReadSide, WriteSide,
 };
 use kithara_integration_tests::temp_dir;
 use kithara_platform::time::Duration;
@@ -98,13 +97,16 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_integration_tests::Tes
     let original_data = b"Hello, World! This is test data for processing.";
     let ctx = TestContext { xor_key: 0x42 };
     {
-        let res = scope
+        let AcquisitionResult::Pending(writer) = scope
             .store()
             .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
-            .unwrap();
-        res.write_at(0, original_data).unwrap();
+            .unwrap()
+        else {
+            panic!("fresh acquire must be Pending");
+        };
+        writer.write_at(0, original_data).unwrap();
 
-        res.commit(Some(original_data.len() as u64)).unwrap();
+        writer.commit(Some(original_data.len() as u64)).unwrap();
     }
 
     assert!(call_count.load(Ordering::SeqCst) > 0);
@@ -137,12 +139,15 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_integration_te
 
     let original_data = b"Data for caching test";
     {
-        let res = scope
+        let AcquisitionResult::Pending(writer) = scope
             .store()
             .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
-            .unwrap();
-        res.write_at(0, original_data).unwrap();
-        res.commit(Some(original_data.len() as u64)).unwrap();
+            .unwrap()
+        else {
+            panic!("fresh acquire must be Pending");
+        };
+        writer.write_at(0, original_data).unwrap();
+        writer.commit(Some(original_data.len() as u64)).unwrap();
     }
     let count_after_commit = call_count.load(Ordering::SeqCst);
 
@@ -180,12 +185,15 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_integration_tests::
 
     let original_data: Vec<u8> = (0..100).collect();
     {
-        let res = scope
+        let AcquisitionResult::Pending(writer) = scope
             .store()
             .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
-            .unwrap();
-        res.write_at(0, &original_data).unwrap();
-        res.commit(Some(original_data.len() as u64)).unwrap();
+            .unwrap()
+        else {
+            panic!("fresh acquire must be Pending");
+        };
+        writer.write_at(0, &original_data).unwrap();
+        writer.commit(Some(original_data.len() as u64)).unwrap();
     }
 
     let processed_res = scope
@@ -223,12 +231,15 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_integration_tests::Te
 
     let original_data = b"short";
     {
-        let res = scope
+        let AcquisitionResult::Pending(writer) = scope
             .store()
             .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
-            .unwrap();
-        res.write_at(0, original_data).unwrap();
-        res.commit(Some(original_data.len() as u64)).unwrap();
+            .unwrap()
+        else {
+            panic!("fresh acquire must be Pending");
+        };
+        writer.write_at(0, original_data).unwrap();
+        writer.commit(Some(original_data.len() as u64)).unwrap();
     }
 
     let processed_res = scope
@@ -248,9 +259,13 @@ fn store_without_processing_works_normally(temp_dir: kithara_integration_tests::
     let key = scope.key("test.bin");
 
     {
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_at(0, b"data").unwrap();
-        res.commit(Some(4)).unwrap();
+        let AcquisitionResult::Pending(writer) =
+            scope.store().acquire_resource(&key, None).unwrap()
+        else {
+            panic!("fresh acquire must be Pending");
+        };
+        writer.write_at(0, b"data").unwrap();
+        writer.commit(Some(4)).unwrap();
     }
 
     let res = scope.store().open_resource(&key, None).unwrap();

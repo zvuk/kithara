@@ -66,7 +66,7 @@ flowchart LR
 <tr><td><code>dl::PeerHandle</code></td><td>struct</td><td>Handle returned by <code>Downloader::register(peer)</code> for canceling and inspecting a peer's state</td></tr>
 <tr><td><code>dl::FetchCmd</code></td><td>struct</td><td>HTTP GET/Head command with self-contained <code>writer</code> + <code>on_complete</code> closures and a <code>CancellationToken</code></td></tr>
 <tr><td><code>dl::DownloaderConfig</code></td><td>struct (bon-builder)</td><td>Pool sizing, retry, timeouts, cancel-token wiring</td></tr>
-<tr><td><code>DecoderHooks</code> / <code>SharedHooks</code></td><td>structs</td><td>Reader-side signal channels (<code>ReaderChunkSignal</code>, <code>ReaderSeekSignal</code>)</td></tr>
+<tr><td><code>DecoderHooks</code> / <code>BoxedHooks</code></td><td>trait / alias</td><td>Single-owner reader-side signal hooks (<code>ReaderChunkSignal</code>, <code>ReaderSeekSignal</code>); the decoder owns the <code>Box&lt;dyn DecoderHooks&gt;</code> and invokes it lock-free via <code>&amp;mut</code></td></tr>
 <tr><td><code>Timeline</code> / <code>ChunkPosition</code></td><td>structs</td><td>Position bookkeeping consumed by the player and ABR</td></tr>
 </table>
 
@@ -82,7 +82,7 @@ Defined here as the single source of truth and re-exported by other crates:
 
 1. The `Downloader` is async; peers and `FetchCmd` callbacks run on the tokio runtime.
 2. `FetchCmd.writer(chunk)` writes bytes directly into the `StorageResource` shared with the sync reader.
-3. The sync reader inside `Stream<T>` calls `Source::wait_range(range)`, which polls the underlying storage with a bounded spin budget (`MAX_WAIT_SPINS × WAIT_RANGE_TIMEOUT`) before returning `Pending(NotReady)`.
+3. The sync reader inside `Stream<T>` calls `Source::wait_range(range)` as a single non-blocking readiness probe: it returns `Ready`/`Eof`/`Interrupted` immediately, and on a not-yet-available range returns `WaitBudgetExceeded`, which `try_read` maps to `Pending(NotReady)` without sleeping. The backoff between probes lives in the audio scheduler's `Waiting` park (10ms), so the worker decode path never blocks on a syscall. (The consumer-thread `Seek` path re-probes `wait_range` under a bounded `SEEK_WAIT_TIMEOUT` wall-clock budget to prime metadata.)
 4. `Source::read_at(offset, buf)` performs the actual sync copy once the range is present.
 5. Cancellation flows top-down through the cancel-token hierarchy described in `crates/kithara-play/README.md`.
 
@@ -100,6 +100,16 @@ Defined here as the single source of truth and re-exported by other crates:
 - Keep `kithara-stream` generic. Do not move HLS-, file-, or surface-specific policy into shared contracts.
 - Treat `wait_range`, `read_at`, and the pull-driven `Peer` contract as the surface of this crate. Fix the owned invariant instead of papering over it with surface-specific hacks.
 - Shared media vocabulary stays here. Reuse `AudioCodec`, `ContainerFormat`, and `MediaInfo` instead of creating parallel cross-crate types.
+
+## Trait Bridges
+
+- `AudioCodec` → `MediaInfo` (`From`) — codec-only media info, container inferred
+- `AudioCodec` → `ContainerFormat` (`TryFrom`) — standalone container, ambiguous codecs fail
+- `&[u8]` → `AudioCodec` (`TryFrom`) — codec detection from magic prefix
+- `E: Into<SourceError>` → `StreamError` (`From`) — lift source errors into stream errors
+- `Iterator<SlotEntry>` → `BatchGroup` (`FromIterator`) — group fetch slots by cancel epoch
+- `NotReadyCause` / `PendingReason` (`Display`) — human-readable not-ready / pending reasons
+- `StreamSeekPastEof` / `StreamReadError` / `StreamPending` / `VariantChangeError` (`Display`) — reader error rendering
 
 ## Integration
 

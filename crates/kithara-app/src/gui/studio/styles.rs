@@ -1,14 +1,19 @@
 use iced::{
     Background, Border, Color, Degrees, Element, Length, Theme, gradient,
     widget::{
-        Space, button::Status as ButtonStatus, button::Style as ButtonStyle, container,
+        Space,
+        button::{Status as ButtonStatus, Style as ButtonStyle},
+        container,
         container::Style as ContainerStyle,
     },
 };
 
-use super::tokens::StudioRadius;
+use super::tokens::studio_radius;
 pub(super) use crate::gui::view::mix_colors;
-use crate::{gui::message::Message, gui::view::with_alpha, theme::gui::GuiPalette};
+use crate::{
+    gui::{message::Message, view::with_alpha},
+    theme::gui::GuiPalette,
+};
 
 pub(super) fn vertical_divider(width: f32, height: f32, color: Color) -> Element<'static, Message> {
     container(Space::new())
@@ -43,7 +48,7 @@ pub(crate) fn ghost_button_style(p: GuiPalette) -> impl Fn(&Theme, ButtonStatus)
             background,
             text_color: p.text,
             border: Border::default()
-                .rounded(StudioRadius::BUTTON)
+                .rounded(studio_radius::BUTTON)
                 .width(1.0)
                 .color(p.line_soft),
             ..ButtonStyle::default()

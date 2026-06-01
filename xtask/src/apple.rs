@@ -215,8 +215,11 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     cmd.args([
         "--lib-type",
         "static",
+        // Device build: drop default features so `symphonia` is absent —
+        // the Apple AudioToolbox backend is the sole decoder on-device.
+        "--no-default-features",
         "-F",
-        "backend-uniffi,apple,dev",
+        "uniffi,apple,dev",
         "--swift-tools-version",
         "6.0",
         "-y",

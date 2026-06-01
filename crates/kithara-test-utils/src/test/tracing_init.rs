@@ -1,4 +1,4 @@
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::EnvFilter;
 
 pub fn setup_tracing() {
     setup_tracing_with_filter("warn");
@@ -10,9 +10,22 @@ pub fn setup_tracing_with_filter(directives: &str) {
 }
 
 pub fn init_tracing(filter: EnvFilter) {
-    #[cfg(not(target_arch = "wasm32"))]
+    // RealtimeSanitizer lane (`--cfg rtsan`, the native sanitizer build only):
+    // a capturing/formatting subscriber allocates on the audio worker thread —
+    // the forbid-blocking produce core — whenever it captures, or merely
+    // *constructs* (recording `?`/`%` Debug fields keeps the callsite live via
+    // the probe layer), a decode/seek diagnostic event. Production RT threads
+    // are never synchronously logged, so install no subscriber here: callsites
+    // stay disabled and the lane verifies kithara's own RT-safety, not the test
+    // logger. Normal `just test` keeps the full fmt + probe subscriber.
+    #[cfg(rtsan)]
     {
-        use tracing_subscriber::Layer as _;
+        let _ = filter;
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), not(rtsan)))]
+    {
+        use tracing_subscriber::{Layer as _, layer::SubscriberExt, util::SubscriberInitExt};
 
         let fmt_layer = tracing_subscriber::fmt::layer()
             .with_test_writer()
@@ -24,8 +37,9 @@ pub fn init_tracing(filter: EnvFilter) {
             .try_init();
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(rtsan)))]
     {
+        use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
         use tracing_wasm::{WASMLayer, WASMLayerConfigBuilder};
 
         let mut config = WASMLayerConfigBuilder::new();

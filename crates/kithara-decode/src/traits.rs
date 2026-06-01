@@ -39,9 +39,7 @@ pub enum InputReadOutcome {
 /// the requested target itself unless it coincides). `PastEof` carries
 /// the decoder's known total duration so the caller can park at EOF
 /// without rounding.
-// Not #[non_exhaustive]: `tests/src/decode_mock.rs` constructs variants by
-// named-field syntax across crates; direct construction is part of the
-// intended mock contract (AGENTS.md "small, obviously stable exception").
+// WHY: not #[non_exhaustive] — cross-crate mock (`tests/src/decode_mock.rs`) builds variants by named fields (AGENTS.md "small, obviously stable exception").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderSeekOutcome {
     /// Decoder is now parked at `landed_at` / `landed_frame` /
@@ -264,4 +262,13 @@ pub trait Decoder: Send + 'static {
     /// calculation. Call this before seeking so the decoder can compute
     /// correct seek deltas.
     fn update_byte_len(&self, len: u64);
+
+    /// Publish reader-hook events queued during decode.
+    ///
+    /// `next_chunk` / `seek` resolve hook events on the worker's
+    /// forbid-blocking decode core but defer the bus publish into a
+    /// lock-free ring. The audio worker drains that ring from its unchecked
+    /// shell, once per pass, by calling this. Default no-op for decoders
+    /// that carry no reader hooks.
+    fn flush_reader_signals(&mut self) {}
 }

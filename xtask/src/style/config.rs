@@ -203,7 +203,6 @@ fn default_allowed_inline_markers() -> Vec<String> {
         "NOTE:",
         "WHY:",
         "HACK:",
-        "kithara:",
         "ast-grep-ignore:",
         "xtask-lint-ignore:",
     ]

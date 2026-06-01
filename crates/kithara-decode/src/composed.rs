@@ -7,7 +7,7 @@ use std::{
 };
 
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_stream::{AudioCodec, ReaderChunkSignal, ReaderSeekSignal, SharedHooks};
+use kithara_stream::{AudioCodec, BoxedHooks, ReaderChunkSignal, ReaderSeekSignal};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -26,11 +26,12 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     demuxer: D,
     byte_len_handle: Option<Arc<AtomicU64>>,
     duration: Option<Duration>,
-    /// Reader-side observer hooks. `None` skips the lock entirely on the
-    /// hot path; `Some(_)` emits per-chunk / per-seek signals after the
-    /// inner outcome resolves. Folded in from the former `HookedDecoder`
-    /// decorator — every decoder is hookable now.
-    hooks: Option<SharedHooks>,
+    /// Reader-side observer hooks. Single-owner `Box<dyn DecoderHooks>` —
+    /// `None` skips emission entirely; `Some(_)` calls `on_chunk` /
+    /// `on_seek` directly via `&mut` after the inner outcome resolves.
+    /// No lock on the produce-core. Folded in from the former
+    /// `HookedDecoder` decorator — every decoder is hookable now.
+    hooks: Option<BoxedHooks>,
     /// When `Some`, frames whose decode-time end is `<= target` are
     /// dropped before the next chunk is emitted. Cleared after the
     /// first frame past the target is consumed. Lets `seek(target)`
@@ -62,7 +63,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         pool: PcmPool,
         epoch: u64,
         byte_len_handle: Option<Arc<AtomicU64>>,
-        hooks: Option<SharedHooks>,
+        hooks: Option<BoxedHooks>,
     ) -> Self {
         let spec = codec.spec();
         let duration = demuxer.duration();
@@ -127,24 +128,18 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         PcmChunk::new(meta, buf)
     }
 
-    fn emit_chunk_signal(&self, outcome: &DecoderChunkOutcome) {
-        let Some(hooks) = self.hooks.as_ref() else {
-            return;
-        };
+    fn emit_chunk_signal(&mut self, outcome: &DecoderChunkOutcome) {
         let signal = match outcome {
             DecoderChunkOutcome::Chunk(_) => ReaderChunkSignal::Chunk,
             DecoderChunkOutcome::Pending(reason) => ReaderChunkSignal::Pending(*reason),
             DecoderChunkOutcome::Eof => ReaderChunkSignal::Eof,
         };
-        if let Ok(mut h) = hooks.lock() {
-            h.on_chunk(signal);
+        if let Some(hooks) = self.hooks.as_mut() {
+            hooks.on_chunk(signal);
         }
     }
 
-    fn emit_seek_signal(&self, outcome: &DecoderSeekOutcome) {
-        let Some(hooks) = self.hooks.as_ref() else {
-            return;
-        };
+    fn emit_seek_signal(&mut self, outcome: &DecoderSeekOutcome) {
         let signal = match outcome {
             DecoderSeekOutcome::Landed {
                 landed_byte,
@@ -156,8 +151,8 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             },
             DecoderSeekOutcome::PastEof { .. } => ReaderSeekSignal::PastEof,
         };
-        if let Ok(mut h) = hooks.lock() {
-            h.on_seek(signal);
+        if let Some(hooks) = self.hooks.as_mut() {
+            hooks.on_seek(signal);
         }
     }
 
@@ -186,10 +181,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                     drop(buf);
                     continue;
                 }
-                // Frame straddles target — trim leading samples so the
-                // emitted chunk starts AT `target`, not at the packet
-                // boundary. Sample-accurate seek without this trim
-                // leaks up to one packet's worth of pre-target audio.
+                // WHY: frame straddles target — trim leading samples (README "Seek trim").
                 if frame_pts < target && frames > 0 {
                     let live_spec = self.codec.spec();
                     let trim_frames_u64 = frames_to_trim(frame_pts, target, live_spec.sample_rate)
@@ -236,8 +228,8 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 Ok(DecoderSeekOutcome::Landed {
                     landed_byte,
                     landed_at,
-                    landed_frame: self.frame_offset,
                     preroll,
+                    landed_frame: self.frame_offset,
                 })
             }
             DemuxSeekOutcome::PastEof { duration } => {
@@ -287,6 +279,12 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
             handle.store(len, Ordering::Release);
         }
     }
+
+    fn flush_reader_signals(&mut self) {
+        if let Some(hooks) = self.hooks.as_mut() {
+            hooks.flush_pending();
+        }
+    }
 }
 
 #[cfg(all(test, feature = "symphonia"))]
@@ -303,12 +301,11 @@ mod default_priming_tests {
     use super::*;
     use crate::symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer};
 
-    const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../assets/test.mp3"
-    ));
-
     fn build_mp3_decoder() -> ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec> {
+        const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/test.mp3"
+        ));
         let cursor = Cursor::new(TEST_MP3_BYTES.to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
@@ -332,9 +329,8 @@ mod default_priming_tests {
     #[kithara::test]
     fn composed_decoder_priming_combines_encoder_and_symphonia_mp3_algo_delay() {
         let decoder = build_mp3_decoder();
-        // 576 libmp3lame encoder priming + 529 LAME-convention algo delay
+        // WHY: 1105 = 576 libmp3lame priming + 529 LAME algo delay (README "Gapless probe contract").
         assert_eq!(decoder.default_priming_frames(AudioCodec::Mp3), 1105);
-        // Codecs without overrides fall back to encoder priming only
         assert_eq!(decoder.default_priming_frames(AudioCodec::AacLc), 1024);
         assert_eq!(decoder.default_priming_frames(AudioCodec::Opus), 312);
         assert_eq!(decoder.default_priming_frames(AudioCodec::Flac), 0);
@@ -360,7 +356,7 @@ fn frames_to_trim(frame_pts: Duration, target: Duration, sample_rate: u32) -> u6
     }
     let delta_nanos = target.saturating_sub(frame_pts).as_nanos();
     let sr_u128 = u128::from(sample_rate);
-    // Round-to-nearest: (n*sr + 5e8) / 1e9 (half-up at the 0.5-sample mark).
+    // WHY: round-to-nearest sample, half-up via +5e8 before the /1e9 divide.
     let frames_u128 = delta_nanos
         .saturating_mul(sr_u128)
         .saturating_add(500_000_000)
@@ -579,10 +575,10 @@ mod test_counting_codec {
     use crate::{codec::FrameCodec, error::DecodeResult, types::PcmSpec};
 
     pub(super) struct CountingCodec {
-        pub(super) spec: PcmSpec,
-        pub(super) frames_per_call: u32,
         pub(super) decode_calls: Arc<AtomicU32>,
         pub(super) flush_calls: Arc<AtomicU32>,
+        pub(super) spec: PcmSpec,
+        pub(super) frames_per_call: u32,
     }
 
     impl CountingCodec {
@@ -643,8 +639,8 @@ mod seek_trim_tests {
 
     struct ThreeFrameDemuxer {
         track: TrackInfo,
-        idx: usize,
         held: Vec<u8>,
+        idx: usize,
     }
 
     impl Demuxer for ThreeFrameDemuxer {
@@ -721,9 +717,7 @@ mod seek_trim_tests {
             "expected Chunk, got {outcome:?}"
         );
 
-        // 2 calls: frame[0] (end=20ms ≤ 30ms target) dropped by
-        // `pending_seek_target` guard; frame[1] (end=40ms > 30ms)
-        // emitted as first chunk with leading 10ms trimmed.
+        // WHY: 2 calls — frame[0] (end=20ms ≤ 30ms target) dropped by the guard; frame[1] (end=40ms) emitted with leading 10ms trimmed.
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,
@@ -739,7 +733,7 @@ mod hook_tests {
 
     use kithara_bufpool::PcmPool;
     use kithara_stream::{
-        DecoderHooks, PendingReason, ReaderChunkSignal, ReaderSeekSignal, SharedHooks,
+        BoxedHooks, DecoderHooks, PendingReason, ReaderChunkSignal, ReaderSeekSignal,
     };
     use kithara_test_utils::kithara;
 
@@ -877,7 +871,7 @@ mod hook_tests {
             },
             1,
         );
-        let hooks: SharedHooks = Arc::new(Mutex::new(LoggingHooks { log }));
+        let hooks: BoxedHooks = Box::new(LoggingHooks { log });
         ComposedDecoder::new(
             demuxer,
             codec,
@@ -933,6 +927,44 @@ mod hook_tests {
         let mut decoder = build(demuxer, Arc::clone(&log));
         let _ = decoder.seek(target).unwrap();
         assert_eq!(log.lock().unwrap().seeks, vec![expected_signal]);
+    }
+
+    #[kithara::test]
+    fn owned_hooks_fire_exactly_once_per_chunk() {
+        let log = Arc::new(Mutex::new(CallLog::default()));
+        let demuxer = StubDemuxer::with_outcomes(
+            vec![
+                StubOutcome::Frame {
+                    data: vec![0u8; 4],
+                    pts: Duration::from_millis(40),
+                    duration: Duration::from_millis(20),
+                },
+                StubOutcome::Frame {
+                    data: vec![0u8; 4],
+                    pts: Duration::from_millis(20),
+                    duration: Duration::from_millis(20),
+                },
+                StubOutcome::Frame {
+                    data: vec![0u8; 4],
+                    pts: Duration::ZERO,
+                    duration: Duration::from_millis(20),
+                },
+            ],
+            Vec::new(),
+        );
+        let mut decoder = build(demuxer, Arc::clone(&log));
+
+        for _ in 0..3 {
+            let _ = decoder.next_chunk().unwrap();
+        }
+        let _ = decoder.next_chunk().unwrap();
+
+        // WHY: single-owner Box hooks must fire once per next_chunk — three
+        // PCM chunks then one Eof, never doubled, never dropped.
+        assert_eq!(
+            log.lock().unwrap().chunks,
+            vec!["chunk", "chunk", "chunk", "eof"],
+        );
     }
 }
 

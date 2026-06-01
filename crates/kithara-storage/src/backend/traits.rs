@@ -29,6 +29,13 @@ pub trait DriverIo: Send + Sync + 'static {
     /// truncation or read-only reopen fails).
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
 
+    /// Length of the published committed snapshot, if any.
+    ///
+    /// Returns `Some(n)` iff an immutable committed snapshot of length `n`
+    /// is currently published; `None` while active/growing or with no
+    /// snapshot. Mutually consistent with [`read_committed`](Self::read_committed).
+    fn committed_len(&self) -> Option<u64>;
+
     /// Publish a write range to the fast-path mechanism.
     ///
     /// Called by [`Resource<D>`](crate::backend::Resource) after a
@@ -55,6 +62,19 @@ pub trait DriverIo: Send + Sync + 'static {
     ///
     /// Returns error if the underlying storage read fails.
     fn read_at(&self, offset: u64, buf: &mut [u8], effective_len: u64) -> StorageResult<usize>;
+
+    /// Read bytes at `offset` from the published committed snapshot into `buf`.
+    ///
+    /// Returns `Ok(Some(n))` where `n = min(buf.len(), snapshot_len - offset)`
+    /// when a committed snapshot is published, or `Ok(None)` when none is
+    /// (the resource is active, or a concurrent `reactivate` cleared the
+    /// snapshot between a [`committed_len`](Self::committed_len) check and this
+    /// read). The caller falls back to the locked read path on `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns error only on a genuine backing-store read failure.
+    fn read_committed(&self, offset: u64, buf: &mut [u8]) -> StorageResult<Option<usize>>;
 
     /// Physical storage length (for `read_at` clamping).
     fn storage_len(&self) -> u64;

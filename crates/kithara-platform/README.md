@@ -58,6 +58,41 @@ time::sleep(std::time::Duration::from_millis(10)).await;
 
 On native these delegate to `tokio` runtime primitives, on wasm they use `setTimeout`-based scheduling.
 
+## CancellationToken
+
+`CancellationToken` is the **single** cancellation token type across the workspace —
+crates never depend on `tokio_util` directly; they use this one. It is a real-time-safe
+token: a `tokio_util::CancellationToken` (async `cancelled()` side + the wider
+propagation tree) paired with a **chain of per-node cancel flags**. `tokio_util`'s own
+`is_cancelled()` takes the `TreeNode` `Mutex<Inner>` (no atomic fast path), which traps
+under RealtimeSanitizer on the audio produce-core. `CancellationToken::is_cancelled()`
+walks `self → root` loading each node's flag (`Acquire`) — lock-free, wait-free, bounded
+by tree depth (master → consumer is 2–3 nodes), RT-safe.
+
+- `cancel()` `Release`-stores **this node's** flag **then** calls `inner.cancel()`, so a
+  thread observing the inner async cancellation (or any later `Acquire` walk) is
+  guaranteed to see the flag set; the flag can never lag the inner token.
+- `child_token()` creates a **new** flag node linked to the parent's chain. A
+  parent/master `cancel()` is observed by every descendant's lock-free `is_cancelled()`
+  (the descendant's walk reaches the parent's flag), while cancelling a child or sibling
+  never marks the parent cancelled — the correct hierarchy. `Clone` keeps the **same**
+  node (same identity), like `tokio_util`'s clone.
+- `cancelled()` / `cancelled_owned()` delegate to the inner token (async side unchanged),
+  so the token drops into `tokio::select!` exactly like a `tokio_util` token.
+
+Consumer-crate masters (`Queue`, `App`, FFI, `PlayerImpl` fallback) mint a root
+`CancellationToken` (via `new()` / `default()`) and thread `child_token()`s down the
+player → audio-worker and player → HLS-coord chains so a master `cancel()` is seen by the
+worker's lock-free read. `new()` / `default()` root a fresh hierarchy and belong only at
+marked owner sites (see the `AGENTS.md` cancel-hierarchy contract, enforced by
+`cargo xtask lint arch`).
+
+## Trait Bridges
+
+- `CancellationToken` → `CancelGroup` (`From`) — single-token group
+- `Vec<CancellationToken>` → `CancelGroup` (`From`) — multi-token group
+- `NotAvailable` / `TimeoutError` / `JoinError` / `TryCurrentError` (`Display`) — human-readable error rendering
+
 ## Integration
 
 Foundation crate used across the workspace (`kithara-storage`, `kithara-assets`, `kithara-stream`, `kithara-play`, `kithara-wasm`, and test infrastructure) to keep platform-specific branching isolated in one place.

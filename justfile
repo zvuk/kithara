@@ -101,9 +101,10 @@ doc:
 test *ARGS:
     cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
 
-# Opt-in: run tests with the L2 fixture cache enabled (nextest `cache` profile
-# runs a setup script that prepares the cache dir + exports KITHARA_FIXTURE_CACHE).
-# ~5% faster by reusing encode/mux output across the test processes in one run.
+# The L2 fixture cache is ON BY DEFAULT (build-fingerprinted temp dir, see
+# tests/src/fixture_cache.rs). This variant instead uses the nextest `cache`
+# profile, whose setup script wipes + recreates a shared cache dir and exports
+# KITHARA_FIXTURE_CACHE — an ephemeral, explicitly-scoped per-run cache.
 test-cached *ARGS:
     cargo nextest run --profile cache --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
 
@@ -124,21 +125,34 @@ test-selenium *ARGS:
 
 # RealtimeSanitizer: compile the player RT path under `-Zsanitizer=realtime`
 # and run the offline-render tests, which enter the
-# `#[sanitize(realtime = "nonblocking")]`-marked node processors without an
-# audio device. Any malloc / lock / syscall in the RT context aborts the run.
-# The `rtsan` cfg gates the attribute on, so stable/production builds are byte
+# `#[kithara::rtsan_forbid_blocking]`-marked node processors and audio-worker
+# scheduler without an audio device. Any malloc / lock / syscall in the RT
+# context aborts the run unless wrapped by `#[kithara::rtsan_allow_blocking]`.
+# The `rtsan` cfg gates the attributes on, so stable/production builds are byte
 # -identical. Requires nightly + rust-src; `--target` keeps the flags off
-# build scripts and proc-macros.
-#   just rtsan
-#   just rtsan offline_harness_smoke
-rtsan FILTER="offline_harness":
+# build scripts and proc-macros. FILTER passes through to libtest, so multiple
+# space-separated test substrings are OR-matched. Three produce-core lanes:
+#   just rtsan                       # mock decoder (suite_light, fast tripwire)
+#   just rtsan-file                  # real-decoder file-offline (suite_stress)
+#   just rtsan-hls                   # real-decoder HLS-offline (suite_stress)
+#   just rtsan "auto_advance gapless_offline_e2e"   # mock lane, custom filter
+_rtsan SUITE FILTER:
     #!/usr/bin/env bash
     set -euo pipefail
     target="$(rustc -vV | sed -n 's/^host: //p')"
     RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
     RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
-        cargo +nightly test -p kithara-integration-tests --test suite_light \
-        --target "$target" {{FILTER}} -- --nocapture
+        cargo +nightly test -p kithara-integration-tests --test {{SUITE}} \
+        --target "$target" -- --nocapture {{FILTER}}
+
+# RTSan mock produce-core lane (suite_light, fast tripwire).
+rtsan FILTER="offline_harness": (_rtsan "suite_light" FILTER)
+
+# RTSan real-decoder file-offline produce-core lane (suite_stress).
+rtsan-file FILTER="phase_continuity::file": (_rtsan "suite_stress" FILTER)
+
+# RTSan real-decoder HLS-offline produce-core lane (suite_stress).
+rtsan-hls FILTER="phase_continuity::hls": (_rtsan "suite_stress" FILTER)
 
 # Convenience: workspace tests + doc-tests in one run.
 test-all: test test-doc

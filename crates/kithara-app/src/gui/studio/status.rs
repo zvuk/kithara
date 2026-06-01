@@ -4,9 +4,9 @@ use iced::{
     widget::{Space, container, container::Style as ContainerStyle, row, text},
 };
 
-use super::tokens::{StudioRadius, StudioSize, StudioSpace, StudioType};
+use super::tokens::{studio_radius, studio_size, studio_space, studio_type};
 use crate::{
-    gui::{app::Kithara, fonts, message::Message, tokens::Gap},
+    gui::{app::Kithara, fonts, message::Message, tokens::gap},
     theme::gui::GuiPalette,
 };
 
@@ -27,16 +27,16 @@ pub(super) fn view_status_bar(state: &Kithara) -> Element<'static, Message> {
             Space::new().width(Length::Fill),
         ]
         .align_y(Alignment::Center)
-        .spacing(Gap::SECTION),
+        .spacing(gap::SECTION),
     )
-    .padding(StudioSpace::STATUS)
+    .padding(studio_space::STATUS)
     .style(status_style(p))
     .into()
 }
 
 fn status_text(label: String, p: GuiPalette) -> Element<'static, Message> {
     text(label)
-        .size(StudioType::MONO_SM)
+        .size(studio_type::MONO_SM)
         .font(fonts::mono(Weight::Medium))
         .color(p.muted)
         .into()
@@ -44,7 +44,7 @@ fn status_text(label: String, p: GuiPalette) -> Element<'static, Message> {
 
 fn separator_text(p: GuiPalette) -> Element<'static, Message> {
     text("|")
-        .size(StudioType::MONO_SM)
+        .size(studio_type::MONO_SM)
         .font(fonts::mono(Weight::Medium))
         .color(p.line)
         .into()
@@ -52,12 +52,12 @@ fn separator_text(p: GuiPalette) -> Element<'static, Message> {
 
 fn status_dot(color: Color) -> Element<'static, Message> {
     container(Space::new())
-        .width(Length::Fixed(StudioSize::STATUS_DOT))
-        .height(Length::Fixed(StudioSize::STATUS_DOT))
+        .width(Length::Fixed(studio_size::STATUS_DOT))
+        .height(Length::Fixed(studio_size::STATUS_DOT))
         .style(move |_theme: &Theme| {
             ContainerStyle::default()
                 .background(color)
-                .border(Border::default().rounded(StudioRadius::ROUND))
+                .border(Border::default().rounded(studio_radius::ROUND))
         })
         .into()
 }

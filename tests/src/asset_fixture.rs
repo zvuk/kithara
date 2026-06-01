@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use kithara_assets::{Assets, AssetsResult, BytePool, index::PinsIndex as InnerPinsIndex};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
 
 /// Test-only handle for interacting with the persisted pins index.
 ///
@@ -29,7 +29,7 @@ impl PinsIndex {
             let _ = std::fs::create_dir_all(parent);
         }
         Ok(Self {
-            inner: InnerPinsIndex::with_persist_at(path, CancellationToken::new(), pool),
+            inner: InnerPinsIndex::with_persist_at(path, CancellationToken::default(), pool),
         })
     }
 

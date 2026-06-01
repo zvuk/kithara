@@ -145,12 +145,18 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     probe_slot_idents.extend(computed_slot_idents.iter().cloned());
 
     let mut tracing_fields: Vec<TokenStream2> = Vec::with_capacity(total_wire);
-    for (name, slot) in arg_idents.iter().zip(arg_slot_idents.iter()) {
-        tracing_fields.push(quote! { #name = #slot });
-    }
-    for ((name, _), slot) in computed.iter().zip(computed_slot_idents.iter()) {
-        tracing_fields.push(quote! { #name = #slot });
-    }
+    tracing_fields.extend(
+        arg_idents
+            .iter()
+            .zip(arg_slot_idents.iter())
+            .map(|(name, slot)| quote! { #name = #slot }),
+    );
+    tracing_fields.extend(
+        computed
+            .iter()
+            .zip(computed_slot_idents.iter())
+            .map(|((name, _), slot)| quote! { #name = #slot }),
+    );
 
     let attrs = &input.attrs;
     let vis = &input.vis;
@@ -162,6 +168,7 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
             let __probe_ret = (|| #block)();
             #[cfg(any(test, feature = "probe"))]
             {
+                let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
                 ::kithara_test_utils::probe::register_probes();
                 ::kithara_test_utils::probe::Probe::record_probe(&__probe_ret, #fn_name_str);
             }
@@ -227,6 +234,7 @@ fn build_emit_entry_event(
     quote! {
         #[cfg(any(test, feature = "probe"))]
         {
+            let __rtsan_probe_permit = ::kithara_test_utils::rtsan::permit();
             ::kithara_test_utils::probe::register_probes();
             let __probe_caller = ::core::panic::Location::caller();
             let __probe_seq: u64 = ::kithara_test_utils::probe::next_probe_seq();

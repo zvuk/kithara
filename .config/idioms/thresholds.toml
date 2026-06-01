@@ -3,6 +3,10 @@
 # guard_cascade limits trimmed to surface more hot-path branch-prediction
 # offenders (see plan: Bug #2 hot-path optimization).
 
+# Test-code / build-script exclusion is now shared across all lint namespaces
+# via `.config/xtask.toml` [lint_exclude] (paths + automatic #[cfg(test)] AST
+# stripping). This file only carries idioms-specific thresholds.
+
 [branch_chains]
 # Strongest match-conversion hint — homogeneous chains test the same
 # expression with the same operator. Three arms are already a `match`.
@@ -16,7 +20,25 @@ general_arms = 5
 count_if_let = false
 
 [guard_cascade]
-# Three consecutive early-return guards (or `let-else`) are enough to
-# warrant either a parallel-compute + tuple-match, or an Option-resolver
-# extraction. See `xtask/src/idioms/checks/guard_cascade.rs` module docs.
-warn_streak = 3
+# Streak of independent early-return guards (`return`/divergent-macro;
+# break/continue loop-control and binding-dependency chains are excluded
+# by the check). 3 consecutive guards is idiomatic validation / defensive
+# flow that the parallel-compute+tuple-match remedy does not improve; the
+# decision-table anti-pattern is meaningful at 4+. See module docs.
+warn_streak = 4
+
+[retry_fallback]
+# retry_fallback flags retry/fallback vocabulary (max_retries, should_retry,
+# attempt, ...) to catch try-A-else-B chains that paper over state bugs. The
+# kithara-net retry subsystem legitimately OWNS that vocabulary and is not a
+# fallback chain — bounded HTTP backoff on 5xx/429/timeout (RetryPolicy /
+# should_retry / RetryExhausted) is degraded-mode network I/O, which AGENTS.md
+# explicitly permits as a justified fallback. Other retry/attempt sites are NOT
+# exempted here; they stay visible (baseline) so the check keeps surfacing them.
+exempt_files = [
+    "**/tests/**",
+    "**/benches/**",
+    "crates/kithara-net/src/error.rs",
+    "crates/kithara-net/src/retry.rs",
+    "crates/kithara-net/src/types.rs",
+]

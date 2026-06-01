@@ -3,6 +3,7 @@
 //! Unified event bus for the kithara audio pipeline.
 
 mod bus;
+mod deferred;
 mod event;
 mod receiver;
 mod scope;
@@ -27,14 +28,15 @@ mod queue;
 
 #[cfg(feature = "abr")]
 pub use abr::{
-    AbrEvent, AbrMode, AbrProgressSnapshot, AbrReason, BandwidthSource, VariantDuration,
-    VariantInfo,
+    AbrEvent, AbrMode, AbrProgressSnapshot, AbrReason, BandwidthSource, BoundsError,
+    VariantDuration, VariantIndex, VariantInfo,
 };
 #[cfg(feature = "app")]
 pub use app::AppEvent;
 #[cfg(feature = "audio")]
 pub use audio::{AudioEvent, AudioFormat, SeekLifecycleStage, SegmentLocation};
 pub use bus::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
+pub use deferred::DeferredBus;
 #[cfg(feature = "downloader")]
 pub use downloader::{CancelReason, DownloaderEvent, RequestId, RequestMethod, RequestPriority};
 pub use event::Event;

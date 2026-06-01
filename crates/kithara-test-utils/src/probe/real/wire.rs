@@ -322,16 +322,19 @@ pub fn bump_install_id() -> u64 {
 /// Numeric identifier of the calling OS thread.
 ///
 /// `std::thread::ThreadId` carries a private `NonZeroU64` (`as_u64()` is
-/// nightly-only) so we hash its `Debug` form. Equal `ThreadId` values
-/// hash to the same `u64`, distinct values almost certainly do not —
-/// the only consumer is "group probe events by thread" and a hash
-/// collision would fold two threads into one bucket; in 50-thread test
-/// runs that's a 64-bit-birthday non-event.
+/// nightly-only) but implements `Hash` over that inner value directly, so
+/// we hash the `ThreadId` itself — no `format!`/`String` allocation. That
+/// matters because this runs on the real-time render path (e.g.
+/// `Timeline::write_playhead`); allocating here would abort under
+/// `-Zsanitizer=realtime`. Equal `ThreadId` values hash to the same `u64`,
+/// distinct values almost certainly do not — the only consumer is "group
+/// probe events by thread" and a hash collision would fold two threads
+/// into one bucket; in 50-thread test runs that's a 64-bit-birthday
+/// non-event.
 #[must_use]
 pub fn current_thread_u64() -> u64 {
-    let id = std::thread::current().id();
     let mut hasher = DefaultHasher::new();
-    format!("{id:?}").hash(&mut hasher);
+    std::thread::current().id().hash(&mut hasher);
     hasher.finish()
 }
 

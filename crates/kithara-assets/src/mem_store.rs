@@ -7,12 +7,15 @@ use std::{
 };
 
 use dashmap::DashMap;
-use kithara_storage::{AvailabilityObserver, MemOptions, MemResource, Resource, StorageResource};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
+use kithara_storage::{
+    AvailabilityObserver, MemOptions, MemResource, Resource, ResourceStatus, StorageResource,
+};
 
 use crate::{
     AssetResourceState,
-    base::{Assets, Capabilities},
+    acquisition::AcquisitionResult,
+    base::{Assets, BaseReader, BaseWriter, Capabilities},
     deleter::AssetDeleter,
     error::{AssetsError, AssetsResult},
     identity::RequestIdentity,
@@ -49,7 +52,7 @@ impl MemCacheKey {
 #[derive(Clone, Debug)]
 pub struct MemAssetStore {
     /// Weak cache of active resources to ensure sharing.
-    active_resources: Arc<DashMap<MemCacheKey, Weak<MemResource>>>,
+    active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
     /// Single canonical removal channel. Synchronises in-memory
     /// `active_resources` clearing with the [`AvailabilityIndex`].
     /// See [`crate::deleter`].
@@ -61,7 +64,7 @@ pub struct MemAssetStore {
 
 #[derive(Debug)]
 pub(crate) struct MemAssetDeleter {
-    active_resources: Arc<DashMap<MemCacheKey, Weak<MemResource>>>,
+    active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
     availability: AvailabilityIndex,
     lru: crate::index::LruIndex,
     pins: crate::index::PinsIndex,
@@ -72,7 +75,7 @@ impl MemAssetDeleter {
         availability: AvailabilityIndex,
         pins: crate::index::PinsIndex,
         lru: crate::index::LruIndex,
-        active_resources: Arc<DashMap<MemCacheKey, Weak<MemResource>>>,
+        active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
     ) -> Self {
         Self {
             active_resources,
@@ -155,7 +158,7 @@ impl MemAssetStore {
         cancel: CancellationToken,
         mem_resource_capacity: Option<usize>,
         availability: AvailabilityIndex,
-        active_resources: Arc<DashMap<MemCacheKey, Weak<MemResource>>>,
+        active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
         deleter: Arc<dyn AssetDeleter>,
     ) -> Self {
         Self {
@@ -169,16 +172,17 @@ impl MemAssetStore {
 }
 
 impl Assets for MemAssetStore {
+    type ActiveRes = BaseWriter;
     type Context = ();
-    type IndexRes = MemResource;
-    type Res = StorageResource;
+    type IndexRes = StorageResource;
+    type ReadyRes = BaseReader;
 
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         _ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
+    ) -> AssetsResult<AcquisitionResult<BaseWriter, BaseReader>> {
         if key.rel_path().is_some_and(str::is_empty) {
             return Err(AssetsError::InvalidKey);
         }
@@ -187,7 +191,11 @@ impl Assets for MemAssetStore {
         if let Some(weak) = self.active_resources.get(&cache_key)
             && let Some(res) = weak.upgrade()
         {
-            return Ok(StorageResource::from((*res).clone()));
+            let storage = (*res).clone();
+            if matches!(storage.status(), ResourceStatus::Committed { .. }) {
+                return Ok(AcquisitionResult::Ready(BaseReader::new(storage)));
+            }
+            return Ok(AcquisitionResult::Pending(BaseWriter::new(storage)));
         }
 
         let mut options = MemOptions::default();
@@ -196,18 +204,20 @@ impl Assets for MemAssetStore {
         {
             options.capacity = capacity;
         }
-        let mem = Resource::open_with_observer(
+        let mem: MemResource = Resource::open_with_observer(
             self.cancel.clone(),
             options,
             Some(self.scoped_observer(key)),
         )
         .map_err(AssetsError::Storage)?;
 
-        let shared = Arc::new(mem);
+        let shared = Arc::new(StorageResource::from(mem));
         self.active_resources
             .insert(cache_key, Arc::downgrade(&shared));
 
-        Ok(StorageResource::from((*shared).clone()))
+        Ok(AcquisitionResult::Pending(BaseWriter::new(
+            (*shared).clone(),
+        )))
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -219,11 +229,11 @@ impl Assets for MemAssetStore {
     }
 
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        Ok(MemResource::new(self.cancel.clone()))
+        Ok(StorageResource::from(MemResource::new(self.cancel.clone())))
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        Ok(MemResource::new(self.cancel.clone()))
+        Ok(StorageResource::from(MemResource::new(self.cancel.clone())))
     }
 
     fn open_resource_with_ctx(
@@ -231,7 +241,7 @@ impl Assets for MemAssetStore {
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         _ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
+    ) -> AssetsResult<BaseReader> {
         if key.rel_path().is_some_and(str::is_empty) {
             return Err(AssetsError::InvalidKey);
         }
@@ -240,7 +250,7 @@ impl Assets for MemAssetStore {
         if let Some(weak) = self.active_resources.get(&cache_key)
             && let Some(res) = weak.upgrade()
         {
-            return Ok(StorageResource::from((*res).clone()));
+            return Ok(BaseReader::new((*res).clone()));
         }
 
         Err(IoError::new(ErrorKind::NotFound, "resource missing").into())
@@ -266,13 +276,24 @@ impl Assets for MemAssetStore {
 #[cfg(test)]
 mod tests {
     use kithara_platform::time::Duration;
-    use kithara_storage::ResourceExt;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::acquisition::{AcquisitionResult, ReadSide, WriteSide};
 
     fn make_mem_store() -> MemAssetStore {
-        MemAssetStore::new(CancellationToken::new(), None, &crate::BytePool::default())
+        MemAssetStore::new(
+            CancellationToken::default(),
+            None,
+            &crate::BytePool::default(),
+        )
+    }
+
+    fn pending(acq: AcquisitionResult<BaseWriter, BaseReader>) -> BaseWriter {
+        match acq {
+            AcquisitionResult::Pending(w) => w,
+            AcquisitionResult::Ready(_) => panic!("expected a fresh Pending writer"),
+        }
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -280,8 +301,11 @@ mod tests {
         let store = make_mem_store();
         let key = ResourceKey::relative("test_asset", "seg_0.m4s");
 
-        let res = store.acquire_resource(&key, None).unwrap();
-        assert!(matches!(res, StorageResource::Mem(_)));
+        let writer = pending(store.acquire_resource(&key, None).unwrap());
+        assert!(
+            writer.reader().path().is_none(),
+            "mem-backed resource has no on-disk path"
+        );
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -289,12 +313,12 @@ mod tests {
         let store = make_mem_store();
         let key = ResourceKey::relative("test_asset", "seg_0.m4s");
 
-        let res = store.acquire_resource(&key, None).unwrap();
-        res.write_at(0, b"segment data").unwrap();
-        res.commit(Some(12)).unwrap();
+        let writer = pending(store.acquire_resource(&key, None).unwrap());
+        writer.write_at(0, b"segment data").unwrap();
+        let reader = writer.commit(Some(12)).unwrap();
 
         let mut buf = [0u8; 12];
-        let n = res.read_at(0, &mut buf).unwrap();
+        let n = reader.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 12);
         assert_eq!(&buf, b"segment data");
     }
@@ -304,8 +328,8 @@ mod tests {
         let store = make_mem_store();
         let key = ResourceKey::relative("test_asset", "seg_0.m4s");
 
-        let res = store.acquire_resource(&key, None).unwrap();
-        assert!(res.path().is_none());
+        let writer = pending(store.acquire_resource(&key, None).unwrap());
+        assert!(writer.reader().path().is_none());
     }
 
     #[kithara::test]

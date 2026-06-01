@@ -15,18 +15,17 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir,
+    TestServerHelper, TestTempDir, auto,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
 use kithara_platform::{
-    Mutex,
+    CancellationToken, Mutex,
     time::{Duration, Instant},
     tokio::task::{spawn, spawn_blocking},
 };
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -128,7 +127,7 @@ impl EventCollector {
                         read_bg.lock_sync().push((*variant, *segment_index));
                     }
                     Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
-                        info!(to = to, ?reason, "VariantApplied");
+                        info!(to = to.get(), ?reason, "VariantApplied");
                         sw_bg.fetch_add(1, Ordering::Release);
                     }
                     _ => {}
@@ -236,7 +235,7 @@ async fn vod_manual_switch_affects_future_segments() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -244,7 +243,7 @@ async fn vod_manual_switch_affects_future_segments() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
@@ -314,6 +313,100 @@ async fn vod_manual_switch_affects_future_segments() {
     );
 }
 
+/// Deterministic regression for the urgent-down-switch reader-stall hang.
+///
+/// V0's tail (segment >= 5) is delayed far longer than the hang budget, so
+/// once the reader reaches the segment-4/5 boundary it blocks on a V0 segment
+/// V0 cannot deliver in time. The ABR raises an `UrgentDownSwitch` to the fast
+/// V1, but the Auto-mode commit historically fired only on a reader
+/// segment-boundary cross — which the undelivered segment prevents. That
+/// circular dependency stalled the reader past `KITHARA_HANG_TIMEOUT_SECS`
+/// and tripped the watchdog (the production freeze). The proactive rescue
+/// (`HlsCoord::urgent_rescue_boundary`) hands the undelivered tail to V1 at
+/// the segment boundary, so the reader finishes V0's loaded prefix and reads
+/// the rest from V1. With the delay (10s) >> hang budget (5s) the stall is
+/// deterministic: pre-fix this test trips the watchdog; post-fix it completes
+/// the full track via V1.
+#[kithara::test(
+    native,
+    tokio,
+    serial,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
+async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
+    let segment_count = 30;
+    let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
+    let pcm_data = Arc::new(create_pcm_segments(segment_count));
+
+    let server = HlsTestServer::new(HlsTestServerConfig {
+        variant_count: 2,
+        segments_per_variant: segment_count,
+        segment_size: D.segment_size,
+        segment_duration_secs: segment_duration_secs(),
+        custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
+        init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
+        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+        codecs: Some("wav".to_string()),
+        delay_rules: vec![DelayRule {
+            variant: Some(0),
+            segment_gte: Some(5),
+            delay_ms: 10_000,
+            ..Default::default()
+        }],
+        ..Default::default()
+    })
+    .await;
+
+    let url = server.url("/master.m3u8");
+    let temp_dir = TestTempDir::new();
+    let cancel = CancellationToken::default();
+    let bus = EventBus::new(8192);
+    let collector = EventCollector::new(&bus);
+
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(auto(0))
+        .build();
+
+    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus)
+        .media_info(wav_info)
+        .build();
+    let mut audio = Audio::<Stream<Hls>>::new(config)
+        .await
+        .expect("create audio");
+
+    let total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(20)))
+        .await
+        .expect("read");
+
+    let segments = collector.segments();
+    let switches = collector.switch_count();
+    let net_v1 = segments
+        .iter()
+        .filter(|s| s.variant == 1 && !s.cached)
+        .count();
+    info!(switches, net_v1, total, "urgent rescue test result");
+
+    // The reader must finish the whole track via V1, not stall on V0's
+    // undeliverable tail. A full WAV track is `segment_count * segment_size`
+    // PCM bytes; require the bulk of it (the rescue can drop at most the
+    // boundary segment to a short read, never the tail).
+    let full_frames = (segment_count * D.segment_size) as u64 / u64::from(D.channels) / 2;
+    assert!(
+        total >= full_frames * 9 / 10,
+        "reader must finish the track via V1 after the urgent rescue; \
+         got {total} frames, expected >= {} (90% of {full_frames})",
+        full_frames * 9 / 10
+    );
+    assert!(switches > 0, "an urgent down-switch must commit");
+    assert!(net_v1 > 0, "V1 must serve the tail after the rescue");
+}
+
 /// Multi-track shared ABR: quality persists across tracks, cache serves on replay.
 ///
 /// 1. Track 1, Auto(Some(0)) → plays V0 (1 Mbps); the default
@@ -377,9 +470,9 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls1 = HlsConfig::for_url(url1.clone())
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::new())
+        .cancel(CancellationToken::default())
         .events(bus1.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let config1 = AudioConfig::<Hls>::for_stream(hls1)
@@ -413,9 +506,9 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls2 = HlsConfig::for_url(url2)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::new())
+        .cancel(CancellationToken::default())
         .events(bus2.clone())
-        .initial_abr_mode(AbrMode::Manual(1))
+        .initial_abr_mode(AbrMode::manual(1))
         .build();
 
     let config2 = AudioConfig::<Hls>::for_stream(hls2)
@@ -448,9 +541,9 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls3 = HlsConfig::for_url(url1)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::new())
+        .cancel(CancellationToken::default())
         .events(bus3.clone())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let config3 = AudioConfig::<Hls>::for_stream(hls3)
@@ -533,7 +626,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -541,7 +634,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
@@ -623,7 +716,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -631,7 +724,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
@@ -661,7 +754,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
     handle
-        .set_mode(AbrMode::Manual(2))
+        .set_mode(AbrMode::manual(2))
         .expect("Manual(2) target is in the variant list");
 
     let post_total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(15)))
@@ -712,7 +805,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     // is FLAC (fLaC). Manual(3) forces the cross-codec path.
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let bus = EventBus::new(8192);
     // EventCollector's segment URL parser is HlsTestServer-specific; for
     // real-asset URLs we capture VariantApplied targets directly.
@@ -727,7 +820,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock_sync().push(to);
+                applied_bg.lock_sync().push(to.get());
             }
         }
     });
@@ -736,7 +829,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
@@ -765,7 +858,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
     handle
-        .set_mode(AbrMode::Manual(3))
+        .set_mode(AbrMode::manual(3))
         .expect("Manual(3) (FLAC variant) target must be valid");
 
     // Read for several seconds after the flip — if the decoder hangs on
@@ -838,7 +931,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -848,7 +941,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .download_batch_size(segment_count * 2)
         .build();
 
@@ -898,7 +991,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
         .expect("HLS stream must expose AbrHandle");
     let pre_switch = collector.switch_count();
     handle
-        .set_mode(AbrMode::Manual(1))
+        .set_mode(AbrMode::manual(1))
         .expect("Manual(1) target must be valid");
 
     // Give the controller a moment to react. If `set_mode` correctly
@@ -967,7 +1060,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -977,7 +1070,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .download_batch_size(segment_count * 2)
         .build();
 
@@ -1035,7 +1128,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
         .expect("HLS stream must expose AbrHandle");
     let pre_switch = collector.switch_count();
     handle
-        .set_mode(AbrMode::Manual(1))
+        .set_mode(AbrMode::manual(1))
         .expect("Manual(1) target must be valid");
 
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -1125,7 +1218,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -1134,7 +1227,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
@@ -1218,7 +1311,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     // AAC sibling of v=0) before v=3's decoder recreate fires.
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let bus = EventBus::new(8192);
 
     let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1232,7 +1325,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock_sync().push(to);
+                applied_bg.lock_sync().push(to.get());
             }
         }
     });
@@ -1241,7 +1334,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
@@ -1270,7 +1363,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
 
     // First switch: cross-codec to FLAC. Closes the variant_generation fence.
     handle
-        .set_mode(AbrMode::Manual(3))
+        .set_mode(AbrMode::manual(3))
         .expect("Manual(3) (FLAC) target valid");
 
     // Race window: same-codec switch must land BEFORE
@@ -1284,7 +1377,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     // bump fence, but shrinks `served_until` on whatever variant is
     // active and activates v=1 with `served_from = switch_at`.
     handle
-        .set_mode(AbrMode::Manual(1))
+        .set_mode(AbrMode::manual(1))
         .expect("Manual(1) (AAC sibling) target valid");
 
     // Read for 15s. Without the fix, decoder hits false EOF inside this
@@ -1369,7 +1462,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     // can downswitch to slq (v=0) for the same-codec scenario.
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let bus = EventBus::new(8192);
 
     let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1383,7 +1476,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock_sync().push(to);
+                applied_bg.lock_sync().push(to.get());
             }
         }
     });
@@ -1392,7 +1485,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Manual(2))
+        .initial_abr_mode(AbrMode::manual(2))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
@@ -1462,7 +1555,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
     handle
-        .set_mode(AbrMode::Manual(0))
+        .set_mode(AbrMode::manual(0))
         .expect("Manual(0) (slq AAC) target valid");
 
     // Phase 4 — read 10 s post-switch. Bug repro: decoder emits a
@@ -1583,7 +1676,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     // (fLaC, fmp4). Track ≈ 220 s, 37 segments each (~6 s).
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let bus = EventBus::new(8192);
 
     let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1593,7 +1686,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         loop {
             match applied_rx.recv().await {
                 Ok(Event::Abr(AbrEvent::VariantApplied { to, .. })) => {
-                    applied_bg.lock_sync().push(to);
+                    applied_bg.lock_sync().push(to.get());
                 }
                 Ok(_) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -1606,7 +1699,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
@@ -1652,7 +1745,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
     handle
-        .set_mode(AbrMode::Manual(target_variant))
+        .set_mode(AbrMode::manual(target_variant))
         .expect("Manual target valid");
 
     // Mirror the production gap between `set_mode` and seek so the

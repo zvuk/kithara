@@ -81,6 +81,21 @@ Re-exports: `AbrMode` from `kithara-abr`; `KeyProcessor`, `KeyProcessorRegistry`
 - Throughput samples are fed to ABR after each completed segment.
 - Manual ABR (`AbrMode::Manual`) overrides automatic selection — the next fetch picks the requested variant immediately.
 
+### Decoder-probe rebuild
+
+On a post-ABR switch into mid-playback, `rebuild_with_decoder_probe` rebuilds the active variant's fetch queue like `rebuild` but also enqueues `seg 0` when `from_seg > 0`. The decoder factory's probe (Symphonia format reader) reads the container's first ~1 KB to construct the codec; without `seg 0` the queue would start at `target_seg`, leaving `[0..PROBE)` unfetched and the probe hanging on `wait_range budget exceeded`.
+
+`seg 0` is required even when the variant advertises a separate init (CMAF `EXT-X-MAP`): the init covers only a small header, but the probe scans further into the first media chunk. After the probe succeeds, `decoder_seek_safe(target_time)` jumps the decoder forward, so segments `1..from_seg` are never fetched — only `seg 0`. This adds at most one extra segment per switch; if `seg 0` is already cached the scheduler skips the fetch and the queue entry resolves via `committed_final_len` in `dispatch`.
+
+### Format-change header byte range
+
+`header_byte_range` returns the byte range a demuxer reads to re-establish container state after a format change (variant flip or codec change). It returns `Ok(range)` only when recovery is applicable:
+
+- `served_from() == 0` and `init_size > 0` (fMP4 with `#EXT-X-MAP`): the virtual init range `[0..init_size)`. The decoder factory's Symphonia probe re-reads init from here.
+- `served_from() == 0` and `init_size == 0` (raw WAV/PCM with a leading header, or raw TS/AAC): the start of segment 0, where the demuxer re-parses the header.
+
+It returns `Err(FormatChangeNotApplicable)` when the variant was activated by `activate_at_segment_with_shift` (a same-codec ABR commit) and has `served_from() > 0`. Init bytes then live at the natural `[0..init_size)` while virtual space starts at `byte_shift`; same-codec playback continues through the shift without init recovery. Cross-codec recovery only runs after `reset_to_full_range` zeroes the shift. Containers with implicit framing (AAC ADTS, MP3, MPEG-TS) do not need this range — callers filter via `container_needs_init_range` before reading.
+
 ## Encryption (AES-128-CBC)
 
 Encrypted segments parse `#EXT-X-KEY` from the media playlist; `KeyManager` resolves the key URL (with `KeyProcessorRule`-driven rewriting if configured) and the asset store decrypts on read. URIs in `#EXT-X-KEY` are resolved relative to the **segment** URL, not the media-playlist URL.
@@ -91,7 +106,7 @@ Each segment is stored as its own `AssetResource` via `AssetStore` (`kithara-ass
 
 ## Seek and wait_range Contract
 
-- `Source::wait_range(start..end)` returns `Ready` only when the requested bytes are readable in the current virtual layout owned by `HlsCoord`.
+- `Source::wait_range(start..end)` is a single non-blocking readiness probe: it returns `Ready` only when the requested bytes are readable in the current virtual layout owned by `HlsCoord`, `Interrupted` while the timeline is flushing, `Eof` past total bytes, and otherwise wakes the peer downloader and returns `WaitBudgetExceeded` immediately. It never sleeps — the worker decode path stays off any blocking syscall, and the backoff between probes lives in the audio scheduler's `Waiting` park.
 - On a seek miss, the source enqueues an explicit on-demand segment fetch for the active variant and seek epoch.
 - On a mid-stream ABR switch, stale metadata offsets are discarded — the source wakes the sequential downloader rather than trusting old offsets.
 - `Eof` is returned only when the timeline is marked EOF and the requested range starts at or after the effective total bytes.

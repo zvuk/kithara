@@ -4,6 +4,7 @@ use anyhow::Result;
 
 use super::{Check, Context};
 use crate::common::{
+    exclude::non_test_line_count,
     violation::Violation,
     walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
 };
@@ -28,7 +29,7 @@ impl Check for FileSize {
                 continue;
             }
             let content = fs::read_to_string(&path)?;
-            let lines = content.lines().count();
+            let lines = non_test_line_count(&content);
             let key = rel.to_string_lossy().replace('\\', "/");
             if lines >= cfg.deny {
                 violations.push(Violation::deny(

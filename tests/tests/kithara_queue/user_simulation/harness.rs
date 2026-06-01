@@ -6,11 +6,11 @@ use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, EventReceiver, TrackId, TrackStatus, VariantInfo};
 use kithara_integration_tests::offline::OfflineSession;
 use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::CancellationToken;
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tokio::time::sleep;
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use super::actions::Action;
@@ -104,7 +104,7 @@ impl SimHarness {
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::default(),
-                CancellationToken::new(),
+                CancellationToken::default(),
             ))
             .build(),
         );
@@ -354,7 +354,7 @@ impl SimHarness {
         let pre_track = self.current_track_id();
         let pre_pos = self.position();
         let bounded = idx % 4;
-        if let Err(e) = handle.set_mode(AbrMode::Manual(bounded)) {
+        if let Err(e) = handle.set_mode(AbrMode::manual(bounded)) {
             // Out-of-bounds is acceptable — fixtures with fewer
             // variants reject the request; this is expected user
             // input on a track that doesn't expose that quality.

@@ -1,23 +1,3 @@
-//! Regression pin for the fdk-aac priming-strip bug.
-//!
-//! When [`kithara_decode::symphonia`] swapped Symphonia's native LC-only
-//! AAC decoder for an `fdk-aac`-backed implementation (HE-AAC v1/v2
-//! support — needed for prod zvuk content), the new decoder stopped
-//! honouring `CStreamInfo::outputDelay`. fdk-aac's algorithmic delay
-//! (~1600 samples for AAC-LC) was emitted as silent leading frames,
-//! producing an audible ~36 ms gap at the start of every AAC track
-//! and breaking gapless-trim heuristics downstream.
-//!
-//! This test pins the contract: **the first decoded chunk of an AAC
-//! stream must begin with the actual signal** — `outputDelay`
-//! algorithmic silence belongs inside the decoder, not in our PCM
-//! output.
-//!
-//! - On the broken adapter (`symphonia-adapter-fdk-aac` 0.2.0 used as-
-//!   is): chunk 0 is fully silent → assertion fails.
-//! - On the in-tree adapter (`kithara_decode::symphonia::aac_fdk`):
-//!   chunk 0 starts with the encoded sawtooth ramp → assertion holds.
-
 use std::io::Cursor;
 
 use kithara::decode::{DecoderConfig, DecoderFactory, PcmChunk};
@@ -53,7 +33,7 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk() {
     let mut decoder = DecoderFactory::create_with_probe(
         Cursor::new(bytes.to_vec()),
         Some("aac"),
-        &DecoderConfig::default(),
+        DecoderConfig::default(),
     )
     .expect("probe AAC decoder");
 

@@ -1,40 +1,14 @@
-//! # Kithara Audio
-//!
 //! Audio pipeline library with decoding, effects, and resampling.
 //!
-//! ## Architecture
-//!
-//! - [`Audio`] - Generic audio pipeline running in a separate thread
-//! - [`AudioConfig`] - Pipeline configuration
-//! - [`ResamplerQuality`] - Sample rate conversion quality
+//! - [`Audio`] — generic audio pipeline running in a separate thread
+//! - [`AudioConfig`] — pipeline configuration
+//! - [`ResamplerQuality`] — sample rate conversion quality
 //! - `Audio` also implements `rodio::Source` directly (requires `rodio` feature)
 //!
-//! ## Target API
-//!
-//! ```ignore
-//! use kithara_audio::{Audio, AudioConfig};
-//! use kithara_hls::{Hls, HlsConfig};
-//! use kithara_stream::Stream;
-//! use ringbuf::traits::Consumer;
-//!
-//! // HLS stream with decoding
-//! let config = AudioConfig::<Hls>::new(hls_config);
-//! let mut audio = Audio::<Stream<Hls>>::new(config).await?;
-//! sink.append(audio);  // rodio compatible
-//!
-//! // Or read PCM from channel directly
-//! while let Some(chunk) = audio.pcm_rx().try_pop() {
-//!     play_audio(chunk);
-//! }
-//!
-//! // Events via event_bus()
-//! let mut events = audio.event_bus().subscribe();
-//! while let Ok(event) = events.recv().await {
-//!     println!("Audio: {:?}", event);
-//! }
-//! ```
+//! See the crate `README.md` for usage, threading model, and architecture.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(rtsan, feature(sanitize))]
 
 mod audio;
 pub mod effects;
@@ -48,12 +22,13 @@ mod waveform;
 pub(crate) mod worker;
 
 pub use audio::Audio;
-pub use effects::eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands};
-pub use effects::timestretch::TimeStretchProcessor;
+pub use effects::{
+    eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
+    timestretch::TimeStretchProcessor,
+};
 pub use pipeline::{
     config::AudioConfig,
     fetch::{EpochValidator, Fetch},
-    track_fsm::TrackPhaseTag,
 };
 pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
 pub use traits::{
@@ -61,4 +36,4 @@ pub use traits::{
     SeekOutcome,
 };
 pub use waveform::{Envelope, PeakAccumulator};
-pub use worker::{AudioWorkerSource, handle::AudioWorkerHandle, types::ServiceClass};
+pub use worker::{AudioWorkerSource, PreloadGate, handle::AudioWorkerHandle, types::ServiceClass};

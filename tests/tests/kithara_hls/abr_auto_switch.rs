@@ -7,11 +7,11 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     events::EventBus,
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    TestTempDir, abr_fast,
+    TestTempDir, abr_fast, auto,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     signal_pcm::{Finite, SignalPcm, signal},
@@ -19,10 +19,10 @@ use kithara_integration_tests::{
     wav::create_wav_header,
 };
 use kithara_platform::{
+    CancellationToken,
     time::{Duration, Instant},
     tokio::task::{spawn, spawn_blocking},
 };
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -98,7 +98,7 @@ async fn abr_auto_switch_during_playback(
     let url = server.url("/master.m3u8");
     info!(%url, "HLS server ready with 2 variants");
 
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let bus = EventBus::new(32);
     let switches = Arc::new(AtomicUsize::new(0));
@@ -125,7 +125,7 @@ async fn abr_auto_switch_during_playback(
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
@@ -136,6 +136,8 @@ async fn abr_auto_switch_during_playback(
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create Audio<Stream<Hls>>");
+
+    let abr = audio.abr_handle();
 
     let result = spawn_blocking(move || {
         let mut buf = vec![0.0f32; 4096];
@@ -161,11 +163,21 @@ async fn abr_auto_switch_during_playback(
     .expect("spawn_blocking");
 
     let switch_count = switches.load(Ordering::Relaxed);
-    info!(switch_count, total_samples = result, "test complete");
+    let final_variant = abr.and_then(|h| h.current_variant_index());
+    info!(
+        switch_count,
+        ?final_variant,
+        total_samples = result,
+        "test complete"
+    );
 
     assert!(result > 0, "expected audio output, got 0 samples");
+    // Assert on the authoritative ABR state, not the VariantApplied event
+    // count: the event rides a bounded broadcast and can be dropped under
+    // full-suite load, but the committed variant index is lossless.
     assert!(
-        switch_count > 0,
-        "ABR must switch variant at least once during playback, got 0 switches"
+        final_variant.is_some_and(|v| v != 0),
+        "ABR must down-switch away from the slow variant 0 during playback; \
+         final variant index = {final_variant:?} (observed {switch_count} VariantApplied events)"
     );
 }

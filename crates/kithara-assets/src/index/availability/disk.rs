@@ -1,15 +1,12 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::BTreeMap,
     path::PathBuf,
     sync::{Arc, OnceLock, atomic::Ordering},
 };
 
-use kithara_platform::Mutex;
-use kithara_storage::{Atomic, MmapResource, ResourceExt, StorageError};
-use rkyv::option::ArchivedOption;
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, Mutex};
+use kithara_storage::{Atomic, MmapDriver, StorageError};
 
 use super::core::{Availability, AvailabilityIndex, InnerIndex};
 use crate::{
@@ -22,14 +19,14 @@ use crate::{
 
 pub(super) struct AvailabilityPersist {
     cancel: CancellationToken,
-    res: OnceLock<Atomic<MmapResource>>,
+    res: OnceLock<Atomic<MmapDriver>>,
     path: PathBuf,
 }
 
 impl AvailabilityIndex {
     /// Enable disk persistence rooted at `path`. Hydrates the
     /// in-memory aggregate from the existing on-disk snapshot (if
-    /// any), then caches the `Atomic<MmapResource>` for subsequent
+    /// any), then caches the `Atomic<MmapDriver>` for subsequent
     /// flushes. Idempotent: subsequent calls are no-ops.
     ///
     /// Failures (open, load) collapse silently — the aggregate
@@ -64,7 +61,7 @@ impl AvailabilityIndex {
     }
 
     /// Load the availability index from a persistent resource.
-    pub(crate) fn load_from<R: ResourceExt>(&self, res: &Atomic<R>) -> AssetsResult<()> {
+    pub(crate) fn load_from(&self, res: &Atomic<MmapDriver>) -> AssetsResult<()> {
         let mut buf = Vec::new();
         let n = res.read_into(&mut buf)?;
         if n == 0 {
@@ -89,21 +86,16 @@ impl AvailabilityIndex {
 
             for (path, res_record) in asset_record.resources.iter() {
                 let mut avail = Availability::default();
-                for r in res_record.ranges.iter() {
-                    let start = r.0.to_native();
-                    let end = r.1.to_native();
-                    avail.insert(start..end);
-                }
+                res_record
+                    .ranges
+                    .iter()
+                    .for_each(|r| avail.insert(r.0.to_native()..r.1.to_native()));
 
-                let final_len: Option<u64> = match res_record.final_len {
-                    ArchivedOption::Some(ref l) => Some(l.to_native()),
-                    ArchivedOption::None => None,
-                };
+                let final_len: Option<u64> = res_record.final_len.as_ref().map(|l| l.to_native());
 
-                if let Some(flen) = final_len {
-                    avail.mark_committed(flen);
-                } else {
-                    avail.committed = res_record.is_committed;
+                match final_len {
+                    Some(flen) => avail.mark_committed(flen),
+                    None => avail.committed = res_record.is_committed,
                 }
 
                 asset_map.insert(path.as_str().to_string(), Arc::new(Mutex::new(avail)));
@@ -118,7 +110,7 @@ impl AvailabilityIndex {
     /// resource. Used by the cross-instance roundtrip tests; the
     /// production flush path goes through [`super::Flushable::flush`].
     #[cfg(test)]
-    pub(crate) fn persist_to<R: ResourceExt>(&self, res: &Atomic<R>) -> AssetsResult<()> {
+    pub(crate) fn persist_to(&self, res: &Atomic<MmapDriver>) -> AssetsResult<()> {
         write_aggregate(&self.inner, res, false)
     }
 }
@@ -137,38 +129,34 @@ impl InnerIndex {
 }
 
 /// Serialise the aggregate into an `Atomic`-wrapped storage resource.
-fn write_aggregate<R: ResourceExt>(
+fn write_aggregate(
     inner: &InnerIndex,
-    res: &Atomic<R>,
+    res: &Atomic<MmapDriver>,
     durable: bool,
 ) -> AssetsResult<()> {
-    let mut file = AvailabilityFile {
-        version: 1,
-        assets: BTreeMap::new(),
-    };
-    for entry in &inner.assets {
-        let root = entry.key();
-        let memory_asset = entry.value();
-        let disk_asset = file
-            .assets
-            .entry(root.clone())
-            .or_insert_with(|| AssetAvailabilityFile {
-                resources: BTreeMap::new(),
-            });
-        for res_entry in &**memory_asset {
-            let path = res_entry.key();
-            let avail = res_entry.value().lock_sync();
-            let ranges = avail.ranges.iter().map(|r| (r.start, r.end)).collect();
-            disk_asset.resources.insert(
-                path.clone(),
-                ResourceAvailabilityFile {
-                    ranges,
-                    final_len: avail.final_len,
-                    is_committed: avail.committed,
-                },
-            );
-        }
-    }
+    let assets = inner
+        .assets
+        .iter()
+        .map(|entry| {
+            let resources = entry
+                .value()
+                .iter()
+                .map(|res_entry| {
+                    let record = {
+                        let avail = res_entry.value().lock_sync();
+                        ResourceAvailabilityFile {
+                            ranges: avail.ranges.iter().map(|r| (r.start, r.end)).collect(),
+                            final_len: avail.final_len,
+                            is_committed: avail.committed,
+                        }
+                    };
+                    (res_entry.key().clone(), record)
+                })
+                .collect();
+            (entry.key().clone(), AssetAvailabilityFile { resources })
+        })
+        .collect();
+    let file = AvailabilityFile { assets, version: 1 };
     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
     if durable {

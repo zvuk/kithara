@@ -68,37 +68,19 @@ impl FileSegmentIndex {
         let mut cumulative_decode_time: Option<u64> = None;
 
         for (idx, moof) in mp4.moofs.iter().enumerate() {
-            let traf = moof.trafs.first()?;
-            let decode_ticks = traf
-                .tfdt
-                .as_ref()
-                .map(|t| t.base_media_decode_time)
-                .or(cumulative_decode_time)
-                .unwrap_or(0);
-            let frag_duration_ticks: u64 = traf
-                .truns
-                .iter()
-                .map(|trun| trun_duration_ticks(trun, &traf.tfhd))
-                .sum();
-            if frag_duration_ticks == 0 {
-                return None;
-            }
-            cumulative_decode_time = Some(decode_ticks.saturating_add(frag_duration_ticks));
-
-            let byte_start = moof.start;
             let byte_end = mp4.moofs.get(idx + 1).map_or(total, |next| next.start);
-            if byte_end <= byte_start {
-                return None;
-            }
-
             let segment_index = u32::try_from(idx).ok()?;
-            segments.push(SegmentDescriptor::new(
-                byte_start..byte_end,
-                ticks_to_duration(decode_ticks, timescale),
-                ticks_to_duration(frag_duration_ticks, timescale),
-                segment_index,
-                0,
-            ));
+            let (descriptor, decode_end) = segment_descriptor(
+                moof,
+                FragmentInput {
+                    byte_end,
+                    timescale,
+                    segment_index,
+                    prev_decode_time: cumulative_decode_time,
+                },
+            )?;
+            cumulative_decode_time = Some(decode_end);
+            segments.push(descriptor);
         }
 
         Some(Self {
@@ -106,6 +88,57 @@ impl FileSegmentIndex {
             segments,
         })
     }
+}
+
+#[derive(Clone, Copy)]
+struct FragmentInput {
+    prev_decode_time: Option<u64>,
+    segment_index: u32,
+    timescale: u32,
+    byte_end: u64,
+}
+
+/// Build the [`SegmentDescriptor`] for one `moof` and return it alongside
+/// the cumulative decode-time tick count after this fragment. Returns
+/// `None` for a malformed fragment (no `traf`, zero duration, or a byte
+/// range that does not advance).
+fn segment_descriptor(
+    moof: &re_mp4::MoofBox,
+    input: FragmentInput,
+) -> Option<(SegmentDescriptor, u64)> {
+    let FragmentInput {
+        byte_end,
+        timescale,
+        segment_index,
+        prev_decode_time,
+    } = input;
+    let traf = moof.trafs.first()?;
+    let decode_ticks = traf
+        .tfdt
+        .as_ref()
+        .map(|t| t.base_media_decode_time)
+        .or(prev_decode_time)
+        .unwrap_or(0);
+    let frag_duration_ticks: u64 = traf
+        .truns
+        .iter()
+        .map(|trun| trun_duration_ticks(trun, &traf.tfhd))
+        .sum();
+    if frag_duration_ticks == 0 {
+        return None;
+    }
+    let byte_start = moof.start;
+    if byte_end <= byte_start {
+        return None;
+    }
+    let descriptor = SegmentDescriptor::new(
+        byte_start..byte_end,
+        ticks_to_duration(decode_ticks, timescale),
+        ticks_to_duration(frag_duration_ticks, timescale),
+        segment_index,
+        0,
+    );
+    Some((descriptor, decode_ticks.saturating_add(frag_duration_ticks)))
 }
 
 fn trun_duration_ticks(trun: &re_mp4::TrunBox, tfhd: &re_mp4::TfhdBox) -> u64 {

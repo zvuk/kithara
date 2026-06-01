@@ -12,10 +12,10 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 use kithara_platform::{
+    CancellationToken,
     time::Duration,
     tokio::task::{JoinHandle, spawn_blocking},
 };
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::common::{
@@ -84,12 +84,12 @@ async fn spawn_hls_instance(
     .await;
 
     let url = server.url("/master.m3u8");
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_path))
         .cancel(cancel)
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));

@@ -1,28 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! Reproduces the false-EOF auto-advance the user caught in `app.log @
-//! 06:39:13`: prod zvuk DRM track 171515249, rapid scrub to ~45%
-//! before warmup completes, decoder fails on the unbuffered range,
-//! and the queue treats the failure as a normal end-of-stream and
-//! silently advances.
-//!
-//! The fix in `crates/kithara-play/src/impls/player_resource.rs`
-//! separates the "failed" signal from `eof_seen` so that decode errors
-//! surface as `PlayerEvent::ItemDidFail` rather than `ItemDidPlayToEnd`.
-//! This test pins that contract end-to-end through the same
-//! `Queue`/`PlayerImpl`/`Downloader` stack the binary uses, against
-//! production zvuk DRM (the exact URL captured in `app.log`).
-//!
-//! The harness drives only the public APIs that UI buttons call
-//! (`Queue::append`, `select`, `seek`, `tick`, `subscribe`) — no test
-//! code lives in the `kithara-app` production crate. The control
-//! flow is driven by USDT probes (`kithara::probe`) and `EventBus`
-//! events, not by wall-clock timers, so the test reflects production
-//! state transitions rather than a guessed cadence.
-//!
-//! `#[ignore]`-gated: needs `KITHARA_DRM_PROD_*` baked at build time
-//! (see `zvuk_prod_drm_e2e.rs`).
-
 use std::{sync::Arc, time::Duration};
 
 use kithara_app::{config::AppConfig, sources::build_source};
@@ -33,12 +10,12 @@ use kithara_events::{
 };
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
 use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::CancellationToken;
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 use tokio::time::{sleep, timeout};
-use tokio_util::sync::CancellationToken;
 
 /// Captured from `app.log @ 06:39:13`. `cdn-hls-slicer.zvuk.com` →
 /// `zvuk-prod` provider in baked `app.yaml`.
@@ -76,10 +53,10 @@ struct Ctx {
 async fn build_ctx() -> Ctx {
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::new())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::default())).build(),
     );
-    let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, CancellationToken::new());
+    let flush_hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
+    let config = AppConfig::new(downloader, flush_hub, CancellationToken::default());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
             .session(OfflineSession::arc_auto())

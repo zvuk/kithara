@@ -176,29 +176,23 @@ impl AudioCodec {
     /// - `mp4a.69` or `mp4a.6B` -> `Mp3`
     #[must_use]
     pub fn parse_hls_codec(codec: &str) -> Option<Self> {
-        let codec_lower = codec.to_lowercase();
+        const PREFIXES: &[(&str, AudioCodec)] = &[
+            ("mp4a.40.29", AudioCodec::AacHeV2),
+            ("mp4a.40.34", AudioCodec::Mp3),
+            ("mp4a.40.5", AudioCodec::AacHe),
+            ("mp4a.40.2", AudioCodec::AacLc),
+            ("mp4a.69", AudioCodec::Mp3),
+            ("mp4a.6b", AudioCodec::Mp3),
+            ("flac", AudioCodec::Flac),
+            ("vorbis", AudioCodec::Vorbis),
+            ("opus", AudioCodec::Opus),
+            ("alac", AudioCodec::Alac),
+        ];
 
-        if codec_lower.starts_with("mp4a.40.29") {
-            Some(Self::AacHeV2)
-        } else if codec_lower.starts_with("mp4a.40.34") {
-            Some(Self::Mp3)
-        } else if codec_lower.starts_with("mp4a.40.5") {
-            Some(Self::AacHe)
-        } else if codec_lower.starts_with("mp4a.40.2") {
-            Some(Self::AacLc)
-        } else if codec_lower.starts_with("mp4a.69") || codec_lower.starts_with("mp4a.6b") {
-            Some(Self::Mp3)
-        } else if codec_lower.starts_with("flac") || codec_lower.starts_with("fLaC") {
-            Some(Self::Flac)
-        } else if codec_lower.starts_with("vorbis") {
-            Some(Self::Vorbis)
-        } else if codec_lower.starts_with("opus") {
-            Some(Self::Opus)
-        } else if codec_lower.starts_with("alac") {
-            Some(Self::Alac)
-        } else {
-            None
-        }
+        let codec_lower = codec.to_lowercase();
+        PREFIXES
+            .iter()
+            .find_map(|&(prefix, codec)| codec_lower.starts_with(prefix).then_some(codec))
     }
 
     /// Parse codec from HTTP Content-Type header value.
@@ -210,31 +204,24 @@ impl AudioCodec {
     #[must_use]
     pub fn parse_mime(mime: &str) -> Option<Self> {
         let m = mime.to_lowercase();
-        if m.contains("mp3") || m == "audio/mpeg" {
-            return Some(Self::Mp3);
-        }
-        if m.contains("aac") {
-            return Some(Self::AacLc);
-        }
-        if m.contains("flac") {
-            return Some(Self::Flac);
-        }
-        if m.contains("vorbis") {
-            return Some(Self::Vorbis);
-        }
-        if m.contains("opus") {
-            return Some(Self::Opus);
-        }
-        if m == "audio/ogg" {
-            return Some(Self::Vorbis);
-        }
-        if m == "audio/wav" || m == "audio/wave" || m == "audio/x-wav" {
-            return Some(Self::Pcm);
-        }
-        if m == "audio/mp4" || m == "audio/x-m4a" {
-            return Some(Self::AacLc);
-        }
-        None
+        [
+            (m.contains("mp3") || m == "audio/mpeg", Self::Mp3),
+            (m.contains("aac"), Self::AacLc),
+            (m.contains("flac"), Self::Flac),
+            (m.contains("vorbis"), Self::Vorbis),
+            (m.contains("opus"), Self::Opus),
+            (m == "audio/ogg", Self::Vorbis),
+            (
+                matches!(m.as_str(), "audio/wav" | "audio/wave" | "audio/x-wav"),
+                Self::Pcm,
+            ),
+            (
+                matches!(m.as_str(), "audio/mp4" | "audio/x-m4a"),
+                Self::AacLc,
+            ),
+        ]
+        .into_iter()
+        .find_map(|(matches, codec)| matches.then_some(codec))
     }
 }
 

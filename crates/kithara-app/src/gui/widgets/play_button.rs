@@ -8,22 +8,29 @@ use iced::{
 };
 
 use crate::{
-    gui::{icons::Icon, message::Message, view::mix_colors, view::with_alpha},
+    gui::{
+        icons::Icon,
+        message::Message,
+        view::{mix_colors, with_alpha},
+    },
     theme::gui::GuiPalette,
 };
 
-const SIZE: f32 = 56.0;
-const ICON_SIZE: f32 = 22.0;
-const BORDER_RADIUS: f32 = 8.0;
-const BORDER_WIDTH: f32 = 1.0;
-const ALPHA_DISABLED: f32 = 0.4;
-const ALPHA_GLOW_HOVER: f32 = 0.30;
-const ALPHA_GLOW_REST: f32 = 0.22;
-const GLOW_HOVER_BLUR: f32 = 11.0;
-const GLOW_HOVER_OFFSET_Y: f32 = 4.0;
-const GLOW_REST_BLUR: f32 = 4.0;
-const GLOW_REST_OFFSET_Y: f32 = 1.0;
-const BORDER_DARKEN_MIX: f32 = 0.30;
+mod consts {
+    pub(super) const SIZE: f32 = 56.0;
+    pub(super) const ICON_SIZE: f32 = 22.0;
+    pub(super) const BORDER_RADIUS: f32 = 8.0;
+    pub(super) const BORDER_WIDTH: f32 = 1.0;
+    pub(super) const ALPHA_DISABLED: f32 = 0.4;
+    pub(super) const ALPHA_GLOW_HOVER: f32 = 0.30;
+    pub(super) const ALPHA_GLOW_REST: f32 = 0.22;
+    pub(super) const GLOW_HOVER_BLUR: f32 = 11.0;
+    pub(super) const GLOW_HOVER_OFFSET_Y: f32 = 4.0;
+    pub(super) const GLOW_REST_BLUR: f32 = 4.0;
+    pub(super) const GLOW_REST_OFFSET_Y: f32 = 1.0;
+    pub(super) const BORDER_DARKEN_MIX: f32 = 0.30;
+}
+use consts::*;
 
 /// Primary play/pause control shared by compact view and DJ Studio:
 /// a solid-gold rounded square with a hover glow. The icon swaps

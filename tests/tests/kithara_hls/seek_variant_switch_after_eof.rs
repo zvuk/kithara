@@ -8,13 +8,12 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir, cancel_token,
+    TestTempDir,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     hls_test_helpers::pin_abr_variant,
-    temp_dir,
+    rt_cancel, temp_dir,
 };
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 /// Seek after ABR variant switch at EOF must not deadlock.
@@ -30,7 +29,7 @@ use tracing::info;
 )]
 async fn seek_after_variant_switch_at_eof_must_not_deadlock(
     temp_dir: TestTempDir,
-    cancel_token: CancellationToken,
+    rt_cancel: CancellationToken,
 ) {
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 3,
@@ -44,8 +43,8 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
 
     let config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(cancel_token)
-        .initial_abr_mode(AbrMode::Manual(0))
+        .cancel(rt_cancel)
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();

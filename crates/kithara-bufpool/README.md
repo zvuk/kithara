@@ -47,8 +47,12 @@ The lower-level `SharedPool`, `Pool`, `Pooled`, `PooledOwned`, `Reuse`, and `Poo
 
 ## Allocation Flow
 
-1. **Get:** lock the home shard (determined by thread ID hash) and pop a buffer. If empty, try other shards (work-stealing). If all empty, allocate a new buffer via `T::default()`.
-2. **Return (drop):** call `value.reuse(trim_capacity)` to clear and optionally shrink. If the shard is not full and `reuse()` returns `true`, push back; otherwise drop silently.
+Pool `get`/`put` are **lock-free**: each shard is a bounded [`crossbeam_queue::ArrayQueue`], so both producer and consumer recycle buffers without taking a lock — safe to call on the real-time produce/consume cores.
+
+1. **Get:** `pop` from the home shard (determined by thread ID hash). If empty, `pop` from neighbour shards (work-stealing). If all empty, allocate a new buffer via `T::default()`.
+2. **Return (drop):** call `value.reuse(trim_capacity)` to clear and optionally shrink, then `push` onto the home shard. If `reuse()` rejects the buffer or the queue is full, the buffer is dropped and its bytes released from the budget.
+
+Each shard's queue capacity is fixed at construction (`max_buffers / SHARDS`, clamped to a sane upper bound for count-unbounded pools such as `BytePool`). The byte budget — not the slot count — is the real memory cap for those pools.
 
 ## Integration
 

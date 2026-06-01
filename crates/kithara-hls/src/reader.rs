@@ -5,10 +5,15 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use kithara_events::{EventBus, HlsEvent};
+use kithara_events::{DeferredBus, EventBus, HlsEvent};
 use kithara_stream::{DecoderHooks, PrerollHint, ReaderChunkSignal, ReaderSeekSignal};
 
 use crate::coord::HlsCoord;
+
+/// Ring depth for the decode-core → shell event hand-off. The hooks
+/// resolve at most a segment-boundary and an initial-seek event per pass,
+/// so this never fills in practice; it only bounds the worst-case burst.
+const READER_EVENT_CAPACITY: usize = 256;
 
 /// Decoder→HLS reader hook bridge: turns the decoder's per-chunk and
 /// per-seek signals into [`HlsEvent`]s on the track's [`EventBus`].
@@ -21,7 +26,7 @@ use crate::coord::HlsCoord;
 pub(crate) struct HlsReaderHooks {
     coord: Arc<HlsCoord>,
     seek_epoch_handle: Arc<AtomicU64>,
-    bus: EventBus,
+    bus: DeferredBus<HlsEvent>,
     /// `(variant_index, segment_index)` of the last segment the
     /// reader was observed in. A change between `on_chunk` calls
     /// drives [`HlsEvent::SegmentReadStart`]; the same pair held
@@ -46,7 +51,7 @@ impl HlsReaderHooks {
     ) -> Self {
         let last_cursor = coord.position();
         Self {
-            bus,
+            bus: DeferredBus::new(bus, READER_EVENT_CAPACITY),
             coord,
             last_cursor,
             seek_epoch_handle,
@@ -70,7 +75,7 @@ impl HlsReaderHooks {
             return;
         }
         self.last_segment = Some(key);
-        self.bus.publish(HlsEvent::SegmentReadStart {
+        self.bus.enqueue(HlsEvent::SegmentReadStart {
             variant,
             segment_index: seg_us,
             byte_offset: seg_start,
@@ -99,7 +104,7 @@ impl HlsReaderHooks {
             None => (None, None, None),
         };
         let seek_epoch = self.seek_epoch_handle.load(Ordering::Acquire);
-        self.bus.publish(HlsEvent::ReaderSeek {
+        self.bus.enqueue(HlsEvent::ReaderSeek {
             seek_epoch,
             variant,
             segment_index,
@@ -131,7 +136,7 @@ impl DecoderHooks for HlsReaderHooks {
             return;
         };
         if let PrerollHint::Required(byte) = preroll {
-            // F.2 will replace this with self.coord.request_preroll(byte);
+            // TODO: route preroll byte to the coordinator once preroll plumbing lands.
             let _ = byte;
         }
         let Some(to) = landed_byte else {
@@ -141,5 +146,9 @@ impl DecoderHooks for HlsReaderHooks {
         self.last_cursor = to;
         self.last_segment = None;
         self.publish_seek(from, to);
+    }
+
+    fn flush_pending(&mut self) {
+        self.bus.flush();
     }
 }

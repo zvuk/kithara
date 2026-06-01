@@ -39,7 +39,7 @@ fn decode_with_probe(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &
     let data = if use_wav { audio.wav() } else { audio.mp3() };
     let reader = Cursor::new(data);
 
-    let mut decoder = DecoderFactory::create_with_probe(reader, Some(ext), &test_config()).unwrap();
+    let mut decoder = DecoderFactory::create_with_probe(reader, Some(ext), test_config()).unwrap();
     let spec = decoder.spec();
 
     assert!(spec.sample_rate > 0);
@@ -59,7 +59,7 @@ fn decode_complete(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &st
     let data = if use_wav { audio.wav() } else { audio.mp3() };
     let reader = Cursor::new(data);
 
-    let mut decoder = DecoderFactory::create_with_probe(reader, Some(ext), &test_config()).unwrap();
+    let mut decoder = DecoderFactory::create_with_probe(reader, Some(ext), test_config()).unwrap();
 
     let mut total_samples = 0;
     let mut chunk_count = 0;
@@ -89,7 +89,7 @@ fn from_media_info(
     };
     let reader = Cursor::new(data);
 
-    let mut decoder = DecoderFactory::create_from_media_info(reader, info, &test_config()).unwrap();
+    let mut decoder = DecoderFactory::create_from_media_info(reader, info, test_config()).unwrap();
     let spec = decoder.spec();
 
     assert!(spec.sample_rate > 0);
@@ -129,7 +129,7 @@ fn spec_properties(audio: EmbeddedAudio, #[case] ext: &str) {
     };
     let reader = Cursor::new(data);
 
-    let decoder = DecoderFactory::create_with_probe(reader, Some(ext), &test_config()).unwrap();
+    let decoder = DecoderFactory::create_with_probe(reader, Some(ext), test_config()).unwrap();
     assert_spec(&decoder.spec(), ext);
 }
 
@@ -138,7 +138,7 @@ fn spec_properties(audio: EmbeddedAudio, #[case] ext: &str) {
 #[case::empty(vec![])]
 fn invalid_data_fails(#[case] data: Vec<u8>) {
     let reader = Cursor::new(data);
-    let result = DecoderFactory::create_with_probe(reader, Some("wav"), &test_config());
+    let result = DecoderFactory::create_with_probe(reader, Some("wav"), test_config());
     assert!(result.is_err());
 }
 
@@ -147,7 +147,7 @@ fn truncated_data_handles_gracefully(audio: EmbeddedAudio) {
     let truncated: Vec<u8> = audio.wav().iter().take(1000).copied().collect();
     let reader = Cursor::new(truncated);
 
-    let decoder_result = DecoderFactory::create_with_probe(reader, Some("wav"), &test_config());
+    let decoder_result = DecoderFactory::create_with_probe(reader, Some("wav"), test_config());
 
     if let Ok(mut decoder) = decoder_result {
         let _ = decoder.next_chunk();
@@ -159,7 +159,7 @@ fn chunk_has_valid_samples(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.wav());
 
     let mut decoder =
-        DecoderFactory::create_with_probe(reader, Some("wav"), &test_config()).unwrap();
+        DecoderFactory::create_with_probe(reader, Some("wav"), test_config()).unwrap();
     let spec = decoder.spec();
 
     let chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
@@ -189,7 +189,7 @@ fn multiple_chunks_consistent(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.mp3());
 
     let mut decoder =
-        DecoderFactory::create_with_probe(reader, Some("mp3"), &test_config()).unwrap();
+        DecoderFactory::create_with_probe(reader, Some("mp3"), test_config()).unwrap();
     let spec = decoder.spec();
 
     let mut prev_len = None;
@@ -225,7 +225,7 @@ fn consecutive_chunks_differ(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.wav());
 
     let mut decoder =
-        DecoderFactory::create_with_probe(reader, Some("wav"), &test_config()).unwrap();
+        DecoderFactory::create_with_probe(reader, Some("wav"), test_config()).unwrap();
 
     let first_chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
     let second_chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();

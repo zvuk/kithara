@@ -14,10 +14,12 @@ use kithara::{
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::{DecoderBackend, PcmChunk},
     events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::{TestServerHelper, TestTempDir, Xorshift64, abr_fast, temp_dir};
+use kithara_integration_tests::{
+    TestServerHelper, TestTempDir, Xorshift64, abr_fast, auto, temp_dir,
+};
 use kithara_platform::{
     time::{Instant, sleep},
     tokio,
@@ -205,7 +207,7 @@ async fn build_live_audio(
         .build();
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
         .await
@@ -231,14 +233,14 @@ fn spawn_live_stats_task(
             match event {
                 Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                     if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial);
+                        locked.initial_variant = Some(initial.get());
                     }
                     if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial);
+                        locked.current_variant = Some(initial.get());
                     }
                 }
                 Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
-                    locked.current_variant = Some(to);
+                    locked.current_variant = Some(to.get());
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
                 Event::Downloader(DownloaderEvent::RequestEnqueued {
@@ -328,7 +330,7 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     info!("creating Audio<Stream<Hls>> for DRM asset");
@@ -408,7 +410,7 @@ async fn live_ephemeral_revisit_sequence_regression(
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
@@ -433,14 +435,14 @@ async fn live_ephemeral_revisit_sequence_regression(
             match event {
                 Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                     if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial);
+                        locked.initial_variant = Some(initial.get());
                     }
                     if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial);
+                        locked.current_variant = Some(initial.get());
                     }
                 }
                 Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
-                    locked.current_variant = Some(to);
+                    locked.current_variant = Some(to.get());
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
                 Event::Downloader(DownloaderEvent::RequestEnqueued {
@@ -660,7 +662,7 @@ async fn live_real_stream_seek_resume_native(
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
@@ -751,7 +753,7 @@ async fn live_stress_real_stream_seek_read_cache(
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
@@ -773,14 +775,14 @@ async fn live_stress_real_stream_seek_read_cache(
             match event {
                 Event::Abr(AbrEvent::VariantsRegistered { initial, .. }) => {
                     if locked.initial_variant.is_none() {
-                        locked.initial_variant = Some(initial);
+                        locked.initial_variant = Some(initial.get());
                     }
                     if locked.current_variant.is_none() {
-                        locked.current_variant = Some(initial);
+                        locked.current_variant = Some(initial.get());
                     }
                 }
                 Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
-                    locked.current_variant = Some(to);
+                    locked.current_variant = Some(to.get());
                     locked.variant_switches = locked.variant_switches.saturating_add(1);
                 }
                 Event::Downloader(DownloaderEvent::RequestEnqueued {
@@ -1050,7 +1052,7 @@ async fn live_ephemeral_small_cache_playback(
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
@@ -1130,7 +1132,7 @@ async fn live_ephemeral_small_cache_seek_stress(
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)

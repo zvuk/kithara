@@ -12,7 +12,7 @@ pub mod mock;
 
 pub use crate::{
     client::HttpClient,
-    error::{NetError, NetResult},
+    error::{NetError, NetResult, Retryability},
     timeout::TimeoutNet,
     traits::{ByteStream, Net, NetExt},
     types::{Compression, Headers, NetOptions, RangeSpec, RetryPolicy},

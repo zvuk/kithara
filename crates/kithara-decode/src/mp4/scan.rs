@@ -87,6 +87,10 @@ pub(crate) trait Mp4Visitor {
         ControlFlow::Continue(())
     }
 
+    fn on_track_codec(&mut self, _fourcc: [u8; 4]) -> ControlFlow<()> {
+        ControlFlow::Continue(())
+    }
+
     fn on_track_edit_list(&mut self, _entries: &[Mp4EditListEntry]) -> ControlFlow<()> {
         ControlFlow::Continue(())
     }
@@ -100,10 +104,6 @@ pub(crate) trait Mp4Visitor {
     }
 
     fn on_track_sample_rate(&mut self, _sample_rate: u32) -> ControlFlow<()> {
-        ControlFlow::Continue(())
-    }
-
-    fn on_track_codec(&mut self, _fourcc: [u8; 4]) -> ControlFlow<()> {
         ControlFlow::Continue(())
     }
 }

@@ -7,9 +7,8 @@ use std::{
 };
 
 use kithara_bufpool::BytePool;
-use kithara_platform::Mutex;
-use kithara_storage::{Atomic, MmapResource, ResourceExt, StorageError};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, Mutex};
+use kithara_storage::{Atomic, MmapDriver, StorageError};
 
 use super::core::{LruIndex, LruInner, LruState};
 use crate::{
@@ -19,7 +18,7 @@ use crate::{
 
 pub(super) struct LruPersist {
     cancel: CancellationToken,
-    res: OnceLock<Atomic<MmapResource>>,
+    res: OnceLock<Atomic<MmapDriver>>,
     path: PathBuf,
 }
 
@@ -74,7 +73,7 @@ fn hydrate_existing(
     path: &std::path::Path,
     cancel: &CancellationToken,
     pool: &BytePool,
-) -> (LruState, Option<Atomic<MmapResource>>) {
+) -> (LruState, Option<Atomic<MmapDriver>>) {
     let nonempty = fs::metadata(path).is_ok_and(|m| m.len() > 0);
     if !nonempty {
         return (LruState::default(), None);
@@ -92,7 +91,7 @@ fn hydrate_existing(
     }
 }
 
-fn read_state(res: &Atomic<MmapResource>, pool: &BytePool) -> AssetsResult<LruState> {
+fn read_state(res: &Atomic<MmapDriver>, pool: &BytePool) -> AssetsResult<LruState> {
     let mut buf = pool.get();
     let n = res.read_into(&mut buf)?;
 
@@ -114,7 +113,7 @@ fn read_state(res: &Atomic<MmapResource>, pool: &BytePool) -> AssetsResult<LruSt
     Ok(LruState::from(file))
 }
 
-fn write_state(res: &Atomic<MmapResource>, state: &LruState, durable: bool) -> AssetsResult<()> {
+fn write_state(res: &Atomic<MmapDriver>, state: &LruState, durable: bool) -> AssetsResult<()> {
     let file = LruIndexFile::from(state);
     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;

@@ -35,10 +35,12 @@ use kithara::{
     },
 };
 use kithara_audio::{ResamplerParams, ResamplerProcessor};
-use kithara_integration_tests::TestHttpServer;
-use kithara_platform::tokio::runtime::{Builder, Runtime};
+use kithara_integration_tests::{TestHttpServer, auto};
+use kithara_platform::{
+    CancellationToken,
+    tokio::runtime::{Builder, Runtime},
+};
 use tempfile::TempDir;
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 struct Consts;
@@ -335,7 +337,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                     let net = NetOptions::builder().pool_max_idle_per_host(8).build();
                     let downloader = Downloader::new(
                         DownloaderConfig::builder()
-                            .client(HttpClient::new(net, CancellationToken::new()))
+                            .client(HttpClient::new(net, CancellationToken::default()))
                             .build(),
                     );
                     let store = StoreOptions::builder()
@@ -345,7 +347,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                         .build();
                     let config = HlsConfig::for_url(url)
                         .store(store)
-                        .initial_abr_mode(AbrMode::Auto(Some(1)))
+                        .initial_abr_mode(auto(1))
                         .downloader(downloader)
                         .download_batch_size(3)
                         .look_ahead_bytes(96_000)

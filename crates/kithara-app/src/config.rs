@@ -7,7 +7,7 @@ use kithara::{
     stream::dl::Downloader,
 };
 use kithara_drm::KeyProcessorRegistry;
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
 
 use crate::{baked, theme::Palette};
 
@@ -28,8 +28,10 @@ pub struct AppConfig {
     pub downloader: Downloader,
     /// App master cancel. Single owner for the whole app subtree; the
     /// queue, player, stores, and UI listener all derive children from
-    /// it (see `main.rs`).
-    pub cancel: CancellationToken,
+    /// it (see `main.rs`). The chain flag reaches the audio worker and HLS
+    /// coord lock-free `is_cancelled()` reads; every subsystem derives its
+    /// own [`CancellationToken::child_token`] from this consumer-top master.
+    pub shutdown: CancellationToken,
     /// App-wide shared file store: concurrent consumers of one URL
     /// (player + waveform) share a single download and cache surface.
     pub file_asset_store: Arc<AssetStore>,
@@ -111,7 +113,7 @@ impl AppConfig {
         Self::builder()
             .downloader(downloader)
             .flush_hub(flush_hub)
-            .cancel(cancel)
+            .shutdown(cancel)
             .file_asset_store(file_asset_store)
             .hls_asset_store(hls_asset_store)
             .build()

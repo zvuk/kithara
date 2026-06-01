@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    num::NonZeroU16,
     sync::{
         Arc, RwLock,
         atomic::{AtomicUsize, Ordering},
@@ -20,11 +21,11 @@ use axum::{
 use bytes::Bytes;
 use futures::{StreamExt, stream};
 use kithara::net::{
-    Headers, HttpClient, Net, NetError, NetExt, NetOptions, RangeSpec, RetryPolicy, TimeoutNet,
+    Headers, HttpClient, Net, NetError, NetExt, NetOptions, RangeSpec, RetryPolicy, Retryability,
+    TimeoutNet,
 };
 use kithara_integration_tests::TestHttpServer;
-use kithara_platform::time::sleep;
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, time::sleep};
 use url::Url;
 
 type TestServer = TestHttpServer;
@@ -322,7 +323,7 @@ async fn test_server(test_router: Router) -> TestServer {
 
 #[kithara::fixture]
 fn http_client() -> HttpClient {
-    HttpClient::new(NetOptions::default(), CancellationToken::new())
+    HttpClient::new(NetOptions::default(), CancellationToken::default())
 }
 
 async fn test_get_bytes_success(client: &HttpClient, url: Url) -> Result<Bytes, NetError> {
@@ -345,7 +346,7 @@ fn auth_bearer(token: &str) -> Headers {
     headers.into()
 }
 
-/// Assert that `result` is `NetError::HttpError` with the expected status.
+/// Assert that `result` is `NetError::Status` with the expected status.
 fn assert_http_status<T: std::fmt::Debug>(
     result: Result<T, NetError>,
     expected_status: u16,
@@ -353,11 +354,12 @@ fn assert_http_status<T: std::fmt::Debug>(
 ) {
     match result {
         Ok(value) => panic!("expected HTTP error {expected_status} ({context}); got Ok({value:?})"),
-        Err(NetError::HttpError { status, .. }) => assert_eq!(
-            status, expected_status,
+        Err(NetError::Status { status, .. }) => assert_eq!(
+            status.get(),
+            expected_status,
             "wrong status for {context}: got {status}"
         ),
-        Err(other) => panic!("expected HttpError({expected_status}) for {context}; got {other:?}"),
+        Err(other) => panic!("expected Status({expected_status}) for {context}; got {other:?}"),
     }
 }
 
@@ -471,17 +473,14 @@ async fn test_http_errors(
     assert!(result.is_err());
     let error = result.err().unwrap();
 
-    let is_http_error = match &error {
-        NetError::Http(_) => true,
-        NetError::HttpError { status, .. } => {
-            assert_eq!(*status, expected_status);
-            true
-        }
-        _ => false,
+    let NetError::Status { status, .. } = &error else {
+        panic!("Expected HTTP status error, got {error:?}");
     };
-
-    assert!(is_http_error, "Expected HTTP error, got {:?}", error);
-    assert_eq!(error.is_retryable(), is_retryable);
+    assert_eq!(status.get(), expected_status);
+    assert_eq!(
+        error.retryability() == Retryability::Transient,
+        is_retryable
+    );
 }
 
 #[kithara::test(
@@ -564,7 +563,7 @@ async fn test_retry_variants(#[future] test_server: TestServer, http_client: Htt
     let url = test_server.url("/retry-test");
 
     let retry_policy = RetryPolicy::new(2, Duration::from_millis(10), Duration::from_secs(5));
-    let client = http_client.with_retry(retry_policy, CancellationToken::new());
+    let client = http_client.with_retry(retry_policy, CancellationToken::default());
 
     let result = client.get_bytes(url, None).await;
 
@@ -614,7 +613,7 @@ async fn test_invalid_url(http_client: HttpClient) {
     assert!(result.is_err(), "Should fail for invalid URL");
     let error = result.err().unwrap();
 
-    let is_acceptable_error = matches!(&error, NetError::Timeout | NetError::Http(_));
+    let is_acceptable_error = matches!(&error, NetError::Timeout | NetError::Network(_));
 
     assert!(
         is_acceptable_error,
@@ -648,7 +647,7 @@ async fn test_stream_get_returns_expected_bytes() {
     let server = TestServer::new(test_router()).await;
     let url = server.url("/test");
 
-    let client = HttpClient::new(NetOptions::default(), CancellationToken::new());
+    let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
     let mut stream = client.stream(url, None).await.unwrap();
     let mut collected = Vec::new();
 
@@ -663,7 +662,7 @@ async fn test_stream_get_returns_expected_bytes() {
 #[kithara::test(tokio)]
 async fn test_range_request_returns_correct_slice() {
     let server = TestServer::new(test_router()).await;
-    let client = HttpClient::new(NetOptions::default(), CancellationToken::new());
+    let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
     let url = server.url("/range");
 
     let mut stream = client
@@ -683,7 +682,7 @@ async fn test_range_request_returns_correct_slice() {
 #[kithara::test(tokio)]
 async fn test_headers_are_sent_correctly() {
     let server = TestServer::new(test_router()).await;
-    let client = HttpClient::new(NetOptions::default(), CancellationToken::new());
+    let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
     let url = server.url("/headers");
 
     let mut headers = HashMap::new();
@@ -696,7 +695,7 @@ async fn test_headers_are_sent_correctly() {
 #[kithara::test(tokio)]
 async fn test_get_bytes_simple() {
     let server = TestServer::new(test_router()).await;
-    let client = HttpClient::new(NetOptions::default(), CancellationToken::new());
+    let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
     let url = server.url("/test");
 
     let bytes = client.get_bytes(url, None).await.unwrap();
@@ -706,7 +705,7 @@ async fn test_get_bytes_simple() {
 #[kithara::test(tokio)]
 async fn test_head_returns_content_length() {
     let server = TestServer::new(test_router()).await;
-    let client = HttpClient::new(NetOptions::default(), CancellationToken::new());
+    let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
     let url = server.url("/head-length");
 
     let headers = client.head(url, None).await.unwrap();
@@ -719,7 +718,7 @@ async fn test_head_returns_content_length() {
 #[kithara::test(tokio)]
 async fn test_timeout_behavior() {
     let server = TestServer::new(test_router()).await;
-    let base = HttpClient::new(NetOptions::default(), CancellationToken::new());
+    let base = HttpClient::new(NetOptions::default(), CancellationToken::default());
     let timeout_duration = Duration::from_millis(10);
     let timeout_client = base.with_timeout(timeout_duration);
 
@@ -741,7 +740,7 @@ async fn test_retry_policy_exponential_backoff() {
 
 #[kithara::test(tokio)]
 async fn test_net_builder_creates_functional_client() {
-    let client = HttpClient::new(NetOptions::default(), CancellationToken::new());
+    let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
     let server = TestServer::new(test_router()).await;
     let url = server.url("/test");
 
@@ -764,7 +763,7 @@ async fn test_net_builder_with_custom_options() {
         ))
         .build();
 
-    let client = HttpClient::new(opts, CancellationToken::new());
+    let client = HttpClient::new(opts, CancellationToken::default());
 
     let server = TestServer::new(test_router()).await;
     let url = server.url("/test");
@@ -786,7 +785,7 @@ async fn test_key_request_passthrough(
     #[case] expected_first_byte: u8,
 ) {
     let server = key_test_server().await;
-    let client = HttpClient::new(NetOptions::default(), CancellationToken::new());
+    let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
     let url = server.url(path);
     let headers = bearer.map(auth_bearer);
 
@@ -822,7 +821,7 @@ async fn test_key_request_rejects_bad_credentials(
     #[case] context: &str,
 ) {
     let server = key_test_server().await;
-    let client = HttpClient::new(NetOptions::default(), CancellationToken::new());
+    let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
     let url = server.url(path);
     let headers = bearer.map(auth_bearer);
 
@@ -833,7 +832,7 @@ async fn test_key_request_rejects_bad_credentials(
 #[kithara::test(tokio)]
 async fn test_key_request_range_with_headers() {
     let server = key_test_server().await;
-    let client = HttpClient::new(NetOptions::default(), CancellationToken::new());
+    let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
     let url = server.url("/key-with-auth");
 
     let mut stream = client
@@ -858,48 +857,36 @@ async fn test_key_request_range_with_headers() {
 #[kithara::test(tokio)]
 async fn test_no_mid_stream_retry() {
     let timeout_error = NetError::Timeout;
-    assert!(
-        timeout_error.is_retryable(),
+    assert_eq!(
+        timeout_error.retryability(),
+        Retryability::Transient,
         "Timeout errors should be retryable (happen before body)"
     );
 
-    let http_500_error = NetError::HttpError {
-        status: 500,
-        url: Url::parse("http://example.com").unwrap(),
+    let status_error = |code: u16| NetError::Status {
+        status: NonZeroU16::new(code).expect("BUG: hard-coded test status is non-zero"),
+        url: Some(Url::parse("http://example.com").unwrap()),
         body: None,
     };
-    assert!(
-        http_500_error.is_retryable(),
+
+    assert_eq!(
+        status_error(500).retryability(),
+        Retryability::Transient,
         "HTTP 5xx errors should be retryable (happen before body)"
     );
-
-    let http_429_error = NetError::HttpError {
-        status: 429,
-        url: Url::parse("http://example.com").unwrap(),
-        body: None,
-    };
-    assert!(
-        http_429_error.is_retryable(),
+    assert_eq!(
+        status_error(429).retryability(),
+        Retryability::Transient,
         "HTTP 429 errors should be retryable"
     );
-
-    let http_408_error = NetError::HttpError {
-        status: 408,
-        url: Url::parse("http://example.com").unwrap(),
-        body: None,
-    };
-    assert!(
-        http_408_error.is_retryable(),
+    assert_eq!(
+        status_error(408).retryability(),
+        Retryability::Transient,
         "HTTP 408 errors should be retryable (as per reference spec)"
     );
-
-    let http_404_error = NetError::HttpError {
-        status: 404,
-        url: Url::parse("http://example.com").unwrap(),
-        body: None,
-    };
-    assert!(
-        !http_404_error.is_retryable(),
+    assert_eq!(
+        status_error(404).retryability(),
+        Retryability::Fatal,
         "HTTP 4xx errors (except 408/429) should not be retryable"
     );
 }
@@ -921,7 +908,7 @@ enum TimeoutOp {
 )]
 async fn test_timeout_matrix(#[case] path: &str, #[case] timeout: Duration, #[case] op: TimeoutOp) {
     let server = TestServer::new(test_router()).await;
-    let base = HttpClient::new(NetOptions::default(), CancellationToken::new());
+    let base = HttpClient::new(NetOptions::default(), CancellationToken::default());
     let timeout_client = TimeoutNet::new(base, timeout);
     let url = server.url(path);
 
@@ -944,7 +931,7 @@ async fn test_timeout_matrix(#[case] path: &str, #[case] timeout: Duration, #[ca
 #[kithara::test(tokio)]
 async fn test_range_behavior_contract() {
     let server = TestServer::new(test_router()).await;
-    let client = HttpClient::new(NetOptions::default(), CancellationToken::new());
+    let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
     let url = server.url("/ignore-range");
 
     let mut stream = client

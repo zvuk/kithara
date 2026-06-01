@@ -12,8 +12,7 @@ use std::{
 use kithara_platform::thread::sleep;
 #[cfg(test)]
 use kithara_platform::time::Instant;
-use kithara_platform::{Condvar, Mutex, time::Duration};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, Condvar, Mutex, time::Duration};
 
 use super::worker::WorkerSlot;
 use crate::error::AssetsResult;
@@ -109,11 +108,11 @@ pub(in crate::flush) struct HubWait {
 ///
 /// See module docs for the worker / sync-fallback semantics.
 pub struct FlushHub {
+    pub(in crate::flush) wait: Arc<HubWait>,
     pub(in crate::flush) cancel: CancellationToken,
     pub(in crate::flush) policy: FlushPolicy,
     pub(in crate::flush) flush_lock: Mutex<()>,
     pub(in crate::flush) sources: Mutex<Vec<Weak<dyn Flushable>>>,
-    pub(in crate::flush) wait: Arc<HubWait>,
     pub(in crate::flush) worker: WorkerSlot,
 }
 
@@ -122,10 +121,8 @@ impl FlushHub {
     /// synchronously through [`Self::flush_now`].
     #[must_use]
     pub fn new(cancel: CancellationToken, policy: FlushPolicy) -> Arc<Self> {
+        // NOTE: `cancel` is a caller-owned child token; `Drop` cancels it to stop the worker.
         Arc::new(Self {
-            // The caller passes a child token it owns exclusively (see
-            // the cancel-hierarchy rule): `Drop` cancels it to stop the
-            // worker without touching the shared parent (storage, app).
             cancel,
             policy,
             flush_lock: Mutex::new(()),
@@ -188,6 +185,10 @@ impl FlushHub {
         g.len()
     }
 
+    /// Force an immediate synchronous flush of all dirty indexes.
+    ///
+    /// # Errors
+    /// Returns `AssetsError` if persisting any index resource fails.
     pub fn flush_now(&self) -> AssetsResult<()> {
         let _g = self.flush_lock.lock_sync();
         {
@@ -213,14 +214,6 @@ impl FlushHub {
         self.start_worker();
     }
 
-    /// Lazily spawn the background flush worker (idempotent). Called on
-    /// the first source registration, mirroring the downloader / audio
-    /// worker lazy-start. The thread is torn down by [`FlushHub`]'s
-    /// `Drop`.
-    pub(crate) fn start_worker(self: &Arc<Self>) {
-        self.worker.start_with(self);
-    }
-
     /// Wake the worker to coalesce a burst of mutations into one
     /// background flush. Bumps the operation counter so a sustained
     /// burst eventually bypasses the debounce. The availability index
@@ -234,6 +227,14 @@ impl FlushHub {
             s.op_count = s.op_count.saturating_add(1);
         }
         self.wait.cv.notify_one();
+    }
+
+    /// Lazily spawn the background flush worker (idempotent). Called on
+    /// the first source registration, mirroring the downloader / audio
+    /// worker lazy-start. The thread is torn down by [`FlushHub`]'s
+    /// `Drop`.
+    pub(crate) fn start_worker(self: &Arc<Self>) {
+        self.worker.start_with(self);
     }
 }
 
@@ -356,7 +357,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(2)))]
     fn flush_now_drains_dirty_sources() {
-        let hub = FlushHub::new(CancellationToken::new(), fast_policy());
+        let hub = FlushHub::new(CancellationToken::default(), fast_policy());
         let src = CountingSource::new("src");
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
 
@@ -397,7 +398,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn worker_coalesces_burst_into_single_flush() {
-        let hub = FlushHub::new(CancellationToken::new(), fast_policy());
+        let hub = FlushHub::new(CancellationToken::default(), fast_policy());
         let src = CountingSource::new("burst");
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
 
@@ -425,7 +426,7 @@ mod tests {
             force_every_n_ops: NonZeroUsize::new(4).unwrap(),
             poll_interval: Duration::from_millis(20),
         };
-        let hub = FlushHub::new(CancellationToken::new(), policy);
+        let hub = FlushHub::new(CancellationToken::default(), policy);
         let src = CountingSource::new("force");
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
 
@@ -447,7 +448,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn cancel_triggers_final_flush() {
-        let cancel = CancellationToken::new();
+        let cancel = CancellationToken::default();
         let hub = FlushHub::new(cancel.clone(), fast_policy());
         let src = CountingSource::new("final");
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
@@ -465,7 +466,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn dropped_source_is_gc_d_on_next_cycle() {
-        let hub = FlushHub::new(CancellationToken::new(), fast_policy());
+        let hub = FlushHub::new(CancellationToken::default(), fast_policy());
         let src = CountingSource::new("ephemeral");
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
         drop(src);
@@ -507,7 +508,7 @@ mod tests {
             attempts: AtomicUsize::new(0),
             fail_first: AtomicBool::new(true),
         });
-        let hub = FlushHub::new(CancellationToken::new(), fast_policy());
+        let hub = FlushHub::new(CancellationToken::default(), fast_policy());
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
 
         src.dirty.store(true, Ordering::Release);
@@ -525,7 +526,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(2)))]
     fn register_lazily_starts_worker() {
-        let hub = FlushHub::new(CancellationToken::new(), fast_policy());
+        let hub = FlushHub::new(CancellationToken::default(), fast_policy());
         assert!(
             !hub.has_worker(),
             "fresh hub has no worker until a source registers"
@@ -541,7 +542,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn repeated_hub_drop_joins_cleanly() {
         for _ in 0..20 {
-            let hub = FlushHub::new(CancellationToken::new(), fast_policy());
+            let hub = FlushHub::new(CancellationToken::default(), fast_policy());
             let src = CountingSource::new("churn");
             hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
             for _ in 0..3 {

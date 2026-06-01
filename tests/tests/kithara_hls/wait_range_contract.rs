@@ -12,8 +12,7 @@ use kithara_integration_tests::{
     TestTempDir, Xorshift64,
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
 
 struct Consts;
 impl Consts {
@@ -50,8 +49,8 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
         .build();
     let config = HlsConfig::for_url(url)
         .store(store)
-        .cancel(CancellationToken::new())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .cancel(CancellationToken::default())
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
     let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
 
@@ -162,8 +161,8 @@ async fn ephemeral_small_cache_reads_entire_stream() {
         .build();
     let config = HlsConfig::for_url(url)
         .store(store)
-        .cancel(CancellationToken::new())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .cancel(CancellationToken::default())
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
     let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
 

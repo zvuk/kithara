@@ -3,7 +3,7 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::{fs, path::Path};
 
-use kithara::{assets::AssetStoreBuilder, storage::ResourceExt};
+use kithara::assets::{AcquisitionResult, AssetStoreBuilder, ReadSide, WriteSide};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
     assets::StoreOptions,
@@ -18,11 +18,10 @@ use kithara_integration_tests::create_wav_exact_bytes;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::hls_server::{HlsTestServer, HlsTestServerConfig};
 use kithara_integration_tests::signal_pcm::signal;
-use kithara_platform::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::tokio::task::spawn_blocking;
+use kithara_platform::{CancellationToken, Duration};
 #[cfg(not(target_arch = "wasm32"))]
-use tokio_util::sync::CancellationToken;
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
 
@@ -48,13 +47,17 @@ fn backend_resource_path_follows_ephemeral_flag(
     let scope = builder.build().scope("test");
 
     let key = scope.key("seg_0.m4s");
-    let res = scope
+    let AcquisitionResult::Pending(writer) = scope
         .store()
         .acquire_resource(&key, None)
-        .expect("open resource");
+        .expect("open resource")
+    else {
+        panic!("fresh acquire must be Pending");
+    };
+    let reader = writer.reader();
 
     assert_eq!(
-        res.path().is_some(),
+        reader.path().is_some(),
         expect_path,
         "resource path presence must match ephemeral flag: ephemeral={ephemeral}",
     );
@@ -117,7 +120,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let hls_config = HlsConfig::for_url(url)
         .store(
@@ -127,7 +130,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
                 .build(),
         )
         .cancel(cancel)
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));

@@ -1,5 +1,5 @@
 use kithara::storage::{MemOptions, MemResource};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
 
 /// Build a committed in-memory resource pre-filled with `data`.
 ///

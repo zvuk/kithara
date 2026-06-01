@@ -280,6 +280,12 @@ fn check_field_block(
     if fields.len() < 2 {
         return;
     }
+    // Mirror the autofix safety model: reordering across heterogeneous
+    // `#[cfg(...)]` field attributes changes which fields compile together,
+    // so the fix refuses these — detection must not flag them either.
+    if has_heterogeneous_cfg(fields) {
+        return;
+    }
     let order = build_visibility_order(&cfg.visibility_order);
 
     let actual: Vec<FieldKey> = fields
@@ -584,6 +590,76 @@ struct S {
         assert!(
             skipped.iter().any(|s| s.contains("floating")),
             "skipped: {skipped:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod detect_tests {
+    use super::*;
+
+    fn default_cfg() -> StructFieldOrderConfig {
+        StructFieldOrderConfig {
+            visibility_order: vec![
+                "pub".to_string(),
+                "pub(crate)".to_string(),
+                "pub(super)".to_string(),
+                "pub(in)".to_string(),
+                "private".to_string(),
+            ],
+            exempt_attrs: vec!["repr".to_string()],
+        }
+    }
+
+    /// Run the detection scan over a snippet and return the violation keys.
+    fn detect(src: &str) -> Vec<String> {
+        let cfg = default_cfg();
+        let file = syn::parse_file(src).unwrap_or_else(|e| panic!("parse failed: {e}\n---\n{src}"));
+        let mut out = Vec::new();
+        scan_items(&cfg, "fixture.rs", &file.items, &mut Vec::new(), &mut out);
+        out.into_iter().map(|v| v.key).collect()
+    }
+
+    #[test]
+    fn out_of_order_visibility_is_flagged() {
+        let src = "\
+struct S {
+    private_field: u32,
+    pub public_field: u32,
+}
+";
+        assert_eq!(detect(src).len(), 1, "homogeneous struct must still fire");
+    }
+
+    #[test]
+    fn heterogeneous_cfg_is_not_flagged() {
+        let src = "\
+struct S {
+    z: u32,
+    #[cfg(feature = \"x\")]
+    a: u32,
+}
+";
+        assert!(
+            detect(src).is_empty(),
+            "reordering across a `#[cfg]` boundary is unsafe — must not flag"
+        );
+    }
+
+    #[test]
+    fn homogeneous_cfg_still_flagged() {
+        let src = "\
+struct S {
+    #[cfg(test)]
+    z: u32,
+    #[cfg(test)]
+    a: u32,
+}
+";
+        assert_eq!(
+            detect(src).len(),
+            1,
+            "uniform `#[cfg(test)]` on every field is safe to reorder — must still flag"
         );
     }
 }

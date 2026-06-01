@@ -1,14 +1,13 @@
 use std::{num::NonZeroUsize, ops::Range, sync::Arc};
 
-use kithara_assets::{AssetResource, AssetStore, ResourceKey};
+use kithara_assets::{AssetReader, AssetStore, ReadSide, ResourceKey};
 use kithara_events::EventBus;
-use kithara_platform::time::Duration;
-use kithara_storage::{ResourceExt, WaitOutcome};
+use kithara_platform::{CancellationToken, Mutex, time::Duration};
+use kithara_storage::WaitOutcome;
 use kithara_stream::{
     AudioCodec, MediaInfo, ReadOutcome, SegmentDescriptor, SourcePhase, StreamError, Timeline,
     dl::PeerHandle,
 };
-use tokio_util::sync::CancellationToken;
 use tracing::trace;
 use url::Url;
 
@@ -44,7 +43,7 @@ impl FileSource {
     /// pulse interrupts any in-flight reads — see
     /// `kithara-play/README.md` "Cancel Hierarchy".
     pub(crate) fn local(
-        res: AssetResource,
+        reader: AssetReader,
         coord: Arc<FileCoord>,
         bus: EventBus,
         backend: Arc<AssetStore>,
@@ -60,7 +59,9 @@ impl FileSource {
             },
             FileAssetCtx {
                 backend,
-                res,
+                reader,
+                writer: Mutex::new(None),
+                raw: None,
                 key,
                 headers: None,
                 url: Url::parse("file:///local")
@@ -115,7 +116,7 @@ impl kithara_stream::Source for FileSource {
 
     fn len(&self) -> Option<u64> {
         let from_coord = self.coord.total_bytes();
-        let from_res = self.inner.asset.res.len();
+        let from_res = self.inner.asset.reader.len();
         from_coord.or(from_res)
     }
 
@@ -129,13 +130,13 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        let contains = self.inner.asset.res.contains_range(range.clone());
+        let contains = self.inner.asset.reader.contains_range(range.clone());
         if contains {
             return SourcePhase::Ready;
         }
 
         let from_coord = self.coord.total_bytes();
-        let from_res = self.inner.asset.res.len();
+        let from_res = self.inner.asset.reader.len();
         let past_eof = from_coord
             .or(from_res)
             .is_some_and(|total| total > 0 && range.start >= total);
@@ -162,7 +163,7 @@ impl kithara_stream::Source for FileSource {
         let n = self
             .inner
             .asset
-            .res
+            .reader
             .read_at(offset, buf)
             .map_err(|e| StreamError::Source(FileSourceError::Storage(e).into()))?;
 
@@ -179,13 +180,13 @@ impl kithara_stream::Source for FileSource {
         self.coord.set_position(pos);
     }
 
-    fn take_reader_hooks(&mut self) -> Option<kithara_stream::SharedHooks> {
+    fn take_reader_hooks(&mut self) -> Option<kithara_stream::BoxedHooks> {
         let hooks = super::reader::FileReaderHooks::new(
             self.inner.source.bus.clone(),
             Arc::clone(&self.coord),
             self.coord.timeline().seek_epoch_handle(),
         );
-        Some(Arc::new(std::sync::Mutex::new(hooks)))
+        Some(Box::new(hooks))
     }
 
     fn timeline(&self) -> Timeline {
@@ -213,7 +214,7 @@ impl kithara_stream::Source for FileSource {
 
         self.inner
             .asset
-            .res
+            .reader
             .wait_range(range)
             .map_err(|e| StreamError::Source(FileSourceError::Storage(e).into()))
     }
@@ -242,7 +243,7 @@ impl kithara_stream::SegmentLayout for FileSegmentLayout {
     }
 
     fn len(&self) -> Option<u64> {
-        self.inner.asset.res.len()
+        self.inner.asset.reader.len()
     }
 
     fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {

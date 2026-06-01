@@ -176,15 +176,6 @@ pub(crate) fn bridge_is_playing() -> bool {
     })
 }
 
-/// Read process count from the bridge-captured shared state.
-pub(crate) fn bridge_process_count() -> u64 {
-    BRIDGE_PLAYER_STATE.with(|cell| {
-        cell.borrow()
-            .as_ref()
-            .map_or(0, |s| s.process_count.load(Ordering::Relaxed))
-    })
-}
-
 /// Pre-initialise the audio context and AudioWorklet eagerly.
 ///
 /// Must be called on the main thread **after** [`session_client()`] has

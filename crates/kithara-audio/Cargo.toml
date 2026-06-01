@@ -13,6 +13,7 @@ categories = ["multimedia::audio"]
 workspace = true
 
 [dependencies]
+arc-swap = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
 kithara-abr = { workspace = true }
@@ -26,7 +27,6 @@ biquad = { workspace = true }
 rubato = { workspace = true }
 audioadapter-buffers = { workspace = true }
 smallvec = { workspace = true }
-tokio-util = { workspace = true }
 ringbuf = { workspace = true }
 tracing = { workspace = true }
 kithara-platform = { workspace = true }
@@ -57,7 +57,6 @@ symphonia = ["kithara-decode/symphonia"]
 fdk-aac = ["kithara-decode/fdk-aac"]
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
-tokio-util = { workspace = true, features = ["full"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }
@@ -70,7 +69,6 @@ web-sys = { workspace = true, features = [
 [dev-dependencies]
 kithara-audio = { path = ".", default-features = false, features = ["mock", "probe", "symphonia"] }
 assert_no_alloc = { workspace = true }
-tokio-util = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }

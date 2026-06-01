@@ -46,7 +46,7 @@ pub(super) async fn run_tui(queue: Arc<Queue>, config: &crate::config::AppConfig
     let controller = Arc::new(StateController::new(
         Arc::clone(&queue),
         config.clone(),
-        config.cancel.child_token(),
+        config.shutdown.child_token(),
     ));
 
     let mut ui_handle = task::spawn_blocking(move || run_ui_loop(&controller, &palette));
@@ -407,7 +407,7 @@ fn cycle_quality(controller: &StateController, dir: i32) {
     };
 
     if let Some(handle) = controller.queue().current_abr_handle() {
-        let mode = chosen.map_or(AbrMode::Auto(None), AbrMode::Manual);
+        let mode = chosen.map_or(AbrMode::Auto(None), AbrMode::manual);
         if let Err(err) = handle.set_mode(mode) {
             controller.mutate(|st| st.status_note = Some(format!("abr failed: {err}")));
             return;

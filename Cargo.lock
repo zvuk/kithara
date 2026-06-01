@@ -3988,7 +3988,6 @@ dependencies = [
  "num-traits",
  "proptest",
  "thiserror 2.0.18",
- "tokio-util",
  "tracing",
  "unimock",
  "wasm-bindgen-test",
@@ -4020,7 +4019,6 @@ dependencies = [
  "serde",
  "serde_yml",
  "tokio",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -4054,7 +4052,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-util",
  "tracing",
  "unimock",
  "url",
@@ -4066,6 +4063,7 @@ name = "kithara-audio"
 version = "0.0.1-alpha2"
 dependencies = [
  "aes",
+ "arc-swap",
  "assert_no_alloc",
  "audioadapter-buffers",
  "axum",
@@ -4098,7 +4096,6 @@ dependencies = [
  "rubato 2.0.0",
  "smallvec",
  "tempfile",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
  "unimock",
@@ -4112,10 +4109,12 @@ dependencies = [
 name = "kithara-bufpool"
 version = "0.0.1-alpha2"
 dependencies = [
+ "crossbeam-queue",
  "hotpath",
  "kithara-bufpool",
  "kithara-platform",
  "kithara-test-macros",
+ "kithara-test-utils",
  "kithara-workspace-hack",
  "wasm-bindgen-test",
 ]
@@ -4188,6 +4187,7 @@ dependencies = [
 name = "kithara-events"
 version = "0.0.1-alpha2"
 dependencies = [
+ "crossbeam-queue",
  "dashmap",
  "delegate",
  "kithara-events",
@@ -4198,6 +4198,7 @@ dependencies = [
  "num-traits",
  "portable-atomic",
  "smallvec",
+ "tracing",
  "url",
  "wasm-bindgen-test",
 ]
@@ -4214,8 +4215,10 @@ dependencies = [
  "jni 0.22.4",
  "js-sys",
  "kithara",
+ "kithara-abr",
  "kithara-drm",
  "kithara-events",
+ "kithara-hls",
  "kithara-platform",
  "kithara-play",
  "kithara-queue",
@@ -4225,9 +4228,9 @@ dependencies = [
  "num-traits",
  "rand 0.10.1",
  "rustls-platform-verifier",
+ "send_wrapper",
  "thiserror 2.0.18",
  "tokio",
- "tokio-util",
  "tracing",
  "tracing-android",
  "tracing-log",
@@ -4264,7 +4267,6 @@ dependencies = [
  "reqwest",
  "tempfile",
  "thiserror 2.0.18",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -4288,7 +4290,6 @@ dependencies = [
  "kithara-workspace-hack",
  "libfuzzer-sys",
  "tempfile",
- "tokio-util",
  "url",
 ]
 
@@ -4324,7 +4325,6 @@ dependencies = [
  "serial_test",
  "tempfile",
  "thiserror 2.0.18",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
  "unimock",
@@ -4388,7 +4388,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
- "tokio-util",
  "tower",
  "tower-http",
  "tracing",
@@ -4424,7 +4423,6 @@ dependencies = [
  "reqwest",
  "thiserror 2.0.18",
  "tokio",
- "tokio-util",
  "tower",
  "tracing",
  "tracing-subscriber",
@@ -4438,6 +4436,7 @@ name = "kithara-platform"
 version = "0.0.1-alpha2"
 dependencies = [
  "console_error_panic_hook",
+ "delegate",
  "futures",
  "js-sys",
  "kithara-platform",
@@ -4448,6 +4447,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tokio_with_wasm",
+ "tracing",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
@@ -4485,7 +4485,6 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.18",
  "thunderdome",
- "tokio-util",
  "tracing",
  "unimock",
  "url",
@@ -4506,7 +4505,6 @@ dependencies = [
  "kithara-workspace-hack",
  "thiserror 2.0.18",
  "tokio",
- "tokio-util",
  "tracing",
 ]
 
@@ -4514,6 +4512,7 @@ dependencies = [
 name = "kithara-storage"
 version = "0.0.1-alpha2"
 dependencies = [
+ "arc-swap",
  "bon",
  "crossbeam-queue",
  "delegate",
@@ -4528,7 +4527,6 @@ dependencies = [
  "rangemap",
  "tempfile",
  "thiserror 2.0.18",
- "tokio-util",
  "tracing",
  "unimock",
  "wasm-bindgen-test",
@@ -4542,6 +4540,7 @@ dependencies = [
  "bitflags 2.11.1",
  "bon",
  "bytes",
+ "dashmap",
  "delegate",
  "futures",
  "hotpath",
@@ -4558,7 +4557,6 @@ dependencies = [
  "thiserror 2.0.18",
  "thunderdome",
  "tokio-stream",
- "tokio-util",
  "tracing",
  "unimock",
  "url",
@@ -4590,14 +4588,12 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
  "tracing-wasm",
  "unimock",
  "url",
  "usdt",
- "web-time",
 ]
 
 [[package]]
@@ -4611,6 +4607,9 @@ dependencies = [
  "clap",
  "clap_builder",
  "cpal",
+ "crossbeam-utils",
+ "derive_more",
+ "derive_more-impl",
  "dof",
  "either",
  "errno",
@@ -4620,13 +4619,14 @@ dependencies = [
  "form_urlencoded",
  "futures",
  "futures-channel",
+ "futures-core",
  "futures-executor",
  "futures-io",
+ "futures-sink",
  "futures-util",
  "getrandom 0.3.4",
  "getrandom 0.4.2",
  "half",
- "hashbrown 0.15.5",
  "hashbrown 0.16.1",
  "hashbrown 0.17.1",
  "hotpath",
@@ -4642,7 +4642,6 @@ dependencies = [
  "memchr",
  "miniz_oxide",
  "mio",
- "nu-ansi-term",
  "num-integer",
  "num-rational",
  "num-traits",
@@ -7358,6 +7357,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "send_wrapper"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
+
+[[package]]
 name = "serde"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8600,12 +8605,8 @@ checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
 dependencies = [
  "bytes",
  "futures-core",
- "futures-io",
  "futures-sink",
- "futures-util",
- "hashbrown 0.15.5",
  "pin-project-lite",
- "slab",
  "tokio",
 ]
 

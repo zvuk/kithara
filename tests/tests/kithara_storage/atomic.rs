@@ -4,13 +4,12 @@ use kithara::storage::MemResource;
 use kithara::storage::{MmapOptions, MmapResource, Resource};
 use kithara::{
     bufpool::BytePool,
-    storage::{ResourceExt, StorageError},
+    storage::{ResourceRead, StorageError, StorageResource},
 };
 use kithara_integration_tests::{TestTempDir, cancel_token, cancel_token_cancelled, temp_dir};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread;
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
 
 #[cfg(not(target_arch = "wasm32"))]
 type TestResource = MmapResource;
@@ -49,7 +48,7 @@ fn atomic_resource_path_method(temp_dir: TestTempDir, cancel_token: Cancellation
 
     assert_eq!(atomic.path(), Some(file_path.as_path()));
 
-    atomic
+    let atomic = atomic
         .write_all(b"test data")
         .expect("write should succeed");
     assert_eq!(atomic.path(), Some(file_path.as_path()));
@@ -67,7 +66,7 @@ fn atomic_resource_write_read_success(
 ) {
     let atomic = open_test_resource(&temp_dir, &format!("{}.dat", test_name), cancel_token);
 
-    atomic.write_all(test_data).expect("write should succeed");
+    let atomic = atomic.write_all(test_data).expect("write should succeed");
 
     let mut buf = BytePool::default().get();
     atomic.read_into(&mut buf).expect("read should succeed");
@@ -78,7 +77,7 @@ fn atomic_resource_write_read_success(
 fn atomic_resource_empty_write_read(temp_dir: TestTempDir, cancel_token: CancellationToken) {
     let atomic = open_test_resource(&temp_dir, "empty.dat", cancel_token);
 
-    atomic.write_all(b"").expect("write should succeed");
+    let atomic = atomic.write_all(b"").expect("write should succeed");
 
     let mut buf = BytePool::default().get();
     let n = atomic.read_into(&mut buf).expect("read should succeed");
@@ -122,15 +121,13 @@ fn atomic_resource_cancelled_operations(
     cancel_token_cancelled: CancellationToken,
 ) {
     let atomic = open_test_resource(&temp_dir, "cancelled.dat", cancel_token_cancelled);
+    let reader = atomic.reader();
 
-    let write_result = atomic.write_all(b"data");
-    assert!(
-        write_result.is_err(),
-        "write_all should fail when cancelled"
-    );
+    let write_result = atomic.write_at(0, b"data");
+    assert!(write_result.is_err(), "write_at should fail when cancelled");
 
     let mut buf = BytePool::default().get();
-    let read_result = atomic.read_into(&mut buf);
+    let read_result = reader.read_into(&mut buf);
     assert!(read_result.is_err(), "read_into should fail when cancelled");
 
     let commit_result = atomic.commit(None);
@@ -143,20 +140,20 @@ fn atomic_resource_cancelled_operations(
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn atomic_resource_fail_propagation(temp_dir: TestTempDir, cancel_token: CancellationToken) {
     let atomic = open_test_resource(&temp_dir, "failed.dat", cancel_token);
+    let reader = atomic.reader();
 
+    // `fail` consumes the writer: writing/committing after a failure is a
+    // compile error now (the writer is gone), not a runtime rejection. The
+    // reader observes the failure.
     atomic.fail("test failure".to_string());
 
-    let write_result = atomic.write_all(b"data");
-    assert!(write_result.is_err(), "write_all should fail after fail()");
-
     let mut buf = BytePool::default().get();
-    let read_result = atomic.read_into(&mut buf);
+    let read_result = reader.read_into(&mut buf);
     assert!(read_result.is_err(), "read_into should fail after fail()");
-
-    let commit_result = atomic.commit(None);
+    let mut probe = [0u8; 4];
     assert!(
-        matches!(commit_result, Err(StorageError::Failed(_))),
-        "commit should return Failed"
+        matches!(reader.read_at(0, &mut probe), Err(StorageError::Failed(_))),
+        "read should surface Failed"
     );
 }
 
@@ -167,7 +164,11 @@ fn atomic_resource_fail_propagation(temp_dir: TestTempDir, cancel_token: Cancell
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 async fn atomic_resource_concurrent_writes(temp_dir: TestTempDir, cancel_token: CancellationToken) {
-    let atomic = open_test_resource(&temp_dir, "concurrent.dat", cancel_token);
+    let atomic = StorageResource::from(open_test_resource(
+        &temp_dir,
+        "concurrent.dat",
+        cancel_token,
+    ));
 
     let atomic_clone = atomic.clone();
     let handle1 = spawn_blocking(move || atomic_clone.write_all(b"data1"));
@@ -209,12 +210,12 @@ fn atomic_resource_invalid_path(temp_dir: TestTempDir, cancel_token: Cancellatio
 fn atomic_resource_large_file_operations() {
     let temp_dir = TestTempDir::new();
     let file_path = temp_dir.path().join("large.dat");
-    let cancel_token = CancellationToken::new();
+    let cancel_token = CancellationToken::default();
 
     let atomic = open_mmap_at(file_path, cancel_token);
 
     let large_data = vec![0x42; 10 * 1024 * 1024];
-    atomic.write_all(&large_data).unwrap();
+    let atomic = atomic.write_all(&large_data).unwrap();
 
     let mut buf = BytePool::default().get();
     atomic.read_into(&mut buf).unwrap();

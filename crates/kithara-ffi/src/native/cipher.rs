@@ -11,12 +11,12 @@ use crate::observer::FfiKeyProcessor;
 /// Wraps `kithara_drm::UniqueBinaryCipher` for use from Swift/Kotlin.
 /// Also implements `FfiKeyProcessor` so it can be passed directly
 /// to `AudioPlayer.setKeyProcessor()`.
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct FfiCipher {
     inner: Mutex<RustCipher>,
 }
 
-#[cfg_attr(feature = "backend-uniffi", uniffi::export)]
+#[cfg_attr(feature = "uniffi", uniffi::export)]
 impl FfiCipher {
     /// Create a new cipher from a key string.
     ///
@@ -24,7 +24,7 @@ impl FfiCipher {
     /// `&str` across the FFI boundary by cloning on the bridge side, which
     /// keeps Rust callers free of unnecessary allocations.
     #[must_use]
-    #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
+    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     pub fn new(key: &str) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(RustCipher::new(key)),
@@ -37,7 +37,7 @@ impl FfiCipher {
     }
 }
 
-#[cfg_attr(feature = "backend-uniffi", uniffi::export)]
+#[cfg_attr(feature = "uniffi", uniffi::export)]
 impl FfiKeyProcessor for FfiCipher {
     fn process_key(&self, key: Vec<u8>, _salt: String) -> Vec<u8> {
         self.decrypt(key)

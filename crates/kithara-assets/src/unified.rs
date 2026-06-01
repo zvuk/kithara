@@ -10,9 +10,9 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
-use rangemap::RangeSet;
 #[cfg(test)]
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
+use rangemap::RangeSet;
 
 use crate::{
     AssetResourceState,
@@ -22,7 +22,7 @@ use crate::{
     index::{AvailabilityIndex, DemandEntry, DemandIndex, DemandLease, ProducerHandle},
     key::ResourceKey,
     scope::AssetScope,
-    store::{AssetResource, MemStore},
+    store::{AssetReader, AssetResource, MemStore},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{disk_store::DiskAssetStore, store::DiskStore};
@@ -134,7 +134,6 @@ where
     }
 
     /// Return the crate-private aggregate availability handle.
-    // ast-grep-ignore: idioms.match-self-conversion
     pub(crate) fn availability(&self) -> &AvailabilityIndex {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -258,7 +257,7 @@ where
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
-    ) -> AssetsResult<AssetResource<Ctx>> {
+    ) -> AssetsResult<AssetReader<Ctx>> {
         delegate_to_store!(self, open_resource, key, identity)
     }
 
@@ -271,7 +270,7 @@ where
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         ctx: Option<Ctx>,
-    ) -> AssetsResult<AssetResource<Ctx>> {
+    ) -> AssetsResult<AssetReader<Ctx>> {
         delegate_to_store!(self, open_resource_with_ctx, key, identity, ctx)
     }
 
@@ -323,7 +322,7 @@ where
         Self::Disk {
             store,
             availability: AvailabilityIndex::new(),
-            demand: DemandIndex::new(CancellationToken::new()),
+            demand: DemandIndex::new(CancellationToken::default()),
             base: None,
         }
     }
@@ -338,7 +337,7 @@ where
         Self::Mem {
             store,
             availability: AvailabilityIndex::new(),
-            demand: DemandIndex::new(CancellationToken::new()),
+            demand: DemandIndex::new(CancellationToken::default()),
         }
     }
 }

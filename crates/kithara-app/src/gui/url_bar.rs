@@ -21,50 +21,55 @@ use crate::{
     theme::gui::GuiPalette,
 };
 
-const BAR_RADIUS: f32 = 10.0;
-const BORDER_WIDTH: f32 = 1.0;
-const INPUT_FONT: f32 = 12.5;
-const INPUT_PAD_V: f32 = 11.0;
-const INPUT_PAD_LEFT: f32 = 14.0;
-/// Right padding reserved on the input so typed text never slides under
-/// the stacked chip + submit button. The input cannot reflow around an
-/// overlay, so this space is held permanently.
-const INPUT_PAD_RIGHT: f32 = 120.0;
-const OVERLAY_PAD_RIGHT: f32 = 5.0;
-const ROW_GAP: f32 = 10.0;
-const CHIP_FONT: f32 = 9.5;
-const FLASH_FONT: f32 = 10.0;
-const CHIP_PAD_X: f32 = 7.0;
-const CHIP_PAD_Y: f32 = 3.0;
-const CHIP_RADIUS: f32 = 4.0;
-const SUBMIT_SIZE: f32 = 32.0;
-const SUBMIT_RADIUS: f32 = 7.0;
-const SUBMIT_ICON: f32 = 14.0;
-const PLACEHOLDER_ALPHA: f32 = 0.6;
-const SELECTION_ALPHA: f32 = 0.4;
-const FOCUS_BORDER_MIX: f32 = 0.55;
-const FLASH_BORDER_MIX: f32 = 0.6;
-const CHIP_BORDER_ALPHA: f32 = 0.3;
-const FLASH_BG_ALPHA: f32 = 0.14;
-const FLASH_BORDER_ALPHA: f32 = 0.3;
-const GRADIENT_ALPHA: f32 = 0.85;
-const SUBMIT_DISABLED_BG_ALPHA: f32 = 0.55;
-/// Submit-button border: accent at 60% over black.
-const SUBMIT_BORDER_MIX: f32 = 0.6;
-const SUBMIT_SHADOW_ALPHA: f32 = 0.3;
-const SUBMIT_SHADOW_BLUR: f32 = 14.0;
-const SUBMIT_SHADOW_OFFSET_Y: f32 = 4.0;
-const FLASH_EXPIRE_MS: u64 = 2200;
+mod consts {
+    use iced::Color;
 
-/// Dark glyph color on the active (gold) submit button (#1a1408).
-const SUBMIT_FG: Color = Color {
-    r: 26.0 / 255.0,
-    g: 20.0 / 255.0,
-    b: 8.0 / 255.0,
-    a: 1.0,
-};
+    pub(super) const BAR_RADIUS: f32 = 10.0;
+    pub(super) const BORDER_WIDTH: f32 = 1.0;
+    pub(super) const INPUT_FONT: f32 = 12.5;
+    pub(super) const INPUT_PAD_V: f32 = 11.0;
+    pub(super) const INPUT_PAD_LEFT: f32 = 14.0;
+    /// Right padding reserved on the input so typed text never slides under
+    /// the stacked chip + submit button. The input cannot reflow around an
+    /// overlay, so this space is held permanently.
+    pub(super) const INPUT_PAD_RIGHT: f32 = 120.0;
+    pub(super) const OVERLAY_PAD_RIGHT: f32 = 5.0;
+    pub(super) const ROW_GAP: f32 = 10.0;
+    pub(super) const CHIP_FONT: f32 = 9.5;
+    pub(super) const FLASH_FONT: f32 = 10.0;
+    pub(super) const CHIP_PAD_X: f32 = 7.0;
+    pub(super) const CHIP_PAD_Y: f32 = 3.0;
+    pub(super) const CHIP_RADIUS: f32 = 4.0;
+    pub(super) const SUBMIT_SIZE: f32 = 32.0;
+    pub(super) const SUBMIT_RADIUS: f32 = 7.0;
+    pub(super) const SUBMIT_ICON: f32 = 14.0;
+    pub(super) const PLACEHOLDER_ALPHA: f32 = 0.6;
+    pub(super) const SELECTION_ALPHA: f32 = 0.4;
+    pub(super) const FOCUS_BORDER_MIX: f32 = 0.55;
+    pub(super) const FLASH_BORDER_MIX: f32 = 0.6;
+    pub(super) const CHIP_BORDER_ALPHA: f32 = 0.3;
+    pub(super) const FLASH_BG_ALPHA: f32 = 0.14;
+    pub(super) const FLASH_BORDER_ALPHA: f32 = 0.3;
+    pub(super) const GRADIENT_ALPHA: f32 = 0.85;
+    pub(super) const SUBMIT_DISABLED_BG_ALPHA: f32 = 0.55;
+    /// Submit-button border: accent at 60% over black.
+    pub(super) const SUBMIT_BORDER_MIX: f32 = 0.6;
+    pub(super) const SUBMIT_SHADOW_ALPHA: f32 = 0.3;
+    pub(super) const SUBMIT_SHADOW_BLUR: f32 = 14.0;
+    pub(super) const SUBMIT_SHADOW_OFFSET_Y: f32 = 4.0;
+    pub(super) const FLASH_EXPIRE_MS: u64 = 2200;
 
-const PLACEHOLDER: &str = "Audio URL \u{2014} mp3, flac, m3u8, opus\u{2026}";
+    /// Dark glyph color on the active (gold) submit button (#1a1408).
+    pub(super) const SUBMIT_FG: Color = Color {
+        r: 26.0 / 255.0,
+        g: 20.0 / 255.0,
+        b: 8.0 / 255.0,
+        a: 1.0,
+    };
+
+    pub(super) const PLACEHOLDER: &str = "Audio URL \u{2014} mp3, flac, m3u8, opus\u{2026}";
+}
+use consts::*;
 
 /// View-local state for the paste-an-audio-URL bar. The committed queue
 /// is owned by the player; this only holds the in-flight text and the

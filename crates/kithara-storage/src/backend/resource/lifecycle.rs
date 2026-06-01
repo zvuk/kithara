@@ -1,18 +1,19 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Range, path::Path};
+use std::{ops::Range, path::Path, sync::atomic::Ordering};
 
 use crate::{
     StorageResult,
-    backend::{resource::state::Resource, traits::DriverIo},
+    backend::{resource::state::ResourceCore, traits::DriverIo},
     resource::{ResourceStatus, range_covered_by},
 };
 
-impl<D: DriverIo> Resource<D> {
+impl<D: DriverIo> ResourceCore<D> {
     pub(super) fn commit_inner(&self, final_len: Option<u64>) -> StorageResult<()> {
         self.check_health()?;
 
         self.inner.driver.commit(final_len)?;
+        self.inner.committed.store(true, Ordering::Release);
 
         {
             let mut state = self.inner.state.lock_sync();
@@ -47,6 +48,13 @@ impl<D: DriverIo> Resource<D> {
         if range.is_empty() {
             return true;
         }
+        // Lock-free committed fast path. A published committed snapshot covers the
+        // whole `[0, committed_len)` (both drivers are linear — `valid_window()` is
+        // `None`, no eviction — so a snapshot implies no gaps), so coverage reduces
+        // to a bound check.
+        if let Some(committed_len) = self.inner.driver.committed_len() {
+            return range.end <= committed_len;
+        }
         let state = self.inner.state.lock_sync();
         range_covered_by(&state.available, &range)
     }
@@ -60,6 +68,15 @@ impl<D: DriverIo> Resource<D> {
     }
 
     pub(super) fn len_inner(&self) -> Option<u64> {
+        // The committed snapshot stays published across a `reactivate` so reads
+        // remain consistent, so confirm the *lifecycle* is still committed (the
+        // lock-free flag) before reporting its length as the resource's final
+        // length. A reactivated (being-rewritten) resource has no known total.
+        if self.inner.committed.load(Ordering::Acquire)
+            && let Some(committed_len) = self.inner.driver.committed_len()
+        {
+            return Some(committed_len);
+        }
         let state = self.inner.state.lock_sync();
         state.final_len
     }
@@ -88,6 +105,7 @@ impl<D: DriverIo> Resource<D> {
         }
 
         self.inner.driver.reactivate()?;
+        self.inner.committed.store(false, Ordering::Release);
 
         {
             let mut state = self.inner.state.lock_sync();
@@ -97,6 +115,17 @@ impl<D: DriverIo> Resource<D> {
         }
         self.inner.condvar.notify_all();
         Ok(())
+    }
+
+    /// Whether dropping an uncommitted writer should mark the core failed.
+    /// `false` once the resource is committed, already failed, or cancelled
+    /// (cancellation is a routine shutdown, not a writer error).
+    pub(super) fn should_fail_on_drop(&self) -> bool {
+        if self.inner.cancel.is_cancelled() {
+            return false;
+        }
+        let state = self.inner.state.lock_sync();
+        !state.committed && state.failed.is_none()
     }
 
     pub(super) fn status_inner(&self) -> ResourceStatus {

@@ -2,7 +2,7 @@ use std::{io::stderr, sync::Once};
 
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*};
 
-#[cfg_attr(feature = "backend-uniffi", uniffi::export)]
+#[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn init_logging(level: u8) {
     static INIT: Once = Once::new();
 

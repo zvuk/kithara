@@ -111,9 +111,9 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         .collect();
 
     let features: &str = if matches!(profile, BuildProfile::Release) {
-        "backend-uniffi,android"
+        "uniffi,android"
     } else {
-        "backend-uniffi,android,dev,test"
+        "uniffi,android,dev,test"
     };
 
     let mut cmd = Command::new("cargo");
@@ -123,7 +123,16 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         .args(&ndk_targets)
         .arg("-o")
         .arg(&jni_dir)
-        .args(["build", "-p", "kithara-ffi", "--features", features]);
+        // Device build: drop default features so `symphonia` is absent —
+        // the Android MediaCodec backend is the sole decoder on-device.
+        .args([
+            "build",
+            "-p",
+            "kithara-ffi",
+            "--no-default-features",
+            "--features",
+            features,
+        ]);
 
     if matches!(profile, BuildProfile::Release) {
         cmd.arg("--release");
@@ -152,7 +161,7 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         // symphonia gives the host bindgen build a DecoderBackend
         // variant (the android MediaCodec variant is target_os-gated
         // and absent when compiling the bindgen bin for the host).
-        "backend-uniffi,symphonia",
+        "uniffi,symphonia",
     ]);
     if matches!(profile, BuildProfile::Release) {
         cmd.arg("--release");

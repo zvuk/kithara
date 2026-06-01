@@ -12,6 +12,7 @@ use kithara_integration_tests::{
     offline::OfflineSession, temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::CancellationToken;
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::{
@@ -19,7 +20,6 @@ use kithara_stream::{
     dl::{Downloader, DownloaderConfig},
 };
 use tokio::time::sleep;
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use super::{
@@ -192,13 +192,13 @@ async fn run_multi(helper: &TestServerHelper, kinds: &[TrackKind], actions: Vec<
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::mp3_streamhq(TrackKind::Mp3StreamHq, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::Manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::Manual(3))]
+#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::Manual(3))]
+#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::manual(3))]
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(3))]
+#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_seek_forward_unbuffered_repro(#[case] kind: TrackKind, #[case] abr: AbrMode) {
     let helper = TestServerHelper::new().await;
     run_single(
@@ -216,13 +216,13 @@ async fn user_sim_seek_forward_unbuffered_repro(#[case] kind: TrackKind, #[case]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::mp3_streamhq(TrackKind::Mp3StreamHq, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::Manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::Manual(3))]
+#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::Manual(3))]
+#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::manual(3))]
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(3))]
+#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_seek_backward_repro(#[case] kind: TrackKind, #[case] abr: AbrMode) {
     let helper = TestServerHelper::new().await;
     run_single(&helper, kind, abr, scenarios::seek_backward_repro()).await;
@@ -234,13 +234,13 @@ async fn user_sim_seek_backward_repro(#[case] kind: TrackKind, #[case] abr: AbrM
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::mp3_streamhq(TrackKind::Mp3StreamHq, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::Manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::Manual(3))]
+#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::Manual(3))]
+#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::manual(3))]
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(3))]
+#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_seek_near_end_repro(#[case] kind: TrackKind, #[case] abr: AbrMode) {
     let helper = TestServerHelper::new().await;
     run_single(&helper, kind, abr, scenarios::seek_near_end_repro()).await;
@@ -251,12 +251,12 @@ async fn user_sim_seek_near_end_repro(#[case] kind: TrackKind, #[case] abr: AbrM
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(90)))]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::Manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::Manual(3))]
+#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(3))]
+#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_seek_backward_after_long_play(#[case] kind: TrackKind, #[case] abr: AbrMode) {
     let helper = TestServerHelper::new().await;
     run_single(
@@ -272,12 +272,12 @@ async fn user_sim_seek_backward_after_long_play(#[case] kind: TrackKind, #[case]
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(90)))]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::Manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::Manual(3))]
+#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(3))]
+#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_seek_backward_after_natural_eof(#[case] kind: TrackKind, #[case] abr: AbrMode) {
     let helper = TestServerHelper::new().await;
     run_single(
@@ -296,13 +296,13 @@ async fn user_sim_seek_backward_after_natural_eof(#[case] kind: TrackKind, #[cas
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::Manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::Manual(3))]
+#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::Manual(3))]
+#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::manual(3))]
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(3))]
+#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_scripted_forward_back_end(#[case] kind: TrackKind, #[case] abr: AbrMode) {
     let helper = TestServerHelper::new().await;
     run_single(&helper, kind, abr, scenarios::scripted_forward_back_end()).await;
@@ -313,12 +313,12 @@ async fn user_sim_scripted_forward_back_end(#[case] kind: TrackKind, #[case] abr
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(240)))]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::Manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::Manual(3))]
+#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(3))]
+#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_random_seed_42(#[case] kind: TrackKind, #[case] abr: AbrMode) {
     let helper = TestServerHelper::new().await;
     run_single(&helper, kind, abr, scenarios::random_seed(42, 12)).await;
@@ -327,12 +327,12 @@ async fn user_sim_random_seed_42(#[case] kind: TrackKind, #[case] abr: AbrMode) 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(240)))]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::Manual(0))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::Manual(3))]
+#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
+#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(0))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(3))]
+#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
+#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_random_seed_1337(#[case] kind: TrackKind, #[case] abr: AbrMode) {
     let helper = TestServerHelper::new().await;
     run_single(&helper, kind, abr, scenarios::random_seed(1337, 12)).await;
@@ -344,10 +344,10 @@ async fn user_sim_random_seed_1337(#[case] kind: TrackKind, #[case] abr: AbrMode
 /// HLS + DRM matrix; ABR Auto since that's the default users hit.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::Manual(3))]
+#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(3))]
+#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_long_play_then_seek_backward(#[case] kind: TrackKind, #[case] abr: AbrMode) {
     let helper = TestServerHelper::new().await;
     run_single(
@@ -362,10 +362,10 @@ async fn user_sim_long_play_then_seek_backward(#[case] kind: TrackKind, #[case] 
 /// 30 s playback then forward seek — Bug #5 path on long playback.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::Manual(3))]
+#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(3))]
+#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
 async fn user_sim_long_play_then_seek_forward(#[case] kind: TrackKind, #[case] abr: AbrMode) {
     let helper = TestServerHelper::new().await;
     run_single(&helper, kind, abr, scenarios::long_play_then_seek_forward()).await;
@@ -400,7 +400,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            CancellationToken::new(),
+            CancellationToken::default(),
         ))
         .build(),
     );
@@ -465,10 +465,10 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
 /// user dragging the slider. Loader has to cancel and restart fetches.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::Manual(0))]
+#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(0))]
+#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
 async fn user_sim_seek_storm(#[case] kind: TrackKind, #[case] abr: AbrMode) {
     let helper = TestServerHelper::new().await;
     run_single(&helper, kind, abr, scenarios::seek_storm()).await;
@@ -484,13 +484,13 @@ async fn user_sim_seek_storm(#[case] kind: TrackKind, #[case] abr: AbrMode) {
 /// breaking the working path while fixing the Auto one.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
-#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::Manual(3))]
-#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::Manual(0))]
+#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
+#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
-#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::Manual(3))]
+#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::manual(3))]
 #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
-#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(3))]
-#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(0))]
+#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(3))]
+#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::manual(0))]
 async fn user_sim_auto_abr_upswitch_then_seek_burst(#[case] kind: TrackKind, #[case] abr: AbrMode) {
     let helper = TestServerHelper::new().await;
     run_single(
@@ -662,10 +662,10 @@ struct ProdCtx {
 fn build_prod_ctx() -> ProdCtx {
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::new())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::default())).build(),
     );
-    let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, CancellationToken::new());
+    let flush_hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
+    let config = AppConfig::new(downloader, flush_hub, CancellationToken::default());
     ProdCtx {
         config,
         cache: TestTempDir::new(),

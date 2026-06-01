@@ -12,6 +12,7 @@
 )]
 
 pub mod abr_fixtures;
+pub use abr_fixtures::auto;
 pub mod alac_fixture;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod apple_warmup;

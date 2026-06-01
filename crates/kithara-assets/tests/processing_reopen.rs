@@ -11,15 +11,24 @@ use cbc::{
     Encryptor,
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
+use kithara_assets::{AcquisitionResult, AssetStoreBuilder, ProcessChunkFn, ReadSide, WriteSide};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_platform::time::Duration;
-use kithara_storage::{ResourceExt, ResourceStatus};
+use kithara_storage::ResourceStatus;
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 
 const ROOT: &str = "processed-asset";
 const DRM_ROOT: &str = "processed-drm-asset";
+
+/// Stream `data` through a Pending writer and commit it.
+fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8]) {
+    let AcquisitionResult::Pending(w) = acq else {
+        panic!("expected a Pending writer");
+    };
+    w.write_at(0, data).unwrap();
+    drop(w.commit(Some(data.len() as u64)).unwrap());
+}
 
 fn xor_process_fn(call_count: Arc<AtomicUsize>) -> ProcessChunkFn<()> {
     Arc::new(move |input, output, _ctx: &mut (), _is_last| {
@@ -64,26 +73,24 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
     let plaintext = b"segment-0-payload";
     let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5A).collect();
 
-    {
-        let res = scope
+    write_commit(
+        scope
             .store()
             .acquire_resource_with_ctx(&key0, None, Some(()))
-            .unwrap();
-        res.write_at(0, plaintext).unwrap();
-        res.commit(Some(plaintext.len() as u64)).unwrap();
-    }
+            .unwrap(),
+        plaintext,
+    );
 
     let calls_after_first_commit = call_count.load(Ordering::SeqCst);
     assert!(calls_after_first_commit > 0);
 
-    {
-        let res = scope
+    write_commit(
+        scope
             .store()
             .acquire_resource_with_ctx(&key1, None, Some(()))
-            .unwrap();
-        res.write_at(0, b"other-segment").unwrap();
-        res.commit(Some(13)).unwrap();
-    }
+            .unwrap(),
+        b"other-segment",
+    );
 
     let calls_after_eviction = call_count.load(Ordering::SeqCst);
     assert!(calls_after_eviction > calls_after_first_commit);
@@ -125,23 +132,21 @@ fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
     let plaintext = b"segment-0-payload";
     let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5A).collect();
 
-    {
-        let res = scope
+    write_commit(
+        scope
             .store()
             .acquire_resource_with_ctx(&key0, None, Some(()))
-            .unwrap();
-        res.write_at(0, plaintext).unwrap();
-        res.commit(Some(plaintext.len() as u64)).unwrap();
-    }
+            .unwrap(),
+        plaintext,
+    );
 
-    {
-        let res = scope
+    write_commit(
+        scope
             .store()
             .acquire_resource_with_ctx(&key1, None, Some(()))
-            .unwrap();
-        res.write_at(0, b"other-segment").unwrap();
-        res.commit(Some(13)).unwrap();
-    }
+            .unwrap(),
+        b"other-segment",
+    );
 
     let reopened = scope.store().open_resource(&key0, None).unwrap();
     assert!(
@@ -172,23 +177,21 @@ fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes
     let plaintext: Vec<u8> = (0u8..=u8::MAX).cycle().take(512 * 1024 + 37).collect();
     let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5A).collect();
 
-    {
-        let res = scope
+    write_commit(
+        scope
             .store()
             .acquire_resource_with_ctx(&key0, None, Some(()))
-            .unwrap();
-        res.write_at(0, &plaintext).unwrap();
-        res.commit(Some(plaintext.len() as u64)).unwrap();
-    }
+            .unwrap(),
+        &plaintext,
+    );
 
-    {
-        let res = scope
+    write_commit(
+        scope
             .store()
             .acquire_resource_with_ctx(&key1, None, Some(()))
-            .unwrap();
-        res.write_at(0, b"other-segment").unwrap();
-        res.commit(Some(13)).unwrap();
-    }
+            .unwrap(),
+        b"other-segment",
+    );
 
     let reopened = scope.store().open_resource(&key0, None).unwrap();
     assert!(
@@ -222,23 +225,21 @@ fn reopened_large_committed_drm_processed_resource_without_ctx_reads_committed_b
     let other_plaintext = b"other-segment";
     let other_ciphertext = encrypt_aes128_cbc(other_plaintext, &key, &iv);
 
-    {
-        let res = scope
+    write_commit(
+        scope
             .store()
             .acquire_resource_with_ctx(&key0, None, Some(DecryptContext::new(key, iv)))
-            .unwrap();
-        res.write_at(0, &ciphertext).unwrap();
-        res.commit(Some(ciphertext.len() as u64)).unwrap();
-    }
+            .unwrap(),
+        &ciphertext,
+    );
 
-    {
-        let res = scope
+    write_commit(
+        scope
             .store()
             .acquire_resource_with_ctx(&key1, None, Some(DecryptContext::new(key, iv)))
-            .unwrap();
-        res.write_at(0, &other_ciphertext).unwrap();
-        res.commit(Some(other_ciphertext.len() as u64)).unwrap();
-    }
+            .unwrap(),
+        &other_ciphertext,
+    );
 
     let reopened = scope.store().open_resource(&key0, None).unwrap();
     assert!(

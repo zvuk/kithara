@@ -1,3 +1,5 @@
+#[cfg(target_arch = "wasm32")]
+use std::sync::OnceLock;
 pub use std::time::Duration;
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
@@ -8,6 +10,46 @@ use std::{
 use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
 use wasm_safe_thread::Builder as WasmThreadBuilder;
+
+/// Process-wide cell for the wasm-bindgen JS shim filename (without `.js`)
+/// that spawned Workers import for `initSync`. The consumer crate sets this
+/// once to its own wasm-bindgen output name — `kithara-platform` cannot know
+/// it, and `wasm_safe_thread`'s Performance-API auto-detection is unreliable
+/// when other `.js` files (e.g. a COOP/COEP service worker) load at the same
+/// base path and sort first. Function-local so it is not a bare module-level
+/// static.
+#[cfg(target_arch = "wasm32")]
+fn wasm_shim_name() -> &'static OnceLock<String> {
+    static CELL: OnceLock<String> = OnceLock::new();
+    &CELL
+}
+
+/// Register the wasm-bindgen shim name used when spawning Worker threads.
+/// Call once from the consumer's wasm entry point (e.g. `wasm_bindgen(start)`)
+/// before any [`spawn`]. Idempotent: the first value wins.
+#[cfg(target_arch = "wasm32")]
+pub fn set_wasm_shim_name(name: impl Into<String>) {
+    let _ = wasm_shim_name().set(name.into());
+}
+
+/// Keep the calling Worker's JS event loop running for the lifetime of the
+/// worker, so async tasks and timers spawned on it (via
+/// [`tokio::task::spawn`](crate::tokio::task) / `setTimeout`-backed
+/// [`time::sleep`](crate::time::sleep)) keep being driven.
+///
+/// `wasm_safe_thread` terminates a Worker once its spawn closure returns and
+/// no tracked tasks remain. A worker that hosts a long-lived async runtime
+/// (rather than a single blocking computation) returns from its closure
+/// immediately after spawning its tasks, so without this the Worker
+/// `close()`s after one microtask drain and every spawned future dies.
+///
+/// Call once, on the worker thread, at the top of such a worker entry point.
+/// The registration is intentionally never released: the engine worker lives
+/// for the page's lifetime.
+#[cfg(target_arch = "wasm32")]
+pub fn keep_worker_alive() {
+    wasm_safe_thread::task_begin();
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub type Thread = std::thread::Thread;
@@ -189,12 +231,16 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    /// The wasm-bindgen JS shim name (crate name with hyphens → underscores).
-    /// Workers use this to locate the JS module for `initSync`.
-    const SHIM_NAME: &str = "kithara-wasm";
-
-    WasmThreadBuilder::new()
-        .shim_name(SHIM_NAME.to_owned())
+    // Use the consumer-registered shim name (see `set_wasm_shim_name`); fall
+    // back to `wasm_safe_thread`'s Performance-API auto-detection only when
+    // unset. Hardcoding here would couple this primitive crate to one
+    // consumer's wasm-bindgen output filename, and a stale name silently
+    // serves the SPA-fallback HTML to `initSync` so the worker never boots.
+    let mut builder = WasmThreadBuilder::new();
+    if let Some(shim) = wasm_shim_name().get() {
+        builder = builder.shim_name(shim.clone());
+    }
+    builder
         .spawn(move || {
             console_error_panic_hook::set_once();
             f()

@@ -4,8 +4,8 @@ use std::io::Write;
 
 use hotpath::HotpathGuardBuilder;
 use kithara::storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
+use kithara_platform::CancellationToken;
 use tempfile::NamedTempFile;
-use tokio_util::sync::CancellationToken;
 
 /// Helper to create test storage with data.
 fn create_test_storage(size: usize) -> (MmapResource, NamedTempFile) {
@@ -18,7 +18,7 @@ fn create_test_storage(size: usize) -> (MmapResource, NamedTempFile) {
     let opts = MmapOptions::for_path(path)
         .mode(OpenMode::ReadWrite)
         .build();
-    let storage: MmapResource = Resource::open(CancellationToken::new(), opts).unwrap();
+    let storage: MmapResource = Resource::open(CancellationToken::default(), opts).unwrap();
     (storage, file)
 }
 

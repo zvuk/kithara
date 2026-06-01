@@ -7,7 +7,8 @@ use kithara_abr::{
     Abr, AbrController, AbrMode, AbrSettings, AbrState, BandwidthSource, Estimator,
     ThroughputEstimator,
 };
-use kithara_events::{VariantDuration, VariantInfo};
+use kithara_events::{VariantDuration, VariantIndex, VariantInfo};
+use kithara_integration_tests::auto;
 use kithara_platform::time::Duration;
 
 fn settings() -> AbrSettings {
@@ -20,7 +21,7 @@ fn settings() -> AbrSettings {
 
 fn variant(idx: usize, bps: u64) -> VariantInfo {
     VariantInfo {
-        variant_index: idx,
+        variant_index: VariantIndex::new(idx),
         bandwidth_bps: Some(bps),
         duration: VariantDuration::Unknown,
         name: None,
@@ -97,7 +98,7 @@ fn bench_controller_record_bandwidth(c: &mut Criterion) {
             |b, &(bytes, duration_ms)| {
                 b.iter(|| {
                     let controller = AbrController::new(settings());
-                    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(1))));
+                    let state = Arc::new(AbrState::new(auto(1)));
                     let peer: Arc<dyn Abr> = Arc::new(BenchPeer {
                         state: Arc::clone(&state),
                         variants: variants_4(),

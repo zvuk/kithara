@@ -12,10 +12,9 @@ use bon::Builder;
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
-use kithara_platform::{Mutex, tokio::runtime::Handle as RuntimeHandle};
+use kithara_platform::{CancellationToken, Mutex, tokio::runtime::Handle as RuntimeHandle};
 use portable_atomic::AtomicF32;
 use ringbuf::{HeapProd, traits::Producer};
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::{
@@ -40,7 +39,9 @@ use crate::{
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct EngineConfig {
-    /// Master cancel token for the engine.
+    /// Master cancel token for the engine. The worker scheduler derives a
+    /// `child_token()` so its produce-core's lock-free `is_cancelled()` read
+    /// observes a master cancel.
     pub cancel: Option<CancellationToken>,
     /// PCM buffer pool for audio-thread scratch buffers.
     pub pcm_pool: Option<PcmPool>,

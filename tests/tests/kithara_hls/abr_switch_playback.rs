@@ -8,14 +8,16 @@ use kithara::{
     stream::{AudioCodec, Stream},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, auto,
     fixture_protocol::{DelayRule, PcmPattern},
     offline::{OfflinePlayer, resource_from_reader},
     temp_dir,
 };
-use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, Instant, sleep},
+};
 use tokio::time::timeout;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::continuity::{
@@ -23,7 +25,7 @@ use crate::continuity::{
 };
 
 fn forced_downswitch_abr_options() -> AbrMode {
-    AbrMode::Auto(Some(0))
+    auto(0)
 }
 
 fn packaged_identical_content_abr_builder(codec: AudioCodec) -> HlsFixtureBuilder {
@@ -124,11 +126,11 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config).build();
@@ -350,11 +352,11 @@ async fn stream_continues_after_seek(
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
 
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let abr_mode = if abr_auto {
-        AbrMode::Auto(Some(0))
+        auto(0)
     } else {
-        AbrMode::Manual(0)
+        AbrMode::manual(0)
     };
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
@@ -436,11 +438,11 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config).build();
@@ -491,11 +493,11 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
 
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
@@ -647,7 +649,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
@@ -776,7 +778,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let bus = EventBus::new(256);
     let mut hls_rx = bus.subscribe();
 
@@ -784,7 +786,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config).build();
@@ -817,7 +819,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
     handle
-        .set_mode(AbrMode::Manual(3))
+        .set_mode(AbrMode::manual(3))
         .expect("Manual(3) (FLAC) target must be valid");
 
     // Phase 3 — sustained post-switch playback. Read for 15 s; collect
@@ -830,7 +832,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     while Instant::now() < post_deadline {
         while let Ok(ev) = hls_rx.try_recv() {
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_targets.push(to);
+                applied_targets.push(to.get());
             }
         }
         match audio.read(&mut buf) {

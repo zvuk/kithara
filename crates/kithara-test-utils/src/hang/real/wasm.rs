@@ -1,28 +1,21 @@
 use std::{path::Path, time::Duration};
 
-use super::detector::HangDump;
+use super::shared::HangDump;
 
+/// Report a detected hang. wasm cannot panic (`panic = "immediate-abort"`
+/// turns it into a fatal `RuntimeError: unreachable` that kills the Worker),
+/// so the detector reports through [`kithara_platform::log_error`], which
+/// writes to the browser `console` and is safe in every scope (including the
+/// audio worklet, where the global `tracing` subscriber's cross-instance
+/// vtable would trap).
 pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, _dir: Option<&Path>) {
-    tracing::error!(
-        target: "kithara_hang_detector",
-        label,
-        payload = %ctx.dump_json(),
-        "hang detected — context dump (wasm; file write skipped)"
-    );
+    kithara_platform::log_error(&format!(
+        "[kithara_hang_detector] hang detected: {label} — {}",
+        ctx.dump_json()
+    ));
 }
 
 #[must_use]
 pub(crate) fn env_timeout() -> Option<Duration> {
     None
-}
-
-#[must_use]
-pub(crate) fn parse_timeout_secs(_value: &str) -> Option<Duration> {
-    None
-}
-
-#[cfg(test)]
-#[must_use]
-pub(crate) fn resolve_dump_dir(_explicit: Option<&Path>) -> std::path::PathBuf {
-    std::path::PathBuf::new()
 }

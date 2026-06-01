@@ -2,18 +2,15 @@
 
 use std::{path::Path, sync::OnceLock};
 
-use kithara_storage::{Atomic, MmapOptions, MmapResource, OpenMode, Resource, StorageError};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
+use kithara_storage::{
+    Atomic, MmapDriver, MmapOptions, MmapResource, OpenMode, Resource, StorageError,
+};
 
 use crate::error::{AssetsError, AssetsResult};
 
 /// Initial mmap capacity used when materialising an on-disk index file.
 ///
-/// Same as the historical `Atomic` default — large enough to hold a
-/// few thousand entries before a remap, small enough that the sparse
-/// file footprint is trivial when the cache is idle.
-pub(super) const INITIAL_LEN: u64 = 4096;
-
 /// Open an existing on-disk index file in read-write mode without
 /// resizing it. Used when a file is detected on construction so its
 /// contents can be hydrated.
@@ -28,12 +25,16 @@ pub(super) fn open_existing(path: &Path, cancel: &CancellationToken) -> AssetsRe
 }
 
 /// Open or create an on-disk index file in read-write mode with the
-/// canonical [`INITIAL_LEN`] sparse footprint. Used on first flush
+/// canonical `INITIAL_LEN` sparse footprint. Used on first flush
 /// when no pre-existing file was hydrated.
 pub(super) fn open_for_write(
     path: &Path,
     cancel: &CancellationToken,
 ) -> AssetsResult<MmapResource> {
+    /// Same as the historical `Atomic` default — large enough to hold a
+    /// few thousand entries before a remap, small enough that the sparse
+    /// file footprint is trivial when the cache is idle.
+    const INITIAL_LEN: u64 = 4096;
     let res: MmapResource = Resource::open(
         cancel.clone(),
         MmapOptions::for_path(path.to_path_buf())
@@ -51,10 +52,10 @@ pub(super) fn open_for_write(
 /// freshly-opened resource is dropped immediately; the winning
 /// resource is returned to both.
 pub(super) fn init_atomic<'a>(
-    cell: &'a OnceLock<Atomic<MmapResource>>,
+    cell: &'a OnceLock<Atomic<MmapDriver>>,
     path: &Path,
     cancel: &CancellationToken,
-) -> AssetsResult<&'a Atomic<MmapResource>> {
+) -> AssetsResult<&'a Atomic<MmapDriver>> {
     if let Some(a) = cell.get() {
         return Ok(a);
     }

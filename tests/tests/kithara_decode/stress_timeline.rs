@@ -16,7 +16,7 @@ fn stress_seeks_preserve_timeline_integrity() {
     let cursor = Cursor::new(wav_data);
 
     let mut decoder =
-        DecoderFactory::create_with_probe(cursor, Some("wav"), &DecoderConfig::default()).unwrap();
+        DecoderFactory::create_with_probe(cursor, Some("wav"), DecoderConfig::default()).unwrap();
 
     let total_duration = decoder.duration().unwrap_or(Duration::from_secs(10));
     let total_secs = total_duration.as_secs_f64();

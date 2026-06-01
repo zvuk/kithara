@@ -1,7 +1,7 @@
 use std::time::Duration as StdDuration;
 
 use kithara_abr::{AbrMode, AbrSettings, AbrState, AbrView};
-use kithara_events::{VariantDuration, VariantInfo};
+use kithara_events::{VariantDuration, VariantIndex, VariantInfo};
 use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;
 
@@ -10,7 +10,7 @@ fn variants() -> Vec<VariantInfo> {
         .iter()
         .enumerate()
         .map(|(i, bps)| VariantInfo {
-            variant_index: i,
+            variant_index: VariantIndex::new(i),
             bandwidth_bps: Some(*bps),
             duration: VariantDuration::Unknown,
             name: None,
@@ -29,7 +29,7 @@ fn fast_settings() -> AbrSettings {
 }
 
 fn run_profile(profile: &[u64]) -> usize {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let settings = fast_settings();
     let variants = variants();
     let base = Instant::now();
@@ -43,11 +43,11 @@ fn run_profile(profile: &[u64]) -> usize {
         };
         let now = base + StdDuration::from_millis((i as u64) + 1);
         let d = state.decide(&view, now);
-        if d.did_change {
-            state.apply(&d, now);
+        if d.changed() {
+            state.apply_decision(&d, now);
         }
     }
-    state.current_variant_index()
+    state.current_variant_index().get()
 }
 
 fn flat(bps: u64, n: usize) -> Vec<u64> {

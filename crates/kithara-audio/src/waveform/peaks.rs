@@ -119,7 +119,7 @@ impl PeakAccumulator {
     /// Downsample + peak-normalise to an [`Envelope`] of `buckets` values.
     #[must_use]
     pub fn finalize(&self, buckets: usize) -> Envelope {
-        Envelope::from_peaks(compute_peaks(&self.bins, 1, buckets))
+        Envelope::from(compute_peaks(&self.bins, 1, buckets))
     }
 }
 

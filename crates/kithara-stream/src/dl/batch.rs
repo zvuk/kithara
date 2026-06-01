@@ -4,15 +4,14 @@ use kithara_abr::{AbrController, AbrPeerId};
 use kithara_events::{
     BandwidthSource, CancelReason, DownloaderEvent, EventBus, RequestId, RequestMethod,
 };
-use kithara_net::{HttpClient, NetError};
+use kithara_net::{HttpClient, NetError, Retryability};
 use kithara_platform::{
-    CancelGroup,
+    CancelGroup, CancellationToken,
     time::{Duration, Instant},
     tokio,
     tokio::task,
 };
 use kithara_test_utils::kithara;
-use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::{
@@ -387,7 +386,7 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
     let DeliveryContext {
         target,
         result,
-        mut writer,
+        writer,
         on_complete_cb,
         on_response_cb,
         abr,
@@ -400,37 +399,48 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
     } = ctx;
     match target {
         ResponseTarget::Channel(tx) => {
-            tx.send(result).ok();
+            // Collect the body here, on the downloader's (possibly separate)
+            // worker, so only `Send` bytes cross back to the caller — the raw
+            // HTTP body stream is `!Send` on wasm.
+            let collected = match result {
+                Ok(resp) => {
+                    let headers = resp.headers.clone();
+                    resp.body.collect().await.map(|bytes| (headers, bytes))
+                }
+                Err(e) => Err(e),
+            };
+            tx.send(collected).ok();
         }
         ResponseTarget::Streaming => match result {
             Ok(resp) => {
-                if let Some(ref mut w) = writer {
-                    let headers = resp.headers.clone();
-                    if let Some(cb) = on_response_cb {
-                        cb(&headers);
-                    }
-                    let write_result = resp.body.write_all(|chunk| w(chunk)).await;
-                    let elapsed = started.elapsed();
-                    match write_result {
-                        Ok(total) => {
-                            finish_request(bus.as_ref(), &abr, peer_id, request_id, total, elapsed);
-                            if let Some(cb) = on_complete_cb {
-                                cb(total, Some(&headers), None);
-                            }
+                let Some(mut w) = writer else {
+                    return;
+                };
+                let headers = resp.headers.clone();
+                if let Some(cb) = on_response_cb {
+                    cb(&headers);
+                }
+                let write_result = resp.body.write_all(|chunk| w(chunk)).await;
+                let elapsed = started.elapsed();
+                match write_result {
+                    Ok(total) => {
+                        finish_request(bus.as_ref(), &abr, peer_id, request_id, total, elapsed);
+                        if let Some(cb) = on_complete_cb {
+                            cb(total, Some(&headers), None);
                         }
-                        Err(ref e) => {
-                            publish_failure_or_cancel(
-                                bus.as_ref(),
-                                request_id,
-                                e,
-                                0,
-                                peer_cancel,
-                                epoch_cancel,
-                                downloader_cancel,
-                            );
-                            if let Some(cb) = on_complete_cb {
-                                cb(0, Some(&headers), Some(e));
-                            }
+                    }
+                    Err(ref e) => {
+                        publish_failure_or_cancel(
+                            bus.as_ref(),
+                            request_id,
+                            e,
+                            0,
+                            peer_cancel,
+                            epoch_cancel,
+                            downloader_cancel,
+                        );
+                        if let Some(cb) = on_complete_cb {
+                            cb(0, Some(&headers), Some(e));
                         }
                     }
                 }
@@ -468,7 +478,7 @@ fn publish_failure_or_cancel(
         let reason = classify_cancel(peer_cancel, epoch_cancel, downloader_cancel);
         abort_request(bus, request_id, reason, bytes_transferred, true);
     } else {
-        let retryable = err.is_retryable();
+        let retryable = err.retryability() == Retryability::Transient;
         fail_request(bus, request_id, err, retryable);
     }
 }
@@ -484,7 +494,7 @@ pub(super) fn deliver_cancelled_with_event(internal: InternalCmd, peer_cancel: &
     let request_id = internal.request_id;
     let bus = internal.bus.clone();
     let epoch_cancel = internal.cmd.cancel.clone();
-    let placeholder_inner = CancellationToken::new(); // kithara:cancel:owner
+    let placeholder_inner = CancellationToken::default(); // kithara:cancel:owner
     let reason = classify_cancel(peer_cancel, epoch_cancel.as_ref(), &placeholder_inner);
     abort_request(bus.as_ref(), request_id, reason, 0, false);
     deliver_cancelled(internal.response, internal.cmd);

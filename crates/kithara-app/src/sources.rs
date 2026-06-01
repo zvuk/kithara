@@ -19,10 +19,10 @@ use crate::config::AppConfig;
 /// ever fires.
 #[must_use]
 pub fn build_source(url: &str, config: &AppConfig) -> TrackSource {
-    match build_resource_config(url, config) {
-        Some(cfg) => TrackSource::Config(Box::new(cfg)),
-        None => TrackSource::Uri(url.to_string()),
-    }
+    build_resource_config(url, config).map_or_else(
+        || TrackSource::Uri(url.to_string()),
+        |cfg| TrackSource::Config(Box::new(cfg)),
+    )
 }
 
 /// Build a [`ResourceConfig`] for `url` with the app's shared stores,

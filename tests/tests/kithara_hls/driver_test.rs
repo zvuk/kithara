@@ -11,18 +11,18 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir, cancel_token,
+    TestTempDir, auto,
     hls_server::{
         TestServer,
         abr::{AbrTestServer, master_playlist},
     },
-    temp_dir,
+    rt_cancel, temp_dir,
 };
 use kithara_platform::{
+    CancellationToken,
     time::sleep,
     tokio::task::{spawn, spawn_blocking},
 };
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 /// Driver-1: Verify that seek works AFTER all segments have been downloaded.
@@ -42,15 +42,15 @@ use tracing::info;
 )]
 async fn test_driver_seek_after_playlist_finished(
     temp_dir: TestTempDir,
-    cancel_token: CancellationToken,
+    rt_cancel: CancellationToken,
 ) {
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8");
 
     let config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(cancel_token)
-        .initial_abr_mode(AbrMode::Manual(0))
+        .cancel(rt_cancel)
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
@@ -103,7 +103,7 @@ async fn test_driver_seek_after_playlist_finished(
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: CancellationToken) {
+async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: CancellationToken) {
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
         false,
@@ -118,9 +118,9 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: Canc
 
     let config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(cancel_token)
+        .cancel(rt_cancel)
         .events(bus)
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();

@@ -6,9 +6,8 @@ use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_audio::{Audio, AudioConfig, AudioWorkerHandle};
 use kithara_hls::{AbrMode, Hls, HlsConfig};
 use kithara_integration_tests::{TestServerHelper, TestTempDir, kithara, temp_dir};
-use kithara_platform::thread::active_named_thread_count;
+use kithara_platform::{CancellationToken, thread::active_named_thread_count};
 use kithara_stream::Stream;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 /// Wait for spawned threads to register with the OS.
@@ -40,7 +39,7 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
 #[kithara::test(serial)]
 fn thread_budget_audio_worker_is_one_thread() {
     let before = active_named_thread_count();
-    let worker = AudioWorkerHandle::new();
+    let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
     settle();
     let after = active_named_thread_count();
 
@@ -63,14 +62,14 @@ fn thread_budget_audio_worker_is_one_thread() {
 )]
 async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let before = active_named_thread_count();
 
     let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel.clone())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config).build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -104,8 +103,8 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
 )]
 async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let cancel = CancellationToken::new();
-    let shared_worker = AudioWorkerHandle::new();
+    let cancel = CancellationToken::default();
+    let shared_worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
     let shared_hub = FlushHub::new(cancel.child_token(), FlushPolicy::default());
     let shared_store = || {
         let mut opts = StoreOptions::new(temp_dir.path());
@@ -119,7 +118,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
         .store(shared_store())
         .cancel(cancel.clone())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
     let config: AudioConfig<Hls> = AudioConfig::for_stream(hls_config)
         .worker(shared_worker.clone())
@@ -129,7 +128,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let hls_config2 = HlsConfig::for_url(server.asset("hls/master.m3u8"))
         .store(shared_store())
         .cancel(cancel.clone())
-        .initial_abr_mode(AbrMode::Manual(1))
+        .initial_abr_mode(AbrMode::manual(1))
         .build();
     let config: AudioConfig<Hls> = AudioConfig::for_stream(hls_config2)
         .worker(shared_worker.clone())
@@ -139,7 +138,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let drm_config = HlsConfig::for_url(server.asset("drm/master.m3u8"))
         .store(shared_store())
         .cancel(cancel.clone())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
     let config: AudioConfig<Hls> = AudioConfig::for_stream(drm_config)
         .worker(shared_worker.clone())

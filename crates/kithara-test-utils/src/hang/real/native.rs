@@ -7,7 +7,19 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use super::detector::{HangDump, sanitize_label};
+use super::shared::HangDump;
+
+/// Sanitize a label for use in a dump filename.
+#[must_use]
+pub(crate) fn sanitize_label(label: &str) -> String {
+    label
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => c,
+            _ => '.',
+        })
+        .collect()
+}
 
 struct Consts;
 impl Consts {
@@ -41,31 +53,13 @@ pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>) 
         "kithara-hang-{label}-{ts}-{pid}.json",
         label = sanitize_label(label),
     ));
-    match File::create(&file).and_then(|mut f| f.write_all(payload.as_bytes())) {
-        Ok(()) => {
-            tracing::error!(
-                target: "kithara_hang_detector",
-                label,
-                ts_ms = %ts,
-                pid,
-                dump_path = %file.display(),
-                payload = %payload,
-                "hang detected — context dump written"
-            );
-        }
-        Err(err) => {
-            tracing::error!(
-                target: "kithara_hang_detector",
-                label,
-                ts_ms = %ts,
-                pid,
-                dump_path = %file.display(),
-                payload = %payload,
-                error = %err,
-                "hang detected — failed to write context dump"
-            );
-        }
-    }
+    let dump = match File::create(&file).and_then(|mut f| f.write_all(payload.as_bytes())) {
+        Ok(()) => format!("dump={}", file.display()),
+        Err(err) => format!("dump-write-failed={err}"),
+    };
+    kithara_platform::log_error(&format!(
+        "[kithara_hang_detector] hang detected: {label} ts_ms={ts} pid={pid} {dump} — {payload}"
+    ));
 }
 
 #[must_use]

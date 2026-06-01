@@ -8,32 +8,27 @@ repository.workspace = true
 description = "Cross-platform FFI adapter for the kithara audio player"
 publish = false
 
-# kithara-play is consumed by:
-#   - `src/android_test.rs` (target_os = "android" + feature = "test")
-#   - `src/web/*` (target_arch = "wasm32")
-# On native host targets the modules aren't compiled, so cargo-machete on
-# a macOS/linux dev machine flags the dep as unused — suppress it
-# explicitly.
-[package.metadata.cargo-machete]
-ignored = ["kithara-play"]
-
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/uniffi_bindgen.rs"
-required-features = ["backend-uniffi"]
+required-features = ["uniffi"]
 
 [lints]
 workspace = true
 
 [dependencies]
 # Cross-platform deps (used by both the native UniFFI modules and `src/web`).
+# `kithara-play` is the canonical owner of the shared play types
+# (`PlayError`, `PlayerStatus`, `TimeRange`, …) that `core::types` mirrors,
+# so the cross-platform `AudioPlayer` facade resolves them from one crate on
+# both targets. The native arm pulls a host backend below; the wasm arm pulls
+# the web-audio backend in the wasm32 target block.
 kithara-platform = { workspace = true }
 kithara-events = { workspace = true }
 kithara-test-macros = { workspace = true }
-tokio-util = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -45,8 +40,15 @@ tracing-subscriber = { workspace = true }
 # `src/web/*` doesn't use any of these directly.
 
 [features]
-default = ["backend-uniffi"]
-backend-uniffi = ["dep:uniffi"]
+# `symphonia` is in the default set so a bare `cargo check -p kithara-ffi`
+# (and the host uniffi-bindgen build) has a `DecoderBackend` variant — the
+# apple/android (target_os-gated) variants are absent off-device, so without
+# a backend `DecoderBackend` would be an empty enum and fail to compile.
+# Device builds compile with `--no-default-features` (see `xtask apple`/
+# `xtask android`), so `symphonia` is never pulled into apple/android — the
+# hardware backend is the sole decoder there.
+default = ["uniffi", "symphonia"]
+uniffi = ["dep:uniffi"]
 apple = ["kithara/apple"]
 android = ["kithara/android"]
 # Cross-platform software decode backend. Not part of apple/android
@@ -54,7 +56,7 @@ android = ["kithara/android"]
 # uniffi-bindgen build, where neither the apple nor the android
 # (target_os-gated) DecoderBackend variant exists, so without a
 # backend feature `DecoderBackend` would be an empty enum.
-symphonia = ["kithara/symphonia"]
+symphonia = ["kithara/symphonia", "kithara-queue/symphonia"]
 # Marker feature for wasm32 build matrix (parallel to apple/android).
 # Actual wasm-only deps live under [target.'cfg(target_arch = "wasm32")'].
 wasm = []
@@ -68,15 +70,21 @@ dev = []
 # Exposes JNI entrypoints that render through the offline firewheel
 # backend and write WAV output, bypassing cpal/AAudio. Never ship in a
 # release AAR.
-test = ["kithara/probe", "dep:kithara-play", "dep:tokio", "dep:cpal"]
+test = ["kithara/probe", "kithara-play/probe", "dep:tokio", "dep:cpal"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara = { workspace = true, features = ["file", "hls"] }
+# `default-features = false` on kithara/kithara-queue: their defaults pull
+# `symphonia`, which would leak into apple/android device builds (compiled
+# with `--no-default-features`). symphonia is re-added explicitly via the
+# crate-local `symphonia` feature (in the default set, off on device).
+kithara = { workspace = true, default-features = false, features = ["file", "hls"] }
 kithara-drm = { workspace = true }
-kithara-queue = { workspace = true, features = ["backend-cpal"] }
-# Optional direct dep so the `test` feature can enable `test-utils` on
-# kithara-play (needed for `init_offline_backend` / offline module).
-kithara-play = { workspace = true, optional = true, default-features = false, features = ["backend-cpal", "probe"] }
+kithara-queue = { workspace = true, default-features = false, features = ["backend-cpal"] }
+# Direct dep so the cross-platform `core::types` / `core::item` can resolve
+# the shared play types from `kithara_play` on native too (the wasm arm pulls
+# the same crate with the web-audio backend). The `probe` feature is gated
+# behind the crate's own `test` feature below.
+kithara-play = { workspace = true, default-features = false, features = ["backend-cpal"] }
 bytes = { workspace = true }
 dashmap = { workspace = true }
 rand = { workspace = true }
@@ -104,9 +112,25 @@ tracing-android = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen", "symphonia"] }
+kithara-queue = { workspace = true, default-features = false, features = ["backend-web-audio", "symphonia"] }
+# The wasm worker reaches the shared DRM key-options, ABR-mode, and
+# key-processor types directly (native reaches the same types through the
+# `kithara` facade and a native-only `kithara-drm` dep).
+kithara-hls = { workspace = true }
+kithara-abr = { workspace = true }
+kithara-drm = { workspace = true }
+bytes = { workspace = true }
 console_error_panic_hook = { workspace = true }
 js-sys = { workspace = true }
 num-traits = { workspace = true }
+# `core::item` derives the per-item `uuid_i64` handle via UUIDv5 (pure SHA-1,
+# no RNG) — the workspace dep is `v5`-only, so no `getrandom` wasm backend is
+# pulled.
+uuid = { workspace = true }
+# Wraps the `!Send` `js_sys::Function` behind a `Send + Sync` guard (with a
+# runtime same-thread assertion) so the JS-backed observer impls satisfy the
+# `core::observer` traits' real `Send + Sync` supertraits on wasm.
+send_wrapper = { workspace = true }
 tracing-log = { workspace = true }
 tracing-wasm = { workspace = true }
 wasm-bindgen = { workspace = true }

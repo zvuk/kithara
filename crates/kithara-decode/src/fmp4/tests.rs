@@ -7,16 +7,19 @@ use std::{
     },
 };
 
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_platform::time::Duration;
 use kithara_stream::{SegmentDescriptor, SegmentLayout};
 use kithara_test_utils::kithara;
 
 use crate::{
-    codec::CodecPriming,
+    codec::{CodecPriming, FrameCodec},
     composed::ComposedDecoder,
-    demuxer::Demuxer,
-    fmp4::Fmp4SegmentDemuxer,
+    demuxer::{Demuxer, TrackInfo},
+    fmp4::{
+        Fmp4SegmentDemuxer,
+        parsing::{CodecConfig, parse_init, parse_segment_frames},
+    },
     symphonia::{SymphoniaCodec, SymphoniaConfig},
     traits::{BoxedSource, Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
 };
@@ -74,6 +77,10 @@ impl SegmentLayout for FakeSegmented {
         None
     }
 
+    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
+        self.segments.get(segment_index as usize).cloned()
+    }
+
     fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
         for desc in self.segments.iter() {
             let end = desc.decode_time.saturating_add(desc.duration);
@@ -82,10 +89,6 @@ impl SegmentLayout for FakeSegmented {
             }
         }
         self.segments.last().cloned()
-    }
-
-    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
-        self.segments.get(segment_index as usize).cloned()
     }
 
     fn segment_count(&self) -> Option<u32> {
@@ -153,7 +156,8 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
         record: Arc::clone(&record),
     });
     let layout: Arc<dyn SegmentLayout> = Arc::new(segmented);
-    let demuxer = Fmp4SegmentDemuxer::open(source, layout).expect("BUG: build demuxer");
+    let demuxer =
+        Fmp4SegmentDemuxer::open(source, layout, BytePool::default()).expect("BUG: build demuxer");
     let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
         .expect("BUG: open codec");
     let decoder = ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
@@ -197,45 +201,20 @@ fn pull_one_chunk(
     None
 }
 
-/// RED scaffold for ABR variant-switch sub-problem #3
-/// (see `project_hls_abr_variant_switch_init_range_bug`).
-///
-/// `Fmp4SegmentDemuxer::open` hardcodes `next_segment_index = 0`.
-/// Production calls `apply_format_change` with `target_offset` equal to
-/// the init-range start in the NEW variant's byte map (which is 0 because
-/// `set_layout_variant` already swapped the active byte map). The
-/// factory then builds the demuxer with `OffsetReader::base_offset = 0`,
-/// and the demuxer's first `next_frame` queries
-/// `segment_at_index(0)` which always returns the layout's seg-0.
-///
-/// Result: regardless of where the previous decoder left off, the new
-/// decoder restarts at the new variant's seg-0 (T1's "drift = full
-/// pre-switch frame count" symptom).
-///
-/// This test pins the CURRENT (broken) observable: a freshly opened
-/// `Fmp4SegmentDemuxer` restarts at the layout's seg-0; there is no API
-/// to resume at a non-zero `decode_time`. ABR variant-switch
-/// `recreate_decoder` relies on this and consequently restarts playback
-/// at seg-0 of the new variant. When the resume API lands, invert this
-/// assertion to `chunk.meta.timestamp >= resume_point`.
-///
-/// Note on the exact timestamp: the fixture is AAC-LC @ 44.1 kHz. The
-/// in-tree fdk-aac adapter strips its algorithmic delay
-/// (`outputDelay ≈ 1024` frames for AAC-LC @ 44.1 kHz, see
-/// `crates/kithara-decode/src/symphonia/aac_fdk.rs`), so the first
-/// emitted chunk lands at packet index 1 (≈ 46.44 ms).
-/// The "open restarts at seg-0" contract is preserved — the
-/// time-domain anchor is offset by the codec strip — so we assert
-/// the timestamp sits inside the first few AAC frames' window, not
-/// strictly equal to zero.
+/// RED scaffold: a freshly opened `Fmp4SegmentDemuxer` always restarts at
+/// the layout's seg-0 (`open` hardcodes `next_segment_index = 0`), so ABR
+/// variant-switch `recreate_decoder` restarts playback at the new variant's
+/// seg-0 instead of resuming. Pins the broken observable; invert to
+/// `timestamp >= resume_point` when a non-zero resume API lands. Timestamp
+/// is bounded (not 0) because the fdk-aac adapter strips ~1024 frames of
+/// algo delay, landing the first chunk at packet 1 (≈46 ms @ 44.1 kHz).
 #[kithara::test]
 fn red_open_always_starts_at_layout_seg_0() {
     let (blob, segmented) = build_test_layout(3);
     let (mut decoder, _reads, _record) = make_decoder(blob, segmented);
 
     let chunk = pull_one_chunk(&mut decoder).expect("BUG: at least one PCM chunk from seg-0");
-    // 1 codec-strip frame + 1 warm-up packet ≈ 2 × 23.22 ms ≈ 46 ms.
-    // Cap at 50 ms to leave a small margin.
+    // WHY: 50ms cap = codec-strip frame + warm-up packet ≈ 2 × 23.22 ms ≈ 46 ms, plus margin.
     let max_strip_time = Duration::from_micros(50_000);
     assert!(
         chunk.meta.timestamp <= max_strip_time,
@@ -250,29 +229,13 @@ fn red_open_always_starts_at_layout_seg_0() {
     );
 }
 
-/// RED scaffold for ABR variant-switch sub-problem #4
-/// (cursor freshness): `SegmentCursor::read.byte_range` is frozen at
-/// `ensure_cursor` / `seek` time from `descriptor.byte_range`. If the
-/// underlying `SegmentLayout` updates the descriptor between
-/// `ensure_cursor` and `fill_segment_buffer` (HEAD-estimated size →
-/// actual committed size, or pre-DRM → post-DRM), the cursor still
-/// allocates and seeks against the OLD range. `parse_segment_frames`
-/// then panics with "sample byte range past segment end" because the
-/// fragment's moof-described samples don't fit the smaller buffer.
-///
-/// Contract under test:
-///   - Either `fill_segment_buffer` must re-query the layout each
-///     iteration and grow the buffer if the descriptor's range
-///     extended.
-///   - Or `ensure_cursor` must capture a layout-version cookie and
-///     refuse to fill against a stale descriptor.
-///
-/// Today neither holds: the cursor commits to whatever
-/// `segment_after_byte` returned at first call. This scaffold is
-/// `#[ignore]`-marked because reproducing the parse-side panic
-/// requires bespoke moof bytes — left as a TODO for the fix author.
-/// The point of the scaffold is to make the missing contract
-/// explicit so the fix has somewhere to land its regression test.
+/// RED scaffold (cursor freshness): `SegmentCursor::read.byte_range` is
+/// frozen at `ensure_cursor`/`seek` time. If `SegmentLayout` updates the
+/// descriptor before `fill_segment_buffer` (HEAD estimate → committed size,
+/// or pre- → post-DRM), the cursor fills against the stale range and
+/// `parse_segment_frames` panics ("sample byte range past segment end").
+/// Fix must re-query the layout each fill (and grow) or version-cookie the
+/// cursor. `#[ignore]`d: reproducing the panic needs bespoke moof bytes.
 #[kithara::test]
 #[ignore = "RED scaffold — needs crafted moof fixture to demonstrate \
             the parse_segment_frames panic. Add when implementing \
@@ -295,8 +258,7 @@ fn seek_backs_up_one_segment_for_aac_preroll() {
     reads.lock().expect("BUG: clear").clear();
     record.store(true, Ordering::Release);
 
-    // Target sits on the seg-2/seg-3 boundary (18 s). AAC SBR warm-up
-    // backs the seek into seg-2.
+    // WHY: 18s = seg-2/seg-3 boundary; AAC SBR warm-up backs the seek into seg-2.
     let target = Duration::from_secs(18);
     let outcome = decoder.seek(target).expect("BUG: seek");
     let DecoderSeekOutcome::Landed {
@@ -412,7 +374,8 @@ fn seek_emits_notneeded_for_first_segment_flac() {
     let (blob, segmented) = build_test_layout_flac(3);
     let source: BoxedSource = Box::new(Cursor::new(blob));
     let layout: Arc<dyn SegmentLayout> = Arc::new(segmented);
-    let mut demuxer = Fmp4SegmentDemuxer::open(source, layout).expect("BUG: build FLAC demuxer");
+    let mut demuxer = Fmp4SegmentDemuxer::open(source, layout, BytePool::default())
+        .expect("BUG: build FLAC demuxer");
 
     let outcome = demuxer
         .seek(Duration::ZERO, CodecPriming::default())
@@ -424,5 +387,108 @@ fn seek_emits_notneeded_for_first_segment_flac() {
         preroll,
         kithara_stream::PrerollHint::NotNeeded,
         "FLAC has warmup_frames=0, so seg-0 seek must emit NotNeeded, not FirstSegment; got {preroll:?}"
+    );
+}
+
+type AacFrameHarness = (SymphoniaCodec, Vec<u8>, Vec<(usize, usize)>);
+
+/// Build a `SymphoniaCodec` from the AAC init segment plus the raw AAC
+/// access units in segment 0. Mirrors `Fmp4SegmentDemuxer::build_track_info`
+/// so the codec is opened with the same `TrackInfo` the real demuxer would
+/// produce, then returns the per-frame `(offset, size)` access-unit ranges.
+fn aac_codec_and_frames() -> AacFrameHarness {
+    let init_bytes = read_fixture("init-slq-a1.mp4");
+    let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
+    let extra_data = match &init.config {
+        CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
+    };
+    let track = TrackInfo {
+        codec: init.codec,
+        sample_rate: init.sample_rate,
+        channels: init.channels,
+        extra_data,
+        duration: None,
+        gapless: init.gapless,
+    };
+    let codec = SymphoniaCodec::open_with_config(&track, &SymphoniaConfig::default())
+        .expect("BUG: open AAC codec");
+
+    let seg = read_fixture("segment-1-slq-a1.m4s");
+    let frames = parse_segment_frames(&init, &seg).expect("BUG: parse segment frames");
+    let ranges = frames.iter().map(|f| (f.offset, f.size)).collect();
+    (codec, seg, ranges)
+}
+
+fn decode_all_aac(
+    codec: &mut SymphoniaCodec,
+    seg: &[u8],
+    ranges: &[(usize, usize)],
+    pool: &PcmPool,
+) -> Vec<f32> {
+    let mut out_pcm = Vec::new();
+    for &(offset, size) in ranges {
+        let frame_data = &seg[offset..offset + size];
+        let mut buf = pool.get();
+        codec
+            .decode_frame(frame_data, Duration::ZERO, &[], &mut buf)
+            .expect("BUG: decode AAC frame");
+        out_pcm.extend_from_slice(&buf[..]);
+    }
+    out_pcm
+}
+
+/// R-tovec: the zero-copy `PacketRef`/`decode_ref` entry must produce
+/// PCM bit-identical to the owning `Packet::new(.., to_vec())` path it
+/// replaces. Two independent decoder passes over the same real AAC
+/// access units must yield byte-for-byte equal interleaved f32 PCM —
+/// pro-DJ zero tolerance for sample drift.
+#[kithara::test]
+fn symphonia_aac_decode_is_bit_identical_across_passes() {
+    let pool = PcmPool::default();
+    let (mut codec_a, seg, ranges) = aac_codec_and_frames();
+    let pcm_a = decode_all_aac(&mut codec_a, &seg, &ranges, &pool);
+
+    let (mut codec_b, _, _) = aac_codec_and_frames();
+    let pcm_b = decode_all_aac(&mut codec_b, &seg, &ranges, &pool);
+
+    assert!(!pcm_a.is_empty(), "decode produced no PCM");
+    assert_eq!(
+        pcm_a, pcm_b,
+        "decode_ref must be deterministic and bit-identical (no sample drift)"
+    );
+}
+
+/// R-tovec: a warm per-packet AAC decode loop must not grow the pool's
+/// `alloc_misses` after warm-up. The zero-copy `PacketRef` entry borrows
+/// the frame slice instead of cloning it into an owning `Packet`, so the
+/// per-packet heap allocation is gone; the `RTSan` lane is the malloc
+/// oracle, this guards against any accidental per-call pool growth.
+#[kithara::test]
+fn symphonia_aac_warm_decode_does_not_grow_pool_alloc_misses() {
+    let pool = PcmPool::new(32, 8192);
+    let (mut codec, seg, ranges) = aac_codec_and_frames();
+    assert!(!ranges.is_empty(), "segment yielded no AAC frames");
+
+    for &(offset, size) in ranges.iter().take(8) {
+        let mut buf = pool.get();
+        codec
+            .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
+            .expect("BUG: warm-up decode");
+    }
+    let warm_misses = pool.stats().alloc_misses;
+
+    for _ in 0..50 {
+        for &(offset, size) in &ranges {
+            let mut buf = pool.get();
+            codec
+                .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
+                .expect("BUG: warm decode");
+        }
+    }
+
+    assert_eq!(
+        pool.stats().alloc_misses,
+        warm_misses,
+        "warm AAC decode must not allocate fresh pool buffers per packet"
     );
 }

@@ -13,10 +13,9 @@ use kithara::{
 use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{offline::OfflinePlayer, temp_dir};
 use kithara_platform::{
-    thread,
+    CancellationToken, thread,
     time::{Duration, Instant},
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -109,7 +108,7 @@ fn fresh_downloader() -> Downloader {
     let net = NetOptions::builder().is_insecure(true).build();
     Downloader::new(
         DownloaderConfig::builder()
-            .client(HttpClient::new(net, CancellationToken::new()))
+            .client(HttpClient::new(net, CancellationToken::default()))
             .build(),
     )
 }
@@ -194,19 +193,19 @@ fn rms(samples: &[f32]) -> f32 {
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
-#[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::Manual(0))]
-#[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::Manual(2))]
+#[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
+#[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple_auto(DecoderBackend::Apple, AbrMode::Auto(None))
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::apple_locked_low(DecoderBackend::Apple, AbrMode::Manual(0))
+    case::apple_locked_low(DecoderBackend::Apple, AbrMode::manual(0))
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::apple_locked_high(DecoderBackend::Apple, AbrMode::Manual(2))
+    case::apple_locked_high(DecoderBackend::Apple, AbrMode::manual(2))
 )]
 #[cfg_attr(
     target_os = "android",

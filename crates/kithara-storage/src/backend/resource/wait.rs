@@ -11,7 +11,7 @@ use tracing::debug;
 
 use crate::{
     StorageError, StorageResult,
-    backend::{resource::state::Resource, traits::DriverIo},
+    backend::{resource::state::ResourceCore, traits::DriverIo},
     resource::{WaitOutcome, range_covered_by},
 };
 
@@ -22,7 +22,7 @@ use crate::{
 /// resolved is a real deadlock.
 const WAIT_HANG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
-impl<D: DriverIo> Resource<D> {
+impl<D: DriverIo> ResourceCore<D> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara::hang_watchdog(timeout = WAIT_HANG_TIMEOUT)]
     pub(super) fn wait_range_inner(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {

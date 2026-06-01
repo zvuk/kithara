@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use kithara_platform::CancellationToken;
 use kithara_test_utils::kithara;
-use tokio_util::sync::CancellationToken;
 
 /// Cross-platform temporary directory.
 ///
@@ -68,13 +68,19 @@ pub fn temp_path() -> (TestTempDir, PathBuf) {
 #[must_use]
 #[kithara::fixture]
 pub fn cancel_token() -> CancellationToken {
-    CancellationToken::new()
+    CancellationToken::default()
+}
+
+#[must_use]
+#[kithara::fixture]
+pub fn rt_cancel() -> CancellationToken {
+    CancellationToken::default()
 }
 
 #[must_use]
 #[kithara::fixture]
 pub fn cancel_token_cancelled() -> CancellationToken {
-    let token = CancellationToken::new();
+    let token = CancellationToken::default();
     token.cancel();
     token
 }

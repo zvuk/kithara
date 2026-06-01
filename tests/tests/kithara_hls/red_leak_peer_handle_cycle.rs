@@ -9,11 +9,10 @@ use std::{
 use kithara_abr::Abr;
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    Mutex,
+    CancellationToken, Mutex,
     time::{Duration, sleep},
 };
 use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer, PeerHandle};
-use tokio_util::sync::CancellationToken;
 
 /// Peer that stashes its own `PeerHandle` clone after registration —
 /// mirroring `HlsPeer` + `SegmentLoader` in production.
@@ -70,11 +69,11 @@ impl Peer for SelfReferencingPeer {
 )]
 async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            CancellationToken::new(),
+            CancellationToken::default(),
         ))
         .cancel(cancel.clone())
         .build(),
@@ -117,11 +116,11 @@ async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
 )]
 async fn registry_leaks_peer_without_teardown_when_handle_is_self_stored()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            CancellationToken::new(),
+            CancellationToken::default(),
         ))
         .cancel(cancel.clone())
         .build(),

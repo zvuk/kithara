@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kithara_events::{AbrEvent, AbrMode, EventBus, VariantInfo};
+use kithara_events::{AbrEvent, AbrMode, EventBus, VariantIndex, VariantInfo};
 use kithara_platform::{
     RwLock,
     time::{Duration, Instant},
@@ -61,14 +61,20 @@ impl AbrHandle {
     /// container, duration shape). Pulled live each call — no caching.
     #[must_use]
     pub fn current_variant(&self) -> Option<VariantInfo> {
-        let idx = self.current_variant_index()?;
+        let idx = self.inner.state.as_ref()?.current_variant_index();
         self.variants().into_iter().find(|v| v.variant_index == idx)
     }
 
-    /// Current variant index — `None` for peers without state.
+    /// Current variant index — `None` for peers without state. Unwrapped to
+    /// `usize` at this public boundary: consumers in `kithara-audio` /
+    /// `kithara-stream` carry their own (unrelated) index space, so the
+    /// typed [`VariantIndex`] stops here.
     #[must_use]
     pub fn current_variant_index(&self) -> Option<usize> {
-        self.inner.state.as_ref().map(|s| s.current_variant_index())
+        self.inner
+            .state
+            .as_ref()
+            .map(|s| s.current_variant_index().get())
     }
 
     /// Drop any unobserved boundary-commit decision — see
@@ -117,9 +123,9 @@ impl AbrHandle {
         let bus = self.inner.bus.lock_sync_read().clone();
         if let Some(bus) = bus {
             bus.publish(AbrEvent::VariantApplied {
-                from: current_before,
-                to: decision.target_variant_index,
-                reason: decision.reason,
+                from: VariantIndex::new(current_before),
+                to: decision.target(),
+                reason: decision.reason(),
             });
         }
         self.inner
@@ -166,7 +172,7 @@ impl AbrHandle {
                 let variants = peer.variants();
                 if !variants.iter().any(|v| v.variant_index == idx) {
                     return Err(AbrError::VariantOutOfBounds {
-                        requested: idx,
+                        requested: idx.get(),
                         available: variants.len(),
                     });
                 }
@@ -221,7 +227,7 @@ impl Drop for HandleInner {
 mod tests {
     use kithara_events::{
         AbrEvent, AbrReason, DEFAULT_EVENT_BUS_CAPACITY, Event, EventBus, VariantDuration,
-        VariantInfo,
+        VariantIndex, VariantInfo,
     };
     use kithara_test_utils::kithara;
 
@@ -234,7 +240,7 @@ mod tests {
     fn test_variants_3() -> Vec<VariantInfo> {
         vec![
             VariantInfo {
-                variant_index: 0,
+                variant_index: VariantIndex::new(0),
                 bandwidth_bps: Some(256_000),
                 duration: VariantDuration::Unknown,
                 name: None,
@@ -242,7 +248,7 @@ mod tests {
                 container: None,
             },
             VariantInfo {
-                variant_index: 1,
+                variant_index: VariantIndex::new(1),
                 bandwidth_bps: Some(512_000),
                 duration: VariantDuration::Unknown,
                 name: None,
@@ -250,7 +256,7 @@ mod tests {
                 container: None,
             },
             VariantInfo {
-                variant_index: 2,
+                variant_index: VariantIndex::new(2),
                 bandwidth_bps: Some(1_024_000),
                 duration: VariantDuration::Unknown,
                 name: None,
@@ -270,14 +276,13 @@ mod tests {
 
     struct StatefulPeer {
         state: Arc<AbrState>,
-        variants: Vec<VariantInfo>,
     }
     impl Abr for StatefulPeer {
         fn state(&self) -> Option<Arc<AbrState>> {
             Some(Arc::clone(&self.state))
         }
         fn variants(&self) -> Vec<VariantInfo> {
-            self.variants.clone()
+            test_variants_3()
         }
     }
 
@@ -287,25 +292,28 @@ mod tests {
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
-        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
+        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
-            variants: test_variants_3(),
         });
         let handle = controller.register(&peer);
 
-        state.request_target(2, AbrReason::UpSwitch);
+        state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
 
         let decision = handle
             .peek_pending_decision()
             .expect("peek must return Some when pending is set");
-        assert_eq!(decision.target_variant_index, 2);
-        assert_eq!(decision.reason, AbrReason::UpSwitch);
-        assert!(decision.did_change);
-        assert_eq!(state.current_variant_index(), 0, "peek must not mutate");
+        assert_eq!(decision.target(), VariantIndex::new(2));
+        assert_eq!(decision.reason(), AbrReason::UpSwitch);
+        assert!(decision.changed());
+        assert_eq!(
+            state.current_variant_index(),
+            VariantIndex::new(0),
+            "peek must not mutate"
+        );
 
         handle.apply_decision(&decision, Instant::now());
-        assert_eq!(state.current_variant_index(), 2);
+        assert_eq!(state.current_variant_index(), VariantIndex::new(2));
     }
 
     #[kithara::test(tokio)]
@@ -314,22 +322,21 @@ mod tests {
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
-        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
+        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
-            variants: test_variants_3(),
         });
         let handle = controller.register(&peer);
 
         handle.lock();
-        state.request_target(2, AbrReason::UpSwitch);
+        state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
 
         assert!(
             handle.peek_pending_decision().is_none(),
             "peek must return None while locked"
         );
-        assert_eq!(state.current_variant_index(), 0);
-        assert_eq!(state.pending_target(), Some(2));
+        assert_eq!(state.current_variant_index(), VariantIndex::new(0));
+        assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
     }
 
     #[kithara::test(tokio)]
@@ -338,10 +345,9 @@ mod tests {
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
-        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(1))));
+        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
-            variants: test_variants_3(),
         });
         let handle = controller.register(&peer);
 
@@ -350,21 +356,21 @@ mod tests {
         assert_eq!(variants[2].bandwidth_bps, Some(1_024_000));
 
         let current = handle.current_variant().expect("current variant");
-        assert_eq!(current.variant_index, 1);
+        assert_eq!(current.variant_index, VariantIndex::new(1));
         assert_eq!(current.bandwidth_bps, Some(512_000));
 
-        state.apply(
-            &AbrDecision {
-                target_variant_index: 2,
+        state.apply_decision(
+            &AbrDecision::UpSwitch {
+                from: VariantIndex::new(1),
+                to: VariantIndex::new(2),
                 reason: AbrReason::UpSwitch,
-                did_change: true,
             },
             Instant::now(),
         );
         let after = handle
             .current_variant()
             .expect("current variant after switch");
-        assert_eq!(after.variant_index, 2);
+        assert_eq!(after.variant_index, VariantIndex::new(2));
         assert_eq!(after.bandwidth_bps, Some(1_024_000));
     }
 
@@ -374,11 +380,10 @@ mod tests {
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
-        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
+        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let handle = {
             let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
                 state: Arc::clone(&state),
-                variants: test_variants_3(),
             });
             let h = controller.register(&peer);
             assert_eq!(h.variants().len(), 3);
@@ -397,33 +402,32 @@ mod tests {
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
-        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
+        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
-            variants: test_variants_3(),
         });
 
         let bus = EventBus::new(DEFAULT_EVENT_BUS_CAPACITY);
         let mut rx = bus.subscribe();
         let handle = controller.register(&peer).with_bus(bus);
 
-        let decision = AbrDecision {
-            target_variant_index: 2,
+        let decision = AbrDecision::UpSwitch {
+            from: VariantIndex::new(0),
+            to: VariantIndex::new(2),
             reason: AbrReason::UpSwitch,
-            did_change: true,
         };
         handle.notify_commit(decision, 0, Duration::ZERO, Instant::now());
 
-        let mut seen = false;
-        while let Ok(event) = rx.try_recv() {
+        let found = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| {
             if let Event::Abr(AbrEvent::VariantApplied { from, to, reason }) = event {
-                assert_eq!(from, 0);
-                assert_eq!(to, 2);
+                assert_eq!(from, VariantIndex::new(0));
+                assert_eq!(to, VariantIndex::new(2));
                 assert_eq!(reason, AbrReason::UpSwitch);
-                seen = true;
-                break;
+                Some(())
+            } else {
+                None
             }
-        }
-        assert!(seen, "expected VariantApplied event on the bus");
+        });
+        assert!(found.is_some(), "expected VariantApplied event on the bus");
     }
 }

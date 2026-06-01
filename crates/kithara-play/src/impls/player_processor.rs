@@ -12,6 +12,7 @@ use firewheel::{
 };
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_platform::Mutex;
+use kithara_test_utils::kithara;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{
     HeapCons,
@@ -40,6 +41,9 @@ pub enum PlayerCmd {
     },
     /// Unload a track by its source identifier.
     UnloadTrack { src: Arc<str> },
+    /// Unload every track from the arena and reset the position/duration
+    /// snapshot to zero. Sent when the queue is explicitly cleared.
+    Clear,
     /// Add a track transition (fade in / fade out).
     Transition(TrackTransition),
     /// Seek active tracks to the given position in seconds.
@@ -63,6 +67,7 @@ impl fmt::Debug for PlayerCmd {
                 .field("src", src)
                 .finish_non_exhaustive(),
             Self::UnloadTrack { src } => f.debug_struct("UnloadTrack").field("src", src).finish(),
+            Self::Clear => f.write_str("Clear"),
             Self::Transition(t) => f.debug_tuple("Transition").field(t).finish(),
             Self::Seek {
                 seconds,
@@ -82,11 +87,11 @@ impl fmt::Debug for PlayerCmd {
 
 /// The realtime audio processor for the player node.
 ///
-/// `(arena_idx, src, was_leading)` tuple captured per active track for one
-/// `process()` call. Lives only inside `render_audio` — exposed as a type
-/// alias so the `SmallVec` literal stays under the workspace
+/// `(arena_slot, handle, was_leading)` tuple captured per active track for
+/// one `process()` call. Lives only inside `render_audio` — exposed as a
+/// type alias so the `SmallVec` literal stays under the workspace
 /// `type_complexity` threshold.
-type ActiveTrackEntry = (usize, Arc<str>, bool);
+type ActiveTrackEntry = (usize, Index, bool);
 
 /// Manages tracks in a thunderdome arena, handles transitions,
 /// and renders mixed stereo audio into the Firewheel output buffers.
@@ -238,6 +243,9 @@ impl PlayerNodeProcessor {
                 }
                 PlayerCmd::UnloadTrack { src } => {
                     self.unload_track(&src);
+                }
+                PlayerCmd::Clear => {
+                    self.clear_all_tracks();
                 }
                 PlayerCmd::Transition(transition) => {
                     self.handle_transition(transition);
@@ -481,10 +489,10 @@ impl PlayerNodeProcessor {
         let mut mix_bufs = [&mut mix_buf0[0][..frames], &mut mix_buf1[0][..frames]];
         let notification_tx = &self.shared_state.notification_tx;
         let tracks = &mut self.tracks;
-        let arena_tracks: SmallVec<[(Arc<str>, TrackState); Self::MAX_TRACKS]> = if is_playing {
+        let arena_tracks: SmallVec<[(Index, TrackState); Self::MAX_TRACKS]> = if is_playing {
             tracks
                 .iter()
-                .map(|(_, track)| (Arc::clone(track.src()), track.state()))
+                .map(|(idx, track)| (idx, track.state()))
                 .collect()
         } else {
             SmallVec::new()
@@ -493,7 +501,7 @@ impl PlayerNodeProcessor {
             .iter()
             .enumerate()
             .filter(|(_, (_, state))| state.is_playing())
-            .map(|(arena_idx, (src, state))| (arena_idx, Arc::clone(src), state.is_leading()))
+            .map(|(arena_idx, (idx, state))| (arena_idx, *idx, state.is_leading()))
             .collect();
         let mut active_arena_slots = [false; Self::MAX_TRACKS];
         for (arena_idx, _, _) in &active_tracks {
@@ -501,7 +509,7 @@ impl PlayerNodeProcessor {
         }
         let mut skip_tracks = [false; Self::MAX_TRACKS];
 
-        for (track_idx, (_arena_track_idx, track_src, was_leading)) in
+        for (track_idx, (_arena_slot, track_handle, was_leading)) in
             active_tracks.iter().enumerate()
         {
             if skip_tracks[track_idx] {
@@ -513,7 +521,7 @@ impl PlayerNodeProcessor {
             }
 
             let mut read_outcome = {
-                let Some(outcome) = tracks.get_mut(track_src).map(|track| {
+                let Some(outcome) = tracks.get_by_index_mut(*track_handle).map(|track| {
                     track.read(&mut read_bufs, &mut mix_bufs, 0..frames, notification_tx)
                 }) else {
                     continue;
@@ -529,7 +537,9 @@ impl PlayerNodeProcessor {
 
                 let mut handover_offset = Self::initial_handover_offset(&read_outcome);
 
-                for (next_idx, (_, next_src, next_is_leading)) in active_tracks.iter().enumerate() {
+                for (next_idx, (_, next_handle, next_is_leading)) in
+                    active_tracks.iter().enumerate()
+                {
                     let Some(offset) = handover_offset else {
                         break;
                     };
@@ -540,7 +550,7 @@ impl PlayerNodeProcessor {
                         break;
                     }
 
-                    let Some(outcome) = tracks.get_mut(next_src).map(|track| {
+                    let Some(outcome) = tracks.get_by_index_mut(*next_handle).map(|track| {
                         track.read(
                             &mut read_bufs,
                             &mut mix_bufs,
@@ -563,7 +573,8 @@ impl PlayerNodeProcessor {
                 if let Some(offset) = handover_offset
                     && offset < frames
                 {
-                    for (next_arena_idx, (next_src, next_state)) in arena_tracks.iter().enumerate()
+                    for (next_arena_idx, (next_handle, next_state)) in
+                        arena_tracks.iter().enumerate()
                     {
                         if *next_state != TrackState::Preloading
                             || active_arena_slots[next_arena_idx]
@@ -571,7 +582,7 @@ impl PlayerNodeProcessor {
                             continue;
                         }
 
-                        let Some(next_track) = tracks.get_mut(next_src) else {
+                        let Some(next_track) = tracks.get_by_index_mut(*next_handle) else {
                             continue;
                         };
                         next_track.play();
@@ -587,9 +598,11 @@ impl PlayerNodeProcessor {
             }
 
             for (out_ch, mix_ch) in buffers.outputs.iter_mut().zip(mix_bufs.iter()) {
-                for (out_sample, &mix_sample) in out_ch.iter_mut().zip(mix_ch.iter()).take(frames) {
-                    *out_sample += mix_sample;
-                }
+                out_ch
+                    .iter_mut()
+                    .zip(mix_ch.iter())
+                    .take(frames)
+                    .for_each(|(out_sample, &mix_sample)| *out_sample += mix_sample);
             }
         }
 
@@ -636,6 +649,25 @@ impl PlayerNodeProcessor {
                 })
                 .ok();
         }
+    }
+
+    /// Unload every track from the arena and reset the published
+    /// position/duration snapshot to zero. Backs [`PlayerCmd::Clear`],
+    /// sent when the queue is explicitly cleared, so a subsequent read of
+    /// `shared_state` reflects an empty player instead of a stale snapshot.
+    fn clear_all_tracks(&mut self) {
+        let keys: SmallVec<[Arc<str>; Self::MAX_TRACKS]> = self
+            .tracks
+            .iter_keys()
+            .map(|(key, _)| Arc::clone(key))
+            .collect();
+        for key in keys {
+            self.unload_track(&key);
+        }
+        self.tracks_transitions.clear();
+        self.shared_state.playing.store(false, Ordering::SeqCst);
+        self.shared_state.position.store(0.0, Ordering::Relaxed);
+        self.shared_state.duration.store(0.0, Ordering::Relaxed);
     }
 
     /// Update `shared_state.position` / `shared_state.duration` from the
@@ -716,7 +748,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         }
     }
 
-    #[cfg_attr(rtsan, sanitize(realtime = "nonblocking"))]
+    #[kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,
         info: &ProcInfo,
@@ -938,6 +970,49 @@ mod tests {
 
         tx.try_push(PlayerCmd::SetPaused(true)).ok();
         processor.drain_commands();
+        assert!(!processor.shared_state.playing.load(Ordering::SeqCst));
+    }
+
+    #[kithara::test(tokio)]
+    async fn processor_clear_unloads_tracks_and_resets_snapshot() {
+        let (reader, _recorded) = SampleRateTrackingReader::new(PcmSpec {
+            channels: 2,
+            sample_rate: 44_100,
+        });
+        let resource = Resource::from_reader(reader, None);
+        let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
+            resource,
+            Arc::from("track.mp3"),
+            &PcmPool::default(),
+        )));
+
+        let (mut processor, mut tx) = make_processor();
+
+        tx.try_push(PlayerCmd::LoadTrack {
+            resource: player_resource,
+            item_id: None,
+            src: Arc::from("track.mp3"),
+        })
+        .ok();
+        processor.drain_commands();
+        assert_eq!(processor.tracks.len(), 1);
+
+        processor.shared_state.playing.store(true, Ordering::SeqCst);
+        processor
+            .shared_state
+            .position
+            .store(42.0, Ordering::Relaxed);
+        processor
+            .shared_state
+            .duration
+            .store(60.0, Ordering::Relaxed);
+
+        tx.try_push(PlayerCmd::Clear).ok();
+        processor.drain_commands();
+
+        assert_eq!(processor.tracks.len(), 0, "arena must be empty after Clear");
+        assert_eq!(processor.shared_state.position.load(Ordering::Relaxed), 0.0);
+        assert_eq!(processor.shared_state.duration.load(Ordering::Relaxed), 0.0);
         assert!(!processor.shared_state.playing.load(Ordering::SeqCst));
     }
 

@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt, fs, ops::Range, path::PathBuf};
+use std::{fmt, fs, ops::Range, path::PathBuf, sync::Arc};
 
+use arc_swap::ArcSwapOption;
 use bon::Builder;
 use crossbeam_queue::SegQueue;
 use kithara_platform::Mutex;
@@ -11,7 +12,7 @@ use rangemap::RangeSet;
 use crate::{
     StorageResult,
     backend::{
-        resource::Resource,
+        resource::ResourceWriter,
         traits::{Driver, DriverState},
     },
     resource::OpenMode,
@@ -54,22 +55,23 @@ impl MmapOptions {
 /// - `Empty`: zero-length committed resource (no mmap needed).
 pub(super) enum MmapState {
     Active(MemoryMappedFile),
-    Committed(MemoryMappedFile),
+    Committed(Arc<MemoryMappedFile>),
     Empty,
 }
 
 impl MmapState {
-    // ast-grep-ignore: idioms.match-self-conversion
     pub(super) fn as_readable(&self) -> Option<&MemoryMappedFile> {
         match self {
-            Self::Active(m) | Self::Committed(m) => Some(m),
+            Self::Active(m) => Some(m),
+            Self::Committed(m) => Some(m.as_ref()),
             Self::Empty => None,
         }
     }
     // ast-grep-ignore: idioms.match-self-conversion
     pub(super) fn len(&self) -> u64 {
         match self {
-            Self::Active(m) | Self::Committed(m) => m.len(),
+            Self::Active(m) => m.len(),
+            Self::Committed(m) => m.len(),
             Self::Empty => 0,
         }
     }
@@ -85,6 +87,8 @@ pub struct MmapDriver {
     pub(super) path: PathBuf,
     /// Lock-free queue for fast-path range notifications.
     pub(super) ready_ranges: SegQueue<Range<u64>>,
+    /// Immutable committed snapshot for the lock-free read fast path.
+    pub(super) committed: ArcSwapOption<MemoryMappedFile>,
 }
 
 impl fmt::Debug for MmapDriver {
@@ -92,6 +96,7 @@ impl fmt::Debug for MmapDriver {
         f.debug_struct("MmapDriver")
             .field("path", &self.path)
             .field("mode", &self.mode)
+            .field("committed", &self.committed.load().is_some())
             .finish_non_exhaustive()
     }
 }
@@ -111,53 +116,56 @@ impl Driver for MmapDriver {
     fn open(opts: MmapOptions) -> StorageResult<(Self, DriverState)> {
         let mode = opts.mode;
 
-        let (mmap_state, init) = if opts.path.exists() && fs::metadata(&opts.path)?.len() > 0 {
-            let len;
-            let mmap_state = if mode == OpenMode::ReadWrite {
-                let mmap = MemoryMappedFile::open_rw(&opts.path)?;
-                len = mmap.len();
-                MmapState::Active(mmap)
-            } else {
-                let mmap = MemoryMappedFile::open_ro(&opts.path)?;
-                len = mmap.len();
-                MmapState::Committed(mmap)
-            };
-            let mut available = RangeSet::new();
-            available.insert(0..len);
-            let init = DriverState {
-                available,
-                is_committed: true,
-                final_len: Some(len),
-            };
-            (mmap_state, init)
-        } else if mode == OpenMode::ReadOnly {
-            (
-                MmapState::Empty,
-                DriverState {
-                    available: RangeSet::new(),
+        let (mmap_state, init, committed) =
+            if opts.path.exists() && fs::metadata(&opts.path)?.len() > 0 {
+                let len;
+                let (mmap_state, snapshot) = if mode == OpenMode::ReadWrite {
+                    let mmap = MemoryMappedFile::open_rw(&opts.path)?;
+                    len = mmap.len();
+                    (MmapState::Active(mmap), None)
+                } else {
+                    let arc = Arc::new(MemoryMappedFile::open_ro(&opts.path)?);
+                    len = arc.len();
+                    (MmapState::Committed(Arc::clone(&arc)), Some(arc))
+                };
+                let mut available = RangeSet::new();
+                available.insert(0..len);
+                let init = DriverState {
+                    available,
                     is_committed: true,
-                    final_len: Some(0),
-                },
-            )
-        } else {
-            if let Some(parent) = opts.path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let size = opts.initial_len.unwrap_or(Consts::DEFAULT_INITIAL_SIZE);
-            let mmap_state = if size == 0 {
-                MmapState::Empty
+                    final_len: Some(len),
+                };
+                (mmap_state, init, ArcSwapOption::from(snapshot))
+            } else if mode == OpenMode::ReadOnly {
+                (
+                    MmapState::Empty,
+                    DriverState {
+                        available: RangeSet::new(),
+                        is_committed: true,
+                        final_len: Some(0),
+                    },
+                    ArcSwapOption::empty(),
+                )
             } else {
-                let mmap = MemoryMappedFile::create_rw(&opts.path, size)?;
-                MmapState::Active(mmap)
+                if let Some(parent) = opts.path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let size = opts.initial_len.unwrap_or(Consts::DEFAULT_INITIAL_SIZE);
+                let mmap_state = if size == 0 {
+                    MmapState::Empty
+                } else {
+                    let mmap = MemoryMappedFile::create_rw(&opts.path, size)?;
+                    MmapState::Active(mmap)
+                };
+                (mmap_state, DriverState::default(), ArcSwapOption::empty())
             };
-            (mmap_state, DriverState::default())
-        };
 
         let driver = Self {
             mode,
             mmap: Mutex::new(mmap_state),
             path: opts.path,
             ready_ranges: SegQueue::new(),
+            committed,
         };
 
         Ok((driver, init))
@@ -166,8 +174,8 @@ impl Driver for MmapDriver {
 
 /// Mmap-backed storage resource.
 ///
-/// Type alias for [`Resource<MmapDriver>`].
-pub type MmapResource = Resource<MmapDriver>;
+/// Type alias for [`ResourceWriter<MmapDriver>`].
+pub type MmapResource = ResourceWriter<MmapDriver>;
 
 #[cfg(test)]
 mod tests {
@@ -175,14 +183,13 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use kithara_platform::{thread, time::Duration};
+    use kithara_platform::{CancellationToken, thread, time::Duration};
     use tempfile::TempDir;
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
     use crate::{
-        StorageError,
-        resource::{ResourceExt, ResourceStatus, WaitOutcome},
+        Resource, ResourceRead, StorageError,
+        resource::{ResourceStatus, WaitOutcome},
     };
 
     fn create_resource(dir: &TempDir) -> MmapResource {
@@ -192,7 +199,7 @@ mod tests {
     fn create_resource_with_size(dir: &TempDir, size: Option<u64>) -> MmapResource {
         let path = dir.path().join("test.dat");
         Resource::open(
-            CancellationToken::new(),
+            CancellationToken::default(),
             MmapOptions {
                 path,
                 initial_len: size,
@@ -216,7 +223,7 @@ mod tests {
         let res = create_resource(&dir);
 
         res.write_at(0, b"hello world").unwrap();
-        res.commit(Some(11)).unwrap();
+        let res = res.commit(Some(11)).unwrap();
 
         let mut buf = [0u8; 11];
         let n = res.read_at(0, &mut buf).unwrap();
@@ -229,7 +236,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
 
-        res.write_all(b"atomic data").unwrap();
+        let res = res.write_all(b"atomic data").unwrap();
 
         let mut buf = Vec::new();
         let n = res.read_into(&mut buf).unwrap();
@@ -252,16 +259,20 @@ mod tests {
     fn test_wait_range_blocks_then_ready() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
-        let res2 = res.clone();
+        let reader = res.reader();
 
+        // Return the writer from the thread so it outlives the read: dropping an
+        // uncommitted writer now marks the resource failed (anti-hang), which
+        // would otherwise race the availability notify.
         let handle = thread::spawn(move || {
             thread::sleep(Duration::from_millis(50));
-            res2.write_at(0, b"delayed data").unwrap();
+            res.write_at(0, b"delayed data").unwrap();
+            res
         });
 
-        let outcome = res.wait_range(0..12).unwrap();
+        let outcome = reader.wait_range(0..12).unwrap();
         assert_eq!(outcome, WaitOutcome::Ready);
-        handle.join().unwrap();
+        let _writer = handle.join().unwrap();
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -270,7 +281,7 @@ mod tests {
         let res = create_resource(&dir);
 
         res.write_at(0, b"short").unwrap();
-        res.commit(Some(5)).unwrap();
+        let res = res.commit(Some(5)).unwrap();
 
         let outcome = res.wait_range(5..10).unwrap();
         assert_eq!(outcome, WaitOutcome::Eof);
@@ -280,14 +291,14 @@ mod tests {
     fn test_fail_wakes_waiters() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
-        let res2 = res.clone();
+        let reader = res.reader();
 
         let handle = thread::spawn(move || {
             thread::sleep(Duration::from_millis(50));
-            res2.fail("test error".to_string());
+            res.fail("test error".to_string());
         });
 
-        let result = res.wait_range(0..100);
+        let result = reader.wait_range(0..100);
         assert!(result.is_err());
         handle.join().unwrap();
     }
@@ -295,7 +306,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(2)))]
     fn test_cancel_wakes_waiters() {
         let dir = TempDir::new().unwrap();
-        let cancel = CancellationToken::new();
+        let cancel = CancellationToken::default();
         let path = dir.path().join("cancel_test.dat");
 
         let res: MmapResource = Resource::open(
@@ -328,7 +339,7 @@ mod tests {
 
         {
             let res: MmapResource = Resource::open(
-                CancellationToken::new(),
+                CancellationToken::default(),
                 MmapOptions {
                     path: path.clone(),
                     initial_len: None,
@@ -340,7 +351,7 @@ mod tests {
         }
 
         let res: MmapResource = Resource::open(
-            CancellationToken::new(),
+            CancellationToken::default(),
             MmapOptions {
                 path,
                 initial_len: None,
@@ -367,7 +378,7 @@ mod tests {
 
         let big_data = vec![42u8; 1024];
         res.write_at(0, &big_data).unwrap();
-        res.commit(Some(1024)).unwrap();
+        let res = res.commit(Some(1024)).unwrap();
 
         let mut buf = vec![0u8; 1024];
         let n = res.read_at(0, &mut buf).unwrap();
@@ -385,7 +396,7 @@ mod tests {
         res.write_at(0, b"data").unwrap();
         assert_eq!(res.status(), ResourceStatus::Active);
 
-        res.commit(Some(4)).unwrap();
+        let res = res.commit(Some(4)).unwrap();
         assert_eq!(
             res.status(),
             ResourceStatus::Committed { final_len: Some(4) }
@@ -396,8 +407,9 @@ mod tests {
     fn test_status_failed() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
+        let reader = res.reader();
 
         res.fail("boom".to_string());
-        assert_eq!(res.status(), ResourceStatus::Failed("boom".to_string()));
+        assert_eq!(reader.status(), ResourceStatus::Failed("boom".to_string()));
     }
 }

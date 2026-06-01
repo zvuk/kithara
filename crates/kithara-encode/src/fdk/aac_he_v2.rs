@@ -1,13 +1,3 @@
-//! HE-AAC v2 encoder through `fdk-aac-sys`.
-//!
-//! Produces raw AAC access units (no ADTS) tagged as
-//! `AudioCodec::AacHeV2` together with the `AudioSpecificConfig`
-//! emitted by the encoder's `confBuf` (stored in the
-//! [`EncodedTrack::codec_config`] field). The downstream fmp4
-//! muxer (`tests/src/native/fmp4`) reads that ASC verbatim into
-//! the `esds` box so the resulting fragments decode the same way
-//! production zvuk DRM fragments do.
-
 use std::{
     cmp,
     mem::{MaybeUninit, size_of, size_of_val},
@@ -42,7 +32,7 @@ pub(crate) struct AacHeV2Encoder;
 
 impl AacHeV2Encoder {
     pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
-        validate(request)?;
+        request.validate()?;
 
         let sample_rate = request.pcm.sample_rate();
         let channels = request.pcm.channels();
@@ -83,8 +73,8 @@ impl AacHeV2Encoder {
             let encoded = encoder.encode(input, &mut output)?;
             if encoded.output_size > 0 {
                 units.push(EncodedAccessUnit {
-                    bytes: output[..encoded.output_size].to_vec(),
                     pts,
+                    bytes: output[..encoded.output_size].to_vec(),
                     dts: pts,
                     duration: u32::try_from(frame_pts_step).unwrap_or(u32::MAX),
                     is_sync: true,
@@ -102,8 +92,8 @@ impl AacHeV2Encoder {
                 break;
             }
             units.push(EncodedAccessUnit {
-                bytes: output[..encoded.output_size].to_vec(),
                 pts,
+                bytes: output[..encoded.output_size].to_vec(),
                 dts: pts,
                 duration: u32::try_from(frame_pts_step).unwrap_or(u32::MAX),
                 is_sync: true,
@@ -134,25 +124,6 @@ impl AacHeV2Encoder {
     }
 }
 
-fn validate(request: &PackagedEncodeRequest<'_>) -> EncodeResult<()> {
-    if request.timescale == 0 {
-        return Err(EncodeError::InvalidInput(
-            "timescale must be > 0".to_owned(),
-        ));
-    }
-    if request.packets_per_segment == 0 {
-        return Err(EncodeError::InvalidInput(
-            "packets_per_segment must be > 0".to_owned(),
-        ));
-    }
-    if request.pcm.total_byte_len().is_none() {
-        return Err(EncodeError::InvalidInput(
-            "PCM source must have a finite length".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
 /// Streams interleaved i16 samples from `pcm` into `feed` in
 /// chunks of `frame_input_samples` (channels × per-channel samples
 /// per frame). `feed` returns how many samples (i16 elements) the
@@ -178,9 +149,11 @@ where
             break;
         }
         byte_offset += n;
-        for chunk in raw[..n].chunks_exact(bytes_per_sample) {
-            buf.push(i16::from_le_bytes([chunk[0], chunk[1]]));
-        }
+        buf.extend(
+            raw[..n]
+                .chunks_exact(bytes_per_sample)
+                .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]])),
+        );
         while buf.len() >= frame_input_samples {
             let consumed = feed(&buf[..frame_input_samples])?;
             if consumed == 0 {

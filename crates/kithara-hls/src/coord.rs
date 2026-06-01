@@ -3,7 +3,7 @@
 use std::{
     ops::Range,
     sync::{
-        Arc, OnceLock,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -12,16 +12,17 @@ use delegate::delegate;
 use kithara_abr::AbrHandle;
 use kithara_assets::{AssetScope, ResourceKey};
 use kithara_drm::DecryptContext;
+use kithara_events::AbrReason;
 use kithara_platform::{
+    CancellationToken,
     time::{Duration, Instant},
-    tokio::sync::Notify,
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SegmentDescriptor, SegmentLayout,
     SourcePhase, SourceSeekAnchor, StreamResult, Timeline,
 };
-use tokio_util::sync::CancellationToken;
+use kithara_test_utils::kithara;
 use tracing::info;
 
 use crate::{
@@ -67,11 +68,6 @@ pub(crate) struct HlsCoord {
     /// it — smooth ABR (FLAC@hi → FLAC@lo) keeps reading without a
     /// fence.
     variant_generation: AtomicU64,
-    /// Reader→peer wake handle, installed once when the owning `HlsPeer`
-    /// binds. Forwarded to every variant via [`Self::set_peer_wake`] so
-    /// `wait_range` / `seek_time_anchor` running inside a variant can
-    /// resume `HlsPeer::poll_next` directly.
-    peer_wake: OnceLock<Arc<Notify>>,
 }
 
 impl HlsCoord {
@@ -98,7 +94,6 @@ impl HlsCoord {
             cancel: env.cancel,
             scope: env.scope,
             headers: env.headers,
-            peer_wake: OnceLock::new(),
             variant_generation: AtomicU64::new(0),
             fence_at: AtomicU64::new(0),
         }
@@ -127,12 +122,14 @@ impl HlsCoord {
     /// entries then.
     pub(crate) fn broadcast_eviction(&self, ctx: &PlanCtx, key: &ResourceKey, seg_at_reader: u32) {
         let active_idx = self.variant_index();
-        let mut active_lost = false;
-        for (v_idx, v) in self.variants.iter().enumerate() {
-            if v.on_evict(key).is_some() && v_idx == active_idx {
-                active_lost = true;
-            }
-        }
+        let active_lost = self
+            .variants
+            .iter()
+            .enumerate()
+            .fold(false, |acc, (v_idx, v)| {
+                let hit = v.on_evict(key).is_some() && v_idx == active_idx;
+                acc || hit
+            });
         if active_lost && let Some(active) = self.active() {
             active.rebuild(ctx, seg_at_reader);
         }
@@ -178,7 +175,7 @@ impl HlsCoord {
         let Some(decision) = self.abr.peek_pending_decision() else {
             return false;
         };
-        let new_v = decision.target_variant_index;
+        let new_v = decision.target().get();
         let Some(v_new) = self.variants.get(new_v) else {
             return false;
         };
@@ -194,7 +191,7 @@ impl HlsCoord {
             from_seg,
             reader_pos = reader_pos_at_entry,
             needs_byte_continuity,
-            reason = ?decision.reason,
+            reason = ?decision.reason(),
             "HlsCoord: commit_variant_switch"
         );
         if needs_byte_continuity {
@@ -244,6 +241,52 @@ impl HlsCoord {
         true
     }
 
+    /// Break the urgent-down-switch / blocked-reader deadlock: when the
+    /// active (slow) variant cannot deliver the next segment the reader
+    /// needs, an Auto-mode commit would otherwise wait for a boundary
+    /// cross that the undelivered segment prevents. Return the segment to
+    /// commit at (`download_head - 1`, so `commit_variant_switch`'s
+    /// `from_seg + 1` lands `switch_at = download_head`) when a proactive
+    /// rescue is both warranted and continuity-safe; otherwise `None`.
+    ///
+    /// Guards (all required):
+    /// - a pending decision exists and its reason is
+    ///   [`AbrReason::UrgentDownSwitch`] — only the rescue path commits
+    ///   early; opportunistic up/down-switches keep boundary-cross
+    ///   gating so `v_new` is not pinned prematurely;
+    /// - the target is a WAV byte-continuity variant — the structured
+    ///   recreate path reseeds by time and is not subject to this
+    ///   circular dependency;
+    /// - `download_head` is strictly ahead of the reader's current
+    ///   segment (`reader_seg`). This keeps the switch on a clean
+    ///   segment boundary the reader has not begun consuming: the
+    ///   reader finishes its fully-loaded current segment on `v_old`,
+    ///   `v_new` takes over at `download_head`. When
+    ///   `download_head == reader_seg` the reader is mid an undelivered
+    ///   segment, so handing it to `v_new` would be a mid-segment
+    ///   cross-bitrate switch (sample shift) — never rescue there;
+    /// - `download_head < num_segments`, i.e. `v_old` genuinely has
+    ///   un-downloaded tail (otherwise there is nothing to rescue from).
+    pub(crate) fn urgent_rescue_boundary(&self, reader_seg: u32) -> Option<u32> {
+        let decision = self.abr.peek_pending_decision()?;
+        if decision.reason() != AbrReason::UrgentDownSwitch {
+            return None;
+        }
+        if !matches!(
+            self.playlist_state
+                .variant_container(decision.target().get()),
+            Some(ContainerFormat::Wav)
+        ) {
+            return None;
+        }
+        let head = self.download_head();
+        let active = self.active()?;
+        if head >= active.num_segments() || head <= reader_seg {
+            return None;
+        }
+        Some(head.saturating_sub(1))
+    }
+
     /// Cross-variant segment lookup. Mirrors [`Self::variant_serving`]'s
     /// priority: active first, then shrunk `v_old`s. Returns `None` if no
     /// engaged variant claims the offset.
@@ -256,7 +299,7 @@ impl HlsCoord {
             if Arc::ptr_eq(v, active) {
                 continue;
             }
-            let shrunk = v.served_from() > 0 || v.served_until() < v.num_segments();
+            let shrunk = v.is_shrunk();
             if !shrunk {
                 continue;
             }
@@ -288,16 +331,11 @@ impl HlsCoord {
         self.active_required().media_info()
     }
 
-    /// External signal that the reader is blocked — wake the peer so
-    /// the next `poll_next` runs immediately.
-    pub(crate) fn notify_waiting(&self) {
-        self.wake_peer();
-    }
-
     /// Track-level phase. Master-cancel takes precedence (terminal
     /// `Cancelled`); otherwise the variant that currently serves
     /// `range.start` decides — mid-buffer boundary cross resolves to
     /// the right `range_ready` / `is_flushing` / `total_bytes` view.
+    #[kithara::rtsan_allow_blocking]
     pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         if self.cancel.is_cancelled() {
             return SourcePhase::Cancelled;
@@ -333,25 +371,6 @@ impl HlsCoord {
             active.reset_to_full_range();
         }
         self.abr.invalidate_pending();
-    }
-
-    /// Install the wake handle that `HlsPeer` listens on. Called once by
-    /// `HlsSource::set_hls_peer` after the peer is bound. Subsequent
-    /// calls silently keep the first registration. Forwarded to every
-    /// variant so reader-path waits inside a variant can wake the peer
-    /// directly.
-    pub(crate) fn set_peer_wake(&self, notify: &Arc<Notify>) {
-        if self.peer_wake.set(Arc::clone(notify)).is_ok() {
-            for v in self.variants.iter() {
-                v.set_peer_wake(Arc::clone(notify));
-            }
-        }
-    }
-
-    /// Wake the peer on receipt of a new seek epoch. The epoch value
-    /// itself lives on `Timeline` — we just resume `poll_next`.
-    pub(crate) fn set_seek_epoch(&self, _seek_epoch: u64) {
-        self.wake_peer();
     }
 
     /// Mirror `abr.lock()` state to `timeline.is_seek_pending()`.
@@ -408,7 +427,7 @@ impl HlsCoord {
             if Arc::ptr_eq(v, active) {
                 continue;
             }
-            let shrunk = v.served_from() > 0 || v.served_until() < v.num_segments();
+            let shrunk = v.is_shrunk();
             if !shrunk {
                 continue;
             }
@@ -433,12 +452,6 @@ impl HlsCoord {
             return Ok(WaitOutcome::Interrupted);
         }
         self.variant_serving(range.start).wait_range(range, timeout)
-    }
-
-    fn wake_peer(&self) {
-        if let Some(notify) = self.peer_wake.get() {
-            notify.notify_one();
-        }
     }
 
     delegate! {

@@ -8,14 +8,15 @@ use std::{
     sync::Arc,
 };
 
+use kithara_platform::CancellationToken;
 use kithara_storage::{
-    AtomicChunked, AvailabilityObserver, MmapOptions, MmapResource, OpenIntent, OpenMode, Resource,
-    ResourceExt, ResourceStatus, StorageError, StorageResource,
+    AtomicChunked, AvailabilityObserver, MmapDriver, MmapOptions, MmapResource, OpenIntent,
+    OpenMode, Resource, ResourceRead, ResourceStatus, StorageError, StorageResource,
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::{
-    base::{Assets, Capabilities},
+    acquisition::AcquisitionResult,
+    base::{Assets, BaseReader, BaseWriter, Capabilities},
     deleter::AssetDeleter,
     error::{AssetsError, AssetsResult},
     identity::RequestIdentity,
@@ -23,9 +24,6 @@ use crate::{
     key::ResourceKey,
     state::AssetResourceState,
 };
-
-/// Initial mmap file size for index resources (4 KB).
-const INDEX_INITIAL_SIZE: u64 = 4096;
 
 /// Concrete on-disk [`Assets`] implementation.
 ///
@@ -160,7 +158,7 @@ impl DiskAssetStore {
         &self,
         key: &ResourceKey,
         path: PathBuf,
-    ) -> AssetsResult<AtomicChunked<MmapResource>> {
+    ) -> AssetsResult<AtomicChunked<MmapDriver>> {
         let observer = self.scoped_observer(key);
         let cancel = self.cancel.clone();
         let chunked = AtomicChunked::open(path, move |target, intent| {
@@ -180,6 +178,8 @@ impl DiskAssetStore {
     }
 
     fn open_index_resource(&self, path: PathBuf) -> AssetsResult<MmapResource> {
+        /// Initial mmap file size for index resources (4 KB).
+        const INDEX_INITIAL_SIZE: u64 = 4096;
         Ok(Resource::open(
             self.cancel.clone(),
             MmapOptions::for_path(path)
@@ -269,16 +269,17 @@ impl DiskAssetStore {
 }
 
 impl Assets for DiskAssetStore {
+    type ActiveRes = BaseWriter;
     type Context = ();
-    type IndexRes = MmapResource;
-    type Res = StorageResource;
+    type IndexRes = StorageResource;
+    type ReadyRes = BaseReader;
 
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
         _identity: Option<&RequestIdentity>,
         _ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
+    ) -> AssetsResult<AcquisitionResult<BaseWriter, BaseReader>> {
         let path = self.resource_path(key)?;
         if key.is_absolute() || (path.exists() && path.metadata().is_ok_and(|m| m.len() > 0)) {
             let mode = if key.is_absolute() {
@@ -286,11 +287,16 @@ impl Assets for DiskAssetStore {
             } else {
                 OpenMode::Auto
             };
-            let mmap = self.open_storage_resource(key, path, mode)?;
-            return Ok(mmap.into());
+            let storage = StorageResource::from(self.open_storage_resource(key, path, mode)?);
+            if matches!(storage.status(), ResourceStatus::Committed { .. }) {
+                return Ok(AcquisitionResult::Ready(BaseReader::new(storage)));
+            }
+            return Ok(AcquisitionResult::Pending(BaseWriter::new(storage)));
         }
         let chunked = self.open_atomic_chunked_resource(key, path)?;
-        Ok(StorageResource::from(chunked))
+        Ok(AcquisitionResult::Pending(BaseWriter::new(
+            StorageResource::from(chunked),
+        )))
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -304,14 +310,14 @@ impl Assets for DiskAssetStore {
         self.deleter.delete_asset(asset_root)
     }
 
-    fn open_lru_index_resource(&self) -> AssetsResult<MmapResource> {
+    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
         let path = self.lru_index_path();
-        self.open_index_resource(path)
+        Ok(StorageResource::from(self.open_index_resource(path)?))
     }
 
-    fn open_pins_index_resource(&self) -> AssetsResult<MmapResource> {
+    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
         let path = self.pins_index_path();
-        self.open_index_resource(path)
+        Ok(StorageResource::from(self.open_index_resource(path)?))
     }
 
     fn open_resource_with_ctx(
@@ -319,13 +325,13 @@ impl Assets for DiskAssetStore {
         key: &ResourceKey,
         _identity: Option<&RequestIdentity>,
         _ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
+    ) -> AssetsResult<BaseReader> {
         let path = self.resource_path(key)?;
         if !path.exists() {
             return Err(IoError::new(ErrorKind::NotFound, "resource missing").into());
         }
         let mmap = self.open_storage_resource(key, path, OpenMode::ReadOnly)?;
-        Ok(mmap.into())
+        Ok(BaseReader::new(StorageResource::from(mmap)))
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
@@ -370,11 +376,12 @@ pub(crate) fn sanitize_rel(input: &str) -> Result<String, ()> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_storage::{ResourceExt, ResourceStatus};
+    use kithara_platform::CancellationToken;
+    use kithara_storage::ResourceStatus;
     use kithara_test_utils::kithara;
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
+    use crate::acquisition::ReadSide;
 
     #[kithara::test]
     #[case("valid.txt", true, "Simple filename")]
@@ -418,7 +425,7 @@ mod tests {
 
         let store = DiskAssetStore::new(
             dir.path().join("cache"),
-            CancellationToken::new(),
+            CancellationToken::default(),
             &crate::BytePool::default(),
         );
 

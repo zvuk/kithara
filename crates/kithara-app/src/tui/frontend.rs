@@ -31,7 +31,7 @@ impl Frontend for TuiFrontend {
 
         let result = rt.block_on(runner::run_tui(queue, &self.config));
 
-        self.config.cancel.cancel();
+        self.config.shutdown.cancel();
         result
     }
 

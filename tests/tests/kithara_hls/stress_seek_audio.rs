@@ -13,8 +13,7 @@ use kithara_integration_tests::{
     phase_distance, phase_from_f32,
     signal_pcm::signal,
 };
-use kithara_platform::tokio::task::spawn_blocking;
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, tokio::task::spawn_blocking};
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -97,7 +96,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool, #[case] backend: Dec
     info!(%url, segments = Consts::SEGMENT_COUNT, "HLS server ready");
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
@@ -109,7 +108,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool, #[case] backend: Dec
     let hls_config = HlsConfig::for_url(url)
         .store(store)
         .cancel(cancel)
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));

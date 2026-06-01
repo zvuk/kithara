@@ -12,10 +12,9 @@ use kithara_audio::{AudioWorkerHandle, EqBandConfig, SeekOutcome, generate_log_s
 use kithara_bufpool::PcmPool;
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
-use kithara_platform::{Mutex, tokio::runtime::Handle as RuntimeHandle};
+use kithara_platform::{CancellationToken, Mutex, tokio::runtime::Handle as RuntimeHandle};
 use portable_atomic::AtomicF32;
 use ringbuf::traits::Consumer;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::{
@@ -36,9 +35,6 @@ use crate::{
     },
     types::{PlayerStatus, SessionDuckingMode, SlotId},
 };
-
-/// Minimum playback rate to prevent stalling.
-const MIN_PLAYBACK_RATE: f32 = 0.01;
 
 struct QueuedResource {
     item_id: Option<Arc<str>>,
@@ -89,14 +85,14 @@ pub struct PlayerConfig {
     /// Secondary lead time before EOF at which the next queued item is loaded.
     #[builder(default = 3.5)]
     pub prefetch_duration: f32,
-    /// Maximum concurrent slots in the engine. Default: 4.
-    #[builder(default = 4)]
-    pub max_slots: usize,
     /// Sample rate passed to the engine/runtime backend as a hint.
     /// Default: 44100. Offline/test harnesses set this to drive
     /// deterministic render at a known rate.
     #[builder(default = 44_100)]
     pub sample_rate: u32,
+    /// Maximum concurrent slots in the engine. Default: 4.
+    #[builder(default = 4)]
+    pub max_slots: usize,
 }
 
 impl fmt::Debug for PlayerConfig {
@@ -164,6 +160,9 @@ pub struct PlayerImpl {
 }
 
 impl PlayerImpl {
+    /// Minimum playback rate to prevent stalling.
+    const MIN_PLAYBACK_RATE: f32 = 0.01;
+
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(mut config: PlayerConfig) -> Self {
@@ -662,7 +661,7 @@ impl PlayerImpl {
 
     /// Start playback at the configured default rate.
     pub fn play(&self) {
-        let rate = self.default_rate().max(MIN_PLAYBACK_RATE);
+        let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
         self.rate.store(rate, Ordering::Relaxed);
         self.playback_rate_shared.store(rate, Ordering::Relaxed);
 
@@ -685,13 +684,6 @@ impl PlayerImpl {
         self.bus.publish(PlayerEvent::CurrentItemChanged);
         self.bus.publish(PlayerEvent::RateChanged { rate });
         debug!(rate, "play");
-    }
-
-    /// Insert a resource at the end and immediately crossfade to it.
-    pub fn play_resource(&self, resource: Resource) -> Result<(), PlayError> {
-        self.insert(resource, None, None);
-        let index = self.item_count().saturating_sub(1);
-        self.select_item(index, true)
     }
 
     /// Current playback position in seconds.
@@ -728,24 +720,13 @@ impl PlayerImpl {
         let parent = config.cancel.unwrap_or_else(|| self.cancel.clone());
         let cancel = Some(parent.child_token());
         super::config::ResourceConfig {
+            bus,
+            cancel,
             worker: Some(self.engine.worker().clone()),
             host_sample_rate: std::num::NonZeroU32::new(self.engine.master_sample_rate()),
             gapless_mode: self.config.gapless_mode,
-            bus,
-            cancel,
             ..config
         }
-    }
-
-    /// Diagnostic: number of times the audio processor's `process()` has been called.
-    pub fn process_count(&self) -> u64 {
-        let Some(slot_id) = *self.current_slot.lock_sync() else {
-            return 0;
-        };
-        let Some(state) = self.engine.slot_shared_state(slot_id) else {
-            return 0;
-        };
-        state.process_count.load(Ordering::Relaxed)
     }
 
     /// Process audio-thread notifications, emitting `ItemDidPlayToEnd`
@@ -789,6 +770,10 @@ impl PlayerImpl {
         self.items.lock_sync().clear();
         self.current_index.store(0, Ordering::Relaxed);
         self.set_status(PlayerStatus::Unknown);
+        // Drop the actively playing track from the audio-thread arena and
+        // reset the position/duration snapshot; otherwise the stale snapshot
+        // outlives the cleared queue. No-op when no slot is allocated.
+        let _ = self.send_to_slot(PlayerCmd::Clear);
         debug!("all items removed");
     }
 
@@ -1025,7 +1010,7 @@ impl PlayerImpl {
     /// Updates the local rate and propagates to the audio pipeline resampler
     /// via `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
     pub fn set_rate(&self, rate: f32) {
-        let clamped = rate.max(MIN_PLAYBACK_RATE);
+        let clamped = rate.max(Self::MIN_PLAYBACK_RATE);
         self.rate.store(clamped, Ordering::Relaxed);
         self.playback_rate_shared.store(clamped, Ordering::Relaxed);
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(clamped));
@@ -1218,7 +1203,7 @@ mod tests {
 
     #[kithara::test]
     fn prepare_config_preserves_caller_supplied_master() {
-        let parent_master = CancellationToken::new();
+        let parent_master = CancellationToken::default();
         let player = PlayerImpl::new(PlayerConfig {
             cancel: Some(parent_master.clone()),
             ..PlayerConfig::default()

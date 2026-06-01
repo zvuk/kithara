@@ -17,12 +17,13 @@ mod preroll;
 mod source;
 mod stream;
 mod timeline;
+mod wake;
 
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
 pub use error::{SourceError, StreamError, StreamResult};
-pub use hooks::{DecoderHooks, ReaderChunkSignal, ReaderSeekSignal, SharedHooks};
+pub use hooks::{BoxedHooks, DecoderHooks, ReaderChunkSignal, ReaderSeekSignal};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
 pub use preroll::PrerollHint;
 pub use source::{
@@ -34,3 +35,4 @@ pub use stream::{
     VariantChangeError,
 };
 pub use timeline::{ChunkPosition, Timeline};
+pub use wake::DeferredWake;

@@ -49,7 +49,7 @@ let client = HttpClient::new(NetOptions::default(), CancellationToken::new())
 <tr><td><code>Headers</code></td><td><code>HashMap&lt;String, String&gt;</code> wrapper</td></tr>
 <tr><td><code>RangeSpec</code></td><td>HTTP byte range: <code>{ start: u64, end: Option&lt;u64&gt; }</code></td></tr>
 <tr><td><code>RetryPolicy</code></td><td>Retry configuration: base delay, max delay, max retries</td></tr>
-<tr><td><code>NetError</code></td><td>Error variants: <code>Http</code>, <code>Timeout</code>, <code>RetryExhausted</code>, <code>HttpError</code>, <code>Unimplemented</code>, <code>Cancelled</code></td></tr>
+<tr><td><code>NetError</code></td><td>Error variants: <code>Status</code>, <code>Timeout</code>, <code>Network</code>, <code>Decode</code>, <code>RetryExhausted</code>, <code>Unimplemented</code>, <code>Cancelled</code>, <code>InvalidContentType</code>. Retry decisioning via <code>retryability() -&gt; Retryability</code> (typed, no substring matching)</td></tr>
 </table>
 
 ## Timeout Behavior
@@ -64,6 +64,13 @@ Two independent limits in `NetOptions`, applied to **all** methods (`get_bytes`,
 
 The `TimeoutNet` decorator can wrap any `Net` with an additional
 `tokio::time::timeout` over the whole call.
+
+## Trait Bridges
+
+- `&RangeSpec` → `String` (`Display`) — HTTP Range header rendering
+- `HashMap<String, String>` → `Headers` (`From`) — build header set from a map
+- `Compression` → `Vec<ClientBuilderMod>` (`From`) — map compression flags to reqwest builder mods
+- `ReqwestError` → `NetError` (`From`) — wrap transport errors into typed `NetError`
 
 ## Integration
 

@@ -20,6 +20,10 @@ exclude_globs = [
 ]
 
 [file_size]
+# Line count per file, excluding lines inside `#[cfg(test)]` items (inline
+# unit-test modules are not production surface). `exclude_globs` drops whole
+# files (generated/proto); test-support crates and `tests/` are dropped by the
+# shared `[lint_exclude]` pass in `.config/xtask.toml`.
 warn = 400
 deny = 1000
 exclude_globs = [
@@ -60,11 +64,16 @@ warn = 8
 "xtask" = 20
 
 [god_struct]
-# `fields + methods` per struct. Methods include both inherent (`impl X`)
-# and trait-impl (`impl Trait for X`) functions, aggregated across every
-# `impl` block in the file (so a type whose surface is split across many
-# traits still hits the threshold). Tuple structs and unit structs count
-# as zero fields.
+# Substantial methods per type, aggregated across every `impl` block of the
+# owning crate (so a type whose surface is split across sibling files is
+# counted once — moving methods between files cannot lower the count). Measures
+# behaviour concentration, NOT state size: field count is reported for context
+# but owned by `pub_struct_open_fields`, not summed here. Excluded from the
+# count: thin forwarders/accessors (short, branch-free bodies — idiomatic
+# facade plumbing), `#[cfg(test)]` items, and methods that only satisfy a
+# standard-library / language trait contract (`Drop`, `Default`, `From`,
+# arithmetic, ordering, IO adapters, ...). Override the trait set via
+# `std_traits = [...]`.
 warn = 15
 
 [god_trait]
@@ -126,6 +135,17 @@ exempt_crates = [
     "kithara-test-utils",
     "kithara-test-macros",
     "kithara-probe-macros",
+]
+
+[cancel_hierarchy]
+# Crates whose production *is* test scaffolding (helpers, mocks): their
+# hard-coded `CancellationToken::new()` calls are indistinguishable from
+# test fixtures and don't violate the cancel-hierarchy contract.
+exempt_crates = [
+    "kithara-test-utils",
+    "kithara-test-macros",
+    "kithara-probe-macros",
+    "xtask",
 ]
 
 [shared_state]

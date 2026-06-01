@@ -22,6 +22,8 @@ use config::ArchConfig;
 
 use crate::common::{
     baseline::{Baseline, RatchetDiff},
+    exclude::{apply_cfg_test_exclusion, apply_module_excludes, apply_path_excludes},
+    project::ProjectConfig,
     report,
     scope::Scope,
     violation::Report,
@@ -128,6 +130,11 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
         let violations = check.run(&ctx)?;
         report.extend(violations);
     }
+
+    let project = ProjectConfig::load(&workspace_root)?;
+    apply_path_excludes(&mut report, &project.lint_exclude.paths);
+    apply_cfg_test_exclusion(&mut report, &workspace_root);
+    apply_module_excludes(&mut report, &project.lint_exclude.modules, &workspace_root);
 
     if args.update_baseline {
         let new_baseline = Baseline::from_report(&report);

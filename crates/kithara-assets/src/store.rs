@@ -7,20 +7,21 @@ use std::{fmt, hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use bon::Builder;
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
-use kithara_storage::StorageResource;
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::disk_store::DiskAssetStore;
 use crate::{
-    cache::{CachedAssets, CachedResource},
+    acquisition::AcquisitionResult,
+    base::{BaseReader, BaseWriter},
+    cache::{CachedAssets, CachedReader, CachedWriter},
     evict::EvictAssets,
     flush::{FlushHub, FlushPolicy},
     index::{AvailabilityIndex, DemandIndex, EvictConfig},
     key::ResourceKey,
-    lease::{LeaseAssets, LeaseGuard, LeaseResource},
+    lease::{LeaseAssets, LeaseGuard, LeaseReader, LeaseWriter},
     mem_store::MemAssetStore,
-    process::{ProcessChunkFn, ProcessedResource, ProcessingAssets},
+    process::{ProcessChunkFn, ProcessedReader, ProcessedWriter, ProcessingAssets},
     unified::AssetStore,
 };
 
@@ -143,13 +144,21 @@ impl From<&StoreOptions> for EvictConfig {
 pub(crate) type DiskStore<Ctx = ()> =
     LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
-/// Resource handle returned by [`AssetStore::open_resource`].
-///
-/// Wraps `StorageResource` with processing and lease semantics.
-/// Implements `ResourceExt` for read/write/commit operations.
-/// Both disk and memory variants return this same type.
-pub type AssetResource<Ctx = ()> =
-    LeaseResource<CachedResource<ProcessedResource<StorageResource, Ctx>>, LeaseGuard>;
+/// Pending (writer) handle returned by the `Pending` arm of
+/// [`AssetStore::acquire_resource`]. Owns the streaming write + decrypt-on-commit
+/// capability; consumes itself on `commit` into an [`AssetReader`].
+pub type AssetWriter<Ctx = ()> =
+    LeaseWriter<CachedWriter<ProcessedWriter<BaseWriter, Ctx>>, LeaseGuard>;
+
+/// Ready (reader) handle returned by [`AssetStore::open_resource`] and the
+/// `Ready` arm of [`AssetStore::acquire_resource`]. Cheap to clone.
+pub type AssetReader<Ctx = ()> =
+    LeaseReader<CachedReader<ProcessedReader<BaseReader, Ctx>>, LeaseGuard>;
+
+/// Phase-typed acquisition outcome returned by
+/// [`AssetStore::acquire_resource`]: a `Pending` [`AssetWriter`] to stream and
+/// commit, or a `Ready` [`AssetReader`] when the resource is already committed.
+pub type AssetResource<Ctx = ()> = AcquisitionResult<AssetWriter<Ctx>, AssetReader<Ctx>>;
 
 /// In-memory asset store with disabled decorators.
 ///
@@ -581,33 +590,37 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        panic::{AssertUnwindSafe, catch_unwind},
-    };
+    use std::fs;
 
     use kithara_platform::time::Duration;
-    use kithara_storage::ResourceExt;
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
 
     use super::*;
     use crate::{
+        acquisition::{AcquisitionResult, ReadSide, WriteSide},
         base::{Assets, Capabilities},
         key::ResourceKey,
     };
 
-    fn panic_message(err: &(dyn std::any::Any + Send)) -> String {
-        if let Some(msg) = err.downcast_ref::<String>() {
-            return msg.clone();
-        }
-        if let Some(msg) = err.downcast_ref::<&str>() {
-            return (*msg).to_string();
-        }
-        "<non-string panic>".to_string()
+    const ROOT: &str = "test_asset";
+
+    /// Stream `data` through the Pending writer and commit it.
+    fn write_commit(acq: AssetResource, data: &[u8]) {
+        let AcquisitionResult::Pending(w) = acq else {
+            panic!("expected a Pending writer");
+        };
+        w.write_at(0, data).unwrap();
+        w.commit(Some(data.len() as u64)).unwrap();
     }
 
-    const ROOT: &str = "test_asset";
+    /// Extract the Pending writer or panic.
+    fn pending(acq: AssetResource) -> AssetWriter {
+        match acq {
+            AcquisitionResult::Pending(w) => w,
+            AcquisitionResult::Ready(_) => panic!("expected a Pending writer"),
+        }
+    }
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn builder_local_mode_decorators_inactive() {
@@ -632,75 +645,14 @@ mod tests {
         let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
 
         let key = ResourceKey::relative(ROOT, "test.bin");
-        let res = store.acquire_resource(&key, None).unwrap();
-        res.write_at(0, b"hello").unwrap();
+        let writer = pending(store.acquire_resource(&key, None).unwrap());
+        writer.write_at(0, b"hello").unwrap();
 
+        let reader = writer.reader();
         let mut buf = [0u8; 5];
-        let n = res.read_at(0, &mut buf).unwrap();
+        let n = reader.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 5);
         assert_eq!(&buf, b"hello");
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn open_resource_write_ops_panic() {
-        let store = AssetStoreBuilder::new().ephemeral(true).build();
-        let key = ResourceKey::relative(ROOT, "test.bin");
-
-        let write_handle = store.acquire_resource(&key, None).unwrap();
-        write_handle.write_at(0, b"x").unwrap();
-        write_handle.commit(Some(1)).unwrap();
-        drop(write_handle);
-
-        let read_handle = store.open_resource(&key, None).unwrap();
-
-        let err = catch_unwind(AssertUnwindSafe(|| {
-            let _ = read_handle.write_at(0, b"x");
-        }))
-        .expect_err("write_at via open_resource must panic");
-        assert!(
-            panic_message(&*err).contains("write_at requires acquire_resource*"),
-            "panic must point to acquire_resource"
-        );
-
-        let err = catch_unwind(AssertUnwindSafe(|| {
-            read_handle.fail("boom".to_string());
-        }))
-        .expect_err("fail via open_resource must panic");
-        assert!(
-            panic_message(&*err).contains("fail requires acquire_resource*"),
-            "panic must point to acquire_resource"
-        );
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn open_resource_commit_and_reactivate_panic() {
-        let store = AssetStoreBuilder::new().ephemeral(true).build();
-        let key = ResourceKey::relative(ROOT, "test.bin");
-
-        let write_handle = store.acquire_resource(&key, None).unwrap();
-        write_handle.write_at(0, b"abcd").unwrap();
-        write_handle.commit(Some(4)).unwrap();
-        drop(write_handle);
-
-        let read_handle = store.open_resource(&key, None).unwrap();
-
-        let err = catch_unwind(AssertUnwindSafe(|| {
-            let _ = read_handle.commit(Some(4));
-        }))
-        .expect_err("commit via open_resource must panic");
-        assert!(
-            panic_message(&*err).contains("commit requires acquire_resource*"),
-            "panic must point to acquire_resource"
-        );
-
-        let err = catch_unwind(AssertUnwindSafe(|| {
-            let _ = read_handle.reactivate();
-        }))
-        .expect_err("reactivate via open_resource must panic");
-        assert!(
-            panic_message(&*err).contains("reactivate requires acquire_resource*"),
-            "panic must point to acquire_resource"
-        );
     }
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
@@ -743,7 +695,6 @@ mod tests {
         assert_eq!(store.capabilities(), Capabilities::all());
     }
 
-
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn build_disk_returns_disk() {
         let dir = tempdir().unwrap();
@@ -766,9 +717,7 @@ mod tests {
             .collect();
 
         for key in &keys {
-            let res = backend.acquire_resource(key, None).unwrap();
-            res.write_at(0, b"data").unwrap();
-            res.commit(Some(4)).unwrap();
+            write_commit(backend.acquire_resource(key, None).unwrap(), b"data");
         }
 
         let reopened = backend.open_resource(&keys[0], None).unwrap();
@@ -791,9 +740,7 @@ mod tests {
             .collect();
 
         for key in &keys {
-            let res = backend.acquire_resource(key, None).unwrap();
-            res.write_at(0, b"data").unwrap();
-            res.commit(Some(4)).unwrap();
+            write_commit(backend.acquire_resource(key, None).unwrap(), b"data");
         }
 
         assert!(
@@ -811,52 +758,11 @@ mod tests {
         assert!(matches!(backend, AssetStore::Disk { .. }));
     }
 
-    /// Red test pinning the root cause of the
-    /// `local_queue_playlist_behavior_*` HLS+AES128 hang
-    /// (`kithara_stream::stream::try_read` spins until the 10 s hang
-    /// detector panics).
-    ///
-    /// The exact production trace is:
-    ///
-    /// ```text
-    /// LeaseResource::drop -> remove_resource (BYPASSES availability invalidation)
-    ///     key=Relative("v0_15.m4s") status=Active
-    /// DiskStore::remove_resource
-    ///     existed=true availability_final_len=65640
-    /// ...
-    /// DiskStore::open_resource: NotFound (file missing)
-    ///     availability_final_len=65640 availability_contains_0_1=true
-    /// ```
-    ///
-    /// `AvailabilityIndex` is the canonical reflection of what is on
-    /// disk. Once a `commit` observer records `final_len`, the index
-    /// is the source of truth and must be invalidated synchronously
-    /// with any disk-side deletion. `CachedAssets` does NOT cause this
-    /// divergence — it only caches in-memory handles. The bug is in
-    /// the disk-side deletion path skipping availability invalidation.
-    ///
-    /// Path doing the divergent deletion: `LeaseResource::drop`
-    /// (lease.rs:367-394). When the writer drops with
-    /// `status = Active | Failed(_)` and `drop_token` strong count
-    /// reaches one, it runs the `RemoveFn` closure (lease.rs:484-488)
-    /// which does `inner.remove_resource(key)` — descending straight
-    /// through `CachedAssets`/`ProcessingAssets`/`EvictAssets` to
-    /// `DiskAssetStore::remove_resource` and `fs::remove_file`.
-    /// `unified::AssetStore::remove_resource` (unified.rs:152) — the
-    /// only place that calls `availability.remove` next to
-    /// `store.remove_resource` — is bypassed entirely.
-    ///
-    /// This reproduction triggers the exact production drop path:
-    /// commit a writer, then `reactivate()` the resource (the live
-    /// path that flips `MmapState::Committed → Active`, mmap.rs:289)
-    /// and drop without commit. `LeaseResource::drop` then sees
-    /// `status == Active` and runs `RemoveFn`. After the drop the
-    /// file is gone, but `AvailabilityIndex` still holds the
-    /// committed `final_len`. Same divergence as the production
-    /// trace, no LRU manipulation, no manual `fs` calls.
-    ///
-    /// FAILING today on the second assertion. Will pass once the
-    /// disk-side deletion path syncs `AvailabilityIndex`.
+    /// Pins the `local_queue_playlist_behavior_*` HLS+AES128 hang: a single-resource
+    /// disk deletion via `LeaseResource::drop` must invalidate `AvailabilityIndex`
+    /// synchronously. Otherwise `contains_range` keeps claiming a committed range
+    /// whose file is gone, and the HLS reader spins on `wait_range=Ready` / `read_at=Retry`
+    /// until the hang detector fires.
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn red_test_lease_resource_drop_strands_availability_index() {
@@ -866,18 +772,18 @@ mod tests {
 
         let target = ResourceKey::relative(seg_root, "v0_15.m4s");
 
-        {
-            let writer = store.acquire_resource(&target, None).unwrap();
-            writer.write_at(0, b"data").unwrap();
-            writer.commit(Some(4)).unwrap();
-        }
+        write_commit(store.acquire_resource(&target, None).unwrap(), b"data");
         assert!(store.contains_range(&target, 0..4));
         let path = dir.path().join(seg_root).join("v0_15.m4s");
         assert!(path.exists(), "file must exist after commit");
 
         {
-            let writer2 = store.acquire_resource(&target, None).unwrap();
-            writer2.reactivate().expect("BUG: reactivate committed");
+            let AcquisitionResult::Ready(reader) = store.acquire_resource(&target, None).unwrap()
+            else {
+                panic!("committed resource must acquire as Ready");
+            };
+            let _writer2 = reader.reactivate().expect("BUG: reactivate committed");
+            // dropped without commit → LeaseWriter cleanup removes the file
         }
 
         assert!(
@@ -899,38 +805,11 @@ mod tests {
         );
     }
 
-    /// Red test pinning the SECOND bypass surfaced by the parallel
-    /// `local_queue_playlist_behavior_symphonia` failure in
-    /// `just test`. After fixing `LeaseResource::drop`'s availability
-    /// invalidation (`lease.rs` → `DiskStore::remove_resource`), the same
-    /// HLS+AES128 hang still reproduces under parallel pressure.
-    ///
-    /// Trace: any caller that deletes an entire `asset_root` directory
-    /// (instead of a single resource) goes through `delete_asset_dir`
-    /// (`fs::remove_dir_all`) without telling `AvailabilityIndex`.
-    /// Three production paths take this shortcut:
-    ///
-    /// 1. `DiskAssetStore::delete_asset` (in `disk_store.rs`) — invoked
-    ///    via `AssetStore::delete_asset` and `CachedAssets::delete_asset`.
-    /// 2. `EvictAssets::on_asset_created` (in `evict.rs`) — LRU
-    ///    eviction triggered when a new `asset_root` is observed.
-    /// 3. `EvictAssets::evict_one` → `delete_and_forget`
-    ///    (evict.rs:219) — explicit byte-cap eviction.
-    ///
-    /// All three invalidate the directory but leave per-resource
-    /// entries stranded in `AvailabilityIndex`. Subsequent
-    /// `contains_range` / `final_len` queries hit the hot-path map and
-    /// answer with stale `true` / `Some(len)`. A `wait_range` caller
-    /// then issues a `read_at` that returns `NotFound` — same race as
-    /// the first bypass, observable as a 10 s `hang_detector` panic.
-    ///
-    /// The minimal repro below uses `AssetStore::delete_asset` because
-    /// it is the most direct of the three. Once
-    /// `AvailabilityIndex::clear_root` (or equivalent) is wired into
-    /// every directory-deletion path, this test passes and the
-    /// remaining production hang lifts.
-    ///
-    /// FAILING today on the second assertion.
+    /// Pins the second bypass behind the same HLS+AES128 hang: deleting a whole
+    /// `asset_root` directory (`delete_asset` and the two LRU-eviction paths) must
+    /// also clear the per-resource `AvailabilityIndex` entries. Otherwise stale
+    /// `contains_range`/`final_len` answers strand a deleted resource and the reader
+    /// spins on `wait_range=Ready` / `read_at=Retry` until the hang detector fires.
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn red_test_delete_asset_strands_availability_index() {
@@ -942,9 +821,7 @@ mod tests {
         let key_b = ResourceKey::relative(seg_root, "v0_16.m4s");
 
         for (key, payload) in [(&key_a, &b"aaaa"[..]), (&key_b, &b"bbbbb"[..])] {
-            let writer = store.acquire_resource(key, None).unwrap();
-            writer.write_at(0, payload).unwrap();
-            writer.commit(Some(payload.len() as u64)).unwrap();
+            write_commit(store.acquire_resource(key, None).unwrap(), payload);
         }
         assert!(store.contains_range(&key_a, 0..4));
         assert!(store.contains_range(&key_b, 0..5));

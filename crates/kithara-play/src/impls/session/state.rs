@@ -523,11 +523,10 @@ fn allocate_slot<B: AudioBackend>(
         return Err("player not running".into());
     }
 
-    let Some(ref mut fw_ctx) = state.ctx else {
-        return Err("session context is not initialised".into());
-    };
-    let Some(master_eq_id) = state.players[idx].master_eq_node_id else {
-        return Err("player master eq node is not initialised".into());
+    let (fw_ctx, master_eq_id) = match (&mut state.ctx, state.players[idx].master_eq_node_id) {
+        (None, _) => return Err("session context is not initialised".into()),
+        (Some(_), None) => return Err("player master eq node is not initialised".into()),
+        (Some(fw_ctx), Some(master_eq_id)) => (fw_ctx, master_eq_id),
     };
 
     let slot_id = SlotId::new(state.players[idx].next_slot_id);
@@ -619,26 +618,28 @@ fn set_player_master_volume<B: AudioBackend>(
     volume: f32,
 ) -> Result<(), String> {
     let idx = player_index(state, player_id)?;
-    state.players[idx].master_volume = volume.clamp(0.0, 1.0);
+    let master_volume = volume.clamp(0.0, 1.0);
+    state.players[idx].master_volume = master_volume;
     if !state.players[idx].started {
         return Ok(());
     }
 
-    let Some(ref mut fw_ctx) = state.ctx else {
-        return Err("session context is not initialised".into());
-    };
-    let Some(master_id) = state.players[idx].master_vol_pan_node_id else {
-        return Err("player master vol node is not initialised".into());
-    };
-    let master_volume = state.players[idx].master_volume;
-    let Some(ref mut memo) = state.players[idx].master_vol_pan_memo else {
-        return Err("player master vol memo is not initialised".into());
-    };
-
-    memo.volume = Volume::Linear(master_volume);
-    let mut queue = fw_ctx.event_queue(master_id);
-    memo.update_memo(&mut queue);
-    Ok(())
+    let player = &mut state.players[idx];
+    match (
+        &mut state.ctx,
+        player.master_vol_pan_node_id,
+        &mut player.master_vol_pan_memo,
+    ) {
+        (None, _, _) => Err("session context is not initialised".into()),
+        (Some(_), None, _) => Err("player master vol node is not initialised".into()),
+        (Some(_), Some(_), None) => Err("player master vol memo is not initialised".into()),
+        (Some(fw_ctx), Some(master_id), Some(memo)) => {
+            memo.volume = Volume::Linear(master_volume);
+            let mut queue = fw_ctx.event_queue(master_id);
+            memo.update_memo(&mut queue);
+            Ok(())
+        }
+    }
 }
 
 fn set_player_slot_volume<B: AudioBackend>(
@@ -651,23 +652,21 @@ fn set_player_slot_volume<B: AudioBackend>(
     if !state.players[idx].started {
         return Err("player not running".into());
     }
-    let Some(slot_nodes) = state.players[idx]
+
+    let slot_nodes = state.players[idx]
         .slots
         .iter_mut()
-        .find(|s| s.slot_id == slot)
-    else {
-        return Err(format!("slot not found: {slot:?}"));
-    };
-
-    let Some(ref mut fw_ctx) = state.ctx else {
-        return Err("session context is not initialised".into());
-    };
-
-    slot_nodes.vol_pan_memo.volume = Volume::Linear(volume.clamp(0.0, 1.0));
-    let mut queue = fw_ctx.event_queue(slot_nodes.vol_pan_node_id);
-    slot_nodes.vol_pan_memo.update_memo(&mut queue);
-
-    Ok(())
+        .find(|s| s.slot_id == slot);
+    match (&mut state.ctx, slot_nodes) {
+        (_, None) => Err(format!("slot not found: {slot:?}")),
+        (None, Some(_)) => Err("session context is not initialised".into()),
+        (Some(fw_ctx), Some(slot_nodes)) => {
+            slot_nodes.vol_pan_memo.volume = Volume::Linear(volume.clamp(0.0, 1.0));
+            let mut queue = fw_ctx.event_queue(slot_nodes.vol_pan_node_id);
+            slot_nodes.vol_pan_memo.update_memo(&mut queue);
+            Ok(())
+        }
+    }
 }
 
 fn set_player_eq_gain<B: AudioBackend>(
@@ -681,42 +680,39 @@ fn set_player_eq_gain<B: AudioBackend>(
         return Err("player not running".into());
     }
 
-    let Some(ref mut fw_ctx) = state.ctx else {
-        return Err("session context is not initialised".into());
-    };
-    let Some(master_eq_id) = state.players[idx].master_eq_node_id else {
-        return Err("player master eq node is not initialised".into());
-    };
-    let Some(ref mut memo) = state.players[idx].master_eq_memo else {
-        return Err("player master eq memo is not initialised".into());
-    };
-
-    if band >= memo.bands.len() {
-        return Err(format!(
-            "eq band out of range: {band} (bands: {})",
-            memo.bands.len()
-        ));
+    let player = &mut state.players[idx];
+    match (
+        &mut state.ctx,
+        player.master_eq_node_id,
+        &mut player.master_eq_memo,
+    ) {
+        (None, _, _) => Err("session context is not initialised".into()),
+        (Some(_), None, _) => Err("player master eq node is not initialised".into()),
+        (Some(_), Some(_), None) => Err("player master eq memo is not initialised".into()),
+        (Some(fw_ctx), Some(master_eq_id), Some(memo)) => {
+            if band >= memo.bands.len() {
+                return Err(format!(
+                    "eq band out of range: {band} (bands: {})",
+                    memo.bands.len()
+                ));
+            }
+            memo.set_gain(band, gain_db);
+            let mut queue = fw_ctx.event_queue(master_eq_id);
+            memo.update_memo(&mut queue);
+            Ok(())
+        }
     }
-
-    memo.set_gain(band, gain_db);
-    let mut queue = fw_ctx.event_queue(master_eq_id);
-    memo.update_memo(&mut queue);
-    Ok(())
 }
 
 fn set_session_ducking<B: AudioBackend>(state: &mut SessionState<B>, mode: SessionDuckingMode) {
     state.session_ducking = mode;
-    let Some(ref mut fw_ctx) = state.ctx else {
-        return;
-    };
-    let Some(session_id) = state.session_output_node_id else {
-        return;
-    };
-    let Some(ref mut memo) = state.session_output_memo else {
-        return;
-    };
-
-    memo.volume = Volume::Linear(ducking_gain(mode));
-    let mut queue = fw_ctx.event_queue(session_id);
-    memo.update_memo(&mut queue);
+    if let (Some(fw_ctx), Some(session_id), Some(memo)) = (
+        &mut state.ctx,
+        state.session_output_node_id,
+        &mut state.session_output_memo,
+    ) {
+        memo.volume = Volume::Linear(ducking_gain(mode));
+        let mut queue = fw_ctx.event_queue(session_id);
+        memo.update_memo(&mut queue);
+    }
 }

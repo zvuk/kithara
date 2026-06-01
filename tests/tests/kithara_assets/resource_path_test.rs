@@ -1,9 +1,8 @@
 #![forbid(unsafe_code)]
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara::{
-    assets::{AssetScope, AssetStoreBuilder, EvictConfig},
-    storage::ResourceExt,
+use kithara::assets::{
+    AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, ReadSide, WriteSide,
 };
 use kithara_integration_tests::{TestTempDir, temp_dir};
 use kithara_platform::time::Duration;
@@ -19,8 +18,8 @@ fn asset_scope_with_root(temp_dir: &TestTempDir, asset_root: &str) -> AssetScope
         .scope(asset_root)
 }
 
-/// Writes to `asset_resource` via either `write_all` (atomic) or
-/// `write_at` + `commit` (streaming) depending on the case.
+/// Selects the write path exercised by the case: an "atomic" single write or a
+/// "streaming" write, both finalized via `write_at` + `commit`.
 enum WriteMode {
     Atomic,
     Streaming,
@@ -40,26 +39,32 @@ fn asset_resource_path_method(
 ) {
     let scope = asset_scope_with_root(&temp_dir, "test-asset");
     let key = scope.key(resource_name);
-    let asset_resource = scope
+    let AcquisitionResult::Pending(writer) = scope
         .store()
         .acquire_resource(&key, None)
-        .expect("Failed to open resource");
+        .expect("Failed to open resource")
+    else {
+        panic!("fresh acquire must be Pending");
+    };
 
-    match write_mode {
+    let asset_resource = match write_mode {
         WriteMode::Atomic => {
-            asset_resource
-                .write_all(b"test data")
-                .expect("Write should succeed");
-        }
-        WriteMode::Streaming => {
-            asset_resource
+            writer
                 .write_at(0, b"test data")
                 .expect("Write should succeed");
-            asset_resource
+            writer
                 .commit(Some(b"test data".len() as u64))
-                .expect("Commit should succeed");
+                .expect("Commit should succeed")
         }
-    }
+        WriteMode::Streaming => {
+            writer
+                .write_at(0, b"test data")
+                .expect("Write should succeed");
+            writer
+                .commit(Some(b"test data".len() as u64))
+                .expect("Commit should succeed")
+        }
+    };
 
     let asset_path = asset_resource.path().unwrap();
     let root_dir = scope.store().root_dir();
@@ -80,18 +85,24 @@ fn asset_resource_path_method(
 fn asset_resource_path_consistency(temp_dir: TestTempDir) {
     let scope = asset_scope_with_root(&temp_dir, "test-asset");
     let key = scope.key("data.bin");
-    let asset_resource = scope
+    let AcquisitionResult::Pending(writer) = scope
         .store()
         .acquire_resource(&key, None)
-        .expect("Failed to open resource");
+        .expect("Failed to open resource")
+    else {
+        panic!("fresh acquire must be Pending");
+    };
 
-    let asset_path = asset_resource.path().unwrap();
+    let asset_path = writer.reader().path().unwrap().to_path_buf();
 
     assert!(!asset_path.as_os_str().is_empty());
 
-    asset_resource
-        .write_all(b"test data")
+    writer
+        .write_at(0, b"test data")
         .expect("Write should succeed");
+    let asset_resource = writer
+        .commit(Some(b"test data".len() as u64))
+        .expect("Commit should succeed");
 
     assert!(!asset_resource.path().unwrap().as_os_str().is_empty());
 }
@@ -106,10 +117,14 @@ fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TestTempD
     let resource_name = "subdir/file.txt";
     let scope = asset_scope_with_root(&temp_dir, asset_root);
     let key = scope.key(resource_name);
-    let asset_resource = scope
+    let AcquisitionResult::Pending(writer) = scope
         .store()
         .acquire_resource(&key, None)
-        .expect("Failed to open resource");
+        .expect("Failed to open resource")
+    else {
+        panic!("fresh acquire must be Pending");
+    };
+    let asset_resource = writer.reader();
 
     let path = asset_resource.path().unwrap();
     let root_dir = scope.store().root_dir();
@@ -134,16 +149,24 @@ fn multiple_resources_same_asset_root_have_different_paths(temp_dir: TestTempDir
     let scope = asset_scope_with_root(&temp_dir, asset_root);
 
     let key1 = scope.key("resource1.bin");
-    let resource1 = scope
+    let AcquisitionResult::Pending(writer1) = scope
         .store()
         .acquire_resource(&key1, None)
-        .expect("Failed to open resource1");
+        .expect("Failed to open resource1")
+    else {
+        panic!("fresh acquire must be Pending");
+    };
+    let resource1 = writer1.reader();
 
     let key2 = scope.key("resource2.bin");
-    let resource2 = scope
+    let AcquisitionResult::Pending(writer2) = scope
         .store()
         .acquire_resource(&key2, None)
-        .expect("Failed to open resource2");
+        .expect("Failed to open resource2")
+    else {
+        panic!("fresh acquire must be Pending");
+    };
+    let resource2 = writer2.reader();
 
     assert_ne!(resource1.path(), resource2.path());
 

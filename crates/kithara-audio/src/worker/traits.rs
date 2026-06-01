@@ -29,6 +29,18 @@ pub trait AudioWorkerSource: Send + 'static {
 
     /// Access the shared timeline for epoch queries.
     fn timeline(&self) -> &Timeline;
+
+    /// Drain deferred off-core signals armed on the forbid-blocking decode
+    /// core: reader-hook events (published to the event bus) and the reader→peer
+    /// wake (a cross-thread `notify_one` the RT core must not make). The worker
+    /// shell calls this once per pass, off the checked path. Default no-op.
+    fn flush_deferred(&mut self) {}
+
+    /// One-time worker-thread warmup, called from the scheduler shell when the
+    /// node registers. Pre-touches the produce-core read path so lazy global
+    /// thread-locals (the `arc_swap` committed-read debt node) allocate here,
+    /// off the forbid-blocking decode core. Default no-op.
+    fn warm_up(&mut self) {}
 }
 
 /// Apply the effect chain to the chunk.

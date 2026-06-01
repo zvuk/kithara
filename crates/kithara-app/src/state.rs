@@ -10,10 +10,9 @@ use kithara::{
     prelude::ResourceConfig,
     stream::AudioCodec,
 };
-use kithara_platform::sync::Mutex;
+use kithara_platform::{CancellationToken, sync::Mutex};
 use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry, TrackSource};
 use tokio::sync::{Notify, broadcast::error::RecvError};
-use tokio_util::sync::CancellationToken;
 
 use crate::{config::AppConfig, sources::build_resource_config, waveform::analyze};
 
@@ -188,7 +187,7 @@ impl StateController {
             .unwrap_or_default();
         st.abr_variants = variants
             .iter()
-            .map(|v| (v.variant_index, variant_short_label(v)))
+            .map(|v| (v.variant_index.get(), variant_short_label(v)))
             .collect();
         st.abr_mode_is_auto = match mode {
             Some(AbrMode::Manual(_)) => false,
@@ -275,7 +274,9 @@ fn spawn_analyze(
         let Some(entry) = st.tracks.get(idx) else {
             return;
         };
-        entry.id
+        let id = entry.id;
+        drop(st);
+        id
     };
 
     state.lock_sync().waveform = None;

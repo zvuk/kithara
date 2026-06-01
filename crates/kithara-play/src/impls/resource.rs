@@ -153,8 +153,8 @@ impl Resource {
     /// producer channel closed or the initial fill hit a decoder
     /// failure.
     pub async fn preload(&mut self) -> Result<(), DecodeError> {
-        if let Some(notify) = self.inner.preload_notify() {
-            notify.notified().await;
+        if let Some(gate) = self.inner.preload_gate() {
+            gate.wait().await;
         }
         self.inner.preload()
     }

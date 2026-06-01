@@ -2,12 +2,7 @@ use std::path::PathBuf;
 
 use kithara::play::ResourceConfig;
 
-/// Store configuration forwarded from platform layer to resource creation.
-#[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
-pub struct StoreOptions {
-    pub cache_dir: Option<String>,
-}
+use crate::config::StoreOptions;
 
 pub(crate) fn configure_resource(config: &mut ResourceConfig, store: &StoreOptions) {
     if let Some(ref dir) = store.cache_dir {

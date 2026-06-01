@@ -10,17 +10,20 @@ use crate::{
     theme::gui,
 };
 
-/// Compact-player window size in logical pixels.
-const COMPACT_WIDTH: f32 = 448.0;
-const COMPACT_HEIGHT: f32 = 784.0;
-const COMPACT_MIN_WIDTH: f32 = 420.0;
-const COMPACT_MIN_HEIGHT: f32 = 760.0;
+mod consts {
+    /// Compact-player window size in logical pixels.
+    pub(super) const COMPACT_WIDTH: f32 = 448.0;
+    pub(super) const COMPACT_HEIGHT: f32 = 784.0;
+    pub(super) const COMPACT_MIN_WIDTH: f32 = 420.0;
+    pub(super) const COMPACT_MIN_HEIGHT: f32 = 760.0;
 
-/// DJ Studio window size in logical pixels.
-const STUDIO_WIDTH: f32 = 980.0;
-const STUDIO_HEIGHT: f32 = 600.0;
-const STUDIO_MIN_WIDTH: f32 = 820.0;
-const STUDIO_MIN_HEIGHT: f32 = 520.0;
+    /// DJ Studio window size in logical pixels.
+    pub(super) const STUDIO_WIDTH: f32 = 980.0;
+    pub(super) const STUDIO_HEIGHT: f32 = 600.0;
+    pub(super) const STUDIO_MIN_WIDTH: f32 = 820.0;
+    pub(super) const STUDIO_MIN_HEIGHT: f32 = 520.0;
+}
+use consts::*;
 
 /// Window settings per mode. A mode swap opens a fresh window rather than
 /// resizing the live one. Close is handled via `close_requests()`, so the
@@ -71,7 +74,7 @@ impl Frontend for GuiFrontend {
         let controller = Arc::new(crate::state::StateController::new(
             Arc::clone(&queue),
             config.clone(),
-            config.cancel.child_token(),
+            config.shutdown.child_token(),
         ));
 
         let result = iced::daemon(
@@ -90,7 +93,7 @@ impl Frontend for GuiFrontend {
         .font(fonts::JETBRAINS_MONO_SEMIBOLD_BYTES)
         .run();
 
-        config.cancel.cancel();
+        config.shutdown.cancel();
         result?;
 
         Ok(())

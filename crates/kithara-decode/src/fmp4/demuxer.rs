@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use kithara_bufpool::BytePool;
 use kithara_stream::{AudioCodec, SegmentLayout};
 use kithara_test_utils::kithara;
 
@@ -34,6 +35,11 @@ pub(crate) struct Fmp4SegmentDemuxer {
     cursor: Option<SegmentCursor>,
     duration: Option<Duration>,
     track_info: TrackInfo,
+    /// Host byte-buffer pool. Each segment cursor draws its read buffer
+    /// from here and returns it on drop, so a steady-state decode loop
+    /// recycles one high-water allocation instead of mallocing per
+    /// segment (and per variant-switch demuxer recreate).
+    byte_pool: BytePool,
     /// Index of the next segment to decode. Sequential playback advances
     /// this by one per segment; a seek sets it to the segment after the
     /// landing segment. Advancing by index (rather than by the previous
@@ -54,7 +60,7 @@ impl Fmp4SegmentDemuxer {
         };
         self.next_segment_index = desc.segment_index.saturating_add(1);
         self.cursor = Some(SegmentCursor {
-            read: SegmentReadState::new(desc.byte_range),
+            read: SegmentReadState::new(desc.byte_range, self.byte_pool.get()),
             frames: None,
             segment_index: desc.segment_index,
             variant_index: desc.variant_index,
@@ -105,6 +111,7 @@ impl Fmp4SegmentDemuxer {
     pub(crate) fn open(
         mut source: BoxedSource,
         segments: Arc<dyn SegmentLayout>,
+        byte_pool: BytePool,
     ) -> DecodeResult<Self> {
         let init_range = segments.init_segment_range();
         if init_range.is_empty() {
@@ -112,7 +119,7 @@ impl Fmp4SegmentDemuxer {
                 "HLS init segment range not announced".into(),
             ));
         }
-        let mut init_state = SegmentReadState::new(init_range);
+        let mut init_state = SegmentReadState::new(init_range, byte_pool.get());
         if let FillStatus::Pending(_) = fill_segment_buffer(
             &mut source,
             &mut init_state,
@@ -129,6 +136,7 @@ impl Fmp4SegmentDemuxer {
             source,
             segments,
             duration,
+            byte_pool,
             next_segment_index: 0,
             cursor: None,
         })
@@ -202,10 +210,7 @@ impl Demuxer for Fmp4SegmentDemuxer {
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
-        // Back the seek into the previous segment(s) when the codec needs
-        // SBR/PS pre-roll: landing at `target - warmup` means a boundary
-        // seek decodes the tail of the prior segment to converge SBR state,
-        // and `ComposedDecoder::pending_seek_target` drops it up to `target`.
+        // WHY: back off to `target - warmup` for SBR/PS pre-roll (README "Seek pre-roll and trim").
         let seek_target =
             warmup_backoff(self.track_info.codec, self.track_info.sample_rate, &priming)
                 .map_or(target, |backoff| target.saturating_sub(backoff));
@@ -240,13 +245,13 @@ impl Demuxer for Fmp4SegmentDemuxer {
         self.cursor = Some(SegmentCursor {
             segment_index,
             variant_index,
-            read: SegmentReadState::new(desc.byte_range),
+            read: SegmentReadState::new(desc.byte_range, self.byte_pool.get()),
             frames: None,
         });
         Ok(DemuxSeekOutcome::Landed {
             landed_at,
-            landed_byte: Some(landed_byte),
             preroll,
+            landed_byte: Some(landed_byte),
         })
     }
 

@@ -5,13 +5,12 @@
 use std::path::Path;
 
 use bytes::Bytes;
-use kithara::{
-    assets::{AssetScope, AssetStoreBuilder, EvictConfig},
-    storage::ResourceExt,
-};
+use kithara::assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, WriteSide};
 use kithara_integration_tests::{cancel_token, temp_dir};
-use kithara_platform::time::{Duration, sleep};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, sleep},
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {
@@ -64,11 +63,15 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             cancel_token.clone(),
         );
         let key_a = scope_a.key("media/a.bin");
-        let res_a = scope_a.store().acquire_resource(&key_a, None).unwrap();
+        let AcquisitionResult::Pending(writer_a) =
+            scope_a.store().acquire_resource(&key_a, None).unwrap()
+        else {
+            panic!("fresh acquire must be Pending");
+        };
 
-        res_a
-            .write_all(&Bytes::from(vec![0xAAu8; bytes_a]))
-            .unwrap();
+        let data_a = Bytes::from(vec![0xAAu8; bytes_a]);
+        writer_a.write_at(0, &data_a).unwrap();
+        writer_a.commit(Some(data_a.len() as u64)).unwrap();
     }
 
     sleep(Duration::from_millis(50)).await;
@@ -81,11 +84,15 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             cancel_token.clone(),
         );
         let key_b = scope_b.key("media/b.bin");
-        let res_b = scope_b.store().acquire_resource(&key_b, None).unwrap();
+        let AcquisitionResult::Pending(writer_b) =
+            scope_b.store().acquire_resource(&key_b, None).unwrap()
+        else {
+            panic!("fresh acquire must be Pending");
+        };
 
-        res_b
-            .write_all(&Bytes::from(vec![0xBBu8; bytes_b]))
-            .unwrap();
+        let data_b = Bytes::from(vec![0xBBu8; bytes_b]);
+        writer_b.write_at(0, &data_b).unwrap();
+        writer_b.commit(Some(data_b.len() as u64)).unwrap();
     }
 
     sleep(Duration::from_millis(50)).await;
@@ -98,9 +105,14 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             cancel_token.clone(),
         );
         let key_c = scope_c.key("media/c.bin");
-        let res_c = scope_c.store().acquire_resource(&key_c, None).unwrap();
+        let AcquisitionResult::Pending(writer_c) =
+            scope_c.store().acquire_resource(&key_c, None).unwrap()
+        else {
+            panic!("fresh acquire must be Pending");
+        };
 
-        res_c.write_all(b"C").unwrap();
+        writer_c.write_at(0, b"C").unwrap();
+        writer_c.commit(Some(1)).unwrap();
     }
 
     sleep(Duration::from_millis(100)).await;
@@ -159,9 +171,14 @@ fn eviction_corner_cases_different_byte_limits(
         );
         let key = scope.key(format!("data{}.bin", i));
 
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_all(&Bytes::from(vec![0x11 * (i + 1) as u8; *size]))
-            .unwrap();
+        let AcquisitionResult::Pending(writer) =
+            scope.store().acquire_resource(&key, None).unwrap()
+        else {
+            panic!("fresh acquire must be Pending");
+        };
+        let data = Bytes::from(vec![0x11 * (i + 1) as u8; *size]);
+        writer.write_at(0, &data).unwrap();
+        writer.commit(Some(data.len() as u64)).unwrap();
     }
 
     {
@@ -173,9 +190,14 @@ fn eviction_corner_cases_different_byte_limits(
         );
         let trigger_key = scope.key("trigger.bin");
 
-        let res = scope.store().acquire_resource(&trigger_key, None).unwrap();
-        res.write_all(&Bytes::from(vec![0xFF; new_asset_size]))
-            .unwrap();
+        let AcquisitionResult::Pending(writer) =
+            scope.store().acquire_resource(&trigger_key, None).unwrap()
+        else {
+            panic!("fresh acquire must be Pending");
+        };
+        let trigger_data = Bytes::from(vec![0xFF; new_asset_size]);
+        writer.write_at(0, &trigger_data).unwrap();
+        writer.commit(Some(trigger_data.len() as u64)).unwrap();
     }
 
     {
@@ -186,8 +208,13 @@ fn eviction_corner_cases_different_byte_limits(
             cancel.clone(),
         );
         let probe_key = scope.key("probe.bin");
-        let probe = scope.store().acquire_resource(&probe_key, None).unwrap();
-        probe.write_all(b"P").unwrap();
+        let AcquisitionResult::Pending(probe) =
+            scope.store().acquire_resource(&probe_key, None).unwrap()
+        else {
+            panic!("fresh acquire must be Pending");
+        };
+        probe.write_at(0, b"P").unwrap();
+        probe.commit(Some(1)).unwrap();
     }
 
     assert!(

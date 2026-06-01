@@ -6,8 +6,8 @@ use kithara::{
     hls::{KeyManager, PlaylistCache},
     net::{HttpClient, NetOptions},
 };
+use kithara_platform::CancellationToken;
 use kithara_stream::dl::{Downloader, DownloaderConfig, Peer, PeerHandle};
-use tokio_util::sync::CancellationToken;
 
 use crate::TestTempDir;
 
@@ -54,7 +54,7 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
         .process_fn(drm_process_fn())
         .root_dir(temp_dir.path().to_path_buf())
         .evict_config(EvictConfig::default())
-        .cancel(CancellationToken::new())
+        .cancel(CancellationToken::default())
         .build();
 
     TestAssets {
@@ -69,7 +69,7 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     let assets = AssetStoreBuilder::new()
         .process_fn(drm_process_fn())
-        .cancel(CancellationToken::new())
+        .cancel(CancellationToken::default())
         .build();
 
     TestAssets {
@@ -80,7 +80,7 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 
 /// Create test HTTP client with default options
 pub fn create_test_net() -> HttpClient {
-    HttpClient::new(NetOptions::default(), CancellationToken::new())
+    HttpClient::new(NetOptions::default(), CancellationToken::default())
 }
 
 /// Create a private test [`Downloader`] with a fresh cancel token.
@@ -93,7 +93,7 @@ fn create_test_peer_handle() -> PeerHandle {
     struct TestPeer;
     impl kithara::abr::Abr for TestPeer {}
     impl Peer for TestPeer {}
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let dl = Downloader::new(
         DownloaderConfig::for_client(create_test_net())
             .cancel(cancel.child_token())

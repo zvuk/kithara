@@ -1,19 +1,21 @@
-use std::time::Duration;
-
 use kithara::{
     audio::{ChunkOutcome, Envelope, PeakAccumulator},
     prelude::{Resource, ResourceConfig},
 };
-use kithara_platform::{thread::sleep, tokio::task::spawn_blocking};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, thread::sleep, tokio::task::spawn_blocking};
 use tracing::{debug, warn};
 
-/// Raw bins per final bucket; oversampling stabilises the shape on long
-/// tracks where the accumulator max-merges.
-const RAW_OVERSAMPLE: usize = 16;
+mod consts {
+    use std::time::Duration;
 
-/// Backoff while the reader is buffering and has no chunk ready.
-const PENDING_BACKOFF: Duration = Duration::from_millis(5);
+    /// Raw bins per final bucket; oversampling stabilises the shape on long
+    /// tracks where the accumulator max-merges.
+    pub(super) const RAW_OVERSAMPLE: usize = 16;
+
+    /// Backoff while the reader is buffering and has no chunk ready.
+    pub(super) const PENDING_BACKOFF: Duration = Duration::from_millis(5);
+}
+use consts::*;
 
 /// Decode `config` end to end off-thread into a peak-normalised envelope
 /// of `buckets` values; `None` on open/decode failure or upfront cancel.

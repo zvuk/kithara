@@ -351,7 +351,7 @@ pub fn variant_info_from_master(
             );
             VariantInfo {
                 duration,
-                variant_index: v.id.0,
+                variant_index: kithara_events::VariantIndex::new(v.id.0),
                 bandwidth_bps: v.bandwidth,
                 name: v.name.clone(),
                 codecs: v.codec.as_ref().and_then(|c| c.codecs.clone()),

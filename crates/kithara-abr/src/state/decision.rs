@@ -1,4 +1,4 @@
-use kithara_events::{AbrMode, AbrReason, VariantInfo};
+use kithara_events::{AbrMode, AbrReason, VariantIndex, VariantInfo};
 use kithara_platform::time::Instant;
 use kithara_test_utils::probe::IntoProbeArg;
 use num_traits::ToPrimitive;
@@ -7,16 +7,82 @@ use super::{core::AbrState, view::AbrView};
 use crate::controller::AbrSettings;
 
 /// Outcome of an ABR decision step.
+///
+/// Replaces the historical flat `{ reason, did_change, target_variant_index }`
+/// struct: the variant itself encodes whether and how the index changes, so
+/// an inconsistent `did_change` / target pairing is unrepresentable.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AbrDecision {
-    pub reason: AbrReason,
-    pub did_change: bool,
-    pub target_variant_index: usize,
+#[non_exhaustive]
+pub enum AbrDecision {
+    /// No switch — stay on `current`; `reason` records why.
+    Stay {
+        current: VariantIndex,
+        reason: AbrReason,
+    },
+    /// Bandwidth-driven up-switch.
+    UpSwitch {
+        from: VariantIndex,
+        to: VariantIndex,
+        reason: AbrReason,
+    },
+    /// Bandwidth- or buffer-driven down-switch.
+    DownSwitch {
+        from: VariantIndex,
+        to: VariantIndex,
+        reason: AbrReason,
+    },
+    /// User-selected fixed variant (ABR disabled).
+    Manual {
+        from: VariantIndex,
+        to: VariantIndex,
+    },
+}
+
+impl AbrDecision {
+    /// The variant this decision lands on (`current` for [`Self::Stay`]).
+    #[must_use]
+    pub fn target(&self) -> VariantIndex {
+        self.into()
+    }
+
+    /// The reason recorded for this decision.
+    #[must_use]
+    pub fn reason(&self) -> AbrReason {
+        self.into()
+    }
+
+    /// `true` when the decision moves off the current variant.
+    #[must_use]
+    pub fn changed(&self) -> bool {
+        !matches!(self, Self::Stay { .. })
+    }
+}
+
+impl From<&AbrDecision> for VariantIndex {
+    fn from(decision: &AbrDecision) -> Self {
+        match decision {
+            AbrDecision::Stay { current, .. } => *current,
+            AbrDecision::UpSwitch { to, .. }
+            | AbrDecision::DownSwitch { to, .. }
+            | AbrDecision::Manual { to, .. } => *to,
+        }
+    }
+}
+
+impl From<&AbrDecision> for AbrReason {
+    fn from(decision: &AbrDecision) -> Self {
+        match decision {
+            AbrDecision::Stay { reason, .. }
+            | AbrDecision::UpSwitch { reason, .. }
+            | AbrDecision::DownSwitch { reason, .. } => *reason,
+            AbrDecision::Manual { .. } => Self::ManualOverride,
+        }
+    }
 }
 
 impl IntoProbeArg for &AbrDecision {
     fn into_probe_arg(self) -> u64 {
-        self.target_variant_index as u64
+        self.target().get().to_u64().unwrap_or(0)
     }
 }
 
@@ -26,7 +92,7 @@ impl IntoProbeArg for &AbrDecision {
 /// the compiler can reorder/coalesce these atomic reads, and the CPU
 /// schedules them in parallel.
 ///
-/// Phase 2: a single tuple-match dispatches to the early-exit reason or
+/// Phase 2: a single tuple-match dispatches to the early-exit outcome or
 /// extracts the bandwidth estimate for the actual decision logic. One
 /// statement, one decision site — jump-table eligible.
 ///
@@ -44,31 +110,56 @@ pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> Ab
     let estimate_bps = view.estimate_bps;
 
     let estimate_bps: u64 = match (locked, manual_target, cant_switch, estimate_bps) {
-        (true, _, _, _) => return decision(current, current, AbrReason::Locked),
-        (_, Some(idx), _, _) => return decision(current, idx, AbrReason::ManualOverride),
-        (_, _, true, _) => return decision(current, current, AbrReason::MinInterval),
-        (_, _, _, None) => return decision(current, current, AbrReason::NoEstimate),
+        (true, _, _, _) => {
+            return AbrDecision::Stay {
+                current,
+                reason: AbrReason::Locked,
+            };
+        }
+        (_, Some(idx), _, _) => return manual_decision(current, idx),
+        (_, _, true, _) => {
+            return AbrDecision::Stay {
+                current,
+                reason: AbrReason::MinInterval,
+            };
+        }
+        (_, _, _, None) => {
+            return AbrDecision::Stay {
+                current,
+                reason: AbrReason::NoEstimate,
+            };
+        }
         (false, None, false, Some(bps)) => bps,
     };
 
     let max_bw = state.max_bandwidth_bps();
     let sorted = sorted_candidates(view.variants, max_bw);
     if sorted.is_empty() {
-        return decision(current, current, AbrReason::AlreadyOptimal);
+        return AbrDecision::Stay {
+            current,
+            reason: AbrReason::AlreadyOptimal,
+        };
     }
 
     let current_bw = current_bandwidth(&sorted, current);
     let adjusted_bps = adjusted_throughput(estimate_bps, view.settings.throughput_safety_factor);
 
     let Some((candidate_idx, candidate_bw)) = candidate_variant(&sorted, adjusted_bps) else {
-        return decision(current, current, AbrReason::AlreadyOptimal);
+        return AbrDecision::Stay {
+            current,
+            reason: AbrReason::AlreadyOptimal,
+        };
     };
 
     if let Some(cap) = max_bw
         && current_bw > cap
         && candidate_idx != current
     {
-        return decision(current, candidate_idx, AbrReason::DownSwitch);
+        return AbrDecision::DownSwitch {
+            from: current,
+            to: candidate_idx,
+            reason: AbrReason::DownSwitch,
+        };
     }
 
     let ctx = SwitchContext {
@@ -90,19 +181,28 @@ pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> Ab
         return d;
     }
 
-    decision(current, current, AbrReason::AlreadyOptimal)
-}
-
-pub(super) fn decision(current: usize, target: usize, reason: AbrReason) -> AbrDecision {
-    AbrDecision {
-        reason,
-        did_change: target != current,
-        target_variant_index: target,
+    AbrDecision::Stay {
+        current,
+        reason: AbrReason::AlreadyOptimal,
     }
 }
 
-fn sorted_candidates(variants: &[VariantInfo], max_bw: Option<u64>) -> Vec<(usize, u64)> {
-    let mut out: Vec<(usize, u64)> = variants
+fn manual_decision(current: VariantIndex, idx: VariantIndex) -> AbrDecision {
+    if idx == current {
+        AbrDecision::Stay {
+            current,
+            reason: AbrReason::ManualOverride,
+        }
+    } else {
+        AbrDecision::Manual {
+            from: current,
+            to: idx,
+        }
+    }
+}
+
+fn sorted_candidates(variants: &[VariantInfo], max_bw: Option<u64>) -> Vec<(VariantIndex, u64)> {
+    let mut out: Vec<(VariantIndex, u64)> = variants
         .iter()
         .map(|v| (v.variant_index, v.bandwidth_bps.unwrap_or(0)))
         .filter(|(_, bw)| max_bw.is_none_or(|cap| *bw <= cap))
@@ -111,7 +211,7 @@ fn sorted_candidates(variants: &[VariantInfo], max_bw: Option<u64>) -> Vec<(usiz
     out
 }
 
-fn current_bandwidth(sorted: &[(usize, u64)], current: usize) -> u64 {
+fn current_bandwidth(sorted: &[(VariantIndex, u64)], current: VariantIndex) -> u64 {
     sorted
         .iter()
         .find(|(idx, _)| *idx == current)
@@ -123,7 +223,10 @@ fn adjusted_throughput(estimate_bps: u64, safety_factor: f64) -> f64 {
     (raw / safety_factor).max(0.0)
 }
 
-fn candidate_variant(sorted: &[(usize, u64)], adjusted_bps: f64) -> Option<(usize, u64)> {
+fn candidate_variant(
+    sorted: &[(VariantIndex, u64)],
+    adjusted_bps: f64,
+) -> Option<(VariantIndex, u64)> {
     let best_under = sorted
         .iter()
         .filter(|(_, bw)| bw.to_f64().unwrap_or(f64::INFINITY) <= adjusted_bps)
@@ -139,8 +242,8 @@ struct SwitchContext<'a> {
     adjusted_bps: f64,
     candidate_bw: u64,
     current_bw: u64,
-    candidate_idx: usize,
-    current: usize,
+    candidate_idx: VariantIndex,
+    current: VariantIndex,
 }
 
 fn up_switch(ctx: SwitchContext<'_>) -> AbrDecision {
@@ -150,9 +253,16 @@ fn up_switch(ctx: SwitchContext<'_>) -> AbrDecision {
     let candidate_bw_f = ctx.candidate_bw.to_f64().unwrap_or(f64::INFINITY);
     let headroom_ok = ctx.adjusted_bps >= candidate_bw_f * ctx.settings.up_hysteresis_ratio;
     if buffer_ok && headroom_ok {
-        return decision(ctx.current, ctx.candidate_idx, AbrReason::UpSwitch);
+        return AbrDecision::UpSwitch {
+            from: ctx.current,
+            to: ctx.candidate_idx,
+            reason: AbrReason::UpSwitch,
+        };
     }
-    decision(ctx.current, ctx.current, AbrReason::BufferTooLowForUpSwitch)
+    AbrDecision::Stay {
+        current: ctx.current,
+        reason: AbrReason::BufferTooLowForUpSwitch,
+    }
 }
 
 fn down_switch(ctx: SwitchContext<'_>) -> Option<AbrDecision> {
@@ -162,18 +272,18 @@ fn down_switch(ctx: SwitchContext<'_>) -> Option<AbrDecision> {
     let current_bw_f = ctx.current_bw.to_f64().unwrap_or(f64::INFINITY);
     let margin_ok = ctx.adjusted_bps <= current_bw_f * ctx.settings.down_hysteresis_ratio;
     if urgent {
-        return Some(decision(
-            ctx.current,
-            ctx.candidate_idx,
-            AbrReason::UrgentDownSwitch,
-        ));
+        return Some(AbrDecision::DownSwitch {
+            from: ctx.current,
+            to: ctx.candidate_idx,
+            reason: AbrReason::UrgentDownSwitch,
+        });
     }
     if margin_ok {
-        return Some(decision(
-            ctx.current,
-            ctx.candidate_idx,
-            AbrReason::DownSwitch,
-        ));
+        return Some(AbrDecision::DownSwitch {
+            from: ctx.current,
+            to: ctx.candidate_idx,
+            reason: AbrReason::DownSwitch,
+        });
     }
     None
 }

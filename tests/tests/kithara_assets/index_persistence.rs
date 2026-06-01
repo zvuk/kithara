@@ -8,11 +8,10 @@ use std::{
 };
 
 use kithara_assets::{
-    AssetScope, AssetStoreBuilder, EvictConfig,
+    AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, WriteSide,
     index::schema::{ArchivedAvailabilityFile, ArchivedLruIndexFile, ArchivedPinsIndexFile},
 };
 use kithara_integration_tests::{kithara, temp_dir};
-use kithara_storage::ResourceExt;
 use rkyv::option::ArchivedOption;
 
 fn index_dir(root: &Path) -> PathBuf {
@@ -133,10 +132,13 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
     );
 
     let key_a = scope.key("segment-a.bin");
-    let res_a = scope
+    let AcquisitionResult::Pending(writer_a) = scope
         .store()
         .acquire_resource(&key_a, None)
-        .expect("acquire segment-a");
+        .expect("acquire segment-a")
+    else {
+        panic!("fresh acquire of segment-a must be Pending");
+    };
     assert!(
         has_nonempty(&pins),
         "pins.bin must be flushed eagerly after acquire_resource"
@@ -169,8 +171,8 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
     );
 
     let payload = b"integration-payload-0123456789abcdef";
-    res_a.write_at(0, payload).expect("write segment-a");
-    res_a
+    writer_a.write_at(0, payload).expect("write segment-a");
+    let res_a = writer_a
         .commit(Some(payload.len() as u64))
         .expect("commit segment-a");
     assert!(
@@ -187,18 +189,21 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
     );
 
     let key_b = scope.key("segment-b.bin");
-    let res_b = scope
+    let AcquisitionResult::Pending(writer_b) = scope
         .store()
         .acquire_resource(&key_b, None)
-        .expect("acquire segment-b");
+        .expect("acquire segment-b")
+    else {
+        panic!("fresh acquire of segment-b must be Pending");
+    };
     let clock_after_second = read_archived_lru_clock(&lru);
     assert_eq!(
         clock_after_second, clock_after_first,
         "lru clock must NOT re-advance for an already-tracked asset_root \
          ({clock_after_second} != {clock_after_first})"
     );
-    res_b.write_at(0, b"b-payload").expect("write b");
-    res_b.commit(Some(9)).expect("commit b");
+    writer_b.write_at(0, b"b-payload").expect("write b");
+    let res_b = writer_b.commit(Some(9)).expect("commit b");
 
     assert!(
         !availability.exists(),
@@ -243,9 +248,13 @@ fn index_files_land_under_root_dir_index(temp_dir: kithara_integration_tests::Te
     let scope = build_scope(&temp_dir, "basic-asset");
     let key = scope.key("one.bin");
     {
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_at(0, b"x").unwrap();
-        res.commit(Some(1)).unwrap();
+        let AcquisitionResult::Pending(writer) =
+            scope.store().acquire_resource(&key, None).unwrap()
+        else {
+            panic!("fresh acquire must be Pending");
+        };
+        writer.write_at(0, b"x").unwrap();
+        writer.commit(Some(1)).unwrap();
     }
     scope.store().checkpoint().unwrap();
 

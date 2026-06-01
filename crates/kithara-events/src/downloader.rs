@@ -129,7 +129,7 @@ pub enum DownloaderEvent {
     RequestFailed {
         request_id: RequestId,
         error: NetError,
-        /// `error.is_retryable()` — pre-evaluated.
+        /// `error.retryability() == Retryability::Transient` — pre-evaluated.
         retryable: bool,
     },
     /// HTTP fetch was cancelled before completion.

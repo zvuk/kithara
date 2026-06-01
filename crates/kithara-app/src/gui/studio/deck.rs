@@ -13,7 +13,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     styles::vertical_divider,
-    tokens::{StudioRadius, StudioSize, StudioSpace, StudioType},
+    tokens::{studio_radius, studio_size, studio_space, studio_type},
 };
 use crate::{
     gui::{
@@ -21,25 +21,28 @@ use crate::{
         fonts,
         icons::Icon,
         message::Message,
-        tokens::Gap,
+        tokens::gap,
         view::{eq_band_label, format_time, track_subtitle, with_alpha},
         widgets,
     },
     theme::gui::GuiPalette,
 };
 
-/// Deck EQ fader range in dB; mirrors the compact equalizer tab so a
-/// band's fader and slider agree on the same gain.
-const EQ_MIN_DB: f32 = -24.0;
-const EQ_MAX_DB: f32 = 6.0;
-/// Gap between adjacent EQ faders; kept tight to match the reference deck.
-const FADER_GAP: f32 = 2.0;
-/// Vertical gap between a fader track and its value/frequency labels.
-const FADER_LABEL_GAP: f32 = 2.0;
-/// Vertical inset of the fader bank from the panel's top/bottom border.
-const FADER_EDGE_PAD: f32 = 10.0;
-/// Gap between the transport cluster and the fader bank.
-const TRANSPORT_FADERS_GAP: f32 = 14.0;
+mod consts {
+    /// Deck EQ fader range in dB; mirrors the compact equalizer tab so a
+    /// band's fader and slider agree on the same gain.
+    pub(super) const EQ_MIN_DB: f32 = -24.0;
+    pub(super) const EQ_MAX_DB: f32 = 6.0;
+    /// Gap between adjacent EQ faders; kept tight to match the reference deck.
+    pub(super) const FADER_GAP: f32 = 2.0;
+    /// Vertical gap between a fader track and its value/frequency labels.
+    pub(super) const FADER_LABEL_GAP: f32 = 2.0;
+    /// Vertical inset of the fader bank from the panel's top/bottom border.
+    pub(super) const FADER_EDGE_PAD: f32 = 10.0;
+    /// Gap between the transport cluster and the fader bank.
+    pub(super) const TRANSPORT_FADERS_GAP: f32 = 14.0;
+}
+use consts::*;
 
 pub(super) fn view_deck(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
@@ -50,11 +53,11 @@ pub(super) fn view_deck(state: &Kithara) -> Element<'_, Message> {
             waveform_cluster(state, p),
             transport_and_faders_row(state, p),
         ]
-        .spacing(Gap::CONTENT),
+        .spacing(gap::CONTENT),
     )
     .width(Length::Fill)
     .height(Length::Fill)
-    .padding(StudioSpace::DECK)
+    .padding(studio_space::DECK)
     .style(deck_style(p))
     .into()
 }
@@ -91,7 +94,7 @@ fn fader_cell(index: usize, total: usize, value: f32, p: GuiPalette) -> Element<
     container(
         column![
             text(format!("{value:+.0}"))
-                .size(StudioType::MONO_SM)
+                .size(studio_type::MONO_SM)
                 .line_height(1.0)
                 .font(fonts::mono(Weight::Medium))
                 .color(p.text_dim),
@@ -100,11 +103,11 @@ fn fader_cell(index: usize, total: usize, value: f32, p: GuiPalette) -> Element<
                 value,
                 EQ_MIN_DB,
                 EQ_MAX_DB,
-                StudioSize::FADER_HEIGHT,
+                studio_size::FADER_HEIGHT,
                 p,
             ),
             text(eq_band_label(index, total))
-                .size(StudioType::MONO_XS)
+                .size(studio_type::MONO_XS)
                 .line_height(1.0)
                 .font(fonts::mono(Weight::Medium))
                 .color(p.text_dim),
@@ -126,15 +129,15 @@ fn deck_header(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
     container(
         column![
             text(title)
-                .size(StudioType::TRACK)
+                .size(studio_type::TRACK)
                 .font(fonts::display(Weight::Semibold))
                 .color(p.text),
             text(track_subtitle(state))
-                .size(StudioType::BODY_SM)
+                .size(studio_type::BODY_SM)
                 .font(fonts::SANS)
                 .color(p.text_dim),
         ]
-        .spacing(Gap::TEXT_STACK),
+        .spacing(gap::TEXT_STACK),
     )
     .width(Length::Fill)
     .into()
@@ -158,34 +161,34 @@ fn waveform_cluster(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
             env.clone(),
             progress,
             duration,
-            StudioSize::WAVEFORM_HEIGHT,
+            studio_size::WAVEFORM_HEIGHT,
             p,
         ),
         _ => Space::new()
             .width(Length::Fill)
-            .height(Length::Fixed(StudioSize::WAVEFORM_HEIGHT))
+            .height(Length::Fixed(studio_size::WAVEFORM_HEIGHT))
             .into(),
     };
 
     column![
         container(canvas)
             .width(Length::Fill)
-            .height(Length::Fixed(StudioSize::WAVEFORM_HEIGHT))
+            .height(Length::Fixed(studio_size::WAVEFORM_HEIGHT))
             .style(waveform_style(p)),
         row![
             text(current)
-                .size(StudioType::MONO_SM)
+                .size(studio_type::MONO_SM)
                 .font(fonts::MONO)
                 .color(p.muted),
             Space::new().width(Length::Fill),
             text(total)
-                .size(StudioType::MONO_SM)
+                .size(studio_type::MONO_SM)
                 .font(fonts::MONO)
                 .color(p.muted),
         ]
         .align_y(Alignment::Center),
     ]
-    .spacing(Gap::INLINE_TIGHT)
+    .spacing(gap::INLINE_TIGHT)
     .into()
 }
 
@@ -204,7 +207,7 @@ fn transport_and_faders_row(state: &Kithara, p: GuiPalette) -> Element<'static, 
     container(
         row![
             transport_buttons(state, p),
-            vertical_divider(StudioSize::DIVIDER, StudioSize::FADER_HEIGHT, p.line_soft),
+            vertical_divider(studio_size::DIVIDER, studio_size::FADER_HEIGHT, p.line_soft),
             faders(state, p),
         ]
         .align_y(Alignment::Center)
@@ -223,7 +226,7 @@ fn transport_buttons(state: &Kithara, p: GuiPalette) -> Element<'static, Message
         secondary_transport_button(Icon::SkipNext, p, Message::Next),
     ]
     .align_y(Alignment::Center)
-    .spacing(Gap::INLINE)
+    .spacing(gap::INLINE)
     .into()
 }
 
@@ -235,7 +238,7 @@ fn secondary_transport_button(
     const SIZE: f32 = 44.0;
 
     button(
-        container(icon.view(StudioSize::TRANSPORT_ICON, p.text_dim))
+        container(icon.view(studio_size::TRANSPORT_ICON, p.text_dim))
             .center_x(Length::Fill)
             .center_y(Length::Fill),
     )
@@ -259,7 +262,7 @@ fn transport_secondary_style(p: GuiPalette, status: ButtonStatus) -> ButtonStyle
     ButtonStyle {
         background,
         text_color: p.text_dim,
-        border: Border::default().rounded(StudioRadius::BUTTON),
+        border: Border::default().rounded(studio_radius::BUTTON),
         ..ButtonStyle::default()
     }
 }
@@ -278,7 +281,7 @@ fn waveform_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
             .background(Background::Color(with_alpha(p.bg_deep, 0.55)))
             .border(
                 Border::default()
-                    .rounded(StudioRadius::BUTTON)
+                    .rounded(studio_radius::BUTTON)
                     .width(1.0)
                     .color(p.line),
             )
@@ -291,7 +294,7 @@ fn transport_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
             .background(Background::Color(with_alpha(p.bg_deep, 0.52)))
             .border(
                 Border::default()
-                    .rounded(StudioRadius::SURFACE)
+                    .rounded(studio_radius::SURFACE)
                     .width(1.0)
                     .color(p.line),
             )

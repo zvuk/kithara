@@ -3,19 +3,18 @@ use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    SignalDirection as Direction, TestTempDir, Xorshift64, abr_fast, detect_direction,
+    SignalDirection as Direction, TestTempDir, Xorshift64, abr_fast, auto, detect_direction,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     phase_from_f32,
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use kithara_platform::{thread, time::Instant, tokio::task::spawn_blocking};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, thread, time::Instant, tokio::task::spawn_blocking};
 use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;
@@ -163,7 +162,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
     info!(%url, "HLS server ready");
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
@@ -176,7 +175,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
     let hls_config = HlsConfig::for_url(url)
         .store(store)
         .cancel(cancel)
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
     let _ = &abr_fast;
 

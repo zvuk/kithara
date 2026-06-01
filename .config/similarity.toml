@@ -1,0 +1,8 @@
+# Crates excluded from similarity-rs duplicate-detection scans (run by
+# `just similarity` / `just health`): the generated workspace-hack crate
+# and test-only infra crates that legitimately share boilerplate.
+excluded_crates = [
+    "kithara-workspace-hack",
+    "kithara-test-utils",
+    "kithara-test-macros",
+]

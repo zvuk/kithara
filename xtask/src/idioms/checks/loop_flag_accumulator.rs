@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use syn::{
-    BinOp, Block, Expr, ExprAssign, ExprBinary, ExprForLoop, ExprIf, ExprLoop, ExprWhile, Lit,
-    Local, Pat, PatIdent, Stmt, visit::Visit,
+    BinOp, Block, Expr, ExprAssign, ExprBinary, ExprForLoop, ExprIf, ExprLoop, ExprPath, ExprWhile,
+    Lit, Local, Pat, PatIdent, Stmt, visit::Visit,
 };
 
 use super::{Check, Context};
@@ -53,11 +53,27 @@ fn analyze_file(rel: &str, file: &syn::File, sup: &Suppressions, out: &mut Vec<V
     }
     impl<'ast> Visit<'ast> for V<'_> {
         fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
-            scan_block(self.rel, &f.block, &HashSet::new(), self.sup, self.out);
+            let reset = reset_flags(&f.block);
+            scan_block(
+                self.rel,
+                &f.block,
+                &HashSet::new(),
+                &reset,
+                self.sup,
+                self.out,
+            );
             syn::visit::visit_item_fn(self, f);
         }
         fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
-            scan_block(self.rel, &f.block, &HashSet::new(), self.sup, self.out);
+            let reset = reset_flags(&f.block);
+            scan_block(
+                self.rel,
+                &f.block,
+                &HashSet::new(),
+                &reset,
+                self.sup,
+                self.out,
+            );
             syn::visit::visit_impl_item_fn(self, f);
         }
     }
@@ -65,10 +81,45 @@ fn analyze_file(rel: &str, file: &syn::File, sup: &Suppressions, out: &mut Vec<V
     v.visit_file(file);
 }
 
+/// Identifiers assigned `false` anywhere in the function body. A flag that
+/// is toggled both ways is mutable cross-iteration / dedup state, not a
+/// monotone find-first latch reducible to `.any()`, so it must not be
+/// flagged.
+fn reset_flags(block: &Block) -> HashSet<String> {
+    struct Reset {
+        names: HashSet<String>,
+    }
+    impl<'ast> Visit<'ast> for Reset {
+        fn visit_expr_assign(&mut self, e: &'ast ExprAssign) {
+            if is_false_lit(&e.right)
+                && let Some(name) = single_ident(&e.left)
+            {
+                self.names.insert(name);
+            }
+            syn::visit::visit_expr_assign(self, e);
+        }
+        fn visit_expr_binary(&mut self, e: &'ast ExprBinary) {
+            if matches!(e.op, BinOp::BitAndAssign(_))
+                && is_false_lit(&e.right)
+                && let Some(name) = single_ident(&e.left)
+            {
+                self.names.insert(name);
+            }
+            syn::visit::visit_expr_binary(self, e);
+        }
+    }
+    let mut r = Reset {
+        names: HashSet::new(),
+    };
+    r.visit_block(block);
+    r.names
+}
+
 fn scan_block(
     rel: &str,
     block: &Block,
     parent_bools: &HashSet<String>,
+    reset: &HashSet<String>,
     sup: &Suppressions,
     out: &mut Vec<Violation>,
 ) {
@@ -80,7 +131,7 @@ fn scan_block(
             bools.insert(name);
         }
         if let Some(expr) = stmt_expr(stmt) {
-            inspect_expr(rel, expr, &bools, sup, out);
+            inspect_expr(rel, expr, &bools, reset, sup, out);
         }
     }
 }
@@ -108,6 +159,7 @@ fn inspect_expr(
     rel: &str,
     expr: &Expr,
     bools: &HashSet<String>,
+    reset: &HashSet<String>,
     sup: &Suppressions,
     out: &mut Vec<Violation>,
 ) {
@@ -115,32 +167,56 @@ fn inspect_expr(
         Expr::ForLoop(ExprForLoop {
             body, for_token, ..
         }) => {
-            check_loop(rel, body, for_token.span.start().line, bools, sup, out);
-            scan_block(rel, body, bools, sup, out);
+            check_loop(
+                rel,
+                body,
+                for_token.span.start().line,
+                bools,
+                reset,
+                sup,
+                out,
+            );
+            scan_block(rel, body, bools, reset, sup, out);
         }
         Expr::While(ExprWhile {
             body, while_token, ..
         }) => {
-            check_loop(rel, body, while_token.span.start().line, bools, sup, out);
-            scan_block(rel, body, bools, sup, out);
+            check_loop(
+                rel,
+                body,
+                while_token.span.start().line,
+                bools,
+                reset,
+                sup,
+                out,
+            );
+            scan_block(rel, body, bools, reset, sup, out);
         }
         Expr::Loop(ExprLoop {
             body, loop_token, ..
         }) => {
-            check_loop(rel, body, loop_token.span.start().line, bools, sup, out);
-            scan_block(rel, body, bools, sup, out);
+            check_loop(
+                rel,
+                body,
+                loop_token.span.start().line,
+                bools,
+                reset,
+                sup,
+                out,
+            );
+            scan_block(rel, body, bools, reset, sup, out);
         }
         Expr::If(ExprIf {
             then_branch,
             else_branch,
             ..
         }) => {
-            scan_block(rel, then_branch, bools, sup, out);
+            scan_block(rel, then_branch, bools, reset, sup, out);
             if let Some((_, els)) = else_branch {
-                inspect_expr(rel, els, bools, sup, out);
+                inspect_expr(rel, els, bools, reset, sup, out);
             }
         }
-        Expr::Block(b) => scan_block(rel, &b.block, bools, sup, out),
+        Expr::Block(b) => scan_block(rel, &b.block, bools, reset, sup, out),
         _ => {}
     }
 }
@@ -150,6 +226,7 @@ fn check_loop(
     body: &Block,
     line: usize,
     bools: &HashSet<String>,
+    reset: &HashSet<String>,
     sup: &Suppressions,
     out: &mut Vec<Violation>,
 ) {
@@ -160,7 +237,14 @@ fn check_loop(
         hits: &mut hits,
     };
     v.visit_block(body);
+    let read = read_idents(body);
     for name in hits {
+        if reset.contains(&name) {
+            continue;
+        }
+        if read.contains(&name) {
+            continue;
+        }
         if sup.is_suppressed(line, ID) {
             continue;
         }
@@ -175,6 +259,41 @@ fn check_loop(
             ),
         ));
     }
+}
+
+/// Identifiers read as an r-value inside the loop body. A find-first latch
+/// is write-only within the loop (set, never consumed) and read only
+/// *after* the loop. A flag read inside the loop — e.g. as its own
+/// re-entry guard `if !flag && pred { ...; flag = true }` — participates in
+/// loop control and cannot be folded into `.any()` without changing
+/// behaviour, so it must not be flagged.
+fn read_idents(body: &Block) -> HashSet<String> {
+    struct Reads {
+        names: HashSet<String>,
+    }
+    impl<'ast> Visit<'ast> for Reads {
+        fn visit_expr_assign(&mut self, e: &'ast ExprAssign) {
+            self.visit_expr(&e.right);
+        }
+        fn visit_expr_binary(&mut self, e: &'ast ExprBinary) {
+            if matches!(e.op, BinOp::BitOrAssign(_) | BinOp::BitAndAssign(_)) {
+                self.visit_expr(&e.right);
+            } else {
+                self.visit_expr(&e.left);
+                self.visit_expr(&e.right);
+            }
+        }
+        fn visit_expr_path(&mut self, p: &'ast ExprPath) {
+            if let Some(name) = single_ident_path(p) {
+                self.names.insert(name);
+            }
+        }
+    }
+    let mut r = Reads {
+        names: HashSet::new(),
+    };
+    r.visit_block(body);
+    r.names
 }
 
 struct WriteScanner<'a> {
@@ -212,9 +331,17 @@ impl<'ast> Visit<'ast> for WriteScanner<'_> {
     }
 }
 
+fn is_false_lit(e: &Expr) -> bool {
+    matches!(e, Expr::Lit(l) if matches!(&l.lit, Lit::Bool(b) if !b.value))
+}
+
 fn single_ident(expr: &Expr) -> Option<String> {
     let Expr::Path(p) = expr else { return None };
-    if p.path.segments.len() != 1 {
+    single_ident_path(p)
+}
+
+fn single_ident_path(p: &ExprPath) -> Option<String> {
+    if p.qself.is_some() || p.path.segments.len() != 1 {
         return None;
     }
     Some(p.path.segments[0].ident.to_string())
@@ -273,5 +400,37 @@ mod tests {
                    for _ in xs { started = true; } \
                    started }";
         assert_eq!(count(src), 0);
+    }
+
+    #[test]
+    fn flag_reset_to_false_elsewhere_not_flagged() {
+        let src = "fn x(items: &[Item]) { \
+                   let mut logged = false; \
+                   loop { \
+                       match tick() { \
+                           Ok(()) => logged = false, \
+                           Err(e) => { if !logged { log(e); logged = true; } } \
+                       } \
+                   } }";
+        assert_eq!(count(src), 0);
+    }
+
+    #[test]
+    fn flag_read_inside_loop_as_guard_not_flagged() {
+        let src = "fn x() { \
+                   let mut marked = false; \
+                   while let Ok(ev) = recv() { \
+                       if !marked && pred(ev) { side_effect(); marked = true; } \
+                   } }";
+        assert_eq!(count(src), 0);
+    }
+
+    #[test]
+    fn write_only_flag_still_flagged_with_side_effect() {
+        let src = "fn x(xs: &[i32]) -> bool { \
+                   let mut found = false; \
+                   for v in xs { if *v > 0 { side_effect(*v); found = true; } } \
+                   found }";
+        assert_eq!(count(src), 1);
     }
 }

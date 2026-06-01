@@ -10,8 +10,8 @@ use std::{
 
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
-use kithara_storage::{Atomic, MmapResource, ResourceExt, StorageError};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
+use kithara_storage::{Atomic, MmapDriver, StorageError};
 
 use super::core::{PinsIndex, PinsInner};
 use crate::{
@@ -21,7 +21,7 @@ use crate::{
 
 pub(super) struct PinsPersist {
     cancel: CancellationToken,
-    res: OnceLock<Atomic<MmapResource>>,
+    res: OnceLock<Atomic<MmapDriver>>,
     path: PathBuf,
 }
 
@@ -72,7 +72,7 @@ fn hydrate_existing(
     path: &std::path::Path,
     cancel: &CancellationToken,
     pool: &BytePool,
-) -> (DashMap<String, NonZeroU32>, Option<Atomic<MmapResource>>) {
+) -> (DashMap<String, NonZeroU32>, Option<Atomic<MmapDriver>>) {
     let nonempty = fs::metadata(path).is_ok_and(|m| m.len() > 0);
     if !nonempty {
         return (DashMap::new(), None);
@@ -91,7 +91,7 @@ fn hydrate_existing(
 }
 
 fn read_pins(
-    res: &Atomic<MmapResource>,
+    res: &Atomic<MmapDriver>,
     pool: &BytePool,
 ) -> AssetsResult<DashMap<String, NonZeroU32>> {
     let mut buf = pool.get();
@@ -121,7 +121,7 @@ fn read_pins(
     Ok(pinned)
 }
 
-fn write_pins(res: &Atomic<MmapResource>, pins: &[String], durable: bool) -> AssetsResult<()> {
+fn write_pins(res: &Atomic<MmapDriver>, pins: &[String], durable: bool) -> AssetsResult<()> {
     let mut map = BTreeMap::new();
     for pin in pins {
         map.insert(pin.clone(), true);

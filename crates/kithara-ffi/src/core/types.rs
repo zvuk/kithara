@@ -1,10 +1,10 @@
-use kithara::play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 use kithara_events::TrackStatus as TS;
 use kithara_platform::time::Duration;
+use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
 #[derive(Clone, Debug, thiserror::Error)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Error))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum FfiError {
     #[error("player not ready")]
     NotReady,
@@ -41,7 +41,7 @@ impl From<PlayError> for FfiError {
     }
 }
 
-#[cfg(feature = "backend-uniffi")]
+#[cfg(feature = "uniffi")]
 impl From<uniffi::UnexpectedUniFFICallbackError> for FfiError {
     fn from(e: uniffi::UnexpectedUniFFICallbackError) -> Self {
         Self::Internal {
@@ -58,7 +58,7 @@ pub fn duration_to_seconds(d: Duration) -> f64 {
 
 /// FFI-friendly player configuration.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiPlayerConfig {
     /// DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
     /// no DRM is needed.
@@ -87,7 +87,7 @@ impl Default for FfiPlayerConfig {
 /// Holds domain-scoped DRM rules — providers with different key
 /// processors and headers can coexist.
 #[derive(Clone, Default)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiKeyOptions {
     pub rules: Vec<FfiKeyRule>,
 }
@@ -103,7 +103,7 @@ impl std::fmt::Debug for FfiKeyOptions {
 /// A single DRM rule: domain patterns + key processor + optional
 /// per-provider headers / query params.
 #[derive(Clone)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiKeyRule {
     pub processor: std::sync::Arc<dyn crate::observer::FfiKeyProcessor>,
     pub headers: Option<std::collections::HashMap<String, String>>,
@@ -134,7 +134,7 @@ impl std::fmt::Debug for FfiKeyRule {
 /// FFI-friendly per-item configuration. All fields immutable after
 /// [`crate::item::AudioPlayerItem::new`].
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiItemConfig {
     pub abr_mode: Option<FfiAbrMode>,
     pub headers: Option<std::collections::HashMap<String, String>>,
@@ -165,7 +165,7 @@ pub struct FfiItemConfig {
 
 /// FFI-friendly mirror of [`PlayerStatus`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiPlayerStatus {
     Unknown,
     ReadyToPlay,
@@ -184,7 +184,7 @@ impl From<PlayerStatus> for FfiPlayerStatus {
 
 /// FFI-friendly mirror of [`ItemStatus`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiItemStatus {
     Unknown,
     ReadyToPlay,
@@ -203,7 +203,7 @@ impl From<ItemStatus> for FfiItemStatus {
 
 /// FFI-friendly mirror of [`TimeControlStatus`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiTimeControlStatus {
     Paused,
     WaitingToPlay,
@@ -226,7 +226,7 @@ impl From<TimeControlStatus> for FfiTimeControlStatus {
 /// loaded -> consumed, or `failed` on error. `Cancelled` covers
 /// loads that were overridden by a later `select` of a different track.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiTrackStatus {
     Pending,
     Loading,
@@ -253,7 +253,7 @@ impl From<kithara_events::TrackStatus> for FfiTrackStatus {
 
 /// FFI-friendly time range (seconds-based).
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiTimeRange {
     pub duration_seconds: f64,
     pub start_seconds: f64,
@@ -277,7 +277,7 @@ impl From<TimeRange> for FfiTimeRange {
 /// (async broadcast task + OS polling thread). Swift must handle
 /// thread-safe delivery internally.
 #[derive(Debug)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[rustfmt::skip]
 pub enum FfiPlayerEvent {
     TimeChanged { seconds: f64 },
@@ -317,7 +317,7 @@ pub enum FfiPlayerEvent {
 /// duration (typical for auto-advance and Next/Prev buttons), or
 /// [`FfiTransition::CrossfadeWith`] to override per-call.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiTransition {
     None,
     Crossfade,
@@ -336,7 +336,7 @@ impl From<FfiTransition> for kithara_queue::Transition {
 
 /// Typed item event dispatched through [`ItemObserver::on_event`].
 #[derive(Debug)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiItemEvent {
     DurationChanged {
         seconds: f64,
@@ -381,7 +381,7 @@ pub enum FfiItemEvent {
 
 /// FFI-friendly HLS variant descriptor.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiVariant {
     pub name: Option<String>,
     pub index: u32,
@@ -391,7 +391,7 @@ pub struct FfiVariant {
 /// Outcome reported by [`crate::observer::ItemLoadCallback::on_complete`]
 /// when [`crate::item::AudioPlayerItem::load`] resolves.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiItemLoadResult {
     /// `true` once the metadata layer recognises encrypted segments.
     pub has_protected_content: bool,
@@ -401,7 +401,7 @@ pub struct FfiItemLoadResult {
 
 /// FFI-friendly ABR mode.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiAbrMode {
     Auto,
     Manual { variant_index: u32 },
@@ -412,7 +412,7 @@ pub enum FfiAbrMode {
 /// Fields are `Option` when no current item is loaded — callers should
 /// not assume defaults.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiPlayerSnapshot {
     pub status: FfiPlayerStatus,
     pub current_time: Option<f64>,

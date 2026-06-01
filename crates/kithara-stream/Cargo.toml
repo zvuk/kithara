@@ -27,7 +27,6 @@ kithara-test-utils = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 thunderdome = { workspace = true }
-tokio-util = { workspace = true }
 url = { workspace = true }
 hotpath = { workspace = true, optional = true }
 unimock = { workspace = true }
@@ -39,13 +38,13 @@ mock = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
-tokio-util = { workspace = true, features = ["full"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = { workspace = true }
 wasm_safe_thread = { workspace = true }
 
 [dev-dependencies]
+dashmap = { workspace = true }
 kithara-stream = { path = ".", default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
 tokio-stream = { workspace = true }

@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result};
 use clap::Args;
 
-use crate::common::timestamp::utc_timestamp;
+use crate::common::{project::ProjectConfig, timestamp::utc_timestamp};
 
 struct Consts;
 impl Consts {
@@ -69,6 +69,14 @@ impl Stage {
         self.advisory = true;
         self
     }
+
+    fn exclude_crates(mut self, crates: &[String]) -> Self {
+        for krate in crates {
+            self.args.push("--exclude".to_owned());
+            self.args.push(krate.clone());
+        }
+        self
+    }
 }
 
 struct StageResult {
@@ -80,10 +88,11 @@ struct StageResult {
 }
 
 pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
+    let project = ProjectConfig::load(Path::new("."))?;
     let logs_dir = PathBuf::from(Consts::LOGS_DIR);
     fs::create_dir_all(&logs_dir).context("create health-logs directory")?;
 
-    let stages = build_stages();
+    let stages = build_stages(&project);
     let total_start = Instant::now();
     let mut results = Vec::with_capacity(stages.len());
 
@@ -94,7 +103,7 @@ pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
     }
 
     let total = total_start.elapsed();
-    write_report(&results, total, &logs_dir)?;
+    write_report(&results, total, &logs_dir, &project.project.name)?;
 
     let failed = results.iter().filter(|r| r.status == Status::Fail).count();
     println!();
@@ -111,7 +120,7 @@ pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
     Ok(())
 }
 
-fn build_stages() -> Vec<Stage> {
+fn build_stages(project: &ProjectConfig) -> Vec<Stage> {
     vec![
         Stage::new(
             "fmt-check",
@@ -152,25 +161,15 @@ fn build_stages() -> Vec<Stage> {
                 "--depth",
                 "2",
                 "--workspace",
-                "--exclude",
-                "kithara-play",
-                "--exclude",
-                "kithara-app",
-                "--exclude",
-                "kithara-fuzz",
             ],
-        ),
+        )
+        .exclude_crates(&project.health.feature_powerset_exclude),
         Stage::new(
             "semver-checks",
             "cargo",
-            &[
-                "semver-checks",
-                "check-release",
-                "--workspace",
-                "--exclude",
-                "kithara-fuzz",
-            ],
-        ),
+            &["semver-checks", "check-release", "--workspace"],
+        )
+        .exclude_crates(&project.health.workspace_exclude),
         Stage::new(
             "lockbud-deadlock",
             "cargo",
@@ -184,17 +183,13 @@ fn build_stages() -> Vec<Stage> {
                 "nextest",
                 "run",
                 "--workspace",
-                "--exclude",
-                "kithara-fuzz",
                 "--cargo-profile",
                 "test-release",
             ],
-        ),
-        Stage::new(
-            "test-doc",
-            "cargo",
-            &["test", "--doc", "--workspace", "--exclude", "kithara-fuzz"],
-        ),
+        )
+        .exclude_crates(&project.health.workspace_exclude),
+        Stage::new("test-doc", "cargo", &["test", "--doc", "--workspace"])
+            .exclude_crates(&project.health.workspace_exclude),
     ]
 }
 
@@ -287,14 +282,24 @@ fn print_progress(idx: usize, total: usize, r: &StageResult) {
     );
 }
 
-fn write_report(results: &[StageResult], total: Duration, logs_dir: &Path) -> Result<()> {
+fn write_report(
+    results: &[StageResult],
+    total: Duration,
+    logs_dir: &Path,
+    project_name: &str,
+) -> Result<()> {
     let mut out = String::new();
     let timestamp = utc_timestamp();
     let total_str = format_duration(total);
     let failed = results.iter().filter(|r| r.status == Status::Fail).count();
     let overall = if failed == 0 { "PASS" } else { "FAIL" };
 
-    out.push_str("# kithara health report\n\n");
+    let title = if project_name.is_empty() {
+        "health report".to_owned()
+    } else {
+        format!("{project_name} health report")
+    };
+    out.push_str(&format!("# {title}\n\n"));
     out.push_str(&format!("- generated_at_utc: {timestamp}\n"));
     out.push_str(&format!("- total_duration: {total_str}\n"));
     out.push_str(&format!(

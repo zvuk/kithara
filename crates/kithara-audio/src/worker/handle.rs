@@ -4,11 +4,10 @@ use std::sync::{
 };
 
 use kithara_decode::PcmChunk;
-use kithara_platform::tokio::sync::Notify;
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
 
 use super::{
-    AudioWorkerSource,
+    AudioWorkerSource, PreloadGate,
     decoder_node::DecoderNode,
     hang_observer::HangWatchdogObserver,
     types::{TrackId, TrackIdGen},
@@ -20,17 +19,17 @@ use crate::{
 
 /// Everything needed to register a track with the shared worker.
 pub(crate) struct TrackRegistration {
-    pub(crate) preload_notify: Arc<Notify>,
+    pub(crate) preload_gate: Arc<PreloadGate>,
+    /// Shared priority hint. The real-time consumer writes it wait-free
+    /// (`Audio::set_service_class`); the worker scheduler reads it each pass.
+    pub(crate) service_class: Arc<AtomicServiceClass>,
     pub(crate) source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
-    pub(crate) outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
     /// Spent-chunk return ring: the real-time consumer ([`crate::Audio`])
     /// hands every consumed `PcmChunk` here instead of dropping it, so the
     /// pooled buffer is freed/recycled on the worker thread rather than on
     /// the audio thread. See `crates/kithara-audio/README.md`.
     pub(crate) trash_inlet: crate::runtime::Inlet<PcmChunk>,
-    /// Shared priority hint. The real-time consumer writes it wait-free
-    /// (`Audio::set_service_class`); the worker scheduler reads it each pass.
-    pub(crate) service_class: Arc<AtomicServiceClass>,
+    pub(crate) outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
     pub(crate) preload_chunks: usize,
 }
 
@@ -56,17 +55,6 @@ impl Clone for AudioWorkerHandle {
 static AUDIO_WORKER_ID: AtomicU64 = AtomicU64::new(0);
 
 impl AudioWorkerHandle {
-    /// Spawn a new shared worker with a fresh orphan cancel token.
-    ///
-    /// Convenience for tests and standalone usage. Production paths use
-    /// [`AudioWorkerHandle::with_cancel`] with a child of the player
-    /// master — see `kithara-play/README.md` "Cancel Hierarchy".
-    #[must_use]
-    // ast-grep-ignore: style.prefer-default-derive
-    pub fn new() -> Self {
-        Self::with_cancel(CancellationToken::new()) // kithara:cancel:owner
-    }
-
     /// Register a track. Returns the assigned [`TrackId`].
     ///
     /// If the worker thread has already exited (e.g. after shutdown), the
@@ -94,10 +82,11 @@ impl AudioWorkerHandle {
         self.inner.wake();
     }
 
-    /// Spawn a new shared worker thread bound to the given cancel token
-    /// and return a handle. Production callers (e.g. `EngineImpl`) pass a
-    /// child of the player master so worker shutdown participates in the
-    /// unified cancel hierarchy.
+    /// Spawn a new shared worker thread bound to the given [`CancellationToken`] and
+    /// return a handle. Production callers (e.g. `EngineImpl`) pass a
+    /// `child_token()` of the player master so worker shutdown participates in
+    /// the unified cancel hierarchy and the produce-core's lock-free
+    /// `is_cancelled()` read observes a master cancel.
     #[must_use]
     pub fn with_cancel(cancel: CancellationToken) -> Self {
         let id = AUDIO_WORKER_ID.fetch_add(1, Ordering::Relaxed);
@@ -111,12 +100,6 @@ impl AudioWorkerHandle {
             inner,
             id_gen: Arc::new(TrackIdGen::new()),
         }
-    }
-}
-
-impl Default for AudioWorkerHandle {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -134,7 +117,6 @@ mod tests {
     use kithara_platform::{
         thread::sleep as thread_sleep,
         time::{Instant, timeout as platform_timeout},
-        tokio::sync::Notify,
     };
     use kithara_stream::Timeline;
     use kithara_test_utils::kithara;
@@ -208,6 +190,23 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct FailingSource {
+        timeline: Timeline,
+    }
+
+    impl AudioWorkerSource for FailingSource {
+        type Chunk = PcmChunk;
+
+        fn step_track(&mut self) -> TrackStep<PcmChunk> {
+            TrackStep::Failed
+        }
+
+        fn timeline(&self) -> &Timeline {
+            &self.timeline
+        }
+    }
+
     fn make_registration<S>(
         source: S,
         ringbuf_capacity: usize,
@@ -215,7 +214,7 @@ mod tests {
     ) -> (
         TrackRegistration,
         crate::runtime::Inlet<Fetch<PcmChunk>>,
-        Arc<Notify>,
+        Arc<PreloadGate>,
     )
     where
         S: AudioWorkerSource<Chunk = PcmChunk> + 'static,
@@ -223,17 +222,17 @@ mod tests {
         let wake = Arc::new(ThreadWake::default());
         let (outlet, inlet) = connect::<Fetch<PcmChunk>>(ringbuf_capacity, Some(wake.clone()));
         let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(ringbuf_capacity + 2, None);
-        let preload_notify = Arc::new(Notify::new());
+        let preload_gate = Arc::new(PreloadGate::default());
 
         let reg = TrackRegistration {
             outlet,
             trash_inlet,
             preload_chunks,
             source: Box::new(source),
-            preload_notify: Arc::clone(&preload_notify),
+            preload_gate: Arc::clone(&preload_gate),
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::Audible)),
         };
-        (reg, inlet, preload_notify)
+        (reg, inlet, preload_gate)
     }
 
     fn wait_for_chunks(
@@ -255,7 +254,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_creates_and_drops_cleanly() {
-        let handle = AudioWorkerHandle::new();
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
         thread_sleep(Duration::from_millis(10));
         handle.shutdown();
         thread_sleep(Duration::from_millis(50));
@@ -263,8 +262,8 @@ mod tests {
 
     #[kithara::test]
     fn worker_delivers_chunks() {
-        let handle = AudioWorkerHandle::new();
-        let (reg, mut data_rx, _preload_notify) = make_registration(MockSource::new(10), 32, 3);
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let (reg, mut data_rx, _preload_gate) = make_registration(MockSource::new(10), 32, 3);
 
         let _id = handle.register_track(reg);
 
@@ -276,7 +275,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_multi_track_round_robin() {
-        let handle = AudioWorkerHandle::new();
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(10), 32, 1);
         let (reg_b, mut rx_b, _) = make_registration(MockSource::new(10), 32, 1);
@@ -294,7 +293,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_skips_not_ready_tracks() {
-        let handle = AudioWorkerHandle::new();
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(10), 32, 1);
         let (reg_b, mut rx_b, _) = make_registration(MockSource::not_ready(10), 32, 1);
@@ -314,7 +313,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_overflow_on_full_ringbuf() {
-        let handle = AudioWorkerHandle::new();
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
 
         let (reg, mut rx, _) = make_registration(MockSource::new(5), 1, 1);
 
@@ -335,7 +334,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_panic_isolation() {
-        let handle = AudioWorkerHandle::new();
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
 
         let (reg_a, _, _) = make_registration(MockSource::panicking(), 32, 1);
         let (reg_b, mut rx_b, _) = make_registration(MockSource::new(10), 32, 1);
@@ -354,7 +353,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_seek_enters_pending_reset() {
-        let handle = AudioWorkerHandle::new();
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
 
         let source = MockSource::new(100);
         let timeline = source.timeline.clone();
@@ -376,44 +375,80 @@ mod tests {
         handle.shutdown();
     }
 
-    #[kithara::test]
-    fn worker_preload_notify_fires() {
-        let handle = AudioWorkerHandle::new();
+    #[kithara::test(tokio)]
+    async fn worker_preload_gate_fires_on_progress() {
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
 
-        let (reg, _rx, _preload_notify) = make_registration(MockSource::new(10), 32, 3);
+        let (reg, _rx, preload_gate) = make_registration(MockSource::new(10), 32, 3);
 
         let _id = handle.register_track(reg);
 
-        thread_sleep(Duration::from_millis(200));
+        platform_timeout(Duration::from_secs(1), preload_gate.wait())
+            .await
+            .expect("preload gate must open once the preload threshold is met");
+        assert!(preload_gate.is_ready());
 
         handle.shutdown();
     }
 
     #[kithara::test(tokio)]
-    async fn worker_preload_notify_rearms_after_seek() {
-        let handle = AudioWorkerHandle::new();
+    async fn worker_preload_gate_fires_on_eof() {
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
 
-        let (reg, _rx, preload_notify) = make_registration(MockSource::new(10), 32, 1);
+        let (reg, _rx, preload_gate) = make_registration(MockSource::new(0), 32, 8);
+
+        let _id = handle.register_track(reg);
+
+        platform_timeout(Duration::from_secs(1), preload_gate.wait())
+            .await
+            .expect("EOF before the preload threshold must still open the gate");
+        assert!(preload_gate.is_ready());
+
+        handle.shutdown();
+    }
+
+    #[kithara::test(tokio)]
+    async fn worker_preload_gate_fires_on_failure() {
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+
+        let (reg, _rx, preload_gate) = make_registration(FailingSource::default(), 32, 8);
+
+        let _id = handle.register_track(reg);
+
+        platform_timeout(Duration::from_secs(1), preload_gate.wait())
+            .await
+            .expect("a decoder failure must open the gate so preload never stalls");
+        assert!(preload_gate.is_ready());
+
+        handle.shutdown();
+    }
+
+    #[kithara::test(tokio)]
+    async fn worker_preload_gate_reopens_after_seek() {
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+
+        let (reg, _rx, preload_gate) = make_registration(MockSource::new(10), 32, 1);
         let timeline = reg.source.timeline().clone();
         let _id = handle.register_track(reg);
 
-        platform_timeout(Duration::from_secs(1), preload_notify.notified())
+        platform_timeout(Duration::from_secs(1), preload_gate.wait())
             .await
-            .expect("initial preload notify must fire");
+            .expect("initial preload gate must open");
+        assert!(preload_gate.is_ready());
 
         let _ = timeline.initiate_seek(Duration::from_secs(1));
         handle.wake();
 
-        platform_timeout(Duration::from_secs(1), preload_notify.notified())
+        platform_timeout(Duration::from_secs(1), preload_gate.wait())
             .await
-            .expect("seek must re-arm preload notify");
+            .expect("re-armed preload gate must reopen after the seek refills");
 
         handle.shutdown();
     }
 
     #[kithara::test]
     fn worker_unregister_removes_track() {
-        let handle = AudioWorkerHandle::new();
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
 
         let (reg, mut rx, _) = make_registration(MockSource::new(100), 32, 1);
 
@@ -435,7 +470,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_service_class_prioritises_audible() {
-        let handle = AudioWorkerHandle::new();
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(100), 4, 0);
         let class_a = Arc::clone(&reg_a.service_class);
@@ -512,7 +547,7 @@ mod tests {
             }
         }
 
-        let handle = AudioWorkerHandle::new();
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(100), 32, 0);
         let _id_a = handle.register_track(reg_a);
@@ -571,7 +606,7 @@ mod tests {
             }
         }
 
-        let handle = AudioWorkerHandle::new();
+        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(1000), 32, 0);
         let _id_a = handle.register_track(reg_a);

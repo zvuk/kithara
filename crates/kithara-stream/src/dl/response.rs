@@ -54,6 +54,18 @@ impl std::fmt::Debug for BodyStream {
     }
 }
 
+/// Bytes-backed body — `Send` on every target. Used to ferry a fully buffered
+/// channel-path response across the wasm worker boundary (the raw HTTP stream
+/// is `!Send` on wasm; collecting it on the download worker and re-wrapping the
+/// bytes keeps the boundary clean).
+impl From<Bytes> for BodyStream {
+    fn from(bytes: Bytes) -> Self {
+        Self {
+            inner: Box::pin(stream::once(async move { Ok(bytes) })),
+        }
+    }
+}
+
 impl BodyStream {
     /// Collect entire body into bytes.
     ///
@@ -109,7 +121,7 @@ impl BodyStream {
         let mut total: u64 = 0;
         while let Some(chunk) = self.next().await {
             let data = chunk?;
-            writer(data.as_ref()).map_err(|e| NetError::Http(e.to_string()))?;
+            writer(data.as_ref()).map_err(|e| NetError::Decode(e.to_string()))?;
             total += data.len() as u64;
         }
         Ok(total)

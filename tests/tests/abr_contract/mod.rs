@@ -14,4 +14,5 @@ mod probe_disk_inventory_parity;
 mod probe_emit_count_contract;
 mod probe_init_range;
 mod probe_pcm_seam_continuity;
+mod probe_seek_invalidates_stale_pending;
 mod probe_track_continuity_invariants;

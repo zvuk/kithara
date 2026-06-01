@@ -2,12 +2,11 @@
 
 use std::{
     fmt::{self, Debug},
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
 };
 
-use kithara_platform::{Condvar, Mutex};
+use kithara_platform::{CancellationToken, Condvar, Mutex};
 use rangemap::RangeSet;
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     StorageError, StorageResult,
@@ -29,22 +28,28 @@ pub(super) struct Inner<D: DriverIo> {
     pub(super) driver: D,
     pub(super) state: Mutex<CommonState>,
     pub(super) observer: Option<Arc<dyn AvailabilityObserver>>,
+    /// Lock-free lifecycle flag: `true` while the resource is committed, `false`
+    /// once `reactivate` reopens it for a re-download. Distinct from the driver's
+    /// committed snapshot, which stays published across a reactivate so reads
+    /// keep serving consistent (immutable) bytes; this flag tracks the *lifecycle*
+    /// so `len()` reports `None` for an active (being-rewritten) resource without
+    /// taking the state mutex.
+    pub(super) committed: AtomicBool,
 }
 
-/// Generic storage resource parameterized by backend driver.
+/// Generic storage resource state machine, parameterized by backend driver.
 ///
 /// Owns the common state machine (range tracking, committed/failed flags,
 /// condvar wait coordination, cancellation) and delegates backend-specific
-/// I/O to `D`.
-///
-/// Use via type aliases:
-/// - [`MmapResource`](crate::MmapResource) = `Resource<MmapDriver>`
-/// - [`MemResource`](crate::MemResource) = `Resource<MemDriver>`
-pub struct Resource<D: DriverIo> {
+/// I/O to `D`. This is the shared backing for the typed handles
+/// [`Resource<Active, D>`](crate::Resource), [`Resource<Committed, D>`] and
+/// [`ReadHandle<D>`](crate::ReadHandle); it is crate-internal and never exposed
+/// directly.
+pub(crate) struct ResourceCore<D: DriverIo> {
     pub(super) inner: Arc<Inner<D>>,
 }
 
-impl<D: DriverIo> Clone for Resource<D> {
+impl<D: DriverIo> Clone for ResourceCore<D> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -52,10 +57,10 @@ impl<D: DriverIo> Clone for Resource<D> {
     }
 }
 
-impl<D: DriverIo + Debug> Debug for Resource<D> {
+impl<D: DriverIo + Debug> Debug for ResourceCore<D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = self.inner.state.lock_sync();
-        f.debug_struct("Resource")
+        f.debug_struct("ResourceCore")
             .field("driver", &self.inner.driver)
             .field("committed", &state.committed)
             .field("final_len", &state.final_len)
@@ -63,7 +68,7 @@ impl<D: DriverIo + Debug> Debug for Resource<D> {
     }
 }
 
-impl<D: Driver> Resource<D> {
+impl<D: Driver> ResourceCore<D> {
     /// Open a resource from driver options with no availability observer.
     ///
     /// `D` is resolved at the call site by the type of `opts` (e.g.
@@ -75,7 +80,7 @@ impl<D: Driver> Resource<D> {
     /// # Errors
     ///
     /// Returns error if `D::open(opts)` fails (e.g. file I/O failure).
-    pub fn open(cancel: CancellationToken, opts: D::Options) -> StorageResult<Self> {
+    pub(crate) fn open(cancel: CancellationToken, opts: D::Options) -> StorageResult<Self> {
         Self::open_with_observer(cancel, opts, None)
     }
 
@@ -87,7 +92,7 @@ impl<D: Driver> Resource<D> {
     /// # Errors
     ///
     /// Returns error if `D::open(opts)` fails.
-    pub fn open_with_observer(
+    pub(crate) fn open_with_observer(
         cancel: CancellationToken,
         opts: D::Options,
         observer: Option<Arc<dyn AvailabilityObserver>>,
@@ -99,6 +104,7 @@ impl<D: Driver> Resource<D> {
                 driver,
                 observer,
                 condvar: Condvar::new(),
+                committed: AtomicBool::new(init.is_committed),
                 state: Mutex::new(CommonState {
                     failed: None,
                     final_len: init.final_len,
@@ -110,7 +116,7 @@ impl<D: Driver> Resource<D> {
     }
 }
 
-impl<D: DriverIo> Resource<D> {
+impl<D: DriverIo> ResourceCore<D> {
     /// Check if the resource is cancelled or failed, returning error if so.
     pub(super) fn check_health(&self) -> StorageResult<()> {
         if self.inner.cancel.is_cancelled() {

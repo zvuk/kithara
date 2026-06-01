@@ -10,7 +10,7 @@ use kithara_platform::time::Duration;
 use unimock::{MockFn, Unimock, matching};
 
 fn mock_error() -> NetError {
-    NetError::Http("mock error".to_string())
+    NetError::Network("mock error".to_string())
 }
 
 fn assert_bytes_or_timeout(result: Result<Bytes, NetError>, should_succeed: bool) {
@@ -100,7 +100,7 @@ async fn test_timeout_with_error() {
     let error = result.err().unwrap();
 
     if delay < timeout {
-        assert!(matches!(error, NetError::Http(_)));
+        assert!(matches!(error, NetError::Network(_)));
     } else {
         assert!(matches!(error, NetError::Timeout));
     }
@@ -171,6 +171,6 @@ async fn test_timeout_preserves_error(#[case] delay: Duration) {
     assert!(result.is_err());
     let error = result.err().unwrap();
 
-    assert!(matches!(error, NetError::Http(_)));
+    assert!(matches!(error, NetError::Network(_)));
     assert!(error.to_string().contains("mock error"));
 }

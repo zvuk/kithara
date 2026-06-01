@@ -1,14 +1,13 @@
 use std::{collections::HashSet, num::NonZeroUsize, path::Path, sync::Arc};
 
 use kithara_assets::{
-    AssetResourceState, AssetStoreBuilder, BytePool, DiskAssetStore, EvictConfig, ProcessChunkFn,
+    AcquisitionResult, AssetResourceState, AssetStoreBuilder, BytePool, DiskAssetStore,
+    EvictConfig, ProcessChunkFn, ReadSide, WriteSide,
 };
 use kithara_integration_tests::{asset_fixture::PinsIndex, assets_ext::AssetStoreTestExt};
-use kithara_platform::time::Duration;
-use kithara_storage::ResourceExt;
+use kithara_platform::{CancellationToken, time::Duration};
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
-use tokio_util::sync::CancellationToken;
 
 fn xor_process_fn() -> ProcessChunkFn<u8> {
     Arc::new(|input, output, ctx: &mut u8, _is_last| {
@@ -19,8 +18,15 @@ fn xor_process_fn() -> ProcessChunkFn<u8> {
     })
 }
 
+fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
+    let AcquisitionResult::Pending(w) = acq else {
+        panic!("expected a Pending writer");
+    };
+    w
+}
+
 fn load_pins(root_dir: &Path) -> HashSet<String> {
-    let disk = DiskAssetStore::new(root_dir, CancellationToken::new(), &BytePool::default());
+    let disk = DiskAssetStore::new(root_dir, CancellationToken::default(), &BytePool::default());
     PinsIndex::open(&disk, &BytePool::default())
         .and_then(|index| index.load())
         .unwrap_or_default()
@@ -47,10 +53,12 @@ fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
         "resource_state must not create files for missing disk resources"
     );
 
-    let committed = scope
-        .store()
-        .acquire_resource(&key_committed, None)
-        .unwrap();
+    let committed = pending(
+        scope
+            .store()
+            .acquire_resource(&key_committed, None)
+            .unwrap(),
+    );
     assert_eq!(
         scope.store().resource_state(&key_committed).unwrap(),
         AssetResourceState::Active
@@ -64,7 +72,7 @@ fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
     );
     assert!(scope.store().has_resource(&key_committed));
 
-    let failed = scope.store().acquire_resource(&key_failed, None).unwrap();
+    let failed = pending(scope.store().acquire_resource(&key_failed, None).unwrap());
     failed.fail("boom".to_string());
     assert_eq!(
         scope.store().resource_state(&key_failed).unwrap(),
@@ -85,14 +93,14 @@ fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
     let key_active = scope.key("segments/active.bin");
     let key_other = scope.key("segments/other.bin");
 
-    let active = scope.store().acquire_resource(&key_active, None).unwrap();
+    let active = pending(scope.store().acquire_resource(&key_active, None).unwrap());
     active.write_at(0, b"abcd").unwrap();
     assert_eq!(
         scope.store().resource_state(&key_active).unwrap(),
         AssetResourceState::Active
     );
 
-    let other = scope.store().acquire_resource(&key_other, None).unwrap();
+    let other = pending(scope.store().acquire_resource(&key_other, None).unwrap());
     other.write_at(0, b"wxyz").unwrap();
 
     assert_eq!(
@@ -112,7 +120,7 @@ fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
         .scope("disk-asset");
 
     let key = scope.key("segments/ghost.bin");
-    let handle = scope.store().acquire_resource(&key, None).unwrap();
+    let handle = pending(scope.store().acquire_resource(&key, None).unwrap());
     handle.write_at(0, b"abcd").unwrap();
     assert_eq!(
         scope.store().resource_state(&key).unwrap(),
@@ -186,20 +194,20 @@ fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
         AssetResourceState::Missing
     );
 
-    let res0 = scope.store().acquire_resource(&key0, None).unwrap();
+    let res0_writer = pending(scope.store().acquire_resource(&key0, None).unwrap());
     assert_eq!(
         scope.store().resource_state(&key0).unwrap(),
         AssetResourceState::Active
     );
-    res0.write_at(0, b"zero").unwrap();
-    res0.commit(Some(4)).unwrap();
+    res0_writer.write_at(0, b"zero").unwrap();
+    let res0 = res0_writer.commit(Some(4)).unwrap();
     assert_eq!(
         scope.store().resource_state(&key0).unwrap(),
         AssetResourceState::Committed { final_len: Some(4) }
     );
     assert!(scope.store().has_resource(&key0));
 
-    let failed = scope.store().acquire_resource(&key_failed, None).unwrap();
+    let failed = pending(scope.store().acquire_resource(&key_failed, None).unwrap());
     failed.fail("boom".to_string());
     assert_eq!(
         scope.store().resource_state(&key_failed).unwrap(),
@@ -212,7 +220,7 @@ fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
     );
 
     for key in [&key1, &key2, &key3] {
-        let res = scope.store().acquire_resource(key, None).unwrap();
+        let res = pending(scope.store().acquire_resource(key, None).unwrap());
         res.write_at(0, b"data").unwrap();
         res.commit(Some(4)).unwrap();
     }
@@ -257,10 +265,12 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         AssetResourceState::Missing
     );
 
-    let res_a = scope_a
-        .store()
-        .acquire_resource_with_ctx(&key_a, None, Some(0x55))
-        .unwrap();
+    let res_a_writer = pending(
+        scope_a
+            .store()
+            .acquire_resource_with_ctx(&key_a, None, Some(0x55))
+            .unwrap(),
+    );
     assert_eq!(
         scope_a.store().resource_state(&key_a).unwrap(),
         AssetResourceState::Active
@@ -270,8 +280,8 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         "opening a resource must persist a pin while the handle is alive"
     );
 
-    res_a.write_at(0, &[0x10, 0x20, 0x30]).unwrap();
-    res_a.commit(Some(3)).unwrap();
+    res_a_writer.write_at(0, &[0x10, 0x20, 0x30]).unwrap();
+    let res_a = res_a_writer.commit(Some(3)).unwrap();
     assert_eq!(
         scope_a.store().resource_state(&key_a).unwrap(),
         AssetResourceState::Committed { final_len: Some(3) }
@@ -289,12 +299,14 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         .build()
         .scope("asset-b");
     let key_b = scope_b.key("segments/0001.bin");
-    let res_b = scope_b
-        .store()
-        .acquire_resource_with_ctx(&key_b, None, Some(0x11))
-        .unwrap();
+    let res_b = pending(
+        scope_b
+            .store()
+            .acquire_resource_with_ctx(&key_b, None, Some(0x11))
+            .unwrap(),
+    );
     res_b.write_at(0, b"bbb").unwrap();
-    res_b.commit(Some(3)).unwrap();
+    let res_b = res_b.commit(Some(3)).unwrap();
     drop(res_b);
 
     assert_eq!(
@@ -316,12 +328,14 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         .build()
         .scope("asset-c");
     let key_c = scope_c.key("segments/0001.bin");
-    let res_c = scope_c
-        .store()
-        .acquire_resource_with_ctx(&key_c, None, Some(0x22))
-        .unwrap();
+    let res_c = pending(
+        scope_c
+            .store()
+            .acquire_resource_with_ctx(&key_c, None, Some(0x22))
+            .unwrap(),
+    );
     res_c.write_at(0, b"ccc").unwrap();
-    res_c.commit(Some(3)).unwrap();
+    let res_c = res_c.commit(Some(3)).unwrap();
     drop(res_c);
 
     let scope_a_probe = AssetStoreBuilder::new()

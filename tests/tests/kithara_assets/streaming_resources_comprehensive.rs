@@ -2,19 +2,23 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::EvictConfig;
-use kithara::{
-    assets::{AssetScope, AssetStoreBuilder},
-    storage::ResourceExt,
-};
+use kithara::assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, ReadSide, WriteSide};
 use kithara_integration_tests::temp_dir;
 use kithara_platform::{thread, time::Duration};
 
 /// Helper to read bytes from resource into a new Vec
-fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
+fn read_bytes<R: ReadSide>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
     let n = res.read_at(offset, &mut buf).unwrap_or(0);
     buf.truncate(n);
     buf
+}
+
+fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
+    let AcquisitionResult::Pending(w) = acq else {
+        panic!("expected a Pending writer")
+    };
+    w
 }
 
 fn asset_scope_with_root(
@@ -57,22 +61,24 @@ fn streaming_resource_complex_write_patterns(
 
     let key = scope.key("data.bin");
 
-    let res = scope.store().acquire_resource(&key, None).unwrap();
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+    let reader = writer.reader();
 
     let total_chunks = total_size / chunk_size;
     for i in 0..total_chunks {
         let offset = initial_offset + (i * chunk_size) as u64;
         let data: Vec<u8> = (0..chunk_size).map(|j| ((i + j) % 256) as u8).collect();
 
-        res.write_at(offset, &data).unwrap();
-        res.wait_range(offset..(offset + chunk_size as u64))
+        writer.write_at(offset, &data).unwrap();
+        reader
+            .wait_range(offset..(offset + chunk_size as u64))
             .unwrap();
 
-        let read_back = read_bytes(&res, offset, chunk_size);
+        let read_back = read_bytes(&reader, offset, chunk_size);
         assert_eq!(read_back, data);
     }
 
-    res.commit(None).unwrap();
+    writer.commit(None).unwrap();
 }
 
 #[kithara::test(
@@ -91,7 +97,7 @@ fn streaming_resource_concurrent_writes(
 
     let key = scope.key("concurrent.bin");
 
-    let res = scope.store().acquire_resource(&key, None).unwrap();
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
 
     let mut handles = Vec::new();
     for i in 0..write_count {
@@ -114,7 +120,7 @@ fn streaming_resource_concurrent_writes(
         println!("Task for offset {} completed", offset);
     }
 
-    res.commit(None).unwrap();
+    writer.commit(None).unwrap();
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
@@ -131,16 +137,17 @@ fn streaming_resource_edge_case_reads(
 
     let key = scope.key("edge.bin");
 
-    let res = scope.store().acquire_resource(&key, None).unwrap();
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+    let reader = writer.reader();
 
     let data_size = 6144;
     let initial_data: Vec<u8> = (0..data_size).map(|i| (i % 256) as u8).collect();
-    res.write_at(0, &initial_data).unwrap();
-    res.wait_range(0..data_size as u64).unwrap();
+    writer.write_at(0, &initial_data).unwrap();
+    reader.wait_range(0..data_size as u64).unwrap();
 
     if offset < data_size as u64 {
         let expected_size = read_size.min(data_size - offset as usize);
-        let read_back = read_bytes(&res, offset, read_size);
+        let read_back = read_bytes(&reader, offset, read_size);
 
         assert_eq!(read_back.len(), expected_size);
 
@@ -150,7 +157,7 @@ fn streaming_resource_edge_case_reads(
         }
     }
 
-    res.commit(None).unwrap();
+    writer.commit(None).unwrap();
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
@@ -164,27 +171,29 @@ fn streaming_resource_multiple_range_operations(
 
     let key = scope.key("multi.bin");
 
-    let res = scope.store().acquire_resource(&key, None).unwrap();
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+    let reader = writer.reader();
 
     for (i, (offset, size)) in write_ranges.iter().enumerate() {
         let data: Vec<u8> = (0..*size).map(|j| ((i * 1000 + j) % 256) as u8).collect();
         let offset_u64 = *offset as u64;
 
-        res.write_at(offset_u64, &data).unwrap();
-        res.wait_range(offset_u64..(offset_u64 + *size as u64))
+        writer.write_at(offset_u64, &data).unwrap();
+        reader
+            .wait_range(offset_u64..(offset_u64 + *size as u64))
             .unwrap();
 
-        let read_back = read_bytes(&res, offset_u64, *size);
+        let read_back = read_bytes(&reader, offset_u64, *size);
         assert_eq!(read_back, data);
     }
 
     for (i, (offset, size)) in write_ranges.iter().enumerate() {
         let expected_data: Vec<u8> = (0..*size).map(|j| ((i * 1000 + j) % 256) as u8).collect();
-        let read_back = read_bytes(&res, *offset as u64, *size);
+        let read_back = read_bytes(&reader, *offset as u64, *size);
         assert_eq!(read_back, expected_data);
     }
 
-    res.commit(None).unwrap();
+    writer.commit(None).unwrap();
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
@@ -198,23 +207,31 @@ fn streaming_resource_commit_behavior(
 
     let key = scope.key("commit.bin");
 
-    let res = scope.store().acquire_resource(&key, None).unwrap();
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+    let reader = writer.reader();
 
     let data = vec![0xAB; 4096];
-    res.write_at(0, &data).unwrap();
-    res.wait_range(0..(data.len() as u64)).unwrap();
+    writer.write_at(0, &data).unwrap();
+    reader.wait_range(0..(data.len() as u64)).unwrap();
 
-    let read_back = read_bytes(&res, 0, data.len());
+    let read_back = read_bytes(&reader, 0, data.len());
     assert_eq!(read_back, data);
 
     if explicit_commit {
-        res.commit(None).unwrap();
+        let committed = writer.commit(None).unwrap();
+
+        let read_back_again = read_bytes(&committed, 0, data.len());
+        assert_eq!(read_back_again, data);
+
+        drop(reader);
+        drop(committed);
+    } else {
+        let read_back_again = read_bytes(&reader, 0, data.len());
+        assert_eq!(read_back_again, data);
+
+        drop(reader);
+        drop(writer);
     }
-
-    let read_back_again = read_bytes(&res, 0, data.len());
-    assert_eq!(read_back_again, data);
-
-    drop(res);
 
     if explicit_commit {
         let res_reopened = scope.store().open_resource(&key, None).unwrap();
@@ -246,20 +263,22 @@ fn streaming_resource_zero_length_operations(
 
     let key = scope.key("zero.bin");
 
-    let res = scope.store().acquire_resource(&key, None).unwrap();
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+    let reader = writer.reader();
 
     let data = vec![0xCC; 2048];
-    res.write_at(base_offset, &data).unwrap();
-    res.wait_range(base_offset..(base_offset + data.len() as u64))
+    writer.write_at(base_offset, &data).unwrap();
+    reader
+        .wait_range(base_offset..(base_offset + data.len() as u64))
         .unwrap();
 
-    let zero_read = read_bytes(&res, base_offset, 0);
+    let zero_read = read_bytes(&reader, base_offset, 0);
     assert!(zero_read.is_empty());
 
-    res.write_at(base_offset + 100, &[]).unwrap();
+    writer.write_at(base_offset + 100, &[]).unwrap();
 
-    let read_back = read_bytes(&res, base_offset, data.len());
+    let read_back = read_bytes(&reader, base_offset, data.len());
     assert_eq!(read_back, data);
 
-    res.commit(None).unwrap();
+    writer.commit(None).unwrap();
 }

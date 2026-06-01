@@ -616,10 +616,10 @@ fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
             if frame_end <= frame_start {
                 continue;
             }
-            let mut frame_sum_abs = 0.0_f64;
-            for &sample in &samples[frame_start..frame_end] {
-                frame_sum_abs += f64::from(sample.abs());
-            }
+            let frame_sum_abs: f64 = samples[frame_start..frame_end]
+                .iter()
+                .map(|&sample| f64::from(sample.abs()))
+                .sum();
             let frame_mean_abs = frame_sum_abs / channels_f64;
             window_sum_abs += frame_mean_abs;
             window_count = window_count.saturating_add(1);

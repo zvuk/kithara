@@ -72,7 +72,7 @@ fn analyze_file(
     }
     impl V<'_> {
         fn check(&mut self, body: &Block, line: usize, kind: &str) {
-            let stmt_count = body.stmts.len();
+            let stmt_count = count_significant_stmts(body);
             let threshold = match kind {
                 "while" => self.cfg.while_stmt_threshold,
                 "loop" => self.cfg.loop_stmt_threshold,
@@ -104,6 +104,42 @@ fn analyze_file(
     }
     let mut v = V { rel, cfg, sup, out };
     v.visit_file(file);
+}
+
+/// Count statements that contribute to loop-body "fatness". A
+/// `let x = <plain expr>;` binding is sequential data plumbing (build a
+/// value, read a slice, clone a handle) — a readable pipeline step, not
+/// interleaved complexity. Only control-flow-bearing bindings and
+/// non-binding statements (calls, assignments, expression statements)
+/// count. Mirrors the `loop_allocation` / `guard_cascade` philosophy:
+/// measure the real problem (distinct actions + control flow), not
+/// surface length.
+fn count_significant_stmts(body: &Block) -> usize {
+    body.stmts
+        .iter()
+        .filter(|stmt| match stmt {
+            Stmt::Local(loc) => loc
+                .init
+                .as_ref()
+                .is_some_and(|init| expr_has_control_flow(&init.expr)),
+            _ => true,
+        })
+        .count()
+}
+
+fn expr_has_control_flow(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::If(_)
+            | Expr::Match(_)
+            | Expr::While(_)
+            | Expr::ForLoop(_)
+            | Expr::Loop(_)
+            | Expr::Block(_)
+            | Expr::Unsafe(_)
+            | Expr::TryBlock(_)
+            | Expr::Closure(_)
+    )
 }
 
 fn count_nested_ctrl(body: &Block) -> usize {
@@ -196,5 +232,50 @@ mod tests {
                        if *state > 100 { break; } \
                    } }";
         assert_eq!(count(src), 1);
+    }
+
+    #[test]
+    fn sequential_plumbing_lets_not_counted() {
+        // A pipeline of data-plumbing `let` bindings + one guard is a
+        // readable sequential loop, not a fat body.
+        let src = "fn x(items: &[i32]) { \
+                   for it in items { \
+                       let a = compute_a(it); \
+                       let b = compute_b(it); \
+                       let c = combine(a, b); \
+                       let d = wrap(c); \
+                       let e = serialize(d); \
+                       let f = e.len(); \
+                       if f == 0 { continue; } \
+                   } }";
+        assert_eq!(count(src), 0, "plumbing-let pipeline must NOT flag");
+    }
+
+    #[test]
+    fn many_call_statements_still_flagged() {
+        // Distinct actions (calls / assignments) ARE fatness — a tick body
+        // with too many of them plus control flow still flags.
+        let src = "fn x(items: &[i32]) { \
+                   for it in items { \
+                       do_a(it); do_b(it); do_c(it); do_d(it); do_e(it); do_f(it); \
+                       if done(it) { break; } \
+                   } }";
+        assert_eq!(count(src), 1, "many call-statements + control must flag");
+    }
+
+    #[test]
+    fn control_bearing_let_counts() {
+        // `let x = match {..}` carries control flow and counts.
+        let src = "fn x(items: &[i32]) { \
+                   for it in items { \
+                       let a = match it { 0 => 1, _ => 2 }; \
+                       let b = match it { 0 => 1, _ => 2 }; \
+                       let c = match it { 0 => 1, _ => 2 }; \
+                       let d = match it { 0 => 1, _ => 2 }; \
+                       let e = match it { 0 => 1, _ => 2 }; \
+                       let f = match it { 0 => 1, _ => 2 }; \
+                       use_all(a, b, c, d, e, f); \
+                   } }";
+        assert_eq!(count(src), 1, "control-bearing let-bindings must count");
     }
 }

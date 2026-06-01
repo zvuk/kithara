@@ -8,9 +8,8 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::{TestTempDir, cancel_token, hls_server::TestServer, temp_dir};
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use tokio_util::sync::CancellationToken;
+use kithara_integration_tests::{TestTempDir, hls_server::TestServer, rt_cancel, temp_dir};
+use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 /// Diagnostic version with detailed logging and safety limits
@@ -21,7 +20,7 @@ use tracing::info;
     env(KITHARA_HANG_TIMEOUT_SECS = "1"),
     tracing("kithara_hls=debug,kithara_stream=debug,kithara_decode=debug")
 )]
-async fn debug_sequential_read(temp_dir: TestTempDir, cancel_token: CancellationToken) {
+async fn debug_sequential_read(temp_dir: TestTempDir, rt_cancel: CancellationToken) {
     info!("=== Starting debug_sequential_read test ===");
 
     let server = TestServer::new().await;
@@ -33,8 +32,8 @@ async fn debug_sequential_read(temp_dir: TestTempDir, cancel_token: Cancellation
 
     let config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(cancel_token)
-        .initial_abr_mode(AbrMode::Manual(1))
+        .cancel(rt_cancel)
+        .initial_abr_mode(AbrMode::manual(1))
         .events(bus)
         .build();
 

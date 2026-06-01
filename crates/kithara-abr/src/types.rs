@@ -1,5 +1,6 @@
 pub use kithara_events::{
-    AbrMode, AbrProgressSnapshot, AbrReason, BandwidthSource, VariantDuration, VariantInfo,
+    AbrMode, AbrProgressSnapshot, AbrReason, BandwidthSource, BoundsError, VariantDuration,
+    VariantIndex, VariantInfo,
 };
 
 pub use crate::{
@@ -11,16 +12,16 @@ pub use crate::{
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::AbrMode;
+    use super::{AbrMode, VariantIndex};
 
     #[kithara::test]
     #[case(AbrMode::Auto(None))]
-    #[case(AbrMode::Auto(Some(0)))]
-    #[case(AbrMode::Auto(Some(5)))]
-    #[case(AbrMode::Auto(Some(42)))]
-    #[case(AbrMode::Manual(0))]
-    #[case(AbrMode::Manual(1))]
-    #[case(AbrMode::Manual(99))]
+    #[case(AbrMode::Auto(Some(VariantIndex::new(0))))]
+    #[case(AbrMode::Auto(Some(VariantIndex::new(5))))]
+    #[case(AbrMode::Auto(Some(VariantIndex::new(42))))]
+    #[case(AbrMode::Manual(VariantIndex::new(0)))]
+    #[case(AbrMode::Manual(VariantIndex::new(1)))]
+    #[case(AbrMode::Manual(VariantIndex::new(99)))]
     fn abr_mode_usize_round_trip(#[case] mode: AbrMode) {
         let encoded: usize = mode.into();
         let decoded: AbrMode = encoded.into();
@@ -29,7 +30,7 @@ mod tests {
 
     #[kithara::test]
     fn manual_and_auto_encode_differently() {
-        let manual: usize = AbrMode::Manual(0).into();
+        let manual: usize = AbrMode::Manual(VariantIndex::new(0)).into();
         let auto: usize = AbrMode::Auto(None).into();
         assert_ne!(manual, auto);
     }

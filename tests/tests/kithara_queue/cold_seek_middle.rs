@@ -12,11 +12,11 @@ use kithara_integration_tests::{
     fixture_protocol::DelayRule, kithara, offline::OfflineSession, temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::CancellationToken;
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tokio::time::sleep;
-use tokio_util::sync::CancellationToken;
 
 fn install_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
@@ -106,7 +106,7 @@ fn build_queue_with_tick(
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            CancellationToken::new(),
+            CancellationToken::default(),
         ))
         .build(),
     );
@@ -167,7 +167,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            CancellationToken::new(),
+            CancellationToken::default(),
         ))
         .build(),
     );

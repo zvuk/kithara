@@ -1,6 +1,4 @@
 use std::sync::PoisonError;
-#[cfg(any(test, feature = "probe"))]
-use std::sync::atomic::Ordering;
 
 use kithara_events::{QueueEvent, TrackId, TrackStatus};
 
@@ -63,15 +61,7 @@ impl Queue {
             self.player.replace_item(index, resource);
             self.set_status(id, TrackStatus::Loaded);
             if self.should_autoplay
-                && self
-                    .autoplay_target
-                    .compare_exchange(
-                        id.as_u64(),
-                        Self::NO_ARMED_TRACK,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    )
-                    .is_ok()
+                && self.autoplay_target.disarm_if_matches(id)
                 && let Err(err) = self.select(id, Transition::None)
             {
                 tracing::warn!(id = id.as_u64(), %err, "autoplay select failed");
@@ -197,12 +187,7 @@ impl Queue {
             .insert(id, TrackSource::Uri(url));
         self.player.reserve_slots(self.len());
         if self.should_autoplay {
-            let _ = self.autoplay_target.compare_exchange(
-                Self::NO_ARMED_TRACK,
-                id.as_u64(),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            );
+            let _ = self.autoplay_target.arm_if_disarmed(id);
         }
         self.bus.publish(QueueEvent::TrackAdded { id, index });
         id

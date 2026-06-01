@@ -8,7 +8,7 @@ use super::{
     library::view_library,
     status::view_status_bar,
     styles::{shell_style, vertical_divider},
-    tokens::StudioSize,
+    tokens::studio_size,
     topbar::view_topbar,
 };
 use crate::gui::{app::Kithara, message::Message};
@@ -21,7 +21,7 @@ pub(crate) fn view_dj_studio(state: &Kithara) -> Element<'_, Message> {
             view_topbar(p),
             row![
                 view_deck(state),
-                vertical_divider(StudioSize::DIVIDER, f32::INFINITY, p.line),
+                vertical_divider(studio_size::DIVIDER, f32::INFINITY, p.line),
                 view_library(state),
             ]
             .width(Length::Fill)

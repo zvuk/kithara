@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use kithara_abr::{AbrController, AbrMode, AbrSettings, AbrState, ThroughputEstimator};
-use kithara_events::{BandwidthSource, VariantDuration, VariantInfo};
+use kithara_events::{BandwidthSource, VariantDuration, VariantIndex, VariantInfo};
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
@@ -32,7 +32,7 @@ fn variants(bitrates: &[u64]) -> Vec<VariantInfo> {
         .iter()
         .enumerate()
         .map(|(i, bps)| VariantInfo {
-            variant_index: i,
+            variant_index: VariantIndex::new(i),
             bandwidth_bps: Some(*bps),
             duration: VariantDuration::Unknown,
             name: None,
@@ -43,7 +43,7 @@ fn variants(bitrates: &[u64]) -> Vec<VariantInfo> {
 }
 
 fn new_peer(bitrates: &[u64]) -> (Arc<AbrState>, Arc<dyn kithara_abr::Abr>) {
-    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn kithara_abr::Abr> = Arc::new(TestPeer {
         state: Arc::clone(&state),
         variants: variants(bitrates),
@@ -87,9 +87,9 @@ async fn three_peers_maintain_independent_variant_indices() {
         );
     }
 
-    let v0 = s0.current_variant_index();
-    let v1 = s1.current_variant_index();
-    let v2 = s2.current_variant_index();
+    let v0 = s0.current_variant_index().get();
+    let v1 = s1.current_variant_index().get();
+    let v2 = s2.current_variant_index().get();
 
     assert!(v0 < 2, "peer0: variant out of range: {v0}");
     assert!(v1 < 4, "peer1: variant out of range: {v1}");

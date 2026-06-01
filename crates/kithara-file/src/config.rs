@@ -4,8 +4,8 @@ use bon::Builder;
 use kithara_assets::{AssetStore, StoreOptions};
 use kithara_events::EventBus;
 use kithara_net::Headers;
+use kithara_platform::CancellationToken;
 use kithara_stream::dl::Downloader;
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 /// Source of a file stream: either a remote URL or a local path.
@@ -140,7 +140,7 @@ mod tests {
     }
 
     fn apply_cancel(mut config: FileConfig) -> FileConfig {
-        config.cancel = Some(CancellationToken::new());
+        config.cancel = Some(CancellationToken::default());
         config
     }
 
@@ -183,7 +183,7 @@ mod tests {
     #[kithara::test]
     fn test_builder_chain() {
         let store = StoreOptions::default();
-        let cancel = CancellationToken::new();
+        let cancel = CancellationToken::default();
         let bus = EventBus::new(32);
 
         let config = FileConfig::for_src(test_src())

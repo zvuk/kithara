@@ -1,16 +1,16 @@
 #![forbid(unsafe_code)]
 
-use std::fmt;
+use std::{fmt, sync::Arc};
 
+use arc_swap::ArcSwapOption;
 use kithara_bufpool::{BytePool, PooledOwned};
-use kithara_platform::Mutex;
+use kithara_platform::{CancellationToken, Mutex};
 use rangemap::RangeSet;
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     StorageError, StorageResult,
     backend::{
-        resource::Resource,
+        resource::ResourceWriter,
         traits::{Driver, DriverState},
     },
 };
@@ -43,6 +43,8 @@ pub(super) struct MemState {
 /// `path()` returns `None`.
 pub struct MemDriver {
     pub(super) state: Mutex<MemState>,
+    /// Immutable committed snapshot for the lock-free read fast path.
+    pub(super) committed: ArcSwapOption<Vec<u8>>,
 }
 
 impl fmt::Debug for MemDriver {
@@ -51,6 +53,7 @@ impl fmt::Debug for MemDriver {
         f.debug_struct("MemDriver")
             .field("len", &state.len)
             .field("capacity", &state.buf.capacity())
+            .field("committed", &self.committed.load().is_some())
             .finish()
     }
 }
@@ -61,18 +64,29 @@ impl Driver for MemDriver {
     fn open(opts: MemOptions) -> StorageResult<(Self, DriverState)> {
         let mut buf = BytePool::default().get();
 
-        let (len, init_state) = if let Some(data) = opts.initial_data {
+        let (len, init_state, committed) = if let Some(data) = opts.initial_data {
             let data_len = data.len();
             if data_len > 0 {
                 buf.ensure_len(data_len)
                     .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
                 buf[..data_len].copy_from_slice(&data);
             }
-            let len = data_len as u64;
+            let len = u64::try_from(data_len).map_err(|err| {
+                StorageError::Failed(format!(
+                    "memory open: initial len {data_len} does not fit u64: {err}"
+                ))
+            })?;
             let mut available = RangeSet::new();
             if len > 0 {
                 available.insert(0..len);
             }
+            // Zero-length committed data publishes no snapshot, matching the
+            // mmap `Empty` contract (`committed_len()` → `None`).
+            let committed = if data.is_empty() {
+                ArcSwapOption::empty()
+            } else {
+                ArcSwapOption::from(Some(Arc::new(data)))
+            };
             (
                 len,
                 DriverState {
@@ -80,17 +94,19 @@ impl Driver for MemDriver {
                     is_committed: true,
                     final_len: Some(len),
                 },
+                committed,
             )
         } else {
             if opts.capacity > 0 {
                 buf.ensure_len(opts.capacity)
                     .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
             }
-            (0, DriverState::default())
+            (0, DriverState::default(), ArcSwapOption::empty())
         };
 
         let driver = Self {
             state: Mutex::new(MemState { buf, len }),
+            committed,
         };
 
         Ok((driver, init_state))
@@ -99,9 +115,9 @@ impl Driver for MemDriver {
 
 /// In-memory storage resource.
 ///
-/// Type alias for [`Resource<MemDriver>`]. Drop-in replacement for
+/// Type alias for [`ResourceWriter<MemDriver>`]. Drop-in replacement for
 /// [`MmapResource`](crate::MmapResource) on platforms without filesystem access.
-pub type MemResource = Resource<MemDriver>;
+pub type MemResource = ResourceWriter<MemDriver>;
 
 impl MemResource {
     /// Create a new empty in-memory resource.

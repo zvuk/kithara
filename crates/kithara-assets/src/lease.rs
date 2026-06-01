@@ -9,22 +9,24 @@ use std::{
 };
 
 use dashmap::DashMap;
-use kithara_platform::Mutex;
-use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, Mutex};
+use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 
 use crate::{
-    AssetResourceState, base::Assets, error::AssetsResult, evict::ByteRecorder,
-    identity::RequestIdentity, index::PinsIndex, key::ResourceKey,
+    AssetResourceState,
+    acquisition::{AcquisitionResult, RawWriteHandle, ReadSide, WriteSide},
+    base::Assets,
+    error::AssetsResult,
+    evict::ByteRecorder,
+    identity::RequestIdentity,
+    index::PinsIndex,
+    key::ResourceKey,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AccessMode {
-    Read,
-    Write,
-}
-
 type RemoveFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
+
+/// Pin guard + removal channel + byte recorder resolved for one resource key.
+type LeaseBindings = (LeaseGuard, Option<RemoveFn>, Option<Arc<dyn ByteRecorder>>);
 
 /// Shared registry of live (non-dropped) lease resources keyed by
 /// `ResourceKey` (which carries its own `asset_root`). Per-shard locks
@@ -200,127 +202,35 @@ where
     }
 }
 
-/// Resource wrapper that combines lease guard with byte recording on commit.
-#[derive(Clone)]
-pub struct LeaseResource<R: ResourceExt, L> {
-    mode: AccessMode,
-    _lease: L,
-    byte_recorder: Option<Arc<dyn ByteRecorder>>,
-    drop_token: Option<Arc<()>>,
-    live: Option<Arc<LiveResource>>,
+/// Cleanup hook for an abandoned write handle. Lives as a field so
+/// [`LeaseWriter`] has no `Drop` impl (its `commit`/`fail` partially move
+/// `inner` out, which a `Drop` type forbids). If a writer is dropped without a
+/// clean `commit`, this removes the partial resource — unless the resource was
+/// committed in the meantime (checked via the shared [`LiveResource`] mirror).
+struct WriterCleanup {
     remove: Option<RemoveFn>,
     resource_key: Option<ResourceKey>,
-    inner: R,
+    drop_token: Option<Arc<()>>,
+    live: Option<Arc<LiveResource>>,
+    armed: bool,
 }
 
-impl<R, L> Debug for LeaseResource<R, L>
-where
-    R: ResourceExt + Debug,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LeaseResource")
-            .field("inner", &self.inner)
-            .field("mode", &self.mode)
-            .field("key", &self.resource_key)
-            .finish_non_exhaustive()
+impl WriterCleanup {
+    fn disarm(&mut self) {
+        self.armed = false;
     }
 }
 
-impl<R: ResourceExt, L> LeaseResource<R, L> {
-    fn write_guard(&self, op: &str) {
-        assert!(
-            matches!(self.mode, AccessMode::Write),
-            "{op} requires acquire_resource*(); handle was opened via open_resource*()"
-        );
-    }
-}
-
-impl<R, L> LeaseResource<crate::cache::CachedResource<R>, L>
-where
-    R: ResourceExt + Clone + Send + Sync + Debug + 'static,
-{
-    /// Pin the underlying cached resource so it is never evicted.
-    pub fn retain(self) -> Self {
-        self.inner.set_retained();
-        self
-    }
-}
-
-impl<R, L> ResourceExt for LeaseResource<R, L>
-where
-    R: ResourceExt + Send + Sync + Clone + Debug + 'static,
-    L: Send + Sync + Clone + 'static,
-{
-    fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        self.write_guard("commit");
-        self.inner.commit(final_len)?;
-        if let Some(live) = &self.live {
-            live.set(AssetResourceState::from(self.inner.status()));
-        }
-
-        if let Some(ref recorder) = self.byte_recorder
-            && let Some(asset_root) = self.resource_key.as_ref().and_then(ResourceKey::asset_root)
-            && let Some(path) = self.inner.path()
-            && let Ok(metadata) = fs::metadata(path)
-            && metadata.is_file()
-        {
-            recorder.record_bytes(asset_root, metadata.len());
-        }
-
-        Ok(())
-    }
-
-    fn fail(&self, reason: String) {
-        self.write_guard("fail");
-        self.inner.fail(reason.clone());
-        if let Some(live) = &self.live {
-            live.set(AssetResourceState::Failed(reason));
-        }
-    }
-
-    fn reactivate(&self) -> StorageResult<()> {
-        self.write_guard("reactivate");
-        self.inner.reactivate()?;
-        if let Some(live) = &self.live {
-            live.set(AssetResourceState::Active);
-        }
-        Ok(())
-    }
-
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.write_guard("write_at");
-        self.inner.write_at(offset, data)
-    }
-
-    delegate::delegate! {
-        to self.inner {
-            fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-            fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
-            fn path(&self) -> Option<&Path>;
-            fn len(&self) -> Option<u64>;
-            fn status(&self) -> ResourceStatus;
-            fn contains_range(&self, range: Range<u64>) -> bool;
-            fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
-        }
-    }
-}
-
-impl<R, L> Drop for LeaseResource<R, L>
-where
-    R: ResourceExt,
-{
+impl Drop for WriterCleanup {
     fn drop(&mut self) {
-        if !matches!(self.mode, AccessMode::Write) {
+        if !self.armed {
             return;
         }
-
-        if !matches!(
-            self.inner.status(),
-            ResourceStatus::Active | ResourceStatus::Cancelled | ResourceStatus::Failed(_)
-        ) {
+        if let Some(live) = &self.live
+            && matches!(live.snapshot(), AssetResourceState::Committed { .. })
+        {
             return;
         }
-
         if let (Some(remove), Some(key)) = (&self.remove, &self.resource_key) {
             if self
                 .drop_token
@@ -334,21 +244,215 @@ where
     }
 }
 
+/// Writer (Pending) phase of a leased resource. Pins the asset while alive,
+/// records bytes + updates the live mirror on `commit`, and removes the partial
+/// resource if dropped without committing.
+pub struct LeaseWriter<W: WriteSide, L> {
+    inner: W,
+    _lease: L,
+    byte_recorder: Option<Arc<dyn ByteRecorder>>,
+    /// Owns the removal channel, resource key, drop-token and live mirror —
+    /// the single home for those, also read by `commit`/`reader`/`fail`.
+    cleanup: WriterCleanup,
+}
+
+/// Reader (Ready) phase of a leased resource. Pins the asset while any clone is
+/// alive; read-only. Carries the write-side machinery (`byte_recorder`,
+/// `remove`) so [`reactivate`](ReadSide::reactivate) can rebuild a full writer.
+pub struct LeaseReader<R: ReadSide, L> {
+    inner: R,
+    lease: L,
+    byte_recorder: Option<Arc<dyn ByteRecorder>>,
+    remove: Option<RemoveFn>,
+    live: Option<Arc<LiveResource>>,
+    resource_key: Option<ResourceKey>,
+}
+
+impl<R, L> Clone for LeaseReader<R, L>
+where
+    R: ReadSide,
+    L: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            lease: self.lease.clone(),
+            byte_recorder: self.byte_recorder.clone(),
+            remove: self.remove.clone(),
+            live: self.live.clone(),
+            resource_key: self.resource_key.clone(),
+        }
+    }
+}
+
+impl<W: WriteSide, L> Debug for LeaseWriter<W, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LeaseWriter")
+            .field("inner", &self.inner)
+            .field("key", &self.cleanup.resource_key)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R: ReadSide, L> Debug for LeaseReader<R, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LeaseReader")
+            .field("inner", &self.inner)
+            .field("key", &self.resource_key)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R, L> LeaseReader<crate::cache::CachedReader<R>, L>
+where
+    R: ReadSide,
+{
+    /// Pin the underlying cached resource so it is never evicted.
+    pub fn retain(self) -> Self {
+        self.inner.set_retained();
+        self
+    }
+}
+
+impl<W, L> LeaseWriter<crate::cache::CachedWriter<W>, L>
+where
+    W: WriteSide,
+{
+    /// Pin the underlying cached resource so it is never evicted.
+    pub fn retain(self) -> Self {
+        self.inner.set_retained();
+        self
+    }
+}
+
+impl<W, L> WriteSide for LeaseWriter<W, L>
+where
+    W: WriteSide,
+    L: Send + Sync + Clone + 'static,
+{
+    type Reader = LeaseReader<W::Reader, L>;
+
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.inner.write_at(offset, data)
+    }
+
+    fn reader(&self) -> LeaseReader<W::Reader, L> {
+        LeaseReader {
+            inner: self.inner.reader(),
+            lease: self._lease.clone(),
+            byte_recorder: self.byte_recorder.clone(),
+            remove: self.cleanup.remove.clone(),
+            live: self.cleanup.live.clone(),
+            resource_key: self.cleanup.resource_key.clone(),
+        }
+    }
+
+    fn raw_write_handle(&self) -> RawWriteHandle {
+        self.inner.raw_write_handle()
+    }
+
+    fn commit(mut self, final_len: Option<u64>) -> StorageResult<LeaseReader<W::Reader, L>> {
+        let reader_inner = self.inner.commit(final_len)?;
+        if let Some(live) = &self.cleanup.live {
+            live.set(AssetResourceState::from(reader_inner.status()));
+        }
+        if let Some(ref recorder) = self.byte_recorder
+            && let Some(asset_root) = self
+                .cleanup
+                .resource_key
+                .as_ref()
+                .and_then(ResourceKey::asset_root)
+            && let Some(path) = reader_inner.path()
+            && let Ok(metadata) = fs::metadata(path)
+            && metadata.is_file()
+        {
+            recorder.record_bytes(asset_root, metadata.len());
+        }
+        self.cleanup.disarm();
+        Ok(LeaseReader {
+            inner: reader_inner,
+            lease: self._lease.clone(),
+            byte_recorder: self.byte_recorder.clone(),
+            remove: self.cleanup.remove.clone(),
+            live: self.cleanup.live.clone(),
+            resource_key: self.cleanup.resource_key.clone(),
+        })
+    }
+
+    fn fail(mut self, reason: String) {
+        self.inner.fail(reason.clone());
+        if let Some(live) = &self.cleanup.live {
+            live.set(AssetResourceState::Failed(reason));
+        }
+        // Explicit failure is a *terminal, observable* `Failed` state — disarm
+        // the abandon-cleanup so the resource is not removed out from under a
+        // `resource_state` query. Only a writer dropped WITHOUT commit/fail
+        // (silent abandonment) triggers the partial-resource removal.
+        self.cleanup.disarm();
+    }
+}
+
+impl<R, L> ReadSide for LeaseReader<R, L>
+where
+    R: ReadSide,
+    L: Send + Sync + Clone + 'static,
+{
+    type Writer = LeaseWriter<R::Writer, L>;
+
+    fn reactivate(self) -> StorageResult<LeaseWriter<R::Writer, L>> {
+        let writer_inner = self.inner.reactivate()?;
+        if let Some(live) = &self.live {
+            live.set(AssetResourceState::Active);
+        }
+        Ok(LeaseWriter {
+            inner: writer_inner,
+            _lease: self.lease,
+            byte_recorder: self.byte_recorder,
+            cleanup: WriterCleanup {
+                remove: self.remove,
+                resource_key: self.resource_key,
+                drop_token: Some(Arc::new(())),
+                live: self.live,
+                armed: true,
+            },
+        })
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+            fn path(&self) -> Option<&Path>;
+            fn len(&self) -> Option<u64>;
+            fn status(&self) -> ResourceStatus;
+            fn contains_range(&self, range: Range<u64>) -> bool;
+            fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
+        }
+    }
+}
+
 impl<A> Assets for LeaseAssets<A>
 where
     A: Assets,
 {
+    type ActiveRes = LeaseWriter<A::ActiveRes, LeaseGuard>;
     type Context = A::Context;
     type IndexRes = A::IndexRes;
-    type Res = LeaseResource<A::Res, LeaseGuard>;
+    type ReadyRes = LeaseReader<A::ReadyRes, LeaseGuard>;
 
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
-        self.wrap_resource(key, identity, ctx, AccessMode::Write)
+    ) -> AssetsResult<AcquisitionResult<Self::ActiveRes, Self::ReadyRes>> {
+        match self.inner.acquire_resource_with_ctx(key, identity, ctx)? {
+            AcquisitionResult::Pending(w) => {
+                Ok(AcquisitionResult::Pending(self.wrap_writer(key, w)?))
+            }
+            AcquisitionResult::Ready(r) => Ok(AcquisitionResult::Ready(self.wrap_reader(key, r)?)),
+        }
     }
 
     fn open_resource_with_ctx(
@@ -356,8 +460,9 @@ where
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
-        self.wrap_resource(key, identity, ctx, AccessMode::Read)
+    ) -> AssetsResult<Self::ReadyRes> {
+        let inner = self.inner.open_resource_with_ctx(key, identity, ctx)?;
+        self.wrap_reader(key, inner)
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
@@ -388,57 +493,15 @@ impl<A> LeaseAssets<A>
 where
     A: Assets,
 {
-    /// Open a resource through the explicit mutable-access alias.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the inner store cannot open the resource.
-    pub fn acquire_resource(
-        &self,
-        key: &ResourceKey,
-        identity: Option<&RequestIdentity>,
-    ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
-        self.acquire_resource_with_ctx(key, identity, None)
-    }
-
-    /// Open a resource with context through the explicit mutable-access alias.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the inner store cannot open the resource.
-    pub fn acquire_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        identity: Option<&RequestIdentity>,
-        ctx: Option<A::Context>,
-    ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
-        self.wrap_resource(key, identity, ctx, AccessMode::Write)
-    }
-
-    fn wrap_opened_resource(
-        &self,
-        key: &ResourceKey,
-        inner: A::Res,
-        mode: AccessMode,
-    ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
-        let live = self.open_live_resource(key, inner.status());
-
+    /// Resolve the pin guard + removal channel + byte recorder for `key`.
+    /// Absolute keys (and the bypass capability) yield a no-op lease.
+    fn lease_for(&self, key: &ResourceKey) -> AssetsResult<LeaseBindings> {
         let pin = (self.is_active() && !key.is_absolute())
             .then(|| key.asset_root())
             .flatten();
         let Some(asset_root) = pin else {
-            return Ok(LeaseResource {
-                inner,
-                mode,
-                _lease: LeaseGuard { inner: None },
-                byte_recorder: None,
-                drop_token: matches!(mode, AccessMode::Write).then(|| Arc::new(())),
-                live: Some(live),
-                remove: None,
-                resource_key: Some(key.clone()),
-            });
+            return Ok((LeaseGuard { inner: None }, None, None));
         };
-
         let lease = self.pin(asset_root)?;
         let remove: RemoveFn = {
             let inner = Arc::clone(&self.inner);
@@ -446,31 +509,45 @@ where
                 let _ = inner.remove_resource(key);
             })
         };
+        Ok((lease, Some(remove), self.byte_recorder.clone()))
+    }
 
-        Ok(LeaseResource {
+    fn wrap_writer(
+        &self,
+        key: &ResourceKey,
+        inner: A::ActiveRes,
+    ) -> AssetsResult<LeaseWriter<A::ActiveRes, LeaseGuard>> {
+        let live = self.open_live_resource(key, ResourceStatus::Active);
+        let (lease, remove, byte_recorder) = self.lease_for(key)?;
+        Ok(LeaseWriter {
             inner,
-            mode,
             _lease: lease,
-            byte_recorder: self.byte_recorder.clone(),
-            drop_token: matches!(mode, AccessMode::Write).then(|| Arc::new(())),
-            live: Some(live),
-            remove: Some(remove),
-            resource_key: Some(key.clone()),
+            byte_recorder,
+            cleanup: WriterCleanup {
+                remove,
+                resource_key: Some(key.clone()),
+                drop_token: Some(Arc::new(())),
+                live: Some(live),
+                armed: true,
+            },
         })
     }
 
-    fn wrap_resource(
+    fn wrap_reader(
         &self,
         key: &ResourceKey,
-        identity: Option<&RequestIdentity>,
-        ctx: Option<A::Context>,
-        mode: AccessMode,
-    ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
-        let inner = match mode {
-            AccessMode::Read => self.inner.open_resource_with_ctx(key, identity, ctx)?,
-            AccessMode::Write => self.inner.acquire_resource_with_ctx(key, identity, ctx)?,
-        };
-        self.wrap_opened_resource(key, inner, mode)
+        inner: A::ReadyRes,
+    ) -> AssetsResult<LeaseReader<A::ReadyRes, LeaseGuard>> {
+        let live = self.open_live_resource(key, inner.status());
+        let (lease, remove, byte_recorder) = self.lease_for(key)?;
+        Ok(LeaseReader {
+            inner,
+            lease,
+            byte_recorder,
+            remove,
+            live: Some(live),
+            resource_key: Some(key.clone()),
+        })
     }
 }
 
@@ -530,17 +607,21 @@ mod tests {
     fn make_pins_disk(dir: &Path) -> PinsIndex {
         let path = dir.join("_index").join("pins.bin");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        PinsIndex::with_persist_at(path, CancellationToken::new(), &crate::BytePool::default())
+        PinsIndex::with_persist_at(
+            path,
+            CancellationToken::default(),
+            &crate::BytePool::default(),
+        )
     }
 
     fn make_lease(dir: &Path) -> LeaseAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(
             dir,
-            CancellationToken::new(),
+            CancellationToken::default(),
             &crate::BytePool::default(),
         ));
         let pins = make_pins_disk(dir);
-        LeaseAssets::new(disk, CancellationToken::new(), pins)
+        LeaseAssets::new(disk, CancellationToken::default(), pins)
     }
 
     fn load_persisted_pins(dir: &Path) -> HashSet<String> {
@@ -548,8 +629,11 @@ mod tests {
         if !path.exists() {
             return HashSet::new();
         }
-        let idx =
-            PinsIndex::with_persist_at(path, CancellationToken::new(), &crate::BytePool::default());
+        let idx = PinsIndex::with_persist_at(
+            path,
+            CancellationToken::default(),
+            &crate::BytePool::default(),
+        );
         idx.snapshot()
     }
 

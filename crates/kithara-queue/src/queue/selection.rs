@@ -5,7 +5,7 @@ use tracing::{debug, warn};
 
 use super::{
     Queue,
-    types::{PendingSelect, Transition},
+    types::{PendingSelect, SelectPhase, Transition},
 };
 use crate::{error::QueueError, track::TrackSource};
 
@@ -14,31 +14,11 @@ impl Queue {
     /// selected id, or `None` when the queue has ended (and
     /// [`RepeatMode::Off`](crate::navigation::RepeatMode::Off) is active).
     pub fn advance_to_next(&self, transition: Transition) -> Option<TrackId> {
-        let len = self.len();
-        loop {
-            let Some(idx) = self.lock_navigation_mut().next(len) else {
-                self.bus.publish(QueueEvent::QueueEnded);
-                return None;
-            };
-            let Some((id, status)) = self
-                .lock_tracks()
-                .get(idx)
-                .map(|e| (e.id, e.status.clone()))
-            else {
-                continue;
-            };
-            if matches!(status, TrackStatus::Cancelled) {
-                debug!(
-                    id = id.as_u64(),
-                    "advance_to_next: skipping cancelled track"
-                );
-                continue;
-            }
-            if let Err(e) = self.select(id, transition) {
-                warn!(id = id.as_u64(), error = %e, "advance_to_next: select failed");
-            }
-            return Some(id);
+        let id = self.next_selectable()?;
+        if let Err(e) = self.select(id, transition) {
+            warn!(id = id.as_u64(), error = %e, "advance_to_next: select failed");
         }
+        Some(id)
     }
 
     /// Synchronous-select counterpart to [`Self::override_pending_select`]:
@@ -50,10 +30,10 @@ impl Queue {
         let stale = {
             let mut p = self.lock_pending_select_mut();
             let result = match *p {
-                Some(prev) if prev.id != applying_id => Some(prev.id),
+                SelectPhase::Pending(prev) if prev.id != applying_id => Some(prev.id),
                 _ => None,
             };
-            *p = None;
+            *p = SelectPhase::Idle;
             result
         };
         if let Some(stale_id) = stale {
@@ -78,6 +58,35 @@ impl Queue {
         }
     }
 
+    /// Walk the navigation cursor forward, skipping entries that vanished
+    /// or are [`TrackStatus::Cancelled`], and return the first selectable
+    /// id. Publishes [`QueueEvent::QueueEnded`] once the cursor runs off
+    /// the end without finding one.
+    fn next_selectable(&self) -> Option<TrackId> {
+        let len = self.len();
+        let selected =
+            std::iter::from_fn(|| self.lock_navigation_mut().next(len)).find_map(|idx| {
+                let (id, status) = self
+                    .lock_tracks()
+                    .get(idx)
+                    .map(|e| (e.id, e.status.clone()))?;
+                match status {
+                    TrackStatus::Cancelled => {
+                        debug!(
+                            id = id.as_u64(),
+                            "advance_to_next: skipping cancelled track"
+                        );
+                        None
+                    }
+                    _ => Some(id),
+                }
+            });
+        if selected.is_none() {
+            self.bus.publish(QueueEvent::QueueEnded);
+        }
+        selected
+    }
+
     /// Replace `pending_select` with a new selection. If the previous
     /// pending track is different from `new`, mark it
     /// [`TrackStatus::Cancelled`] so the in-flight load — when it
@@ -89,10 +98,10 @@ impl Queue {
     pub(super) fn override_pending_select(&self, new: PendingSelect) {
         let mut p = self.lock_pending_select_mut();
         let prev_id = match *p {
-            Some(prev) if prev.id != new.id => Some(prev.id),
+            SelectPhase::Pending(prev) if prev.id != new.id => Some(prev.id),
             _ => None,
         };
-        *p = Some(new);
+        *p = SelectPhase::Pending(new);
         drop(p);
         if let Some(prev_id) = prev_id {
             self.set_status(prev_id, TrackStatus::Cancelled);
@@ -224,8 +233,8 @@ impl Queue {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
                 let result = match *p {
-                    Some(pending) if pending.id == id => {
-                        *p = None;
+                    SelectPhase::Pending(pending) if pending.id == id => {
+                        *p = SelectPhase::Idle;
                         Some(pending.transition)
                     }
                     _ => None,
@@ -330,14 +339,17 @@ mod tests {
         let queue = make_queue();
         let id = queue.append("https://example.com/a.mp3");
         let _ = queue.select(id, Transition::None);
-        let pending = queue
+        let phase = *queue
             .pending_select
             .lock()
-            .expect("BUG: pending_select Mutex is not held across await")
-            .to_owned();
-        let pending = pending.expect("BUG: select stashes pending entry");
-        assert_eq!(pending.id, id);
-        assert_eq!(pending.transition, Transition::None);
+            .expect("BUG: pending_select Mutex is not held across await");
+        match phase {
+            SelectPhase::Pending(pending) => {
+                assert_eq!(pending.id, id);
+                assert_eq!(pending.transition, Transition::None);
+            }
+            SelectPhase::Idle => panic!("BUG: select stashes pending entry"),
+        }
     }
 
     #[kithara::test(tokio)]

@@ -4,11 +4,11 @@ use std::{ops::Range, sync::Arc};
 
 use delegate::delegate;
 use kithara_events::EventBus;
-use kithara_platform::{time::Duration, tokio::sync::Notify};
+use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    MediaInfo, ReadOutcome, SegmentLayout, SharedHooks, Source, SourcePhase, SourceSeekAnchor,
-    StreamResult, Timeline,
+    BoxedHooks, DeferredWake, MediaInfo, ReadOutcome, SegmentLayout, Source, SourcePhase,
+    SourceSeekAnchor, StreamResult, Timeline,
 };
 
 use crate::{
@@ -34,11 +34,11 @@ pub struct HlsSource {
     bus: EventBus,
     hls_peer: Option<Arc<HlsPeer>>,
     peer_handle: Option<kithara_stream::dl::PeerHandle>,
-    /// Reader→peer wake handle. Cloned from the owning [`HlsPeer`] once
-    /// it is bound via [`Self::set_hls_peer`]. Also installed on
-    /// [`HlsCoord::set_peer_wake`] so coord-side methods can wake the
-    /// peer directly.
-    peer_wake: Option<Arc<Notify>>,
+    /// Reader→peer wake handle. Cloned from the owning [`HlsPeer`] once it is
+    /// bound via [`Self::set_hls_peer`], and returned by [`Source::peer_wake`]
+    /// so the reader drivers (`Stream::probe_read` / `read` / `prime_seek_range`
+    /// and the audio FSM) can arm or notify the peer themselves.
+    peer_wake: Option<Arc<DeferredWake>>,
     /// Registry deregistration guard for the app-wide shared store. `Some`
     /// only when an [`HlsStore`](crate::HlsStore) was injected; dropping it
     /// removes this stream's eviction routing entry. `None` for a
@@ -65,9 +65,7 @@ impl HlsSource {
     }
 
     pub(crate) fn set_hls_peer(&mut self, peer: Arc<HlsPeer>) {
-        let wake = peer.reader_wake();
-        self.coord.set_peer_wake(&wake);
-        self.peer_wake = Some(wake);
+        self.peer_wake = Some(peer.reader_wake());
         self.hls_peer = Some(peer);
     }
 
@@ -97,22 +95,21 @@ impl Source for HlsSource {
         self.abr_handle()?.current_variant()
     }
 
-    fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
-        let notify = self.peer_wake.clone()?;
-        Some(Box::new(move || notify.notify_one()))
+    fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
+        self.peer_wake.clone()
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
         Some(self.coord.media_info())
     }
 
-    fn take_reader_hooks(&mut self) -> Option<SharedHooks> {
+    fn take_reader_hooks(&mut self) -> Option<BoxedHooks> {
         let hooks = HlsReaderHooks::new(
             self.bus.clone(),
             Arc::clone(&self.coord),
             self.coord.timeline.seek_epoch_handle(),
         );
-        Some(Arc::new(std::sync::Mutex::new(hooks)))
+        Some(Box::new(hooks))
     }
 
     delegate! {
@@ -124,7 +121,6 @@ impl Source for HlsSource {
             fn timeline(&self) -> Timeline;
             fn phase_at(&self, range: Range<u64>) -> SourcePhase;
             fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
-            fn notify_waiting(&self);
             fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome>;
             fn wait_range(
                 &mut self,
@@ -135,7 +131,6 @@ impl Source for HlsSource {
                 &mut self,
                 position: Duration,
             ) -> StreamResult<Option<SourceSeekAnchor>>;
-            fn set_seek_epoch(&mut self, seek_epoch: u64);
             fn clear_variant_fence(&mut self);
             fn has_variant_change_pending(&self) -> bool;
         }

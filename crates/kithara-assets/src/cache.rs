@@ -1,45 +1,53 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt, num::NonZeroUsize, path::Path, sync::Arc};
+use std::{fmt, num::NonZeroUsize, ops::Range, path::Path, sync::Arc};
 
 use dashmap::DashSet;
 use kithara_platform::Mutex;
-use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
+use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 use lru::LruCache;
 
 use crate::{
     AssetResourceState,
+    acquisition::{AcquisitionResult, RawWriteHandle, ReadSide, WriteSide},
     base::{Assets, Capabilities},
     error::AssetsResult,
     identity::RequestIdentity,
     key::ResourceKey,
 };
 
-/// Resource wrapper returned by [`CachedAssets`].
+/// Writer (Pending) wrapper returned by [`CachedAssets`].
+pub struct CachedWriter<W> {
+    pinned: Arc<DashSet<ResourceKey>>,
+    inner: W,
+    key: ResourceKey,
+}
+
+/// Reader (Ready) wrapper returned by [`CachedAssets`]. Cheap to clone.
 #[derive(Clone)]
-pub struct CachedResource<R> {
+pub struct CachedReader<R> {
     pinned: Arc<DashSet<ResourceKey>>,
     inner: R,
     key: ResourceKey,
 }
 
-impl<R: fmt::Debug> fmt::Debug for CachedResource<R> {
+impl<W: fmt::Debug> fmt::Debug for CachedWriter<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.inner.fmt(f)
     }
 }
 
-impl<R> CachedResource<R> {
-    /// Unpin this resource, making it eligible for LRU eviction.
-    pub fn release(self) -> Self {
-        self.set_released();
-        self
+impl<R: fmt::Debug> fmt::Debug for CachedReader<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
     }
+}
 
-    /// Pin this resource in the LRU cache. It will not be evicted
-    /// until [`release`](Self::release) is called for the same key.
+impl<W> CachedWriter<W> {
+    /// Pin this resource in the LRU cache so it is never evicted, until
+    /// [`CachedReader::release`] is called for the same key.
     pub fn retain(self) -> Self {
-        self.set_retained();
+        self.pinned.insert(self.key.clone());
         self
     }
 
@@ -47,29 +55,81 @@ impl<R> CachedResource<R> {
     pub(crate) fn set_retained(&self) {
         self.pinned.insert(self.key.clone());
     }
+}
 
-    /// Unpin this resource (by-ref, for use inside wrappers).
-    pub(crate) fn set_released(&self) {
+impl<R> CachedReader<R> {
+    /// Unpin this resource, making it eligible for LRU eviction.
+    pub fn release(self) -> Self {
         self.pinned.remove(&self.key);
+        self
+    }
+
+    /// Pin this resource in the LRU cache. It will not be evicted
+    /// until [`release`](Self::release) is called for the same key.
+    pub fn retain(self) -> Self {
+        self.pinned.insert(self.key.clone());
+        self
+    }
+
+    /// Pin this resource in the LRU cache (by-ref, for use inside wrappers).
+    pub(crate) fn set_retained(&self) {
+        self.pinned.insert(self.key.clone());
     }
 }
 
-impl<R: ResourceExt + Clone + Send + Sync + fmt::Debug + 'static> ResourceExt
-    for CachedResource<R>
-{
+impl<W: WriteSide> WriteSide for CachedWriter<W> {
+    type Reader = CachedReader<W::Reader>;
+
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.inner.write_at(offset, data)
+    }
+
+    fn reader(&self) -> CachedReader<W::Reader> {
+        CachedReader {
+            pinned: Arc::clone(&self.pinned),
+            inner: self.inner.reader(),
+            key: self.key.clone(),
+        }
+    }
+
+    fn raw_write_handle(&self) -> RawWriteHandle {
+        self.inner.raw_write_handle()
+    }
+
+    fn commit(self, final_len: Option<u64>) -> StorageResult<CachedReader<W::Reader>> {
+        Ok(CachedReader {
+            pinned: Arc::clone(&self.pinned),
+            inner: self.inner.commit(final_len)?,
+            key: self.key.clone(),
+        })
+    }
+
+    fn fail(self, reason: String) {
+        self.inner.fail(reason);
+    }
+}
+
+impl<R: ReadSide> ReadSide for CachedReader<R> {
+    type Writer = CachedWriter<R::Writer>;
+
+    fn reactivate(self) -> StorageResult<CachedWriter<R::Writer>> {
+        Ok(CachedWriter {
+            pinned: Arc::clone(&self.pinned),
+            inner: self.inner.reactivate()?,
+            key: self.key.clone(),
+        })
+    }
+
     delegate::delegate! {
         to self.inner {
             fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
-            fn wait_range(&self, range: std::ops::Range<u64>) -> StorageResult<WaitOutcome>;
-            fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
-            fn fail(&self, reason: String);
+            fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
             fn path(&self) -> Option<&Path>;
             fn len(&self) -> Option<u64>;
             fn status(&self) -> ResourceStatus;
-            fn reactivate(&self) -> StorageResult<()>;
-            fn contains_range(&self, range: std::ops::Range<u64>) -> bool;
-            fn next_gap(&self, from: u64, limit: u64) -> Option<std::ops::Range<u64>>;
+            fn contains_range(&self, range: Range<u64>) -> bool;
+            fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
         }
     }
 }
@@ -93,14 +153,14 @@ enum CacheEntry<R, I> {
 
 type Cache<R, C, I> = Mutex<LruCache<CacheKey<C>, CacheEntry<R, I>>>;
 type SharedCache<A> =
-    Arc<Cache<<A as Assets>::Res, <A as Assets>::Context, <A as Assets>::IndexRes>>;
+    Arc<Cache<<A as Assets>::ReadyRes, <A as Assets>::Context, <A as Assets>::IndexRes>>;
 type CacheMap<A> = LruCache<
     CacheKey<<A as Assets>::Context>,
-    CacheEntry<<A as Assets>::Res, <A as Assets>::IndexRes>,
+    CacheEntry<<A as Assets>::ReadyRes, <A as Assets>::IndexRes>,
 >;
 type CacheItem<A> = (
     CacheKey<<A as Assets>::Context>,
-    CacheEntry<<A as Assets>::Res, <A as Assets>::IndexRes>,
+    CacheEntry<<A as Assets>::ReadyRes, <A as Assets>::IndexRes>,
 );
 
 /// A decorator that caches opened resources in memory with LRU eviction.
@@ -150,10 +210,10 @@ where
     ) -> Self {
         Self {
             inner,
-            cache: Arc::new(Mutex::new(LruCache::new(capacity))),
-            pinned: Arc::new(DashSet::new()),
             capacity,
             on_invalidated,
+            cache: Arc::new(Mutex::new(LruCache::new(capacity))),
+            pinned: Arc::new(DashSet::new()),
             volatile,
         }
     }
@@ -162,7 +222,7 @@ where
         &self,
         cache: &mut CacheMap<A>,
         key: CacheKey<A::Context>,
-        entry: CacheEntry<A::Res, A::IndexRes>,
+        entry: CacheEntry<A::ReadyRes, A::IndexRes>,
     ) -> Vec<ResourceKey> {
         let mut invalidated = Vec::new();
 
@@ -273,7 +333,7 @@ where
         }
     }
 
-    fn is_protected_resource(entry: &CacheEntry<A::Res, A::IndexRes>) -> bool {
+    fn is_protected_resource(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> bool {
         matches!(
             entry,
             CacheEntry::Resource(res) if matches!(res.status(), ResourceStatus::Active)
@@ -328,11 +388,32 @@ where
         cache.pop(&key).map(|entry| (key, entry))
     }
 
-    fn wrap(&self, key: &ResourceKey, inner: A::Res) -> CachedResource<A::Res> {
-        CachedResource {
+    fn wrap_writer(&self, key: &ResourceKey, inner: A::ActiveRes) -> CachedWriter<A::ActiveRes> {
+        CachedWriter {
             inner,
             key: key.clone(),
             pinned: Arc::clone(&self.pinned),
+        }
+    }
+
+    fn wrap_reader(&self, key: &ResourceKey, inner: A::ReadyRes) -> CachedReader<A::ReadyRes> {
+        CachedReader {
+            inner,
+            key: key.clone(),
+            pinned: Arc::clone(&self.pinned),
+        }
+    }
+
+    /// Wrap an [`AcquisitionResult`] from the inner store in cache wrappers
+    /// (used on the bypass and absolute-key paths where no caching happens).
+    fn wrap_acq(
+        &self,
+        key: &ResourceKey,
+        acq: AcquisitionResult<A::ActiveRes, A::ReadyRes>,
+    ) -> AcquisitionResult<CachedWriter<A::ActiveRes>, CachedReader<A::ReadyRes>> {
+        match acq {
+            AcquisitionResult::Pending(w) => AcquisitionResult::Pending(self.wrap_writer(key, w)),
+            AcquisitionResult::Ready(r) => AcquisitionResult::Ready(self.wrap_reader(key, r)),
         }
     }
 }
@@ -341,18 +422,19 @@ impl<A> Assets for CachedAssets<A>
 where
     A: Assets,
 {
+    type ActiveRes = CachedWriter<A::ActiveRes>;
     type Context = A::Context;
     type IndexRes = A::IndexRes;
-    type Res = CachedResource<A::Res>;
+    type ReadyRes = CachedReader<A::ReadyRes>;
 
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
+    ) -> AssetsResult<AcquisitionResult<Self::ActiveRes, Self::ReadyRes>> {
         if !self.is_active() || key.is_absolute() {
-            return Ok(self.wrap(
+            return Ok(self.wrap_acq(
                 key,
                 self.inner.acquire_resource_with_ctx(key, identity, ctx)?,
             ));
@@ -365,17 +447,34 @@ where
         };
         let mut cache = self.cache.lock_sync();
 
-        if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
-            let res = res.clone();
-            if !matches!(res.status(), ResourceStatus::Committed { .. }) {
-                res.reactivate()?;
+        let hit = match cache.get(&cache_key) {
+            Some(CacheEntry::Resource(reader)) => Some(reader.clone()),
+            _ => None,
+        };
+        if let Some(reader) = hit {
+            if matches!(reader.status(), ResourceStatus::Committed { .. }) {
+                drop(cache);
+                return Ok(AcquisitionResult::Ready(self.wrap_reader(key, reader)));
             }
+            // In-flight slot: reactivate mints a fresh-generation writer; cache
+            // its current-generation reader-view so concurrent opens block on
+            // the new generation's gate. No invalidation — same key, same bytes.
+            let writer = reader.reactivate()?;
+            cache.put(cache_key, CacheEntry::Resource(writer.reader()));
             drop(cache);
-            return Ok(self.wrap(key, res));
+            return Ok(AcquisitionResult::Pending(self.wrap_writer(key, writer)));
         }
 
-        let res = self.inner.acquire_resource_with_ctx(key, identity, ctx)?;
-        let displaced = self.cache_entry(&mut cache, cache_key, CacheEntry::Resource(res.clone()));
+        let acq = self.inner.acquire_resource_with_ctx(key, identity, ctx)?;
+        let reader_for_cache = match &acq {
+            AcquisitionResult::Pending(w) => w.reader(),
+            AcquisitionResult::Ready(r) => r.clone(),
+        };
+        let displaced = self.cache_entry(
+            &mut cache,
+            cache_key,
+            CacheEntry::Resource(reader_for_cache),
+        );
         let on_invalidated = self.on_invalidated.clone();
         drop(cache);
 
@@ -385,7 +484,7 @@ where
             }
         }
 
-        Ok(self.wrap(key, res))
+        Ok(self.wrap_acq(key, acq))
     }
 
     fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
@@ -425,9 +524,11 @@ where
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
+    ) -> AssetsResult<Self::ReadyRes> {
         if !self.is_active() || key.is_absolute() {
-            return Ok(self.wrap(key, self.inner.open_resource_with_ctx(key, identity, ctx)?));
+            return Ok(
+                self.wrap_reader(key, self.inner.open_resource_with_ctx(key, identity, ctx)?)
+            );
         }
 
         let cache_key = CacheKey::Resource {
@@ -439,7 +540,7 @@ where
         let mut cache = self.cache.lock_sync();
 
         if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
-            return Ok(self.wrap(key, res.clone()));
+            return Ok(self.wrap_reader(key, res.clone()));
         }
 
         if ctx.is_none()
@@ -460,7 +561,7 @@ where
                         _ => None,
                     })
         {
-            return Ok(self.wrap(key, res));
+            return Ok(self.wrap_reader(key, res));
         }
 
         let res = self.inner.open_resource_with_ctx(key, identity, ctx)?;
@@ -474,7 +575,7 @@ where
             }
         }
 
-        Ok(self.wrap(key, res))
+        Ok(self.wrap_reader(key, res))
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
@@ -522,26 +623,46 @@ where
 mod tests {
     use std::{fs, path::Path, sync::Arc, time::Duration};
 
-    use kithara_platform::thread;
-    use kithara_storage::{ResourceExt, StorageResource};
+    use kithara_platform::{CancellationToken, thread};
+    use kithara_storage::StorageResource;
     use kithara_test_utils::kithara;
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::{base::Capabilities, disk_store::DiskAssetStore, mem_store::MemAssetStore};
+    use crate::{
+        base::{BaseReader, BaseWriter, Capabilities},
+        disk_store::DiskAssetStore,
+        mem_store::MemAssetStore,
+    };
 
     const ROOT: &str = "test_asset";
+
+    /// Stream `data` through a Pending writer and commit it.
+    fn commit_writer<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8]) {
+        let AcquisitionResult::Pending(w) = acq else {
+            panic!("expected a Pending writer");
+        };
+        w.write_at(0, data).unwrap();
+        w.commit(Some(data.len() as u64)).unwrap();
+    }
+
+    /// Extract the Pending writer or panic.
+    fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
+        match acq {
+            AcquisitionResult::Pending(w) => w,
+            AcquisitionResult::Ready(_) => panic!("expected a Pending writer"),
+        }
+    }
 
     #[derive(Clone, Debug)]
     struct ContextMemStore {
         inner: MemAssetStore,
     }
 
-    impl ContextMemStore {
-        fn new() -> Self {
+    impl Default for ContextMemStore {
+        fn default() -> Self {
             Self {
                 inner: MemAssetStore::new(
-                    CancellationToken::new(),
+                    CancellationToken::default(),
                     None,
                     &crate::BytePool::default(),
                 ),
@@ -550,16 +671,17 @@ mod tests {
     }
 
     impl Assets for ContextMemStore {
+        type ActiveRes = BaseWriter;
         type Context = u8;
-        type IndexRes = kithara_storage::MemResource;
-        type Res = StorageResource;
+        type IndexRes = StorageResource;
+        type ReadyRes = BaseReader;
 
         fn acquire_resource_with_ctx(
             &self,
             key: &ResourceKey,
             identity: Option<&RequestIdentity>,
             _ctx: Option<Self::Context>,
-        ) -> AssetsResult<Self::Res> {
+        ) -> AssetsResult<AcquisitionResult<BaseWriter, BaseReader>> {
             self.inner.acquire_resource(key, identity)
         }
 
@@ -584,7 +706,7 @@ mod tests {
             key: &ResourceKey,
             identity: Option<&RequestIdentity>,
             _ctx: Option<Self::Context>,
-        ) -> AssetsResult<Self::Res> {
+        ) -> AssetsResult<BaseReader> {
             self.inner.open_resource(key, identity)
         }
 
@@ -600,7 +722,7 @@ mod tests {
     fn make_cached(dir: &Path, capacity: NonZeroUsize) -> CachedAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(
             dir,
-            CancellationToken::new(),
+            CancellationToken::default(),
             &crate::BytePool::default(),
         ));
         CachedAssets::new(disk, capacity, None, false)
@@ -617,9 +739,7 @@ mod tests {
             .collect();
 
         for key in &keys {
-            let res = cached.acquire_resource(key, None).unwrap();
-            res.write_at(0, b"data").unwrap();
-            res.commit(Some(4)).unwrap();
+            commit_writer(cached.acquire_resource(key, None).unwrap(), b"data");
         }
 
         assert_eq!(cached.cache.lock_sync().len(), 3);
@@ -645,7 +765,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let disk = Arc::new(DiskAssetStore::new(
             dir.path(),
-            CancellationToken::new(),
+            CancellationToken::default(),
             &crate::BytePool::default(),
         ));
         let (log, cb) = record_invalidations();
@@ -655,9 +775,7 @@ mod tests {
             .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
             .collect();
         for key in &keys {
-            let res = cached.acquire_resource(key, None).unwrap();
-            res.write_at(0, b"data").unwrap();
-            res.commit(Some(4)).unwrap();
+            commit_writer(cached.acquire_resource(key, None).unwrap(), b"data");
         }
 
         // The oldest handle was displaced from the 2-slot in-memory LRU,
@@ -680,7 +798,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn volatile_displacement_invalidates() {
         let mem = Arc::new(MemAssetStore::new(
-            CancellationToken::new(),
+            CancellationToken::default(),
             None,
             &crate::BytePool::default(),
         ));
@@ -691,9 +809,7 @@ mod tests {
             .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
             .collect();
         for key in &keys {
-            let res = cached.acquire_resource(key, None).unwrap();
-            res.write_at(0, b"data").unwrap();
-            res.commit(Some(4)).unwrap();
+            commit_writer(cached.acquire_resource(key, None).unwrap(), b"data");
         }
 
         // Ephemeral backing frees bytes when the last handle drops, so
@@ -716,14 +832,12 @@ mod tests {
             .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
             .collect();
 
-        let first = cached.acquire_resource(&keys[0], None).unwrap().retain();
+        let first = pending(cached.acquire_resource(&keys[0], None).unwrap()).retain();
         first.write_at(0, b"data").unwrap();
         first.commit(Some(4)).unwrap();
 
         for key in &keys[1..] {
-            let res = cached.acquire_resource(key, None).unwrap();
-            res.write_at(0, b"data").unwrap();
-            res.commit(Some(4)).unwrap();
+            commit_writer(cached.acquire_resource(key, None).unwrap(), b"data");
         }
 
         assert_eq!(cached.cache.lock_sync().len(), 4);
@@ -746,22 +860,18 @@ mod tests {
             .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
             .collect();
 
-        let first = cached.acquire_resource(&keys[0], None).unwrap().retain();
+        let first = pending(cached.acquire_resource(&keys[0], None).unwrap()).retain();
         first.write_at(0, b"data").unwrap();
-        first.commit(Some(4)).unwrap();
+        let first = first.commit(Some(4)).unwrap();
 
         for key in &keys[1..4] {
-            let res = cached.acquire_resource(key, None).unwrap();
-            res.write_at(0, b"data").unwrap();
-            res.commit(Some(4)).unwrap();
+            commit_writer(cached.acquire_resource(key, None).unwrap(), b"data");
         }
         assert_eq!(cached.cache.lock_sync().len(), 4, "3 normal + 1 pinned");
 
         first.release();
 
-        let res = cached.acquire_resource(&keys[4], None).unwrap();
-        res.write_at(0, b"data").unwrap();
-        res.commit(Some(4)).unwrap();
+        commit_writer(cached.acquire_resource(&keys[4], None).unwrap(), b"data");
 
         assert_eq!(
             cached.cache.lock_sync().len(),
@@ -777,10 +887,10 @@ mod tests {
         let cached = make_cached(dir.path(), cap);
         let key = ResourceKey::relative(ROOT, "audio.mp3");
 
-        let res1 = cached.acquire_resource(&key, None).unwrap();
-        let res2 = cached.acquire_resource(&key, None).unwrap();
+        let res1 = pending(cached.acquire_resource(&key, None).unwrap());
+        let res2 = pending(cached.acquire_resource(&key, None).unwrap());
 
-        assert_eq!(res1.path(), res2.path());
+        assert_eq!(res1.reader().path(), res2.reader().path());
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -790,9 +900,7 @@ mod tests {
         let cached = make_cached(dir.path(), cap);
         let key = ResourceKey::relative(ROOT, "audio.mp3");
 
-        let res = cached.acquire_resource(&key, None).unwrap();
-        res.write_at(0, b"hello").unwrap();
-        res.commit(Some(5)).unwrap();
+        commit_writer(cached.acquire_resource(&key, None).unwrap(), b"hello");
 
         let read_res = cached.open_resource(&key, None).unwrap();
         let mut buf = [0u8; 5];
@@ -807,7 +915,7 @@ mod tests {
         let cached = make_cached(dir.path(), cap);
 
         let key = ResourceKey::relative(ROOT, "delete_me.mp3");
-        let _res = cached.acquire_resource(&key, None).unwrap();
+        let _res = pending(cached.acquire_resource(&key, None).unwrap());
 
         assert!(!cached.cache.lock_sync().is_empty());
 
@@ -823,9 +931,7 @@ mod tests {
         let cached = make_cached(dir.path(), cap);
 
         let key = ResourceKey::relative(ROOT, "remove_me.mp3");
-        let res = cached.acquire_resource(&key, None).unwrap();
-        res.write_at(0, b"data").unwrap();
-        res.commit(Some(4)).unwrap();
+        commit_writer(cached.acquire_resource(&key, None).unwrap(), b"data");
 
         assert!(matches!(
             cached.resource_state(&key),
@@ -845,9 +951,7 @@ mod tests {
         let cached = make_cached(dir.path(), cap);
         let key = ResourceKey::relative(ROOT, "committed.m4s");
 
-        let res = cached.acquire_resource(&key, None).unwrap();
-        res.write_at(0, b"hello").unwrap();
-        res.commit(Some(5)).unwrap();
+        commit_writer(cached.acquire_resource(&key, None).unwrap(), b"hello");
 
         let opened = cached.open_resource(&key, None).unwrap();
         let mut buf = [0u8; 5];
@@ -857,21 +961,22 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn context_aware_caching_separates_keys() {
-        let store = ContextMemStore::new();
+        let store = ContextMemStore::default();
         let cached = CachedAssets::new(Arc::new(store), NonZeroUsize::new(5).unwrap(), None, true);
         let key = ResourceKey::relative("ctx_test", "seg.m4s");
 
-        let r1 = cached
-            .acquire_resource_with_ctx(&key, None, Some(1))
-            .unwrap();
-        r1.write_at(0, b"aaa").unwrap();
-        r1.commit(Some(3)).unwrap();
-
-        let r2 = cached
-            .acquire_resource_with_ctx(&key, None, Some(2))
-            .unwrap();
-        r2.write_at(0, b"bbb").unwrap();
-        r2.commit(Some(3)).unwrap();
+        commit_writer(
+            cached
+                .acquire_resource_with_ctx(&key, None, Some(1))
+                .unwrap(),
+            b"aaa",
+        );
+        commit_writer(
+            cached
+                .acquire_resource_with_ctx(&key, None, Some(2))
+                .unwrap(),
+            b"bbb",
+        );
 
         let check1 = cached.open_resource_with_ctx(&key, None, Some(1)).unwrap();
         let check2 = cached.open_resource_with_ctx(&key, None, Some(2)).unwrap();
@@ -890,19 +995,13 @@ mod tests {
         let cached = make_cached(dir.path(), cap);
 
         let key_a = ResourceKey::relative(ROOT, "a.m4s");
-        let a = cached.acquire_resource(&key_a, None).unwrap();
-        a.write_at(0, b"aaaa").unwrap();
-        a.commit(Some(4)).unwrap();
+        commit_writer(cached.acquire_resource(&key_a, None).unwrap(), b"aaaa");
 
         let key_b = ResourceKey::relative(ROOT, "b.m4s");
-        let b = cached.acquire_resource(&key_b, None).unwrap();
-        b.write_at(0, b"bbbb").unwrap();
-        b.commit(Some(4)).unwrap();
+        commit_writer(cached.acquire_resource(&key_b, None).unwrap(), b"bbbb");
 
         let key_c = ResourceKey::relative(ROOT, "c.m4s");
-        let c = cached.acquire_resource(&key_c, None).unwrap();
-        c.write_at(0, b"cccc").unwrap();
-        c.commit(Some(4)).unwrap();
+        commit_writer(cached.acquire_resource(&key_c, None).unwrap(), b"cccc");
 
         let a_path = dir.path().join(ROOT).join("a.m4s");
         assert!(a_path.exists(), "committed data must remain on disk");
@@ -911,15 +1010,16 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn open_resource_with_none_context_finds_committed() {
-        let store = ContextMemStore::new();
+        let store = ContextMemStore::default();
         let cached = CachedAssets::new(Arc::new(store), NonZeroUsize::new(5).unwrap(), None, true);
         let key = ResourceKey::relative("ctx_test2", "seg.m4s");
 
-        let res = cached
-            .acquire_resource_with_ctx(&key, None, Some(42))
-            .unwrap();
-        res.write_at(0, b"data").unwrap();
-        res.commit(Some(4)).unwrap();
+        commit_writer(
+            cached
+                .acquire_resource_with_ctx(&key, None, Some(42))
+                .unwrap(),
+            b"data",
+        );
 
         let found = cached.open_resource(&key, None).unwrap();
         let mut buf = [0u8; 4];

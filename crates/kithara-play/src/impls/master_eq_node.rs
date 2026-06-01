@@ -12,11 +12,9 @@ use firewheel::{
     },
 };
 use kithara_audio::{EqBandConfig, IsolatorEq};
+use kithara_test_utils::kithara;
 
 use super::shared_eq::{EQ_MAX_GAIN_DB, EQ_MIN_GAIN_DB};
-
-/// Minimum stereo channel count for processing.
-const MIN_STEREO: usize = 2;
 
 #[derive(Diff, Patch, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MasterEqBand {
@@ -134,7 +132,7 @@ impl AudioNodeProcessor for MasterEqProcessor {
         self.eq_r.update_sample_rate(self.sample_rate.get());
     }
 
-    #[cfg_attr(rtsan, sanitize(realtime = "nonblocking"))]
+    #[kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,
         info: &ProcInfo,
@@ -142,6 +140,8 @@ impl AudioNodeProcessor for MasterEqProcessor {
         events: &mut ProcEvents,
         _extra: &mut ProcExtra,
     ) -> ProcessStatus {
+        /// Minimum stereo channel count for processing.
+        const MIN_STEREO: usize = 2;
         let mut dirty = false;
         for patch in events.drain_patches::<MasterEqNode>() {
             self.params.apply(patch);

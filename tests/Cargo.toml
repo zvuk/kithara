@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 publish = false
 autotests = false
+build = "build.rs"
 
 [lints]
 workspace = true
@@ -32,7 +33,6 @@ kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-stream = { workspace = true, features = ["probe"] }
 # Async runtime
-tokio-util = { workspace = true }
 
 # Channels/buffers
 bytes = { workspace = true }
@@ -83,7 +83,6 @@ num-traits = { workspace = true }
 
 # Additional tokio features (full runtime on native)
 tokio = { workspace = true, features = ["full"] }
-tokio-util = { workspace = true, features = ["full"] }
 
 # HTTP server (axum stack not available on WASM)
 reqwest = { workspace = true, features = ["rustls", "stream"] }

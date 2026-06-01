@@ -30,6 +30,20 @@ pub async fn sleep(duration: Duration) {
     let _ = JsFuture::from(promise).await;
 }
 
+/// Coarse `Date.now()` timestamp in milliseconds, safe in every wasm scope.
+///
+/// Unlike [`Instant`] (which reads `performance.now()` and traps in an
+/// `AudioWorkletGlobalScope`, where `performance` is undefined), `Date.now()`
+/// is valid on the audio render thread. wasm-only: native code with the same
+/// need should use [`Instant`] directly, which is cheap there. Coarse
+/// (millisecond, wall-clock) — for second-scale deadlines, not precise
+/// interval timing.
+#[cfg(target_arch = "wasm32")]
+#[must_use]
+pub fn coarse_now_ms() -> f64 {
+    js_sys::Date::now()
+}
+
 /// Error returned when an async operation exceeds its deadline.
 #[derive(Debug)]
 pub struct TimeoutError;

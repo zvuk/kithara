@@ -4,19 +4,21 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::{PcmChunk, PcmMeta},
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    SignalDirection as Direction, TestTempDir, Xorshift64, detect_direction,
+    SignalDirection as Direction, TestTempDir, Xorshift64, auto, detect_direction,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     phase_from_f32,
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use kithara_platform::time::{Duration, Instant, sleep};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, Instant, sleep},
+};
 use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;
@@ -164,7 +166,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     info!(%url, "HLS server ready with 2 variants");
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
@@ -176,7 +178,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     let hls_config = HlsConfig::for_url(url)
         .store(store)
         .cancel(cancel)
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));

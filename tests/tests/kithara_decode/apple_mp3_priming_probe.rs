@@ -1,20 +1,3 @@
-//! Diagnostic probe for the Apple MP3 priming bug (+27.864 samp in
-//! `phase_continuity::file::codec_distortion_profile_mp3_vs_wav_apple`).
-//!
-//! Empirical baselines from `/tmp/mp3_proof` experiment (2026-05-25):
-//! - `afconvert` (Apple ExtAudioFile)   → impulse aligned with reference
-//! - `ffmpeg -c:a mp3_at` (raw AudioConverter) → impulse shifted -529 samples
-//! - `lame --decode`                    → impulse aligned with reference
-//!
-//! Two tests:
-//! 1. `mp3_raw_decoder_shift_vs_reference` — varies bit_rate, measures
-//!    leading silence in raw decoded output per backend.
-//! 2. `mp3_decoder_reads_lame_enc_delay_or_not` — patches the LAME tag's
-//!    `enc_delay` field (no re-encoding), re-measures leading silence.
-//!    If the decoder reads the tag, leading silence changes with the
-//!    override. If it ignores the tag, leading silence stays at the
-//!    actual encoder priming (576 for libmp3lame default).
-
 use std::io::Cursor;
 
 use kithara::decode::{DecoderBackend, DecoderConfig, DecoderFactory, PcmChunk};
@@ -24,12 +7,6 @@ use reqwest::Client;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
-const SAW_PERIOD: i32 = 65_536;
-
-fn sawtooth_ref(frame: i64) -> i32 {
-    let m = frame.rem_euclid(i64::from(SAW_PERIOD));
-    i32::try_from(m).unwrap_or(0) - 32_768
-}
 
 /// Locate the LAME encoder tag inside an MP3's Xing/Info header.
 ///
@@ -86,7 +63,7 @@ fn measure_leading_silence(
     config.gapless = gapless;
     config.hint = Some("mp3".to_owned());
     let mut decoder =
-        DecoderFactory::create_with_probe(Cursor::new(mp3_bytes), Some("mp3"), &config)
+        DecoderFactory::create_with_probe(Cursor::new(mp3_bytes), Some("mp3"), config)
             .expect("probe MP3 decoder");
     let mut left = Vec::<f32>::with_capacity(SAMPLE_RATE as usize);
     let chan = usize::from(CHANNELS);

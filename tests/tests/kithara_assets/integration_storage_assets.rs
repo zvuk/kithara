@@ -3,19 +3,28 @@
 use std::{fs, path::Path};
 
 use kithara::{
-    assets::{AssetScope, AssetStoreBuilder, EvictConfig, ResourceKey},
+    assets::{
+        AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, ReadSide, ResourceKey,
+        WriteSide,
+    },
     bufpool::BytePool,
-    storage::ResourceExt,
 };
 use kithara_assets::index::schema::{ArchivedPinsIndexFile, PinsIndexFile};
 use kithara_integration_tests::temp_dir;
 use kithara_platform::{thread, time::Duration};
 
 /// Helper to read bytes from resource into a pooled buffer
-fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
+fn read_bytes<R: ReadSide>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     let mut buf = BytePool::default().get_with(|b| b.resize(len, 0));
     let n = res.read_at(offset, &mut buf).unwrap_or(0);
     buf[..n].to_vec()
+}
+
+fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
+    let AcquisitionResult::Pending(w) = acq else {
+        panic!("expected a Pending writer")
+    };
+    w
 }
 
 fn read_pins_file(root: &Path) -> Option<Vec<String>> {
@@ -76,9 +85,10 @@ fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
     let key = scope.key(rel_path);
     let payload: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
 
-    let res = scope.store().acquire_resource(&key, None).unwrap();
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
 
-    res.write_all(&payload).unwrap();
+    writer.write_at(0, &payload).unwrap();
+    let res = writer.commit(Some(payload.len() as u64)).unwrap();
 
     let mut read_back = BytePool::default().get();
     res.read_into(&mut read_back).unwrap();
@@ -108,8 +118,9 @@ fn atomic_resource_persistence(
     let key = scope.key(rel_path);
 
     {
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_all(payload).unwrap();
+        let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+        writer.write_at(0, payload).unwrap();
+        writer.commit(Some(payload.len() as u64)).unwrap();
     }
 
     let res = scope.store().open_resource(&key, None).unwrap();
@@ -131,9 +142,9 @@ fn streaming_resource_persistence(
     let key = scope.key(rel_path);
 
     {
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_at(0, payload).unwrap();
-        res.commit(Some(payload.len() as u64)).unwrap();
+        let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+        writer.write_at(0, payload).unwrap();
+        let res = writer.commit(Some(payload.len() as u64)).unwrap();
         res.wait_range(0..payload.len() as u64).unwrap();
     }
 
@@ -153,15 +164,18 @@ fn mixed_resource_persistence_across_reopen(temp_dir: kithara_integration_tests:
     let streaming_payload = b"stream-bytes-123".to_vec();
 
     {
-        let atomic = scope.store().acquire_resource(&atomic_key, None).unwrap();
-        atomic.write_all(&atomic_payload).unwrap();
+        let atomic = pending(scope.store().acquire_resource(&atomic_key, None).unwrap());
+        atomic.write_at(0, &atomic_payload).unwrap();
+        atomic.commit(Some(atomic_payload.len() as u64)).unwrap();
 
-        let streaming = scope
-            .store()
-            .acquire_resource(&streaming_key, None)
-            .unwrap();
+        let streaming = pending(
+            scope
+                .store()
+                .acquire_resource(&streaming_key, None)
+                .unwrap(),
+        );
         streaming.write_at(0, &streaming_payload).unwrap();
-        streaming
+        let streaming = streaming
             .commit(Some(streaming_payload.len() as u64))
             .unwrap();
         streaming
@@ -195,7 +209,7 @@ fn streaming_resource_concurrent_write_and_read_across_handles(
     let key = scope.key("media/concurrent.bin");
     let payload: Vec<u8> = b"concurrent streaming data".to_vec();
     let payload_len = payload.len() as u64;
-    let writer_res = scope.store().acquire_resource(&key, None).unwrap();
+    let writer_res = pending(scope.store().acquire_resource(&key, None).unwrap());
 
     let scope_reader = scope.clone();
     let key_reader = key.clone();
@@ -215,12 +229,10 @@ fn streaming_resource_concurrent_write_and_read_across_handles(
     let payload_writer = payload.clone();
     let writer = thread::spawn(move || {
         writer_res.write_at(0, &payload_writer).unwrap();
-        writer_res
+        let reader = writer_res
             .commit(Some(payload_writer.len() as u64))
             .unwrap();
-        writer_res
-            .wait_range(0..payload_writer.len() as u64)
-            .unwrap();
+        reader.wait_range(0..payload_writer.len() as u64).unwrap();
     });
 
     let data = reader.join().unwrap();
@@ -247,8 +259,9 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     let playlist_key = scope.key("master.m3u8");
     let playlist_bytes = b"#EXTM3U\n#EXT-X-VERSION:7\n".to_vec();
 
-    let playlist = scope.store().acquire_resource(&playlist_key, None).unwrap();
-    playlist.write_all(&playlist_bytes).unwrap();
+    let playlist = pending(scope.store().acquire_resource(&playlist_key, None).unwrap());
+    playlist.write_at(0, &playlist_bytes).unwrap();
+    let playlist = playlist.commit(Some(playlist_bytes.len() as u64)).unwrap();
     let mut playlist_read = BytePool::default().get();
     playlist.read_into(&mut playlist_read).unwrap();
     assert_eq!(&*playlist_read, &playlist_bytes[..]);
@@ -257,33 +270,37 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     for i in 0..segment_count.min(2) {
         let seg_key = scope.key(format!("segments/{:04}.m4s", i + 1));
 
-        let seg = scope.store().acquire_resource(&seg_key, None).unwrap();
-        segments.push((seg, i));
+        let seg = pending(scope.store().acquire_resource(&seg_key, None).unwrap());
+        let seg_reader = seg.reader();
+        segments.push((seg, seg_reader, i));
     }
 
-    if let Some((seg1, _)) = segments.first() {
+    if let Some((seg1, seg1_reader, _)) = segments.first() {
         let a = vec![0xAAu8; 4096];
         let b = vec![0xBBu8; 2048];
 
         seg1.write_at(0, &a).unwrap();
         seg1.write_at(8192, &b).unwrap();
 
-        seg1.wait_range(0..(a.len() as u64)).unwrap();
-        seg1.wait_range(8192..(8192 + b.len() as u64)).unwrap();
+        seg1_reader.wait_range(0..(a.len() as u64)).unwrap();
+        seg1_reader
+            .wait_range(8192..(8192 + b.len() as u64))
+            .unwrap();
 
-        assert_eq!(read_bytes(seg1, 0, a.len()), a);
-        assert_eq!(read_bytes(seg1, 8192, b.len()), b);
+        assert_eq!(read_bytes(seg1_reader, 0, a.len()), a);
+        assert_eq!(read_bytes(seg1_reader, 8192, b.len()), b);
     }
 
-    if let Some((seg2, _)) = segments.get(1) {
+    if let Some((seg2, seg2_reader, _)) = segments.get(1) {
         let c = vec![0xCCu8; 10 * 1024];
         seg2.write_at(0, &c).unwrap();
-        seg2.wait_range(0..(c.len() as u64)).unwrap();
-        assert_eq!(read_bytes(seg2, 0, c.len()), c);
+        seg2_reader.wait_range(0..(c.len() as u64)).unwrap();
+        assert_eq!(read_bytes(seg2_reader, 0, c.len()), c);
     }
 
-    for (seg, _) in &segments {
-        seg.commit(None).unwrap();
+    let mut committed = Vec::new();
+    for (seg, _seg_reader, _) in segments {
+        committed.push(seg.commit(None).unwrap());
     }
 
     if let Some(pinned) = read_pins_file(&dir) {
@@ -293,7 +310,7 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
         );
     }
 
-    for (seg, _) in segments {
+    for seg in committed {
         drop(seg);
     }
     drop(playlist);
@@ -313,9 +330,10 @@ fn atomic_resource_roundtrip_with_different_paths(
     let key = scope.key(rel_path);
     let payload = b"test data for atomic resource".to_vec();
 
-    let res = scope.store().acquire_resource(&key, None).unwrap();
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
 
-    res.write_all(&payload).unwrap();
+    writer.write_at(0, &payload).unwrap();
+    let res = writer.commit(Some(payload.len() as u64)).unwrap();
 
     let mut read_back = BytePool::default().get();
     res.read_into(&mut read_back).unwrap();
@@ -335,17 +353,18 @@ fn streaming_resource_write_read_at_different_positions(
     let scope = asset_scope_with_root(&temp_dir, "streaming-test");
 
     let key = scope.key("data.bin");
-    let res = scope.store().acquire_resource(&key, None).unwrap();
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+    let reader = writer.reader();
 
     let data: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
 
-    res.write_at(offset, &data).unwrap();
-    res.wait_range(offset..(offset + size as u64)).unwrap();
+    writer.write_at(offset, &data).unwrap();
+    reader.wait_range(offset..(offset + size as u64)).unwrap();
 
-    let read_back = read_bytes(&res, offset, read_size.min(size));
+    let read_back = read_bytes(&reader, offset, read_size.min(size));
     assert_eq!(read_back, &data[..read_size.min(size)]);
 
-    res.commit(None).unwrap();
+    writer.commit(None).unwrap();
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
@@ -372,10 +391,11 @@ fn multiple_resources_same_asset_root_independently_accessible(
 
     let mut resources = Vec::new();
     for (i, key) in keys.iter().enumerate() {
-        let res = scope.store().acquire_resource(key, None).unwrap();
+        let writer = pending(scope.store().acquire_resource(key, None).unwrap());
 
         let data = format!("data for file {}", i).into_bytes();
-        res.write_all(&data).unwrap();
+        writer.write_at(0, &data).unwrap();
+        let res = writer.commit(Some(data.len() as u64)).unwrap();
 
         resources.push((res, data));
     }
@@ -403,8 +423,9 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::
     for (i, asset_root) in asset_roots.iter().enumerate() {
         let scope = asset_scope_with_root(&temp_dir, asset_root);
         let key = scope.key("data.bin");
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_all(payloads[i]).unwrap();
+        let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+        writer.write_at(0, payloads[i]).unwrap();
+        writer.commit(Some(payloads[i].len() as u64)).unwrap();
     }
 
     for asset_root in &asset_roots {
@@ -433,7 +454,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::
     {
         let scope = asset_scope_with_root(&temp_dir, "asset-alpha");
         let key = scope.key("data.bin");
-        let res = scope.store().acquire_resource(&key, None).unwrap();
+        let res = scope.store().open_resource(&key, None).unwrap();
         let mut buf = BytePool::default().get();
         res.read_into(&mut buf).unwrap();
         assert_eq!(&*buf, payloads[0], "asset-alpha data should be intact");
@@ -446,7 +467,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::
     {
         let scope = asset_scope_with_root(&temp_dir, "asset-gamma");
         let key = scope.key("data.bin");
-        let res = scope.store().acquire_resource(&key, None).unwrap();
+        let res = scope.store().open_resource(&key, None).unwrap();
         let mut buf = BytePool::default().get();
         res.read_into(&mut buf).unwrap();
         assert_eq!(&*buf, payloads[2], "asset-gamma data should be intact");
@@ -467,8 +488,10 @@ fn delete_assets_sequentially(temp_dir: kithara_integration_tests::TestTempDir) 
     for (i, asset_root) in asset_roots.iter().enumerate() {
         let scope = asset_scope_with_root(&temp_dir, asset_root);
         let key = scope.key(format!("file{}.bin", i));
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_all(format!("content {}", i).as_bytes()).unwrap();
+        let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+        let content = format!("content {}", i).into_bytes();
+        writer.write_at(0, &content).unwrap();
+        writer.commit(Some(content.len() as u64)).unwrap();
     }
 
     for asset_root in &asset_roots {
@@ -524,8 +547,10 @@ fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_integration_tests::T
     {
         let scope = asset_scope_with_root(&temp_dir, "existing-asset");
         let key = scope.key("data.bin");
-        let res = scope.store().acquire_resource(&key, None).unwrap();
-        res.write_all(b"existing data").unwrap();
+        let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+        let data: &[u8] = b"existing data";
+        writer.write_at(0, data).unwrap();
+        writer.commit(Some(data.len() as u64)).unwrap();
     }
 
     {

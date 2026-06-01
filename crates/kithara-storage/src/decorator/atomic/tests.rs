@@ -7,13 +7,12 @@ mod kithara {
     pub(crate) use kithara_test_macros::test;
 }
 
-use kithara_platform::time::Duration;
+use kithara_platform::{CancellationToken, time::Duration};
 #[cfg(not(target_arch = "wasm32"))]
 use tempfile::TempDir;
-use tokio_util::sync::CancellationToken;
 
 use super::core::Atomic;
-use crate::{MemOptions, MemResource, Resource, ResourceExt};
+use crate::{MemOptions, MemResource, Resource};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{MmapOptions, MmapResource, OpenMode};
 
@@ -21,7 +20,7 @@ use crate::{MmapOptions, MmapResource, OpenMode};
 fn create_mmap_resource(dir: &TempDir, name: &str) -> MmapResource {
     let path = dir.path().join(name);
     Resource::open(
-        CancellationToken::new(),
+        CancellationToken::default(),
         MmapOptions {
             path,
             mode: OpenMode::ReadWrite,
@@ -32,7 +31,7 @@ fn create_mmap_resource(dir: &TempDir, name: &str) -> MmapResource {
 }
 
 fn create_mem_resource() -> MemResource {
-    Resource::open(CancellationToken::new(), MemOptions::default()).unwrap()
+    Resource::open(CancellationToken::default(), MemOptions::default()).unwrap()
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -5,14 +5,13 @@ use std::{error::Error as StdError, num::NonZeroUsize, time::Duration};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, AudioWorkerHandle, ChunkOutcome, PcmReader},
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
+use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{thread::active_named_thread_count, time::sleep};
+use kithara_platform::{CancellationToken, thread::active_named_thread_count, time::sleep};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 struct Consts;
@@ -55,7 +54,7 @@ async fn run_drm_seek_resume_cycle(
     let hls_config = HlsConfig::for_url(url)
         .store(store)
         .downloader(downloader.clone())
-        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .initial_abr_mode(auto(0))
         .build();
 
     let mut audio = Audio::<Stream<Hls>>::new(
@@ -104,14 +103,14 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServerHelper::new().await;
-    let shared_worker = AudioWorkerHandle::new();
+    let shared_worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
 
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            CancellationToken::new(),
+            CancellationToken::default(),
         ))
-        .cancel(CancellationToken::new())
+        .cancel(CancellationToken::default())
         .build(),
     );
 

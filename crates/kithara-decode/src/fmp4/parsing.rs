@@ -17,7 +17,6 @@ pub(crate) enum CodecConfig {
 }
 
 impl AsRef<[u8]> for CodecConfig {
-    // ast-grep-ignore: idioms.match-self-conversion
     fn as_ref(&self) -> &[u8] {
         match self {
             Self::Aac(bytes) | Self::Flac(bytes) => bytes,
@@ -476,6 +475,13 @@ fn collect_frames(
     let default_base_is_moof = (tfhd.flags & re_mp4::TfhdBox::FLAG_DEFAULT_BASE_IS_MOOF) != 0;
     let mut decode_time = traf.tfdt.as_ref().map_or(0, |t| t.base_media_decode_time);
 
+    let sample_total: usize = traf
+        .truns
+        .iter()
+        .map(|trun| usize::try_from(trun.sample_count).unwrap_or(0))
+        .sum();
+    out.reserve(sample_total);
+
     for trun in &traf.truns {
         let data_offset_i32 = trun.data_offset.unwrap_or(0);
         let base = if default_base_is_moof {
@@ -618,6 +624,24 @@ mod tests {
             );
             assert!(f.size > 0);
         }
+    }
+
+    /// R-remp4: the per-frame `Vec<Fmp4Frame>` must be presized from the
+    /// `trun` sample count, so a single-moof segment is built with exactly
+    /// one allocation — capacity equals the frame count, no realloc churn.
+    #[kithara::test]
+    fn parse_segment_frames_presizes_vec_to_sample_count() {
+        let init_bytes = read_fixture("init-slq-a1.mp4");
+        let init = parse_init(&init_bytes).expect("BUG: parse init");
+        let seg_bytes = read_fixture("segment-1-slq-a1.m4s");
+        let frames = parse_segment_frames(&init, &seg_bytes).expect("BUG: parse seg");
+        assert!(!frames.is_empty(), "segment must yield frames");
+        assert_eq!(
+            frames.capacity(),
+            frames.len(),
+            "Vec<Fmp4Frame> must be presized to the trun sample count \
+             (exact capacity, single allocation)",
+        );
     }
 
     #[kithara::test]

@@ -2,8 +2,15 @@
 
 use std::{fmt::Debug, hash::Hash, path::Path};
 
+// Base-layer storage seam types live in `resource.rs`; re-exported here so the
+// decorator stack can keep referring to them through `crate::base::`.
+pub(crate) use crate::resource::{BaseReader, BaseWriter};
 use crate::{
-    error::AssetsResult, identity::RequestIdentity, key::ResourceKey, state::AssetResourceState,
+    acquisition::{AcquisitionResult, ReadSide, WriteSide},
+    error::AssetsResult,
+    identity::RequestIdentity,
+    key::ResourceKey,
+    state::AssetResourceState,
 };
 
 bitflags::bitflags! {
@@ -26,14 +33,25 @@ bitflags::bitflags! {
 
 /// Explicit public contract for the assets abstraction.
 ///
-/// See crate `README.md` for the asset / resource / identity model.
+/// Acquisition is **phase-typed**: `acquire_resource*` hands back an
+/// [`AcquisitionResult`] — a `Pending` [`WriteSide`] writer that must
+/// `commit` before any read, or a `Ready` [`ReadSide`] reader when the
+/// resource is already committed. `open_resource*` always returns a `Ready`
+/// reader. The decrypt-readiness gate is carried in these types, not behind a
+/// runtime `is_readable()` probe; storage lifecycle `status()` stays a runtime
+/// facade on the reader. See crate `README.md` for the asset / resource /
+/// identity model.
 pub trait Assets: Clone + Send + Sync + 'static {
     /// Context type for resource processing. Use `()` for no context.
     type Context: Clone + Send + Sync + Hash + Eq + Debug + 'static;
-    /// Resource type for index persistence (pins, LRU).
-    type IndexRes: kithara_storage::ResourceExt + Clone + Send + Sync + Debug + 'static;
-    /// Type returned by `open_resource`. Must be Clone for caching.
-    type Res: kithara_storage::ResourceExt + Clone + Send + Sync + Debug + 'static;
+    /// Resource type for index persistence (pins, LRU). Cached and cloned by
+    /// the cache decorator; no resource API is invoked on it directly.
+    type IndexRes: Clone + Send + Sync + Debug + 'static;
+    /// Writer (Pending) phase returned by `acquire_resource*`.
+    type ActiveRes: WriteSide<Reader = Self::ReadyRes>;
+    /// Reader (Ready) phase returned by `open_resource*` and by the `Ready`
+    /// arm of `acquire_resource*`.
+    type ReadyRes: ReadSide<Writer = Self::ActiveRes>;
 
     /// Acquire a resource for mutation (no identity, no context).
     ///
@@ -43,7 +61,7 @@ pub trait Assets: Clone + Send + Sync + 'static {
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
-    ) -> AssetsResult<Self::Res> {
+    ) -> AssetsResult<AcquisitionResult<Self::ActiveRes, Self::ReadyRes>> {
         self.acquire_resource_with_ctx(key, identity, None)
     }
 
@@ -56,9 +74,7 @@ pub trait Assets: Clone + Send + Sync + 'static {
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
-        self.open_resource_with_ctx(key, identity, ctx)
-    }
+    ) -> AssetsResult<AcquisitionResult<Self::ActiveRes, Self::ReadyRes>>;
 
     /// Decorator capabilities supported by this backend.
     #[must_use]
@@ -92,7 +108,7 @@ pub trait Assets: Clone + Send + Sync + 'static {
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
-    ) -> AssetsResult<Self::Res> {
+    ) -> AssetsResult<Self::ReadyRes> {
         self.open_resource_with_ctx(key, identity, None)
     }
 
@@ -105,7 +121,7 @@ pub trait Assets: Clone + Send + Sync + 'static {
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res>;
+    ) -> AssetsResult<Self::ReadyRes>;
 
     /// Remove a single resource by `key`.
     ///

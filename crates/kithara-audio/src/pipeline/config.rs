@@ -45,7 +45,7 @@ pub struct AudioConfig<T: StreamType> {
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
     /// Master cancel token for the audio pipeline.
-    pub cancel: Option<tokio_util::sync::CancellationToken>,
+    pub cancel: Option<kithara_platform::CancellationToken>,
     /// Optional format hint (file extension like "mp3", "wav")
     pub hint: Option<String>,
     /// Target sample rate of the audio host (for resampling).
@@ -128,7 +128,7 @@ pub(crate) fn create_effects(
 
     let resampler_rate = match tempo_ratio {
         Some(_) => {
-            chain.push(Box::new(TimeStretchProcessor::new()));
+            chain.push(Box::new(TimeStretchProcessor));
             Arc::new(AtomicF32::new(1.0))
         }
         None => Arc::clone(playback_rate),

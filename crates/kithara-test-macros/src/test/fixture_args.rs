@@ -1,8 +1,3 @@
-#![allow(
-    clippy::option_if_let_else,
-    reason = "match is more readable for format_ident! case names"
-)]
-
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{Attribute, Expr, FnArg, Ident, ItemFn, Pat, Token};

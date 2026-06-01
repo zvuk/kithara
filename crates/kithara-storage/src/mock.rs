@@ -1,1 +1,1 @@
-pub use crate::{backend::DriverIoMock, resource::ResourceMock};
+pub use crate::backend::DriverIoMock;

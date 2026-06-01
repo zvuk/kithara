@@ -6,14 +6,79 @@ use kithara_platform::time::Duration;
 /// `usize` representation of [`AbrMode`].
 const ABR_MODE_AUTO_THRESHOLD: usize = usize::MAX / 2;
 
+/// A validated position into a peer's variant list.
+///
+/// Keeps a variant position from being confused with a byte offset, a
+/// segment index, or an index into a different variant list. Construct via
+/// [`VariantIndex::try_new`] at trust boundaries (FFI, UI), or
+/// [`VariantIndex::new`] when validity is already structurally guaranteed
+/// (atomic reload, playlist parse). See `kithara-abr/README.md`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[repr(transparent)]
+pub struct VariantIndex(usize);
+
+impl VariantIndex {
+    /// Validated constructor: `Ok` iff `idx < available`.
+    ///
+    /// # Errors
+    /// Returns [`BoundsError`] when `idx >= available`.
+    pub fn try_new(idx: usize, available: usize) -> Result<Self, BoundsError> {
+        if idx < available {
+            Ok(Self(idx))
+        } else {
+            Err(BoundsError {
+                requested: idx,
+                available,
+            })
+        }
+    }
+
+    /// Wrap an index whose validity is already guaranteed by construction
+    /// (atomic reload, playlist id, test literal). No bounds check.
+    #[must_use]
+    pub const fn new(idx: usize) -> Self {
+        Self(idx)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+impl std::fmt::Display for VariantIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+/// A variant index out of range against a known variant count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BoundsError {
+    pub requested: usize,
+    pub available: usize,
+}
+
+impl std::fmt::Display for BoundsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "variant index {} out of bounds (available: {})",
+            self.requested, self.available
+        )
+    }
+}
+
+impl std::error::Error for BoundsError {}
+
 /// ABR mode selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AbrMode {
     /// Automatic bitrate adaptation.
     /// Optional initial variant index (defaults to 0 when `None`).
-    Auto(Option<usize>),
+    Auto(Option<VariantIndex>),
     /// Manual variant selection — ABR disabled, fixed variant.
-    Manual(usize),
+    Manual(VariantIndex),
 }
 
 impl Default for AbrMode {
@@ -22,17 +87,28 @@ impl Default for AbrMode {
     }
 }
 
+impl AbrMode {
+    /// Manual mode pinned to variant `idx`. Shorthand for
+    /// `Manual(VariantIndex::new(idx))` — the index is wrapped without a
+    /// bounds check; validate at trust boundaries via
+    /// [`VariantIndex::try_new`] / `AbrHandle::set_mode`.
+    #[must_use]
+    pub const fn manual(idx: usize) -> Self {
+        Self::Manual(VariantIndex::new(idx))
+    }
+}
+
 impl From<AbrMode> for usize {
     fn from(mode: AbrMode) -> Self {
         match mode {
             AbrMode::Manual(v) => {
-                debug_assert!(v < ABR_MODE_AUTO_THRESHOLD, "variant index too large");
-                v
+                debug_assert!(v.get() < ABR_MODE_AUTO_THRESHOLD, "variant index too large");
+                v.get()
             }
             AbrMode::Auto(None) => Self::MAX,
             AbrMode::Auto(Some(v)) => {
-                debug_assert!(v < ABR_MODE_AUTO_THRESHOLD, "variant index too large");
-                Self::MAX - 1 - v
+                debug_assert!(v.get() < ABR_MODE_AUTO_THRESHOLD, "variant index too large");
+                Self::MAX - 1 - v.get()
             }
         }
     }
@@ -43,9 +119,9 @@ impl From<usize> for AbrMode {
         if val == usize::MAX {
             Self::Auto(None)
         } else if val >= ABR_MODE_AUTO_THRESHOLD {
-            Self::Auto(Some(usize::MAX - 1 - val))
+            Self::Auto(Some(VariantIndex::new(usize::MAX - 1 - val)))
         } else {
-            Self::Manual(val)
+            Self::Manual(VariantIndex::new(val))
         }
     }
 }
@@ -104,7 +180,7 @@ pub struct VariantInfo {
     pub container: Option<String>,
     pub name: Option<String>,
     pub duration: VariantDuration,
-    pub variant_index: usize,
+    pub variant_index: VariantIndex,
 }
 
 /// Events emitted by the ABR controller for a single registered peer.
@@ -126,11 +202,11 @@ pub enum AbrEvent {
     },
     VariantsRegistered {
         variants: Vec<VariantInfo>,
-        initial: usize,
+        initial: VariantIndex,
     },
     VariantApplied {
-        from: usize,
-        to: usize,
+        from: VariantIndex,
+        to: VariantIndex,
         reason: AbrReason,
     },
     ModeChanged {
@@ -163,12 +239,12 @@ mod tests {
 
     #[kithara::test]
     #[case(AbrMode::Auto(None))]
-    #[case(AbrMode::Auto(Some(0)))]
-    #[case(AbrMode::Auto(Some(5)))]
-    #[case(AbrMode::Auto(Some(42)))]
-    #[case(AbrMode::Manual(0))]
-    #[case(AbrMode::Manual(1))]
-    #[case(AbrMode::Manual(99))]
+    #[case(AbrMode::Auto(Some(VariantIndex::new(0))))]
+    #[case(AbrMode::Auto(Some(VariantIndex::new(5))))]
+    #[case(AbrMode::Auto(Some(VariantIndex::new(42))))]
+    #[case(AbrMode::Manual(VariantIndex::new(0)))]
+    #[case(AbrMode::Manual(VariantIndex::new(1)))]
+    #[case(AbrMode::Manual(VariantIndex::new(99)))]
     fn abr_mode_usize_round_trip(#[case] mode: AbrMode) {
         let encoded: usize = mode.into();
         let decoded: AbrMode = encoded.into();
@@ -177,9 +253,44 @@ mod tests {
 
     #[kithara::test]
     fn manual_and_auto_encode_differently() {
-        let manual: usize = AbrMode::Manual(0).into();
+        let manual: usize = AbrMode::Manual(VariantIndex::new(0)).into();
         let auto: usize = AbrMode::Auto(None).into();
         assert_ne!(manual, auto);
+    }
+
+    #[kithara::test]
+    fn variant_index_try_new_accepts_in_range() {
+        assert_eq!(VariantIndex::try_new(0, 3), Ok(VariantIndex::new(0)));
+        assert_eq!(VariantIndex::try_new(2, 3), Ok(VariantIndex::new(2)));
+    }
+
+    #[kithara::test]
+    #[case(3, 3)]
+    #[case(4, 3)]
+    #[case(usize::MAX, 3)]
+    fn variant_index_try_new_rejects_out_of_range(#[case] idx: usize, #[case] available: usize) {
+        assert_eq!(
+            VariantIndex::try_new(idx, available),
+            Err(BoundsError {
+                requested: idx,
+                available,
+            })
+        );
+    }
+
+    #[kithara::test]
+    fn variant_index_try_new_against_empty_list_always_fails() {
+        assert!(VariantIndex::try_new(0, 0).is_err());
+    }
+
+    #[kithara::test]
+    fn variant_index_get_round_trips() {
+        assert_eq!(VariantIndex::new(7).get(), 7);
+    }
+
+    #[kithara::test]
+    fn variant_index_display_is_the_bare_index() {
+        assert_eq!(format!("{}", VariantIndex::new(42)), "42");
     }
 
     #[kithara::test]
@@ -208,18 +319,16 @@ mod tests {
     #[kithara::test]
     fn abr_event_into_event_variant_applied() {
         let event: Event = AbrEvent::VariantApplied {
-            from: 0,
-            to: 1,
+            from: VariantIndex::new(0),
+            to: VariantIndex::new(1),
             reason: AbrReason::UpSwitch,
         }
         .into();
-        assert!(matches!(
-            event,
-            Event::Abr(AbrEvent::VariantApplied {
-                from: 0,
-                to: 1,
-                reason: AbrReason::UpSwitch,
-            })
-        ));
+        let Event::Abr(AbrEvent::VariantApplied { from, to, reason }) = event else {
+            panic!("expected VariantApplied");
+        };
+        assert_eq!(from, VariantIndex::new(0));
+        assert_eq!(to, VariantIndex::new(1));
+        assert_eq!(reason, AbrReason::UpSwitch);
     }
 }

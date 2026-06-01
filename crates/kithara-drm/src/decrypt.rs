@@ -15,23 +15,12 @@ use crate::DecryptContext;
 /// AES block size in bytes.
 pub(crate) const AES_BLOCK_SIZE: usize = 16;
 
-/// AES-128-CBC chunk decryption function.
+/// AES-128-CBC chunk decryption, for use as `ProcessChunkFn<DecryptContext>`
+/// in `ProcessingAssets`.
 ///
-/// Designed for use as `ProcessChunkFn<DecryptContext>` in `ProcessingAssets`.
-///
-/// Decrypts `input` into `output` using the key and IV from `ctx`.
-/// For the last chunk (`is_last = true`), PKCS7 padding is removed.
-/// For intermediate chunks, data is decrypted block-by-block without
-/// padding removal (each 16-byte block produces 16 bytes).
-///
-/// # Arguments
-/// - `input`: encrypted bytes (must be aligned to AES block size, except possibly the last chunk)
-/// - `output`: buffer for decrypted bytes (same capacity as input)
-/// - `ctx`: decryption context with key and IV
-/// - `is_last`: true for the final chunk (triggers PKCS7 unpadding)
-///
-/// # Returns
-/// Number of decrypted bytes written to `output`.
+/// Decrypts `input` into `output` using the key and IV from `ctx` and returns
+/// the number of bytes written. The last chunk (`is_last = true`) removes PKCS7
+/// padding; intermediate chunks decrypt block-by-block (16 in, 16 out).
 ///
 /// # Errors
 ///
