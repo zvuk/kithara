@@ -108,6 +108,27 @@ impl ResamplerKind {
         }
     }
 
+    /// Worst-case input block across the whole ratio-adjustment window
+    /// (`MAX_RATIO_ADJUSTMENT`). Pre-sizing input scratch to this means a
+    /// live ratio change (DJ rate sweep) never reallocates on the
+    /// produce-core.
+    // ast-grep-ignore: idioms.match-self-conversion
+    fn input_frames_max(&self) -> usize {
+        match self {
+            Self::Poly(r) | Self::Sinc(r) => r.input_frames_max(),
+            Self::Fft(r) => r.input_frames_max(),
+        }
+    }
+
+    /// Worst-case output block across the whole ratio-adjustment window.
+    // ast-grep-ignore: idioms.match-self-conversion
+    fn output_frames_max(&self) -> usize {
+        match self {
+            Self::Poly(r) | Self::Sinc(r) => r.output_frames_max(),
+            Self::Fft(r) => r.output_frames_max(),
+        }
+    }
+
     fn process_into_buffer(
         &mut self,
         input: &[Vec<f32>],
@@ -583,11 +604,46 @@ impl ResamplerProcessor {
                 for buf in &mut self.input_buffer {
                     buf.clear();
                 }
+                self.presize_scratch();
             }
             Err(e) => {
                 debug!(err = %e, "Failed to create resampler, staying in current mode");
             }
         }
+    }
+
+    /// Reserve steady-state capacity for every per-chunk scratch buffer up
+    /// front (construction / resampler-recreate), so the produce-core never
+    /// reallocates them mid-playback. Sizes come from the resampler's
+    /// worst-case input/output blocks (`*_frames_max`, which already fold in
+    /// the `MAX_RATIO_ADJUSTMENT` window), so even a live DJ rate sweep stays
+    /// allocation-free. No-op in passthrough — there is no resampler and the
+    /// scratch is unused. Pure capacity reservation: output is bit-exact.
+    fn presize_scratch(&mut self) {
+        let Some((in_max, out_max, in_next)) = self.resampler.as_ref().map(|r| {
+            (
+                r.input_frames_max(),
+                r.output_frames_max(),
+                r.input_frames_next().max(1),
+            )
+        }) else {
+            return;
+        };
+        let channels = self.channels;
+        let chunk = self.chunk_size;
+        // `input_buffer` carries a sub-block residual plus one freshly
+        // appended decoder chunk before the next drain.
+        let in_buf_cap = in_max + chunk;
+        // `temp_output_all` gathers every block emitted from one `process`
+        // call before interleaving.
+        let blocks = chunk.div_ceil(in_next).saturating_add(1);
+        let out_all_cap = out_max.saturating_mul(blocks);
+
+        reserve_channel_scratch(&mut self.input_buffer, channels, in_buf_cap);
+        reserve_channel_scratch(&mut self.temp_deinterleave, channels, chunk.max(in_max));
+        reserve_channel_scratch(&mut self.temp_input_slice, channels, in_max);
+        reserve_channel_scratch(&mut self.temp_output_bufs, channels, out_max);
+        reserve_channel_scratch(&mut self.temp_output_all, channels, out_all_cap);
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -718,6 +774,20 @@ impl ResamplerProcessor {
 #[cfg_attr(feature = "perf", hotpath::measure)]
 fn smallvec_new_vecs(channels: usize) -> SmallVec<[Vec<f32>; 8]> {
     (0..channels).map(|_| Vec::new()).collect()
+}
+
+/// Reserve `cap` floats of capacity on each per-channel scratch Vec,
+/// growing the outer `SmallVec` to `channels` first. Pure capacity — the
+/// lengths and contents are untouched, so resampler output stays bit-exact.
+fn reserve_channel_scratch(bufs: &mut SmallVec<[Vec<f32>; 8]>, channels: usize, cap: usize) {
+    if bufs.len() < channels {
+        bufs.resize_with(channels, Vec::new);
+    }
+    for buf in bufs.iter_mut().take(channels) {
+        if buf.capacity() < cap {
+            buf.reserve(cap.saturating_sub(buf.len()));
+        }
+    }
 }
 
 impl ResamplerProcessor {
