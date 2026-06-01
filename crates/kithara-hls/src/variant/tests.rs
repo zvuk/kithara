@@ -1,4 +1,7 @@
-use std::sync::{Arc, atomic::AtomicU64};
+use std::sync::{
+    Arc, Barrier,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+};
 
 use kithara_assets::{AssetScope, AssetStoreBuilder, ProcessChunkFn};
 use kithara_drm::DecryptContext;
@@ -133,12 +136,12 @@ fn position_starts_at_zero() {
 fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
-    let pre_shift = v.byte_shift();
-    let pre_served_from = v.served_from();
-    let pre_served_until = v.served_until();
-    assert_eq!(pre_shift, 0);
-    assert_eq!(pre_served_from, 0);
-    assert_eq!(pre_served_until, v.num_segments());
+    assert_eq!(v.served_from(), 0);
+    assert_eq!(
+        v.segment_byte_offset(2),
+        Some(1_000),
+        "natural offset of seg 2 = 200 init + 400 + 400"
+    );
 
     let from_seg: u32 = 2;
     let seg_boundary: u64 = 1_500;
@@ -151,19 +154,85 @@ fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
         "served_from must equal the activation segment after return"
     );
     assert_eq!(
-        v.served_until(),
-        v.num_segments(),
-        "served_until must equal num_segments after a fresh activate"
+        v.segment_byte_offset(from_seg),
+        Some(seg_boundary),
+        "from_seg must be pinned at seg_boundary (encodes byte_shift = \
+         seg_boundary - natural_offset = 500)"
+    );
+    let seg3_virtual = v.segment_byte_offset(3).expect("seg 3 addressable");
+    assert!(
+        v.find_at_offset(seg3_virtual).is_some(),
+        "served_until must span all segments after a fresh activate"
     );
     assert_eq!(
         v.get_position(),
-        reader_pos.max(seg_boundary),
-        "position must follow the requested reader_pos / seg_boundary"
+        reader_pos,
+        "position must follow the requested reader_pos"
     );
+}
+
+/// Coordinate-frame coherence under a concurrent variant switch.
+///
+/// `find_virtual` reads `byte_shift` and the served bounds in separate
+/// steps; a reader on the decode thread races
+/// `activate_at_segment_with_shift` / `reset_to_full_range` on the
+/// scheduler thread. Byte 2000 is served by BOTH the full frame
+/// (shift 0, served [0,8) -> seg 1) and the activated frame
+/// (shift -5000, served [4,8) -> seg 6), so a coherent read always
+/// resolves it. The only way `find_virtual` returns `None` is a torn
+/// read that pairs `byte_shift == 0` (full frame) with
+/// `served_from == 4` (activated frame) -> seg 1 falls below the served
+/// range. That `(0, 4)` pairing is never a real activation frame, so
+/// every `None` is a split-lock tear. Offsets are value-identical across
+/// both frames (seed 1000, fixed sizes), isolating the tear to
+/// `byte_shift` + `served_from`.
+#[kithara::test]
+fn concurrent_switch_keeps_coordinate_reads_coherent() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 1000, &[1000; 8], &ctx);
+
+    v.reset_to_full_range();
+    assert!(
+        v.find_at_offset(2000).is_some(),
+        "full frame must serve byte 2000"
+    );
+    v.activate_at_segment_with_shift(&ctx, 4, 0, 0);
+    assert!(
+        v.find_at_offset(2000).is_some(),
+        "activated frame must serve byte 2000"
+    );
+
+    const ITERS: usize = 50_000;
+    let barrier = Barrier::new(2);
+    let torn = AtomicUsize::new(0);
+
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            barrier.wait();
+            for i in 0..ITERS {
+                if i % 2 == 0 {
+                    v.reset_to_full_range();
+                } else {
+                    v.activate_at_segment_with_shift(&ctx, 4, 0, 0);
+                }
+            }
+        });
+        s.spawn(|| {
+            barrier.wait();
+            for _ in 0..ITERS {
+                if v.find_at_offset(2000).is_none() {
+                    torn.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+    });
+
     assert_eq!(
-        v.byte_shift(),
-        500,
-        "byte_shift must reflect (seg_boundary - natural_offset)"
+        torn.load(Ordering::Relaxed),
+        0,
+        "byte 2000 is served by both activation frames; a None means \
+         find_virtual mixed byte_shift and served_from from different \
+         frames (split-lock torn read)"
     );
 }
 
@@ -213,6 +282,58 @@ fn find_at_offset_mid_segment_binary_search() {
     assert_eq!(idx, 2);
     let (idx, _, _) = v.find_at_offset(1200).expect("first byte of seg 3");
     assert_eq!(idx, 3);
+}
+
+#[kithara::test]
+fn find_at_offset_reflects_post_commit_size_shrink() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[400, 400, 400, 400], &ctx);
+
+    let (idx, off, size) = v.find_at_offset(450).expect("seg 1 before shrink");
+    assert_eq!((idx, off, size), (1, 400, 400));
+
+    v.layout.apply_commit(&v.segments, || {
+        v.segments[0].size.store(384, Ordering::Release);
+        v.init_size()
+    });
+
+    let (idx, off, size) = v.find_at_offset(390).expect("seg 1 after shrink");
+    assert_eq!(
+        (idx, off, size),
+        (1, 384, 400),
+        "shrinking seg 0 slides seg 1 down by the stripped delta"
+    );
+    assert!(
+        v.find_at_offset(383).is_some_and(|(i, ..)| i == 0),
+        "byte 384 is seg 1's new start, so 383 is the last byte of the shrunk seg 0"
+    );
+    assert!(
+        v.find_at_offset(384).is_some_and(|(i, ..)| i == 1),
+        "byte 384 belongs to seg 1 after the shrink"
+    );
+}
+
+/// The produce-core lookup takes only a shared read-lock on the Layout
+/// frame, so it can never resize the offset table (resize needs the
+/// exclusive lock). Verify repeated lookups stay self-consistent across
+/// the whole virtual range.
+#[kithara::test]
+fn find_at_offset_is_stable_over_repeated_lookups() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[400, 400, 400, 400], &ctx);
+
+    for byte in 0..1_600_u64 {
+        let (idx, off, size) = v.find_at_offset(byte).expect("every media byte resolves");
+        assert!(
+            off <= byte && byte < off + size,
+            "byte {byte} inside its segment"
+        );
+        assert_eq!(u64::from(idx), byte / 400, "400-byte segments map linearly");
+    }
+    assert!(
+        v.find_at_offset(1_600).is_none(),
+        "one past the last byte is EOF"
+    );
 }
 
 #[kithara::test]

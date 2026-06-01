@@ -306,7 +306,7 @@ impl HlsCoord {
             if Arc::ptr_eq(v, active) {
                 continue;
             }
-            let shrunk = v.served_from() > 0 || v.served_until() < v.num_segments();
+            let shrunk = v.is_shrunk();
             if !shrunk {
                 continue;
             }
@@ -459,7 +459,7 @@ impl HlsCoord {
             if Arc::ptr_eq(v, active) {
                 continue;
             }
-            let shrunk = v.served_from() > 0 || v.served_until() < v.num_segments();
+            let shrunk = v.is_shrunk();
             if !shrunk {
                 continue;
             }
