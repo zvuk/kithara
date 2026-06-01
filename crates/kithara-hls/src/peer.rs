@@ -22,7 +22,7 @@ use kithara_stream::{
 };
 use kithara_test_utils::kithara;
 
-use crate::{coord::HlsCoord, variant::PlanCtx};
+use crate::{coord::HlsCoord, ids::duration_prefix, variant::PlanCtx};
 
 struct HlsTrackState {
     coord: Arc<HlsCoord>,
@@ -192,10 +192,12 @@ impl Abr for HlsPeer {
             .lock_sync()
             .as_ref()
             .map_or(0, |s| s.coord.download_head() as usize);
-        let reader_clamped = reader_idx.min(durations.len());
-        let head_clamped = download_head.min(durations.len());
-        let reader_playback_time: Duration = durations[..reader_clamped].iter().copied().sum();
-        let download_head_playback_time: Duration = durations[..head_clamped].iter().copied().sum();
+        // `reader_idx`/`download_head` are prefix endpoints into `durations`:
+        // `idx == len` is the valid "at/after the last segment" endpoint and
+        // sums the full slice; `idx > len` is impossible and surfaces as
+        // `None` rather than being silently clamped.
+        let reader_playback_time = duration_prefix(&durations, reader_idx)?;
+        let download_head_playback_time = duration_prefix(&durations, download_head)?;
         Some(AbrProgressSnapshot {
             reader_playback_time,
             download_head_playback_time,

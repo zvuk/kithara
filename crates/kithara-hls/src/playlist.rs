@@ -9,8 +9,8 @@ use crate::ids::{SegmentIndex, VariantIndex};
 pub struct SegmentState {
     /// Duration of the segment.
     pub duration: Duration,
-    /// Segment index within the variant's media playlist.
-    pub index: SegmentIndex,
+    /// Bounded segment index within the variant's media playlist.
+    pub(crate) index: SegmentIndex,
     /// Absolute URL of the segment.
     pub url: Url,
 }
@@ -99,19 +99,21 @@ impl PlaylistState {
                     .as_ref()
                     .and_then(|init| media_url.join(&init.uri).ok());
 
+                let num_segments = playlist.segments.len();
                 let segments: Vec<SegmentState> = playlist
                     .segments
                     .iter()
                     .enumerate()
-                    .map(|(index, seg)| {
+                    .filter_map(|(idx, seg)| {
+                        let index = SegmentIndex::try_new(idx, num_segments)?;
                         let url = media_url
                             .join(&seg.uri)
                             .unwrap_or_else(|_| media_url.clone());
-                        SegmentState {
+                        Some(SegmentState {
                             index,
                             url,
                             duration: seg.duration,
-                        }
+                        })
                     })
                     .collect();
 
@@ -185,18 +187,18 @@ pub(crate) trait PlaylistAccess: Send + Sync {
         &self,
         variant: VariantIndex,
         target: Duration,
-    ) -> Option<(SegmentIndex, Duration, Duration)>;
+    ) -> Option<(usize, Duration, Duration)>;
 
     fn has_size_map(&self, variant: VariantIndex) -> bool;
     fn init_size(&self, variant: VariantIndex) -> u64;
     fn init_url(&self, variant: VariantIndex) -> Option<Url>;
-    fn segment_byte_offset(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64>;
+    fn segment_byte_offset(&self, variant: VariantIndex, index: usize) -> Option<u64>;
     fn segment_decode_range(
         &self,
         variant: VariantIndex,
-        index: SegmentIndex,
+        index: usize,
     ) -> Option<(Duration, Duration)>;
-    fn segment_url(&self, variant: VariantIndex, index: SegmentIndex) -> Option<Url>;
+    fn segment_url(&self, variant: VariantIndex, index: usize) -> Option<Url>;
     fn total_variant_size(&self, variant: VariantIndex) -> Option<u64>;
 }
 
@@ -205,7 +207,7 @@ impl PlaylistAccess for PlaylistState {
         &self,
         variant: VariantIndex,
         target: Duration,
-    ) -> Option<(SegmentIndex, Duration, Duration)> {
+    ) -> Option<(usize, Duration, Duration)> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         if state.segments.is_empty() {
@@ -219,7 +221,7 @@ impl PlaylistAccess for PlaylistState {
                 let segment_start = elapsed;
                 let segment_end = segment_start.saturating_add(segment.duration);
                 if target < segment_end {
-                    found = Some((segment.index, segment_start, segment_end));
+                    found = Some((segment.index.into_inner(), segment_start, segment_end));
                     break;
                 }
                 elapsed = segment_end;
@@ -227,7 +229,7 @@ impl PlaylistAccess for PlaylistState {
             found.or_else(|| {
                 state.segments.last().map(|tail| {
                     let tail_start = elapsed.saturating_sub(tail.duration);
-                    (tail.index, tail_start, elapsed)
+                    (tail.index.into_inner(), tail_start, elapsed)
                 })
             })
         };
@@ -257,7 +259,7 @@ impl PlaylistAccess for PlaylistState {
         state.init_url.clone()
     }
 
-    fn segment_byte_offset(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64> {
+    fn segment_byte_offset(&self, variant: VariantIndex, index: usize) -> Option<u64> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         state.size_map.as_ref()?.offsets.get(index).copied()
@@ -266,7 +268,7 @@ impl PlaylistAccess for PlaylistState {
     fn segment_decode_range(
         &self,
         variant: VariantIndex,
-        index: SegmentIndex,
+        index: usize,
     ) -> Option<(Duration, Duration)> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
@@ -287,7 +289,7 @@ impl PlaylistAccess for PlaylistState {
         result
     }
 
-    fn segment_url(&self, variant: VariantIndex, index: SegmentIndex) -> Option<Url> {
+    fn segment_url(&self, variant: VariantIndex, index: usize) -> Option<Url> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         state.segments.get(index).map(|s| s.url.clone())
@@ -319,7 +321,7 @@ impl PlaylistState {
 #[cfg(test)]
 impl PlaylistState {
     /// Find which segment contains the given byte offset (binary search on offsets).
-    fn find_segment_at_offset(&self, variant: VariantIndex, offset: u64) -> Option<SegmentIndex> {
+    fn find_segment_at_offset(&self, variant: VariantIndex, offset: u64) -> Option<usize> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         let result = state.size_map.as_ref().and_then(|size_map| {
@@ -353,9 +355,9 @@ mod tests {
         Url::parse(raw).expect("valid test URL")
     }
 
-    fn make_segment(index: usize) -> SegmentState {
+    fn make_segment(index: usize, num_segments: usize) -> SegmentState {
         SegmentState {
-            index,
+            index: SegmentIndex::try_new(index, num_segments).expect("in-bounds segment index"),
             url: base_url()
                 .join(&format!("segment-{index}.m4s"))
                 .expect("valid segment URL"),
@@ -364,7 +366,9 @@ mod tests {
     }
 
     fn make_variant(_id: usize, num_segments: usize) -> VariantState {
-        let segments: Vec<SegmentState> = (0..num_segments).map(make_segment).collect();
+        let segments: Vec<SegmentState> = (0..num_segments)
+            .map(|i| make_segment(i, num_segments))
+            .collect();
         VariantState {
             segments,
             codec: Some(AudioCodec::AacLc),
