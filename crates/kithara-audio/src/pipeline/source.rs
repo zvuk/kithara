@@ -17,7 +17,7 @@ use kithara_decode::{
     GaplessMode, PcmChunk, PcmSpec,
 };
 use kithara_events::{AudioEvent, AudioFormat, SeekLifecycleStage, SegmentLocation};
-use kithara_platform::{Mutex, thread::yield_now};
+use kithara_platform::Mutex;
 use kithara_stream::{
     ContainerFormat, MediaInfo, PendingReason, SourcePhase, SourceSeekAnchor, Stream, StreamType,
     Timeline,
@@ -1306,6 +1306,7 @@ enum DecodeAction {
 enum DecodeStep {
     Produced(Fetch<PcmChunk>),
     Interrupted,
+    NotReady(WaitingReason),
     Eof,
     Failed,
 }
@@ -1450,7 +1451,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                         DecodeAction::Return(result) => return result,
                     }
                 }
-                Ok(DecoderChunkOutcome::Pending(_reason)) => {
+                Ok(DecoderChunkOutcome::Pending(reason)) => {
                     if self.shared_stream.has_variant_change_pending() {
                         match self.handle_variant_change(DecodeError::InvalidData(
                             "variant change signal without observable format transition".into(),
@@ -1459,9 +1460,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                             DecodeAction::Return(result) => return result,
                         }
                     }
-                    hang_tick!();
-                    yield_now();
-                    continue;
+                    return Ok(DecoderChunkOutcome::Pending(reason));
                 }
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {
                     let current_epoch = self.epoch.load(Ordering::Acquire);
@@ -1476,7 +1475,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                         continue;
                     }
                     hang_reset!();
-                    yield_now();
                     self.track_chunk(&chunk);
                     self.gapless.push(chunk);
                     continue;
@@ -1642,7 +1640,9 @@ impl<T: StreamType> StreamAudioSource<T> {
                 self.update_state(CurrentFsm::at_eof());
                 DecodeStep::Eof
             }
-            Ok(DecoderChunkOutcome::Pending(_reason)) => DecodeStep::Interrupted,
+            Ok(DecoderChunkOutcome::Pending(_reason)) => {
+                DecodeStep::NotReady(WaitingReason::Waiting)
+            }
             Err(e) if e.is_interrupted() => DecodeStep::Interrupted,
             Err(e) => {
                 self.update_state(CurrentFsm::failed(TrackFailure::Decode(e)));
@@ -2019,6 +2019,7 @@ impl Track<AwaitingResume> {
         match src.decode_one_step() {
             DecodeStep::Produced(fetch) => TrackStep::Produced(fetch),
             DecodeStep::Interrupted => TrackStep::StateChanged,
+            DecodeStep::NotReady(reason) => TrackStep::Blocked(reason),
             DecodeStep::Eof => TrackStep::Eof,
             DecodeStep::Failed => TrackStep::Failed,
         }
@@ -2061,6 +2062,7 @@ impl Track<Decoding> {
         match src.decode_one_step() {
             DecodeStep::Produced(fetch) => TrackStep::Produced(fetch),
             DecodeStep::Interrupted => TrackStep::StateChanged,
+            DecodeStep::NotReady(reason) => TrackStep::Blocked(reason),
             DecodeStep::Eof => TrackStep::Eof,
             DecodeStep::Failed => TrackStep::Failed,
         }
