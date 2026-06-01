@@ -2,7 +2,7 @@
 
 use std::{
     collections::VecDeque,
-    io::{Error as IoError, ErrorKind},
+    io::Error as IoError,
     marker::PhantomData,
     num::NonZeroUsize,
     ops::Range,
@@ -13,8 +13,8 @@ use std::{
 };
 
 use kithara_assets::{
-    AcquisitionResult, AssetReader, AssetResource, AssetResourceState, AssetScope, AssetWriter,
-    AssetsError, RawWriteHandle, ReadSide, ResourceKey, WriteSide,
+    AcquisitionResult, AssetReader, AssetResource, AssetScope, AssetWriter, RawWriteHandle,
+    ReadSide, ResourceKey, WriteSide,
 };
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, NetError};
@@ -37,9 +37,11 @@ use crate::{
 mod cancel_epoch;
 mod layout;
 mod reader_runtime;
+mod segment_store;
 use cancel_epoch::CancelEpoch;
 use layout::Layout;
 use reader_runtime::ReaderRuntime;
+use segment_store::SegmentStore;
 
 #[cfg(test)]
 mod tests;
@@ -372,13 +374,13 @@ pub(crate) struct PlanCtx {
 }
 
 pub(crate) struct HlsVariant {
-    /// Per-track asset store — used by reader paths (`read_at`,
-    /// `wait_range`, `range_ready`) for `open_resource` /
-    /// `contains_range` and by `dispatch` (already accessed via
-    /// `PlanCtx`) for `acquire_resource`. Cloned from `PlanCtx` at
-    /// construction so reader-side methods don't have to thread `ctx`
-    /// through.
-    scope: AssetScope<DecryptContext>,
+    /// Segment/init content domain: the asset scope plus the init and
+    /// media entry tables. Owns every resource read (`read_resource`,
+    /// `contains_range`) — the produce-core's open-and-read live here, and
+    /// it is the home for the `WS5d` held-resource lease. The fetch path on
+    /// this facade borrows its `init()` / `segments()` to claim slots and
+    /// build `FetchCmd`s.
+    store: SegmentStore,
     /// Parsed master/media-playlist data. Owned by `Arc` so multiple
     /// variants share a single immutable view; used by
     /// `seek_time_anchor` (`find_seek_point_for_time`) and as the
@@ -401,9 +403,6 @@ pub(crate) struct HlsVariant {
     /// `v_old`, and the second activation of `v_old` must dispatch fetches
     /// under a *live* cancel, so [`Self::rearm_cancel`] rotates the child.
     cancel_epoch: CancelEpoch,
-    /// fMP4 init metadata. For raw TS/AAC variants `init.size == 0` and
-    /// `init.state == Loaded` — `rebuild` then never enqueues `Init`.
-    init: InitEntry,
     queue: Mutex<VecDeque<PlannedFetch>>,
     /// Cached audio codec — pulled from `playlist_state` at construction
     /// time. The reader's hot path (`media_info`) reads this without
@@ -416,7 +415,6 @@ pub(crate) struct HlsVariant {
     /// resource-wide auth (e.g. zvuk `X-Auth-Token`) so segment GETs
     /// reach the same authenticated endpoint as the playlist load.
     headers: Option<Headers>,
-    segments: Vec<SegmentEntry>,
     variant: usize,
 }
 
@@ -503,8 +501,12 @@ impl HlsVariant {
     ) {
         self.rearm_cancel();
         let from_seg = from_seg.min(self.num_segments());
-        self.layout
-            .activate_with_shift(from_seg, seg_boundary, self.init_size(), &self.segments);
+        self.layout.activate_with_shift(
+            from_seg,
+            seg_boundary,
+            self.init_size(),
+            self.store.segments(),
+        );
         self.set_position(reader_pos);
         self.rebuild(ctx, from_seg);
     }
@@ -526,16 +528,10 @@ impl HlsVariant {
     /// `range_ready`. The closure performs the caller-owned size store and
     /// reports the post-store `init_size` to seed the recompute.
     fn apply_commit(&self, loaded: &Segment<Loaded>) {
-        self.layout.apply_commit(&self.segments, || {
-            match loaded.planned() {
-                PlannedFetch::Init => self.init.size.store(loaded.final_len(), Ordering::Release),
-                PlannedFetch::Segment(idx) => {
-                    if let Some(slot) = self.segments.get(idx as usize) {
-                        slot.size.store(loaded.final_len(), Ordering::Release);
-                    }
-                }
-            }
-            self.init_size()
+        self.layout.apply_commit(self.store.segments(), || {
+            self.store
+                .apply_loaded_size(loaded.planned(), loaded.final_len());
+            self.store.init_size()
         });
     }
 
@@ -593,19 +589,20 @@ impl HlsVariant {
         ctx: &PlanCtx,
         handle: Segment<Downloading>,
     ) -> Option<FetchCmd> {
-        let resource = match &self.init.content {
+        let init = self.store.init();
+        let resource = match &init.content {
             SegmentContent::Plain => ctx
                 .scope
                 .store()
-                .acquire_resource(&self.init.resource_id, None)
+                .acquire_resource(&init.resource_id, None)
                 .expect("acquire_resource for init must succeed"),
             SegmentContent::Encrypted(c) => ctx
                 .scope
                 .store()
-                .acquire_resource_with_ctx(&self.init.resource_id, None, Some(c.clone()))
+                .acquire_resource_with_ctx(&init.resource_id, None, Some(c.clone()))
                 .expect("acquire_resource_with_ctx for init must succeed"),
         };
-        self.build_cmd(self.init.url.clone(), resource, handle)
+        self.build_cmd(init.url.clone(), resource, handle)
     }
 
     fn build_init_entry(
@@ -687,33 +684,11 @@ impl HlsVariant {
         self.cancel_epoch.handle()
     }
 
-    /// Skip-fetch guard: a previously-cached resource may stay
-    /// `Committed` on disk even after the in-memory LRU evicts it
-    /// (eviction clears the cache slot, not the on-disk bytes). The reader's
-    /// `contains_range` already falls back to `resource_state` so the
-    /// segment is readable; dispatching a fresh `acquire_resource` against
-    /// a committed key would race the existing writer and fail with
-    /// `cannot write to committed resource`.
-    ///
-    /// Returns the committed on-disk length when the resource is
-    /// `Committed` with a known `final_len`. The caller uses that length
-    /// to mirror what `FetchSlot::settle` would have done — apply the
-    /// post-processing size so `init_size` / per-segment sizes match the
-    /// actual bytes on disk (after PKCS7 unpad, container framing, etc).
-    /// Without that apply, the announced/estimated size and the on-disk
-    /// size disagree and `range_ready` deadlocks on a cache-hot resource.
-    fn committed_final_len(ctx: &PlanCtx, key: &ResourceKey) -> Option<u64> {
-        match ctx.scope.store().resource_state(key) {
-            Ok(AssetResourceState::Committed { final_len }) => final_len,
-            _ => None,
-        }
-    }
-
     pub(crate) fn descriptor(&self, idx: usize) -> Option<SegmentDescriptor> {
-        let entry = self.segments.get(idx)?;
+        let entry = self.store.segments().get(idx)?;
         let seg_idx_u32 = u32::try_from(idx).ok()?;
         let byte_offset = self.layout.natural_offset(idx)?;
-        let size = self.segment_size(idx)?;
+        let size = self.store.segment_size(idx)?;
         Some(SegmentDescriptor::new(
             byte_offset..byte_offset + size,
             entry.decode_time,
@@ -726,14 +701,14 @@ impl HlsVariant {
     #[kithara::probe(variant = self.variant as u64, byte)]
     pub(crate) fn descriptor_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
         let mut idx = self.layout.bisect_left(byte);
-        if idx >= self.segments.len() {
+        if idx >= self.store.segments().len() {
             return None;
         }
         let off = self.layout.natural_offset(idx)?;
         if off < byte {
             idx += 1;
         }
-        if idx >= self.segments.len() {
+        if idx >= self.store.segments().len() {
             return None;
         }
         self.descriptor(idx)
@@ -747,12 +722,7 @@ impl HlsVariant {
 
     #[kithara::probe(variant = self.variant as u64)]
     pub(crate) fn descriptor_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
-        if self.segments.is_empty() {
-            return None;
-        }
-        let idx = bisect_right_decode_time(&self.segments, t).saturating_sub(1);
-        let idx = idx.min(self.segments.len() - 1);
-        self.descriptor(idx)
+        self.descriptor(self.store.index_at_time(t)?)
     }
 
     #[kithara::probe(
@@ -789,21 +759,21 @@ impl HlsVariant {
             let Some(planned) = planned else { break };
             match planned {
                 PlannedFetch::Init => {
-                    let Some(handle) = self
-                        .init
+                    let init = self.store.init();
+                    let Some(handle) = init
                         .state
                         .try_claim(PlannedFetch::Init, Arc::downgrade(self))
                     else {
                         continue;
                     };
-                    if let Some(actual) = Self::committed_final_len(ctx, &self.init.resource_id) {
+                    if let Some(actual) = self.store.committed_final_len(&init.resource_id) {
                         handle.into_loaded(actual);
                         continue;
                     }
                     out.extend(self.build_init_cmd(ctx, handle));
                 }
                 PlannedFetch::Segment(seg_idx) => {
-                    let Some(entry) = self.segments.get(seg_idx as usize) else {
+                    let Some(entry) = self.store.segments().get(seg_idx as usize) else {
                         continue;
                     };
                     let Some(handle) = entry
@@ -812,7 +782,7 @@ impl HlsVariant {
                     else {
                         continue;
                     };
-                    if let Some(actual) = Self::committed_final_len(ctx, &entry.resource_id) {
+                    if let Some(actual) = self.store.committed_final_len(&entry.resource_id) {
                         handle.into_loaded(actual);
                         continue;
                     }
@@ -832,12 +802,7 @@ impl HlsVariant {
     /// when every segment is `Loaded`. Scans linearly; cheap because it
     /// only runs from `Abr::progress` (ABR tick cadence).
     pub(crate) fn download_head(&self) -> u32 {
-        let head = self
-            .segments
-            .iter()
-            .position(|s| !s.state.is_loaded())
-            .unwrap_or(self.segments.len());
-        u32::try_from(head).unwrap_or(u32::MAX)
+        self.store.download_head()
     }
 
     #[kithara::probe(
@@ -851,7 +816,7 @@ impl HlsVariant {
         seg_idx: u32,
         handle: Segment<Downloading>,
     ) -> Option<FetchCmd> {
-        let entry = &self.segments[seg_idx as usize];
+        let entry = &self.store.segments()[seg_idx as usize];
         let acquire = match &entry.content {
             SegmentContent::Plain => ctx.scope.store().acquire_resource(&entry.resource_id, None),
             SegmentContent::Encrypted(c) => ctx.scope.store().acquire_resource_with_ctx(
@@ -887,11 +852,12 @@ impl HlsVariant {
         byte_offset,
         found_seg = self
             .layout
-            .find_at_offset(byte_offset, &self.segments)
+            .find_at_offset(byte_offset, self.store.segments())
             .map_or(u64::MAX, |(i, _, _)| u64::from(i))
     )]
     pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
-        self.layout.find_at_offset(byte_offset, &self.segments)
+        self.layout
+            .find_at_offset(byte_offset, self.store.segments())
     }
 
     /// Header byte range for format-change resync — alias for
@@ -911,17 +877,17 @@ impl HlsVariant {
             timeline,
             segments,
         } = parts;
-        let layout = Layout::new(init.size.load(Ordering::Acquire), &segments);
+        let init_size = init.size.load(Ordering::Acquire);
+        let layout = Layout::new(init_size, &segments);
+        let store = SegmentStore::new(ctx.scope.clone(), init, segments);
         Arc::new(Self {
             variant,
-            scope: ctx.scope.clone(),
+            store,
             playlist_state,
             reader: ReaderRuntime::new(timeline),
             layout,
             codec,
             container,
-            init,
-            segments,
             prefetch_anchor: AtomicU64::new(0),
             queue: Mutex::new(VecDeque::new()),
             cancel_epoch: CancelEpoch::new(ctx.master_cancel.clone()),
@@ -947,11 +913,14 @@ impl HlsVariant {
         if self.init_size() > 0 {
             return Ok(self.init_byte_range());
         }
-        let (_, off, size) = self.layout.find_natural(0, &self.segments).ok_or_else(|| {
-            StreamError::Source(SourceError::Other(Box::new(IoError::other(
-                "variant has no segments — cannot derive header range",
-            ))))
-        })?;
+        let (_, off, size) = self
+            .layout
+            .find_natural(0, self.store.segments())
+            .ok_or_else(|| {
+                StreamError::Source(SourceError::Other(Box::new(IoError::other(
+                    "variant has no segments — cannot derive header range",
+                ))))
+            })?;
         Ok(off..(off + size))
     }
 
@@ -989,16 +958,15 @@ impl HlsVariant {
     /// Resource key for the variant's init segment — `None` when the
     /// playlist has no `#EXT-X-MAP` (raw TS/AAC).
     pub(crate) fn init_resource(&self) -> Option<ResourceKey> {
-        (self.init_size() > 0).then(|| self.init.resource_id.clone())
+        self.store.init_resource()
     }
 
     pub(crate) fn init_size(&self) -> u64 {
-        self.init.size.load(Ordering::Acquire)
+        self.store.init_size()
     }
 
     pub(crate) fn invalidate_init(&self) {
-        if self.init_size() > 0 {
-            self.init.state.mark_missing();
+        if self.store.invalidate_init() {
             self.layout.clear_init_seed();
         }
     }
@@ -1039,12 +1007,12 @@ impl HlsVariant {
     /// (CMAF `EXT-X-MAP`) — true only if the variant advertises a
     /// non-zero init segment that hasn't been loaded yet.
     fn needs_init_fetch(&self) -> bool {
-        self.init_size() > 0 && !self.init.state.is_loaded()
+        self.store.needs_init_fetch()
     }
 
     #[must_use]
     pub(crate) fn num_segments(&self) -> u32 {
-        u32::try_from(self.segments.len()).unwrap_or(u32::MAX)
+        self.store.num_segments()
     }
 
     /// Returns evicted `seg_idx` (`-1` for init), or `None` if `key` doesn't belong to this variant.
@@ -1054,17 +1022,7 @@ impl HlsVariant {
     /// next ABR flip).
     #[kithara::probe(variant = self.variant as u64)]
     pub(crate) fn on_evict(&self, key: &ResourceKey) -> Option<i32> {
-        if self.init_size() > 0 && &self.init.resource_id == key {
-            self.init.state.mark_missing();
-            return Some(-1);
-        }
-        for (seg_idx, entry) in self.segments.iter().enumerate() {
-            if &entry.resource_id == key {
-                entry.state.mark_missing();
-                return i32::try_from(seg_idx).ok();
-            }
-        }
-        None
+        self.store.on_evict(key)
     }
 
     pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
@@ -1104,11 +1062,7 @@ impl HlsVariant {
             let slice_end = end.min(init_range.end);
             let local_start = cursor - init_range.start;
             let local_end = slice_end - init_range.start;
-            if !self
-                .scope
-                .store()
-                .contains_range(key, local_start..local_end)
-            {
+            if !self.store.contains_range(key, local_start..local_end) {
                 return false;
             }
             cursor = slice_end;
@@ -1128,11 +1082,7 @@ impl HlsVariant {
             let slice_end = end.min(seg_end);
             let local_start = cursor - seg_off;
             let local_end = slice_end - seg_off;
-            if !self
-                .scope
-                .store()
-                .contains_range(key, local_start..local_end)
-            {
+            if !self.store.contains_range(key, local_start..local_end) {
                 return false;
             }
             cursor = slice_end;
@@ -1162,7 +1112,7 @@ impl HlsVariant {
             let local_end = slice_end - init_range.start;
             let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
             let dst = &mut buf[written..written + take];
-            match self.read_resource(key, local_start..local_end, dst)? {
+            match self.store.read_resource(key, local_start..local_end, dst)? {
                 Some(n) => {
                     written += n;
                     cursor += n as u64;
@@ -1188,7 +1138,10 @@ impl HlsVariant {
             let local_end = slice_end - seg_off;
             let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
             let dst = &mut buf[written..written + take];
-            match self.read_resource(&key, local_start..local_end, dst)? {
+            match self
+                .store
+                .read_resource(&key, local_start..local_end, dst)?
+            {
                 Some(n) => {
                     written += n;
                     cursor += n as u64;
@@ -1201,26 +1154,6 @@ impl HlsVariant {
         }
 
         Ok(Self::wrap(written))
-    }
-
-    fn read_resource(
-        &self,
-        key: &ResourceKey,
-        range: Range<u64>,
-        dst: &mut [u8],
-    ) -> StreamResult<Option<usize>> {
-        let resource = match self.scope.store().open_resource(key, None) {
-            Ok(res) => res,
-            Err(AssetsError::Io(e)) if e.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(StreamError::Source(HlsError::from(e).into())),
-        };
-        resource
-            .wait_range(range.clone())
-            .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
-        let n = resource
-            .read_at(range.start, dst)
-            .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
-        Ok(Some(n))
     }
 
     /// Replace the cancel token with a fresh child of `master_cancel`.
@@ -1296,7 +1229,7 @@ impl HlsVariant {
     /// natural offsets. Subsequent ABR commits at boundary will re-build
     /// the layering as usual.
     pub(crate) fn reset_to_full_range(&self) {
-        self.layout.reset(self.init_size(), &self.segments);
+        self.layout.reset(self.init_size(), self.store.segments());
         self.rearm_cancel();
     }
 
@@ -1360,25 +1293,13 @@ impl HlsVariant {
     }
 
     pub(crate) fn segment_index_at_time(&self, t: Duration) -> Option<u32> {
-        if self.segments.is_empty() {
-            return None;
-        }
-        let idx = bisect_right_decode_time(&self.segments, t).saturating_sub(1);
-        let idx = idx.min(self.segments.len() - 1);
-        u32::try_from(idx).ok()
+        self.store
+            .index_at_time(t)
+            .and_then(|idx| u32::try_from(idx).ok())
     }
 
     pub(crate) fn segment_resource(&self, seg_idx: u32) -> Option<ResourceKey> {
-        self.segments
-            .get(seg_idx as usize)
-            .map(|e| e.resource_id.clone())
-    }
-
-    /// Media size of segment `idx` — pure media only; the init prefix
-    /// (when present) lives in its own range `[0, init.size)` and is
-    /// served by the source via [`Self::init_resource`].
-    fn segment_size(&self, idx: usize) -> Option<u64> {
-        Some(self.segments.get(idx)?.size.load(Ordering::Acquire))
+        self.store.segment_resource(seg_idx)
     }
 
     pub(crate) fn served_from(&self) -> u32 {
@@ -1421,10 +1342,11 @@ impl HlsVariant {
 
     #[kithara::probe(
         variant = self.variant as u64,
-        total = self.layout.total_bytes(&self.segments, self.init_size())
+        total = self.layout.total_bytes(self.store.segments(), self.init_size())
     )]
     pub(crate) fn total_bytes(&self) -> u64 {
-        self.layout.total_bytes(&self.segments, self.init_size())
+        self.layout
+            .total_bytes(self.store.segments(), self.init_size())
     }
 
     #[kithara::hang_watchdog]
@@ -1589,18 +1511,4 @@ impl FetchSlot {
             raw.write_at(pos, chunk).map_err(IoError::other)
         })
     }
-}
-
-fn bisect_right_decode_time(segments: &[SegmentEntry], t: Duration) -> usize {
-    let mut lo = 0_usize;
-    let mut hi = segments.len();
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        if segments[mid].decode_time <= t {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    lo
 }

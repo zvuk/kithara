@@ -302,8 +302,8 @@ fn find_at_offset_reflects_post_commit_size_shrink() {
     let (idx, off, size) = v.find_at_offset(450).expect("seg 1 before shrink");
     assert_eq!((idx, off, size), (1, 400, 400));
 
-    v.layout.apply_commit(&v.segments, || {
-        v.segments[0].size.store(384, Ordering::Release);
+    v.layout.apply_commit(v.store.segments(), || {
+        v.store.segments()[0].size.store(384, Ordering::Release);
         v.init_size()
     });
 
@@ -410,10 +410,10 @@ fn rebuild_refills_queue_without_touching_cancel_token() {
 fn dispatch_emits_init_first_then_segments_under_budget() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400], &ctx);
-    let init_url = v.init.url.clone();
-    let seg0_url = v.segments[0].url.clone();
-    let seg1_url = v.segments[1].url.clone();
-    let seg2_url = v.segments[2].url.clone();
+    let init_url = v.store.init().url.clone();
+    let seg0_url = v.store.segments()[0].url.clone();
+    let seg1_url = v.store.segments()[1].url.clone();
+    let seg2_url = v.store.segments()[2].url.clone();
     v.rebuild(&ctx, 0);
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 4);
@@ -440,29 +440,29 @@ fn dispatch_respects_budget() {
 fn dispatch_skips_non_missing_segments() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
-    v.init.state.mark_loaded();
-    v.segments[1].state.mark_loaded();
+    v.store.init().state.mark_loaded();
+    v.store.segments()[1].state.mark_loaded();
     v.queue.lock_sync().clear();
     for seg in 0..3_u32 {
         push_planned(&v, seg);
     }
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 2);
-    assert!(v.segments[1].state.is_loaded());
+    assert!(v.store.segments()[1].state.is_loaded());
 }
 
 #[kithara::test]
 fn on_evict_returns_minus_one_for_init() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[100, 100, 100], &ctx);
-    v.init.state.mark_loaded();
-    v.segments[1].state.mark_loaded();
-    let key = v.init.resource_id.clone();
+    v.store.init().state.mark_loaded();
+    v.store.segments()[1].state.mark_loaded();
+    let key = v.store.init().resource_id.clone();
     let res = v.on_evict(&key);
     assert_eq!(res, Some(-1));
-    assert!(!v.init.state.is_loaded());
+    assert!(!v.store.init().state.is_loaded());
     assert!(
-        v.segments[1].state.is_loaded(),
+        v.store.segments()[1].state.is_loaded(),
         "init eviction must not touch segment states"
     );
 }
@@ -471,11 +471,11 @@ fn on_evict_returns_minus_one_for_init() {
 fn on_evict_returns_seg_idx_for_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
-    v.segments[1].state.mark_loaded();
-    let key = v.segments[1].resource_id.clone();
+    v.store.segments()[1].state.mark_loaded();
+    let key = v.store.segments()[1].resource_id.clone();
     let res = v.on_evict(&key);
     assert_eq!(res, Some(1));
-    assert!(!v.segments[1].state.is_loaded());
+    assert!(!v.store.segments()[1].state.is_loaded());
 }
 
 #[kithara::test]
@@ -603,7 +603,7 @@ fn position_advances_are_strictly_monotonic() {
 fn dispatch_cmd_cancel_shares_cancellation_with_variant_cancel() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100], &ctx);
-    v.init.state.mark_loaded();
+    v.store.init().state.mark_loaded();
     let variant_cancel = v.cancel_handle();
     for seg in 0..2_u32 {
         push_planned(&v, seg);
@@ -628,8 +628,8 @@ fn variant_flip_cancels_v_old_and_keeps_v_new_token_live() {
     let ctx = test_ctx(3);
     let v_old = make_var(0, 0, &[100; 20], &ctx);
     let v_new = make_var(1, 0, &[200; 20], &ctx);
-    v_old.init.state.mark_loaded();
-    v_new.init.state.mark_loaded();
+    v_old.store.init().state.mark_loaded();
+    v_new.store.init().state.mark_loaded();
     let v_old_token = v_old.cancel_handle();
     let v_new_token = v_new.cancel_handle();
 
@@ -654,12 +654,12 @@ fn variant_flip_cancels_v_old_and_keeps_v_new_token_live() {
 fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100; 20], &ctx);
-    v.segments[10].state.mark_loaded();
+    v.store.segments()[10].state.mark_loaded();
 
     v.rebuild(&ctx, 10);
     let cmds = v.dispatch(&ctx, 3);
     assert_eq!(cmds.len(), 3);
-    let seg10_url = v.segments[10].url.clone();
+    let seg10_url = v.store.segments()[10].url.clone();
     assert!(
         cmds.iter().all(|c| c.url != seg10_url),
         "Loaded seg 10 must not be re-emitted"
