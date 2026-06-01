@@ -82,7 +82,7 @@ Defined here as the single source of truth and re-exported by other crates:
 
 1. The `Downloader` is async; peers and `FetchCmd` callbacks run on the tokio runtime.
 2. `FetchCmd.writer(chunk)` writes bytes directly into the `StorageResource` shared with the sync reader.
-3. The sync reader inside `Stream<T>` calls `Source::wait_range(range)`, which polls the underlying storage with a bounded spin budget (`MAX_WAIT_SPINS × WAIT_RANGE_TIMEOUT`) before returning `Pending(NotReady)`.
+3. The sync reader inside `Stream<T>` calls `Source::wait_range(range)` as a single non-blocking readiness probe: it returns `Ready`/`Eof`/`Interrupted` immediately, and on a not-yet-available range returns `WaitBudgetExceeded`, which `try_read` maps to `Pending(NotReady)` without sleeping. The backoff between probes lives in the audio scheduler's `Waiting` park (10ms), so the worker decode path never blocks on a syscall. (The consumer-thread `Seek` path re-probes `wait_range` under a bounded `SEEK_WAIT_TIMEOUT` wall-clock budget to prime metadata.)
 4. `Source::read_at(offset, buf)` performs the actual sync copy once the range is present.
 5. Cancellation flows top-down through the cancel-token hierarchy described in `crates/kithara-play/README.md`.
 

@@ -106,7 +106,7 @@ Each segment is stored as its own `AssetResource` via `AssetStore` (`kithara-ass
 
 ## Seek and wait_range Contract
 
-- `Source::wait_range(start..end)` returns `Ready` only when the requested bytes are readable in the current virtual layout owned by `HlsCoord`.
+- `Source::wait_range(start..end)` is a single non-blocking readiness probe: it returns `Ready` only when the requested bytes are readable in the current virtual layout owned by `HlsCoord`, `Interrupted` while the timeline is flushing, `Eof` past total bytes, and otherwise wakes the peer downloader and returns `WaitBudgetExceeded` immediately. It never sleeps — the worker decode path stays off any blocking syscall, and the backoff between probes lives in the audio scheduler's `Waiting` park.
 - On a seek miss, the source enqueues an explicit on-demand segment fetch for the active variant and seek epoch.
 - On a mid-stream ABR switch, stale metadata offsets are discarded — the source wakes the sequential downloader rather than trusting old offsets.
 - `Eof` is returned only when the timeline is marked EOF and the requested range starts at or after the effective total bytes.

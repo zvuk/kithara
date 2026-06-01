@@ -180,6 +180,24 @@ impl<S> Audio<S> {
     /// Probe buffer size in bytes for initial stream detection.
     const PROBE_BUFFER_SIZE: usize = 1024;
 
+    /// Wall-clock budget for the construction-time blocking warm-read.
+    ///
+    /// The non-blocking-pull read path makes `Stream::read` return
+    /// `Interrupted`/`NotReady` immediately when the first segment has not
+    /// arrived yet (the worker decode loop tolerates this by parking and
+    /// re-ticking). Decoder construction, however, runs once on a
+    /// `spawn_blocking` thread and has no re-tick loop — it must read the
+    /// container prefix synchronously. This budget bounds how long the
+    /// off-RT probe waits for that prefix to download before giving up; a
+    /// broken downloader cannot hang construction, and on the happy path
+    /// the prefix resolves well under it.
+    const PROBE_WARM_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// Backoff between construction-time warm-read retries while the
+    /// prefix is still downloading. Off-RT (construction only), so a short
+    /// sleep is the permitted backoff.
+    const PROBE_WARM_BACKOFF: Duration = Duration::from_millis(2);
+
     /// Minimum playback-position advance (ms) between `PlaybackProgress`
     /// emissions. Caps progress telemetry to ~10/s so it cannot flood the
     /// shared bounded event bus and drop control events.
@@ -1092,11 +1110,48 @@ where
         byte_pool: &kithara_bufpool::BytePool,
     ) -> Result<Stream<T>, DecodeError> {
         let mut probe_buf = byte_pool.get_with(|b| b.resize(Self::PROBE_BUFFER_SIZE, 0));
-        if let Err(e) = stream.read(&mut probe_buf) {
-            tracing::debug!(?e, "probe_stream_blocking: probe read failed");
-        }
+        Self::warm_probe_prefix(&mut stream, &mut probe_buf);
         stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
         Ok(stream)
+    }
+
+    /// Block (off-RT, on the `spawn_blocking` probe task) until the first
+    /// probe read succeeds, hits a hard error, or [`Self::PROBE_WARM_TIMEOUT`]
+    /// elapses.
+    ///
+    /// The read path is non-blocking-pull: a not-yet-downloaded range
+    /// surfaces as `ErrorKind::Interrupted`/`WouldBlock` immediately, and
+    /// each read attempt nudges the downloader (via `wait_range`'s
+    /// `wake_peer`). This mirrors the single warming read the blocking probe
+    /// performed before the non-blocking-pull conversion — it reads exactly
+    /// one probe buffer at offset 0, retrying with a short backoff until the
+    /// bytes land, then returns. It deliberately does NOT read forward past
+    /// the first buffer: advancing the cursor across a segment boundary here
+    /// would drive an ABR commit mid-construction. The caller seeks back to
+    /// 0 and the decoder probe reads the now-cached prefix.
+    fn warm_probe_prefix(stream: &mut Stream<T>, probe_buf: &mut [u8]) {
+        let deadline = kithara_platform::time::Instant::now() + Self::PROBE_WARM_TIMEOUT;
+        loop {
+            match stream.read(probe_buf) {
+                Ok(_) => return,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    if kithara_platform::time::Instant::now() >= deadline {
+                        tracing::debug!(?e, "warm_probe_prefix: timed out waiting for prefix");
+                        return;
+                    }
+                    park_timeout(Self::PROBE_WARM_BACKOFF);
+                }
+                Err(e) => {
+                    tracing::debug!(?e, "warm_probe_prefix: probe read failed");
+                    return;
+                }
+            }
+        }
     }
 
     fn resolve_event_bus(stream_config: &T::Config, config_bus: Option<EventBus>) -> EventBus {

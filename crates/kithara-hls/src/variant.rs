@@ -18,12 +18,7 @@ use kithara_assets::{
 };
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, NetError};
-use kithara_platform::{
-    CancellationToken, Mutex, RwLock,
-    thread::sleep,
-    time::{Duration, Instant},
-    tokio::sync::Notify,
-};
+use kithara_platform::{CancellationToken, Mutex, RwLock, time::Duration, tokio::sync::Notify};
 use kithara_storage::{ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SegmentDescriptor,
@@ -1596,39 +1591,21 @@ impl HlsVariant {
     pub(crate) fn wait_range(
         &self,
         range: Range<u64>,
-        timeout: Option<Duration>,
+        _timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
-        let started_at = Instant::now();
-        loop {
-            if self.range_ready(&range) {
-                hang_reset!();
-                return Ok(WaitOutcome::Ready);
-            }
-            if self.timeline.is_flushing() {
-                return Ok(WaitOutcome::Interrupted);
-            }
-            let total = self.total_bytes();
-            if total > 0 && range.start >= total {
-                return Ok(WaitOutcome::Eof);
-            }
-            if let Some(budget) = timeout
-                && started_at.elapsed() > budget
-            {
-                warn!(
-                    target: "kithara_hls::wait",
-                    v = self.variant,
-                    range_start = range.start,
-                    range_end = range.end,
-                    range_len = range.end.saturating_sub(range.start),
-                    budget_ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX),
-                    "wait_range budget exceeded"
-                );
-                return Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()));
-            }
-            self.wake_peer();
-            hang_tick!();
-            sleep(Duration::from_millis(2));
+        if self.range_ready(&range) {
+            hang_reset!();
+            return Ok(WaitOutcome::Ready);
         }
+        if self.timeline.is_flushing() {
+            return Ok(WaitOutcome::Interrupted);
+        }
+        let total = self.total_bytes();
+        if total > 0 && range.start >= total {
+            return Ok(WaitOutcome::Eof);
+        }
+        self.wake_peer();
+        Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()))
     }
 
     pub(crate) fn wake_peer(&self) {

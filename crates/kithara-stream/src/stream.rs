@@ -10,7 +10,12 @@ use std::{
     sync::Arc,
 };
 
-use kithara_platform::{MaybeSend, MaybeSync, thread::yield_now, time::Duration, tokio::task};
+use kithara_platform::{
+    MaybeSend, MaybeSync,
+    thread::{park_timeout, yield_now},
+    time::{Duration, Instant},
+    tokio::task,
+};
 use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
 
@@ -302,26 +307,65 @@ impl<T: StreamType> Stream<T> {
 }
 
 impl<T: StreamType> Stream<T> {
-    /// Maximum `wait_range` retries before returning
-    /// `Pending(NotReady)` to the caller. Each retry takes
-    /// `WAIT_RANGE_TIMEOUT` (10ms), so 50 iterations ≈ 500ms.
-    /// Prevents the hang detector from firing when data is
-    /// legitimately not yet available (e.g. encrypted HLS startup).
-    const MAX_WAIT_SPINS: u32 = 50;
-
-    /// `Seek` calls `wait_range(new_pos..new_pos+1)` to prime metadata
-    /// (so `source.len()` answers before the seek-past-EOF check). A
-    /// hard cap is required because a broken downloader would otherwise
-    /// hang the seek forever; on the happy path local metadata resolves
-    /// well under this budget. Matches the read path's total budget
-    /// (`WAIT_RANGE_TIMEOUT * MAX_WAIT_SPINS`).
+    /// Bounded wall-clock budget for the seek-priming `wait_range` spin.
+    /// `Seek` re-probes `wait_range(new_pos..new_pos+1)` to prime metadata
+    /// (so `source.len()` answers before the seek-past-EOF check). Each
+    /// probe returns immediately under the non-blocking-pull contract, so
+    /// the spin yields between probes and is capped by elapsed time rather
+    /// than an internal sleep: a broken downloader cannot hang the seek,
+    /// and on the happy path local metadata resolves well under this
+    /// budget. This is consumer-thread work, not the real-time worker
+    /// read path.
     const SEEK_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 
-    /// Short timeout keeps the audio worker responsive for round-robin
-    /// between tracks. At 44100Hz stereo with 4096-sample chunks, one chunk
-    /// lasts ~46ms. A 10ms budget gives the worker time to serve other
-    /// tracks and still refill the ringbuf before the audio callback drains it.
+    /// Per-probe hint passed to [`Source::wait_range`] on the worker read
+    /// path. Non-blocking-pull sources (HLS) treat `wait_range` as a single
+    /// readiness probe and ignore this hint; the backoff between probes
+    /// lives in the audio scheduler's `Waiting` park (10ms). The value
+    /// still names the worker's re-poll cadence: one PCM chunk at 44100Hz
+    /// stereo / 4096 samples lasts ~46ms, so a 10ms re-check refills the
+    /// ringbuf with margin while staying fair to other tracks.
     const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
+
+    /// Wall-clock budget for the blocking [`Read::read`] adapter that
+    /// direct `Read + Seek` consumers use. `try_read` is a single
+    /// non-blocking probe; the blocking interface retries it across this
+    /// budget so a `read` issued right after a `seek` waits for the
+    /// seeked bytes to download instead of erroring on the first
+    /// not-ready probe. This is the consumer-thread interface, never the
+    /// real-time worker path (the worker uses [`Self::probe_read`]).
+    const BLOCKING_READ_TIMEOUT: Duration = Duration::from_millis(500);
+
+    /// Per-spin park between blocking [`Read::read`] probes. Bounds the
+    /// re-check cadence while the seeked range downloads; small enough to
+    /// return promptly once bytes land, large enough to avoid a busy
+    /// spin. Off-RT consumer interface only.
+    const BLOCKING_READ_BACKOFF: Duration = Duration::from_millis(10);
+
+    /// Prime metadata for a seek target by re-probing the non-blocking
+    /// [`Source::wait_range`] until the range resolves (`Ready`/`Eof`),
+    /// the source reports an error, or the [`Self::SEEK_WAIT_TIMEOUT`]
+    /// wall-clock budget elapses. Runs on the consumer/seek thread — not
+    /// the real-time worker read path — so a bounded yield-spin is the
+    /// permitted backoff: `wait_range` returns immediately under the
+    /// non-blocking-pull contract, so the elapsed-time cap (not an
+    /// internal sleep) bounds a broken downloader. The outcome is
+    /// advisory; `seek` re-checks `source.len()` afterwards.
+    fn prime_seek_range(&mut self, range: Range<u64>) {
+        let deadline = Instant::now() + Self::SEEK_WAIT_TIMEOUT;
+        loop {
+            let not_ready = matches!(
+                self.source
+                    .wait_range(range.clone(), Some(Self::WAIT_RANGE_TIMEOUT)),
+                Ok(WaitOutcome::Interrupted)
+                    | Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+            );
+            if !not_ready || Instant::now() >= deadline {
+                return;
+            }
+            yield_now();
+        }
+    }
 
     /// Typed read — returns a [`StreamReadOutcome`] discriminating
     /// progress (`Bytes` with [`NonZeroUsize`]) from non-progress
@@ -338,15 +382,12 @@ impl<T: StreamType> Stream<T> {
             });
         }
 
-        let mut wait_spins = 0u32;
-
         loop {
             let timeline = self.source.timeline();
             let read_epoch = timeline.seek_epoch();
             let pos = self.source.position();
             let range = pos..pos.saturating_add(buf.len() as u64);
 
-            // WHY: `wait_range` returns `Interrupted` when the source has a
             if self.source.has_variant_change_pending() {
                 return Ok(StreamReadOutcome::Pending(PendingReason::VariantChange));
             }
@@ -360,15 +401,9 @@ impl<T: StreamType> Stream<T> {
                     if timeline.is_flushing() || timeline.seek_epoch() != read_epoch {
                         return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
-                    wait_spins += 1;
-                    if wait_spins >= Self::MAX_WAIT_SPINS {
-                        return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
-                            NotReadyCause::WaitBudgetExhausted,
-                        )));
-                    }
-                    hang_tick!();
-                    yield_now();
-                    continue;
+                    return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
+                        NotReadyCause::WaitBudgetExhausted,
+                    )));
                 }
                 Err(e) => {
                     return Err(StreamReadError::Source(IoError::other(e.to_string())));
@@ -380,22 +415,14 @@ impl<T: StreamType> Stream<T> {
                     return Ok(StreamReadOutcome::Eof { byte_position: pos });
                 }
                 WaitOutcome::Interrupted => {
-                    if !timeline.is_flushing() {
-                        wait_spins += 1;
-                        if wait_spins >= Self::MAX_WAIT_SPINS {
-                            return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
-                                NotReadyCause::WaitInterrupted,
-                            )));
-                        }
-                        hang_tick!();
-                        yield_now();
-                        continue;
+                    if timeline.is_flushing() {
+                        return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
-                    return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
+                    return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
+                        NotReadyCause::WaitInterrupted,
+                    )));
                 }
             }
-
-            wait_spins = 0;
 
             if timeline.seek_epoch() != read_epoch {
                 return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
@@ -435,8 +462,24 @@ impl<T: StreamType> Stream<T> {
     }
 }
 
-impl<T: StreamType> Read for Stream<T> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+impl<T: StreamType> Stream<T> {
+    /// Map a single [`Self::try_read`] probe to the `std::io::Read`
+    /// contract **without blocking**: a not-ready range surfaces as an
+    /// `Interrupted`/`Other` `io::Error` carrying the typed
+    /// [`StreamPending`]/[`VariantChangeError`] payload immediately.
+    ///
+    /// This is the real-time worker read path — the audio worker maps
+    /// the `Interrupted`/`WouldBlock` error to `DemuxOutcome::Pending`
+    /// and parks in the scheduler. Direct `Read + Seek` consumers go
+    /// through the blocking [`Read::read`] adapter instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns the source's `io::Error` for genuine failures, an
+    /// `Interrupted` error carrying [`StreamPending`] for transient
+    /// backpressure / seek-pending, and `Other(VariantChangeError)` at a
+    /// variant boundary.
+    pub fn probe_read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self.try_read(buf) {
             Ok(StreamReadOutcome::Bytes { count, .. }) => Ok(count.get()),
             Ok(StreamReadOutcome::Eof { .. }) => Ok(0),
@@ -453,6 +496,47 @@ impl<T: StreamType> Read for Stream<T> {
                 Err(IoError::other(VariantChangeError))
             }
             Err(StreamReadError::Source(e)) => Err(e),
+        }
+    }
+}
+
+impl<T: StreamType> Read for Stream<T> {
+    /// Blocking `std::io::Read` for direct `Read + Seek` consumers.
+    ///
+    /// `try_read` is a single non-blocking probe; this adapter retries it
+    /// across [`Self::BLOCKING_READ_TIMEOUT`] so a `read` issued right
+    /// after a `seek` waits for the seeked bytes to download instead of
+    /// erroring on the first not-ready probe. Only the transient
+    /// "data not ready" pending (`NotReady`/`Retry`) is waited on; a
+    /// seek that flushes mid-read (`SeekPending`), a variant boundary, a
+    /// natural EOF, and genuine source errors all return immediately.
+    /// This is the off-RT consumer interface — the real-time worker uses
+    /// [`Self::probe_read`] and never blocks here.
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let deadline = Instant::now() + Self::BLOCKING_READ_TIMEOUT;
+        loop {
+            match self.try_read(buf) {
+                Ok(StreamReadOutcome::Bytes { count, .. }) => return Ok(count.get()),
+                Ok(StreamReadOutcome::Eof { .. }) => return Ok(0),
+                Ok(StreamReadOutcome::Pending(
+                    reason @ (PendingReason::NotReady(_) | PendingReason::Retry),
+                )) => {
+                    if Instant::now() >= deadline {
+                        return Err(IoError::new(
+                            ErrorKind::Interrupted,
+                            self.snapshot_pending(reason, buf.len()),
+                        ));
+                    }
+                    park_timeout(Self::BLOCKING_READ_BACKOFF);
+                }
+                Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
+                    return Err(IoError::new(ErrorKind::Interrupted, reason));
+                }
+                Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {
+                    return Err(IoError::other(VariantChangeError));
+                }
+                Err(StreamReadError::Source(e)) => return Err(e),
+            }
         }
     }
 }
@@ -493,7 +577,7 @@ impl<T: StreamType> Seek for Stream<T> {
             SeekFrom::Current(delta) => i128::from(current).saturating_add(i128::from(delta)),
             SeekFrom::End(delta) => {
                 if self.source.len().is_none() {
-                    let _ = self.source.wait_range(0..1, None);
+                    self.prime_seek_range(0..1);
                 }
                 let Some(len) = self.source.len() else {
                     return Err(IoError::new(
@@ -518,9 +602,7 @@ impl<T: StreamType> Seek for Stream<T> {
             Ok(range) if range.start == new_pos => range,
             _ => new_pos..new_pos.saturating_add(1),
         };
-        let _ = self
-            .source
-            .wait_range(wait_range, Some(Self::SEEK_WAIT_TIMEOUT));
+        self.prime_seek_range(wait_range);
 
         if let Some(len) = self.source.len()
             && new_pos > len
@@ -730,7 +812,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn read_retries_interrupted_when_not_flushing() {
+    fn try_read_yields_not_ready_on_interrupted_then_recovers_next_probe() {
         let timeline = Timeline::new();
         let source = ScriptSource::new(
             timeline.clone(),
@@ -741,9 +823,17 @@ mod tests {
         let mut stream = Stream::<DummyType> { source };
         let mut buf = [0u8; 4];
 
+        let first = stream
+            .try_read(&mut buf)
+            .expect("BUG: not-ready is a status return; not a hard error in this test");
+        assert!(matches!(
+            first,
+            StreamReadOutcome::Pending(PendingReason::NotReady(NotReadyCause::WaitInterrupted))
+        ));
+
         let n = stream
             .read(&mut buf)
-            .expect("BUG: read must succeed after the explicit retry in this test scenario");
+            .expect("BUG: read must succeed once the source reports the range ready");
         assert_eq!(n, 4);
         assert_eq!(&buf, b"ABCD");
     }

@@ -110,10 +110,8 @@ impl<T: StreamType> Clone for SharedStream<T> {
 }
 
 impl<T: StreamType> Read for SharedStream<T> {
-    delegate! {
-        to self.inner.lock_sync() {
-            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
-        }
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.lock_sync().probe_read(buf)
     }
 }
 
