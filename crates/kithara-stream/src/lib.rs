@@ -17,6 +17,7 @@ mod preroll;
 mod source;
 mod stream;
 mod timeline;
+mod wake;
 
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
@@ -34,3 +35,4 @@ pub use stream::{
     VariantChangeError,
 };
 pub use timeline::{ChunkPosition, Timeline};
+pub use wake::DeferredWake;

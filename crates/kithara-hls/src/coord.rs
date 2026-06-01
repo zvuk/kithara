@@ -3,7 +3,7 @@
 use std::{
     ops::Range,
     sync::{
-        Arc, OnceLock,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -16,7 +16,6 @@ use kithara_events::AbrReason;
 use kithara_platform::{
     CancellationToken,
     time::{Duration, Instant},
-    tokio::sync::Notify,
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
@@ -69,11 +68,6 @@ pub(crate) struct HlsCoord {
     /// it — smooth ABR (FLAC@hi → FLAC@lo) keeps reading without a
     /// fence.
     variant_generation: AtomicU64,
-    /// Reader→peer wake handle, installed once when the owning `HlsPeer`
-    /// binds. Forwarded to every variant via [`Self::set_peer_wake`] so
-    /// `wait_range` / `seek_time_anchor` running inside a variant can
-    /// resume `HlsPeer::poll_next` directly.
-    peer_wake: OnceLock<Arc<Notify>>,
 }
 
 impl HlsCoord {
@@ -100,7 +94,6 @@ impl HlsCoord {
             cancel: env.cancel,
             scope: env.scope,
             headers: env.headers,
-            peer_wake: OnceLock::new(),
             variant_generation: AtomicU64::new(0),
             fence_at: AtomicU64::new(0),
         }
@@ -338,12 +331,6 @@ impl HlsCoord {
         self.active_required().media_info()
     }
 
-    /// External signal that the reader is blocked — wake the peer so
-    /// the next `poll_next` runs immediately.
-    pub(crate) fn notify_waiting(&self) {
-        self.wake_peer();
-    }
-
     /// Track-level phase. Master-cancel takes precedence (terminal
     /// `Cancelled`); otherwise the variant that currently serves
     /// `range.start` decides — mid-buffer boundary cross resolves to
@@ -384,25 +371,6 @@ impl HlsCoord {
             active.reset_to_full_range();
         }
         self.abr.invalidate_pending();
-    }
-
-    /// Install the wake handle that `HlsPeer` listens on. Called once by
-    /// `HlsSource::set_hls_peer` after the peer is bound. Subsequent
-    /// calls silently keep the first registration. Forwarded to every
-    /// variant so reader-path waits inside a variant can wake the peer
-    /// directly.
-    pub(crate) fn set_peer_wake(&self, notify: &Arc<Notify>) {
-        if self.peer_wake.set(Arc::clone(notify)).is_ok() {
-            for v in self.variants.iter() {
-                v.set_peer_wake(Arc::clone(notify));
-            }
-        }
-    }
-
-    /// Wake the peer on receipt of a new seek epoch. The epoch value
-    /// itself lives on `Timeline` — we just resume `poll_next`.
-    pub(crate) fn set_seek_epoch(&self, _seek_epoch: u64) {
-        self.wake_peer();
     }
 
     /// Mirror `abr.lock()` state to `timeline.is_seek_pending()`.
@@ -484,12 +452,6 @@ impl HlsCoord {
             return Ok(WaitOutcome::Interrupted);
         }
         self.variant_serving(range.start).wait_range(range, timeout)
-    }
-
-    fn wake_peer(&self) {
-        if let Some(notify) = self.peer_wake.get() {
-            notify.notify_one();
-        }
     }
 
     delegate! {

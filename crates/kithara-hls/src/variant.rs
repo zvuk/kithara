@@ -18,7 +18,7 @@ use kithara_assets::{
 };
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, NetError};
-use kithara_platform::{CancellationToken, Mutex, time::Duration, tokio::sync::Notify};
+use kithara_platform::{CancellationToken, Mutex, time::Duration};
 use kithara_storage::{ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SegmentDescriptor,
@@ -1273,7 +1273,6 @@ impl HlsVariant {
             .variant_index(variant)
             .build();
         self.set_position(byte_offset);
-        self.wake_peer();
         Ok(Some(anchor))
     }
 
@@ -1310,13 +1309,6 @@ impl HlsVariant {
     /// `served_until` read under a single Layout lock.
     pub(crate) fn is_shrunk(&self) -> bool {
         self.layout.is_shrunk(self.num_segments())
-    }
-
-    /// Install the wake handle that the owning peer listens on. Called
-    /// once by `HlsCoord` after the peer is bound. Subsequent calls
-    /// silently keep the first registration.
-    pub(crate) fn set_peer_wake(&self, notify: Arc<Notify>) {
-        self.reader.set_wake(notify);
     }
 
     #[kithara::probe(variant = self.variant as u64, pos)]
@@ -1366,12 +1358,10 @@ impl HlsVariant {
         if total > 0 && range.start >= total {
             return Ok(WaitOutcome::Eof);
         }
-        self.wake_peer();
+        // Not ready: the reader driver (`Stream::probe_read` / `read` /
+        // `prime_seek_range`) wakes the peer for this range, per its own
+        // on-core/off-core context — this method stays wake-free.
         Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()))
-    }
-
-    pub(crate) fn wake_peer(&self) {
-        self.reader.wake();
     }
 
     fn wrap(written: usize) -> ReadOutcome {

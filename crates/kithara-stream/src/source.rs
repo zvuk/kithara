@@ -11,6 +11,7 @@ use crate::{
     Timeline,
     error::{SourceError, StreamError, StreamResult},
     media::MediaInfo,
+    wake::DeferredWake,
 };
 
 /// Per-segment metadata exposed by segmented sources (HLS).
@@ -288,15 +289,14 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// arrive (Content-Length discovery).
     fn len(&self) -> Option<u64>;
 
-    /// Create a callback that wakes blocked `wait_range()` without holding
-    /// the `SharedStream` mutex.
+    /// The reader→peer wake handle, if this source pushes a downloader peer.
     ///
-    /// The returned closure captures only the underlying condvar/notify
-    /// primitive, so calling it from the main thread cannot deadlock even
-    /// when the worker thread holds the `SharedStream` lock inside `read()`.
-    ///
-    /// Default returns `None` (no blocking waits to wake).
-    fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
+    /// Segmented sources (HLS) return their [`DeferredWake`]; the driver
+    /// reading or seeking the stream arms it on the produce core (the audio
+    /// shell flushes it) or [`notify_now`](DeferredWake::notify_now)s it
+    /// off-core, per the driver's own statically-known context. Non-segmented
+    /// sources have no peer and return `None`.
+    fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
         None
     }
 
@@ -304,13 +304,6 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     fn media_info(&self) -> Option<MediaInfo> {
         None
     }
-
-    /// Wake any blocked `wait_range()` calls.
-    ///
-    /// Called after `Timeline::initiate_seek()` to ensure immediate response
-    /// from threads sleeping on condvars. Default no-op for sources without
-    /// blocking waits.
-    fn notify_waiting(&self) {}
 
     /// Overall source readiness at the current timeline position.
     ///
@@ -370,12 +363,6 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// post-seek landings. Sources implement this via the same atomic
     /// cursor that backs [`Self::position`] / [`Self::advance`].
     fn set_position(&self, pos: u64);
-
-    /// Set current seek epoch for stale request invalidation.
-    ///
-    /// HLS uses this to drop in-flight network/segment requests that belong
-    /// to previous seeks. Non-seek-aware sources keep the default no-op.
-    fn set_seek_epoch(&mut self, _seek_epoch: u64) {}
 
     /// Build a fresh reader-side hooks instance.
     ///

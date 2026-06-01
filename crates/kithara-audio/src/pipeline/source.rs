@@ -71,7 +71,6 @@ impl<T: StreamType> SharedStream<T> {
             fn format_change_segment_range(&self) -> kithara_stream::StreamResult<Range<u64>>;
             pub(crate) fn clear_variant_fence(&self);
             pub(crate) fn has_variant_change_pending(&self) -> bool;
-            pub(crate) fn set_seek_epoch(&self, seek_epoch: u64);
             fn seek_time_anchor(&self, position: Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
             fn commit_seek_landing(&self, anchor: Option<SourceSeekAnchor>);
             /// Build a fresh reader-side hooks instance from the inner source.
@@ -86,18 +85,11 @@ impl<T: StreamType> SharedStream<T> {
             pub(crate) fn phase(&self) -> SourcePhase;
             /// Point-in-time readiness for a specific byte range.
             pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase;
-            /// Wake blocked `wait_range()` calls and downstream waiters.
-            ///
-            /// Safe to call outside of `read()`; briefly takes the inner mutex.
-            fn notify_waiting(&self);
-            /// Create a lock-free callback for waking blocked `wait_range()`.
-            ///
-            /// Called once during `Audio::new()` (before the worker starts),
-            /// so the inner mutex lock is safe. The returned closure captures
-            /// only the condvar/notify primitive — it never takes the inner
-            /// mutex, preventing deadlock when called from `Audio::seek()`
-            /// while the worker holds the lock inside `read()`.
-            pub(crate) fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>>;
+            /// The reader→peer wake handle — `Some` for segmented sources
+            /// (HLS) that push a downloader peer. The FSM arms it on the
+            /// produce core (seek-apply / finalize); the scheduler shell
+            /// flushes it off the forbid-blocking path.
+            pub(crate) fn peer_wake(&self) -> Option<Arc<kithara_stream::DeferredWake>>;
         }
     }
 }
@@ -210,14 +202,13 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     gapless: GaplessStage,
     emit: Option<Box<dyn Fn(AudioEvent) + Send>>,
     last_spec: Option<PcmSpec>,
-    /// Lock-free wake callback resolved from
-    /// [`Source::make_notify_fn`] at construction. Captures the source's
-    /// peer-wake `Arc<Notify>` directly, so calling it never re-enters
-    /// the `SharedStream` mutex — the FSM holds that lock for every
-    /// `clear_seek_pending` callsite, which makes
-    /// `shared_stream.notify_waiting()` unsafe to call from inside the
-    /// FSM (recursive mutex acquisition = stack overflow).
-    peer_wake: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Reader→peer wake handle, resolved from [`Source::peer_wake`] at
+    /// construction. The FSM runs on the produce core, so it `arm`s this
+    /// (lock-free) at seek-apply / `finalize_seek_pending`; the scheduler shell
+    /// flushes it off the forbid path. Holding the handle directly (not via the
+    /// `SharedStream` mutex) keeps the arm out of the lock the FSM already holds
+    /// at every `clear_seek_pending` callsite. `None` for file streams.
+    peer_wake: Option<Arc<kithara_stream::DeferredWake>>,
     /// Buffered effect-chain tail produced by a single end-of-stream drain (`drain_effects`).
     /// `None` until true EOF arms it.
     eof_drain_queue: Option<VecDeque<PcmChunk>>,
@@ -256,7 +247,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         gapless_mode: GaplessMode,
     ) -> Self {
         let timeline = shared_stream.timeline();
-        let peer_wake = shared_stream.make_notify_fn();
+        let peer_wake = shared_stream.peer_wake();
         let gapless =
             GaplessStage::build(decoder.as_ref(), gapless_mode, initial_media_info.as_ref());
         let session = DecoderSession {
@@ -1586,11 +1577,12 @@ impl<T: StreamType> StreamAudioSource<T> {
             self.emit_seek_lifecycle(SeekLifecycleStage::SeekRequest, epoch, self.seek_context());
         }
 
-        self.shared_stream.set_seek_epoch(epoch);
         let anchor_result = self.shared_stream.seek_time_anchor(position);
         self.shared_stream.clear_variant_fence();
         self.timeline.complete_seek(epoch);
-        self.shared_stream.notify_waiting();
+        // Seek applied on the produce core: arm the peer so it re-targets
+        // fetches around the new reader position. The shell flushes it.
+        self.arm_peer_wake();
 
         let mode = match anchor_result {
             Ok(Some(anchor)) => SeekMode::Anchor(anchor),
@@ -1678,14 +1670,21 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// calls then hit `AbrReason::Locked` in `decide()` and silently fail
     /// to commit.
     ///
-    /// Notifying the source's waiter (`make_notify_fn` -> `HlsCoord::wake_peer`)
-    /// after every seek-completion ensures the peer runs one more
-    /// `poll_next` cycle, which sees `is_seek_pending() == false` and
-    /// releases the ABR lock through `sync_abr_lock`.
+    /// Arming the source's peer wake (`Source::peer_wake`) after every
+    /// seek-completion ensures the peer runs one more `poll_next` cycle, which
+    /// sees `is_seek_pending() == false` and releases the ABR lock through
+    /// `sync_abr_lock`.
     fn finalize_seek_pending(&self, epoch: u64) {
         self.timeline.clear_seek_pending(epoch);
+        self.arm_peer_wake();
+    }
+
+    /// Arm the reader→peer wake on the produce core (lock-free). The scheduler
+    /// shell flushes it off the forbid path, so the cross-thread `notify_one`
+    /// (a `kevent`) never fires on the RT core. No-op for file streams.
+    fn arm_peer_wake(&self) {
         if let Some(ref wake) = self.peer_wake {
-            wake();
+            wake.arm();
         }
     }
 
@@ -2207,8 +2206,16 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         &self.timeline
     }
 
-    fn flush_reader_events(&mut self) {
+    fn flush_deferred(&mut self) {
         self.session.decoder.flush_reader_signals();
+        // Deliver the peer wake the produce core armed this pass (a blocked
+        // `probe_read`, a seek-apply / finalize). The `notify_one` is a
+        // cross-thread `kevent` the forbid-blocking core must not make, so it
+        // lands here in the shell. Same `Arc<DeferredWake>` the reader drivers
+        // and the FSM arm, so one flush covers both. `None` for file streams.
+        if let Some(ref wake) = self.peer_wake {
+            wake.flush();
+        }
     }
 
     fn warm_up(&mut self) {

@@ -14,13 +14,10 @@ use kithara_events::{AbrMode, AbrProgressSnapshot, VariantDuration, VariantInfo}
 use kithara_platform::{
     CancellationToken, Mutex,
     time::Duration,
-    tokio::{
-        self,
-        sync::{Notify, mpsc},
-    },
+    tokio::{self, sync::mpsc},
 };
 use kithara_stream::{
-    Timeline,
+    DeferredWake, Timeline,
     dl::{FetchCmd, Peer, RequestPriority},
 };
 use kithara_test_utils::kithara;
@@ -54,7 +51,7 @@ pub(crate) struct HlsPeer {
     /// again without waiting for the next downloader-driven wakeup. Owned
     /// here (not on `HlsCoord`) because the wake mechanism is a property
     /// of the peer, not of shared state.
-    reader_advanced: Arc<Notify>,
+    reader_advanced: Arc<DeferredWake>,
     reader_segment: Arc<AtomicUsize>,
     state: Arc<Mutex<Option<HlsTrackState>>>,
     /// Wake-up trigger for the waker-forwarding micro-task: not a
@@ -81,7 +78,7 @@ impl HlsPeer {
             abr: Arc::new(AbrState::new(initial_mode)),
             variants: Mutex::new(Vec::new()),
             reader_segment: Arc::new(AtomicUsize::new(0)),
-            reader_advanced: Arc::new(Notify::new()),
+            reader_advanced: Arc::new(DeferredWake::default()),
         }
     }
 
@@ -151,9 +148,10 @@ impl HlsPeer {
         });
     }
 
-    /// Shared `Notify` handle that the `Source` clones to wake `poll_next`
-    /// after every reader progress event.
-    pub(crate) fn reader_wake(&self) -> Arc<Notify> {
+    /// Shared wake handle the `Source` clones to resume `poll_next` after a
+    /// reader progress event. The reader drivers arm/notify it; this micro-task
+    /// awaits [`DeferredWake::notified`].
+    pub(crate) fn reader_wake(&self) -> Arc<DeferredWake> {
         Arc::clone(&self.reader_advanced)
     }
 
@@ -213,7 +211,9 @@ impl Abr for HlsPeer {
     }
 
     fn wake(&self) {
-        self.reader_advanced.notify_one();
+        // The ABR controller runs on the downloader runtime (off the RT produce
+        // core), so wake the peer immediately rather than deferring.
+        self.reader_advanced.notify_now();
     }
 }
 

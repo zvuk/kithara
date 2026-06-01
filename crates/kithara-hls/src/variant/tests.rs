@@ -8,7 +8,6 @@ use kithara_drm::DecryptContext;
 use kithara_platform::{
     CancellationToken,
     time::{Duration, Instant},
-    tokio::sync::Notify,
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{SourceError, StreamError, Timeline};
@@ -695,18 +694,17 @@ fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
 }
 
 /// Non-blocking-pull contract: a not-ready range must make `wait_range`
-/// return `WaitBudgetExceeded` *immediately* (no internal sleep), after
-/// nudging the peer downloader via `wake_peer`. The backoff between probes
-/// is the caller's responsibility (the worker scheduler park), so the read
-/// path never blocks on a syscall. The old implementation slept 2ms per
-/// spin and looped until the 10ms budget elapsed; the probe must now return
-/// in well under that.
+/// return `WaitBudgetExceeded` *immediately* (no internal sleep). The backoff
+/// between probes is the caller's responsibility (the worker scheduler park),
+/// so the read path never blocks on a syscall. Waking the peer downloader is
+/// the reader driver's job (`Stream::probe_read` / `read` / `prime_seek_range`,
+/// per its on-core/off-core context), not this method's. The old
+/// implementation slept 2ms per spin and looped until the 10ms budget elapsed;
+/// the probe must now return in well under that.
 #[kithara::test]
-fn wait_range_probes_without_sleeping_and_wakes_peer() {
+fn wait_range_probes_without_sleeping() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400], &ctx);
-    let wake = Arc::new(Notify::new());
-    v.set_peer_wake(Arc::clone(&wake));
 
     let started = Instant::now();
     let outcome = v.wait_range(0..1, Some(Duration::from_millis(10)));
@@ -722,20 +720,6 @@ fn wait_range_probes_without_sleeping_and_wakes_peer() {
     assert!(
         elapsed < Duration::from_millis(2),
         "probe must not sleep (old impl slept 2ms/spin up to the 10ms budget); took {elapsed:?}"
-    );
-
-    let rt = kithara_platform::tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("current-thread runtime");
-    let woken = rt.block_on(async {
-        kithara_platform::tokio::time::timeout(Duration::from_millis(50), wake.notified())
-            .await
-            .is_ok()
-    });
-    assert!(
-        woken,
-        "wake_peer must nudge the peer downloader on a not-ready probe"
     );
 }
 

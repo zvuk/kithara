@@ -161,7 +161,7 @@ impl fmt::Display for VariantChangeError {
 impl StdError for VariantChangeError {}
 
 use crate::{
-    MediaInfo, SourcePhase, SourceSeekAnchor, Timeline,
+    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor, Timeline,
     error::{SourceError, StreamError},
     source::{NotReadyCause, PendingReason, ReadOutcome, Source},
 };
@@ -287,12 +287,9 @@ impl<T: StreamType> Stream<T> {
             /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
             /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
             pub fn has_variant_change_pending(&self) -> bool;
-            /// Set seek epoch for stale request invalidation.
-            pub fn set_seek_epoch(&mut self, seek_epoch: u64);
-            /// Wake any blocked `wait_range()` calls.
-            pub fn notify_waiting(&self);
-            /// Create a lock-free callback for waking blocked `wait_range()`.
-            pub fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>>;
+            /// The reader→peer wake handle — `Some` for segmented sources (HLS)
+            /// that push a downloader peer, `None` otherwise.
+            pub fn peer_wake(&self) -> Option<Arc<DeferredWake>>;
             /// Commit the actual post-seek landing after `decoder.seek(...)`.
             pub fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>);
             /// Build a fresh reader-side hooks instance from the inner source.
@@ -354,12 +351,20 @@ impl<T: StreamType> Stream<T> {
     fn prime_seek_range(&mut self, range: Range<u64>) {
         let deadline = Instant::now() + Self::SEEK_WAIT_TIMEOUT;
         loop {
-            let not_ready = matches!(
-                self.source
-                    .wait_range(range.clone(), Some(Self::WAIT_RANGE_TIMEOUT)),
-                Ok(WaitOutcome::Interrupted)
-                    | Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+            let outcome = self
+                .source
+                .wait_range(range.clone(), Some(Self::WAIT_RANGE_TIMEOUT));
+            let budget_exceeded = matches!(
+                &outcome,
+                Err(StreamError::Source(SourceError::WaitBudgetExceeded))
             );
+            // Consumer seek-prime path: a not-ready range means the peer must
+            // fetch it. Off the produce core, wake immediately so the prime is
+            // not gated on the worker's next pass.
+            if budget_exceeded && let Some(wake) = self.source.peer_wake() {
+                wake.notify_now();
+            }
+            let not_ready = budget_exceeded || matches!(&outcome, Ok(WaitOutcome::Interrupted));
             if !not_ready || Instant::now() >= deadline {
                 return;
             }
@@ -484,18 +489,42 @@ impl<T: StreamType> Stream<T> {
             Ok(StreamReadOutcome::Bytes { count, .. }) => Ok(count.get()),
             Ok(StreamReadOutcome::Eof { .. }) => Ok(0),
             Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
+                self.arm_peer_wake();
                 Err(IoError::new(ErrorKind::Interrupted, reason))
             }
             Ok(StreamReadOutcome::Pending(
                 reason @ (PendingReason::NotReady(_) | PendingReason::Retry),
-            )) => Err(IoError::new(
-                ErrorKind::Interrupted,
-                self.snapshot_pending(reason, buf.len()),
-            )),
+            )) => {
+                self.arm_peer_wake();
+                Err(IoError::new(
+                    ErrorKind::Interrupted,
+                    self.snapshot_pending(reason, buf.len()),
+                ))
+            }
             Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {
                 Err(IoError::other(VariantChangeError))
             }
             Err(StreamReadError::Source(e)) => Err(e),
+        }
+    }
+
+    /// Worker (produce-core) peer wake: a reader-blocked probe arms the wake
+    /// lock-free. The audio scheduler shell flushes it off the forbid path, so
+    /// the cross-thread `notify_one` (a `kevent`) never fires on the RT core.
+    /// No-op for sources without a peer (file streams).
+    fn arm_peer_wake(&self) {
+        if let Some(wake) = self.source.peer_wake() {
+            wake.arm();
+        }
+    }
+
+    /// Consumer (off-core) peer wake: a not-ready probe wakes the peer
+    /// immediately — the consumer never runs on the RT produce core, so the
+    /// `notify_one` is allowed and the read is not stalled on the worker's next
+    /// pass. No-op for sources without a peer (file streams).
+    fn notify_peer_wake(&self) {
+        if let Some(wake) = self.source.peer_wake() {
+            wake.notify_now();
         }
     }
 }
@@ -521,6 +550,7 @@ impl<T: StreamType> Read for Stream<T> {
                 Ok(StreamReadOutcome::Pending(
                     reason @ (PendingReason::NotReady(_) | PendingReason::Retry),
                 )) => {
+                    self.notify_peer_wake();
                     if Instant::now() >= deadline {
                         return Err(IoError::new(
                             ErrorKind::Interrupted,
@@ -530,6 +560,7 @@ impl<T: StreamType> Read for Stream<T> {
                     park_timeout(Self::BLOCKING_READ_BACKOFF);
                 }
                 Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
+                    self.notify_peer_wake();
                     return Err(IoError::new(ErrorKind::Interrupted, reason));
                 }
                 Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {
@@ -661,6 +692,7 @@ mod tests {
         data: Vec<u8>,
         reads: VecDeque<ScriptRead>,
         waits: VecDeque<WaitOutcome>,
+        peer_wake: Option<Arc<DeferredWake>>,
     }
 
     impl ScriptSource {
@@ -677,7 +709,13 @@ mod tests {
                 anchor: None,
                 reads: reads.into_iter().collect(),
                 waits: waits.into_iter().collect(),
+                peer_wake: None,
             }
+        }
+
+        fn with_peer_wake(mut self, wake: Arc<DeferredWake>) -> Self {
+            self.peer_wake = Some(wake);
+            self
         }
     }
 
@@ -738,6 +776,10 @@ mod tests {
             _timeout: Option<Duration>,
         ) -> crate::StreamResult<WaitOutcome> {
             Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
+        }
+
+        fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
+            self.peer_wake.clone()
         }
     }
 
@@ -809,6 +851,63 @@ mod tests {
             let _ = self.timeline.initiate_seek(Duration::from_millis(10));
             Ok(WaitOutcome::Ready)
         }
+    }
+
+    #[kithara::test]
+    fn probe_read_arms_peer_wake_on_core_without_notifying() {
+        // Worker read path: a not-ready probe ARMS the deferred wake (lock-free)
+        // instead of waking the downloader cross-thread — that `notify_one` is a
+        // `kevent` the RT produce core must not make. The scheduler shell flushes
+        // it off the forbid path.
+        let wake = Arc::new(DeferredWake::default());
+        let source = ScriptSource::new(
+            Timeline::new(),
+            [WaitOutcome::Interrupted],
+            [],
+            vec![0u8; 8],
+        )
+        .with_peer_wake(Arc::clone(&wake));
+        let mut stream = Stream::<DummyType> { source };
+        let mut buf = [0u8; 4];
+
+        let outcome = stream.probe_read(&mut buf);
+        assert!(
+            outcome.is_err(),
+            "not-ready worker probe surfaces as an Interrupted io::Error"
+        );
+        assert!(
+            wake.flush(),
+            "the worker probe armed the deferred wake; the shell flush delivers it"
+        );
+        assert!(!wake.flush(), "the arm coalesced into a single delivery");
+    }
+
+    #[kithara::test]
+    fn read_notifies_peer_wake_immediately_off_core() {
+        // Consumer read path: a not-ready probe wakes the peer IMMEDIATELY (the
+        // consumer is off the RT core), so a blocking read is not stalled
+        // waiting for the worker's next pass. An immediate notify leaves nothing
+        // armed — the distinguishing signal from the worker's deferred arm.
+        let wake = Arc::new(DeferredWake::default());
+        let source = ScriptSource::new(
+            Timeline::new(),
+            [WaitOutcome::Interrupted, WaitOutcome::Ready],
+            [ScriptRead::Data(4)],
+            b"ABCD".to_vec(),
+        )
+        .with_peer_wake(Arc::clone(&wake));
+        let mut stream = Stream::<DummyType> { source };
+        let mut buf = [0u8; 4];
+
+        let n = stream
+            .read(&mut buf)
+            .expect("read completes once the source reports the range ready");
+        assert_eq!(n, 4);
+        assert_eq!(&buf, b"ABCD");
+        assert!(
+            !wake.flush(),
+            "the consumer path notifies immediately — nothing is left armed"
+        );
     }
 
     #[kithara::test]

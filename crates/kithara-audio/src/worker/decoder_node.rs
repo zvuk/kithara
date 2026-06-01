@@ -124,7 +124,7 @@ impl Node for DecoderNode {
 
     fn recycle(&mut self) {
         while self.trash_inlet.try_pop().is_some() {}
-        self.source.flush_reader_events();
+        self.source.flush_deferred();
     }
 
     fn warm_up(&mut self) {
