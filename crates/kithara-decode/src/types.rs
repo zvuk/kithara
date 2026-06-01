@@ -63,6 +63,21 @@ impl PcmSpec {
             sample_rate: sample_rate.get(),
         }
     }
+
+    /// Validate a raw rate at a decode boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::DecodeError::InvalidSampleRate`] when `raw_rate` is zero.
+    pub fn checked(
+        channels: u16,
+        raw_rate: u32,
+        resource: &'static str,
+    ) -> Result<Self, crate::error::DecodeError> {
+        let nz = NonZeroU32::new(raw_rate)
+            .ok_or(crate::error::DecodeError::InvalidSampleRate { resource })?;
+        Ok(Self::new(channels, nz))
+    }
 }
 
 impl From<&PcmMeta> for kithara_stream::ChunkPosition {
