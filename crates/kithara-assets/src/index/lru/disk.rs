@@ -7,9 +7,8 @@ use std::{
 };
 
 use kithara_bufpool::BytePool;
-use kithara_platform::Mutex;
+use kithara_platform::{CancellationToken, Mutex};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
-use tokio_util::sync::CancellationToken;
 
 use super::core::{LruIndex, LruInner, LruState};
 use crate::{

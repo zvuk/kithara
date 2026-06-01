@@ -5,12 +5,12 @@ use std::{
 };
 
 use kithara_platform::{
+    CancellationToken,
     sync::mpsc::{self, TryRecvError},
     thread::{spawn_named, yield_now},
     time::Instant,
 };
 use kithara_test_utils::kithara;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 
 use crate::runtime::{
@@ -135,10 +135,12 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
 
     /// Spawn a new scheduler thread and return a handle.
     ///
-    /// `cancel` is the externally-owned token that drives the run loop's
-    /// shutdown. Callers (e.g. [`AudioWorkerHandle`](super::super::worker::AudioWorkerHandle))
-    /// derive it as a child of the player master so worker shutdown
-    /// participates in the unified cancel hierarchy.
+    /// `cancel` is the externally-owned [`CancellationToken`] that drives the run
+    /// loop's shutdown. Callers (e.g.
+    /// [`AudioWorkerHandle`](super::super::worker::AudioWorkerHandle)) derive
+    /// it as a `child_token()` of the player master so worker shutdown
+    /// participates in the unified cancel hierarchy and the lock-free
+    /// `is_cancelled()` read on the produce-core observes a master cancel.
     #[must_use]
     pub(crate) fn start(
         name: String,
@@ -519,7 +521,7 @@ mod tests {
         let handle = Scheduler::<DummyNode, TestObserver>::start(
             "test-worker".into(),
             TestObserver,
-            CancellationToken::new(),
+            CancellationToken::default(),
         );
         sleep(Duration::from_millis(10));
         handle.shutdown();
@@ -531,7 +533,7 @@ mod tests {
         let handle = Scheduler::<DummyNode, TestObserver>::start(
             "test-worker".into(),
             TestObserver,
-            CancellationToken::new(),
+            CancellationToken::default(),
         );
 
         handle.register(
@@ -569,7 +571,7 @@ mod tests {
         let handle = Scheduler::<BackpressureNode, TestObserver>::start(
             "test-worker".into(),
             TestObserver,
-            CancellationToken::new(),
+            CancellationToken::default(),
         );
 
         handle.register(1, BackpressureNode);

@@ -15,7 +15,7 @@ use kithara_integration_tests::net_fixture::{
     assert_success_all_net_methods, leaked, ok_headers, success_stream, test_url,
 };
 use kithara_net::mock::NetMock;
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
 use unimock::{MockFn, Unimock, matching};
 
 fn should_fail(attempts: &Arc<AtomicUsize>, failures_before_success: usize) -> bool {
@@ -91,7 +91,7 @@ async fn try_with_retry(
 ) -> Result<Bytes, NetError> {
     let mock_net = make_retry_mock(failures_before_success, error);
     let retry_policy = RetryPolicy::new(max_retries, base_delay, Duration::from_secs(5));
-    let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
+    let retry_net = mock_net.with_retry(retry_policy, CancellationToken::default());
     retry_net.get_bytes(test_url(), None).await
 }
 
@@ -163,7 +163,7 @@ async fn test_exponential_backoff_with_max_delay(
 ) {
     let mock_net = make_retry_mock((max_retries + 1) as usize, http_500());
     let retry_policy = RetryPolicy::new(max_retries, base_delay, max_delay);
-    let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
+    let retry_net = mock_net.with_retry(retry_policy, CancellationToken::default());
     let result = retry_net.get_bytes(test_url(), None).await;
     assert!(result.is_err());
 }
@@ -178,7 +178,7 @@ async fn test_all_net_methods_with_retry(#[case] failures_before_success: usize)
         Duration::from_millis(10),
         Duration::from_secs(5),
     );
-    let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
+    let retry_net = mock_net.with_retry(retry_policy, CancellationToken::default());
     assert_success_all_net_methods(&retry_net).await;
 }
 
@@ -194,7 +194,7 @@ async fn test_timeout_retry_chaining(#[case] failures_before_success: usize) {
     );
     let net = mock_net
         .with_timeout(Duration::from_secs(5))
-        .with_retry(retry_policy, CancellationToken::new());
+        .with_retry(retry_policy, CancellationToken::default());
     let result = net.get_bytes(test_url(), None).await;
     assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
 }

@@ -2,8 +2,7 @@
 
 use std::{ops::Range, path::Path, sync::Arc};
 
-use kithara_platform::{MaybeSend, MaybeSync};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, MaybeSend, MaybeSync};
 use tracing::warn;
 
 use super::state::ResourceCore;

@@ -14,6 +14,7 @@ use kithara_assets::{AssetScope, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::AbrReason;
 use kithara_platform::{
+    CancellationToken,
     time::{Duration, Instant},
     tokio::sync::Notify,
 };
@@ -23,7 +24,6 @@ use kithara_stream::{
     SourcePhase, SourceSeekAnchor, StreamResult, Timeline,
 };
 use kithara_test_utils::kithara;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{

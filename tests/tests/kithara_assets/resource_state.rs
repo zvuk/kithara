@@ -5,10 +5,9 @@ use kithara_assets::{
     EvictConfig, ProcessChunkFn, ReadSide, WriteSide,
 };
 use kithara_integration_tests::{asset_fixture::PinsIndex, assets_ext::AssetStoreTestExt};
-use kithara_platform::time::Duration;
+use kithara_platform::{CancellationToken, time::Duration};
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
-use tokio_util::sync::CancellationToken;
 
 fn xor_process_fn() -> ProcessChunkFn<u8> {
     Arc::new(|input, output, ctx: &mut u8, _is_last| {
@@ -27,7 +26,7 @@ fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
 }
 
 fn load_pins(root_dir: &Path) -> HashSet<String> {
-    let disk = DiskAssetStore::new(root_dir, CancellationToken::new(), &BytePool::default());
+    let disk = DiskAssetStore::new(root_dir, CancellationToken::default(), &BytePool::default());
     PinsIndex::open(&disk, &BytePool::default())
         .and_then(|index| index.load())
         .unwrap_or_default()

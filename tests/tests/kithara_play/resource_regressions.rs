@@ -25,9 +25,11 @@ use kithara_integration_tests::{
     signal_pcm::signal,
     temp_dir,
 };
-use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, Instant, sleep},
+};
 use tokio::time::timeout;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 use crate::{
@@ -590,7 +592,7 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
 
     let hls_server = open_audio_hls_server().await;
     let (ok_url, _) = mp3_endpoints().await;
-    let worker = AudioWorkerHandle::new();
+    let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
     let store = store_options(&temp_dir, true);
     let hls_url = hls_server.url("/master.m3u8");
 
@@ -700,8 +702,8 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     let server_b = open_audio_hls_server().await;
     let temp_a = TestTempDir::new();
     let temp_b = TestTempDir::new();
-    let worker_a = AudioWorkerHandle::new();
-    let worker_b = AudioWorkerHandle::new();
+    let worker_a = AudioWorkerHandle::with_cancel(CancellationToken::default());
+    let worker_b = AudioWorkerHandle::with_cancel(CancellationToken::default());
     let store_a = store_options(&temp_a, false);
     let store_b = store_options(&temp_b, true);
     let hls_url_a = server_a.url("/master.m3u8");
@@ -1004,7 +1006,7 @@ async fn stress_offline_crossfade_no_gaps() {
     let store = store_options(&temp_dir(), true);
     let hls_url = hls_server.url("/master.m3u8");
 
-    let worker = AudioWorkerHandle::new();
+    let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
     let mut player = OfflinePlayer::new(SR);
 
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
@@ -1362,7 +1364,7 @@ async fn live_remote_resource_decodes_with_duration(
         .build();
     let downloader = Downloader::new(
         DownloaderConfig::builder()
-            .client(HttpClient::new(net, CancellationToken::new()))
+            .client(HttpClient::new(net, CancellationToken::default()))
             .build(),
     );
     let config = ResourceConfig::for_src(url)

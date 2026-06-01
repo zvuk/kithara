@@ -194,10 +194,9 @@ mod tests {
     use std::fs;
 
     use kithara_bufpool::BytePool;
-    use kithara_platform::time::Duration;
+    use kithara_platform::{CancellationToken, time::Duration};
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
 
@@ -207,7 +206,7 @@ mod tests {
         let path = temp_dir.path().join("pins.bin");
         let idx = PinsIndex::with_persist_at(
             path.clone(),
-            CancellationToken::new(),
+            CancellationToken::default(),
             &BytePool::default(),
         );
         assert!(idx.snapshot().is_empty());
@@ -223,7 +222,7 @@ mod tests {
         let path = temp_dir.path().join("pins.bin");
         let idx = PinsIndex::with_persist_at(
             path.clone(),
-            CancellationToken::new(),
+            CancellationToken::default(),
             &BytePool::default(),
         );
 
@@ -257,7 +256,7 @@ mod tests {
         let path = temp_dir.path().join("pins.bin");
         let idx = PinsIndex::with_persist_at(
             path.clone(),
-            CancellationToken::new(),
+            CancellationToken::default(),
             &BytePool::default(),
         );
 
@@ -277,7 +276,8 @@ mod tests {
     fn concurrent_leases_keep_pin_alive() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx = PinsIndex::with_persist_at(path, CancellationToken::new(), &BytePool::default());
+        let idx =
+            PinsIndex::with_persist_at(path, CancellationToken::default(), &BytePool::default());
 
         idx.add("playlist").unwrap();
         idx.add("playlist").unwrap();
@@ -297,7 +297,7 @@ mod tests {
         {
             let idx = PinsIndex::with_persist_at(
                 path.clone(),
-                CancellationToken::new(),
+                CancellationToken::default(),
                 &BytePool::default(),
             );
             idx.add("persistent_asset").unwrap();
@@ -306,7 +306,7 @@ mod tests {
         {
             let idx = PinsIndex::with_persist_at(
                 path.clone(),
-                CancellationToken::new(),
+                CancellationToken::default(),
                 &BytePool::default(),
             );
             assert!(idx.contains("persistent_asset"));
@@ -320,7 +320,8 @@ mod tests {
         let path = temp_dir.path().join("invalid.bin");
         fs::write(&path, b"not valid rkyv data").unwrap();
 
-        let idx = PinsIndex::with_persist_at(path, CancellationToken::new(), &BytePool::default());
+        let idx =
+            PinsIndex::with_persist_at(path, CancellationToken::default(), &BytePool::default());
         assert!(idx.snapshot().is_empty());
     }
 
@@ -335,7 +336,8 @@ mod tests {
     fn clone_shares_state() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx = PinsIndex::with_persist_at(path, CancellationToken::new(), &BytePool::default());
+        let idx =
+            PinsIndex::with_persist_at(path, CancellationToken::default(), &BytePool::default());
         let idx2 = idx.clone();
 
         idx.add("from_first").unwrap();

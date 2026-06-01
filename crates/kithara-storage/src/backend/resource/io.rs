@@ -153,8 +153,7 @@ mod tests {
         mpsc,
     };
 
-    use kithara_platform::{thread, time::Duration};
-    use tokio_util::sync::CancellationToken;
+    use kithara_platform::{CancellationToken, thread, time::Duration};
 
     use crate::{
         WaitOutcome,
@@ -169,7 +168,7 @@ mod tests {
     /// Open a fresh, uncommitted in-memory resource for the concurrency tests.
     fn open_mem() -> ResourceCore<MemDriver> {
         ResourceCore::open(
-            CancellationToken::new(),
+            CancellationToken::default(),
             MemOptions {
                 initial_data: None,
                 capacity: 0,
@@ -182,7 +181,7 @@ mod tests {
     /// builder defaults). The caller keeps the backing `TempDir` alive for the
     /// duration of the test.
     fn open_mmap(path: std::path::PathBuf) -> ResourceCore<MmapDriver> {
-        ResourceCore::open(CancellationToken::new(), MmapOptions::new(path))
+        ResourceCore::open(CancellationToken::default(), MmapOptions::new(path))
             .expect("open mmap must succeed")
     }
 
@@ -203,7 +202,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn committed_read_does_not_take_state_mutex() {
         let core: ResourceCore<MemDriver> = ResourceCore::open(
-            CancellationToken::new(),
+            CancellationToken::default(),
             MemOptions {
                 initial_data: Some(b"hello world".to_vec()),
                 capacity: 0,
@@ -242,7 +241,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn committed_len_and_contains_do_not_take_state_mutex() {
         let core: ResourceCore<MemDriver> = ResourceCore::open(
-            CancellationToken::new(),
+            CancellationToken::default(),
             MemOptions {
                 initial_data: Some(b"hello world".to_vec()),
                 capacity: 0,

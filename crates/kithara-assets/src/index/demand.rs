@@ -15,8 +15,7 @@ use std::sync::{
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
-use kithara_platform::{Mutex, tokio::sync::Notify};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, Mutex, tokio::sync::Notify};
 
 use crate::key::ResourceKey;
 
@@ -288,9 +287,8 @@ mod tests {
         atomic::{AtomicU64, AtomicUsize, Ordering},
     };
 
-    use kithara_platform::time::Duration;
+    use kithara_platform::{CancellationToken, time::Duration};
     use kithara_test_utils::kithara;
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
     use crate::key::ResourceKey;
@@ -304,7 +302,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn attach_refcount_and_single_producer_election() {
-        let index = DemandIndex::new(CancellationToken::new());
+        let index = DemandIndex::new(CancellationToken::default());
         let key = ResourceKey::relative("asset", "file");
 
         let attach_count = AtomicUsize::new(0);
@@ -349,7 +347,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn watermark_is_max_over_entries() {
-        let index = DemandIndex::new(CancellationToken::new());
+        let index = DemandIndex::new(CancellationToken::default());
         let key = ResourceKey::relative("asset", "file");
 
         // Bounded entry: read_pos 10 + look_ahead 50 = 60.
@@ -365,7 +363,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn watermark_tracks_read_pos_advance() {
-        let index = DemandIndex::new(CancellationToken::new());
+        let index = DemandIndex::new(CancellationToken::default());
         let key = ResourceKey::relative("asset", "file");
         let read_pos = Arc::new(AtomicU64::new(0));
 
@@ -383,7 +381,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn detach_one_of_two_keeps_slot_and_producer() {
-        let index = DemandIndex::new(CancellationToken::new());
+        let index = DemandIndex::new(CancellationToken::default());
         let key = ResourceKey::relative("asset", "file");
 
         let (l1, producer) = index.attach_demand(&key, entry(0, Some(10)));
@@ -404,7 +402,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn reattach_after_last_detach_wins_producer_election() {
-        let index = DemandIndex::new(CancellationToken::new());
+        let index = DemandIndex::new(CancellationToken::default());
         let key = ResourceKey::relative("asset", "file");
 
         let (l1, _producer) = index.attach_demand(&key, entry(0, None));
@@ -432,7 +430,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn dropping_producer_lets_a_survivor_take_over() {
-        let index = DemandIndex::new(CancellationToken::new());
+        let index = DemandIndex::new(CancellationToken::default());
         let key = ResourceKey::relative("asset", "file");
 
         let (winner_lease, producer) = index.attach_demand(&key, entry(0, None));

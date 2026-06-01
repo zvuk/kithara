@@ -1,7 +1,8 @@
 use std::{ops::BitOr, sync::Arc};
 
 use futures::future::select_all;
-use tokio_util::sync::CancellationToken;
+
+use crate::CancellationToken;
 
 /// OR-combinator for cancellation tokens.
 ///
@@ -108,9 +109,8 @@ mod tests {
 
     use kithara_test_utils::kithara;
     use tokio::{spawn, task, time as tokio_time};
-    use tokio_util::sync::CancellationToken;
 
-    use super::CancelGroup;
+    use super::{CancelGroup, CancellationToken};
 
     #[derive(Clone, Debug)]
     enum Src {
@@ -138,15 +138,15 @@ mod tests {
 
         for s in spec {
             match s {
-                Src::Fresh => sources.push(CancellationToken::new()),
+                Src::Fresh => sources.push(CancellationToken::default()),
                 Src::ChildOf(idx) => {
                     while parents.len() <= *idx {
-                        parents.push(CancellationToken::new());
+                        parents.push(CancellationToken::default());
                     }
                     sources.push(parents[*idx].child_token());
                 }
                 Src::PreCancelled => {
-                    let tok = CancellationToken::new();
+                    let tok = CancellationToken::default();
                     tok.cancel();
                     sources.push(tok);
                 }
@@ -251,9 +251,9 @@ mod tests {
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn cancelled_resolves_immediately_when_pre_cancelled() {
-        let tok = CancellationToken::new();
+        let tok = CancellationToken::default();
         tok.cancel();
-        let group = CancelGroup::new(vec![tok, CancellationToken::new()]);
+        let group = CancelGroup::new(vec![tok, CancellationToken::default()]);
 
         tokio_time::timeout(Duration::from_secs(1), group.cancelled())
             .await
@@ -278,7 +278,7 @@ mod tests {
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn clone_observes_same_cancellation() {
-        let tok = CancellationToken::new();
+        let tok = CancellationToken::default();
         let group = CancelGroup::new(vec![tok.clone()]);
         let cloned = group.clone();
 
@@ -289,8 +289,8 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn token_bitor_token() {
-        let a = CancellationToken::new();
-        let b = CancellationToken::new();
+        let a = CancellationToken::default();
+        let b = CancellationToken::default();
         let group = CancelGroup::from(a.clone()) | b.clone();
 
         assert!(!group.is_cancelled());
@@ -300,8 +300,8 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn group_bitor_token() {
-        let a = CancellationToken::new();
-        let b = CancellationToken::new();
+        let a = CancellationToken::default();
+        let b = CancellationToken::default();
         let group = CancelGroup::from(a.clone()) | b.clone();
 
         assert!(!group.is_cancelled());
@@ -311,8 +311,8 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn token_bitor_group() {
-        let a = CancellationToken::new();
-        let b = CancellationToken::new();
+        let a = CancellationToken::default();
+        let b = CancellationToken::default();
         let group = a.clone() | CancelGroup::from(b.clone());
 
         assert!(!group.is_cancelled());
@@ -322,8 +322,8 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn group_bitor_group() {
-        let a = CancellationToken::new();
-        let b = CancellationToken::new();
+        let a = CancellationToken::default();
+        let b = CancellationToken::default();
         let g1 = CancelGroup::from(a.clone());
         let g2 = CancelGroup::from(b.clone());
         let merged = g1 | g2;
@@ -335,9 +335,9 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn chained_bitor() {
-        let a = CancellationToken::new();
-        let b = CancellationToken::new();
-        let c = CancellationToken::new();
+        let a = CancellationToken::default();
+        let b = CancellationToken::default();
+        let c = CancellationToken::default();
         let group = CancelGroup::from(a.clone()) | b.clone() | c.clone();
 
         assert!(!group.is_cancelled());
@@ -347,8 +347,8 @@ mod tests {
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn bitor_async_cancelled() {
-        let a = CancellationToken::new();
-        let b = CancellationToken::new();
+        let a = CancellationToken::default();
+        let b = CancellationToken::default();
         let group = CancelGroup::from(a.clone()) | b.clone();
 
         let g2 = group.clone();

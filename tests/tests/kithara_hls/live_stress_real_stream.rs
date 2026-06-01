@@ -14,7 +14,7 @@ use kithara::{
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::{DecoderBackend, PcmChunk},
     events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::{

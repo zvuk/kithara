@@ -183,9 +183,8 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use kithara_platform::{thread, time::Duration};
+    use kithara_platform::{CancellationToken, thread, time::Duration};
     use tempfile::TempDir;
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
     use crate::{
@@ -200,7 +199,7 @@ mod tests {
     fn create_resource_with_size(dir: &TempDir, size: Option<u64>) -> MmapResource {
         let path = dir.path().join("test.dat");
         Resource::open(
-            CancellationToken::new(),
+            CancellationToken::default(),
             MmapOptions {
                 path,
                 initial_len: size,
@@ -307,7 +306,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(2)))]
     fn test_cancel_wakes_waiters() {
         let dir = TempDir::new().unwrap();
-        let cancel = CancellationToken::new();
+        let cancel = CancellationToken::default();
         let path = dir.path().join("cancel_test.dat");
 
         let res: MmapResource = Resource::open(
@@ -340,7 +339,7 @@ mod tests {
 
         {
             let res: MmapResource = Resource::open(
-                CancellationToken::new(),
+                CancellationToken::default(),
                 MmapOptions {
                     path: path.clone(),
                     initial_len: None,
@@ -352,7 +351,7 @@ mod tests {
         }
 
         let res: MmapResource = Resource::open(
-            CancellationToken::new(),
+            CancellationToken::default(),
             MmapOptions {
                 path,
                 initial_len: None,

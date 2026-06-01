@@ -5,9 +5,8 @@ use std::{
     sync::{Arc, OnceLock, atomic::Ordering},
 };
 
-use kithara_platform::Mutex;
+use kithara_platform::{CancellationToken, Mutex};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
-use tokio_util::sync::CancellationToken;
 
 use super::core::{Availability, AvailabilityIndex, InnerIndex};
 use crate::{

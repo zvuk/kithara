@@ -3,10 +3,10 @@
 use std::sync::{Arc, OnceLock, Weak};
 
 use kithara_platform::{
+    CancellationToken,
     thread::{JoinHandle, spawn_named},
     time::Instant,
 };
-use tokio_util::sync::CancellationToken;
 
 use super::{FlushHub, FlushPolicy, core::HubWait};
 

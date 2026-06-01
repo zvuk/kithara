@@ -10,11 +10,10 @@ use kithara::{
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
 use kithara_platform::{
-    thread,
+    CancellationToken, thread,
     time::{Duration, Instant},
     tokio::task::spawn_blocking,
 };
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 fn is_known_box(tag: &[u8; 4]) -> bool {
@@ -150,7 +149,7 @@ async fn drm_stream_byte_integrity(
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {

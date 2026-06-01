@@ -10,7 +10,7 @@ use std::{
 
 use kithara::{assets::DiskAssetStore, bufpool::BytePool};
 use kithara_integration_tests::{asset_fixture::PinsIndex, temp_dir};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
 
 fn pins_path(root: &Path) -> PathBuf {
     root.join("_index").join("pins.bin")
@@ -20,7 +20,7 @@ fn pins_path(root: &Path) -> PathBuf {
 fn disk_asset_store(temp_dir: kithara_integration_tests::TestTempDir) -> DiskAssetStore {
     DiskAssetStore::new(
         temp_dir.path(),
-        CancellationToken::new(),
+        CancellationToken::default(),
         &BytePool::default(),
     )
 }
@@ -177,7 +177,7 @@ fn pins_index_empty_set_stores_and_loads_correctly(
 )]
 fn pins_index_persists_across_store_instances(temp_dir: kithara_integration_tests::TestTempDir) {
     let dir = temp_dir.path();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let base1 = DiskAssetStore::new(dir, cancel.clone(), &BytePool::default());
     let idx1 = PinsIndex::open(&base1, &BytePool::default()).unwrap();

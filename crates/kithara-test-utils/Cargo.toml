@@ -38,4 +38,3 @@ kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspac
 usdt = { workspace = true, optional = true }
 backtrace = { workspace = true }
 tokio = { workspace = true, features = ["time", "rt"] }
-tokio-util = { workspace = true }

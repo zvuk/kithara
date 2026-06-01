@@ -12,10 +12,10 @@ use kithara_integration_tests::{
     TestTempDir, hls_fixture::HlsStreamBuilder, hls_server::TestServer, temp_dir,
 };
 use kithara_platform::{
+    CancellationToken,
     time::{Duration, sleep, timeout},
     tokio::{sync::oneshot, task::spawn},
 };
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 use url::Url;
 
@@ -37,7 +37,7 @@ async fn test_hls_session_creation(
 
     let config = HlsConfig::for_url(test_stream_url.clone())
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::new())
+        .cancel(CancellationToken::default())
         .events(bus)
         .build();
 
@@ -85,7 +85,7 @@ async fn test_hls_stream_creation(
     };
 
     let _stream = builder
-        .build(&server, temp_dir.path(), CancellationToken::new())
+        .build(&server, temp_dir.path(), CancellationToken::default())
         .await;
 
     info!("HLS stream created successfully (init={})", with_init);
@@ -110,7 +110,7 @@ async fn test_hls_session_events_consumption(
 
     let config = HlsConfig::for_url(test_stream_url)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::new())
+        .cancel(CancellationToken::default())
         .events(bus)
         .build();
 
@@ -149,7 +149,7 @@ async fn test_hls_invalid_url_handling(
     if let Ok(url) = url_result {
         let config = HlsConfig::for_url(url)
             .store(StoreOptions::new(temp_dir.path()))
-            .cancel(CancellationToken::new())
+            .cancel(CancellationToken::default())
             .build();
 
         let result = Stream::<Hls>::new(config).await;
@@ -174,7 +174,7 @@ async fn test_hls_session_drop_cleanup(
     info!("Testing HLS session drop cleanup");
 
     let stream = HlsStreamBuilder::new()
-        .build(&server, temp_dir.path(), CancellationToken::new())
+        .build(&server, temp_dir.path(), CancellationToken::default())
         .await;
     drop(stream);
 

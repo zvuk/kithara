@@ -1,8 +1,8 @@
 use std::{fmt, num::NonZeroUsize, sync::Arc};
 
 use bon::Builder;
+use kithara_platform::CancellationToken;
 use kithara_play::PlayerImpl;
-use tokio_util::sync::CancellationToken;
 
 /// Default parallelism cap for async track loads.
 pub(crate) const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {

@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use kithara::play::PlayerEvent;
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackStatus};
-use kithara_platform::{Duration, JoinHandle, Mutex, sleep, spawn, tokio, tokio::sync::broadcast};
+use kithara_platform::{
+    CancellationToken, Duration, JoinHandle, Mutex, sleep, spawn, tokio, tokio::sync::broadcast,
+};
 use kithara_queue::Queue;
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     observer::{ItemObserver, PlayerObserver},

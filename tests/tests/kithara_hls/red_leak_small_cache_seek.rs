@@ -13,10 +13,10 @@ use kithara::{
 };
 use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
 use kithara_platform::{
+    CancellationToken,
     time::{Duration, sleep},
     tokio::task::spawn_blocking,
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -77,7 +77,7 @@ async fn red_small_cache_seek_stress_does_not_leak_threads(
     let server = TestServer::new().await;
 
     {
-        let cancel = CancellationToken::new();
+        let cancel = CancellationToken::default();
         let stream = build_small_cache_stream(&server, temp_dir.path(), cancel.clone()).await;
         spawn_blocking(move || exercise_stream_blocking(stream))
             .await
@@ -89,7 +89,7 @@ async fn red_small_cache_seek_stress_does_not_leak_threads(
     let threads_baseline = live_thread_count();
 
     for i in 0..Consts::STREAM_ITERATIONS {
-        let cancel = CancellationToken::new();
+        let cancel = CancellationToken::default();
         let stream = build_small_cache_stream(&server, temp_dir.path(), cancel.clone()).await;
         spawn_blocking(move || exercise_stream_blocking(stream))
             .await

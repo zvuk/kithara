@@ -1,8 +1,7 @@
 use bon::Builder;
 use kithara_abr::AbrSettings;
 use kithara_net::HttpClient;
-use kithara_platform::{time::Duration, tokio::runtime::Handle};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, time::Duration, tokio::runtime::Handle};
 
 /// Configuration for [`Downloader`](super::Downloader).
 #[derive(Clone, Builder)]
@@ -12,7 +11,7 @@ pub struct DownloaderConfig {
     #[builder(default)]
     pub abr_settings: AbrSettings,
     /// Cancellation token — when cancelled, the download loop exits.
-    #[builder(default = CancellationToken::new())] // kithara:cancel:owner
+    #[builder(default = CancellationToken::default())] // kithara:cancel:owner
     pub cancel: CancellationToken,
     /// Throttle delay for demand (low-priority) processing.
     /// Gives urgent work a chance to preempt before demand batch runs.

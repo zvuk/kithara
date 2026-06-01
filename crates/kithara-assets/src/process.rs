@@ -576,12 +576,12 @@ where
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use kithara_platform::CancellationToken;
     use kithara_storage::{
         MemOptions, MemResource, MmapOptions, MmapResource, Resource, StorageResource,
     };
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
     use crate::{
@@ -598,7 +598,7 @@ mod tests {
     fn mock_writer(content: &[u8]) -> (BaseWriter, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test.bin");
-        let cancel = CancellationToken::new();
+        let cancel = CancellationToken::default();
 
         let res: MmapResource = Resource::open(cancel, MmapOptions::new(path)).unwrap();
         res.write_at(0, content).unwrap();
@@ -607,7 +607,7 @@ mod tests {
 
     /// Mem-backed mock writer, mirroring [`mock_writer`] for the ephemeral path.
     fn mock_writer_mem(content: &[u8]) -> BaseWriter {
-        let cancel = CancellationToken::new();
+        let cancel = CancellationToken::default();
         let res: MemResource = Resource::open(
             cancel,
             MemOptions {
@@ -745,7 +745,7 @@ mod tests {
 
         let dir = tempdir().unwrap();
         let path = dir.path().join("cancel.bin");
-        let cancel = CancellationToken::new();
+        let cancel = CancellationToken::default();
         let resource: MmapResource =
             Resource::open(cancel.clone(), MmapOptions::new(path)).unwrap();
         resource.write_at(0, &[1u8; 16]).unwrap();
@@ -922,7 +922,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("reopen.bin");
         let res: MmapResource =
-            Resource::open(CancellationToken::new(), MmapOptions::new(path)).unwrap();
+            Resource::open(CancellationToken::default(), MmapOptions::new(path)).unwrap();
         res.write_at(0, &already_processed).unwrap();
         let storage = StorageResource::from(res);
         storage

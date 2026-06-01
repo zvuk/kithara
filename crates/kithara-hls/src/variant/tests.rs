@@ -2,10 +2,9 @@ use std::sync::{Arc, atomic::AtomicU64};
 
 use kithara_assets::{AssetScope, AssetStoreBuilder, ProcessChunkFn};
 use kithara_drm::DecryptContext;
-use kithara_platform::time::Duration;
+use kithara_platform::{CancellationToken, time::Duration};
 use kithara_stream::Timeline;
 use kithara_test_utils::kithara;
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use super::{
@@ -15,7 +14,7 @@ use super::{
 use crate::playlist::PlaylistState;
 
 fn test_ctx(prefetch_budget: usize) -> PlanCtx {
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let passthrough: ProcessChunkFn<DecryptContext> =
         Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
             output[..input.len()].copy_from_slice(input);

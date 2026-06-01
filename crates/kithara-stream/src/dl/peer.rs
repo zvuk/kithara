@@ -9,10 +9,9 @@ use kithara_abr::{Abr, AbrHandle, AbrPeerId};
 use kithara_events::{EventBus, RequestPriority};
 use kithara_net::{Headers, NetError};
 use kithara_platform::{
-    CancelGroup, RwLock,
+    CancelGroup, CancellationToken, RwLock,
     tokio::sync::{mpsc, oneshot},
 };
-use tokio_util::sync::CancellationToken;
 
 use super::{cmd::FetchCmd, downloader::DownloaderInner, response::FetchResponse};
 

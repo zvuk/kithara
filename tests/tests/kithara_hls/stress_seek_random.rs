@@ -13,11 +13,10 @@ use kithara_integration_tests::{
     hls_server::{EncryptionConfig, HlsTestServer, HlsTestServerConfig},
 };
 use kithara_platform::{
-    thread,
+    CancellationToken, thread,
     time::{Duration, Instant},
     tokio::task::spawn_blocking,
 };
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 /// Random seek+read cycles with exact byte verification on HLS stream.
@@ -112,7 +111,7 @@ async fn stress_random_seek_read_hls(
     );
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))

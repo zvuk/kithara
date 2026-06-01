@@ -14,6 +14,7 @@ categories = ["wasm", "concurrency"]
 workspace = true
 
 [dependencies]
+delegate = { workspace = true }
 futures = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }

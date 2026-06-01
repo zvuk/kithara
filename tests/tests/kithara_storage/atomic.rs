@@ -9,8 +9,7 @@ use kithara::{
 use kithara_integration_tests::{TestTempDir, cancel_token, cancel_token_cancelled, temp_dir};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread;
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
 
 #[cfg(not(target_arch = "wasm32"))]
 type TestResource = MmapResource;
@@ -211,7 +210,7 @@ fn atomic_resource_invalid_path(temp_dir: TestTempDir, cancel_token: Cancellatio
 fn atomic_resource_large_file_operations() {
     let temp_dir = TestTempDir::new();
     let file_path = temp_dir.path().join("large.dat");
-    let cancel_token = CancellationToken::new();
+    let cancel_token = CancellationToken::default();
 
     let atomic = open_mmap_at(file_path, cancel_token);
 

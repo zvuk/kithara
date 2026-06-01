@@ -2,10 +2,10 @@
 
 use std::{path::Path, sync::OnceLock};
 
+use kithara_platform::CancellationToken;
 use kithara_storage::{
     Atomic, MmapDriver, MmapOptions, MmapResource, OpenMode, Resource, StorageError,
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::error::{AssetsError, AssetsResult};
 

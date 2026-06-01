@@ -3,10 +3,9 @@
 use std::io::{Read, Seek, SeekFrom};
 
 use kithara_integration_tests::{
-    TestTempDir, cancel_token, hls_fixture::HlsStreamBuilder, hls_server::TestServer, temp_dir,
+    TestTempDir, hls_fixture::HlsStreamBuilder, hls_server::TestServer, rt_cancel, temp_dir,
 };
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 /// Segment size in bytes (test fixture pads to 200KB).
@@ -23,13 +22,13 @@ const SEGMENT_SIZE: u64 = 200_000;
 #[case(400_000, b"V0-SEG-2:")]
 async fn hls_stream_seek_to_segment_start(
     temp_dir: TestTempDir,
-    cancel_token: CancellationToken,
+    rt_cancel: CancellationToken,
     #[case] seek_pos: u64,
     #[case] expected_prefix: &[u8],
 ) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
-        .build(&server, temp_dir.path(), cancel_token)
+        .build(&server, temp_dir.path(), rt_cancel)
         .await;
 
     let expected_len = expected_prefix.len();
@@ -56,10 +55,10 @@ async fn hls_stream_seek_to_segment_start(
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn hls_stream_seek_current(temp_dir: TestTempDir, cancel_token: CancellationToken) {
+async fn hls_stream_seek_current(temp_dir: TestTempDir, rt_cancel: CancellationToken) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
-        .build(&server, temp_dir.path(), cancel_token)
+        .build(&server, temp_dir.path(), rt_cancel)
         .await;
 
     spawn_blocking(move || {
@@ -85,10 +84,10 @@ async fn hls_stream_seek_current(temp_dir: TestTempDir, cancel_token: Cancellati
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn hls_stream_multiple_seeks(temp_dir: TestTempDir, cancel_token: CancellationToken) {
+async fn hls_stream_multiple_seeks(temp_dir: TestTempDir, rt_cancel: CancellationToken) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
-        .build(&server, temp_dir.path(), cancel_token)
+        .build(&server, temp_dir.path(), rt_cancel)
         .await;
 
     spawn_blocking(move || {
@@ -119,13 +118,10 @@ async fn hls_stream_multiple_seeks(temp_dir: TestTempDir, cancel_token: Cancella
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn hls_stream_read_all_then_seek_back(
-    temp_dir: TestTempDir,
-    cancel_token: CancellationToken,
-) {
+async fn hls_stream_read_all_then_seek_back(temp_dir: TestTempDir, rt_cancel: CancellationToken) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
-        .build(&server, temp_dir.path(), cancel_token)
+        .build(&server, temp_dir.path(), rt_cancel)
         .await;
 
     spawn_blocking(move || {
@@ -171,12 +167,12 @@ async fn hls_stream_read_all_then_seek_back(
 )]
 async fn hls_with_manual_abr_uses_fixed_variant(
     temp_dir: TestTempDir,
-    cancel_token: CancellationToken,
+    rt_cancel: CancellationToken,
 ) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
         .variant(1)
-        .build(&server, temp_dir.path(), cancel_token)
+        .build(&server, temp_dir.path(), rt_cancel)
         .await;
 
     spawn_blocking(move || {
@@ -198,14 +194,14 @@ async fn hls_with_manual_abr_uses_fixed_variant(
 )]
 async fn hls_seek_across_all_segments_with_fixed_abr(
     temp_dir: TestTempDir,
-    cancel_token: CancellationToken,
+    rt_cancel: CancellationToken,
 ) {
     let server = TestServer::new().await;
 
     info!("Testing seek across all segments with fixed ABR");
 
     let mut stream = HlsStreamBuilder::new()
-        .build(&server, temp_dir.path(), cancel_token)
+        .build(&server, temp_dir.path(), rt_cancel)
         .await;
 
     spawn_blocking(move || {
@@ -245,20 +241,20 @@ async fn hls_seek_across_all_segments_with_fixed_abr(
 )]
 async fn hls_seek_different_variants_return_different_data(
     temp_dir: TestTempDir,
-    cancel_token: CancellationToken,
+    rt_cancel: CancellationToken,
 ) {
     let server = TestServer::new().await;
 
     let mut stream_v0 = HlsStreamBuilder::new()
         .variant(0)
         .store_subdir("v0")
-        .build(&server, temp_dir.path(), cancel_token.clone())
+        .build(&server, temp_dir.path(), rt_cancel.clone())
         .await;
 
     let mut stream_v1 = HlsStreamBuilder::new()
         .variant(1)
         .store_subdir("v1")
-        .build(&server, temp_dir.path(), cancel_token)
+        .build(&server, temp_dir.path(), rt_cancel)
         .await;
 
     spawn_blocking(move || {

@@ -8,8 +8,8 @@ use kithara_assets::{BytePool, StoreOptions};
 use kithara_drm::KeyProcessorRegistry;
 use kithara_events::EventBus;
 use kithara_net::Headers;
+use kithara_platform::CancellationToken;
 use kithara_stream::dl::Downloader;
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::invalidation::HlsStore;
@@ -78,7 +78,11 @@ pub struct HlsConfig {
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
     pub bus: Option<EventBus>,
-    /// Cancellation token for graceful shutdown.
+    /// Cancellation token for graceful shutdown. The master `CancellationToken` whose
+    /// shared atomic mirror reaches [`HlsCoord`](crate::coord::HlsCoord)'s
+    /// lock-free `is_cancelled()` read on the produce-core; the async-only
+    /// downloader / net / asset paths derive children from its inner
+    /// [`CancellationToken`](kithara_platform::CancellationToken).
     pub cancel: Option<CancellationToken>,
     /// Shared downloader (created lazily if not provided).
     pub downloader: Option<Downloader>,

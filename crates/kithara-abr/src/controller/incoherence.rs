@@ -1,10 +1,10 @@
 use kithara_events::AbrEvent;
 use kithara_platform::{
+    CancellationToken,
     time::{Duration, Instant},
     tokio,
     tokio::time::sleep,
 };
-use tokio_util::sync::CancellationToken;
 
 use super::{
     core::{AbrController, AbrPeerId},
@@ -62,7 +62,7 @@ impl AbrController {
         let Some(entry) = self.peer_entry(peer_id) else {
             return;
         };
-        let token = CancellationToken::new(); // kithara:cancel:owner
+        let token = CancellationToken::default(); // kithara:cancel:owner
         {
             let mut slot = entry.last_variant_switch.lock_sync();
             *slot = Some((now, reader_pt));

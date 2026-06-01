@@ -3,10 +3,10 @@ use std::future::Future;
 use async_trait::async_trait;
 use bytes::Bytes;
 use kithara_platform::{
+    CancellationToken,
     time::{Duration, sleep},
     tokio,
 };
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 mod kithara {
@@ -190,7 +190,7 @@ mod tests {
         RetryNet::new(
             mock,
             DefaultRetryPolicy::new(policy),
-            CancellationToken::new(),
+            CancellationToken::default(),
         )
     }
 
@@ -460,7 +460,7 @@ mod tests {
             max_delay: Duration::from_secs(10),
             max_retries: 3,
         };
-        let cancel = CancellationToken::new();
+        let cancel = CancellationToken::default();
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy), cancel.clone());
 
         let url = test_url();

@@ -13,7 +13,7 @@ fn drm_headers(auth: &str) -> Headers {
 fn stage_client() -> HttpClient {
     HttpClient::new(
         NetOptions::builder().is_insecure(true).build(),
-        tokio_util::sync::CancellationToken::new(),
+        kithara_platform::CancellationToken::default(),
     )
 }
 

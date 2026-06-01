@@ -20,11 +20,10 @@ use kithara_integration_tests::{
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    thread,
+    CancellationToken, thread,
     time::{sleep, timeout},
     tokio::task::spawn_blocking,
 };
-use tokio_util::sync::CancellationToken;
 
 struct Consts;
 impl Consts {
@@ -52,7 +51,7 @@ fn clean_temp_dir() -> TestTempDir {
 )]
 async fn file_stream_closes_early_seek_still_works() {
     let clean_temp_dir = clean_temp_dir();
-    let cancel_token = CancellationToken::new();
+    let cancel_token = CancellationToken::default();
 
     let file_data: Vec<u8> = (0..Consts::TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
     let helper = TestServerHelper::new().await;
@@ -73,7 +72,7 @@ async fn file_stream_closes_early_seek_still_works() {
                 .inactivity_timeout(Duration::from_secs(1))
                 .total_timeout(Duration::from_secs(1))
                 .build(),
-            CancellationToken::new(),
+            CancellationToken::default(),
         ))
         .cancel(cancel_token.clone())
         .build(),
@@ -162,7 +161,7 @@ async fn partial_cache_resume_works() {
     });
     let url = handle.url();
 
-    let cancel1 = CancellationToken::new();
+    let cancel1 = CancellationToken::default();
     let config1 = FileConfig::for_src(FileSrc::Remote(url.clone()))
         .store(StoreOptions::new(cache_dir.path()))
         .cancel(cancel1.clone())
@@ -190,7 +189,7 @@ async fn partial_cache_resume_works() {
     sleep(Duration::from_millis(200)).await;
     tracing::info!("Phase 1 complete, stream dropped");
 
-    let cancel2 = CancellationToken::new();
+    let cancel2 = CancellationToken::default();
     let config2 = FileConfig::for_src(FileSrc::Remote(url))
         .store(StoreOptions::new(cache_dir.path()))
         .cancel(cancel2.clone())

@@ -12,7 +12,7 @@ use kithara_integration_tests::{
     fixture_protocol::{HlsRouteKind, HttpErrorRule},
     temp_dir,
 };
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
 
 #[kithara::test(
     tokio,
@@ -34,7 +34,7 @@ async fn prefetch_403_returns_err_quickly(
     let url = server.url("/master-encrypted.m3u8");
     let config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::new())
+        .cancel(CancellationToken::default())
         .build();
 
     let started = std::time::Instant::now();

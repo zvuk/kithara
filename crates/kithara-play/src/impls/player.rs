@@ -12,10 +12,9 @@ use kithara_audio::{AudioWorkerHandle, EqBandConfig, SeekOutcome, generate_log_s
 use kithara_bufpool::PcmPool;
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
-use kithara_platform::{Mutex, tokio::runtime::Handle as RuntimeHandle};
+use kithara_platform::{CancellationToken, Mutex, tokio::runtime::Handle as RuntimeHandle};
 use portable_atomic::AtomicF32;
 use ringbuf::traits::Consumer;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::{
@@ -1204,7 +1203,7 @@ mod tests {
 
     #[kithara::test]
     fn prepare_config_preserves_caller_supplied_master() {
-        let parent_master = CancellationToken::new();
+        let parent_master = CancellationToken::default();
         let player = PlayerImpl::new(PlayerConfig {
             cancel: Some(parent_master.clone()),
             ..PlayerConfig::default()

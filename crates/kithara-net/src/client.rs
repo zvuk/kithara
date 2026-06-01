@@ -3,8 +3,8 @@ use std::{num::NonZeroU16, sync::Arc};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
+use kithara_platform::CancellationToken;
 use reqwest::Client;
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::{
@@ -428,7 +428,7 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_retries_503_until_ok() {
         let (url, counter) = server_failing_first_n(2).await;
-        let client = HttpClient::new(fast_options(3), CancellationToken::new());
+        let client = HttpClient::new(fast_options(3), CancellationToken::default());
         let bytes = client
             .get_bytes(url, None)
             .await
@@ -444,7 +444,7 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_no_retry_propagates_5xx() {
         let (url, counter) = server_failing_first_n(2).await;
-        let client = HttpClient::new(fast_options(0), CancellationToken::new());
+        let client = HttpClient::new(fast_options(0), CancellationToken::default());
         let err = client
             .get_bytes(url, None)
             .await
@@ -463,7 +463,7 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_head_retries_503_until_ok() {
         let (url, counter) = server_failing_first_n(1).await;
-        let client = HttpClient::new(fast_options(2), CancellationToken::new());
+        let client = HttpClient::new(fast_options(2), CancellationToken::default());
         client.head(url, None).await.expect("HEAD must retry");
         assert_eq!(counter.load(Ordering::SeqCst), 2);
     }

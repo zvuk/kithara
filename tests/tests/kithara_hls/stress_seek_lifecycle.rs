@@ -3,7 +3,7 @@ use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -14,8 +14,7 @@ use kithara_integration_tests::{
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use kithara_platform::{thread, time::Instant, tokio::task::spawn_blocking};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, thread, time::Instant, tokio::task::spawn_blocking};
 use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;
@@ -163,7 +162,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
     info!(%url, "HLS server ready");
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {

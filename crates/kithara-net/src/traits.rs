@@ -7,8 +7,7 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use kithara_platform::{MaybeSend, MaybeSync};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, MaybeSend, MaybeSync};
 use url::Url;
 
 mod kithara {

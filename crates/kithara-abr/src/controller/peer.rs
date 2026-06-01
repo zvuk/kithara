@@ -5,10 +5,9 @@ use std::sync::{
 
 use kithara_events::EventBus;
 use kithara_platform::{
-    Mutex, RwLock,
+    CancellationToken, Mutex, RwLock,
     time::{Duration, Instant},
 };
-use tokio_util::sync::CancellationToken;
 
 use super::throttle::EventThrottleCache;
 use crate::{abr::Abr, state::AbrState};

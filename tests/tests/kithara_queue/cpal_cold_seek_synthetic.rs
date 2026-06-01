@@ -12,11 +12,11 @@ use kithara_integration_tests::{
     offline::OfflineSession, temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::CancellationToken;
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tokio::time::sleep;
-use tokio_util::sync::CancellationToken;
 
 async fn wait_for_loader_done(
     queue: &Queue,
@@ -97,7 +97,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            CancellationToken::new(),
+            CancellationToken::default(),
         ))
         .build(),
     );

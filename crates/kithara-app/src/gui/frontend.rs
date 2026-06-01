@@ -74,7 +74,7 @@ impl Frontend for GuiFrontend {
         let controller = Arc::new(crate::state::StateController::new(
             Arc::clone(&queue),
             config.clone(),
-            config.cancel.child_token(),
+            config.shutdown.child_token(),
         ));
 
         let result = iced::daemon(
@@ -93,7 +93,7 @@ impl Frontend for GuiFrontend {
         .font(fonts::JETBRAINS_MONO_SEMIBOLD_BYTES)
         .run();
 
-        config.cancel.cancel();
+        config.shutdown.cancel();
         result?;
 
         Ok(())

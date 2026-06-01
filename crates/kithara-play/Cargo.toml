@@ -34,7 +34,6 @@ firewheel = { workspace = true }
 thunderdome = { workspace = true }
 
 # Async & channels
-tokio-util = { workspace = true }
 ringbuf = { workspace = true }
 
 # Utilities

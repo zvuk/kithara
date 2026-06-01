@@ -9,6 +9,7 @@ mod cancel_group;
 mod env;
 mod logging;
 mod maybe_send;
+mod rt_cancel;
 pub mod sync;
 pub mod thread;
 pub mod time;
@@ -19,6 +20,7 @@ pub use cancel_group::CancelGroup;
 pub use env::env_mutation_lock;
 pub use logging::log_error;
 pub use maybe_send::{BoxFuture, MaybeSend, MaybeSendFuture, MaybeSync, WasmSend};
+pub use rt_cancel::CancellationToken;
 pub use sync::{
     Condvar, Mutex, MutexGuard, NotAvailable, RwLock, RwLockReadGuard, RwLockWriteGuard,
 };

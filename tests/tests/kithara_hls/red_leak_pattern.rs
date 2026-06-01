@@ -14,9 +14,11 @@ use kithara::{
 use kithara_abr::Abr;
 use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::time::{Duration, sleep};
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, sleep},
+};
 use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer};
-use tokio_util::sync::CancellationToken;
 
 /// A peer that behaves like `HlsPeer`: `poll_next` never returns
 /// `Ready(None)` — always `Pending`.
@@ -53,11 +55,11 @@ impl Peer for ImmortalPeer {
 )]
 async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn StdError + Send + Sync>>
 {
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            CancellationToken::new(),
+            CancellationToken::default(),
         ))
         .cancel(cancel.clone())
         .build(),
@@ -116,9 +118,9 @@ async fn red_hls_source_drop_leaks_peer(
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            CancellationToken::new(),
+            CancellationToken::default(),
         ))
-        .cancel(CancellationToken::new())
+        .cancel(CancellationToken::default())
         .build(),
     );
 
@@ -126,7 +128,7 @@ async fn red_hls_source_drop_leaks_peer(
         let stream = Stream::<Hls>::new(
             HlsConfig::for_url(url.clone())
                 .store(StoreOptions::new(temp_dir.path()))
-                .cancel(CancellationToken::new())
+                .cancel(CancellationToken::default())
                 .downloader(downloader.clone())
                 .build(),
         )
@@ -141,7 +143,7 @@ async fn red_hls_source_drop_leaks_peer(
         let stream = Stream::<Hls>::new(
             HlsConfig::for_url(url.clone())
                 .store(StoreOptions::new(temp_dir.path()))
-                .cancel(CancellationToken::new())
+                .cancel(CancellationToken::default())
                 .downloader(downloader.clone())
                 .build(),
         )

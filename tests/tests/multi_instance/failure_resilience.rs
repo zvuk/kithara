@@ -13,10 +13,10 @@ use kithara_integration_tests::{
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread;
 use kithara_platform::{
+    CancellationToken,
     time::{Duration, sleep},
     tokio::task::{JoinHandle, spawn, spawn_blocking},
 };
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -135,7 +135,7 @@ async fn spawn_instance(
 ) -> JoinHandle<Outcome> {
     let server = create_server(wav_data).await;
     let temp = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let healthy = cancel_after.is_none();
 
     let audio = create_hls_audio(&server, temp.path(), cancel.clone()).await;

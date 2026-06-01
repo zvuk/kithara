@@ -13,10 +13,9 @@ use kithara_integration_tests::{
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    thread,
+    CancellationToken, thread,
     time::{Duration, Instant},
 };
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::common::test_defaults::Consts as Shared;
@@ -178,7 +177,7 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::default(),
-                CancellationToken::new(),
+                CancellationToken::default(),
             ))
             .build(),
         );

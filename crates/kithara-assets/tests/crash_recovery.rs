@@ -5,10 +5,9 @@ use std::{fs, path::Path};
 use kithara_assets::{
     AcquisitionResult, AssetStoreBuilder, FlushHub, FlushPolicy, ReadSide, WriteSide,
 };
-use kithara_platform::time::Duration;
+use kithara_platform::{CancellationToken, time::Duration};
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
-use tokio_util::sync::CancellationToken;
 
 /// Stream `data` through a Pending writer and commit it.
 fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8]) {
@@ -213,7 +212,7 @@ fn commit_then_crash_before_checkpoint_recovers_via_slow_path() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
     let dir = tempdir().unwrap();
-    let hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
+    let hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
 
     let dir_a = dir.path().join("a");
     let dir_b = dir.path().join("b");

@@ -11,11 +11,17 @@ use crate::common::{
 
 pub(crate) const ID: &str = "cancel_hierarchy";
 
-/// Inline-comment markers + the call pattern the lint matches.
+/// Inline-comment markers + the call patterns the lint matches.
 mod markers {
     pub(super) const OWNER: &str = "kithara:cancel:owner";
     pub(super) const BRIDGE: &str = "kithara:cancel:bridge";
-    pub(super) const PATTERN: &str = "CancellationToken::new()";
+    /// Master-minting calls that must sit at a marked owner / bridge site:
+    /// the workspace `CancellationToken`'s fresh-root constructor
+    /// (`CancellationToken::default()`). It roots a new cancel hierarchy, so an
+    /// unmarked one is an orphan that never sees a parent shutdown pulse.
+    /// (`.unwrap_or_default()` is not matched — it is the sanctioned standalone
+    /// fallback on `Option<CancellationToken>`.)
+    pub(super) const PATTERNS: &[&str] = &["CancellationToken::default()"];
 }
 
 pub(crate) struct CancelHierarchy;
@@ -44,7 +50,7 @@ impl Check for CancelHierarchy {
             }
 
             let content = fs::read_to_string(&path)?;
-            if !content.contains(markers::PATTERN) {
+            if !markers::PATTERNS.iter().any(|p| content.contains(p)) {
                 continue;
             }
             let Ok(file) = parse_file(&content) else {
@@ -56,9 +62,9 @@ impl Check for CancelHierarchy {
 
             for (idx, line) in content.lines().enumerate() {
                 let code = strip_line_comment(line);
-                if !code.contains(markers::PATTERN) {
+                let Some(pattern) = markers::PATTERNS.iter().find(|p| code.contains(**p)) else {
                     continue;
-                }
+                };
                 if line.contains(markers::OWNER) || line.contains(markers::BRIDGE) {
                     continue;
                 }
@@ -73,7 +79,7 @@ impl Check for CancelHierarchy {
                     Violation::deny(
                         ID,
                         format!("{rel_str}:{line_num}"),
-                        "orphan `CancellationToken::new()` in production code".to_string(),
+                        format!("orphan `{pattern}` master-cancel construction in production code"),
                     )
                     .with_explanation(EXPLANATION),
                 );
@@ -84,20 +90,23 @@ impl Check for CancelHierarchy {
 }
 
 const EXPLANATION: &str = "\
-Summary: Hard-coded `CancellationToken::new()` outside the marked
-owner / bridge sites breaks the unified cancel hierarchy.
+Summary: Hard-coded `CancellationToken::default()` outside the marked
+owner / bridge sites breaks the unified cancel hierarchy. It mints a fresh
+master and roots a new tree.
 
 Why: Every cancel token in production should be either (a) the
 single master owned by the consumer crate (`Queue` / `App` / FFI
 player / `PlayerImpl` fallback) or (b) a child of one such master
 derived via `.child_token()`. Orphans synthesised at subsystem level
 never see a parent shutdown pulse — dropping the player leaves the
-orphan-rooted task running.
+orphan-rooted task running. A fresh master is doubly dangerous: its
+lock-free flag chain roots a new tree, so a child of an orphan master
+never observes the real master cancel on the produce-core.
 
-Fix: derive a child from the cancel passed in via your config
-struct (e.g. `config.cancel.clone().unwrap_or_default().child_token()`),
-or take a `CancellationToken` parameter from your caller. If the
-construction is genuinely an owner / bridge site, add the inline
+Fix: derive a child from the cancel passed in via your config struct
+(e.g. `config.cancel.clone().unwrap_or_default().child_token()`), or
+take a `CancellationToken` parameter from your caller. If
+the construction is genuinely an owner / bridge site, add the inline
 marker comment on the same line:
   - `// kithara:cancel:owner`  (consumer-crate top, PlayerImpl fallback)
   - `// kithara:cancel:bridge` (FFI bridge that outlives the player)

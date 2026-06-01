@@ -10,12 +10,12 @@ use kithara_integration_tests::{
     TestTempDir, kithara, offline::OfflinePlayer, swallow_detector::assert_no_committed_swallow,
 };
 use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::CancellationToken;
 use kithara_play::Resource;
 use kithara_queue::TrackSource;
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::probe::capture as probe_capture;
 use tokio::time::sleep;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 /// Production zvuk DRM track with a FLAC lossless top variant (a zvuk
@@ -78,10 +78,10 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
 
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::new())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::default())).build(),
     );
-    let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, CancellationToken::new());
+    let flush_hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
+    let config = AppConfig::new(downloader, flush_hub, CancellationToken::default());
     let temp = TestTempDir::new();
 
     let TrackSource::Config(mut cfg) = build_source(PROD_TRACK, &config) else {

@@ -19,12 +19,11 @@ use kithara_abr::Abr;
 use kithara_events::{DownloaderEvent, Event, EventBus};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    Mutex,
+    CancellationToken, Mutex,
     time::Duration,
     tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn, time as tokio_time},
 };
 use kithara_test_utils::kithara;
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority};
@@ -41,7 +40,7 @@ impl Abr for MockPeer {}
 impl Peer for MockPeer {}
 
 fn test_client() -> HttpClient {
-    HttpClient::new(NetOptions::default(), CancellationToken::new())
+    HttpClient::new(NetOptions::default(), CancellationToken::default())
 }
 
 fn test_config() -> DownloaderConfig {
@@ -131,7 +130,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
         .total_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .build();
     let dl = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::new())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::default())).build(),
     );
     let handle = dl.register(Arc::new(MockPeer));
 
@@ -161,7 +160,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
 
 #[kithara::test(tokio)]
 async fn peer_handle_downloader_cancel_cascades() {
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let dl = Downloader::new(
         DownloaderConfig::for_client(test_client())
             .cancel(cancel.clone())
@@ -529,7 +528,7 @@ async fn shared_client_keepalive_bounds_socket_count() {
         NetOptions::builder()
             .pool_max_idle_per_host(PARALLEL_DLS * MAX_CONCURRENT)
             .build(),
-        CancellationToken::new(),
+        CancellationToken::default(),
     );
 
     let mut total_ok = 0;

@@ -12,7 +12,7 @@ use kithara_abr::{Abr, AbrState};
 use kithara_assets::ResourceKey;
 use kithara_events::{AbrMode, AbrProgressSnapshot, VariantDuration, VariantInfo};
 use kithara_platform::{
-    Mutex,
+    CancellationToken, Mutex,
     time::Duration,
     tokio::{
         self,
@@ -24,7 +24,6 @@ use kithara_stream::{
     dl::{FetchCmd, Peer, RequestPriority},
 };
 use kithara_test_utils::kithara;
-use tokio_util::sync::CancellationToken;
 
 use crate::{coord::HlsCoord, variant::PlanCtx};
 
@@ -78,7 +77,7 @@ impl HlsPeer {
             timeline,
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::new(None),
-            wake_signal: CancellationToken::new(), // kithara:cancel:owner
+            wake_signal: CancellationToken::default(), // kithara:cancel:owner
             abr: Arc::new(AbrState::new(initial_mode)),
             variants: Mutex::new(Vec::new()),
             reader_segment: Arc::new(AtomicUsize::new(0)),

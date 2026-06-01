@@ -8,11 +8,11 @@ use std::{
     sync::Arc,
 };
 
+use kithara_platform::CancellationToken;
 use kithara_storage::{
     AtomicChunked, AvailabilityObserver, MmapDriver, MmapOptions, MmapResource, OpenIntent,
     OpenMode, Resource, ResourceRead, ResourceStatus, StorageError, StorageResource,
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     acquisition::AcquisitionResult,
@@ -376,9 +376,9 @@ pub(crate) fn sanitize_rel(input: &str) -> Result<String, ()> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_platform::CancellationToken;
     use kithara_storage::ResourceStatus;
     use kithara_test_utils::kithara;
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
     use crate::acquisition::ReadSide;
@@ -425,7 +425,7 @@ mod tests {
 
         let store = DiskAssetStore::new(
             dir.path().join("cache"),
-            CancellationToken::new(),
+            CancellationToken::default(),
             &crate::BytePool::default(),
         );
 

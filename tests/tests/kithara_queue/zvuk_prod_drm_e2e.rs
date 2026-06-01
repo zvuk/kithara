@@ -8,6 +8,7 @@ use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
 use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::CancellationToken;
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
@@ -15,7 +16,6 @@ use tokio::{
     sync::OnceCell,
     time::{sleep, timeout},
 };
-use tokio_util::sync::CancellationToken;
 
 /// Production zvuk DRM track. Server: `cdn-hls-slicer.zvuk.com`,
 /// matched by the `zvuk-prod` provider in `app.yaml` (domains
@@ -40,10 +40,11 @@ async fn shared_ctx() -> &'static Ctx {
     CTX.get_or_init(|| async {
         let net = NetOptions::builder().is_insecure(true).build();
         let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::new())).build(),
+            DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::default()))
+                .build(),
         );
-        let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
-        let config = AppConfig::new(downloader, flush_hub, CancellationToken::new());
+        let flush_hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
+        let config = AppConfig::new(downloader, flush_hub, CancellationToken::default());
         let player = Arc::new(PlayerImpl::new(
             PlayerConfig::builder()
                 .session(OfflineSession::arc_auto())

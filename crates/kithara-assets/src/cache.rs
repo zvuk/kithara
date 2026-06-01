@@ -623,10 +623,9 @@ where
 mod tests {
     use std::{fs, path::Path, sync::Arc, time::Duration};
 
-    use kithara_platform::thread;
+    use kithara_platform::{CancellationToken, thread};
     use kithara_storage::StorageResource;
     use kithara_test_utils::kithara;
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
     use crate::{
@@ -663,7 +662,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 inner: MemAssetStore::new(
-                    CancellationToken::new(),
+                    CancellationToken::default(),
                     None,
                     &crate::BytePool::default(),
                 ),
@@ -723,7 +722,7 @@ mod tests {
     fn make_cached(dir: &Path, capacity: NonZeroUsize) -> CachedAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(
             dir,
-            CancellationToken::new(),
+            CancellationToken::default(),
             &crate::BytePool::default(),
         ));
         CachedAssets::new(disk, capacity, None, false)
@@ -766,7 +765,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let disk = Arc::new(DiskAssetStore::new(
             dir.path(),
-            CancellationToken::new(),
+            CancellationToken::default(),
             &crate::BytePool::default(),
         ));
         let (log, cb) = record_invalidations();
@@ -799,7 +798,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn volatile_displacement_invalidates() {
         let mem = Arc::new(MemAssetStore::new(
-            CancellationToken::new(),
+            CancellationToken::default(),
             None,
             &crate::BytePool::default(),
         ));

@@ -9,9 +9,8 @@ use std::{
 };
 
 use dashmap::DashMap;
-use kithara_platform::Mutex;
+use kithara_platform::{CancellationToken, Mutex};
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     AssetResourceState,
@@ -608,17 +607,21 @@ mod tests {
     fn make_pins_disk(dir: &Path) -> PinsIndex {
         let path = dir.join("_index").join("pins.bin");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        PinsIndex::with_persist_at(path, CancellationToken::new(), &crate::BytePool::default())
+        PinsIndex::with_persist_at(
+            path,
+            CancellationToken::default(),
+            &crate::BytePool::default(),
+        )
     }
 
     fn make_lease(dir: &Path) -> LeaseAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(
             dir,
-            CancellationToken::new(),
+            CancellationToken::default(),
             &crate::BytePool::default(),
         ));
         let pins = make_pins_disk(dir);
-        LeaseAssets::new(disk, CancellationToken::new(), pins)
+        LeaseAssets::new(disk, CancellationToken::default(), pins)
     }
 
     fn load_persisted_pins(dir: &Path) -> HashSet<String> {
@@ -626,8 +629,11 @@ mod tests {
         if !path.exists() {
             return HashSet::new();
         }
-        let idx =
-            PinsIndex::with_persist_at(path, CancellationToken::new(), &crate::BytePool::default());
+        let idx = PinsIndex::with_persist_at(
+            path,
+            CancellationToken::default(),
+            &crate::BytePool::default(),
+        );
         idx.snapshot()
     }
 

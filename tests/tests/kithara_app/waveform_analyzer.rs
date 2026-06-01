@@ -8,7 +8,7 @@ use std::time::Duration;
 use kithara::prelude::ResourceConfig;
 use kithara_app::waveform::analyze;
 use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
 
 fn silence_wav_spec() -> SignalSpec {
     SignalSpec {
@@ -34,7 +34,7 @@ async fn analyze_silent_wav_yields_all_zero_envelope() {
     // A silent 1s WAV must decode end to end and finalise to exactly
     // `buckets` all-zero values (no frames are loud, so nothing normalises
     // up to 1.0).
-    let env = analyze(config, 100, CancellationToken::new())
+    let env = analyze(config, 100, CancellationToken::default())
         .await
         .expect("silent WAV must decode to a finalised envelope");
 
@@ -56,7 +56,7 @@ async fn analyze_returns_none_when_cancelled_upfront() {
     let config =
         ResourceConfig::new(url.as_str()).expect("silence URL must build a ResourceConfig");
 
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     cancel.cancel();
     assert!(
         analyze(config, 100, cancel).await.is_none(),

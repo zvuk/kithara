@@ -22,7 +22,6 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 bon = { workspace = true }
 delegate = { workspace = true }
 thiserror = { workspace = true }
-tokio-util = { workspace = true }
 tracing = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-test-macros = { workspace = true }
@@ -44,7 +43,6 @@ mmap-io = { workspace = true }
 # crash-safe atomic writes (unique temp files)
 tempfile = { workspace = true }
 # full tokio features for native
-tokio-util = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 kithara-storage = { path = ".", default-features = false }

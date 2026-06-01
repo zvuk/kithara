@@ -295,11 +295,10 @@ impl AvailabilityObserver for ScopedAvailabilityObserver {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use kithara_platform::time::Duration;
+    use kithara_platform::{CancellationToken, time::Duration};
     use kithara_storage::{Atomic, MmapOptions, MmapResource, OpenMode, Resource};
     use kithara_test_utils::kithara;
     use tempfile::TempDir;
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
 
@@ -428,7 +427,7 @@ mod tests {
     fn index_snapshot_and_seed_roundtrip() {
         let dir = TempDir::new().unwrap();
         let res: MmapResource = Resource::open(
-            CancellationToken::new(),
+            CancellationToken::default(),
             MmapOptions::for_path(dir.path().join("availability.bin"))
                 .initial_len(4096)
                 .mode(OpenMode::ReadWrite)
@@ -457,7 +456,7 @@ mod tests {
     fn schema_empty_resource_loads_empty() {
         let dir = TempDir::new().unwrap();
         let res: MmapResource = Resource::open(
-            CancellationToken::new(),
+            CancellationToken::default(),
             MmapOptions::for_path(dir.path().join("availability.bin"))
                 .mode(OpenMode::ReadWrite)
                 .build(),
@@ -474,7 +473,7 @@ mod tests {
     fn schema_corrupt_payload_loads_empty() {
         let dir = TempDir::new().unwrap();
         let res: MmapResource = Resource::open(
-            CancellationToken::new(),
+            CancellationToken::default(),
             MmapOptions::for_path(dir.path().join("availability.bin"))
                 .initial_len(4096)
                 .mode(OpenMode::ReadWrite)

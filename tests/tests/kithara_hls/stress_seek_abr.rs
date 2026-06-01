@@ -6,7 +6,7 @@ use std::sync::{
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, abr_fast, auto, temp_dir};

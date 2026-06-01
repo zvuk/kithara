@@ -4,7 +4,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::{PcmChunk, PcmMeta},
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -15,8 +15,10 @@ use kithara_integration_tests::{
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use kithara_platform::time::{Duration, Instant, sleep};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, Instant, sleep},
+};
 use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;
@@ -164,7 +166,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     info!(%url, "HLS server ready with 2 variants");
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {

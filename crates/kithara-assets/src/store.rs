@@ -7,7 +7,7 @@ use std::{fmt, hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use bon::Builder;
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::disk_store::DiskAssetStore;

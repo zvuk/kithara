@@ -14,9 +14,9 @@ use kithara_integration_tests::{
     offline::OfflinePlayer,
 };
 use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::CancellationToken;
 use kithara_stream::AudioCodec;
 use tokio::time::sleep;
-use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::phase_continuity::common::{
@@ -121,7 +121,7 @@ async fn run_case(
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            CancellationToken::new(),
+            CancellationToken::default(),
         ))
         .build(),
     );

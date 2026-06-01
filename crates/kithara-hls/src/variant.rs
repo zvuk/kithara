@@ -19,7 +19,7 @@ use kithara_assets::{
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, NetError};
 use kithara_platform::{
-    Mutex, RwLock,
+    CancellationToken, Mutex, RwLock,
     thread::sleep,
     time::{Duration, Instant},
     tokio::sync::Notify,
@@ -31,7 +31,6 @@ use kithara_stream::{
     dl::{FetchCmd, OnCompleteFn, WriterFn},
 };
 use kithara_test_utils::kithara;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 use url::Url;
 

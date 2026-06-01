@@ -15,11 +15,10 @@ use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage, SegmentLocation};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
-use kithara_platform::{thread::park_timeout, tokio::task::spawn_blocking};
+use kithara_platform::{CancellationToken, thread::park_timeout, tokio::task::spawn_blocking};
 use kithara_stream::{MediaInfo, Stream, StreamType, Timeline};
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
 use crate::{
@@ -887,8 +886,10 @@ where
         let (data_tx, data_rx) = Self::create_channels(pcm_buffer_chunks, Arc::clone(&reader_wake));
         let (trash_tx, trash_inlet) = Self::create_trash_channel(pcm_buffer_chunks);
 
-        let (worker, is_standalone) =
-            config_worker.map_or_else(|| (AudioWorkerHandle::new(), true), |w| (w, false));
+        let (worker, is_standalone) = config_worker.map_or_else(
+            || (AudioWorkerHandle::with_cancel(cancel.child_token()), true),
+            |w| (w, false),
+        );
 
         let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
 
@@ -1405,7 +1406,7 @@ mod tests {
     #[kithara::test]
     fn blocking_recv_returns_closed_after_cancel() {
         let mut audio = empty_audio();
-        let cancel = CancellationToken::new();
+        let cancel = CancellationToken::default();
         cancel.cancel();
         audio.cancel = Some(cancel);
 
@@ -1521,7 +1522,7 @@ mod tests {
     #[kithara::test]
     fn consumer_phase_failed_on_channel_close() {
         let (mut audio, _tx) = audio_with_channel();
-        let cancel = CancellationToken::new();
+        let cancel = CancellationToken::default();
         cancel.cancel();
         audio.cancel = Some(cancel);
         audio.preloaded = false;

@@ -8,12 +8,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir, cancel_token,
+    TestTempDir,
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    temp_dir,
+    rt_cancel, temp_dir,
 };
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -50,7 +49,7 @@ impl Consts {
 )]
 async fn seek_beyond_head_total_within_actual_total(
     temp_dir: TestTempDir,
-    cancel_token: CancellationToken,
+    rt_cancel: CancellationToken,
 ) {
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
@@ -65,7 +64,7 @@ async fn seek_beyond_head_total_within_actual_total(
 
     let config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(cancel_token)
+        .cancel(rt_cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 

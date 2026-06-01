@@ -18,11 +18,10 @@ use kithara_integration_tests::create_wav_exact_bytes;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::hls_server::{HlsTestServer, HlsTestServerConfig};
 use kithara_integration_tests::signal_pcm::signal;
-use kithara_platform::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::tokio::task::spawn_blocking;
+use kithara_platform::{CancellationToken, Duration};
 #[cfg(not(target_arch = "wasm32"))]
-use tokio_util::sync::CancellationToken;
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
 
@@ -121,7 +120,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let hls_config = HlsConfig::for_url(url)
         .store(

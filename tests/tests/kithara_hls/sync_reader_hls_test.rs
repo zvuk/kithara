@@ -10,8 +10,7 @@ use kithara_integration_tests::{
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
-use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, time::sleep, tokio::task::spawn_blocking};
 
 #[kithara::test(
     tokio,
@@ -28,7 +27,7 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
     .await;
 
     let url = server.url("/master.m3u8");
-    let cancel_token = CancellationToken::new();
+    let cancel_token = CancellationToken::default();
 
     let config = HlsConfig::for_url(url.clone())
         .cancel(cancel_token.clone())

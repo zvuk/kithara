@@ -10,8 +10,8 @@ use std::{
 
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
+use kithara_platform::CancellationToken;
 use kithara_storage::{Atomic, MmapDriver, StorageError};
-use tokio_util::sync::CancellationToken;
 
 use super::core::{PinsIndex, PinsInner};
 use crate::{

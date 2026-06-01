@@ -7,10 +7,10 @@ use std::{
 };
 
 use dashmap::DashMap;
+use kithara_platform::CancellationToken;
 use kithara_storage::{
     AvailabilityObserver, MemOptions, MemResource, Resource, ResourceStatus, StorageResource,
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     AssetResourceState,
@@ -282,7 +282,11 @@ mod tests {
     use crate::acquisition::{AcquisitionResult, ReadSide, WriteSide};
 
     fn make_mem_store() -> MemAssetStore {
-        MemAssetStore::new(CancellationToken::new(), None, &crate::BytePool::default())
+        MemAssetStore::new(
+            CancellationToken::default(),
+            None,
+            &crate::BytePool::default(),
+        )
     }
 
     fn pending(acq: AcquisitionResult<BaseWriter, BaseReader>) -> BaseWriter {

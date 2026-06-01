@@ -45,7 +45,7 @@ pub struct AudioConfig<T: StreamType> {
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
     /// Master cancel token for the audio pipeline.
-    pub cancel: Option<tokio_util::sync::CancellationToken>,
+    pub cancel: Option<kithara_platform::CancellationToken>,
     /// Optional format hint (file extension like "mp3", "wav")
     pub hint: Option<String>,
     /// Target sample rate of the audio host (for resampling).

@@ -4,8 +4,8 @@ use std::{
 };
 
 use kithara_events::{EventBus, EventReceiver, TrackId};
+use kithara_platform::CancellationToken;
 use kithara_play::{PlayerConfig, PlayerImpl};
-use tokio_util::sync::CancellationToken;
 
 use super::types::{
     AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase,
@@ -101,7 +101,7 @@ pub struct Queue {
     /// shutdown to the player's subsystems. When a caller supplies a
     /// pre-built player, this token is independent — the caller owns
     /// the player's master directly.
-    pub(super) cancel: CancellationToken,
+    pub(super) shutdown: CancellationToken,
 }
 
 impl Queue {
@@ -152,7 +152,7 @@ impl Queue {
             bus,
             #[cfg(any(test, feature = "probe"))]
             should_autoplay,
-            cancel,
+            shutdown: cancel,
             navigation: Arc::new(Mutex::new(NavigationState::new())),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
             sources: Arc::new(Mutex::new(HashMap::new())),
@@ -221,7 +221,7 @@ impl Queue {
 
 impl Drop for Queue {
     fn drop(&mut self) {
-        self.cancel.cancel();
+        self.shutdown.cancel();
     }
 }
 

@@ -7,11 +7,11 @@ use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_integration_tests::{TestTempDir, kithara};
 use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::CancellationToken;
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tokio::{sync::OnceCell, time::timeout};
-use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 /// Real-network DRM trace harness. Loads a single zvq.me DRM master
@@ -61,11 +61,11 @@ async fn shared_ctx() -> &'static Ctx {
         let net = NetOptions::builder().is_insecure(true).build();
         let downloader = Downloader::new(
             DownloaderConfig::builder()
-                .client(HttpClient::new(net, CancellationToken::new()))
+                .client(HttpClient::new(net, CancellationToken::default()))
                 .build(),
         );
-        let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
-        let config = AppConfig::new(downloader, flush_hub, CancellationToken::new());
+        let flush_hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
+        let config = AppConfig::new(downloader, flush_hub, CancellationToken::default());
         let player = Arc::new(PlayerImpl::new(PlayerConfig::builder().build()));
         let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 

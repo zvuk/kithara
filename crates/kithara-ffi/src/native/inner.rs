@@ -11,10 +11,9 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_drm::{KeyRequest, KeyRequestFactory};
-use kithara_platform::Mutex;
+use kithara_platform::{CancellationToken, Mutex};
 use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource};
 use rand::{distr::Alphanumeric, prelude::*};
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::StoreOptions,
@@ -169,8 +168,10 @@ pub(crate) struct NativeInner {
     /// children of this token. The facade's `Drop` fires
     /// `cancel.cancel()` so the shutdown pulse reaches subsystems before
     /// structural Arc teardown unwinds. See `kithara-play/README.md`
-    /// "Cancel Hierarchy".
-    cancel: CancellationToken,
+    /// "Cancel Hierarchy". The chain flag reaches the audio worker and HLS
+    /// coord lock-free `is_cancelled()` reads; every subsystem derives its
+    /// own [`CancellationToken::child_token`] from this consumer-top master.
+    shutdown: CancellationToken,
     /// Player-wide HTTP headers (e.g. `X-Encrypted-Key`,
     /// `X-Auth-Token`). Merged into per-item `headers` on insert.
     /// Item-supplied headers take precedence on key collision.
@@ -197,7 +198,7 @@ pub(crate) struct NativeInner {
 
 impl NativeInner {
     pub(crate) fn new(config: FfiPlayerConfig) -> Self {
-        let cancel = CancellationToken::new(); // kithara:cancel:owner
+        let cancel = CancellationToken::default(); // kithara:cancel:owner
         let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(config.eq_band_count as usize))
             .cancel(cancel.clone())
@@ -214,7 +215,7 @@ impl NativeInner {
         let player_headers_map: DashMap<String, String> = player_headers.into_iter().collect();
         Self {
             downloader,
-            cancel,
+            shutdown: cancel,
             key_options: Mutex::new(key_options),
             player_headers: player_headers_map,
             peak_bitrate: Mutex::new(PeakBitrate::default()),
@@ -469,7 +470,7 @@ impl NativeInner {
             Arc::clone(&observer),
             Arc::clone(&self.queue),
             &self.items,
-            CancellationToken::new(), // kithara:cancel:bridge
+            CancellationToken::default(), // kithara:cancel:bridge
         );
 
         let mut eb = self.event_bridge.lock_sync();
@@ -626,7 +627,7 @@ impl Drop for NativeInner {
     /// `AudioPlayer` is dropped. See `kithara-play/README.md`
     /// "Cancel Hierarchy".
     fn drop(&mut self) {
-        self.cancel.cancel();
+        self.shutdown.cancel();
     }
 }
 

@@ -2,8 +2,7 @@ use kithara::{
     audio::{ChunkOutcome, Envelope, PeakAccumulator},
     prelude::{Resource, ResourceConfig},
 };
-use kithara_platform::{thread::sleep, tokio::task::spawn_blocking};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, thread::sleep, tokio::task::spawn_blocking};
 use tracing::{debug, warn};
 
 mod consts {

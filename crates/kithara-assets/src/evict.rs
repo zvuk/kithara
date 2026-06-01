@@ -3,7 +3,7 @@
 use std::{collections::HashSet, fmt, path::Path, sync::Arc};
 
 use dashmap::DashSet;
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
 
 use crate::{
     AssetResourceState,

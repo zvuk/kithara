@@ -86,7 +86,7 @@ mod hls_timeline {
         hls_server::{HlsTestServer, HlsTestServerConfig},
         signal_pcm::signal,
     };
-    use tokio_util::sync::CancellationToken;
+    use kithara_platform::CancellationToken;
 
     use crate::common::test_defaults::SawWav;
 
@@ -121,7 +121,7 @@ mod hls_timeline {
 
         let url = server.url("/master.m3u8");
         let temp_dir = TestTempDir::new();
-        let cancel = CancellationToken::new();
+        let cancel = CancellationToken::default();
 
         let hls_config = HlsConfig::for_url(url)
             .store(StoreOptions::new(temp_dir.path()))

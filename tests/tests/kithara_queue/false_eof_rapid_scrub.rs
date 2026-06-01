@@ -10,12 +10,12 @@ use kithara_events::{
 };
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
 use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::CancellationToken;
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 use tokio::time::{sleep, timeout};
-use tokio_util::sync::CancellationToken;
 
 /// Captured from `app.log @ 06:39:13`. `cdn-hls-slicer.zvuk.com` →
 /// `zvuk-prod` provider in baked `app.yaml`.
@@ -53,10 +53,10 @@ struct Ctx {
 async fn build_ctx() -> Ctx {
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::new())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::default())).build(),
     );
-    let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, CancellationToken::new());
+    let flush_hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
+    let config = AppConfig::new(downloader, flush_hub, CancellationToken::default());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
             .session(OfflineSession::arc_auto())

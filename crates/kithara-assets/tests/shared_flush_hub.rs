@@ -3,10 +3,9 @@
 use std::num::NonZeroUsize;
 
 use kithara_assets::{AcquisitionResult, AssetStoreBuilder, FlushHub, FlushPolicy, WriteSide};
-use kithara_platform::time::Duration;
+use kithara_platform::{CancellationToken, time::Duration};
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
-use tokio_util::sync::CancellationToken;
 
 const INDEXES_PER_DISK_STORE: usize = 3;
 
@@ -37,7 +36,7 @@ fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8])
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn shared_hub_registers_three_indexes_per_store() {
     let dir = tempdir().unwrap();
-    let hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
+    let hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
     assert_eq!(hub.live_source_count(), 0, "fresh hub has no sources");
 
     let _store_a = AssetStoreBuilder::new()
@@ -66,7 +65,7 @@ fn shared_hub_registers_three_indexes_per_store() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn shared_hub_gcs_dropped_store_indexes() {
     let dir = tempdir().unwrap();
-    let hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
+    let hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
 
     let store_a = AssetStoreBuilder::new()
         .root_dir(dir.path().join("a"))
@@ -115,7 +114,7 @@ fn shared_hub_flush_now_persists_every_store() {
     let dir = tempdir().unwrap();
     // Manual-only: the background worker must not write availability before
     // the explicit flush_now, or the checkpoint-only pre-assertion races it.
-    let hub = FlushHub::new(CancellationToken::new(), manual_flush_policy());
+    let hub = FlushHub::new(CancellationToken::default(), manual_flush_policy());
 
     let store_a = AssetStoreBuilder::new()
         .root_dir(dir.path().join("a"))

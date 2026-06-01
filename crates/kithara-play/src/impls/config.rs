@@ -15,9 +15,9 @@ use kithara_events::EventBus;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::{HlsConfig, HlsStore, KeyOptions, SizeProbeMethod};
 use kithara_net::Headers;
+use kithara_platform::CancellationToken;
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use portable_atomic::AtomicF32;
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 fn derive_remote_file_hint(url: &Url) -> Option<String> {
@@ -96,7 +96,10 @@ pub struct ResourceConfig {
     pub bus: Option<EventBus>,
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
-    /// Cancellation token for graceful shutdown.
+    /// Cancellation token for graceful shutdown. The master `CancellationToken` whose
+    /// shared atomic mirror reaches the HLS coord's lock-free `is_cancelled()`
+    /// read; the async-only downloader / file / decode paths take its inner
+    /// `CancellationToken` via [`CancellationToken::token`].
     pub cancel: Option<CancellationToken>,
     /// Shared downloader instance.
     pub downloader: Option<Downloader>,
@@ -186,7 +189,7 @@ impl ResourceConfig {
             let dl_cancel = self
                 .cancel
                 .as_ref()
-                .map_or_else(CancellationToken::new, CancellationToken::child_token);
+                .map_or_else(CancellationToken::default, CancellationToken::child_token);
             let client = kithara_net::HttpClient::new(
                 kithara_net::NetOptions::default(),
                 dl_cancel.child_token(),
@@ -208,7 +211,7 @@ impl ResourceConfig {
             .maybe_cancel(self.cancel.clone())
             .build();
         AudioConfig::<kithara_file::File>::for_stream(file_config)
-            .maybe_cancel(self.cancel)
+            .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint.or(derived_hint))
             .maybe_byte_pool(self.byte_pool)
             .maybe_pcm_pool(self.pcm_pool)
@@ -256,7 +259,7 @@ impl ResourceConfig {
             .size_probe_method(self.size_probe_method)
             .build();
         Ok(AudioConfig::<kithara_hls::Hls>::for_stream(hls_config)
-            .maybe_cancel(self.cancel)
+            .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint)
             .maybe_byte_pool(self.byte_pool)
             .maybe_pcm_pool(self.pcm_pool)
@@ -457,7 +460,7 @@ mod tests {
 
     #[kithara::test]
     fn config_with_worker_sets_field() {
-        let worker = AudioWorkerHandle::new();
+        let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
         let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
             .worker(worker.clone())
@@ -468,7 +471,7 @@ mod tests {
 
     #[kithara::test]
     fn config_worker_propagates_to_file_config() {
-        let worker = AudioWorkerHandle::new();
+        let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
         let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
             .worker(worker.clone())
@@ -480,7 +483,7 @@ mod tests {
 
     #[kithara::test]
     fn config_worker_propagates_to_hls_config() {
-        let worker = AudioWorkerHandle::new();
+        let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
         let config = ResourceConfig::for_src("https://example.com/live.m3u8")
             .unwrap()
             .worker(worker.clone())

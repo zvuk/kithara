@@ -9,12 +9,11 @@ use kithara_assets::{
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::EventBus;
-use kithara_platform::tokio::sync::mpsc;
+use kithara_platform::{CancellationToken, tokio::sync::mpsc};
 use kithara_stream::{
     SourceError, StreamType, Timeline,
     dl::{Downloader, DownloaderConfig, Peer},
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::HlsConfig,

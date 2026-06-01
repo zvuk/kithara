@@ -5,9 +5,8 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 
-use kithara_platform::{Condvar, Mutex};
+use kithara_platform::{CancellationToken, Condvar, Mutex};
 use rangemap::RangeSet;
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     StorageError, StorageResult,

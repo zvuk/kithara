@@ -7,7 +7,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     events::EventBus,
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -19,10 +19,10 @@ use kithara_integration_tests::{
     wav::create_wav_header,
 };
 use kithara_platform::{
+    CancellationToken,
     time::{Duration, Instant},
     tokio::task::{spawn, spawn_blocking},
 };
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -98,7 +98,7 @@ async fn abr_auto_switch_during_playback(
     let url = server.url("/master.m3u8");
     info!(%url, "HLS server ready with 2 variants");
 
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let bus = EventBus::new(32);
     let switches = Arc::new(AtomicUsize::new(0));

@@ -4,9 +4,10 @@ use futures::task::AtomicWaker;
 use kithara_abr::{Abr, AbrController, AbrPeerId};
 use kithara_events::EventBus;
 use kithara_net::HttpClient;
-use kithara_platform::{Mutex, RwLock, time::Duration, tokio, tokio::sync::mpsc};
+use kithara_platform::{
+    CancellationToken, Mutex, RwLock, time::Duration, tokio, tokio::sync::mpsc,
+};
 use kithara_test_utils::kithara;
-use tokio_util::sync::CancellationToken;
 
 use super::{
     peer::{Peer, PeerHandle},

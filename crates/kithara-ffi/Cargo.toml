@@ -29,7 +29,6 @@ workspace = true
 kithara-platform = { workspace = true }
 kithara-events = { workspace = true }
 kithara-test-macros = { workspace = true }
-tokio-util = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

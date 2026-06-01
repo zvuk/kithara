@@ -19,9 +19,9 @@ use kithara_integration_tests::{
     offline::OfflinePlayer,
     swallow_detector::assert_no_committed_swallow,
 };
+use kithara_platform::CancellationToken;
 use kithara_test_utils::probe::capture as probe_capture;
 use tokio::time::sleep;
-use tokio_util::sync::CancellationToken;
 
 /// `b"0123456789abcdef"` — the AES-128 key/zero-IV pair used across the
 /// repo's DRM fixtures.
@@ -115,7 +115,7 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            CancellationToken::new(),
+            CancellationToken::default(),
         ))
         .build(),
     );

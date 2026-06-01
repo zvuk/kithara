@@ -11,10 +11,10 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
 };
 use kithara_platform::{
+    CancellationToken,
     time::{Duration, Instant},
     tokio::time::sleep,
 };
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 /// Walk `root` recursively and collect every file that is not inside the
@@ -116,7 +116,7 @@ async fn html_playlist_failure_leaves_no_orphan_cache_files(
     let helper = TestServerHelper::new().await;
     let (url, orphan_prefix) = build_scenario(&helper, scenario);
 
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel.clone())
@@ -161,7 +161,7 @@ async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
         delivery: Delivery::Normal,
     });
 
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
     let config = HlsConfig::for_url(master.url())
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel.clone())

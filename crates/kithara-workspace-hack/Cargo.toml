@@ -16,17 +16,19 @@ publish = false
 ### BEGIN HAKARI SECTION
 [dependencies]
 cpal = { version = "0.17", default-features = false, features = ["wasm-bindgen"] }
+crossbeam-utils = { version = "0.8" }
 firewheel = { version = "0.10", default-features = false, features = ["all_nodes", "cpal", "musical_transport", "pool", "tracing", "wasm-bindgen"] }
 firewheel-cpal = { version = "0.10", default-features = false, features = ["tracing", "wasm-bindgen"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
+futures-core = { version = "0.3" }
+futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
 hotpath = { version = "0.16", features = ["hotpath", "hotpath-alloc"] }
 indexmap = { version = "2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
-nu-ansi-term = { version = "0.50" }
 num-integer = { version = "0.1", features = ["i128"] }
 num-rational = { version = "0.4", features = ["num-bigint-std", "serde"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
@@ -37,7 +39,6 @@ quote = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
 rustfft = { version = "6" }
-serde = { version = "1", features = ["derive"] }
 serde_core = { version = "1", features = ["alloc"] }
 serde_json = { version = "1", features = ["alloc", "unbounded_depth"] }
 smallvec = { version = "1", default-features = false, features = ["const_generics"] }
@@ -45,23 +46,24 @@ syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "vis
 thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
-tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 toml_parser = { version = "1" }
 tracing-core = { version = "0.1" }
 
 [build-dependencies]
 cpal = { version = "0.17", default-features = false, features = ["wasm-bindgen"] }
+crossbeam-utils = { version = "0.8" }
 firewheel = { version = "0.10", default-features = false, features = ["all_nodes", "cpal", "musical_transport", "pool", "tracing", "wasm-bindgen"] }
 firewheel-cpal = { version = "0.10", default-features = false, features = ["tracing", "wasm-bindgen"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
+futures-core = { version = "0.3" }
+futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
 hotpath = { version = "0.16", features = ["hotpath", "hotpath-alloc"] }
 indexmap = { version = "2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
-nu-ansi-term = { version = "0.50" }
 num-integer = { version = "0.1", features = ["i128"] }
 num-rational = { version = "0.4", features = ["num-bigint-std", "serde"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
@@ -72,7 +74,6 @@ quote = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
 rustfft = { version = "6" }
-serde = { version = "1", features = ["derive"] }
 serde_core = { version = "1", features = ["alloc"] }
 serde_json = { version = "1", features = ["alloc", "unbounded_depth"] }
 smallvec = { version = "1", default-features = false, features = ["const_generics"] }
@@ -80,7 +81,6 @@ syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "vis
 thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
-tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 toml_parser = { version = "1" }
 tracing-core = { version = "0.1" }
 
@@ -102,7 +102,6 @@ futures-io = { version = "0.3" }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
-hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15", default-features = false, features = ["default-hasher"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
@@ -116,7 +115,7 @@ percent-encoding = { version = "2" }
 regex = { version = "1" }
 rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "stdio", "system", "termios", "time"] }
 semver = { version = "1", features = ["serde"] }
-serde = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
@@ -124,7 +123,7 @@ smallvec = { version = "1", default-features = false, features = ["const_new", "
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
-tokio-util = { version = "0.7", default-features = false, features = ["full"] }
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
 toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -151,7 +150,6 @@ futures-io = { version = "0.3" }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
-hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15", default-features = false, features = ["default-hasher"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hotpath-macros = { version = "0.16", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
@@ -166,7 +164,7 @@ percent-encoding = { version = "2" }
 regex = { version = "1" }
 rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "stdio", "system", "termios", "time"] }
 semver = { version = "1", features = ["serde"] }
-serde = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
@@ -174,7 +172,7 @@ smallvec = { version = "1", default-features = false, features = ["const_new", "
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
-tokio-util = { version = "0.7", default-features = false, features = ["full"] }
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
 toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -196,7 +194,6 @@ form_urlencoded = { version = "1" }
 futures = { version = "0.3", features = ["thread-pool"] }
 futures-channel = { version = "0.3" }
 futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
-futures-io = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
@@ -211,17 +208,16 @@ percent-encoding = { version = "2" }
 regex = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
 semver = { version = "1", features = ["serde"] }
-serde = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
-slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 symphonia-metadata = { version = "0.6", default-features = false, features = ["ape", "flac", "id3v1", "riff-id3", "riff-info", "vorbis"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
-tokio-util = { version = "0.7", default-features = false, features = ["full"] }
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
@@ -242,7 +238,6 @@ form_urlencoded = { version = "1" }
 futures = { version = "0.3", features = ["thread-pool"] }
 futures-channel = { version = "0.3" }
 futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
-futures-io = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
@@ -258,17 +253,16 @@ percent-encoding = { version = "2" }
 regex = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
 semver = { version = "1", features = ["serde"] }
-serde = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
-slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 symphonia-metadata = { version = "0.6", default-features = false, features = ["ape", "flac", "id3v1", "riff-id3", "riff-info", "vorbis"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
-tokio-util = { version = "0.7", default-features = false, features = ["full"] }
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
@@ -288,7 +282,6 @@ form_urlencoded = { version = "1" }
 futures = { version = "0.3", features = ["thread-pool"] }
 futures-channel = { version = "0.3" }
 futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
-futures-io = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
@@ -303,17 +296,16 @@ percent-encoding = { version = "2" }
 regex = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
 semver = { version = "1", features = ["serde"] }
-serde = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
-slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 symphonia-metadata = { version = "0.6", default-features = false, features = ["ape", "flac", "id3v1", "riff-id3", "riff-info", "vorbis"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
-tokio-util = { version = "0.7", default-features = false, features = ["full"] }
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
@@ -334,7 +326,6 @@ form_urlencoded = { version = "1" }
 futures = { version = "0.3", features = ["thread-pool"] }
 futures-channel = { version = "0.3" }
 futures-executor = { version = "0.3", default-features = false, features = ["thread-pool"] }
-futures-io = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
@@ -350,17 +341,16 @@ percent-encoding = { version = "2" }
 regex = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
 semver = { version = "1", features = ["serde"] }
-serde = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
-slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 symphonia-metadata = { version = "0.6", default-features = false, features = ["ape", "flac", "id3v1", "riff-id3", "riff-info", "vorbis"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
-tokio-util = { version = "0.7", default-features = false, features = ["full"] }
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.6", default-features = false, features = ["des"] }

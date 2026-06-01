@@ -3,7 +3,7 @@ use std::io;
 use bon::Builder;
 use kithara_events::RequestMethod;
 use kithara_net::{Headers, NetError, NetResult, RangeSpec};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
 use url::Url;
 
 /// Per-command body writer. Downloader calls it for each chunk.

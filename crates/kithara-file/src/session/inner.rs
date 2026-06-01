@@ -9,9 +9,8 @@ use kithara_assets::{
 };
 use kithara_events::EventBus;
 use kithara_net::Headers;
-use kithara_platform::Mutex;
+use kithara_platform::{CancellationToken, Mutex};
 use kithara_stream::MediaInfo;
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use super::segments::FileSegmentIndex;

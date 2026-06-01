@@ -10,9 +10,9 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
-use rangemap::RangeSet;
 #[cfg(test)]
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancellationToken;
+use rangemap::RangeSet;
 
 use crate::{
     AssetResourceState,
@@ -322,7 +322,7 @@ where
         Self::Disk {
             store,
             availability: AvailabilityIndex::new(),
-            demand: DemandIndex::new(CancellationToken::new()),
+            demand: DemandIndex::new(CancellationToken::default()),
             base: None,
         }
     }
@@ -337,7 +337,7 @@ where
         Self::Mem {
             store,
             availability: AvailabilityIndex::new(),
-            demand: DemandIndex::new(CancellationToken::new()),
+            demand: DemandIndex::new(CancellationToken::default()),
         }
     }
 }

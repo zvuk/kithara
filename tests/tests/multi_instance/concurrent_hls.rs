@@ -10,8 +10,7 @@ use kithara_integration_tests::{
     TestTempDir, auto,
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 use crate::common::{
@@ -48,7 +47,7 @@ async fn create_hls_audio(
     abr: AbrMode,
 ) -> Audio<Stream<Hls>> {
     let url = server.url("/master.m3u8");
-    let cancel = CancellationToken::new();
+    let cancel = CancellationToken::default();
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(cache_dir))
