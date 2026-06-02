@@ -86,6 +86,15 @@ Defined here as the single source of truth and re-exported by other crates:
 4. `Source::read_at(offset, buf)` performs the actual sync copy once the range is present.
 5. Cancellation flows top-down through the cancel-token hierarchy described in `crates/kithara-play/README.md`.
 
+### End-of-stream contract
+
+`Stream::try_read` surfaces `StreamReadOutcome::Eof` only from a `Source` that proves the end is genuinely reached — `WaitOutcome::Eof` from `wait_range` or `ReadOutcome::Eof` from `read_at`. A `Source` must **never** mint `Eof` for an in-range range whose bytes have not yet arrived; that case is `WaitBudgetExceeded`/`Pending(NotReady)` so the reader holds at need-data. Per source:
+
+- File (`FileSource`): EOF keys off the **committed** length (`AssetReader::len()`, `None` while downloading), never the announced `Content-Length`.
+- HLS (`HlsVariant`): EOF keys off the variant layout's published `total_bytes()` (sum of known segment sizes through `served_until`); see `crates/kithara-hls/README.md` "Seek and wait_range Contract".
+
+A premature `Eof` for a withheld in-range segment latches the audio consumer into `AtEof` and drives the queue's silent auto-advance; the empty-buffer (`buf.is_empty()`) zero-length return is a distinct, non-terminal case. Pinned by `tests/tests/kithara_hls/early_seek_withheld_segment.rs`.
+
 ## Features
 
 <table>
