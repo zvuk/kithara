@@ -13,6 +13,7 @@ pub mod dl;
 mod error;
 mod hooks;
 mod media;
+mod playhead;
 mod preroll;
 mod source;
 mod stream;

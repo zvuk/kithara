@@ -11,6 +11,8 @@ use std::{
 use bitflags::bitflags;
 use kithara_test_utils::kithara;
 
+use crate::playhead::{PlayheadRead, PlayheadState, PlayheadWrite};
+
 /// Decoder-reported chunk position used to advance the timeline.
 ///
 /// This struct is the kithara-stream-local mirror of the fields
@@ -69,7 +71,7 @@ bitflags! {
 /// [`Source::set_position`](crate::Source::set_position).
 #[derive(Clone, Debug)]
 pub struct Timeline {
-    committed_position_ns: Arc<AtomicU64>,
+    playhead: Arc<PlayheadState>,
     /// Independent latch for `DecoderNode::sync_seek_epoch`: the
     /// preempt latch above is destructively consumed inside
     /// `StreamAudioSource`, so the wrapping decoder node — which has to
@@ -94,12 +96,9 @@ pub struct Timeline {
     /// the last-read data belongs to — `byte_position` has already advanced
     /// past the data boundary by the time the decoder queries metadata.
     segment_position: Arc<AtomicU64>,
-
-    total_duration_ns: Arc<AtomicU64>,
 }
 
 impl Timeline {
-    const NO_DURATION: u64 = u64::MAX;
     const NO_PENDING_SEEK: u64 = u64::MAX;
     const NO_SEEK_TARGET: u64 = u64::MAX;
 
@@ -107,9 +106,8 @@ impl Timeline {
     // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self {
-            committed_position_ns: Arc::new(AtomicU64::new(0)),
+            playhead: Arc::new(PlayheadState::new()),
             pending_seek_epoch: Arc::new(AtomicU64::new(Self::NO_PENDING_SEEK)),
-            total_duration_ns: Arc::new(AtomicU64::new(Self::NO_DURATION)),
             segment_position: Arc::new(AtomicU64::new(0)),
             seek_epoch: Arc::new(AtomicU64::new(0)),
             seek_target_ns: Arc::new(AtomicU64::new(Self::NO_SEEK_TARGET)),
@@ -132,12 +130,7 @@ impl Timeline {
     /// otherwise it is left untouched so the producer-side cursor
     /// (`Stream::try_read` / `Stream::seek`) continues to drive it.
     pub fn advance_committed_chunk(&self, pos: &ChunkPosition) {
-        self.write_playhead(
-            pos,
-            pos.frame_offset.saturating_add(pos.frames),
-            pos.source_byte_offset
-                .map(|off| off.saturating_add(pos.source_bytes)),
-        );
+        self.write_playhead(pos, false);
     }
 
     /// Clear seek-pending flag after the decoder successfully applied the seek.
@@ -158,12 +151,24 @@ impl Timeline {
     /// consumed any chunk, just repositioned). `pos.source_byte_offset`
     /// (if known) is the byte offset the decoder is now reading from.
     pub fn commit_seek_landed(&self, pos: &ChunkPosition) {
-        self.write_playhead(pos, pos.frame_offset, pos.source_byte_offset);
+        // Route through `write_playhead` so the `committed_ns` USDT probe
+        // fires on seek-landing too (the swallow detector consumes it),
+        // matching the pre-refactor behaviour.
+        self.write_playhead(pos, true);
+    }
+
+    #[kithara::probe(committed_ns = pos.end_position_ns)]
+    fn write_playhead(&self, pos: &ChunkPosition, landed: bool) {
+        if landed {
+            self.playhead.land(pos);
+        } else {
+            self.playhead.advance(pos);
+        }
     }
 
     #[must_use]
     pub fn committed_position(&self) -> Duration {
-        Duration::from_nanos(self.committed_position_ns.load(Ordering::Acquire))
+        self.playhead.position()
     }
 
     /// Complete a seek (`FLUSH_STOP`).
@@ -345,9 +350,7 @@ impl Timeline {
     /// Panics if `position` overflows `u64::MAX` nanoseconds (≈584 years);
     /// no realistic media stream can hit this.
     pub fn set_committed_position(&self, position: Duration) {
-        let nanos = u64::try_from(position.as_nanos())
-            .expect("BUG: position.as_nanos() fits in u64 for any realistic playback time");
-        self.committed_position_ns.store(nanos, Ordering::Release);
+        self.playhead.set_position(position);
     }
 
     /// Report the current download byte position. The value is not
@@ -372,32 +375,12 @@ impl Timeline {
     }
 
     pub fn set_total_duration(&self, duration: Option<Duration>) {
-        let nanos = duration
-            .and_then(|value| u64::try_from(value.as_nanos()).ok())
-            .unwrap_or(Self::NO_DURATION);
-        self.total_duration_ns.store(nanos, Ordering::Release);
+        self.playhead.set_duration(duration);
     }
 
     #[must_use]
     pub fn total_duration(&self) -> Option<Duration> {
-        let nanos = self.total_duration_ns.load(Ordering::Acquire);
-        if nanos == Self::NO_DURATION {
-            None
-        } else {
-            Some(Duration::from_nanos(nanos))
-        }
-    }
-
-    #[kithara::probe(committed_ns = pos.end_position_ns)]
-    fn write_playhead(&self, pos: &ChunkPosition, _end_frame: u64, _source_byte_end: Option<u64>) {
-        let duration_ns = self.total_duration_ns.load(Ordering::Acquire);
-        let cap = if duration_ns == Self::NO_DURATION {
-            u64::MAX
-        } else {
-            duration_ns
-        };
-        self.committed_position_ns
-            .store(pos.end_position_ns.min(cap), Ordering::Release);
+        self.playhead.duration()
     }
 }
 
