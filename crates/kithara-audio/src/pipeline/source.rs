@@ -690,7 +690,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         };
         let end_position_ns = u64::try_from(end_position.as_nanos()).unwrap_or(u64::MAX);
         let pos = kithara_stream::ChunkPosition {
-            sample_rate,
             frame_offset,
             end_position_ns,
             frames: 0,
@@ -1563,7 +1562,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             let end_position_ns = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
             self.timeline
                 .commit_seek_landed(&kithara_stream::ChunkPosition {
-                    sample_rate,
                     end_position_ns,
                     frame_offset: end_frame,
                     frames: 0,

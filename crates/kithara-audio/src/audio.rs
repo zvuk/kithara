@@ -94,11 +94,7 @@ pub struct Audio<S> {
     /// How many frames of `current_chunk` have been served to the
     /// caller. Local consumer cursor — reset to 0 on every new chunk
     /// (`fill_buffer`) and after seek (the next `fill_buffer` after
-    /// `commit_seek_landed` issues a fresh chunk). Avoids reloading
-    /// `committed_frame_end` from the timeline inside `Audio::read`'s
-    /// per-slice loop, which used to issue an atomic load + 3 atomic
-    /// stores on every slice and serialised the audio hot path on
-    /// the timeline counters.
+    /// `commit_seek_landed` issues a fresh chunk).
     pub(crate) current_chunk_consumed_frames: u64,
 
     /// Shared epoch counter with worker (kept alive for `Arc` shared ownership).

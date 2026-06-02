@@ -27,7 +27,6 @@ pub struct ChunkPosition {
     /// Absolute byte offset of the chunk's source data when the
     /// decoder reports it (Apple `mStartOffset`, Android API 28+).
     pub source_byte_offset: Option<u64>,
-    pub sample_rate: u32,
     /// Decoder-reported wall-clock position **after** the chunk has
     /// been emitted (or, for [`Timeline::commit_seek_landed`], the
     /// landed position). Authoritative — derived from the decoder's
@@ -70,12 +69,6 @@ bitflags! {
 /// [`Source::set_position`](crate::Source::set_position).
 #[derive(Clone, Debug)]
 pub struct Timeline {
-    /// Frame end (exclusive) of the last consumed slice — the consumer's
-    /// playhead in frame space. Single source of truth for "where is the
-    /// consumer in the stream"; both `committed_position_ns` (UI) and
-    /// the per-chunk consumption offset (`Audio::read`) are derived
-    /// from it. Decoder-driven via [`Self::advance_committed_to`].
-    committed_frame_end: Arc<AtomicU64>,
     committed_position_ns: Arc<AtomicU64>,
     /// Independent latch for `DecoderNode::sync_seek_epoch`: the
     /// preempt latch above is destructively consumed inside
@@ -85,11 +78,6 @@ pub struct Timeline {
     decoder_node_seek_latch: Arc<AtomicBool>,
     /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `PLAYING`.
     flags: Arc<AtomicU8>,
-    /// Sample rate (Hz) of the most recently committed chunk; lets
-    /// readers convert `committed_frame_end` ↔ `committed_position`
-    /// without external state.
-    last_sample_rate: Arc<AtomicU64>,
-
     pending_seek_epoch: Arc<AtomicU64>,
 
     seek_epoch: Arc<AtomicU64>,
@@ -120,8 +108,6 @@ impl Timeline {
     pub fn new() -> Self {
         Self {
             committed_position_ns: Arc::new(AtomicU64::new(0)),
-            committed_frame_end: Arc::new(AtomicU64::new(0)),
-            last_sample_rate: Arc::new(AtomicU64::new(0)),
             pending_seek_epoch: Arc::new(AtomicU64::new(Self::NO_PENDING_SEEK)),
             total_duration_ns: Arc::new(AtomicU64::new(Self::NO_DURATION)),
             segment_position: Arc::new(AtomicU64::new(0)),
@@ -139,17 +125,12 @@ impl Timeline {
     /// playing through; the decoder owns these numbers, callers do
     /// not invent them.
     ///
-    /// `committed_position_ns` (UI) is derived from the new playhead
-    /// frame divided by `pos.sample_rate`. `byte_position` is set
-    /// from `pos.source_byte_offset + pos.source_bytes` when the
+    /// `committed_position_ns` (UI) is taken directly from
+    /// `pos.end_position_ns`, capped at `total_duration`. `byte_position`
+    /// is set from `pos.source_byte_offset + pos.source_bytes` when the
     /// decoder reports absolute offsets (Apple, Android API 28+);
     /// otherwise it is left untouched so the producer-side cursor
     /// (`Stream::try_read` / `Stream::seek`) continues to drive it.
-    ///
-    /// Validates against `total_duration` in dev/test builds: a chunk
-    /// pushing the playhead past the declared duration is a real
-    /// arithmetic bug — the decoder's frame counter disagrees with
-    /// `total_duration`, somebody is wrong.
     pub fn advance_committed_chunk(&self, pos: &ChunkPosition) {
         self.write_playhead(
             pos,
@@ -407,12 +388,8 @@ impl Timeline {
         }
     }
 
-    #[kithara::probe(committed_ns = pos.end_position_ns, end_frame)]
-    fn write_playhead(&self, pos: &ChunkPosition, end_frame: u64, _source_byte_end: Option<u64>) {
-        let sr = u64::from(pos.sample_rate);
-        if sr == 0 {
-            return;
-        }
+    #[kithara::probe(committed_ns = pos.end_position_ns)]
+    fn write_playhead(&self, pos: &ChunkPosition, _end_frame: u64, _source_byte_end: Option<u64>) {
         let duration_ns = self.total_duration_ns.load(Ordering::Acquire);
         let cap = if duration_ns == Self::NO_DURATION {
             u64::MAX
@@ -421,8 +398,6 @@ impl Timeline {
         };
         self.committed_position_ns
             .store(pos.end_position_ns.min(cap), Ordering::Release);
-        self.committed_frame_end.store(end_frame, Ordering::Release);
-        self.last_sample_rate.store(sr, Ordering::Release);
     }
 }
 
@@ -731,6 +706,41 @@ mod tests {
                 assert_eq!(tl.is_seek_pending(), want_seek_pending);
             }
         }
+    }
+
+    #[kithara::test]
+    fn advance_committed_chunk_updates_position_and_caps_at_duration() {
+        let tl = Timeline::new();
+        tl.set_total_duration(Some(Duration::from_secs(10)));
+
+        let pos = ChunkPosition {
+            frame_offset: 0,
+            frames: 44100,
+            end_position_ns: 1_000_000_000,
+            source_bytes: 4096,
+            source_byte_offset: None,
+        };
+        tl.advance_committed_chunk(&pos);
+        assert_eq!(
+            tl.committed_position(),
+            Duration::from_nanos(1_000_000_000),
+            "committed_position must reflect end_position_ns"
+        );
+
+        // Value past total_duration is capped.
+        let pos_past = ChunkPosition {
+            frame_offset: 0,
+            frames: 44100,
+            end_position_ns: 15_000_000_000,
+            source_bytes: 4096,
+            source_byte_offset: None,
+        };
+        tl.advance_committed_chunk(&pos_past);
+        assert_eq!(
+            tl.committed_position(),
+            Duration::from_secs(10),
+            "committed_position must be capped at total_duration"
+        );
     }
 
     #[kithara::test]

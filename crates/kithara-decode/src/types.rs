@@ -86,7 +86,6 @@ impl PcmSpec {
 impl From<&PcmMeta> for kithara_stream::ChunkPosition {
     fn from(meta: &PcmMeta) -> Self {
         Self {
-            sample_rate: meta.spec.sample_rate.get(),
             frame_offset: meta.frame_offset,
             frames: u64::from(meta.frames),
             source_bytes: meta.source_bytes,
