@@ -84,6 +84,8 @@ pub(crate) fn reset_effects(effects: &mut [Box<dyn AudioEffect>]) {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmMeta, PcmSpec};
     use kithara_test_utils::kithara;
@@ -92,10 +94,13 @@ mod tests {
     use super::*;
     use crate::traits::AudioEffectMock;
 
-    const SPEC: PcmSpec = PcmSpec {
-        channels: 1,
-        sample_rate: 48_000,
-    };
+    const SPEC: PcmSpec = PcmSpec::new(
+        1,
+        match NonZeroU32::new(48_000) {
+            Some(r) => r,
+            None => unreachable!(),
+        },
+    );
 
     fn chunk(range: std::ops::Range<u32>) -> PcmChunk {
         let samples: Vec<f32> = range.map(|i| i as f32).collect();

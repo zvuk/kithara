@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use std::{ffi::c_void, ptr::NonNull, time::Duration};
+use std::{ffi::c_void, num::NonZeroU32, ptr::NonNull, time::Duration};
 
 use kithara_bufpool::PcmBuf;
 use kithara_stream::AudioCodec;
@@ -249,13 +249,9 @@ fn read_output_format(
         Some(PCM_ENCODING_FLOAT) => AndroidPcmEncoding::Float,
         Some(other) => return Err(AndroidBackendError::UnsupportedPcmEncoding { encoding: other }),
     };
-    Ok((
-        PcmSpec {
-            sample_rate,
-            channels,
-        },
-        pcm_encoding,
-    ))
+    let nz_rate = NonZeroU32::new(sample_rate)
+        .ok_or_else(|| AndroidBackendError::operation("codec-output-format", "zero sample-rate"))?;
+    Ok((PcmSpec::new(channels, nz_rate), pcm_encoding))
 }
 
 fn decode_pcm16_into(bytes: &[u8], out: &mut PcmBuf) -> DecodeResult<()> {

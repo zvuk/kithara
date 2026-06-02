@@ -102,13 +102,12 @@ pub(crate) fn expected_output_spec(
     host_sample_rate: &Arc<AtomicU32>,
 ) -> PcmSpec {
     let host_sr = host_sample_rate.load(Ordering::Relaxed);
-    if host_sr == 0 || host_sr == initial_spec.sample_rate {
+    if host_sr == 0 || host_sr == initial_spec.sample_rate.get() {
         initial_spec
+    } else if let Some(nz_host) = NonZeroU32::new(host_sr) {
+        PcmSpec::new(initial_spec.channels, nz_host)
     } else {
-        PcmSpec {
-            channels: initial_spec.channels,
-            sample_rate: host_sr,
-        }
+        initial_spec
     }
 }
 
@@ -136,7 +135,7 @@ pub(crate) fn create_effects(
 
     let params = ResamplerParams::builder()
         .host_sample_rate(Arc::clone(host_sample_rate))
-        .source_sample_rate(initial_spec.sample_rate)
+        .source_sample_rate(initial_spec.sample_rate.get())
         .channels(initial_spec.channels as usize)
         .playback_rate(resampler_rate)
         .quality(quality)
@@ -182,10 +181,7 @@ mod tests {
     }
 
     fn spec() -> PcmSpec {
-        PcmSpec {
-            sample_rate: 44100,
-            channels: 2,
-        }
+        PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
     }
 
     #[kithara::test]

@@ -67,10 +67,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
     let _guard = HotpathGuardBuilder::new(label).build();
     match scenario {
         PerfScenario::QualityComparison => {
-            let input_spec = PcmSpec {
-                channels: 2,
-                sample_rate: 48000,
-            };
+            let input_spec = PcmSpec::new(2, NonZeroU32::new(48000).expect("test rate"));
             let output_rate = 44100;
             let test_frames = 2048;
             let qualities = [
@@ -106,10 +103,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
             }
         }
         PerfScenario::PassthroughDetection => {
-            let spec = PcmSpec {
-                channels: 2,
-                sample_rate: 44100,
-            };
+            let spec = PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
             let host_rate = Arc::new(AtomicU32::new(spec.sample_rate));
             let mut params =
                 ResamplerParams::new(host_rate, spec.sample_rate, spec.channels as usize);
@@ -130,10 +124,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
             println!("{:=<60}\n", "");
         }
         PerfScenario::DeinterleaveOverhead => {
-            let input_spec = PcmSpec {
-                channels: 2,
-                sample_rate: 48000,
-            };
+            let input_spec = PcmSpec::new(2, NonZeroU32::new(48000).expect("test rate"));
             let chunk = create_test_chunk(2048, input_spec);
 
             for _ in 0..1000 {
@@ -165,10 +156,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
             println!("{:=<60}\n", "");
         }
         PerfScenario::DetailedBreakdown => {
-            let input_spec = PcmSpec {
-                channels: 2,
-                sample_rate: 48000,
-            };
+            let input_spec = PcmSpec::new(2, NonZeroU32::new(48000).expect("test rate"));
             let output_rate = 44100;
             let host_rate = Arc::new(AtomicU32::new(output_rate));
             let mut params = ResamplerParams::new(

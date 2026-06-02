@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_bufpool::PcmBuf;
 use kithara_platform::time::Duration;
 use kithara_stream::AudioCodec;
@@ -174,7 +176,7 @@ impl FrameCodec for SymphoniaCodec {
         _packet_desc: &[u8],
         out: &mut PcmBuf,
     ) -> DecodeResult<u32> {
-        let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate);
+        let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate.get());
         let packet_pts = Timestamp::new(i64::try_from(pts_ticks).unwrap_or(i64::MAX));
         let packet_ref = PacketRef::new(
             Consts::TRACK_ID,
@@ -206,7 +208,7 @@ impl FrameCodec for SymphoniaCodec {
         if !self.logged_first_frame {
             tracing::info!(
                 target: "kithara_decode::symphonia::codec",
-                declared_rate = self.spec.sample_rate,
+                declared_rate = self.spec.sample_rate.get(),
                 declared_channels = self.spec.channels,
                 actual_rate,
                 actual_channels,
@@ -217,21 +219,18 @@ impl FrameCodec for SymphoniaCodec {
             );
             self.logged_first_frame = true;
         }
-        if actual_rate != 0
-            && (self.spec.sample_rate != actual_rate || self.spec.channels != actual_channels)
+        if let Some(nz_actual_rate) = NonZeroU32::new(actual_rate)
+            && (self.spec.sample_rate != nz_actual_rate || self.spec.channels != actual_channels)
         {
             tracing::debug!(
                 target: "kithara_decode::symphonia::codec",
-                old_rate = self.spec.sample_rate,
+                old_rate = self.spec.sample_rate.get(),
                 old_channels = self.spec.channels,
                 new_rate = actual_rate,
                 new_channels = actual_channels,
                 "SymphoniaCodec: live spec update from decoder output"
             );
-            self.spec = PcmSpec {
-                channels: actual_channels,
-                sample_rate: actual_rate,
-            };
+            self.spec = PcmSpec::new(actual_channels, nz_actual_rate);
         }
         if num_samples == 0 {
             out.clear();
@@ -305,9 +304,6 @@ fn map_codec(codec: AudioCodec) -> DecodeResult<(AudioCodecId, Option<CodecProfi
 }
 
 fn duration_to_ticks(d: Duration, sample_rate: u32) -> u64 {
-    if sample_rate == 0 {
-        return 0;
-    }
     let secs = d.as_secs();
     let subsec_nanos = u64::from(d.subsec_nanos());
     secs.saturating_mul(u64::from(sample_rate))

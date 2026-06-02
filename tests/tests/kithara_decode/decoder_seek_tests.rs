@@ -73,7 +73,7 @@ async fn decoder_file_creates_successfully(
     let decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     let spec = decoder.spec();
-    assert!(spec.sample_rate > 0);
+    assert!(spec.sample_rate.get() > 0);
     assert!(spec.channels > 0);
 }
 
@@ -113,7 +113,7 @@ async fn decoder_file_single_seek(
     let mut decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     let spec = decoder.spec();
-    assert!(spec.sample_rate > 0 && spec.channels > 0);
+    assert!(spec.sample_rate.get() > 0 && spec.channels > 0);
 
     next_chunk(&mut decoder, "before seek").await;
 

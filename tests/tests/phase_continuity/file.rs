@@ -89,7 +89,7 @@ async fn run_case(
     let total_frames_truth = (total_secs * f64::from(SAMPLE_RATE)) as u64;
 
     let aspec = audio.spec();
-    assert_eq!(aspec.sample_rate, SAMPLE_RATE);
+    assert_eq!(aspec.sample_rate.get(), SAMPLE_RATE);
     assert_eq!(u32::from(aspec.channels), u32::from(CHANNELS));
 
     let drifts = spawn_blocking(move || -> Vec<PhaseDrift> {
@@ -151,7 +151,7 @@ async fn decode_pcm_seconds(
         .expect("create Audio<Stream<File>>");
     let aspec = audio.spec();
     let chan = aspec.channels as usize;
-    assert_eq!(aspec.sample_rate, SAMPLE_RATE);
+    assert_eq!(aspec.sample_rate.get(), SAMPLE_RATE);
     assert_eq!(u32::from(aspec.channels), u32::from(CHANNELS));
     let total_frames_target = (secs * f64::from(SAMPLE_RATE)) as usize;
     spawn_blocking(move || -> Vec<f32> {

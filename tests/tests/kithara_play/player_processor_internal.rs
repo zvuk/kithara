@@ -64,10 +64,7 @@ fn create_mock_player_resource_with_duration(
     src: &str,
     duration_secs: f64,
 ) -> Arc<PlatformMutex<PlayerResource>> {
-    let spec = PcmSpec {
-        channels: 2,
-        sample_rate: 44100,
-    };
+    let spec = PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
     let reader = TestPcmReader::new(spec, duration_secs);
     let resource = Resource::from_reader(reader, None);
     Arc::new(PlatformMutex::new(PlayerResource::new(

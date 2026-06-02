@@ -181,7 +181,7 @@ async fn run_case(
     let total_frames_truth = (total_secs * f64::from(SAMPLE_RATE)) as u64;
 
     let aspec = audio.spec();
-    assert_eq!(aspec.sample_rate, SAMPLE_RATE);
+    assert_eq!(aspec.sample_rate.get(), SAMPLE_RATE);
     assert_eq!(u32::from(aspec.channels), u32::from(CHANNELS));
 
     let abr_handle = audio.abr_handle();

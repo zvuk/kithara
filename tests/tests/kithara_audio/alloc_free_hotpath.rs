@@ -1,4 +1,7 @@
-use std::sync::{Arc, atomic::AtomicU32};
+use std::{
+    num::NonZeroU32,
+    sync::{Arc, atomic::AtomicU32},
+};
 
 use assert_no_alloc::*;
 use kithara_bufpool::{PcmPool, SharedPool};
@@ -29,10 +32,7 @@ fn make_chunk_at(pool: &PcmPool, frames: usize, channels: u16, sample_rate: u32)
         *s = val;
     }
     let meta = PcmMeta {
-        spec: PcmSpec {
-            channels,
-            sample_rate,
-        },
+        spec: PcmSpec::new(channels, NonZeroU32::new(sample_rate).expect("test rate")),
         ..Default::default()
     };
     PcmChunk::new(meta, pcm)

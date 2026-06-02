@@ -654,10 +654,7 @@ mod tests {
     use crate::impls::resource::Resource;
 
     fn mock_spec() -> PcmSpec {
-        PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        }
+        PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
     }
 
     fn make_track_from_resource(
@@ -722,7 +719,7 @@ mod tests {
         fn position(&self) -> Duration {
             let frames =
                 u64::try_from(self.position_frames).expect("test mock position non-negative");
-            Duration::from_micros(frames * 1_000_000 / u64::from(self.spec.sample_rate))
+            Duration::from_micros(frames * 1_000_000 / u64::from(self.spec.sample_rate.get()))
         }
 
         fn read(

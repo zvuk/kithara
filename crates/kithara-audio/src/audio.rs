@@ -230,7 +230,7 @@ impl<S> Audio<S> {
     /// reallocating on the real-time path.
     fn alloc_interleaved_scratch(pool: &PcmPool, spec: PcmSpec) -> PcmBuf {
         let channels = usize::from(spec.channels).max(2);
-        let sample_rate = usize::try_from(spec.sample_rate).unwrap_or(usize::MAX);
+        let sample_rate = usize::try_from(spec.sample_rate.get()).unwrap_or(usize::MAX);
         let capacity = sample_rate.saturating_mul(channels);
         pool.get_with(|buf| {
             buf.clear();
@@ -1427,7 +1427,7 @@ mod tests {
             trash_tx,
             _epoch: Arc::new(AtomicU64::new(0)),
             validator: EpochValidator::default(),
-            spec: PcmSpec::default(),
+            spec: PcmMeta::default().spec,
             current_chunk: None,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
@@ -1488,7 +1488,7 @@ mod tests {
             trash_tx,
             _epoch: Arc::new(AtomicU64::new(0)),
             validator: EpochValidator::default(),
-            spec: PcmSpec::default(),
+            spec: PcmMeta::default().spec,
             current_chunk: None,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,

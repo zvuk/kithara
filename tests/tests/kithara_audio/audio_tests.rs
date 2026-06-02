@@ -166,7 +166,7 @@ async fn test_audio_spec() {
         .unwrap();
 
     let spec = audio.spec();
-    assert_eq!(spec.sample_rate, 44100);
+    assert_eq!(spec.sample_rate.get(), 44100);
     assert_eq!(spec.channels, 2);
 }
 

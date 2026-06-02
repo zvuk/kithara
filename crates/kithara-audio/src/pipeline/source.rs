@@ -672,10 +672,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// for the wall-clock position it parked at; we never recompute
     /// `frame * 1e9 / sample_rate` here.
     fn commit_decoder_seek_outcome(&self, outcome: &DecoderSeekOutcome) {
-        let sample_rate = self.session.decoder.spec().sample_rate;
-        if sample_rate == 0 {
-            return;
-        }
+        let sample_rate = self.session.decoder.spec().sample_rate.get();
         let (frame_offset, end_position, applied_landed_byte) = match *outcome {
             DecoderSeekOutcome::Landed {
                 landed_frame,
@@ -849,12 +846,9 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn duration_for_frames(spec: PcmSpec, frames: usize) -> Duration {
-        if spec.sample_rate == 0 {
-            return Duration::ZERO;
-        }
         let nanos = (frames as u128)
             .saturating_mul(Self::NANOS_PER_SEC)
-            .saturating_div(u128::from(spec.sample_rate));
+            .saturating_div(u128::from(spec.sample_rate.get()));
         let nanos_u64 = num_traits::cast::ToPrimitive::to_u64(&nanos).unwrap_or(u64::MAX);
         Duration::from_nanos(nanos_u64)
     }
@@ -927,12 +921,9 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn frames_for_duration(spec: PcmSpec, duration: Duration) -> usize {
-        if spec.sample_rate == 0 {
-            return 0;
-        }
         let frames = duration
             .as_nanos()
-            .saturating_mul(u128::from(spec.sample_rate))
+            .saturating_mul(u128::from(spec.sample_rate.get()))
             .saturating_div(Self::NANOS_PER_SEC);
         assert!(
             frames <= usize::MAX as u128,
@@ -1251,7 +1242,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             && let Some(ref emit) = self.emit
         {
             emit.enqueue(AudioEvent::FormatDetected {
-                spec: AudioFormat::new(chunk.spec().channels, chunk.spec().sample_rate),
+                spec: AudioFormat::new(chunk.spec().channels, chunk.spec().sample_rate.get()),
             });
             self.last_spec = Some(chunk.spec());
         }
@@ -1260,8 +1251,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             && old_spec != chunk.spec()
         {
             self.emit_event(AudioEvent::FormatChanged {
-                old: AudioFormat::new(old_spec.channels, old_spec.sample_rate),
-                new: AudioFormat::new(chunk.spec().channels, chunk.spec().sample_rate),
+                old: AudioFormat::new(old_spec.channels, old_spec.sample_rate.get()),
+                new: AudioFormat::new(chunk.spec().channels, chunk.spec().sample_rate.get()),
             });
             self.last_spec = Some(chunk.spec());
         }
@@ -1564,7 +1555,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         if let Some(duration) = self.timeline.total_duration()
             && position >= duration
         {
-            let sample_rate = self.session.decoder.spec().sample_rate;
+            let sample_rate = self.session.decoder.spec().sample_rate.get();
             let end_frame = num_traits::cast::ToPrimitive::to_u64(
                 &(duration.as_secs_f64() * f64::from(sample_rate)),
             )

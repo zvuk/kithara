@@ -59,7 +59,7 @@ impl PlayerResource {
     pub fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
         let spec = resource.spec();
         let channels = spec.channels as usize;
-        let buffer_len = (spec.sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
+        let buffer_len = (spec.sample_rate.get() as usize / Self::BUFFER_DURATION_DIVISOR)
             * channels.max(Self::STEREO_CHANNELS);
 
         let channel_buffers = std::array::from_fn(|_| {

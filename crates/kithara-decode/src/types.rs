@@ -42,10 +42,13 @@ pub struct TrackMetadata {
 /// workspace, constructed via direct struct literal at >100 call sites.
 /// Adding fields would force a workspace-wide migration regardless of
 /// non-exhaustiveness, so the marker buys nothing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+///
+/// `Default` is intentionally absent — a zero sample rate is not a valid
+/// `PcmSpec`. Use `PcmMeta::default()` for EOF/failure sentinel chunks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PcmSpec {
     pub channels: u16,
-    pub sample_rate: u32,
+    pub sample_rate: NonZeroU32,
 }
 
 impl fmt::Display for PcmSpec {
@@ -57,10 +60,10 @@ impl fmt::Display for PcmSpec {
 impl PcmSpec {
     /// Production ctor from a validated non-zero rate.
     #[must_use]
-    pub fn new(channels: u16, sample_rate: NonZeroU32) -> Self {
+    pub const fn new(channels: u16, sample_rate: NonZeroU32) -> Self {
         Self {
             channels,
-            sample_rate: sample_rate.get(),
+            sample_rate,
         }
     }
 
@@ -83,7 +86,7 @@ impl PcmSpec {
 impl From<&PcmMeta> for kithara_stream::ChunkPosition {
     fn from(meta: &PcmMeta) -> Self {
         Self {
-            sample_rate: meta.spec.sample_rate,
+            sample_rate: meta.spec.sample_rate.get(),
             frame_offset: meta.frame_offset,
             frames: u64::from(meta.frames),
             source_bytes: meta.source_bytes,
@@ -102,7 +105,7 @@ impl From<&PcmMeta> for kithara_stream::ChunkPosition {
 /// it via `PcmMeta { spec, ..Default::default() }` for fixtures; the
 /// pattern survives field additions, and `non_exhaustive` would block
 /// the struct-literal idiom altogether.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PcmMeta {
     /// Wall-clock position **after** this chunk's frames have played
     /// out, computed by the decoder from its own frame counter. Used
@@ -148,6 +151,33 @@ pub struct PcmMeta {
     /// formats and arbitrary-sized PCM packets. `0` means "unknown" (mock
     /// decoders, post-EOF flush chunks).
     pub source_bytes: u64,
+}
+
+/// Placeholder rate for `PcmMeta::default()` sentinel/marker chunks.
+///
+/// EOF, failure, and flush markers carry no audio; the rate is never consumed
+/// because these chunks are identified by `frames == 0` or `pcm.is_empty()`
+/// before any format-change comparison.
+const PLACEHOLDER_RATE: NonZeroU32 = match NonZeroU32::new(48_000) {
+    Some(r) => r,
+    None => unreachable!(),
+};
+
+impl Default for PcmMeta {
+    fn default() -> Self {
+        Self {
+            spec: PcmSpec::new(0, PLACEHOLDER_RATE),
+            end_timestamp: Duration::ZERO,
+            timestamp: Duration::ZERO,
+            segment_index: None,
+            source_byte_offset: None,
+            variant_index: None,
+            frames: 0,
+            epoch: 0,
+            frame_offset: 0,
+            source_bytes: 0,
+        }
+    }
 }
 
 /// PCM chunk containing interleaved audio samples with automatic pool recycling.
@@ -261,16 +291,12 @@ mod tests {
     #[case(48000, 1, "48000 Hz, 1 channels")]
     #[case(96000, 6, "96000 Hz, 6 channels")]
     #[case(192000, 8, "192000 Hz, 8 channels")]
-    #[case(0, 0, "0 Hz, 0 channels")]
     fn test_pcm_spec_display(
         #[case] sample_rate: u32,
         #[case] channels: u16,
         #[case] expected: &str,
     ) {
-        let spec = PcmSpec {
-            channels,
-            sample_rate,
-        };
+        let spec = pcm_spec(channels, sample_rate);
         assert_eq!(format!("{}", spec), expected);
     }
 
@@ -285,7 +311,6 @@ mod tests {
     #[case(44100, 2, 44100, 2, true)]
     #[case(44100, 2, 48000, 2, false)]
     #[case(44100, 2, 44100, 1, false)]
-    #[case(0, 0, 0, 0, true)]
     fn test_pcm_spec_partial_eq(
         #[case] sr1: u32,
         #[case] ch1: u16,
@@ -293,14 +318,8 @@ mod tests {
         #[case] ch2: u16,
         #[case] should_equal: bool,
     ) {
-        let spec1 = PcmSpec {
-            channels: ch1,
-            sample_rate: sr1,
-        };
-        let spec2 = PcmSpec {
-            channels: ch2,
-            sample_rate: sr2,
-        };
+        let spec1 = pcm_spec(ch1, sr1);
+        let spec2 = pcm_spec(ch2, sr2);
         assert_eq!(spec1 == spec2, should_equal);
     }
 
@@ -318,10 +337,7 @@ mod tests {
     #[case(48000, 1)]
     #[case(96000, 6)]
     fn test_pcm_spec_copy_trait(#[case] sample_rate: u32, #[case] channels: u16) {
-        let spec = PcmSpec {
-            channels,
-            sample_rate,
-        };
+        let spec = pcm_spec(channels, sample_rate);
         let copied = spec;
         assert_eq!(spec, copied);
     }
@@ -329,8 +345,8 @@ mod tests {
     #[kithara::test]
     fn test_pcm_meta_default() {
         let meta = PcmMeta::default();
-        assert_eq!(meta.spec, PcmSpec::default());
         assert_eq!(meta.frame_offset, 0);
+        assert_eq!(meta.frames, 0);
         assert_eq!(meta.timestamp, Duration::ZERO);
         assert_eq!(meta.segment_index, None);
         assert_eq!(meta.variant_index, None);
@@ -340,10 +356,7 @@ mod tests {
     #[kithara::test]
     fn test_pcm_meta_copy() {
         let meta = PcmMeta {
-            spec: PcmSpec {
-                channels: 2,
-                sample_rate: 44100,
-            },
+            spec: pcm_spec(2, 44100),
             frame_offset: 1000,
             timestamp: Duration::from_millis(22),
             end_timestamp: Duration::from_millis(22),
@@ -372,10 +385,7 @@ mod tests {
     #[kithara::test]
     fn test_pcm_meta_partial_eq() {
         let a = PcmMeta {
-            spec: PcmSpec {
-                channels: 2,
-                sample_rate: 44100,
-            },
+            spec: pcm_spec(2, 44100),
             frame_offset: 100,
             timestamp: Duration::from_millis(2),
             end_timestamp: Duration::from_millis(2),
@@ -413,20 +423,15 @@ mod tests {
         #[case] channels: u16,
         #[case] expected_frames: usize,
     ) {
-        let spec = PcmSpec {
-            channels,
-            sample_rate: 44100,
-        };
+        let spec = pcm_spec(channels, 44100);
         let chunk = test_chunk(spec, pcm);
         assert_eq!(chunk.frames(), expected_frames);
     }
 
     #[kithara::test]
     fn test_frames_zero_channels() {
-        let spec = PcmSpec {
-            channels: 0,
-            sample_rate: 44100,
-        };
+        // channels=0 is still valid for PcmSpec (only sample_rate is NonZeroU32)
+        let spec = PcmSpec::new(0, NonZeroU32::new(44100).expect("test rate"));
         let chunk = test_chunk(spec, vec![0.0, 1.0, 2.0, 3.0]);
         assert_eq!(chunk.frames(), 0);
     }

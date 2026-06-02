@@ -900,10 +900,10 @@ mod tests {
     async fn load_track_propagates_host_sample_rate() {
         let host_rate = 88_200u32;
 
-        let (reader, recorded) = SampleRateTrackingReader::new(PcmSpec {
-            channels: 2,
-            sample_rate: 44_100,
-        });
+        let (reader, recorded) = SampleRateTrackingReader::new(PcmSpec::new(
+            2,
+            NonZeroU32::new(44100).expect("test rate"),
+        ));
 
         let resource = Resource::from_reader(reader, None);
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
@@ -975,10 +975,10 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn processor_clear_unloads_tracks_and_resets_snapshot() {
-        let (reader, _recorded) = SampleRateTrackingReader::new(PcmSpec {
-            channels: 2,
-            sample_rate: 44_100,
-        });
+        let (reader, _recorded) = SampleRateTrackingReader::new(PcmSpec::new(
+            2,
+            NonZeroU32::new(44100).expect("test rate"),
+        ));
         let resource = Resource::from_reader(reader, None);
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
@@ -1089,10 +1089,7 @@ mod tests {
 
         let reader = SeekTrackingReader {
             seek_log,
-            spec: PcmSpec {
-                channels: 2,
-                sample_rate: 44_100,
-            },
+            spec: PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate")),
             metadata: TrackMetadata {
                 title: Some("Tracking".to_owned()),
                 ..Default::default()

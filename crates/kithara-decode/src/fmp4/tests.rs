@@ -182,7 +182,7 @@ fn next_chunk_yields_pcm_from_init_plus_segment_zero() {
     }
     let chunk = got_chunk.expect("BUG: at least one PCM chunk from segment 0");
     assert!(chunk.frames() > 0);
-    assert!(chunk.spec().sample_rate >= 8_000);
+    assert!(chunk.spec().sample_rate.get() >= 8_000);
     assert!(chunk.spec().channels >= 1);
 }
 

@@ -225,7 +225,7 @@ fn wav_pcm_round_trip_matches_signal_across_backends() {
 
         let spec = dec.spec();
         assert_eq!(
-            spec.sample_rate,
+            spec.sample_rate.get(),
             Consts::WAV_SAMPLE_RATE,
             "{backend:?}: sample rate mismatch"
         );
@@ -264,7 +264,7 @@ fn apple_decodes_standalone_alac_m4a() {
     let mut decoder = Backend::Apple.make_decoder(bytes, &info);
 
     let spec = decoder.spec();
-    assert!(spec.sample_rate >= 8000, "ALAC sample rate sanity");
+    assert!(spec.sample_rate.get() >= 8000, "ALAC sample rate sanity");
     assert!(spec.channels >= 1, "ALAC channel count sanity");
 
     let samples = drain_all(&mut *decoder);

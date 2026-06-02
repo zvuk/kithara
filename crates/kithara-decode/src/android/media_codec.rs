@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use std::{ffi::CString, ptr::NonNull};
+use std::{ffi::CString, num::NonZeroU32, ptr::NonNull};
 
 use tracing::{debug, info};
 
@@ -351,12 +351,11 @@ fn load_output_format(codec: &OwnedCodec) -> Result<OutputFormat, AndroidBackend
         Some(other) => return Err(AndroidBackendError::UnsupportedPcmEncoding { encoding: other }),
     };
 
+    let nz_rate = NonZeroU32::new(sample_rate)
+        .ok_or_else(|| AndroidBackendError::operation("codec-output-format", "zero sample-rate"))?;
     Ok(OutputFormat {
         pcm_encoding,
-        spec: PcmSpec {
-            sample_rate,
-            channels,
-        },
+        spec: PcmSpec::new(channels, nz_rate),
     })
 }
 

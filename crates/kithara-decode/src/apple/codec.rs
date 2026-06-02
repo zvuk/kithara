@@ -113,10 +113,7 @@ impl AppleCodec {
             }
         }
 
-        let spec = PcmSpec {
-            channels: track.channels,
-            sample_rate: track.sample_rate,
-        };
+        let spec = PcmSpec::checked(track.channels, track.sample_rate, "apple.codec.open")?;
 
         Ok(Self {
             converter,
