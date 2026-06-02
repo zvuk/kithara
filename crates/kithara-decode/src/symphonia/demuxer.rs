@@ -60,6 +60,21 @@ pub(crate) struct SymphoniaDemuxer {
     time_base: Option<TimeBase>,
     track_info: TrackInfo,
     track_id: u32,
+    /// Native (timebase-unit) timestamp the *next* packet must start at.
+    /// Authoritative across a `Pending`: set to the seek's `actual_ts` on
+    /// seek and advanced to `pts + dur` after each successfully-returned
+    /// frame. Kept in native units (not `Duration`) so the resume re-seek
+    /// round-trips exactly to a packet boundary — a `Duration` conversion
+    /// loses sub-frame precision and snaps one packet early. Used to undo a
+    /// read-ahead strand (see `next_frame` / `reseek_to_resume`).
+    resume_ts: i64,
+    /// Set when a `next_frame` read was interrupted at a not-ready segment
+    /// boundary. Symphonia's `MediaSourceStream` may have consumed
+    /// ring-buffered bytes into a packet that was then discarded (its read
+    /// position advanced), stranding those bytes. The next `next_frame`
+    /// re-seeks the reader back to `resume_ts` before reading so the
+    /// interrupted packet is re-read from its start instead of skipped.
+    needs_resume: bool,
 }
 
 impl SymphoniaDemuxer {
@@ -114,6 +129,8 @@ impl SymphoniaDemuxer {
             byte_pos_handle,
             segment_layout,
             current_packet: None,
+            resume_ts: 0,
+            needs_resume: false,
         })
     }
 
@@ -205,6 +222,15 @@ impl Demuxer for SymphoniaDemuxer {
     #[kithara::probe]
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         self.current_packet = None;
+        // A previous read stranded bytes inside `MediaSourceStream` at a
+        // not-ready boundary (it consumed ring bytes into a packet that was
+        // then discarded, advancing its read position). Re-seek to the last
+        // authoritative timestamp so the stranded packet is re-read from its
+        // start instead of being skipped (README "Read-ahead strand").
+        if self.needs_resume {
+            self.needs_resume = false;
+            self.reseek_to_resume()?;
+        }
         loop {
             let packet = match self.format_reader.next_packet() {
                 Ok(Some(p)) => p,
@@ -226,6 +252,16 @@ impl Demuxer for SymphoniaDemuxer {
                                 .copied()
                         })
                         .unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending));
+                    // A `MediaSourceStream` read interrupted at a not-ready
+                    // boundary can strand bytes it already consumed from its
+                    // ring (read position advanced, no packet emitted). The
+                    // adapter's byte cursor doesn't reveal this — the consumed
+                    // bytes were buffered by an earlier read-ahead. Flag an
+                    // unconditional resume: the next call re-seeks to
+                    // `resume_ts` so the interrupted packet is re-read from
+                    // its start. Idempotent when no strand occurred (the read
+                    // position already sits at `resume_ts`).
+                    self.needs_resume = true;
                     return Ok(DemuxOutcome::Pending(reason));
                 }
                 Err(e) => return Err(DecodeError::backend(e)),
@@ -233,6 +269,14 @@ impl Demuxer for SymphoniaDemuxer {
             if packet.track_id != self.track_id {
                 continue;
             }
+            // This packet was emitted cleanly; the next one must start at
+            // its end. Track the resume point in native timebase units so a
+            // strand re-seek round-trips exactly to this boundary.
+            self.resume_ts = packet
+                .pts
+                .get()
+                .saturating_add(i64::try_from(packet.dur.get()).unwrap_or(i64::MAX));
+            self.needs_resume = false;
             let pts = self.ts_to_duration(packet.pts);
             let duration = self.dur_to_duration(packet.dur);
             self.current_packet = Some(packet);
@@ -268,6 +312,11 @@ impl Demuxer for SymphoniaDemuxer {
 
         let landed_at = self.ts_to_duration(seeked.actual_ts);
 
+        // A fresh seek defines the authoritative resume point and clears any
+        // pending strand recovery left over from the prior read position.
+        self.resume_ts = seeked.actual_ts.get();
+        self.needs_resume = false;
+
         if let Some(duration) = self.track_info.duration
             && landed_at >= duration
         {
@@ -294,6 +343,27 @@ impl Demuxer for SymphoniaDemuxer {
 }
 
 impl SymphoniaDemuxer {
+    /// Re-seek the reader back to the last authoritative timestamp
+    /// (`resume_ts`) after a read-ahead strand. Unlike [`Demuxer::seek`]
+    /// this applies no pre-roll back-off and no codec flush — it is a
+    /// position restore, not a user seek: the goal is to re-read the exact
+    /// packet whose in-flight read was interrupted at a not-ready boundary
+    /// so its bytes are re-delivered rather than skipped. `Accurate` mode
+    /// lands at or before `resume_ts`; for the packet-quantised readers
+    /// that strand (WAV/PCM) the landing is the same packet boundary, so no
+    /// audio is re-emitted twice (the decoder's leading-trim guard already
+    /// gates on the seek target).
+    fn reseek_to_resume(&mut self) -> DecodeResult<()> {
+        let seek_to = SeekTo::Timestamp {
+            ts: Timestamp::new(self.resume_ts),
+            track_id: self.track_id,
+        };
+        self.format_reader
+            .seek(SeekMode::Accurate, seek_to)
+            .map_err(|e| classify_seek_err(&e))?;
+        Ok(())
+    }
+
     /// Override the `track.gapless` slot built by `from_reader` with a
     /// container-level probe result.
     ///

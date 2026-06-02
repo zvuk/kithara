@@ -253,6 +253,29 @@ impl HlsTestServer {
         }
     }
 
+    /// Build a configurable HLS server that withholds the GET (body)
+    /// response for one `(variant, segment)` until the returned handle
+    /// releases it. The HEAD (size) response stays unblocked, so the
+    /// up-front size-estimation pass still learns the segment size while
+    /// the body is parked.
+    ///
+    /// Deterministic, network-free, timer-free seam for "this segment has
+    /// not arrived yet" scenarios over the WAV/`HlsTestServer` fixture path
+    /// (the AAC fMP4 analogue is [`PackagedTestServer::with_segment_gate`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub async fn with_segment_gate(
+        config: HlsTestServerConfig,
+        variant: usize,
+        segment: usize,
+    ) -> (Self, crate::SegmentGateHandle) {
+        let server = Self::new(config).await;
+        let handle = server
+            ._helper
+            .register_segment_gate(server.created.token(), variant, segment);
+        (server, handle)
+    }
+
     #[must_use]
     pub fn config(&self) -> &HlsTestServerConfig {
         &self.config

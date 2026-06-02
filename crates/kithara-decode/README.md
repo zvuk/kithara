@@ -139,6 +139,33 @@ Current metadata sources:
 - Android MediaCodec reads `encoder-delay`/`encoder-padding` from `MediaFormat`
   and falls back to the MP4 probe for AAC MP4 containers.
 
+## Read-ahead strand
+
+When the source is an HLS `Stream`, a `next_frame` read can be interrupted at a
+not-yet-downloaded segment boundary. Symphonia's `MediaSourceStream` (MSS)
+buffers read-ahead in a ring and consumes bytes from that ring into a packet
+buffer *before* it knows whether the read can complete. If a later internal
+`fetch` then hits the not-ready boundary and returns `Interrupted`, the
+half-read packet is discarded but MSS's read position has already advanced past
+the consumed bytes — they are **stranded**. On resume, byte-position-quantised
+readers (WAV/PCM, whose packet pts is derived from the stream position) compute
+the next packet's pts from the advanced position and silently skip the stranded
+bytes (~one packet of decoded PCM).
+
+`MSS` exposes no per-call rewind through the `FormatReader` trait, so
+`SymphoniaDemuxer` makes the **decoder's timestamp authoritative across a
+`Pending`**: it tracks `resume_ts` (native timebase units — `actual_ts` on seek,
+`pts + dur` after each emitted packet) and, on any interrupted read, sets
+`needs_resume`. The next `next_frame` re-seeks the reader to `resume_ts` before
+reading, so the interrupted packet is re-read from its start instead of skipped.
+The re-seek is a bare position restore — no pre-roll back-off and no codec flush
+(that is the user-seek path) — and is idempotent when no strand occurred (the
+read position already sits at `resume_ts`). `resume_ts` is kept in native units,
+not `Duration`, because a `Duration` round-trip loses sub-frame precision and
+snaps the re-seek one packet early (re-emitting a packet instead of continuing).
+This keeps the strand contained in the decode layer: it never reaches into the
+`Stream`/`wait_range` contract.
+
 ## Feature Flags
 
 <table>
