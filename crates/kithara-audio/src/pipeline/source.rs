@@ -21,7 +21,7 @@ use kithara_events::{AudioEvent, AudioFormat, DeferredBus, SeekLifecycleStage, S
 use kithara_platform::Mutex;
 use kithara_stream::{
     Activity, ContainerFormat, MediaInfo, PendingReason, PlayheadWrite, SeekControl, SeekObserve,
-    SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline,
+    SourcePhase, SourceSeekAnchor, Stream, StreamType,
 };
 use kithara_test_utils::kithara;
 use tracing::{debug, trace, warn};
@@ -79,8 +79,6 @@ impl<T: StreamType> SharedStream<T> {
             /// inner source. Used by the decoder factory to activate the
             /// segment-by-segment fMP4 path on HLS.
             pub(crate) fn as_segment_layout(&self) -> Option<Arc<dyn kithara_stream::SegmentLayout>>;
-            /// Get the shared timeline for flushing checks.
-            pub(crate) fn timeline(&self) -> Timeline;
             /// Narrow mutating playhead handle.
             pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
             /// Narrow seek-control handle.
@@ -209,10 +207,6 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     seek_obs: Arc<dyn SeekObserve>,
     /// Narrow activity handle — set/query the `PLAYING` flag.
     activity: Arc<dyn Activity>,
-    /// Timeline clone kept solely for the `AudioWorkerSource::timeline()`
-    /// accessor consumed by `DecoderNode` (Phase 2.3). All FSM logic uses
-    /// the narrow handles above; this field is never written through.
-    node_tl: Timeline,
     /// Explicit FSM state — single source of truth for track phase.
     pub(crate) state: CurrentFsm,
     epoch: Arc<AtomicU64>,
@@ -275,7 +269,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         effects: Vec<Box<dyn AudioEffect>>,
         gapless_mode: GaplessMode,
     ) -> Self {
-        let node_tl = shared_stream.timeline();
         let playhead = shared_stream.playhead_write();
         let seek = shared_stream.seek_control();
         let seek_obs = shared_stream.seek_observe();
@@ -301,7 +294,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             seek,
             seek_obs,
             activity,
-            node_tl,
             gapless_mode,
             gapless,
             peer_wake,
@@ -2241,8 +2233,8 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         }
     }
 
-    fn timeline(&self) -> &Timeline {
-        &self.node_tl
+    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        Arc::clone(&self.seek_obs)
     }
 
     fn flush_deferred(&mut self) {

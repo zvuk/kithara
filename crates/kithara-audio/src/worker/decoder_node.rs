@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use kithara_decode::PcmChunk;
+use kithara_stream::SeekObserve;
 use tracing::trace;
 
 use super::{AudioWorkerSource, PreloadGate, handle::TrackRegistration, types::ServiceClass};
@@ -35,6 +36,9 @@ pub(crate) struct DecoderNode {
     /// read back here by the scheduler each pass — see [`AtomicServiceClass`].
     service_class: Arc<AtomicServiceClass>,
     source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
+    /// Held seek-observe handle — avoids an Arc clone on every hot
+    /// `sync_seek_epoch` tick.
+    seek_obs: Arc<dyn SeekObserve>,
     runtime: DecoderRuntime,
     /// Spent chunks returned by the real-time consumer. Drained once per pass
     /// by [`recycle`](DecoderNode::recycle), in the scheduler's unchecked shell
@@ -78,10 +82,10 @@ impl DecoderNode {
     /// so a fresh `Resource::preload().await` blocks again until the
     /// post-seek refill re-opens it.
     fn sync_seek_epoch(&mut self) {
-        if !self.source.timeline().did_take_decoder_node_seek() {
+        if !self.seek_obs.take_decoder_seek() {
             return;
         }
-        let current = self.source.timeline().seek_epoch();
+        let current = self.seek_obs.epoch();
         if current == self.runtime.seek_epoch {
             return;
         }
@@ -97,8 +101,10 @@ impl DecoderNode {
 
 impl From<TrackRegistration> for DecoderNode {
     fn from(reg: TrackRegistration) -> Self {
-        let seek_epoch = reg.source.timeline().seek_epoch();
+        let seek_obs = reg.source.seek_observe();
+        let seek_epoch = seek_obs.epoch();
         Self {
+            seek_obs,
             source: reg.source,
             outlet: reg.outlet,
             trash_inlet: reg.trash_inlet,
@@ -163,7 +169,7 @@ impl Node for DecoderNode {
             TrackStep::Eof if self.runtime.eof_sent => TickResult::Backpressured,
 
             TrackStep::Eof => {
-                let epoch = self.source.timeline().seek_epoch();
+                let epoch = self.seek_obs.epoch();
                 let marker = Fetch::new(PcmChunk::default(), true, epoch);
                 if let Ok(()) = self.outlet.try_push(marker) {
                     self.complete_preload();
@@ -176,7 +182,7 @@ impl Node for DecoderNode {
             }
 
             TrackStep::Failed => {
-                let epoch = self.source.timeline().seek_epoch();
+                let epoch = self.seek_obs.epoch();
                 let marker = Fetch::failure(PcmChunk::default(), epoch);
                 if let Ok(()) = self.outlet.try_push(marker) {
                     self.complete_preload();
@@ -201,7 +207,7 @@ impl Node for DecoderNode {
 mod tests {
     use std::time::Duration;
 
-    use kithara_stream::Timeline;
+    use kithara_stream::{SeekObserve, Timeline};
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
@@ -218,9 +224,11 @@ mod tests {
         source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
         outlet: Outlet<Fetch<PcmChunk>>,
         preload_gate: Arc<PreloadGate>,
+        seek_obs: Arc<dyn SeekObserve>,
     ) -> DecoderNode {
         let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(4, None);
         DecoderNode {
+            seek_obs,
             source,
             outlet,
             trash_inlet,
@@ -244,17 +252,13 @@ mod tests {
             .unwrap();
         assert!(outlet.has_pending());
 
-        let timeline = Timeline::new();
-        let source = Box::new(Unimock::new((
+        let source = Box::new(Unimock::new(
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Eof),
-            MockAudioWorkerSource::timeline.stub(|each| {
-                each.call(matching!()).returns(timeline.clone());
-            }),
-        )));
+        ));
 
-        let mut node = test_node(source, outlet, gate);
+        let mut node = test_node(source, outlet, gate, Timeline::new().seek_observe());
 
         assert_eq!(node.tick(), TickResult::Backpressured);
         assert!(!node.runtime.eof_sent);
@@ -291,30 +295,32 @@ mod tests {
         let gate = Arc::new(PreloadGate::default());
 
         let (eof_outlet, mut eof_inlet) = connect::<Fetch<PcmChunk>>(1, None);
-        let eof_timeline = Timeline::new();
-        let eof_source = Box::new(Unimock::new((
+        let eof_source = Box::new(Unimock::new(
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Eof),
-            MockAudioWorkerSource::timeline.stub(|each| {
-                each.call(matching!()).returns(eof_timeline.clone());
-            }),
-        )));
-        let mut eof_node = test_node(eof_source, eof_outlet, Arc::clone(&gate));
+        ));
+        let mut eof_node = test_node(
+            eof_source,
+            eof_outlet,
+            Arc::clone(&gate),
+            Timeline::new().seek_observe(),
+        );
         assert_eq!(eof_node.tick(), TickResult::Progress);
         let eof_kind = drain_marker_kind(&mut eof_node.outlet, &mut eof_inlet);
 
         let (failed_outlet, mut failed_inlet) = connect::<Fetch<PcmChunk>>(1, None);
-        let failed_timeline = Timeline::new();
-        let failed_source = Box::new(Unimock::new((
+        let failed_source = Box::new(Unimock::new(
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Failed),
-            MockAudioWorkerSource::timeline.stub(|each| {
-                each.call(matching!()).returns(failed_timeline.clone());
-            }),
-        )));
-        let mut failed_node = test_node(failed_source, failed_outlet, gate);
+        ));
+        let mut failed_node = test_node(
+            failed_source,
+            failed_outlet,
+            gate,
+            Timeline::new().seek_observe(),
+        );
         let _ = failed_node.tick();
         let failed_kind = drain_marker_kind(&mut failed_node.outlet, &mut failed_inlet);
 
@@ -337,7 +343,6 @@ mod tests {
             .try_push(Fetch::new(PcmChunk::default(), false, 0))
             .unwrap();
 
-        let timeline = Timeline::new();
         let source = Box::new(Unimock::new((
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
@@ -351,12 +356,14 @@ mod tests {
                 .returns(TrackStep::Blocked(
                     crate::pipeline::track_fsm::WaitingReason::Waiting,
                 )),
-            MockAudioWorkerSource::timeline.stub(|each| {
-                each.call(matching!()).returns(timeline.clone());
-            }),
         )));
 
-        let mut node = test_node(source, outlet, Arc::clone(&gate));
+        let mut node = test_node(
+            source,
+            outlet,
+            Arc::clone(&gate),
+            Timeline::new().seek_observe(),
+        );
 
         assert_eq!(node.tick(), TickResult::Progress);
         assert_eq!(node.runtime.chunks_sent, 1);
@@ -379,7 +386,7 @@ mod tests {
         let gate = Arc::new(PreloadGate::default());
         let (outlet, mut inlet) = connect::<Fetch<PcmChunk>>(2, None);
 
-        let timeline = Timeline::new();
+        let tl = Timeline::new();
         let source = Box::new(Unimock::new((
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
@@ -398,18 +405,17 @@ mod tests {
                     false,
                     0,
                 ))),
-            MockAudioWorkerSource::timeline.stub(|each| {
-                each.call(matching!()).returns(timeline.clone());
-            }),
         )));
 
-        let mut node = test_node(source, outlet, Arc::clone(&gate));
+        // Pass a seek_obs handle derived from `tl` so seek_control().begin()
+        // arms the shared latch the node will observe on its next tick.
+        let mut node = test_node(source, outlet, Arc::clone(&gate), tl.seek_observe());
 
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(node.runtime.preloaded);
         assert!(gate.is_ready(), "first chunk opens the gate");
 
-        let _ = timeline.seek_control().begin(Duration::from_secs(1));
+        let _ = tl.seek_control().begin(Duration::from_secs(1));
 
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(!node.runtime.preloaded, "seek resets the preload runtime");

@@ -129,19 +129,6 @@ impl Timeline {
         self.playhead.position()
     }
 
-    /// Consume the decoder-node seek latch with an Acquire swap.
-    ///
-    /// Independent from `take_seek_preempt`: the inner audio source
-    /// consumes that one inside `step_track`, while `DecoderNode` (the
-    /// wrapping scheduler node) needs its own signal so it can reset
-    /// preload state and drop parked chunks on a new epoch. `true`
-    /// here means `seek_epoch` was just bumped and the node must run
-    /// the cleanup branch; otherwise the tick falls through.
-    #[must_use]
-    pub fn did_take_decoder_node_seek(&self) -> bool {
-        self.seek.take_decoder_seek()
-    }
-
     /// Read the raw flags snapshot (used in tests and the concurrent flag test).
     #[cfg(test)]
     pub(crate) fn flags_snapshot_with(&self, order: Ordering) -> TimelineFlags {

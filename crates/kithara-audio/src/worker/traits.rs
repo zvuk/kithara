@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use kithara_decode::PcmChunk;
-use kithara_stream::Timeline;
+use kithara_stream::SeekObserve;
 
 use crate::{pipeline::track_fsm, traits::AudioEffect};
 
@@ -27,8 +29,8 @@ pub trait AudioWorkerSource: Send + 'static {
     /// - `Failed` — terminal failure.
     fn step_track(&mut self) -> track_fsm::TrackStep<Self::Chunk>;
 
-    /// Access the shared timeline for epoch queries.
-    fn timeline(&self) -> &Timeline;
+    /// Narrow seek-observe handle — epoch queries and decoder-node seek latch.
+    fn seek_observe(&self) -> Arc<dyn SeekObserve>;
 
     /// Drain deferred off-core signals armed on the forbid-blocking decode
     /// core: reader-hook events (published to the event bus) and the reader→peer
