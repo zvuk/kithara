@@ -16,6 +16,7 @@ mod html_error_cleanup;
 mod keys_integration;
 mod live_stress_real_stream;
 mod playlist_integration;
+mod probe_not_ready_at_creation;
 mod seek_past_eof;
 mod seek_variant_switch_after_eof;
 mod segment_boundary_strand;

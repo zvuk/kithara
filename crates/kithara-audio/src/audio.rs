@@ -1009,6 +1009,29 @@ where
         DeferredBus::new(bus.clone(), AUDIO_EVENT_CAPACITY)
     }
 
+    /// Build the initial decoder, tolerating the transient `Interrupted`
+    /// retry-signal the construction probe can hit.
+    ///
+    /// The decoder probe reads the container header + first packet through the
+    /// source's non-blocking single-probe `Read`. Three transient conditions
+    /// surface there as an `ErrorClass::Interrupted` `io::Error` — not-ready
+    /// bytes (`NotReady`), a flush / seek-epoch bump (`SeekPending`), and an
+    /// auto-ABR variant boundary (`VariantChange`) — none of which is a hard
+    /// codec/container failure. The steady-state decode loop and the
+    /// decoder-recreate path both treat `Interrupted` as "wait for the source,
+    /// retry" (`DecodeStep::Interrupted` / `RecreateOutcome::NeedsSourceWait`);
+    /// construction is the one path that lacked that tolerance and instead
+    /// surfaced `DecodeError::Interrupted` as a fatal creation error
+    /// (`.expect("audio creation")` then panicked under load — flake F2).
+    ///
+    /// Mirror the recreate contract here: re-run the build after a short
+    /// off-RT backoff while it reports `Interrupted`, within
+    /// [`Self::PROBE_WARM_TIMEOUT`]. Each attempt rebuilds the config from
+    /// scratch, so `take_reader_hooks` (which mints a fresh handle per call)
+    /// and the `OffsetReader` cursor are reset cleanly. On budget exhaustion
+    /// the error is re-mapped to a typed terminal `TimedOut` so the caller
+    /// never sees the cooperative-retry signal. This does NOT touch the
+    /// `wait_range` / DRM cancel budget gate — it only re-issues the build.
     async fn create_initial_decoder(
         shared_stream: SharedStream<T>,
         initial_media_info: Option<MediaInfo>,
@@ -1018,6 +1041,53 @@ where
         decoder_backend: kithara_decode::DecoderBackend,
     ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation...");
+        let deadline = kithara_platform::time::Instant::now() + Self::PROBE_WARM_TIMEOUT;
+        loop {
+            let attempt = Self::build_initial_decoder(
+                shared_stream.clone(),
+                initial_media_info.clone(),
+                hint.clone(),
+                pcm_pool.clone(),
+                byte_pool.clone(),
+                decoder_backend,
+            )
+            .await;
+            match attempt {
+                Ok(decoder) => {
+                    debug!("Audio::new — decoder created");
+                    return Ok(decoder);
+                }
+                Err(e) if e.is_interrupted() => {
+                    if kithara_platform::time::Instant::now() >= deadline {
+                        debug!(?e, "create_initial_decoder: probe interrupted past budget");
+                        return Err(DecodeError::Io(IoError::new(
+                            std::io::ErrorKind::TimedOut,
+                            "initial decoder probe stayed interrupted past the probe budget",
+                        )));
+                    }
+                    trace!(
+                        ?e,
+                        "create_initial_decoder: transient interrupt, retrying build"
+                    );
+                    kithara_platform::time::sleep(Self::PROBE_WARM_BACKOFF).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// Single construction-probe attempt: build the decoder config and run the
+    /// blocking probe once on `spawn_blocking`. Returns the transient
+    /// `Interrupted` retry-signal unmodified so [`Self::create_initial_decoder`]
+    /// can decide whether to retry.
+    async fn build_initial_decoder(
+        shared_stream: SharedStream<T>,
+        initial_media_info: Option<MediaInfo>,
+        hint: Option<String>,
+        pcm_pool: PcmPool,
+        byte_pool: kithara_bufpool::BytePool,
+        decoder_backend: kithara_decode::DecoderBackend,
+    ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
         let decoder_config = kithara_decode::DecoderConfig::builder()
             .backend(decoder_backend)
@@ -1030,7 +1100,7 @@ where
             .build();
         let hint_for_decoder = hint;
         let initial_media_info_for_decoder = initial_media_info;
-        let decoder = spawn_blocking(move || {
+        spawn_blocking(move || {
             if let Some(ref info) = initial_media_info_for_decoder {
                 DecoderFactory::create_from_media_info(shared_stream, info, decoder_config)
             } else {
@@ -1042,9 +1112,7 @@ where
             }
         })
         .await
-        .map_err(|e| DecodeError::Io(IoError::other(format!("decoder task panicked: {e}"))))??;
-        debug!("Audio::new — decoder created");
-        Ok(decoder)
+        .map_err(|e| DecodeError::Io(IoError::other(format!("decoder task panicked: {e}"))))?
     }
 
     async fn create_stream_with_probe(
@@ -1118,20 +1186,16 @@ where
         Ok(stream)
     }
 
-    /// Block (off-RT, on the `spawn_blocking` probe task) until the first
-    /// probe read succeeds, hits a hard error, or [`Self::PROBE_WARM_TIMEOUT`]
-    /// elapses.
-    ///
-    /// The read path is non-blocking-pull: a not-yet-downloaded range
-    /// surfaces as `ErrorKind::Interrupted`/`WouldBlock` immediately, and
-    /// each read attempt nudges the downloader (via `wait_range`'s
-    /// `wake_peer`). This mirrors the single warming read the blocking probe
-    /// performed before the non-blocking-pull conversion — it reads exactly
-    /// one probe buffer at offset 0, retrying with a short backoff until the
-    /// bytes land, then returns. It deliberately does NOT read forward past
-    /// the first buffer: advancing the cursor across a segment boundary here
-    /// would drive an ABR commit mid-construction. The caller seeks back to
-    /// 0 and the decoder probe reads the now-cached prefix.
+    /// Best-effort warm of the container prefix on the `spawn_blocking` probe
+    /// task before the decoder build runs. Reads exactly one probe buffer at
+    /// offset 0, retrying with a short backoff until the bytes land, a hard
+    /// error surfaces, or [`Self::PROBE_WARM_TIMEOUT`] elapses, then returns
+    /// regardless — the decoder build's own `Interrupted`-retry loop
+    /// ([`Self::create_initial_decoder`]) owns the readiness budget and the
+    /// typed-terminal-on-timeout contract. It deliberately does NOT read
+    /// forward past the first buffer: advancing the cursor across a segment
+    /// boundary here would drive an ABR commit mid-construction. The caller
+    /// seeks back to 0 and the decoder probe reads the warmed prefix.
     fn warm_probe_prefix(stream: &mut Stream<T>, probe_buf: &mut [u8]) {
         let deadline = kithara_platform::time::Instant::now() + Self::PROBE_WARM_TIMEOUT;
         loop {
