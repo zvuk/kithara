@@ -25,7 +25,7 @@ mod wake;
 pub mod mock;
 
 pub use error::{SourceError, StreamError, StreamResult};
-pub use hooks::{BoxedHooks, DecoderHooks, ReaderChunkSignal, ReaderSeekSignal};
+pub use hooks::{BoxedEventSink, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
 pub use playhead::{PlayheadRead, PlayheadWrite};
 pub use preroll::PrerollHint;

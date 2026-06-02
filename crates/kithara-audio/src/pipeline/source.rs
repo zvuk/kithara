@@ -73,8 +73,8 @@ impl<T: StreamType> SharedStream<T> {
             pub(crate) fn has_variant_change_pending(&self) -> bool;
             fn seek_time_anchor(&self, position: Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
             fn commit_seek_landing(&self, anchor: Option<SourceSeekAnchor>);
-            /// Build a fresh reader-side hooks instance from the inner source.
-            pub(crate) fn take_reader_hooks(&self) -> Option<kithara_stream::BoxedHooks>;
+            /// Build a fresh reader-side event-sink instance from the inner source.
+            pub(crate) fn take_reader_event_sink(&self) -> Option<kithara_stream::BoxedEventSink>;
             /// Pull a clone of the optional segment-layout handle from the
             /// inner source. Used by the decoder factory to activate the
             /// segment-by-segment fMP4 path on HLS.

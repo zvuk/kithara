@@ -318,8 +318,8 @@ impl<T: StreamType> Stream<T> {
             pub fn peer_wake(&self) -> Option<Arc<DeferredWake>>;
             /// Commit the actual post-seek landing after `decoder.seek(...)`.
             pub fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>);
-            /// Build a fresh reader-side hooks instance from the inner source.
-            pub fn take_reader_hooks(&mut self) -> Option<crate::BoxedHooks>;
+            /// Build a fresh reader-side event-sink instance from the inner source.
+            pub fn take_reader_event_sink(&mut self) -> Option<crate::BoxedEventSink>;
             /// Optional segment-layout handle for segment-aware decoders.
             pub fn as_segment_layout(&self) -> Option<Arc<dyn crate::SegmentLayout>>;
             /// Absolute byte-position set — used by [`Stream::seek`] callers

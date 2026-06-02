@@ -7,7 +7,7 @@ use std::{
 };
 
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_stream::{AudioCodec, BoxedHooks, ReaderChunkSignal, ReaderSeekSignal};
+use kithara_stream::{AudioCodec, BoxedEventSink, ReaderChunkSignal, ReaderSeekSignal};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -26,12 +26,12 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     demuxer: D,
     byte_len_handle: Option<Arc<AtomicU64>>,
     duration: Option<Duration>,
-    /// Reader-side observer hooks. Single-owner `Box<dyn DecoderHooks>` —
+    /// Reader-side event sink. Single-owner `Box<dyn ReaderEventSink>` —
     /// `None` skips emission entirely; `Some(_)` calls `on_chunk` /
     /// `on_seek` directly via `&mut` after the inner outcome resolves.
     /// No lock on the produce-core. Folded in from the former
     /// `HookedDecoder` decorator — every decoder is hookable now.
-    hooks: Option<BoxedHooks>,
+    hooks: Option<BoxedEventSink>,
     /// When `Some`, frames whose decode-time end is `<= target` are
     /// dropped before the next chunk is emitted. Cleared after the
     /// first frame past the target is consumed. Lets `seek(target)`
@@ -63,7 +63,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         pool: PcmPool,
         epoch: u64,
         byte_len_handle: Option<Arc<AtomicU64>>,
-        hooks: Option<BoxedHooks>,
+        hooks: Option<BoxedEventSink>,
     ) -> Self {
         let spec = codec.spec();
         let duration = demuxer.duration();
@@ -279,7 +279,7 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
 
     fn flush_reader_signals(&mut self) {
         if let Some(hooks) = self.hooks.as_mut() {
-            hooks.flush_pending();
+            hooks.flush();
         }
     }
 }
@@ -733,7 +733,7 @@ mod hook_tests {
 
     use kithara_bufpool::PcmPool;
     use kithara_stream::{
-        BoxedHooks, DecoderHooks, PendingReason, ReaderChunkSignal, ReaderSeekSignal,
+        BoxedEventSink, PendingReason, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal,
     };
     use kithara_test_utils::kithara;
 
@@ -753,7 +753,7 @@ mod hook_tests {
         log: Arc<Mutex<CallLog>>,
     }
 
-    impl DecoderHooks for LoggingHooks {
+    impl ReaderEventSink for LoggingHooks {
         fn on_chunk(&mut self, signal: ReaderChunkSignal) {
             let tag = match signal {
                 ReaderChunkSignal::Chunk => "chunk",
@@ -868,7 +868,7 @@ mod hook_tests {
             PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             1,
         );
-        let hooks: BoxedHooks = Box::new(LoggingHooks { log });
+        let hooks: BoxedEventSink = Box::new(LoggingHooks { log });
         ComposedDecoder::new(
             demuxer,
             codec,

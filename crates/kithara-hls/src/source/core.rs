@@ -7,12 +7,12 @@ use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    BoxedHooks, DeferredWake, MediaInfo, ReadOutcome, SegmentLayout, Source, SourcePhase,
+    BoxedEventSink, DeferredWake, MediaInfo, ReadOutcome, SegmentLayout, Source, SourcePhase,
     SourceSeekAnchor, StreamResult, Timeline,
 };
 
 use crate::{
-    coord::HlsCoord, invalidation::HlsInvalidationGuard, peer::HlsPeer, reader::HlsReaderHooks,
+    coord::HlsCoord, invalidation::HlsInvalidationGuard, peer::HlsPeer, reader::HlsReaderEventSink,
 };
 
 /// HLS source: thin façade over [`HlsCoord`].
@@ -23,13 +23,13 @@ use crate::{
 /// single owner of the active-variant atomic, the cross-variant
 /// history, and the asset store. `HlsSource` keeps only what coord
 /// legitimately should not know about: the [`EventBus`] (for
-/// [`HlsReaderHooks`]) and the [`HlsPeer`] handle (for teardown on drop
-/// and for the ABR handle the audio FSM consumes).
+/// [`HlsReaderEventSink`]) and the [`HlsPeer`] handle (for teardown on
+/// drop and for the ABR handle the audio FSM consumes).
 pub struct HlsSource {
     coord: Arc<HlsCoord>,
     /// Event bus the track was created against. Forwarded to
-    /// [`HlsReaderHooks`] in [`Source::take_reader_hooks`] so the
-    /// decoder's per-seek / per-chunk signals reach test subscribers
+    /// [`HlsReaderEventSink`] in [`Source::take_reader_event_sink`] so
+    /// the decoder's per-seek / per-chunk signals reach test subscribers
     /// as `HlsEvent::ReaderSeek` / `HlsEvent::ReadProgress`.
     bus: EventBus,
     hls_peer: Option<Arc<HlsPeer>>,
@@ -103,13 +103,13 @@ impl Source for HlsSource {
         Some(self.coord.media_info())
     }
 
-    fn take_reader_hooks(&mut self) -> Option<BoxedHooks> {
-        let hooks = HlsReaderHooks::new(
+    fn take_reader_event_sink(&mut self) -> Option<BoxedEventSink> {
+        let sink = HlsReaderEventSink::new(
             self.bus.clone(),
             Arc::clone(&self.coord),
             self.coord.timeline.seek_epoch_handle(),
         );
-        Some(Box::new(hooks))
+        Some(Box::new(sink))
     }
 
     delegate! {

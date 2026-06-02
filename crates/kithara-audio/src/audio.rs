@@ -987,7 +987,7 @@ where
                 .byte_pool(factory_byte_pool.clone())
                 .epoch(factory_epoch.load(Ordering::Acquire))
                 .maybe_segment_layout(stream.as_segment_layout())
-                .maybe_hooks(stream.take_reader_hooks())
+                .maybe_hooks(stream.take_reader_event_sink())
                 .build();
             let source = OffsetReader::new(stream.clone(), base_offset);
             match DecoderFactory::create_from_media_info(source, info, config) {
@@ -1029,7 +1029,7 @@ where
             .pcm_pool(pcm_pool)
             .byte_pool(byte_pool)
             .maybe_segment_layout(shared_stream.as_segment_layout())
-            .maybe_hooks(shared_stream.take_reader_hooks())
+            .maybe_hooks(shared_stream.take_reader_event_sink())
             .maybe_hint(hint.clone())
             .build();
         let hint_for_decoder = hint;

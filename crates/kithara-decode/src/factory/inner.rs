@@ -5,7 +5,7 @@ use std::{
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_stream::{AudioCodec, BoxedHooks, ContainerFormat, MediaInfo, SegmentLayout};
+use kithara_stream::{AudioCodec, BoxedEventSink, ContainerFormat, MediaInfo, SegmentLayout};
 
 use super::probe::{
     ProbeHint, codec_from_mp4_fourcc, container_from_extension, probe_codec,
@@ -110,7 +110,7 @@ pub struct DecoderConfig {
     pub hint: Option<String>,
     /// Reader-side observer hooks. Single-owner; moved into
     /// [`ComposedDecoder`] by the chosen backend path.
-    pub hooks: Option<BoxedHooks>,
+    pub hooks: Option<BoxedEventSink>,
     /// PCM buffer pool, propagated from the host. `None` falls back to
     /// `PcmPool::default()`.
     pub pcm_pool: Option<PcmPool>,

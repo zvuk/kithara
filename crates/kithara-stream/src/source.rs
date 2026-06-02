@@ -366,19 +366,18 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// cursor that backs [`Self::position`] / [`Self::advance`].
     fn set_position(&self, pos: u64);
 
-    /// Build a fresh reader-side hooks instance.
+    /// Build a fresh reader-side event-sink instance.
     ///
     /// Returned by Source-impls that want to expose reader-side events
-    /// (`HlsSource`, `FileSource`). The audio pipeline takes the hook
+    /// (`HlsSource`, `FileSource`). The audio pipeline takes the sink
     /// at decoder creation/recreation time and threads it into the
-    /// `HookedDecoder` wrapper. Default `None` keeps mock and test
-    /// sources unhooked.
+    /// composed decoder. Default `None` keeps mock and test sources
+    /// without a sink.
     ///
-    /// `take_*` is a misnomer: each call must return a **fresh** hook
-    /// instance, because decoder recreation (ABR / format change)
-    /// rebuilds the wrapper and the new hook needs a clean state
-    /// cursor.
-    fn take_reader_hooks(&mut self) -> Option<crate::BoxedHooks> {
+    /// Each call must return a **fresh** sink instance, because decoder
+    /// recreation (ABR / format change) rebuilds the decoder and the new
+    /// sink needs a clean state cursor.
+    fn take_reader_event_sink(&mut self) -> Option<crate::BoxedEventSink> {
         None
     }
 
