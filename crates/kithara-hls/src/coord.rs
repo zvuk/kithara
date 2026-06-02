@@ -20,7 +20,7 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     ByteMap, ContainerFormat, MediaInfo, PendingReason, PlayheadRead, ReadOutcome, SeekObserve,
-    SegmentDescriptor, SourcePhase, SourceSeekAnchor, StreamResult, Timeline,
+    SegmentDescriptor, SourcePhase, SourceSeekAnchor, StreamResult, Timeline, VariantControl,
 };
 use kithara_test_utils::kithara;
 use tracing::info;
@@ -478,6 +478,24 @@ impl HlsCoord {
                 position: Duration,
             ) -> StreamResult<Option<SourceSeekAnchor>>;
         }
+    }
+}
+
+/// `VariantControl` exposes the cross-variant fence/format-change surface
+/// to the stream layer. The bodies are the coord's existing inherent
+/// methods — non-adaptive sources vend `None` instead of implementing
+/// these.
+impl VariantControl for HlsCoord {
+    fn clear_variant_fence(&self) {
+        Self::clear_variant_fence(self);
+    }
+
+    fn has_variant_change_pending(&self) -> bool {
+        Self::has_variant_change_pending(self)
+    }
+
+    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        Self::format_change_segment_range(self)
     }
 }
 

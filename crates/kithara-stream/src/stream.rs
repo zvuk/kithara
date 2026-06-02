@@ -162,10 +162,10 @@ impl StdError for VariantChangeError {}
 
 use crate::{
     DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor, Timeline,
-    error::{SourceError, StreamError},
+    error::{SourceError, StreamError, StreamResult},
     playhead::PlayheadWrite,
     seek_state::{Activity, SeekControl, SeekObserve},
-    source::{NotReadyCause, PendingReason, ReadOutcome, Source},
+    source::{NotReadyCause, PendingReason, ReadOutcome, Source, VariantControl},
 };
 
 /// Defines a stream type and how to create it.
@@ -295,20 +295,6 @@ impl<T: StreamType> Stream<T> {
             pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
             /// Get total length if known.
             pub fn len(&self) -> Option<u64>;
-            /// Header byte range for decoder recreate after a format change.
-            /// Transitional — removed in Plan 06.
-            ///
-            /// # Errors
-            ///
-            /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS
-            /// sources or HLS variants activated with `served_from > 0`
-            /// (init prefix unreachable via Stream reads).
-            pub fn format_change_segment_range(&self) -> crate::error::StreamResult<Range<u64>>;
-            /// Clear variant fence, allowing reads from the next variant.
-            pub fn clear_variant_fence(&mut self);
-            /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
-            /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
-            pub fn has_variant_change_pending(&self) -> bool;
             /// The reader→peer wake handle — `Some` for segmented sources (HLS)
             /// that push a downloader peer, `None` otherwise.
             pub fn peer_wake(&self) -> Option<Arc<DeferredWake>>;
@@ -320,6 +306,44 @@ impl<T: StreamType> Stream<T> {
             /// and audio FSM landings. Forwards to the source's atomic cursor.
             pub fn set_position(&self, pos: u64);
         }
+    }
+
+    /// Optional HLS-only variant-coordination handle — `Some` for adaptive
+    /// sources (HLS), `None` otherwise.
+    #[must_use]
+    pub fn variant_control(&self) -> Option<Arc<dyn VariantControl>> {
+        self.source.variant_control()
+    }
+
+    /// Clear the variant fence, allowing reads from the next variant.
+    /// No-op for non-adaptive sources.
+    pub fn clear_variant_fence(&mut self) {
+        if let Some(vc) = self.source.variant_control() {
+            vc.clear_variant_fence();
+        }
+    }
+
+    /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
+    /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
+    #[must_use]
+    pub fn has_variant_change_pending(&self) -> bool {
+        self.source
+            .variant_control()
+            .is_some_and(|vc| vc.has_variant_change_pending())
+    }
+
+    /// Header byte range for decoder recreate after a format change.
+    ///
+    /// # Errors
+    ///
+    /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS sources
+    /// or HLS variants activated with `served_from > 0` (init prefix
+    /// unreachable via Stream reads).
+    pub fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        self.source.variant_control().map_or(
+            Err(StreamError::Source(SourceError::FormatChangeNotApplicable)),
+            |vc| vc.format_change_segment_range(),
+        )
     }
 }
 
@@ -407,13 +431,17 @@ impl<T: StreamType> Stream<T> {
             });
         }
 
+        let variant_control = self.source.variant_control();
         loop {
             let timeline = self.source.timeline();
             let read_epoch = timeline.seek_epoch();
             let pos = self.source.position();
             let range = pos..pos.saturating_add(buf.len() as u64);
 
-            if self.source.has_variant_change_pending() {
+            if variant_control
+                .as_ref()
+                .is_some_and(|vc| vc.has_variant_change_pending())
+            {
                 return Ok(StreamReadOutcome::Pending(PendingReason::VariantChange));
             }
 
@@ -669,7 +697,10 @@ impl<T: StreamType> Stream<T> {
             phase,
             epoch: timeline.seek_epoch(),
             flushing: timeline.is_flushing(),
-            variant_fence: self.source.has_variant_change_pending(),
+            variant_fence: self
+                .source
+                .variant_control()
+                .is_some_and(|vc| vc.has_variant_change_pending()),
         }
     }
 }
@@ -686,7 +717,7 @@ impl<T: StreamType> Seek for Stream<T> {
         }
         let new_pos = self.resolve_seek_target(pos, self.source.len())?;
 
-        let wait_range = match self.source.format_change_segment_range() {
+        let wait_range = match self.format_change_segment_range() {
             Ok(range) if range.start == new_pos => range,
             _ => new_pos..new_pos.saturating_add(1),
         };

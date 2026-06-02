@@ -95,6 +95,10 @@ impl Source for HlsSource {
         self.peer_wake.clone()
     }
 
+    fn variant_control(&self) -> Option<Arc<dyn kithara_stream::VariantControl>> {
+        Some(Arc::clone(&self.coord) as Arc<dyn kithara_stream::VariantControl>)
+    }
+
     fn media_info(&self) -> Option<MediaInfo> {
         Some(self.coord.media_info())
     }
@@ -116,15 +120,12 @@ impl Source for HlsSource {
             fn set_position(&self, pos: u64);
             fn timeline(&self) -> Timeline;
             fn phase_at(&self, range: Range<u64>) -> SourcePhase;
-            fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
             fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome>;
             fn wait_range(
                 &mut self,
                 range: Range<u64>,
                 timeout: Option<Duration>,
             ) -> StreamResult<WaitOutcome>;
-            fn clear_variant_fence(&mut self);
-            fn has_variant_change_pending(&self) -> bool;
         }
     }
 }

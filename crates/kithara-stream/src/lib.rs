@@ -32,7 +32,7 @@ pub use preroll::PrerollHint;
 pub use seek_state::{Activity, SeekControl, SeekObserve};
 pub use source::{
     ByteMap, NotReadyCause, PendingReason, ReadOutcome, SegmentDescriptor, Source, SourcePhase,
-    SourceSeekAnchor,
+    SourceSeekAnchor, VariantControl,
 };
 pub use stream::{
     Stream, StreamPending, StreamReadError, StreamReadOutcome, StreamSeekPastEof, StreamType,

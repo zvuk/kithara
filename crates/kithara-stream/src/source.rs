@@ -8,7 +8,7 @@ use kithara_test_utils::kithara;
 
 use crate::{
     Timeline,
-    error::{SourceError, StreamError, StreamResult},
+    error::StreamResult,
     media::MediaInfo,
     playhead::{PlayheadRead, PlayheadWrite},
     seek_state::{Activity, SeekControl, SeekObserve},
@@ -211,46 +211,10 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
         None
     }
 
-    /// Clear variant fence, allowing reads from the next variant.
-    ///
-    /// Called when the decoder is recreated after ABR switch.
-    /// Default no-op for non-HLS sources.
-    fn clear_variant_fence(&mut self) {}
-
-    /// Byte range of the header (init segment or first served segment)
-    /// the decoder must read to re-establish container state after a
-    /// format change (HLS ABR cross-codec switch).
-    ///
-    /// Returns `Ok(range)` — header byte range that `apply_format_change`
-    /// seeks to and the decoder factory's probe reads.
-    ///
-    /// # Errors
-    ///
-    /// `Err(SourceError::FormatChangeNotApplicable)` — source has no
-    /// HLS-style format-change recovery (file source — default impl) or
-    /// the active HLS variant was activated with `served_from > 0` so
-    /// the init prefix lives outside the served virtual byte range.
-    /// Callers should fall back to a non-init recovery anchor (e.g.
-    /// the current segment boundary).
-    ///
-    /// Transitional — removed in Plan 06.
-    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
-        Err(StreamError::Source(SourceError::FormatChangeNotApplicable))
-    }
-
-    /// `true` if a cross-variant transition is in-flight and `read_at` /
-    /// `wait_range` are short-circuited to `Pending(VariantChange)` /
-    /// `Interrupted` until the decoder acks the switch via
-    /// `clear_variant_fence` (HLS) or equivalent.
-    ///
-    /// Sources without a variant fence keep the default `false`. Used by
-    /// the audio decode loop to break out of `Ok(Pending(_))` retry spin
-    /// when Symphonia / other demuxers absorb the underlying
-    /// `VariantChangeError` and surface only an opaque pending — without
-    /// this polled check the loop would yield forever while the fence
-    /// stays closed waiting for a recreate that never starts.
-    fn has_variant_change_pending(&self) -> bool {
-        false
+    /// Optional HLS-only variant-coordination handle. Adaptive sources (HLS)
+    /// return `Some`; non-adaptive sources keep the default `None`.
+    fn variant_control(&self) -> Option<Arc<dyn VariantControl>> {
+        None
     }
 
     /// Whether the source currently reports zero bytes. Default mirrors
@@ -393,6 +357,32 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
         range: Range<u64>,
         timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome>;
+}
+
+/// HLS-only variant-coordination surface, vended as `Some` by adaptive
+/// sources and `None` by everything else. Replaces three former no-op
+/// default `Source` methods — non-adaptive sources no longer pretend to
+/// implement variant fences.
+///
+/// All methods take `&self`; the HLS impl (`HlsCoord`) uses interior
+/// mutability, so callers hold an `Arc<dyn VariantControl>` and never
+/// need `&mut`.
+pub trait VariantControl: Send + Sync + 'static {
+    /// Clear the variant fence after a decoder recreate acks an ABR switch.
+    fn clear_variant_fence(&self);
+
+    /// Whether a cross-variant transition is in-flight (reads/waits are
+    /// short-circuited until the decoder acks via `clear_variant_fence`).
+    fn has_variant_change_pending(&self) -> bool;
+
+    /// Byte range of the header the decoder must re-read after a format
+    /// change (HLS ABR cross-codec switch).
+    ///
+    /// # Errors
+    /// `Err(SourceError::FormatChangeNotApplicable)` when the active variant
+    /// was served with a non-zero `served_from` so the init prefix lives
+    /// outside the virtual range.
+    fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
 }
 
 /// Segment-table view exposed by segmented sources (HLS, fragmented
