@@ -15,6 +15,7 @@ mod hooks;
 mod media;
 mod playhead;
 mod preroll;
+mod seek_state;
 mod source;
 mod stream;
 mod timeline;
