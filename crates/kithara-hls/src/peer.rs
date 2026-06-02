@@ -17,7 +17,7 @@ use kithara_platform::{
     tokio::{self, sync::mpsc},
 };
 use kithara_stream::{
-    DeferredWake, Timeline,
+    Activity, DeferredWake, SeekObserve,
     dl::{FetchCmd, Peer, RequestPriority},
 };
 use kithara_test_utils::kithara;
@@ -26,6 +26,10 @@ use crate::{coord::HlsCoord, variant::PlanCtx};
 
 struct HlsTrackState {
     coord: Arc<HlsCoord>,
+    /// Narrow seek-observe handle — cloned from `HlsPeer.seek_obs` at
+    /// activation time. All epoch/target/pending reads use this directly
+    /// rather than routing through `coord.timeline`.
+    seek_obs: Arc<dyn SeekObserve>,
     /// Reused from the parent [`HlsPeer`]: stores the reader's last-known
     /// segment index — read by [`Abr::progress`] and compared against the
     /// freshly resolved segment in `poll_next` to detect a boundary
@@ -65,13 +69,24 @@ pub(crate) struct HlsPeer {
     /// [`Self::set_abr_variants`] after the master + media playlists
     /// have been parsed; never mutated again for the peer's lifetime.
     variants: Mutex<Vec<VariantInfo>>,
-    timeline: Timeline,
+    /// Narrow seek-observe handle. Used by `poll_next`'s inner logic
+    /// (via `HlsTrackState`) to read the current epoch/target without
+    /// holding a wide `Timeline`.
+    seek_obs: Arc<dyn SeekObserve>,
+    /// Narrow activity handle. Used by `priority()` to check whether
+    /// the track is currently playing.
+    activity: Arc<dyn Activity>,
 }
 
 impl HlsPeer {
-    pub(crate) fn new(timeline: Timeline, initial_mode: AbrMode) -> Self {
+    pub(crate) fn new(
+        seek_obs: Arc<dyn SeekObserve>,
+        activity: Arc<dyn Activity>,
+        initial_mode: AbrMode,
+    ) -> Self {
         Self {
-            timeline,
+            seek_obs,
+            activity,
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::new(None),
             wake_signal: CancellationToken::default(), // kithara:cancel:owner
@@ -102,7 +117,7 @@ impl HlsPeer {
                 master_cancel: coord.cancel.clone(),
                 scope: coord.scope.clone(),
                 headers: coord.headers.clone(),
-                seek_epoch: coord.timeline.seek_epoch(),
+                seek_epoch: self.seek_obs.epoch(),
             };
             active.rebuild(&plan_ctx, initial_seg);
         }
@@ -113,6 +128,7 @@ impl HlsPeer {
             let mut guard = self.state.lock_sync();
             *guard = Some(HlsTrackState {
                 coord,
+                seek_obs: Arc::clone(&self.seek_obs),
                 eviction_rx,
                 prefetch_budget,
                 look_ahead_bytes,
@@ -244,7 +260,7 @@ impl Peer for HlsPeer {
     }
 
     fn priority(&self) -> RequestPriority {
-        if self.timeline.is_playing() {
+        if self.activity.is_playing() {
             RequestPriority::High
         } else {
             RequestPriority::Low
@@ -366,7 +382,7 @@ impl HlsTrackState {
     /// otherwise pull bytes from a `history` variant whose data does
     /// not match the variant ABR currently considers active.
     fn apply_seek_change(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
-        let cur_seek = coord.timeline.seek_epoch();
+        let cur_seek = self.seek_obs.epoch();
         if cur_seek == self.last_seek_epoch {
             return;
         }
@@ -391,7 +407,7 @@ impl HlsTrackState {
             scope: self.coord.scope.clone(),
             headers: self.coord.headers.clone(),
             prefetch_budget: self.prefetch_budget,
-            seek_epoch: self.coord.timeline.seek_epoch(),
+            seek_epoch: self.seek_obs.epoch(),
             look_ahead_bytes: self.look_ahead_bytes,
         }
     }
@@ -403,12 +419,12 @@ impl HlsTrackState {
     /// — integration tests key off this probe to detect scheduler
     /// epoch resets without polling cycles flooding the wire.
     #[kithara::probe(
-        seek_epoch = coord.timeline.seek_epoch(),
+        seek_epoch = self.seek_obs.epoch(),
         segment_index = self.reader_segment.load(Ordering::Acquire),
         variant = coord.variant_index()
     )]
     fn seek_epoch_reset(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
-        if let Some(target) = coord.timeline.seek_target()
+        if let Some(target) = self.seek_obs.target()
             && let Some(active) = coord.active()
             && let Some(seg) = active.rebuild_at_time(ctx, target)
         {

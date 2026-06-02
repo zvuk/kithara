@@ -95,7 +95,13 @@ impl StreamType for Hls {
             .unwrap_or_else(|| BytePool::default().clone());
 
         let timeline = Timeline::new();
-        let hls_peer = Arc::new(HlsPeer::new(timeline.clone(), config.initial_abr_mode));
+        let seek_obs = timeline.seek_observe();
+        let activity = timeline.activity();
+        let hls_peer = Arc::new(HlsPeer::new(
+            Arc::clone(&seek_obs),
+            Arc::clone(&activity),
+            config.initial_abr_mode,
+        ));
         let peer_handle = downloader
             .register(Arc::clone(&hls_peer) as Arc<dyn Peer>)
             .with_bus(bus.clone());
@@ -175,7 +181,7 @@ impl StreamType for Hls {
                 HlsVariant::new(
                     idx,
                     &playlist_state,
-                    &timeline,
+                    Arc::clone(&seek_obs),
                     init_decrypt_ctx,
                     &decrypt_contexts,
                     &plan_ctx,

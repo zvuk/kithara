@@ -3,10 +3,10 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use kithara_stream::Timeline;
+use kithara_stream::SeekObserve;
 
 /// Reader-side runtime state for one variant: the shared byte cursor and the
-/// timeline consulted for `is_flushing` gating.
+/// seek-observe handle consulted for `is_flushing` gating.
 ///
 /// Grouped out of `HlsVariant` so the cursor and flush-gate live in one domain.
 /// The variant facade keeps the probe-tagged public accessors (`get_position` /
@@ -14,14 +14,14 @@ use kithara_stream::Timeline;
 /// ops here.
 pub(super) struct ReaderRuntime {
     position: Arc<AtomicU64>,
-    timeline: Timeline,
+    seek_obs: Arc<dyn SeekObserve>,
 }
 
 impl ReaderRuntime {
-    pub(super) fn new(timeline: Timeline) -> Self {
+    pub(super) fn new(seek_obs: Arc<dyn SeekObserve>) -> Self {
         Self {
             position: Arc::new(AtomicU64::new(0)),
-            timeline,
+            seek_obs,
         }
     }
 
@@ -38,6 +38,6 @@ impl ReaderRuntime {
     }
 
     pub(super) fn is_flushing(&self) -> bool {
-        self.timeline.is_flushing()
+        self.seek_obs.is_flushing()
     }
 }

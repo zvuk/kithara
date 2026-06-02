@@ -19,8 +19,8 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SegmentDescriptor, SegmentLayout,
-    SourcePhase, SourceSeekAnchor, StreamResult, Timeline,
+    ContainerFormat, MediaInfo, PendingReason, PlayheadRead, ReadOutcome, SeekObserve,
+    SegmentDescriptor, SegmentLayout, SourcePhase, SourceSeekAnchor, StreamResult, Timeline,
 };
 use kithara_test_utils::kithara;
 use tracing::info;
@@ -54,6 +54,12 @@ pub(crate) struct HlsCoord {
     pub(crate) cancel: CancellationToken,
     pub(crate) headers: Option<kithara_net::Headers>,
     pub(crate) timeline: Timeline,
+    /// Narrow seek-observe handle — derived from `timeline` at construction.
+    /// Used by internal methods that only need epoch/target/pending reads.
+    seek_obs: Arc<dyn SeekObserve>,
+    /// Narrow read-only playhead handle — derived from `timeline` at construction.
+    /// Used by internal methods that only need committed position reads.
+    playhead_read: Arc<dyn PlayheadRead>,
     playlist_state: Arc<PlaylistState>,
     /// Last generation acknowledged by the reader. When `<
     /// variant_generation` the read gate is closed; when equal the gate
@@ -86,8 +92,12 @@ impl HlsCoord {
             abr.current_variant_index().is_some(),
             "HlsCoord requires an AbrHandle with state — HlsPeer must construct AbrState"
         );
+        let seek_obs = timeline.seek_observe();
+        let playhead_read = timeline.playhead_read();
         Self {
             timeline,
+            seek_obs,
+            playhead_read,
             abr,
             variants,
             playlist_state,
@@ -221,9 +231,9 @@ impl HlsCoord {
                 v_new.invalidate_init();
             }
             let target_time = self
-                .timeline
-                .seek_target()
-                .unwrap_or_else(|| self.timeline.committed_position());
+                .seek_obs
+                .target()
+                .unwrap_or_else(|| self.playhead_read.position());
             let target_seg: u32 = self
                 .playlist_state
                 .find_seek_point_for_time(new_v, target_time)
@@ -235,7 +245,7 @@ impl HlsCoord {
             self.abr.apply_decision(&decision, Instant::now());
             v_new.rebuild_with_decoder_probe(ctx, target_seg);
         }
-        let reader_pt = self.timeline.committed_position();
+        let reader_pt = self.playhead_read.position();
         self.abr
             .notify_commit(decision, current_before, reader_pt, Instant::now());
         true
@@ -373,9 +383,9 @@ impl HlsCoord {
         self.abr.invalidate_pending();
     }
 
-    /// Mirror `abr.lock()` state to `timeline.is_seek_pending()`.
+    /// Mirror `abr.lock()` state to `seek_obs.is_pending()`.
     pub(crate) fn sync_abr_lock(&self) {
-        let pending = self.timeline.is_seek_pending();
+        let pending = self.seek_obs.is_pending();
         let locked = self.abr.is_locked();
         if pending && !locked {
             self.abr.lock();

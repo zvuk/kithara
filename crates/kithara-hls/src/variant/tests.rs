@@ -10,7 +10,7 @@ use kithara_platform::{
     time::{Duration, Instant},
 };
 use kithara_storage::WaitOutcome;
-use kithara_stream::{SourceError, StreamError, Timeline};
+use kithara_stream::{SeekObserve, SourceError, StreamError, Timeline};
 use kithara_test_utils::kithara;
 use url::Url;
 
@@ -76,15 +76,21 @@ fn make_seg(idx: u32, size: u64, scope: &AssetScope<DecryptContext>) -> SegmentE
 }
 
 fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) -> Arc<HlsVariant> {
-    make_var_with_timeline(variant, init_size, media_sizes, ctx, Timeline::new())
+    make_var_with_seek_obs(
+        variant,
+        init_size,
+        media_sizes,
+        ctx,
+        Timeline::new().seek_observe(),
+    )
 }
 
-fn make_var_with_timeline(
+fn make_var_with_seek_obs(
     variant: usize,
     init_size: u64,
     media_sizes: &[u64],
     ctx: &PlanCtx,
-    timeline: Timeline,
+    seek_obs: Arc<dyn SeekObserve>,
 ) -> Arc<HlsVariant> {
     let init = make_init(init_size, &ctx.scope);
     let segments: Vec<SegmentEntry> = media_sizes
@@ -104,7 +110,7 @@ fn make_var_with_timeline(
             init,
             segments,
             playlist_state: Arc::new(PlaylistState::new(Vec::new())),
-            timeline,
+            seek_obs,
             codec: None,
             container: None,
         },
@@ -552,7 +558,7 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
         VariantParts {
             init,
             playlist_state: Arc::new(PlaylistState::new(Vec::new())),
-            timeline: Timeline::new(),
+            seek_obs: Timeline::new().seek_observe(),
             codec: None,
             container: None,
             segments: vec![seg],
@@ -730,7 +736,7 @@ fn wait_range_probes_without_sleeping() {
 fn wait_range_flush_short_circuits_without_sleeping() {
     let ctx = test_ctx(3);
     let timeline = Timeline::new();
-    let v = make_var_with_timeline(0, 200, &[400], &ctx, timeline.clone());
+    let v = make_var_with_seek_obs(0, 200, &[400], &ctx, timeline.seek_observe());
 
     let _ = timeline.seek_control().begin(Duration::from_millis(10));
     let started = Instant::now();

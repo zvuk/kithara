@@ -124,6 +124,18 @@ impl Timeline {
         Arc::clone(&self.seek) as Arc<dyn SeekObserve>
     }
 
+    /// Narrow read-only playhead handle vended as a trait object.
+    #[must_use]
+    pub fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+    }
+
+    /// Narrow activity handle vended as a trait object — `is_playing` / `set_playing`.
+    #[must_use]
+    pub fn activity(&self) -> Arc<dyn Activity> {
+        Arc::clone(&self.seek) as Arc<dyn Activity>
+    }
+
     #[must_use]
     pub fn committed_position(&self) -> Duration {
         self.playhead.position()
@@ -158,16 +170,6 @@ impl Timeline {
     #[must_use]
     pub fn is_playing(&self) -> bool {
         self.seek.is_playing()
-    }
-
-    /// Check if a seek has been initiated but not yet applied by the decoder.
-    ///
-    /// Unlike `is_flushing()` (which gates I/O via `wait_range`), this flag
-    /// stays set until the decoder successfully repositions. Used by the worker
-    /// loop to trigger seek retry.
-    #[must_use]
-    pub fn is_seek_pending(&self) -> bool {
-        self.seek.is_pending()
     }
 
     /// Read the current seek epoch.
@@ -306,9 +308,9 @@ mod tests {
     #[kithara::test]
     fn initiate_seek_sets_seek_pending() {
         let tl = Timeline::new();
-        assert!(!tl.is_seek_pending());
+        assert!(!tl.seek_observe().is_pending());
         let _epoch = tl.seek_control().begin(Duration::from_secs(5));
-        assert!(tl.is_seek_pending());
+        assert!(tl.seek_observe().is_pending());
     }
 
     #[kithara::test]
@@ -317,9 +319,9 @@ mod tests {
         let epoch1 = tl.seek_control().begin(Duration::from_secs(5));
         let epoch2 = tl.seek_control().begin(Duration::from_secs(10));
         tl.seek_control().clear_pending(epoch1);
-        assert!(tl.is_seek_pending());
+        assert!(tl.seek_observe().is_pending());
         tl.seek_control().clear_pending(epoch2);
-        assert!(!tl.is_seek_pending());
+        assert!(!tl.seek_observe().is_pending());
     }
 
     #[kithara::test]
@@ -327,9 +329,9 @@ mod tests {
         let tl = Timeline::new();
         let epoch = tl.seek_control().begin(Duration::from_secs(5));
         tl.seek_control().clear_pending(epoch);
-        assert!(!tl.is_seek_pending());
+        assert!(!tl.seek_observe().is_pending());
         let _epoch2 = tl.seek_control().begin(Duration::from_secs(10));
-        assert!(tl.is_seek_pending());
+        assert!(tl.seek_observe().is_pending());
     }
 
     #[kithara::test]
@@ -338,7 +340,7 @@ mod tests {
         let epoch = tl.seek_control().begin(Duration::from_secs(5));
         tl.seek_control().complete(epoch);
         assert!(!tl.is_flushing());
-        assert!(tl.is_seek_pending());
+        assert!(tl.seek_observe().is_pending());
     }
 
     #[kithara::test]
@@ -346,7 +348,7 @@ mod tests {
         let tl = Timeline::new();
         let clone = tl.clone();
         let _epoch = tl.seek_control().begin(Duration::from_secs(5));
-        assert!(clone.is_seek_pending());
+        assert!(clone.seek_observe().is_pending());
     }
 
     #[kithara::test]
@@ -369,7 +371,7 @@ mod tests {
 
             assert_eq!(tl.is_flushing(), want_flushing, "mask {mask:#04b} flushing");
             assert_eq!(
-                tl.is_seek_pending(),
+                tl.seek_observe().is_pending(),
                 want_seek_pending,
                 "mask {mask:#04b} seek_pending"
             );
@@ -457,7 +459,7 @@ mod tests {
         );
         assert!(!tl.is_flushing(), "FLUSHING must be fully cleared");
         assert!(
-            !tl.is_seek_pending(),
+            !tl.seek_observe().is_pending(),
             "SEEK_PENDING must be fully cleared after last clear"
         );
     }
@@ -516,7 +518,7 @@ mod tests {
                     "mask {mask:#04b} play={initial_playing} flushing"
                 );
                 assert_eq!(
-                    tl.is_seek_pending(),
+                    tl.seek_observe().is_pending(),
                     want_seek_pending,
                     "mask {mask:#04b} play={initial_playing} seek_pending"
                 );
@@ -524,7 +526,7 @@ mod tests {
                 tl.set_playing(!initial_playing);
                 assert_eq!(tl.is_playing(), !initial_playing);
                 assert_eq!(tl.is_flushing(), want_flushing);
-                assert_eq!(tl.is_seek_pending(), want_seek_pending);
+                assert_eq!(tl.seek_observe().is_pending(), want_seek_pending);
             }
         }
     }
