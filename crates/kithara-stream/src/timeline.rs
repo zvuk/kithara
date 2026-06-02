@@ -124,43 +124,9 @@ impl Timeline {
         Arc::clone(&self.seek) as Arc<dyn SeekObserve>
     }
 
-    /// Clear seek-pending flag after the decoder successfully applied the seek.
-    ///
-    /// Only clears if `epoch` matches the current seek epoch, preventing a
-    /// stale completion from clearing a newer seek.
-    pub fn clear_seek_pending(&self, epoch: u64) {
-        self.seek.clear_pending(epoch);
-    }
-
-    /// Pin the playhead to the decoder's actual landing frame after a
-    /// seek. Called by the worker once `decoder.seek` returns
-    /// [`DecoderSeekOutcome::Landed`] — the only authoritative source
-    /// for "where did we actually end up". `pos.frame_offset` carries
-    /// the landed frame; `pos.frames` should be `0` (we have not yet
-    /// consumed any chunk, just repositioned). `pos.source_byte_offset`
-    /// (if known) is the byte offset the decoder is now reading from.
-    pub fn commit_seek_landed(&self, pos: &ChunkPosition) {
-        // `PlayheadState::land` fires the `committed_ns` USDT probe
-        // (the swallow detector consumes it) — the probe lives on the
-        // playhead handle now that the produce path bypasses `Timeline`.
-        self.playhead.land(pos);
-    }
-
     #[must_use]
     pub fn committed_position(&self) -> Duration {
         self.playhead.position()
-    }
-
-    /// Complete a seek (`FLUSH_STOP`).
-    ///
-    /// Clears flushing flag only if `epoch` is still current.
-    /// A superseding `initiate_seek` will have incremented the epoch,
-    /// preventing an older completion from clearing the new seek.
-    ///
-    /// Uses a double-check to guard against the race where a new
-    /// `initiate_seek` fires between our epoch load and flushing store.
-    pub fn complete_seek(&self, epoch: u64) {
-        self.seek.complete(epoch);
     }
 
     /// Consume the decoder-node seek latch with an Acquire swap.
@@ -174,19 +140,6 @@ impl Timeline {
     #[must_use]
     pub fn did_take_decoder_node_seek(&self) -> bool {
         self.seek.take_decoder_seek()
-    }
-
-    /// Consume the seek-preempt latch with an Acquire swap.
-    ///
-    /// Returns `true` exactly once per `initiate_seek` call: the worker
-    /// uses this to short-circuit `step_track`'s preempt guard without
-    /// dereferencing two `Arc<AtomicU64>`s. The Acquire ordering
-    /// synchronises with the Release in `initiate_seek` so observing
-    /// `true` here means the new `seek_epoch` and `seek_target_ns`
-    /// stores are also visible.
-    #[must_use]
-    pub fn did_take_seek_preempt(&self) -> bool {
-        self.seek.take_preempt()
     }
 
     /// Read the raw flags snapshot (used in tests and the concurrent flag test).
@@ -315,7 +268,7 @@ mod tests {
     fn complete_seek_clears_flushing() {
         let tl = Timeline::new();
         let epoch = tl.seek_control().begin(Duration::from_secs(5));
-        tl.complete_seek(epoch);
+        tl.seek_control().complete(epoch);
         assert!(!tl.is_flushing());
         assert_eq!(tl.seek_target(), Some(Duration::from_secs(5)));
     }
@@ -325,10 +278,10 @@ mod tests {
         let tl = Timeline::new();
         let epoch1 = tl.seek_control().begin(Duration::from_secs(5));
         let epoch2 = tl.seek_control().begin(Duration::from_secs(10));
-        tl.complete_seek(epoch1);
+        tl.seek_control().complete(epoch1);
         assert!(tl.is_flushing());
         assert_eq!(tl.seek_target(), Some(Duration::from_secs(10)));
-        tl.complete_seek(epoch2);
+        tl.seek_control().complete(epoch2);
         assert!(!tl.is_flushing());
     }
 
@@ -349,7 +302,7 @@ mod tests {
         let tl = Timeline::new();
         let epoch1 = tl.seek_control().begin(Duration::from_secs(5));
         let _epoch2 = tl.seek_control().begin(Duration::from_secs(15));
-        tl.complete_seek(epoch1);
+        tl.seek_control().complete(epoch1);
         assert!(tl.is_flushing());
         assert_eq!(tl.seek_target(), Some(Duration::from_secs(15)));
     }
@@ -376,9 +329,9 @@ mod tests {
         let tl = Timeline::new();
         let epoch1 = tl.seek_control().begin(Duration::from_secs(5));
         let epoch2 = tl.seek_control().begin(Duration::from_secs(10));
-        tl.clear_seek_pending(epoch1);
+        tl.seek_control().clear_pending(epoch1);
         assert!(tl.is_seek_pending());
-        tl.clear_seek_pending(epoch2);
+        tl.seek_control().clear_pending(epoch2);
         assert!(!tl.is_seek_pending());
     }
 
@@ -386,7 +339,7 @@ mod tests {
     fn new_initiate_seek_resets_seek_pending() {
         let tl = Timeline::new();
         let epoch = tl.seek_control().begin(Duration::from_secs(5));
-        tl.clear_seek_pending(epoch);
+        tl.seek_control().clear_pending(epoch);
         assert!(!tl.is_seek_pending());
         let _epoch2 = tl.seek_control().begin(Duration::from_secs(10));
         assert!(tl.is_seek_pending());
@@ -396,7 +349,7 @@ mod tests {
     fn complete_seek_does_not_clear_seek_pending() {
         let tl = Timeline::new();
         let epoch = tl.seek_control().begin(Duration::from_secs(5));
-        tl.complete_seek(epoch);
+        tl.seek_control().complete(epoch);
         assert!(!tl.is_flushing());
         assert!(tl.is_seek_pending());
     }
@@ -417,12 +370,13 @@ mod tests {
             let want_seek_pending = mask & 2 != 0;
 
             if want_flushing || want_seek_pending {
-                let _ = tl.seek_control().begin(Duration::from_secs(1));
+                let sc = tl.seek_control();
+                let _ = sc.begin(Duration::from_secs(1));
                 if !want_flushing {
-                    tl.complete_seek(tl.seek_epoch());
+                    sc.complete(tl.seek_epoch());
                 }
                 if !want_seek_pending {
-                    tl.clear_seek_pending(tl.seek_epoch());
+                    sc.clear_pending(tl.seek_epoch());
                 }
             }
 
@@ -454,7 +408,7 @@ mod tests {
 
         tl.remove_flags_with(TimelineFlags::FLUSHING, Ordering::SeqCst);
         let _epoch2 = tl.seek_control().begin(Duration::from_secs(2));
-        tl.complete_seek(epoch1);
+        tl.seek_control().complete(epoch1);
 
         assert!(
             tl.is_flushing(),
@@ -483,9 +437,10 @@ mod tests {
         let b = thread::spawn(move || {
             barrier_b.wait();
             for _ in 0..ITER {
-                let epoch = tl_b.seek_control().begin(Duration::from_millis(1));
-                tl_b.clear_seek_pending(epoch);
-                tl_b.complete_seek(epoch);
+                let sc = tl_b.seek_control();
+                let epoch = sc.begin(Duration::from_millis(1));
+                sc.clear_pending(epoch);
+                sc.complete(epoch);
             }
         });
 
@@ -556,12 +511,13 @@ mod tests {
                 let want_seek_pending = mask & 2 != 0;
 
                 if want_flushing || want_seek_pending {
-                    let _ = tl.seek_control().begin(Duration::from_secs(1));
+                    let sc = tl.seek_control();
+                    let _ = sc.begin(Duration::from_secs(1));
                     if !want_flushing {
-                        tl.complete_seek(tl.seek_epoch());
+                        sc.complete(tl.seek_epoch());
                     }
                     if !want_seek_pending {
-                        tl.clear_seek_pending(tl.seek_epoch());
+                        sc.clear_pending(tl.seek_epoch());
                     }
                 }
                 tl.set_playing(initial_playing);
@@ -625,11 +581,12 @@ mod tests {
     fn initiate_seek_does_not_touch_playing() {
         let tl = Timeline::new();
         tl.set_playing(true);
-        let epoch = tl.seek_control().begin(Duration::from_secs(5));
+        let sc = tl.seek_control();
+        let epoch = sc.begin(Duration::from_secs(5));
         assert!(tl.is_playing(), "PLAYING must not be affected by seek");
-        tl.complete_seek(epoch);
+        sc.complete(epoch);
         assert!(tl.is_playing(), "PLAYING must survive complete_seek");
-        tl.clear_seek_pending(epoch);
+        sc.clear_pending(epoch);
         assert!(tl.is_playing(), "PLAYING must survive clear_seek_pending");
     }
 }

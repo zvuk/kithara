@@ -164,7 +164,7 @@ use crate::{
     DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor, Timeline,
     error::{SourceError, StreamError},
     playhead::PlayheadWrite,
-    seek_state::{SeekControl, SeekObserve},
+    seek_state::{Activity, SeekControl, SeekObserve},
     source::{NotReadyCause, PendingReason, ReadOutcome, Source},
 };
 
@@ -274,6 +274,12 @@ impl<T: StreamType> Stream<T> {
     #[must_use]
     pub fn seek_observe(&self) -> Arc<dyn SeekObserve> {
         self.source.seek_observe()
+    }
+
+    /// Narrow activity handle — set/query the `PLAYING` flag.
+    #[must_use]
+    pub fn activity(&self) -> Arc<dyn Activity> {
+        self.source.activity()
     }
 
     delegate::delegate! {

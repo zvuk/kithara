@@ -20,8 +20,8 @@ use kithara_decode::{
 use kithara_events::{AudioEvent, AudioFormat, DeferredBus, SeekLifecycleStage, SegmentLocation};
 use kithara_platform::Mutex;
 use kithara_stream::{
-    ContainerFormat, MediaInfo, PendingReason, SourcePhase, SourceSeekAnchor, Stream, StreamType,
-    Timeline,
+    Activity, ContainerFormat, MediaInfo, PendingReason, PlayheadWrite, SeekControl, SeekObserve,
+    SourcePhase, SourceSeekAnchor, Stream, StreamType, Timeline,
 };
 use kithara_test_utils::kithara;
 use tracing::{debug, trace, warn};
@@ -81,6 +81,14 @@ impl<T: StreamType> SharedStream<T> {
             pub(crate) fn as_segment_layout(&self) -> Option<Arc<dyn kithara_stream::SegmentLayout>>;
             /// Get the shared timeline for flushing checks.
             pub(crate) fn timeline(&self) -> Timeline;
+            /// Narrow mutating playhead handle.
+            pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
+            /// Narrow seek-control handle.
+            pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl>;
+            /// Narrow seek-observe handle.
+            pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve>;
+            /// Narrow activity handle.
+            pub(crate) fn activity(&self) -> Arc<dyn Activity>;
             /// Overall source readiness at current position.
             pub(crate) fn phase(&self) -> SourcePhase;
             /// Point-in-time readiness for a specific byte range.
@@ -193,8 +201,18 @@ pub(crate) type DecoderFactory<T> =
 pub(crate) struct StreamAudioSource<T: StreamType> {
     /// Decoder + `base_offset` + `media_info` as an atomic unit.
     pub(crate) session: DecoderSession,
-    /// Cached timeline for lock-free flushing checks.
-    pub(crate) timeline: Timeline,
+    /// Narrow mutating playhead handle — committed position and total duration.
+    playhead: Arc<dyn PlayheadWrite>,
+    /// Narrow seek-control handle — begin / complete / clear-pending.
+    seek: Arc<dyn SeekControl>,
+    /// Narrow seek-observe handle — read seek state without mutation.
+    seek_obs: Arc<dyn SeekObserve>,
+    /// Narrow activity handle — set/query the `PLAYING` flag.
+    activity: Arc<dyn Activity>,
+    /// Timeline clone kept solely for the `AudioWorkerSource::timeline()`
+    /// accessor consumed by `DecoderNode` (Phase 2.3). All FSM logic uses
+    /// the narrow handles above; this field is never written through.
+    node_tl: Timeline,
     /// Explicit FSM state — single source of truth for track phase.
     pub(crate) state: CurrentFsm,
     epoch: Arc<AtomicU64>,
@@ -257,7 +275,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         effects: Vec<Box<dyn AudioEffect>>,
         gapless_mode: GaplessMode,
     ) -> Self {
-        let timeline = shared_stream.timeline();
+        let node_tl = shared_stream.timeline();
+        let playhead = shared_stream.playhead_write();
+        let seek = shared_stream.seek_control();
+        let seek_obs = shared_stream.seek_observe();
+        let activity = shared_stream.activity();
         let peer_wake = shared_stream.peer_wake();
         let gapless =
             GaplessStage::build(decoder.as_ref(), gapless_mode, initial_media_info.as_ref());
@@ -265,9 +287,9 @@ impl<T: StreamType> StreamAudioSource<T> {
             decoder,
             base_offset: 0,
             media_info: initial_media_info,
-            installed_at_seek_epoch: timeline.seek_epoch(),
+            installed_at_seek_epoch: seek_obs.epoch(),
         };
-        timeline.set_playing(true);
+        activity.set_playing(true);
         Self {
             shared_stream,
             session,
@@ -275,7 +297,11 @@ impl<T: StreamType> StreamAudioSource<T> {
             epoch,
             effects,
             eof_drain_queue: None,
-            timeline,
+            playhead,
+            seek,
+            seek_obs,
+            activity,
+            node_tl,
             gapless_mode,
             gapless,
             peer_wake,
@@ -499,7 +525,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             attempt = request.attempt,
             stream_pos,
             ?segment_range,
-            committed_position = ?self.timeline.committed_position(),
+            committed_position = ?self.playhead.position(),
             variant = ?self
                 .shared_stream
                 .abr_handle()
@@ -632,7 +658,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             anchor_byte_offset = anchor.byte_offset,
             anchor_variant = ?anchor.variant_index,
             stream_pos = self.shared_stream.position(),
-            committed_position = ?self.timeline.committed_position(),
+            committed_position = ?self.playhead.position(),
             variant = ?self
                 .shared_stream
                 .abr_handle()
@@ -696,7 +722,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             source_bytes: 0,
             source_byte_offset: applied_landed_byte,
         };
-        self.timeline.commit_seek_landed(&pos);
+        self.playhead.land(&pos);
         if let Some(byte) = applied_landed_byte {
             self.shared_stream.set_position(byte);
         }
@@ -817,9 +843,8 @@ impl<T: StreamType> StreamAudioSource<T> {
     #[kithara::probe]
     fn detect_format_change(&self) -> FormatChangeDetection {
         // NOTE: seek-epoch suppression (see README "Decoder recreate policy").
-        let timeline = self.shared_stream.timeline();
-        if timeline.is_seek_pending()
-            && self.session.installed_at_seek_epoch == timeline.seek_epoch()
+        if self.seek_obs.is_pending()
+            && self.session.installed_at_seek_epoch == self.seek_obs.epoch()
         {
             return FormatChangeDetection::NoChange;
         }
@@ -945,7 +970,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             base_offset,
             decoder: new_decoder,
             media_info: Some(new_info.clone()),
-            installed_at_seek_epoch: self.shared_stream.timeline().seek_epoch(),
+            installed_at_seek_epoch: self.seek_obs.epoch(),
         };
         debug!(?new_duration, base_offset, "Decoder recreated successfully");
         self.emit_event(AudioEvent::DecoderReady {
@@ -1009,14 +1034,14 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// below re-validates against `Timeline`.
     #[inline]
     fn preempt_seek_target(&self) -> Option<Duration> {
-        if !self.timeline.did_take_seek_preempt() {
+        if !self.seek_obs.take_preempt() {
             return None;
         }
-        let timeline_epoch = self.timeline.seek_epoch();
+        let timeline_epoch = self.seek_obs.epoch();
         if timeline_epoch <= self.epoch.load(Ordering::Acquire) {
             return None;
         }
-        let target = self.timeline.seek_target()?;
+        let target = self.seek_obs.target()?;
         if self.state.is_terminal() {
             return None;
         }
@@ -1219,7 +1244,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             attempt,
             next = ?std::mem::discriminant(&next),
             ?pending_seek_target,
-            committed_position = ?self.timeline.committed_position(),
+            committed_position = ?self.playhead.position(),
             stream_pos = self.shared_stream.position(),
             "start_recreating_decoder"
         );
@@ -1279,7 +1304,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// mid-seek windows is deliberate, because the listener is still
     /// attached to this track.
     fn update_state(&mut self, new: CurrentFsm) {
-        self.timeline.set_playing(playing_for_state(&new));
+        self.activity.set_playing(playing_for_state(&new));
         self.state = new;
     }
 
@@ -1409,7 +1434,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             // seek path owns repositioning, so defer to it (`Interrupted`
             // re-runs the loop, which handles the seek) instead of failing
             // the producer on this transient ordering.
-            if self.timeline.is_seek_pending() {
+            if self.seek_obs.is_pending() {
                 return DecodeAction::Return(Err(DecodeError::Interrupted));
             }
             warn!(
@@ -1445,7 +1470,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     #[kithara::hang_watchdog]
     fn decode_next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
-            if self.timeline.is_flushing() || self.timeline.is_seek_pending() {
+            if self.seek_obs.is_flushing() || self.seek_obs.is_pending() {
                 return Err(DecodeError::Interrupted);
             }
 
@@ -1528,7 +1553,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             epoch,
             attempt = request.attempt,
             current_epoch = self.epoch.load(Ordering::Acquire),
-            timeline_seek_target = ?self.timeline.seek_target(),
+            timeline_seek_target = ?self.seek_obs.target(),
             stream_pos = self.shared_stream.position(),
             variant = ?self
                 .shared_stream
@@ -1536,8 +1561,8 @@ impl<T: StreamType> StreamAudioSource<T> {
                 .and_then(|h| h.current_variant_index()),
             "apply_seek_from_timeline: enter (TIMELINE seek picked up)"
         );
-        if self.timeline.seek_target().is_none() {
-            self.timeline.complete_seek(epoch);
+        if self.seek_obs.target().is_none() {
+            self.seek.complete(epoch);
             self.finalize_seek_pending(epoch);
             self.update_state(CurrentFsm::decoding());
             return;
@@ -1545,13 +1570,13 @@ impl<T: StreamType> StreamAudioSource<T> {
 
         let current_epoch = self.epoch.load(Ordering::Acquire);
         if epoch <= current_epoch {
-            self.timeline.complete_seek(epoch);
+            self.seek.complete(epoch);
             self.finalize_seek_pending(epoch);
             self.update_state(CurrentFsm::decoding());
             return;
         }
 
-        if let Some(duration) = self.timeline.total_duration()
+        if let Some(duration) = self.playhead.duration()
             && position >= duration
         {
             let sample_rate = self.session.decoder.spec().sample_rate.get();
@@ -1560,15 +1585,14 @@ impl<T: StreamType> StreamAudioSource<T> {
             )
             .unwrap_or(u64::MAX);
             let end_position_ns = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
-            self.timeline
-                .commit_seek_landed(&kithara_stream::ChunkPosition {
-                    end_position_ns,
-                    frame_offset: end_frame,
-                    frames: 0,
-                    source_bytes: 0,
-                    source_byte_offset: None,
-                });
-            self.timeline.complete_seek(epoch);
+            self.playhead.land(&kithara_stream::ChunkPosition {
+                end_position_ns,
+                frame_offset: end_frame,
+                frames: 0,
+                source_bytes: 0,
+                source_byte_offset: None,
+            });
+            self.seek.complete(epoch);
             self.finalize_seek_pending(epoch);
             self.epoch.store(epoch, Ordering::Release);
             self.update_state(CurrentFsm::at_eof());
@@ -1581,7 +1605,7 @@ impl<T: StreamType> StreamAudioSource<T> {
 
         let anchor_result = self.shared_stream.seek_time_anchor(position);
         self.shared_stream.clear_variant_fence();
-        self.timeline.complete_seek(epoch);
+        self.seek.complete(epoch);
         // Seek applied on the produce core: arm the peer so it re-targets
         // fetches around the new reader position. The shell flushes it.
         self.arm_peer_wake();
@@ -1620,9 +1644,9 @@ impl<T: StreamType> StreamAudioSource<T> {
             self.session.decoder.as_ref(),
             self.gapless_mode,
         );
-        let timeline_duration = self.timeline.total_duration();
+        let timeline_duration = self.playhead.duration();
         if decoder_duration > timeline_duration {
-            self.timeline.set_total_duration(decoder_duration);
+            self.playhead.set_duration(decoder_duration);
         }
         let current_epoch = self.epoch.load(Ordering::Acquire);
         let result = self.decode_next_chunk();
@@ -1677,7 +1701,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// sees `is_seek_pending() == false` and releases the ABR lock through
     /// `sync_abr_lock`.
     fn finalize_seek_pending(&self, epoch: u64) {
-        self.timeline.clear_seek_pending(epoch);
+        self.seek.clear_pending(epoch);
         self.arm_peer_wake();
     }
 
@@ -1865,7 +1889,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 offset = recreate.offset,
                 cause = ?recreate.cause,
                 next = ?recreate.next,
-                committed = ?self.timeline.committed_position(),
+                committed = ?self.playhead.position(),
                 stream_pos = self.shared_stream.position(),
                 stream_len = ?self.shared_stream.len(),
                 "execute_recreation: FormatBoundary+Decode branch enter"
@@ -1873,7 +1897,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             if let Err(e) = self.apply_format_change(&recreate.media_info, recreate.offset) {
                 return Some(Self::classify_recreate_err(&e, recreate.offset));
             }
-            let committed = self.timeline.committed_position();
+            let committed = self.playhead.position();
             let target_time = match self.resume_target {
                 Some((seek_epoch, target))
                     if seek_epoch == self.epoch.load(Ordering::Acquire) && target > committed =>
@@ -1930,7 +1954,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             target = ?request.seek.target,
             epoch = request.seek.epoch,
             attempt = request.attempt,
-            committed_position = ?self.timeline.committed_position(),
+            committed_position = ?self.playhead.position(),
             stream_pos = self.shared_stream.position(),
             "finish_apply_seek_after_recreate: enter"
         );
@@ -2048,7 +2072,7 @@ impl Track<Decoding> {
     fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
         let () = self.into_inner();
         if !src.source_is_ready() {
-            if !src.timeline.is_seek_pending()
+            if !src.seek_obs.is_pending()
                 && let FormatChangeDetection::Applicable {
                     target: new_info,
                     target_offset,
@@ -2185,7 +2209,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
             self.update_state(CurrentFsm::seek_requested(SeekRequest {
                 seek: SeekContext {
                     target,
-                    epoch: self.timeline.seek_epoch(),
+                    epoch: self.seek_obs.epoch(),
                 },
                 ..Default::default()
             }));
@@ -2218,7 +2242,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
     }
 
     fn timeline(&self) -> &Timeline {
-        &self.timeline
+        &self.node_tl
     }
 
     fn flush_deferred(&mut self) {

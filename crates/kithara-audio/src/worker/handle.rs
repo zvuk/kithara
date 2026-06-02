@@ -118,7 +118,7 @@ mod tests {
         thread::sleep as thread_sleep,
         time::{Instant, timeout as platform_timeout},
     };
-    use kithara_stream::Timeline;
+    use kithara_stream::{SeekControl, SeekObserve, Timeline};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -130,6 +130,8 @@ mod tests {
 
     struct MockSource {
         timeline: Timeline,
+        seek: Arc<dyn SeekControl>,
+        seek_obs: Arc<dyn SeekObserve>,
         ready: bool,
         should_panic: bool,
         chunks_to_produce: usize,
@@ -138,8 +140,13 @@ mod tests {
 
     impl MockSource {
         fn new(chunks: usize) -> Self {
+            let tl = Timeline::new();
+            let seek = tl.seek_control();
+            let seek_obs = tl.seek_observe();
             Self {
-                timeline: Timeline::new(),
+                timeline: tl,
+                seek,
+                seek_obs,
                 chunks_to_produce: chunks,
                 cursor: 0,
                 ready: true,
@@ -166,10 +173,10 @@ mod tests {
         type Chunk = PcmChunk;
 
         fn step_track(&mut self) -> TrackStep<PcmChunk> {
-            if self.timeline.is_seek_pending() || self.timeline.is_flushing() {
-                let epoch = self.timeline.seek_epoch();
-                self.timeline.complete_seek(epoch);
-                self.timeline.clear_seek_pending(epoch);
+            if self.seek_obs.is_pending() || self.seek_obs.is_flushing() {
+                let epoch = self.seek_obs.epoch();
+                self.seek.complete(epoch);
+                self.seek.clear_pending(epoch);
                 return TrackStep::StateChanged;
             }
             if !self.ready {
