@@ -1,10 +1,9 @@
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
 
@@ -76,11 +75,6 @@ bitflags! {
 pub struct Timeline {
     playhead: Arc<PlayheadState>,
     seek: Arc<SeekState>,
-    /// Byte offset at the start of the most recent `Stream::read()` call.
-    /// Used by `StreamContext::segment_index()` to resolve which segment
-    /// the last-read data belongs to — `byte_position` has already advanced
-    /// past the data boundary by the time the decoder queries metadata.
-    segment_position: Arc<AtomicU64>,
 }
 
 impl Timeline {
@@ -90,7 +84,6 @@ impl Timeline {
         Self {
             playhead: Arc::new(PlayheadState::new()),
             seek: Arc::new(SeekState::new()),
-            segment_position: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -204,11 +197,6 @@ impl Timeline {
     /// does not affect the seek state.
     pub fn set_playing(&self, playing: bool) {
         self.seek.set_playing(playing);
-    }
-
-    #[kithara::probe(position)]
-    pub fn set_segment_position(&self, position: u64) {
-        self.segment_position.store(position, Ordering::Release);
     }
 
     pub fn set_total_duration(&self, duration: Option<Duration>) {

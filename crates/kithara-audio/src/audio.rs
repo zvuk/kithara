@@ -824,10 +824,9 @@ where
         let stream = Self::create_stream_with_probe(stream_config, byte_pool.clone()).await?;
 
         let initial_byte_len = stream.len().unwrap_or(0);
-        let tl = stream.timeline();
-        let playhead = tl.playhead_write();
-        let seek = tl.seek_control();
-        let seek_obs = tl.seek_observe();
+        let playhead = stream.playhead_write();
+        let seek = stream.seek_control();
+        let seek_obs = stream.seek_observe();
         let initial_media_info =
             merge_user_and_stream_media_info(user_media_info, stream.media_info());
         debug!(?initial_media_info, "Initial MediaInfo from stream");

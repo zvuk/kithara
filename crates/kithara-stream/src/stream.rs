@@ -161,7 +161,7 @@ impl fmt::Display for VariantChangeError {
 impl StdError for VariantChangeError {}
 
 use crate::{
-    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor, Timeline,
+    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor,
     error::{SourceError, StreamError, StreamResult},
     playhead::PlayheadWrite,
     seek_state::{Activity, SeekControl, SeekObserve},
@@ -252,11 +252,6 @@ impl<T: StreamType> Stream<T> {
     /// Get shared reference to inner source.
     pub fn source(&self) -> &T::Source {
         &self.source
-    }
-
-    /// Get stream timeline.
-    pub fn timeline(&self) -> Timeline {
-        self.source.timeline()
     }
 
     /// Narrow mutating playhead handle — position + duration.
@@ -432,9 +427,9 @@ impl<T: StreamType> Stream<T> {
         }
 
         let variant_control = self.source.variant_control();
+        let seek_obs = self.source.seek_observe();
         loop {
-            let timeline = self.source.timeline();
-            let read_epoch = timeline.seek_epoch();
+            let read_epoch = seek_obs.epoch();
             let pos = self.source.position();
             let range = pos..pos.saturating_add(buf.len() as u64);
 
@@ -451,7 +446,7 @@ impl<T: StreamType> Stream<T> {
             let wait_outcome = match wait_result {
                 Ok(outcome) => outcome,
                 Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
-                    if timeline.is_flushing() || timeline.seek_epoch() != read_epoch {
+                    if seek_obs.is_flushing() || seek_obs.epoch() != read_epoch {
                         return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
                     return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
@@ -468,7 +463,7 @@ impl<T: StreamType> Stream<T> {
                     return Ok(StreamReadOutcome::Eof { byte_position: pos });
                 }
                 WaitOutcome::Interrupted => {
-                    if timeline.is_flushing() {
+                    if seek_obs.is_flushing() {
                         return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
                     return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
@@ -477,7 +472,7 @@ impl<T: StreamType> Stream<T> {
                 }
             }
 
-            if timeline.seek_epoch() != read_epoch {
+            if seek_obs.epoch() != read_epoch {
                 return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
             }
 
@@ -487,11 +482,10 @@ impl<T: StreamType> Stream<T> {
                 .map_err(|e| StreamReadError::Source(IoError::other(e.to_string())))?
             {
                 ReadOutcome::Bytes(count) => {
-                    if timeline.seek_epoch() != read_epoch {
+                    if seek_obs.epoch() != read_epoch {
                         return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
                     hang_reset!();
-                    timeline.set_segment_position(pos);
                     self.source.advance(count.get() as u64);
                     let new_pos = self.source.position();
                     return Ok(StreamReadOutcome::Bytes {
@@ -688,15 +682,15 @@ impl<T: StreamType> Stream<T> {
         let pos = self.source.position();
         let len = self.source.len();
         let phase = self.source.phase_at(pos..pos.saturating_add(want as u64));
-        let timeline = self.source.timeline();
+        let seek_obs = self.source.seek_observe();
         StreamPending {
             reason,
             pos,
             want,
             len,
             phase,
-            epoch: timeline.seek_epoch(),
-            flushing: timeline.is_flushing(),
+            epoch: seek_obs.epoch(),
+            flushing: seek_obs.is_flushing(),
             variant_fence: self
                 .source
                 .variant_control()
@@ -755,7 +749,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{ReadOutcome, Source, SourcePhase};
+    use crate::{ReadOutcome, Source, SourcePhase, Timeline};
 
     /// Test helper — script entry that maps to either `Bytes(N)` (with
     /// the source slicing actual `data`) or a terminal `Eof`. Pending
