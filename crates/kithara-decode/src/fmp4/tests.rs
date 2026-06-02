@@ -9,7 +9,7 @@ use std::{
 
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_platform::time::Duration;
-use kithara_stream::{SegmentDescriptor, SegmentLayout};
+use kithara_stream::{ByteMap, SegmentDescriptor};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -59,7 +59,7 @@ struct FakeSegmented {
     init_range: Range<u64>,
 }
 
-impl SegmentLayout for FakeSegmented {
+impl ByteMap for FakeSegmented {
     fn init_segment_range(&self) -> Range<u64> {
         self.init_range.clone()
     }
@@ -155,7 +155,7 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
         reads: Arc::clone(&reads),
         record: Arc::clone(&record),
     });
-    let layout: Arc<dyn SegmentLayout> = Arc::new(segmented);
+    let layout: Arc<dyn ByteMap> = Arc::new(segmented);
     let demuxer =
         Fmp4SegmentDemuxer::open(source, layout, BytePool::default()).expect("BUG: build demuxer");
     let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
@@ -230,7 +230,7 @@ fn red_open_always_starts_at_layout_seg_0() {
 }
 
 /// RED scaffold (cursor freshness): `SegmentCursor::read.byte_range` is
-/// frozen at `ensure_cursor`/`seek` time. If `SegmentLayout` updates the
+/// frozen at `ensure_cursor`/`seek` time. If `ByteMap` updates the
 /// descriptor before `fill_segment_buffer` (HEAD estimate → committed size,
 /// or pre- → post-DRM), the cursor fills against the stale range and
 /// `parse_segment_frames` panics ("sample byte range past segment end").
@@ -373,7 +373,7 @@ fn build_test_layout_flac(num_segments: usize) -> (Vec<u8>, FakeSegmented) {
 fn seek_emits_notneeded_for_first_segment_flac() {
     let (blob, segmented) = build_test_layout_flac(3);
     let source: BoxedSource = Box::new(Cursor::new(blob));
-    let layout: Arc<dyn SegmentLayout> = Arc::new(segmented);
+    let layout: Arc<dyn ByteMap> = Arc::new(segmented);
     let mut demuxer = Fmp4SegmentDemuxer::open(source, layout, BytePool::default())
         .expect("BUG: build FLAC demuxer");
 

@@ -244,7 +244,8 @@ impl<T: StreamType> Stream<T> {
         position: Duration,
     ) -> Result<Option<SourceSeekAnchor>, io::Error> {
         self.source
-            .seek_time_anchor(position)
+            .byte_map()
+            .map_or(Ok(None), |m| m.anchor_at_time(position))
             .map_err(|e| IoError::other(e.to_string()))
     }
 
@@ -320,8 +321,8 @@ impl<T: StreamType> Stream<T> {
             pub fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>);
             /// Build a fresh reader-side event-sink instance from the inner source.
             pub fn take_reader_event_sink(&mut self) -> Option<crate::BoxedEventSink>;
-            /// Optional segment-layout handle for segment-aware decoders.
-            pub fn as_segment_layout(&self) -> Option<Arc<dyn crate::SegmentLayout>>;
+            /// Optional byte-map handle for segment-aware decoders.
+            pub fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>>;
             /// Absolute byte-position set — used by [`Stream::seek`] callers
             /// and audio FSM landings. Forwards to the source's atomic cursor.
             pub fn set_position(&self, pos: u64);
@@ -818,11 +819,11 @@ mod tests {
             }
         }
 
-        fn seek_time_anchor(
-            &mut self,
-            _position: Duration,
-        ) -> crate::StreamResult<Option<SourceSeekAnchor>> {
-            Ok(self.anchor)
+        fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>> {
+            Some(Arc::new(ScriptByteMap {
+                anchor: self.anchor,
+                len: self.data.len() as u64,
+            }))
         }
 
         fn set_position(&self, pos: u64) {
@@ -843,6 +844,40 @@ mod tests {
 
         fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
             self.peer_wake.clone()
+        }
+    }
+
+    struct ScriptByteMap {
+        anchor: Option<SourceSeekAnchor>,
+        len: u64,
+    }
+
+    impl crate::ByteMap for ScriptByteMap {
+        fn anchor_at_time(
+            &self,
+            _position: Duration,
+        ) -> crate::StreamResult<Option<SourceSeekAnchor>> {
+            Ok(self.anchor)
+        }
+
+        fn init_segment_range(&self) -> Range<u64> {
+            0..0
+        }
+
+        fn len(&self) -> Option<u64> {
+            Some(self.len)
+        }
+
+        fn segment_after_byte(&self, _byte_offset: u64) -> Option<crate::SegmentDescriptor> {
+            None
+        }
+
+        fn segment_at_time(&self, _t: Duration) -> Option<crate::SegmentDescriptor> {
+            None
+        }
+
+        fn segment_count(&self) -> Option<u32> {
+            None
         }
     }
 

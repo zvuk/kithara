@@ -166,7 +166,7 @@ impl FileInner {
     }
 
     /// Lock-free FSM transition. The one-shot fragmented-mp4 parse runs
-    /// on the `Complete` edge so the hot-path `as_segment_layout` audit
+    /// on the `Complete` edge so the hot-path `byte_map` audit
     /// can short-circuit on `segment_index.get()` without re-reading the
     /// file each tick.
     pub(crate) fn set_phase(&self, phase: FilePhase) {
@@ -179,7 +179,7 @@ impl FileInner {
     /// One-shot fragmented-mp4 parse from the fully cached file bytes.
     /// Idempotent: a second call is a `OnceLock::get` fast-path no-op.
     /// Called from `set_phase(Complete)` (and from `new` for files
-    /// constructed already-complete) so the hot-path `as_segment_layout`
+    /// constructed already-complete) so the hot-path `byte_map`
     /// audit only ever reads the cached result.
     fn try_build_segment_index(&self) {
         if self.segment_index.get().is_some() {

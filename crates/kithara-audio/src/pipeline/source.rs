@@ -75,10 +75,10 @@ impl<T: StreamType> SharedStream<T> {
             fn commit_seek_landing(&self, anchor: Option<SourceSeekAnchor>);
             /// Build a fresh reader-side event-sink instance from the inner source.
             pub(crate) fn take_reader_event_sink(&self) -> Option<kithara_stream::BoxedEventSink>;
-            /// Pull a clone of the optional segment-layout handle from the
+            /// Pull a clone of the optional byte-map handle from the
             /// inner source. Used by the decoder factory to activate the
             /// segment-by-segment fMP4 path on HLS.
-            pub(crate) fn as_segment_layout(&self) -> Option<Arc<dyn kithara_stream::SegmentLayout>>;
+            pub(crate) fn byte_map(&self) -> Option<Arc<dyn kithara_stream::ByteMap>>;
             /// Narrow mutating playhead handle.
             pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
             /// Narrow seek-control handle.
@@ -1734,7 +1734,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn seek_landing_end(&self, byte: u64) -> u64 {
         let segment_end = self
             .shared_stream
-            .as_segment_layout()
+            .byte_map()
             .and_then(|layout| layout.segment_at_byte(byte))
             .map(|seg| seg.byte_range.end);
         let end = segment_end.unwrap_or_else(|| self.boundary_end(byte));
@@ -1748,7 +1748,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let lookahead_end = pos.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES);
         let check_end = self
             .shared_stream
-            .as_segment_layout()
+            .byte_map()
             .and_then(|layout| layout.segment_after_byte(pos))
             .map_or(lookahead_end, |next| {
                 next.byte_range.start.min(lookahead_end)

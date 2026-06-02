@@ -986,7 +986,7 @@ where
                 .pcm_pool(factory_pool.clone())
                 .byte_pool(factory_byte_pool.clone())
                 .epoch(factory_epoch.load(Ordering::Acquire))
-                .maybe_segment_layout(stream.as_segment_layout())
+                .maybe_byte_map(stream.byte_map())
                 .maybe_hooks(stream.take_reader_event_sink())
                 .build();
             let source = OffsetReader::new(stream.clone(), base_offset);
@@ -1028,7 +1028,7 @@ where
             .byte_len_handle(byte_len_handle)
             .pcm_pool(pcm_pool)
             .byte_pool(byte_pool)
-            .maybe_segment_layout(shared_stream.as_segment_layout())
+            .maybe_byte_map(shared_stream.byte_map())
             .maybe_hooks(shared_stream.take_reader_event_sink())
             .maybe_hint(hint.clone())
             .build();

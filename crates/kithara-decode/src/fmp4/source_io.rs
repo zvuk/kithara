@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_bufpool::PooledOwned;
-use kithara_stream::{PendingReason, SegmentLayout, StreamReadError};
+use kithara_stream::{ByteMap, PendingReason, StreamReadError};
 
 use crate::{
     error::{DecodeError, DecodeResult},
@@ -99,15 +99,15 @@ impl SegmentReadState {
 
 /// Which range in the live layout to re-resolve `state.range` against
 /// on each iteration. Init reads (no `segment_index`) must re-query
-/// [`SegmentLayout::init_segment_range`] because the post-decrypt init
+/// [`ByteMap::init_segment_range`] because the post-decrypt init
 /// size on DRM streams can shrink between cursor setup and the actual
 /// read (PKCS7 padding strips up to 16 bytes off the encrypted estimate).
-/// Media reads must re-query [`SegmentLayout::segment_at_index`] for the
+/// Media reads must re-query [`ByteMap::segment_at_index`] for the
 /// same reason on individual segment sizes.
 #[derive(Clone, Copy)]
 pub(crate) enum LiveRange<'a> {
-    Init(&'a dyn SegmentLayout),
-    Segment(&'a dyn SegmentLayout, u32),
+    Init(&'a dyn ByteMap),
+    Segment(&'a dyn ByteMap, u32),
 }
 
 impl<'a> LiveRange<'a> {
@@ -231,7 +231,7 @@ mod tests {
         segments: Vec<Range<u64>>,
     }
 
-    impl SegmentLayout for FixedLayout {
+    impl ByteMap for FixedLayout {
         fn init_segment_range(&self) -> Range<u64> {
             0..0
         }

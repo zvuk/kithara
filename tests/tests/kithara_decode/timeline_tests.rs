@@ -135,7 +135,7 @@ mod hls_timeline {
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
         let decoder_config = DecoderConfig::builder()
             .hint("wav".to_string())
-            .maybe_segment_layout(stream.as_segment_layout())
+            .maybe_byte_map(stream.byte_map())
             .build();
 
         let result = tokio::task::spawn_blocking(move || {

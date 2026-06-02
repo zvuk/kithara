@@ -19,8 +19,8 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ContainerFormat, MediaInfo, PendingReason, PlayheadRead, ReadOutcome, SeekObserve,
-    SegmentDescriptor, SegmentLayout, SourcePhase, SourceSeekAnchor, StreamResult, Timeline,
+    ByteMap, ContainerFormat, MediaInfo, PendingReason, PlayheadRead, ReadOutcome, SeekObserve,
+    SegmentDescriptor, SourcePhase, SourceSeekAnchor, StreamResult, Timeline,
 };
 use kithara_test_utils::kithara;
 use tracing::info;
@@ -481,10 +481,14 @@ impl HlsCoord {
     }
 }
 
-/// `SegmentLayout` delegates to whichever variant is currently active —
+/// `ByteMap` delegates to whichever variant is currently active —
 /// `HlsCoord` already owns the variants and the active index, so we
 /// implement the trait here instead of a separate view wrapper.
-impl SegmentLayout for HlsCoord {
+impl ByteMap for HlsCoord {
+    fn anchor_at_time(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
+        self.seek_time_anchor(position)
+    }
+
     fn init_segment_range(&self) -> Range<u64> {
         self.active().map(|v| v.init_byte_range()).unwrap_or(0..0)
     }

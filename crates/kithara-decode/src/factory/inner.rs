@@ -5,7 +5,7 @@ use std::{
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_stream::{AudioCodec, BoxedEventSink, ContainerFormat, MediaInfo, SegmentLayout};
+use kithara_stream::{AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo};
 
 use super::probe::{
     ProbeHint, codec_from_mp4_fourcc, container_from_extension, probe_codec,
@@ -114,8 +114,8 @@ pub struct DecoderConfig {
     /// PCM buffer pool, propagated from the host. `None` falls back to
     /// `PcmPool::default()`.
     pub pcm_pool: Option<PcmPool>,
-    /// Optional segment-layout handle over the underlying source.
-    pub segment_layout: Option<Arc<dyn SegmentLayout>>,
+    /// Optional byte-map handle over the underlying source.
+    pub byte_map: Option<Arc<dyn ByteMap>>,
     /// Enable gapless trim wiring through the per-backend codec.
     #[builder(default = true)]
     pub gapless: bool,
@@ -252,7 +252,7 @@ fn create_apple(
     use crate::apple::AppleCodec;
 
     if should_use_segment_aware(codec, container, &config)
-        && let Some(layout) = config.segment_layout.clone()
+        && let Some(layout) = config.byte_map.clone()
     {
         if AppleCodec::supports(codec) {
             tracing::debug!(
@@ -344,7 +344,7 @@ fn create_android(
     use crate::android::AndroidCodec;
 
     if should_use_segment_aware(codec, container, &config)
-        && let Some(layout) = config.segment_layout.clone()
+        && let Some(layout) = config.byte_map.clone()
     {
         if AndroidCodec::supports(codec) {
             tracing::debug!(
@@ -440,7 +440,7 @@ fn create_symphonia(
     config: DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     if should_use_segment_aware(codec, container, &config)
-        && let Some(layout) = config.segment_layout.clone()
+        && let Some(layout) = config.byte_map.clone()
     {
         return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
@@ -478,7 +478,7 @@ fn create_file_symphonia_universal(
         config.hint.clone(),
         container,
         config.byte_len_handle.clone(),
-        config.segment_layout.clone(),
+        config.byte_map.clone(),
     )?;
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
@@ -520,14 +520,14 @@ fn should_use_segment_aware(
         codec,
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac
     ) && matches!(container, Some(ContainerFormat::Fmp4))
-        && config.segment_layout.is_some()
+        && config.byte_map.is_some()
 }
 
 #[cfg(feature = "symphonia")]
 fn create_fmp4_segment_symphonia(
     source: BoxedSource,
     codec: AudioCodec,
-    layout: Arc<dyn SegmentLayout>,
+    layout: Arc<dyn ByteMap>,
     config: DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::symphonia::{SymphoniaCodec, SymphoniaConfig};
@@ -556,7 +556,7 @@ fn create_fmp4_segment_symphonia(
 /// single closure that opens the codec from `TrackInfo`.
 fn build_fmp4_segment_decoder<C, F>(
     source: BoxedSource,
-    layout: Arc<dyn SegmentLayout>,
+    layout: Arc<dyn ByteMap>,
     config: DecoderConfig,
     open_codec: F,
 ) -> DecodeResult<Box<dyn Decoder>>

@@ -933,7 +933,7 @@ impl HlsVariant {
     /// question lives in the *caller* (e.g. `init_descriptor_at`) which
     /// combines this with `served_from()` — keeping virtual-space
     /// concerns out of a per-variant primitive avoids silently dropping
-    /// post-commit inits at the `SegmentLayout` boundary.
+    /// post-commit inits at the `ByteMap` boundary.
     #[kithara::probe(variant = self.variant as u64, size = self.init_size())]
     pub(crate) fn init_byte_range(&self) -> Range<u64> {
         0..self.init_size()

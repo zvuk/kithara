@@ -7,8 +7,8 @@ use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    BoxedEventSink, DeferredWake, MediaInfo, ReadOutcome, SegmentLayout, Source, SourcePhase,
-    SourceSeekAnchor, StreamResult, Timeline,
+    BoxedEventSink, ByteMap, DeferredWake, MediaInfo, ReadOutcome, Source, SourcePhase,
+    StreamResult, Timeline,
 };
 
 use crate::{
@@ -87,8 +87,8 @@ impl Source for HlsSource {
         self.peer_handle.as_ref().map(|h| h.abr().clone())
     }
 
-    fn as_segment_layout(&self) -> Option<Arc<dyn SegmentLayout>> {
-        Some(Arc::clone(&self.coord) as Arc<dyn SegmentLayout>)
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
     }
 
     fn current_variant(&self) -> Option<kithara_events::VariantInfo> {
@@ -127,10 +127,6 @@ impl Source for HlsSource {
                 range: Range<u64>,
                 timeout: Option<Duration>,
             ) -> StreamResult<WaitOutcome>;
-            fn seek_time_anchor(
-                &mut self,
-                position: Duration,
-            ) -> StreamResult<Option<SourceSeekAnchor>>;
             fn clear_variant_fence(&mut self);
             fn has_variant_change_pending(&self) -> bool;
         }

@@ -31,8 +31,8 @@ pub use playhead::{PlayheadRead, PlayheadWrite};
 pub use preroll::PrerollHint;
 pub use seek_state::{Activity, SeekControl, SeekObserve};
 pub use source::{
-    NotReadyCause, PendingReason, ReadOutcome, SegmentDescriptor, SegmentLayout, Source,
-    SourcePhase, SourceSeekAnchor,
+    ByteMap, NotReadyCause, PendingReason, ReadOutcome, SegmentDescriptor, Source, SourcePhase,
+    SourceSeekAnchor,
 };
 pub use stream::{
     Stream, StreamPending, StreamReadError, StreamReadOutcome, StreamSeekPastEof, StreamType,

@@ -208,7 +208,7 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// open to grab a lock-free, Arc-shareable view over the segment
     /// table — independent of the byte cursor passed to the decoder
     /// through `Read + Seek`. Default `None` for non-segmented sources.
-    fn as_segment_layout(&self) -> Option<Arc<dyn SegmentLayout>> {
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
         None
     }
 
@@ -229,7 +229,7 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// Current segment byte range (HLS-only).
     ///
     /// Transitional — removed in Plan 06 once the audio FSM consumes
-    /// segment boundaries through [`SegmentLayout`].
+    /// segment boundaries through [`ByteMap`].
     fn current_segment_range(&self) -> Option<Range<u64>> {
         None
     }
@@ -346,21 +346,6 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// Returns an error if the read fails or the source is in an invalid state.
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome>;
 
-    /// Resolve `position` to a source-specific seek anchor.
-    ///
-    /// Segmented sources (HLS) should map time to a deterministic segment
-    /// boundary and byte offset. Non-segmented sources return `Ok(None)`.
-    ///
-    /// The caller is expected to set stream position to `byte_offset` and
-    /// perform decoder reset/recreation using this anchor.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the source cannot resolve the anchor.
-    fn seek_time_anchor(&mut self, _position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
-        Ok(None)
-    }
-
     /// Absolute set of the byte cursor — used by [`Stream::seek`] and
     /// post-seek landings. Sources implement this via the same atomic
     /// cursor that backs [`Self::position`] / [`Self::advance`].
@@ -443,8 +428,18 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
 /// `segment_at_time`, `segment_after_byte`, `segment_count`, and total
 /// `len`. Has no I/O surface: the byte cursor is the decoder's
 /// `Read + Seek` handle, queried independently. Sources that aren't
-/// segment-aware return `None` from [`Source::as_segment_layout`].
-pub trait SegmentLayout: Send + Sync + 'static {
+/// segment-aware return `None` from [`Source::byte_map`].
+pub trait ByteMap: Send + Sync + 'static {
+    /// Resolve `position` to a source-specific seek anchor (segment
+    /// boundary + byte offset). Non-segmented / non-anchoring layouts
+    /// keep the default `Ok(None)`.
+    ///
+    /// # Errors
+    /// Returns an error when the layout cannot resolve the anchor.
+    fn anchor_at_time(&self, _position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
+        Ok(None)
+    }
+
     /// Init segment range (e.g. ftyp+moov from `EXT-X-MAP`) for the
     /// current layout variant. Returns an **empty** range (`0..0`) when
     /// the layout has no init segment (raw TS/AAC/MPEG-ES) or when the

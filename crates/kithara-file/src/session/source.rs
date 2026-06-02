@@ -107,9 +107,9 @@ impl kithara_stream::Source for FileSource {
         self.coord.advance_position(n);
     }
 
-    fn as_segment_layout(&self) -> Option<Arc<dyn kithara_stream::SegmentLayout>> {
+    fn byte_map(&self) -> Option<Arc<dyn kithara_stream::ByteMap>> {
         self.inner.segment_index.get()?;
-        Some(Arc::new(FileSegmentLayout {
+        Some(Arc::new(FileByteMap {
             inner: Arc::clone(&self.inner),
         }))
     }
@@ -220,22 +220,22 @@ impl kithara_stream::Source for FileSource {
     }
 }
 
-/// Segment-layout handle for a fully cached fragmented-mp4 file.
+/// Byte-map handle for a fully cached fragmented-mp4 file.
 ///
 /// Holds a clone of `FileInner` so the layout survives independently of
 /// the original `FileSource` cursor; segment queries hit the lazy
 /// `OnceLock<FileSegmentIndex>` populated on first call.
-struct FileSegmentLayout {
+struct FileByteMap {
     inner: Arc<FileInner>,
 }
 
-impl FileSegmentLayout {
+impl FileByteMap {
     fn segment_index(&self) -> Option<&FileSegmentIndex> {
         self.inner.segment_index.get()
     }
 }
 
-impl kithara_stream::SegmentLayout for FileSegmentLayout {
+impl kithara_stream::ByteMap for FileByteMap {
     fn init_segment_range(&self) -> Range<u64> {
         self.segment_index()
             .map(FileSegmentIndex::init_range)

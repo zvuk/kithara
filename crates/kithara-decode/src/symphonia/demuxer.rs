@@ -54,7 +54,7 @@ pub(crate) struct SymphoniaDemuxer {
     /// Replaced (and the previous packet dropped) on every successful
     /// `next_frame` call.
     current_packet: Option<symphonia::core::packet::Packet>,
-    segment_layout: Option<Arc<dyn kithara_stream::SegmentLayout>>,
+    byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
     /// Time base used to translate packet timestamps into wall-clock
     /// [`std::time::Duration`].
     time_base: Option<TimeBase>,
@@ -92,7 +92,7 @@ impl SymphoniaDemuxer {
     pub(crate) fn from_reader_with_layout(
         format_reader: Box<dyn FormatReader>,
         byte_pos_handle: Option<Arc<AtomicU64>>,
-        segment_layout: Option<Arc<dyn kithara_stream::SegmentLayout>>,
+        byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
     ) -> DecodeResult<Self> {
         let track = format_reader
             .default_track(TrackType::Audio)
@@ -112,7 +112,7 @@ impl SymphoniaDemuxer {
             native_params,
             time_base,
             byte_pos_handle,
-            segment_layout,
+            byte_map,
             current_packet: None,
         })
     }
@@ -145,7 +145,7 @@ impl SymphoniaDemuxer {
         hint: Option<String>,
         container: Option<ContainerFormat>,
         byte_len_handle: Option<Arc<AtomicU64>>,
-        segment_layout: Option<Arc<dyn kithara_stream::SegmentLayout>>,
+        byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
     ) -> DecodeResult<(Self, Arc<AtomicU64>)>
     where
         R: Read + Seek + Send + Sync + 'static,
@@ -165,7 +165,7 @@ impl SymphoniaDemuxer {
         let demuxer = Self::from_reader_with_layout(
             bootstrap.format_reader,
             Some(bootstrap.byte_pos_handle),
-            segment_layout,
+            byte_map,
         )?;
         Ok((demuxer, len_handle))
     }
@@ -184,7 +184,7 @@ impl SymphoniaDemuxer {
 impl Demuxer for SymphoniaDemuxer {
     fn current_segment_index(&self) -> Option<u32> {
         let byte = self.current_byte()?;
-        self.segment_layout
+        self.byte_map
             .as_ref()?
             .segment_at_byte(byte.saturating_sub(1))
             .map(|d| d.segment_index)
@@ -192,7 +192,7 @@ impl Demuxer for SymphoniaDemuxer {
 
     fn current_variant_index(&self) -> Option<usize> {
         let byte = self.current_byte()?;
-        self.segment_layout
+        self.byte_map
             .as_ref()?
             .segment_at_byte(byte.saturating_sub(1))
             .map(|d| d.variant_index)
