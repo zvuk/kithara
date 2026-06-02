@@ -293,13 +293,8 @@ impl<T: StreamType> Stream<T> {
             pub fn media_info(&self) -> Option<MediaInfo>;
             /// Runtime ABR handle — `Some` for adaptive sources (HLS).
             pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
-            /// Current variant metadata — `Some` for adaptive sources (HLS).
-            pub fn current_variant(&self) -> Option<kithara_events::VariantInfo>;
             /// Get total length if known.
             pub fn len(&self) -> Option<u64>;
-            /// Get current segment byte range (for segmented sources like HLS).
-            /// Transitional — removed in Plan 06.
-            pub fn current_segment_range(&self) -> Option<Range<u64>>;
             /// Header byte range for decoder recreate after a format change.
             /// Transitional — removed in Plan 06.
             ///
@@ -317,8 +312,6 @@ impl<T: StreamType> Stream<T> {
             /// The reader→peer wake handle — `Some` for segmented sources (HLS)
             /// that push a downloader peer, `None` otherwise.
             pub fn peer_wake(&self) -> Option<Arc<DeferredWake>>;
-            /// Commit the actual post-seek landing after `decoder.seek(...)`.
-            pub fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>);
             /// Build a fresh reader-side event-sink instance from the inner source.
             pub fn take_reader_event_sink(&mut self) -> Option<crate::BoxedEventSink>;
             /// Optional byte-map handle for segment-aware decoders.

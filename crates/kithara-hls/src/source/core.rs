@@ -91,10 +91,6 @@ impl Source for HlsSource {
         Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
     }
 
-    fn current_variant(&self) -> Option<kithara_events::VariantInfo> {
-        self.abr_handle()?.current_variant()
-    }
-
     fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
         self.peer_wake.clone()
     }

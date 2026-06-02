@@ -67,12 +67,10 @@ impl<T: StreamType> SharedStream<T> {
             pub(crate) fn len(&self) -> Option<u64>;
             fn media_info(&self) -> Option<MediaInfo>;
             pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
-            fn current_segment_range(&self) -> Option<Range<u64>>;
             fn format_change_segment_range(&self) -> kithara_stream::StreamResult<Range<u64>>;
             pub(crate) fn clear_variant_fence(&self);
             pub(crate) fn has_variant_change_pending(&self) -> bool;
             fn seek_time_anchor(&self, position: Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
-            fn commit_seek_landing(&self, anchor: Option<SourceSeekAnchor>);
             /// Build a fresh reader-side event-sink instance from the inner source.
             pub(crate) fn take_reader_event_sink(&self) -> Option<kithara_stream::BoxedEventSink>;
             /// Pull a clone of the optional byte-map handle from the
@@ -510,13 +508,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         let epoch = request.seek.epoch;
         let position = request.seek.target;
         let stream_pos = self.shared_stream.position();
-        let segment_range = self.shared_stream.current_segment_range();
         debug!(
             ?position,
             epoch,
             attempt = request.attempt,
             stream_pos,
-            ?segment_range,
             committed_position = ?self.playhead.position(),
             variant = ?self
                 .shared_stream
@@ -535,7 +531,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 epoch,
                 target_offset,
                 current_stream_pos = stream_pos,
-                ?segment_range,
                 "seek: codec-changing format boundary pending, recreating decoder before seek"
             );
             self.start_recreating_decoder(
@@ -555,7 +550,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             ?position,
             epoch,
             stream_pos,
-            ?segment_range,
             base_offset = self.session.base_offset,
             ?stream_len,
             "seek: about to call decoder.seek()"
@@ -572,7 +566,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 },
             );
         }
-        self.shared_stream.commit_seek_landing(None);
 
         self.apply_seek_applied(epoch, position, self.seek_context(), None);
         true
@@ -673,7 +666,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             target_offset = anchor.byte_offset,
             "seek anchor path: exact decoder seek succeeded"
         );
-        self.shared_stream.commit_seek_landing(Some(anchor));
 
         self.apply_seek_applied(
             epoch,
@@ -826,12 +818,8 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// reflects what was probed and built successfully — that's the
     /// authoritative decoder type.
     ///
-    /// Two recovery anchors, picked in order:
-    /// - cross-codec: init-segment offset via `format_change_segment_range`;
-    /// - byte-shifted same-codec / non-init-bearing: current segment
-    ///   start via `current_segment_range` (decoder re-parses format
-    ///   markers from the new variant's segment boundary).
-    /// `NoChange` when neither applies.
+    /// Recovery anchor: cross-codec init-segment offset via
+    /// `format_change_segment_range`. `NoChange` when it does not apply.
     #[kithara::probe]
     fn detect_format_change(&self) -> FormatChangeDetection {
         // NOTE: seek-epoch suppression (see README "Decoder recreate policy").
@@ -848,11 +836,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         else {
             return FormatChangeDetection::NoChange;
         };
-        let range = if let Ok(init) = self.shared_stream.format_change_segment_range() {
-            init
-        } else if let Some(current) = self.shared_stream.current_segment_range() {
-            current
-        } else {
+        let Ok(range) = self.shared_stream.format_change_segment_range() else {
             return FormatChangeDetection::NoChange;
         };
         FormatChangeDetection::Applicable {
@@ -1204,14 +1188,13 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn seek_context(&self) -> SegmentLocation {
-        let segment_range = self.shared_stream.current_segment_range();
         SegmentLocation::new(
             self.shared_stream
                 .abr_handle()
                 .and_then(|h| h.current_variant_index()),
             None,
-            segment_range.as_ref().map(|range| range.start),
-            segment_range.as_ref().map(|range| range.end),
+            None,
+            None,
         )
     }
 
@@ -1648,15 +1631,14 @@ impl<T: StreamType> StreamAudioSource<T> {
                     .resume_state()
                     .is_some_and(|resume| resume.seek.epoch == current_epoch)
                 {
-                    let segment_range = self.shared_stream.current_segment_range();
                     self.emit_seek_lifecycle(
                         SeekLifecycleStage::DecodeStarted,
                         current_epoch,
                         SegmentLocation::new(
                             chunk.meta.variant_index,
                             chunk.meta.segment_index,
-                            segment_range.as_ref().map(|range| range.start),
-                            segment_range.as_ref().map(|range| range.end),
+                            None,
+                            None,
                         ),
                     );
                     self.update_state(CurrentFsm::decoding());
@@ -1952,7 +1934,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         );
         match self.decoder_seek_safe(request.seek.target) {
             Ok(_outcome) => {
-                self.shared_stream.commit_seek_landing(None);
                 self.apply_seek_applied(
                     request.seek.epoch,
                     request.seek.target,

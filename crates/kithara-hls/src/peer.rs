@@ -64,8 +64,8 @@ pub(crate) struct HlsPeer {
     wake_signal: CancellationToken,
     pending_waker: Mutex<Option<Waker>>,
     /// Single source of truth for variant metadata visible to ABR
-    /// controller via [`Abr::variants()`] and to UI/FFI via the
-    /// `Source::current_variant()` chain. Populated once by
+    /// controller via [`Abr::variants()`] and to UI/FFI via
+    /// `AbrHandle::current_variant()`. Populated once by
     /// [`Self::set_abr_variants`] after the master + media playlists
     /// have been parsed; never mutated again for the peer's lifetime.
     variants: Mutex<Vec<VariantInfo>>,

@@ -2,7 +2,6 @@
 
 use std::{error::Error as StdError, fmt, num::NonZeroUsize, ops::Range, sync::Arc};
 
-use kithara_events::VariantInfo;
 use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
@@ -217,30 +216,6 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// Called when the decoder is recreated after ABR switch.
     /// Default no-op for non-HLS sources.
     fn clear_variant_fence(&mut self) {}
-
-    /// Commit the actual post-seek landing after `decoder.seek(...)`.
-    ///
-    /// Segmented sources can use this hook to reconcile source-local state
-    /// with the authoritative landed reader position in [`Timeline`].
-    ///
-    /// Default no-op for sources that do not need post-seek reconciliation.
-    fn commit_seek_landing(&mut self, _anchor: Option<SourceSeekAnchor>) {}
-
-    /// Current segment byte range (HLS-only).
-    ///
-    /// Transitional — removed in Plan 06 once the audio FSM consumes
-    /// segment boundaries through [`ByteMap`].
-    fn current_segment_range(&self) -> Option<Range<u64>> {
-        None
-    }
-
-    /// Current variant's full metadata. Adaptive sources (HLS) return
-    /// the live `VariantInfo` for the active variant — pulled from the
-    /// peer on every call so the UI never sees a stale label. Non-adaptive
-    /// sources keep the default `None`.
-    fn current_variant(&self) -> Option<VariantInfo> {
-        None
-    }
 
     /// Byte range of the header (init segment or first served segment)
     /// the decoder must read to re-establish container state after a
