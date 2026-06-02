@@ -18,14 +18,14 @@ pub(crate) struct PlayheadState {
 }
 
 /// Read-only view of the committed playhead.
-pub(crate) trait PlayheadRead: Send + Sync {
+pub trait PlayheadRead: Send + Sync {
     fn position(&self) -> Duration;
     fn duration(&self) -> Option<Duration>;
 }
 
 /// Mutating view — the decode/produce path holds this. It is the ONLY mutator;
 /// no à-la-carte field setters to desync.
-pub(crate) trait PlayheadWrite: PlayheadRead {
+pub trait PlayheadWrite: PlayheadRead {
     /// Advance to the end of a consumed chunk (caps at total duration).
     fn advance(&self, pos: &ChunkPosition);
     /// Pin after a seek (caps at total duration).

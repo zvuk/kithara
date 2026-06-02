@@ -11,6 +11,8 @@ use crate::{
     Timeline,
     error::{SourceError, StreamError, StreamResult},
     media::MediaInfo,
+    playhead::{PlayheadRead, PlayheadWrite},
+    seek_state::{Activity, SeekControl, SeekObserve},
     wake::DeferredWake,
 };
 
@@ -388,6 +390,31 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// (reader, audio FSM, Downloader peers).
     fn timeline(&self) -> Timeline;
 
+    /// Narrow read-only handle to the playhead position and total duration.
+    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        self.timeline().playhead_arc()
+    }
+
+    /// Narrow mutating handle to the playhead — for the decode/produce path.
+    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        self.timeline().playhead_arc()
+    }
+
+    /// Narrow read-only handle to seek/flush coordination state.
+    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        self.timeline().seek_arc()
+    }
+
+    /// Narrow mutating handle to seek coordination (`FLUSH_START` / `FLUSH_STOP`).
+    fn seek_control(&self) -> Arc<dyn SeekControl> {
+        self.timeline().seek_arc()
+    }
+
+    /// Narrow handle to the playback-activity flag.
+    fn activity(&self) -> Arc<dyn Activity> {
+        self.timeline().seek_arc()
+    }
+
     /// Wait for data in range to be available.
     ///
     /// `timeout` is the maximum wait time before returning an
@@ -530,5 +557,82 @@ mod tests {
             position: Arc::new(AtomicU64::new(0)),
         };
         assert_eq!(source.phase(), SourcePhase::Ready);
+    }
+
+    /// Exercises all five narrow `Source` accessor default methods.
+    ///
+    /// Verifies that:
+    /// - `playhead_read().position()` starts at `Duration::ZERO`.
+    /// - `playhead_read().duration()` starts at `None`.
+    /// - `seek_observe().epoch()` starts at `0`.
+    /// - `seek_control().begin(t)` returns a monotonically increasing epoch
+    ///   and `seek_observe().epoch()` observes the new value.
+    /// - `activity().is_playing()` toggles correctly.
+    #[kithara::test]
+    fn narrow_source_accessors_seam() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct MinimalSource {
+            timeline: Timeline,
+            position: Arc<AtomicU64>,
+        }
+        impl Source for MinimalSource {
+            fn timeline(&self) -> Timeline {
+                self.timeline.clone()
+            }
+            fn wait_range(
+                &mut self,
+                _range: Range<u64>,
+                _timeout: Option<Duration>,
+            ) -> StreamResult<WaitOutcome> {
+                Ok(WaitOutcome::Ready)
+            }
+            fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> StreamResult<ReadOutcome> {
+                Ok(ReadOutcome::Eof)
+            }
+            fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+                SourcePhase::Waiting
+            }
+            fn len(&self) -> Option<u64> {
+                None
+            }
+            fn position(&self) -> u64 {
+                self.position.load(Ordering::Acquire)
+            }
+            fn advance(&self, n: u64) {
+                self.position.fetch_add(n, Ordering::AcqRel);
+            }
+            fn set_position(&self, pos: u64) {
+                self.position.store(pos, Ordering::Release);
+            }
+        }
+
+        let src = MinimalSource {
+            timeline: Timeline::new(),
+            position: Arc::new(AtomicU64::new(0)),
+        };
+
+        // playhead_read / playhead_write
+        assert_eq!(src.playhead_read().position(), Duration::ZERO);
+        assert_eq!(src.playhead_read().duration(), None);
+
+        // seek_observe initial state
+        assert_eq!(src.seek_observe().epoch(), 0);
+        assert!(!src.seek_observe().is_flushing());
+        assert!(src.seek_observe().target().is_none());
+
+        // seek_control.begin bumps the epoch; seek_observe sees it
+        let epoch = src.seek_control().begin(Duration::from_secs(5));
+        assert_eq!(epoch, 1);
+        assert_eq!(src.seek_observe().epoch(), 1);
+        assert_eq!(src.seek_observe().target(), Some(Duration::from_secs(5)));
+        assert!(src.seek_observe().is_flushing());
+
+        // activity toggle
+        assert!(!src.activity().is_playing());
+        src.activity().set_playing(true);
+        assert!(src.activity().is_playing());
+        src.activity().set_playing(false);
+        assert!(!src.activity().is_playing());
     }
 }

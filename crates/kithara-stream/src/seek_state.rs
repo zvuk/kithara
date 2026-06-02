@@ -11,7 +11,7 @@ use std::{
 use crate::timeline::TimelineFlags;
 
 /// Read-only observations of seek/flush coordination state.
-pub(crate) trait SeekObserve: Send + Sync {
+pub trait SeekObserve: Send + Sync {
     fn epoch(&self) -> u64;
     fn is_flushing(&self) -> bool;
     fn is_pending(&self) -> bool;
@@ -23,7 +23,7 @@ pub(crate) trait SeekObserve: Send + Sync {
 }
 
 /// Mutating seek coordination — `FLUSH_START` / `FLUSH_STOP` protocol.
-pub(crate) trait SeekControl: Send + Sync {
+pub trait SeekControl: Send + Sync {
     fn begin(&self, target: Duration) -> u64;
     fn complete(&self, epoch: u64);
     fn clear_pending(&self, epoch: u64);
@@ -31,7 +31,7 @@ pub(crate) trait SeekControl: Send + Sync {
 }
 
 /// Activity flag — whether the audio FSM has this timeline as active decode target.
-pub(crate) trait Activity: Send + Sync {
+pub trait Activity: Send + Sync {
     fn is_playing(&self) -> bool;
     fn set_playing(&self, playing: bool);
 }

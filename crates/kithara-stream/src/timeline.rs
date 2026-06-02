@@ -94,6 +94,18 @@ impl Timeline {
         }
     }
 
+    /// Vend a clone of the inner `Arc<PlayheadState>` — used by `Source`
+    /// default methods to produce typed trait-object handles.
+    pub(crate) fn playhead_arc(&self) -> Arc<PlayheadState> {
+        Arc::clone(&self.playhead)
+    }
+
+    /// Vend a clone of the inner `Arc<SeekState>` — used by `Source`
+    /// default methods to produce typed trait-object handles.
+    pub(crate) fn seek_arc(&self) -> Arc<SeekState> {
+        Arc::clone(&self.seek)
+    }
+
     /// Advance the consumer's playhead to the end of the consumed
     /// region described by `pos`. `pos.frame_offset + pos.frames`
     /// must equal the absolute frame the consumer has now finished
