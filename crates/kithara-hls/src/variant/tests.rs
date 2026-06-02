@@ -732,7 +732,7 @@ fn wait_range_flush_short_circuits_without_sleeping() {
     let timeline = Timeline::new();
     let v = make_var_with_timeline(0, 200, &[400], &ctx, timeline.clone());
 
-    let _ = timeline.initiate_seek(Duration::from_millis(10));
+    let _ = timeline.seek_control().begin(Duration::from_millis(10));
     let started = Instant::now();
     let interrupted = v.wait_range(0..1, Some(Duration::from_millis(10)));
     assert!(

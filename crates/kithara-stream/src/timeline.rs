@@ -19,7 +19,7 @@ use crate::{
 /// Decoder-reported chunk position used to advance the timeline.
 ///
 /// This struct is the kithara-stream-local mirror of the fields
-/// [`Timeline::advance_committed_chunk`] needs from a decoder's
+/// [`PlayheadWrite::advance`] needs from a decoder's
 /// per-chunk metadata. It exists because `PcmMeta` lives in
 /// `kithara-decode` (which depends on `kithara-stream`); a tiny mirror
 /// avoids the circular dep without forcing decoders to fragment their
@@ -106,20 +106,22 @@ impl Timeline {
         Arc::clone(&self.seek)
     }
 
-    /// Advance the consumer's playhead to the end of the consumed
-    /// region described by `pos`. `pos.frame_offset + pos.frames`
-    /// must equal the absolute frame the consumer has now finished
-    /// playing through; the decoder owns these numbers, callers do
-    /// not invent them.
-    ///
-    /// `committed_position_ns` (UI) is taken directly from
-    /// `pos.end_position_ns`, capped at `total_duration`. `byte_position`
-    /// is set from `pos.source_byte_offset + pos.source_bytes` when the
-    /// decoder reports absolute offsets (Apple, Android API 28+);
-    /// otherwise it is left untouched so the producer-side cursor
-    /// (`Stream::try_read` / `Stream::seek`) continues to drive it.
-    pub fn advance_committed_chunk(&self, pos: &ChunkPosition) {
-        self.write_playhead(pos, false);
+    /// Narrow mutating playhead handle vended as a trait object.
+    #[must_use]
+    pub fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+    }
+
+    /// Narrow seek-control handle vended as a trait object — begin / complete / `mark_pending`.
+    #[must_use]
+    pub fn seek_control(&self) -> Arc<dyn SeekControl> {
+        Arc::clone(&self.seek) as Arc<dyn SeekControl>
+    }
+
+    /// Narrow seek-observe handle vended as a trait object.
+    #[must_use]
+    pub fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
     }
 
     /// Clear seek-pending flag after the decoder successfully applied the seek.
@@ -138,19 +140,10 @@ impl Timeline {
     /// consumed any chunk, just repositioned). `pos.source_byte_offset`
     /// (if known) is the byte offset the decoder is now reading from.
     pub fn commit_seek_landed(&self, pos: &ChunkPosition) {
-        // Route through `write_playhead` so the `committed_ns` USDT probe
-        // fires on seek-landing too (the swallow detector consumes it),
-        // matching the pre-refactor behaviour.
-        self.write_playhead(pos, true);
-    }
-
-    #[kithara::probe(committed_ns = pos.end_position_ns)]
-    fn write_playhead(&self, pos: &ChunkPosition, landed: bool) {
-        if landed {
-            self.playhead.land(pos);
-        } else {
-            self.playhead.advance(pos);
-        }
+        // `PlayheadState::land` fires the `committed_ns` USDT probe
+        // (the swallow detector consumes it) — the probe lives on the
+        // playhead handle now that the produce path bypasses `Timeline`.
+        self.playhead.land(pos);
     }
 
     #[must_use]
@@ -168,11 +161,6 @@ impl Timeline {
     /// `initiate_seek` fires between our epoch load and flushing store.
     pub fn complete_seek(&self, epoch: u64) {
         self.seek.complete(epoch);
-    }
-
-    #[must_use]
-    pub fn did_clear_pending_seek_epoch(&self, seek_epoch: u64) -> bool {
-        self.seek.clear_pending_epoch(seek_epoch)
     }
 
     /// Consume the decoder-node seek latch with an Acquire swap.
@@ -214,21 +202,6 @@ impl Timeline {
         self.seek.remove_flags_raw(flags, order);
     }
 
-    /// Initiate a seek (`FLUSH_START`).
-    ///
-    /// Sets flushing flag, records target position, increments epoch.
-    /// All blocking reads (`wait_range`) will observe `is_flushing()` and abort.
-    ///
-    /// Returns the new seek epoch.
-    ///
-    /// # Panics
-    /// Panics if `target` overflows `u64::MAX` nanoseconds (≈584 years —
-    /// not reachable for any realistic seek target).
-    #[must_use]
-    pub fn initiate_seek(&self, target: Duration) -> u64 {
-        self.seek.begin(target)
-    }
-
     /// Check if the pipeline is being flushed (seek pending).
     #[must_use]
     pub fn is_flushing(&self) -> bool {
@@ -257,15 +230,6 @@ impl Timeline {
         self.seek.is_pending()
     }
 
-    pub fn mark_pending_seek_epoch(&self, seek_epoch: u64) {
-        self.seek.mark_pending(seek_epoch);
-    }
-
-    #[must_use]
-    pub fn pending_seek_epoch(&self) -> Option<u64> {
-        self.seek.pending_epoch()
-    }
-
     /// Read the current seek epoch.
     #[must_use]
     pub fn seek_epoch(&self) -> u64 {
@@ -282,13 +246,6 @@ impl Timeline {
     #[must_use]
     pub fn seek_target(&self) -> Option<Duration> {
         self.seek.target()
-    }
-
-    /// # Panics
-    /// Panics if `position` overflows `u64::MAX` nanoseconds (≈584 years);
-    /// no realistic media stream can hit this.
-    pub fn set_committed_position(&self, position: Duration) {
-        self.playhead.set_position(position);
     }
 
     /// Report the current download byte position. The value is not
@@ -346,7 +303,7 @@ mod tests {
         assert!(tl.seek_target().is_none());
         let initial_committed = tl.committed_position();
 
-        let epoch = tl.initiate_seek(Duration::from_secs(10));
+        let epoch = tl.seek_control().begin(Duration::from_secs(10));
         assert_eq!(epoch, 1);
         assert!(tl.is_flushing());
         assert_eq!(tl.seek_target(), Some(Duration::from_secs(10)));
@@ -357,7 +314,7 @@ mod tests {
     #[kithara::test]
     fn complete_seek_clears_flushing() {
         let tl = Timeline::new();
-        let epoch = tl.initiate_seek(Duration::from_secs(5));
+        let epoch = tl.seek_control().begin(Duration::from_secs(5));
         tl.complete_seek(epoch);
         assert!(!tl.is_flushing());
         assert_eq!(tl.seek_target(), Some(Duration::from_secs(5)));
@@ -366,8 +323,8 @@ mod tests {
     #[kithara::test]
     fn complete_seek_ignores_stale_epoch() {
         let tl = Timeline::new();
-        let epoch1 = tl.initiate_seek(Duration::from_secs(5));
-        let epoch2 = tl.initiate_seek(Duration::from_secs(10));
+        let epoch1 = tl.seek_control().begin(Duration::from_secs(5));
+        let epoch2 = tl.seek_control().begin(Duration::from_secs(10));
         tl.complete_seek(epoch1);
         assert!(tl.is_flushing());
         assert_eq!(tl.seek_target(), Some(Duration::from_secs(10)));
@@ -378,9 +335,9 @@ mod tests {
     #[kithara::test]
     fn seek_epoch_monotonically_increases() {
         let tl = Timeline::new();
-        let e1 = tl.initiate_seek(Duration::from_secs(1));
-        let e2 = tl.initiate_seek(Duration::from_secs(2));
-        let e3 = tl.initiate_seek(Duration::from_secs(3));
+        let e1 = tl.seek_control().begin(Duration::from_secs(1));
+        let e2 = tl.seek_control().begin(Duration::from_secs(2));
+        let e3 = tl.seek_control().begin(Duration::from_secs(3));
         assert_eq!(e1, 1);
         assert_eq!(e2, 2);
         assert_eq!(e3, 3);
@@ -390,8 +347,8 @@ mod tests {
     #[kithara::test]
     fn complete_seek_does_not_clobber_concurrent_target() {
         let tl = Timeline::new();
-        let epoch1 = tl.initiate_seek(Duration::from_secs(5));
-        let _epoch2 = tl.initiate_seek(Duration::from_secs(15));
+        let epoch1 = tl.seek_control().begin(Duration::from_secs(5));
+        let _epoch2 = tl.seek_control().begin(Duration::from_secs(15));
         tl.complete_seek(epoch1);
         assert!(tl.is_flushing());
         assert_eq!(tl.seek_target(), Some(Duration::from_secs(15)));
@@ -401,7 +358,7 @@ mod tests {
     fn initiate_seek_is_visible_across_clones() {
         let tl = Timeline::new();
         let clone = tl.clone();
-        let _ = tl.initiate_seek(Duration::from_secs(7));
+        let _ = tl.seek_control().begin(Duration::from_secs(7));
         assert!(clone.is_flushing());
         assert_eq!(clone.seek_target(), Some(Duration::from_secs(7)));
     }
@@ -410,15 +367,15 @@ mod tests {
     fn initiate_seek_sets_seek_pending() {
         let tl = Timeline::new();
         assert!(!tl.is_seek_pending());
-        let _epoch = tl.initiate_seek(Duration::from_secs(5));
+        let _epoch = tl.seek_control().begin(Duration::from_secs(5));
         assert!(tl.is_seek_pending());
     }
 
     #[kithara::test]
     fn clear_seek_pending_only_clears_matching_epoch() {
         let tl = Timeline::new();
-        let epoch1 = tl.initiate_seek(Duration::from_secs(5));
-        let epoch2 = tl.initiate_seek(Duration::from_secs(10));
+        let epoch1 = tl.seek_control().begin(Duration::from_secs(5));
+        let epoch2 = tl.seek_control().begin(Duration::from_secs(10));
         tl.clear_seek_pending(epoch1);
         assert!(tl.is_seek_pending());
         tl.clear_seek_pending(epoch2);
@@ -428,17 +385,17 @@ mod tests {
     #[kithara::test]
     fn new_initiate_seek_resets_seek_pending() {
         let tl = Timeline::new();
-        let epoch = tl.initiate_seek(Duration::from_secs(5));
+        let epoch = tl.seek_control().begin(Duration::from_secs(5));
         tl.clear_seek_pending(epoch);
         assert!(!tl.is_seek_pending());
-        let _epoch2 = tl.initiate_seek(Duration::from_secs(10));
+        let _epoch2 = tl.seek_control().begin(Duration::from_secs(10));
         assert!(tl.is_seek_pending());
     }
 
     #[kithara::test]
     fn complete_seek_does_not_clear_seek_pending() {
         let tl = Timeline::new();
-        let epoch = tl.initiate_seek(Duration::from_secs(5));
+        let epoch = tl.seek_control().begin(Duration::from_secs(5));
         tl.complete_seek(epoch);
         assert!(!tl.is_flushing());
         assert!(tl.is_seek_pending());
@@ -448,7 +405,7 @@ mod tests {
     fn is_seek_pending_visible_across_clones() {
         let tl = Timeline::new();
         let clone = tl.clone();
-        let _epoch = tl.initiate_seek(Duration::from_secs(5));
+        let _epoch = tl.seek_control().begin(Duration::from_secs(5));
         assert!(clone.is_seek_pending());
     }
 
@@ -460,7 +417,7 @@ mod tests {
             let want_seek_pending = mask & 2 != 0;
 
             if want_flushing || want_seek_pending {
-                let _ = tl.initiate_seek(Duration::from_secs(1));
+                let _ = tl.seek_control().begin(Duration::from_secs(1));
                 if !want_flushing {
                     tl.complete_seek(tl.seek_epoch());
                 }
@@ -493,10 +450,10 @@ mod tests {
     #[kithara::test]
     fn complete_seek_double_check_re_raises_flushing_when_newer_seek_interleaves() {
         let tl = Timeline::new();
-        let epoch1 = tl.initiate_seek(Duration::from_secs(1));
+        let epoch1 = tl.seek_control().begin(Duration::from_secs(1));
 
         tl.remove_flags_with(TimelineFlags::FLUSHING, Ordering::SeqCst);
-        let _epoch2 = tl.initiate_seek(Duration::from_secs(2));
+        let _epoch2 = tl.seek_control().begin(Duration::from_secs(2));
         tl.complete_seek(epoch1);
 
         assert!(
@@ -526,7 +483,7 @@ mod tests {
         let b = thread::spawn(move || {
             barrier_b.wait();
             for _ in 0..ITER {
-                let epoch = tl_b.initiate_seek(Duration::from_millis(1));
+                let epoch = tl_b.seek_control().begin(Duration::from_millis(1));
                 tl_b.clear_seek_pending(epoch);
                 tl_b.complete_seek(epoch);
             }
@@ -599,7 +556,7 @@ mod tests {
                 let want_seek_pending = mask & 2 != 0;
 
                 if want_flushing || want_seek_pending {
-                    let _ = tl.initiate_seek(Duration::from_secs(1));
+                    let _ = tl.seek_control().begin(Duration::from_secs(1));
                     if !want_flushing {
                         tl.complete_seek(tl.seek_epoch());
                     }
@@ -641,7 +598,7 @@ mod tests {
             source_bytes: 4096,
             source_byte_offset: None,
         };
-        tl.advance_committed_chunk(&pos);
+        tl.playhead_write().advance(&pos);
         assert_eq!(
             tl.committed_position(),
             Duration::from_nanos(1_000_000_000),
@@ -656,7 +613,7 @@ mod tests {
             source_bytes: 4096,
             source_byte_offset: None,
         };
-        tl.advance_committed_chunk(&pos_past);
+        tl.playhead_write().advance(&pos_past);
         assert_eq!(
             tl.committed_position(),
             Duration::from_secs(10),
@@ -668,7 +625,7 @@ mod tests {
     fn initiate_seek_does_not_touch_playing() {
         let tl = Timeline::new();
         tl.set_playing(true);
-        let epoch = tl.initiate_seek(Duration::from_secs(5));
+        let epoch = tl.seek_control().begin(Duration::from_secs(5));
         assert!(tl.is_playing(), "PLAYING must not be affected by seek");
         tl.complete_seek(epoch);
         assert!(tl.is_playing(), "PLAYING must survive complete_seek");

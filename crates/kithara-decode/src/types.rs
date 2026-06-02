@@ -108,7 +108,7 @@ impl From<&PcmMeta> for kithara_stream::ChunkPosition {
 pub struct PcmMeta {
     /// Wall-clock position **after** this chunk's frames have played
     /// out, computed by the decoder from its own frame counter. Used
-    /// by `Timeline::advance_committed_chunk` to update the playhead
+    /// by `PlayheadWrite::advance` to update the playhead
     /// without re-doing `frames * 1e9 / sample_rate` arithmetic on the
     /// consumer side. For frame-based decoders (MP3 / AAC) the last
     /// chunk may legitimately push this a few ms past the rounded

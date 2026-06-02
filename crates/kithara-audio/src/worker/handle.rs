@@ -364,7 +364,7 @@ mod tests {
         let got = wait_for_chunks(&mut rx, 2, Duration::from_secs(5));
         assert!(got >= 2);
 
-        let _ = timeline.initiate_seek(Duration::from_secs(10));
+        let _ = timeline.seek_control().begin(Duration::from_secs(10));
         handle.wake();
 
         thread_sleep(Duration::from_millis(100));
@@ -436,7 +436,7 @@ mod tests {
             .expect("initial preload gate must open");
         assert!(preload_gate.is_ready());
 
-        let _ = timeline.initiate_seek(Duration::from_secs(1));
+        let _ = timeline.seek_control().begin(Duration::from_secs(1));
         handle.wake();
 
         platform_timeout(Duration::from_secs(1), preload_gate.wait())

@@ -163,7 +163,7 @@ fn file_source_phase_during_seek(
     coord.set_total_bytes(Some(total_bytes));
     let source = make_source(res, coord, bus);
 
-    let _ = timeline.initiate_seek(Duration::from_secs(0));
+    let _ = timeline.seek_control().begin(Duration::from_secs(0));
 
     assert_eq!(source.phase_at(range), expected);
 }
@@ -196,7 +196,7 @@ fn file_source_wait_range_returns_interrupted_while_flushing() {
     coord.set_total_bytes(Some(100));
     let mut source = make_source(res, coord, bus);
 
-    let _ = timeline.initiate_seek(Duration::from_secs(0));
+    let _ = timeline.seek_control().begin(Duration::from_secs(0));
 
     let result = Source::wait_range(&mut source, 50..60, Some(Duration::from_secs(1)));
     assert_eq!(result.unwrap(), WaitOutcome::Interrupted);

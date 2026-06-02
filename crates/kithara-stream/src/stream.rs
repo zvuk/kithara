@@ -163,6 +163,8 @@ impl StdError for VariantChangeError {}
 use crate::{
     DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor, Timeline,
     error::{SourceError, StreamError},
+    playhead::PlayheadWrite,
+    seek_state::{SeekControl, SeekObserve},
     source::{NotReadyCause, PendingReason, ReadOutcome, Source},
 };
 
@@ -254,6 +256,24 @@ impl<T: StreamType> Stream<T> {
     /// Get stream timeline.
     pub fn timeline(&self) -> Timeline {
         self.source.timeline()
+    }
+
+    /// Narrow mutating playhead handle — position + duration.
+    #[must_use]
+    pub fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        self.source.playhead_write()
+    }
+
+    /// Narrow seek-control handle — begin / complete / `mark_pending`.
+    #[must_use]
+    pub fn seek_control(&self) -> Arc<dyn SeekControl> {
+        self.source.seek_control()
+    }
+
+    /// Narrow seek-observe handle — read seek state without mutation.
+    #[must_use]
+    pub fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        self.source.seek_observe()
     }
 
     delegate::delegate! {
@@ -885,7 +905,10 @@ mod tests {
             _range: Range<u64>,
             _timeout: Option<Duration>,
         ) -> crate::StreamResult<WaitOutcome> {
-            let _ = self.timeline.initiate_seek(Duration::from_millis(10));
+            let _ = self
+                .timeline
+                .seek_control()
+                .begin(Duration::from_millis(10));
             Ok(WaitOutcome::Ready)
         }
     }
@@ -1010,7 +1033,7 @@ mod tests {
     #[kithara::test]
     fn try_read_returns_seek_pending_when_flushing() {
         let timeline = Timeline::new();
-        let _ = timeline.initiate_seek(Duration::from_millis(10));
+        let _ = timeline.seek_control().begin(Duration::from_millis(10));
         let source = ScriptSource::new(timeline.clone(), [WaitOutcome::Interrupted], [], vec![]);
         let mut stream = Stream::<DummyType> { source };
         let mut buf = [0u8; 4];

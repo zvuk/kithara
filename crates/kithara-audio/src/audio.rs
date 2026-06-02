@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use delegate::delegate;
 use fast_interleave::deinterleave_variable;
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
@@ -16,7 +17,7 @@ use kithara_events::{AudioEvent, DeferredBus, EventBus, SeekLifecycleStage, Segm
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
 use kithara_platform::{CancellationToken, thread::park_timeout, tokio::task::spawn_blocking};
-use kithara_stream::{MediaInfo, Stream, StreamType, Timeline};
+use kithara_stream::{MediaInfo, PlayheadWrite, SeekControl, SeekObserve, Stream, StreamType};
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
 use tracing::{debug, info, trace, warn};
@@ -88,8 +89,14 @@ pub struct Audio<S> {
     /// Current audio specification (updated from chunks).
     pub(crate) spec: PcmSpec,
 
-    /// Shared stream timeline for committed playback position.
-    pub(crate) timeline: Timeline,
+    /// Narrow mutating playhead handle — committed position and total duration.
+    pub(crate) playhead: Arc<dyn PlayheadWrite>,
+
+    /// Narrow seek-control handle — initiates and marks seek epochs.
+    pub(crate) seek: Arc<dyn SeekControl>,
+
+    /// Narrow seek-observe handle — reads seek state (pending epoch, etc.).
+    pub(crate) seek_obs: Arc<dyn SeekObserve>,
 
     /// How many frames of `current_chunk` have been served to the
     /// caller. Local consumer cursor — reset to 0 on every new chunk
@@ -271,7 +278,7 @@ impl<S> Audio<S> {
     /// Returns `None` for streaming sources where duration is unknown.
     #[must_use]
     pub fn duration(&self) -> Option<Duration> {
-        self.timeline.total_duration()
+        self.playhead.duration()
     }
 
     fn emit_audio_event(&self, event: AudioEvent) {
@@ -290,8 +297,8 @@ impl<S> Audio<S> {
         self.last_progress_emit = Some((epoch, position_ms));
 
         let total_ms = self
-            .timeline
-            .total_duration()
+            .playhead
+            .duration()
             .map(|duration| clamp_u128_to_u64_millis(duration.as_millis()));
 
         self.emit_audio_event(AudioEvent::PlaybackProgress {
@@ -302,7 +309,7 @@ impl<S> Audio<S> {
     }
 
     fn emit_post_seek_output_commit(&mut self, meta: Option<PcmMeta>) {
-        let Some(seek_epoch) = self.timeline.pending_seek_epoch() else {
+        let Some(seek_epoch) = self.seek_obs.pending_epoch() else {
             return;
         };
         if seek_epoch != self.validator.epoch {
@@ -322,7 +329,7 @@ impl<S> Audio<S> {
             seek_epoch,
             position: (*self).position(),
         });
-        let _ = self.timeline.did_clear_pending_seek_epoch(seek_epoch);
+        let _ = self.seek_obs.clear_pending_epoch(seek_epoch);
     }
 
     /// Receive next chunk and store it as `current_chunk`.
@@ -364,7 +371,7 @@ impl<S> Audio<S> {
     /// Calculated from samples read since last seek plus the seek base.
     #[must_use]
     pub fn position(&self) -> Duration {
-        self.timeline.committed_position()
+        self.playhead.position()
     }
 
     /// Enable non-blocking mode for `read()` and prime the first chunk.
@@ -492,8 +499,8 @@ impl<S> Audio<S> {
                 self.current_chunk_consumed_frames = consumed_total;
 
                 if final_segment {
-                    self.timeline
-                        .advance_committed_chunk(&kithara_stream::ChunkPosition::from(&chunk.meta));
+                    self.playhead
+                        .advance(&kithara_stream::ChunkPosition::from(&chunk.meta));
                     self.recycle_current_chunk();
                 } else {
                     let total_frames = chunk_total_frames.max(1);
@@ -506,8 +513,8 @@ impl<S> Audio<S> {
                         span_ns * u128::from(consumed_total) / u128::from(total_frames);
                     let interpolated = u128::from(start_ns).saturating_add(consumed_ns_offset);
                     let interpolated_ns = u64::try_from(interpolated).unwrap_or(u64::MAX);
-                    self.timeline
-                        .set_committed_position(Duration::from_nanos(interpolated_ns));
+                    self.playhead
+                        .set_position(Duration::from_nanos(interpolated_ns));
                 }
             }
 
@@ -531,11 +538,9 @@ impl<S> Audio<S> {
             self.emit_playback_progress();
             let position = self.position();
             debug_assert!(
-                self.timeline
-                    .total_duration()
-                    .is_none_or(|dur| position <= dur),
+                self.playhead.duration().is_none_or(|dur| position <= dur),
                 "Audio::read Frames contract: position={position:?} > duration={:?}",
-                self.timeline.total_duration(),
+                self.playhead.duration(),
             );
             return Ok(ReadOutcome::Frames { count, position });
         }
@@ -657,8 +662,8 @@ impl<S> Audio<S> {
     /// `read()` / `next_chunk()`).
     #[kithara::hang_watchdog]
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        let epoch = self.timeline.initiate_seek(position);
-        self.timeline.mark_pending_seek_epoch(epoch);
+        let epoch = self.seek.begin(position);
+        self.seek.mark_pending(epoch);
         self.validator.epoch = epoch;
         self.recycle_current_chunk();
         self.current_chunk_consumed_frames = 0;
@@ -674,7 +679,7 @@ impl<S> Audio<S> {
         }
 
         trace!(?position, epoch, "seek initiated via Timeline");
-        match self.timeline.total_duration() {
+        match self.playhead.duration() {
             Some(duration) if position >= duration => {
                 debug_assert!(
                     position >= duration,
@@ -687,11 +692,9 @@ impl<S> Audio<S> {
             }
             _ => {
                 debug_assert!(
-                    self.timeline
-                        .total_duration()
-                        .is_none_or(|dur| position <= dur),
+                    self.playhead.duration().is_none_or(|dur| position <= dur),
                     "Audio::seek Landed contract: landed_at={position:?} > duration={:?}",
-                    self.timeline.total_duration(),
+                    self.playhead.duration(),
                 );
                 Ok(SeekOutcome::Landed {
                     target: position,
@@ -821,7 +824,10 @@ where
         let stream = Self::create_stream_with_probe(stream_config, byte_pool.clone()).await?;
 
         let initial_byte_len = stream.len().unwrap_or(0);
-        let timeline = stream.timeline();
+        let tl = stream.timeline();
+        let playhead = tl.playhead_write();
+        let seek = tl.seek_control();
+        let seek_obs = tl.seek_observe();
         let initial_media_info =
             merge_user_and_stream_media_info(user_media_info, stream.media_info());
         debug!(?initial_media_info, "Initial MediaInfo from stream");
@@ -846,8 +852,8 @@ where
         .await?;
 
         let initial_spec = decoder.spec();
-        let total_duration = decoder.duration().or_else(|| timeline.total_duration());
-        timeline.set_total_duration(total_duration);
+        let total_duration = decoder.duration().or_else(|| playhead.duration());
+        playhead.set_duration(total_duration);
         let metadata = decoder.metadata();
 
         let epoch = Arc::new(AtomicU64::new(0));
@@ -917,7 +923,9 @@ where
         });
 
         Ok(Self {
-            timeline,
+            playhead,
+            seek,
+            seek_obs,
             metadata,
             bus,
             host_sample_rate,
@@ -1248,8 +1256,10 @@ impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
         self.abr_handle.clone()
     }
 
-    fn duration(&self) -> Option<Duration> {
-        Self::duration(self)
+    delegate! {
+        to self.playhead {
+            fn duration(&self) -> Option<Duration>;
+        }
     }
 
     fn event_bus(&self) -> &EventBus {
@@ -1292,13 +1302,15 @@ impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
             self.consumer_phase = ConsumerPhase::Playing;
         }
 
-        self.timeline
-            .advance_committed_chunk(&kithara_stream::ChunkPosition::from(&chunk.meta));
+        self.playhead
+            .advance(&kithara_stream::ChunkPosition::from(&chunk.meta));
         Ok(ChunkOutcome::Chunk(chunk))
     }
 
-    fn position(&self) -> Duration {
-        Self::position(self)
+    delegate! {
+        to self.playhead {
+            fn position(&self) -> Duration;
+        }
     }
 
     fn preload(&mut self) -> Result<(), DecodeError> {
@@ -1417,6 +1429,7 @@ mod tests {
     fn empty_audio() -> Audio<()> {
         let (_data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(1, None);
         let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
+        let tl = kithara_stream::Timeline::new();
 
         Audio {
             pcm_rx,
@@ -1427,7 +1440,9 @@ mod tests {
             current_chunk: None,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
-            timeline: Timeline::new(),
+            playhead: tl.playhead_write(),
+            seek: tl.seek_control(),
+            seek_obs: tl.seek_observe(),
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,
@@ -1478,6 +1493,7 @@ mod tests {
     fn audio_with_channel() -> (Audio<()>, crate::runtime::Outlet<Fetch<PcmChunk>>) {
         let (data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(4, None);
         let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
+        let tl = kithara_stream::Timeline::new();
 
         let audio = Audio {
             pcm_rx,
@@ -1488,7 +1504,9 @@ mod tests {
             current_chunk: None,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
-            timeline: Timeline::new(),
+            playhead: tl.playhead_write(),
+            seek: tl.seek_control(),
+            seek_obs: tl.seek_observe(),
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,

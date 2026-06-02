@@ -409,7 +409,7 @@ mod tests {
         assert!(node.runtime.preloaded);
         assert!(gate.is_ready(), "first chunk opens the gate");
 
-        let _ = timeline.initiate_seek(Duration::from_secs(1));
+        let _ = timeline.seek_control().begin(Duration::from_secs(1));
 
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(!node.runtime.preloaded, "seek resets the preload runtime");

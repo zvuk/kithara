@@ -5,6 +5,8 @@ use std::{
     time::Duration,
 };
 
+use kithara_test_utils::kithara;
+
 use crate::timeline::ChunkPosition;
 
 const NO_DURATION: u64 = u64::MAX;
@@ -56,6 +58,16 @@ impl PlayheadState {
         self.position_ns
             .store(ns.min(self.cap()), Ordering::Release);
     }
+
+    /// Capped playhead write that also fires the `committed_ns` USDT probe.
+    /// The probe lives here (not on `Timeline`) because the produce path
+    /// advances the playhead directly through this `PlayheadWrite` handle —
+    /// `Timeline` no longer sits on the hot path. The FLAC `swallow_detector`
+    /// consumes this probe (`tests/src/swallow_detector.rs`).
+    #[kithara::probe(committed_ns = pos.end_position_ns)]
+    fn write_playhead(&self, pos: &ChunkPosition) {
+        self.write_ns_capped(pos.end_position_ns);
+    }
 }
 
 impl PlayheadRead for PlayheadState {
@@ -73,11 +85,11 @@ impl PlayheadRead for PlayheadState {
 
 impl PlayheadWrite for PlayheadState {
     fn advance(&self, pos: &ChunkPosition) {
-        self.write_ns_capped(pos.end_position_ns);
+        self.write_playhead(pos);
     }
 
     fn land(&self, pos: &ChunkPosition) {
-        self.write_ns_capped(pos.end_position_ns);
+        self.write_playhead(pos);
     }
 
     fn set_position(&self, position: Duration) {
