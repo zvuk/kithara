@@ -1626,6 +1626,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     /// Decode one chunk using the decode loop.
+    #[kithara::probe]
     fn decode_one_step(&mut self) -> DecodeStep {
         let decoder_duration = crate::pipeline::gapless::visible_duration(
             self.session.decoder.as_ref(),
@@ -1755,6 +1756,22 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.source_ready_for_range(pos..check_end)
     }
 
+    /// Phase of the read-ahead window the decoder reads *through* during
+    /// steady-state playback: `[pos, pos + READ_AHEAD)`, clamped to the
+    /// stream length but — unlike [`source_is_ready`] — NOT clamped to the
+    /// next segment boundary. The decoder's container parser reads across
+    /// segment boundaries, so a boundary-clamped gate reports `Ready` while
+    /// the decoder is actually blocked on the (withheld) next segment. The
+    /// `WaitContext::Playback` wait path gates on this wider window so the
+    /// gate and the decoder's real read never disagree (a mismatch hot-spins
+    /// the worker; see crate `README.md` "Playback readiness gating").
+    fn source_phase_forward(&self) -> SourcePhase {
+        let pos = self.shared_stream.position();
+        let end = pos.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES);
+        let end = self.shared_stream.len().map_or(end, |len| end.min(len));
+        self.shared_stream.phase_at(pos..end)
+    }
+
     fn source_is_ready_for_apply_seek(&self, applying: ApplySeekState) -> bool {
         match applying.mode {
             SeekMode::Anchor(anchor) => self.source_is_ready_for_seek_landing(anchor.byte_offset),
@@ -1811,7 +1828,14 @@ impl<T: StreamType> StreamAudioSource<T> {
                 || self.shared_stream.phase(),
                 |byte| self.source_phase_for_boundary(byte),
             ),
-            WaitContext::Playback | WaitContext::Seek(_) => self.shared_stream.phase(),
+            // Steady-state playback parks on the decoder's forward read-ahead
+            // window (see `source_phase_forward`), not the single-byte phase at
+            // `pos`: the decoder reads across the next segment boundary, so a
+            // single-byte gate reports `Ready` while the decoder is blocked on
+            // the withheld next segment, bouncing the worker straight back into
+            // `Decoding` and hot-spinning the decode loop.
+            WaitContext::Playback => self.source_phase_forward(),
+            WaitContext::Seek(_) => self.shared_stream.phase(),
         }
     }
 
@@ -2091,7 +2115,18 @@ impl Track<Decoding> {
         match src.decode_one_step() {
             DecodeStep::Produced(fetch) => TrackStep::Produced(fetch),
             DecodeStep::Interrupted => TrackStep::StateChanged,
-            DecodeStep::NotReady(reason) => TrackStep::Blocked(reason),
+            // The decoder read across the current segment boundary into a
+            // not-ready (withheld) byte. Park in `WaitingForSource(Playback)`
+            // rather than re-running the full decode every tick: the wait
+            // state re-checks the forward read-ahead window cheaply and only
+            // re-enters `Decoding` once that window is ready. Staying in
+            // `Decoding` here hot-spins the decode loop (`source_is_ready`
+            // gates only the current segment, so it never reflects the
+            // blocked forward read) — flake F5.
+            DecodeStep::NotReady(reason) => {
+                src.update_state(CurrentFsm::waiting(WaitContext::Playback, reason));
+                TrackStep::Blocked(reason)
+            }
             DecodeStep::Eof => TrackStep::Eof,
             DecodeStep::Failed => TrackStep::Failed,
         }

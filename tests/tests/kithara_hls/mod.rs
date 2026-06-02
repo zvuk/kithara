@@ -11,6 +11,7 @@ mod deferred_abr_debug;
 mod drm_stream_integrity;
 mod driver_test;
 mod ephemeral;
+mod forward_withheld_segment_busy_spin;
 mod html_error_body;
 mod html_error_cleanup;
 mod keys_integration;
