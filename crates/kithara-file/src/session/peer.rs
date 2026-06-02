@@ -161,7 +161,7 @@ impl Peer for FilePeer {
     }
 
     fn priority(&self) -> RequestPriority {
-        if self.inner.source.coord.timeline().is_playing() {
+        if self.inner.source.coord.activity().is_playing() {
             RequestPriority::High
         } else {
             RequestPriority::Low

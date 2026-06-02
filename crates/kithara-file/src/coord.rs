@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use kithara_platform::tokio as platform_tokio;
-use kithara_stream::Timeline;
+use kithara_stream::{Activity, SeekObserve, Timeline};
 use platform_tokio::sync::Notify;
 
 pub(crate) struct FileCoord {
@@ -18,6 +18,11 @@ pub(crate) struct FileCoord {
     total_bytes: Arc<AtomicU64>,
     reader_advanced: Notify,
     timeline: Timeline,
+    /// Narrow seek-observe handle (flush gate) — derived from `timeline`'s
+    /// shared `SeekState`, so it observes the same flags without the wide type.
+    seek_obs: Arc<dyn SeekObserve>,
+    /// Narrow activity handle (`is_playing`) read by the downloader peer.
+    activity: Arc<dyn Activity>,
 }
 
 impl FileCoord {
@@ -28,8 +33,12 @@ impl FileCoord {
 
     #[must_use]
     pub(crate) fn new(timeline: Timeline) -> Self {
+        let seek_obs = timeline.seek_observe();
+        let activity = timeline.activity();
         Self {
             timeline,
+            seek_obs,
+            activity,
             position: Arc::new(AtomicU64::new(0)),
             read_pos: Arc::new(AtomicU64::new(0)),
             reader_advanced: Notify::new(),
@@ -80,6 +89,16 @@ impl FileCoord {
     #[must_use]
     pub(crate) fn timeline(&self) -> Timeline {
         self.timeline.clone()
+    }
+
+    #[must_use]
+    pub(crate) fn seek_obs(&self) -> &Arc<dyn SeekObserve> {
+        &self.seek_obs
+    }
+
+    #[must_use]
+    pub(crate) fn activity(&self) -> &Arc<dyn Activity> {
+        &self.activity
     }
 
     #[must_use]

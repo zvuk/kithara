@@ -141,7 +141,7 @@ impl kithara_stream::Source for FileSource {
             .or(from_res)
             .is_some_and(|total| total > 0 && range.start >= total);
 
-        if self.coord.timeline().is_flushing() {
+        if self.coord.seek_obs().is_flushing() {
             return SourcePhase::Seeking;
         }
         if past_eof {
