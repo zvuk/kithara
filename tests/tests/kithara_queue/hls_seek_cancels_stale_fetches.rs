@@ -150,7 +150,7 @@ async fn wait_for_loader_done(
 struct PostSeekObservation {
     /// First `ReaderSeek` event after `seek_at`. Confirms the decoder
     /// actually called `Seek::seek` on the stream (not just that
-    /// `Timeline::initiate_seek` ran).
+    /// `SeekControl::begin` ran).
     reader_seek: Option<Event>,
     /// First `SegmentReadStart` after `seek_at`. The discriminating
     /// signal: a healthy seek path emits this with `segment_index ≈

@@ -71,7 +71,7 @@ pub(crate) struct HlsPeer {
     variants: Mutex<Vec<VariantInfo>>,
     /// Narrow seek-observe handle. Used by `poll_next`'s inner logic
     /// (via `HlsTrackState`) to read the current epoch/target without
-    /// holding a wide `Timeline`.
+    /// holding a wide seek/playhead aggregate.
     seek_obs: Arc<dyn SeekObserve>,
     /// Narrow activity handle. Used by `priority()` to check whether
     /// the track is currently playing.
@@ -372,7 +372,7 @@ impl HlsTrackState {
         resolved
     }
 
-    /// Detect a seek-epoch bump on the [`Timeline`] and delegate the
+    /// Detect a seek-epoch bump on the shared seek state and delegate the
     /// reset work to [`Self::seek_epoch_reset`] (which carries the
     /// probe). Called every poll cycle; the equality short-circuit
     /// keeps it free in the steady state.

@@ -70,8 +70,8 @@ impl DecoderNode {
 
     /// Reset preload state when a new seek epoch arrives.
     ///
-    /// Fast path: `Timeline::take_decoder_node_seek` is a one-shot
-    /// `AtomicBool` armed by `initiate_seek`. The typical no-seek tick
+    /// Fast path: `SeekObserve::take_decoder_seek` is a one-shot
+    /// `AtomicBool` armed by `begin`. The typical no-seek tick
     /// reads a single bool and falls through; only the rare epoch-bump
     /// tick goes through the `Arc<AtomicU64>` deref to refresh the
     /// cached value. The slow path still re-reads the canonical
@@ -207,7 +207,7 @@ impl Node for DecoderNode {
 mod tests {
     use std::time::Duration;
 
-    use kithara_stream::{SeekObserve, Timeline};
+    use kithara_stream::{SeekControl, SeekObserve, SeekState};
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
@@ -258,7 +258,12 @@ mod tests {
                 .returns(TrackStep::Eof),
         ));
 
-        let mut node = test_node(source, outlet, gate, Timeline::new().seek_observe());
+        let mut node = test_node(
+            source,
+            outlet,
+            gate,
+            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        );
 
         assert_eq!(node.tick(), TickResult::Backpressured);
         assert!(!node.runtime.eof_sent);
@@ -304,7 +309,7 @@ mod tests {
             eof_source,
             eof_outlet,
             Arc::clone(&gate),
-            Timeline::new().seek_observe(),
+            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         );
         assert_eq!(eof_node.tick(), TickResult::Progress);
         let eof_kind = drain_marker_kind(&mut eof_node.outlet, &mut eof_inlet);
@@ -319,7 +324,7 @@ mod tests {
             failed_source,
             failed_outlet,
             gate,
-            Timeline::new().seek_observe(),
+            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         );
         let _ = failed_node.tick();
         let failed_kind = drain_marker_kind(&mut failed_node.outlet, &mut failed_inlet);
@@ -362,7 +367,7 @@ mod tests {
             source,
             outlet,
             Arc::clone(&gate),
-            Timeline::new().seek_observe(),
+            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         );
 
         assert_eq!(node.tick(), TickResult::Progress);
@@ -386,7 +391,7 @@ mod tests {
         let gate = Arc::new(PreloadGate::default());
         let (outlet, mut inlet) = connect::<Fetch<PcmChunk>>(2, None);
 
-        let tl = Timeline::new();
+        let seek_state = Arc::new(SeekState::new());
         let source = Box::new(Unimock::new((
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
@@ -407,15 +412,20 @@ mod tests {
                 ))),
         )));
 
-        // Pass a seek_obs handle derived from `tl` so seek_control().begin()
+        // Pass a seek_obs handle derived from `seek_state` so begin()
         // arms the shared latch the node will observe on its next tick.
-        let mut node = test_node(source, outlet, Arc::clone(&gate), tl.seek_observe());
+        let mut node = test_node(
+            source,
+            outlet,
+            Arc::clone(&gate),
+            Arc::clone(&seek_state) as Arc<dyn SeekObserve>,
+        );
 
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(node.runtime.preloaded);
         assert!(gate.is_ready(), "first chunk opens the gate");
 
-        let _ = tl.seek_control().begin(Duration::from_secs(1));
+        let _ = SeekControl::begin(&*seek_state, Duration::from_secs(1));
 
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(!node.runtime.preloaded, "seek resets the preload runtime");

@@ -365,7 +365,7 @@ pub(crate) struct PlanCtx {
     /// `Init` is always emitted regardless — the fMP4 demuxer needs
     /// it before any segment can decode.
     pub(crate) look_ahead_bytes: Option<u64>,
-    /// Snapshot of `Timeline::seek_epoch()` at plan-time. Tagged on
+    /// Snapshot of `SeekObserve::epoch()` at plan-time. Tagged on
     /// every emitted `FetchCmd`'s probe so integration tests can
     /// distinguish fetches that pre-date a user seek from those that
     /// the scheduler issued *after* observing the new epoch.

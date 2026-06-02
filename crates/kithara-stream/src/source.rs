@@ -443,7 +443,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::Timeline;
+    use crate::{PlayheadState, SeekState};
 
     #[kithara::test]
     fn test_source_trait_object_safety() {
@@ -460,24 +460,25 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
 
         struct ReadySource {
-            timeline: Timeline,
+            seek: Arc<SeekState>,
+            playhead: Arc<PlayheadState>,
             position: Arc<AtomicU64>,
         }
         impl Source for ReadySource {
             fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-                self.timeline.playhead_read()
+                Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
             }
             fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-                self.timeline.playhead_write()
+                Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
             }
             fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-                self.timeline.seek_observe()
+                Arc::clone(&self.seek) as Arc<dyn SeekObserve>
             }
             fn seek_control(&self) -> Arc<dyn SeekControl> {
-                self.timeline.seek_control()
+                Arc::clone(&self.seek) as Arc<dyn SeekControl>
             }
             fn activity(&self) -> Arc<dyn Activity> {
-                self.timeline.activity()
+                Arc::clone(&self.seek) as Arc<dyn Activity>
             }
             fn wait_range(
                 &mut self,
@@ -506,7 +507,8 @@ mod tests {
             }
         }
         let source = ReadySource {
-            timeline: Timeline::new(),
+            seek: Arc::new(SeekState::new()),
+            playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
         };
         assert_eq!(source.phase(), SourcePhase::Ready);
@@ -526,24 +528,25 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
 
         struct MinimalSource {
-            timeline: Timeline,
+            seek: Arc<SeekState>,
+            playhead: Arc<PlayheadState>,
             position: Arc<AtomicU64>,
         }
         impl Source for MinimalSource {
             fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-                self.timeline.playhead_read()
+                Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
             }
             fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-                self.timeline.playhead_write()
+                Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
             }
             fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-                self.timeline.seek_observe()
+                Arc::clone(&self.seek) as Arc<dyn SeekObserve>
             }
             fn seek_control(&self) -> Arc<dyn SeekControl> {
-                self.timeline.seek_control()
+                Arc::clone(&self.seek) as Arc<dyn SeekControl>
             }
             fn activity(&self) -> Arc<dyn Activity> {
-                self.timeline.activity()
+                Arc::clone(&self.seek) as Arc<dyn Activity>
             }
             fn wait_range(
                 &mut self,
@@ -573,7 +576,8 @@ mod tests {
         }
 
         let src = MinimalSource {
-            timeline: Timeline::new(),
+            seek: Arc::new(SeekState::new()),
+            playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
         };
 

@@ -7,9 +7,37 @@ use std::{
 
 use kithara_test_utils::kithara;
 
-use crate::timeline::ChunkPosition;
-
 const NO_DURATION: u64 = u64::MAX;
+
+/// Decoder-reported chunk position used to advance the playhead.
+///
+/// This struct is the kithara-stream-local mirror of the fields
+/// [`PlayheadWrite::advance`] needs from a decoder's per-chunk metadata.
+/// It exists because `PcmMeta` lives in `kithara-decode` (which depends on
+/// `kithara-stream`); a tiny mirror avoids the circular dep without forcing
+/// decoders to fragment their existing meta type.
+///
+/// Decoder backends fill it from their own meta — see
+/// `From<&PcmMeta> for ChunkPosition` in `kithara-decode`.
+#[derive(Debug, Clone, Copy)]
+pub struct ChunkPosition {
+    /// Absolute byte offset of the chunk's source data when the
+    /// decoder reports it (Apple `mStartOffset`, Android API 28+).
+    pub source_byte_offset: Option<u64>,
+    /// Decoder-reported wall-clock position **after** the chunk has
+    /// been emitted (or, for a seek landing, the landed position).
+    /// Authoritative — derived from the decoder's own frame counter
+    /// inside its own arithmetic, so the playhead never recomputes
+    /// `frames * 1e9 / sample_rate`. Always strictly greater than (or
+    /// equal to, for seek landings) the chunk start.
+    pub end_position_ns: u64,
+    /// Absolute frame offset of the *first* frame in the chunk.
+    pub frame_offset: u64,
+    /// Number of frames the chunk covers.
+    pub frames: u64,
+    /// Source bytes the chunk decoded from (decoder ground truth).
+    pub source_bytes: u64,
+}
 
 /// Source-agnostic playback playhead. The committed position is the single
 /// coherent value readers need — a lone atomic, no torn read across fields.
@@ -32,8 +60,7 @@ pub trait PlayheadWrite: PlayheadRead {
     fn advance(&self, pos: &ChunkPosition);
     /// Pin after a seek (caps at total duration).
     fn land(&self, pos: &ChunkPosition);
-    /// Partial-chunk fixup — raw store, no duration cap (matches Timeline
-    /// `set_committed_position` which is also a raw store).
+    /// Partial-chunk fixup — raw store, no duration cap.
     fn set_position(&self, position: Duration);
     fn set_duration(&self, duration: Option<Duration>);
 }
@@ -61,10 +88,9 @@ impl PlayheadState {
     }
 
     /// Capped playhead write that also fires the `committed_ns` USDT probe.
-    /// The probe lives here (not on `Timeline`) because the produce path
-    /// advances the playhead directly through this `PlayheadWrite` handle —
-    /// `Timeline` no longer sits on the hot path. The FLAC `swallow_detector`
-    /// consumes this probe (`tests/src/swallow_detector.rs`).
+    /// The probe lives here because the produce path advances the playhead
+    /// directly through this `PlayheadWrite` handle. The FLAC
+    /// `swallow_detector` consumes this probe (`tests/src/swallow_detector.rs`).
     #[kithara::probe(committed_ns = pos.end_position_ns)]
     fn write_playhead(&self, pos: &ChunkPosition) {
         self.write_ns_capped(pos.end_position_ns);
@@ -124,8 +150,42 @@ mod tests {
         let s = PlayheadState::new();
         s.set_duration(Some(Duration::from_secs(5)));
         s.set_position(Duration::from_secs(9));
-        // set_position is a raw store — no cap — matches Timeline::set_committed_position
+        // set_position is a raw store — no cap.
         assert_eq!(s.position(), Duration::from_secs(9));
+    }
+
+    #[kithara::test]
+    fn advance_under_duration_reflects_end_then_caps() {
+        let s = PlayheadState::new();
+        s.set_duration(Some(Duration::from_secs(10)));
+
+        let pos = ChunkPosition {
+            frame_offset: 0,
+            frames: 44100,
+            end_position_ns: 1_000_000_000,
+            source_bytes: 4096,
+            source_byte_offset: None,
+        };
+        s.advance(&pos);
+        assert_eq!(
+            s.position(),
+            Duration::from_nanos(1_000_000_000),
+            "position must reflect end_position_ns when under duration"
+        );
+
+        let pos_past = ChunkPosition {
+            frame_offset: 0,
+            frames: 44100,
+            end_position_ns: 15_000_000_000,
+            source_bytes: 4096,
+            source_byte_offset: None,
+        };
+        s.advance(&pos_past);
+        assert_eq!(
+            s.position(),
+            Duration::from_secs(10),
+            "position must be capped at total_duration"
+        );
     }
 
     #[kithara::test]

@@ -12,9 +12,9 @@ use futures::executor::block_on;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, AudioCodec, ContainerFormat, MediaInfo, PlayheadRead, PlayheadWrite, ReadOutcome,
-    SeekControl, SeekObserve, Source, SourceError, SourcePhase, Stream, StreamResult, StreamType,
-    Timeline,
+    Activity, AudioCodec, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState, PlayheadWrite,
+    ReadOutcome, SeekControl, SeekObserve, SeekState, Source, SourceError, SourcePhase, Stream,
+    StreamResult, StreamType,
 };
 
 use crate::{
@@ -25,7 +25,8 @@ use crate::{
 /// WAV-backed `Source` adapter over [`SignalPcm`].
 pub struct SignalSource<S: signal::SignalFn> {
     pcm: SignalPcm<S>,
-    timeline: Timeline,
+    seek: Arc<SeekState>,
+    playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
     header: WavHeader,
 }
@@ -39,7 +40,8 @@ impl<S: signal::SignalFn> SignalSource<S> {
     #[must_use]
     pub fn new(pcm: SignalPcm<S>) -> Self {
         Self {
-            timeline: Timeline::new(),
+            seek: Arc::new(SeekState::new()),
+            playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             header: create_header_from_signal(&pcm),
             pcm,
@@ -134,23 +136,23 @@ impl<S: signal::SignalFn + Sync> Source for SignalSource<S> {
     }
 
     fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-        self.timeline.playhead_read()
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
     }
 
     fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-        self.timeline.playhead_write()
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
     }
 
     fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        self.timeline.seek_observe()
+        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
     }
 
     fn seek_control(&self) -> Arc<dyn SeekControl> {
-        self.timeline.seek_control()
+        Arc::clone(&self.seek) as Arc<dyn SeekControl>
     }
 
     fn activity(&self) -> Arc<dyn Activity> {
-        self.timeline.activity()
+        Arc::clone(&self.seek) as Arc<dyn Activity>
     }
 
     fn wait_range(

@@ -95,7 +95,7 @@ impl From<&PcmMeta> for kithara_stream::ChunkPosition {
     }
 }
 
-/// Timeline metadata for a PCM chunk.
+/// Position metadata for a PCM chunk.
 ///
 /// Combines audio format specification with position on the logical timeline.
 /// Each chunk gets unique timeline coordinates; `PcmSpec` is the static part.

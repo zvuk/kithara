@@ -118,7 +118,7 @@ mod tests {
         thread::sleep as thread_sleep,
         time::{Instant, timeout as platform_timeout},
     };
-    use kithara_stream::{SeekControl, SeekObserve, Timeline};
+    use kithara_stream::{SeekControl, SeekObserve, SeekState};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -139,9 +139,9 @@ mod tests {
 
     impl MockSource {
         fn new(chunks: usize) -> Self {
-            let tl = Timeline::new();
-            let seek = tl.seek_control();
-            let seek_obs = tl.seek_observe();
+            let state = Arc::new(SeekState::new());
+            let seek = Arc::clone(&state) as Arc<dyn SeekControl>;
+            let seek_obs = Arc::clone(&state) as Arc<dyn SeekObserve>;
             Self {
                 seek,
                 seek_obs,
@@ -202,7 +202,7 @@ mod tests {
     impl Default for FailingSource {
         fn default() -> Self {
             Self {
-                seek_obs: Timeline::new().seek_observe(),
+                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
             }
         }
     }
@@ -567,7 +567,7 @@ mod tests {
 
         let blocking = Arc::new(AtomicBool::new(true));
         let blocking_source = BlockingSource {
-            seek_obs: Timeline::new().seek_observe(),
+            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
             blocking: Arc::clone(&blocking),
         };
         let (reg_b, _rx_b, _) = make_registration(blocking_source, 32, 0);
@@ -625,7 +625,7 @@ mod tests {
         let _id_a = handle.register_track(reg_a);
 
         let slow_source = SlowDecodeSource {
-            seek_obs: Timeline::new().seek_observe(),
+            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
             block_ms: 10,
         };
         let (reg_b, mut rx_b, _) = make_registration(slow_source, 32, 0);

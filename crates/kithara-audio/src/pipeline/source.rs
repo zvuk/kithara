@@ -999,15 +999,15 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// Resolve a seek-preemption target in one Option-chain so the per-tick
     /// hot path of `step_track` short-circuits with a single branch instead
     /// of four sequential predicates. Returns `Some(target)` only when a
-    /// new timeline seek epoch must preempt the current state; otherwise
+    /// new seek epoch must preempt the current state; otherwise
     /// `None` and the caller falls through to the phase dispatcher.
     ///
-    /// Fast-path: `Timeline::take_seek_preempt` returns `true` exactly
-    /// once per `initiate_seek` call. The typical no-seek tick reads a
+    /// Fast-path: `SeekObserve::take_preempt` returns `true` exactly
+    /// once per `begin` call. The typical no-seek tick reads a
     /// single Acquire bool and falls through, instead of dereferencing
     /// two `Arc<AtomicU64>`s. A spurious consume (e.g. seek already
     /// processed by an earlier tick) is harmless because the slow path
-    /// below re-validates against `Timeline`.
+    /// below re-validates against the seek state.
     #[inline]
     fn preempt_seek_target(&self) -> Option<Duration> {
         if !self.seek_obs.take_preempt() {
@@ -1266,11 +1266,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    /// Publish the current FSM phase to the shared Timeline and assign
+    /// Publish the current FSM phase to the shared activity flag and assign
     /// the new state.
     ///
-    /// `PLAYING` mirrors "audio FSM has an active decode target on this
-    /// Timeline": every non-terminal state keeps it set (`Decoding`,
+    /// `PLAYING` mirrors "audio FSM has an active decode target": every
+    /// non-terminal state keeps it set (`Decoding`,
     /// `SeekRequested`, `ApplyingSeek`, `AwaitingResume`,
     /// `WaitingForSource`, `RecreatingDecoder`), while terminal states
     /// (`AtEof`, `Failed`) clear it. The Downloader's peer
@@ -1517,9 +1517,9 @@ impl<T: StreamType> StreamAudioSource<T> {
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
-    /// Apply a pending seek from the Timeline.
+    /// Apply a pending seek from the shared seek state.
     ///
-    /// Reads epoch/target from Timeline and resolves the seek mode.
+    /// Reads epoch/target from the seek state and resolves the seek mode.
     fn apply_seek_from_timeline(&mut self, request: SeekRequest) {
         let epoch = request.seek.epoch;
         let position = request.seek.target;
@@ -1662,7 +1662,7 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Clear the seek-pending flag and wake the source's peer in one step.
     ///
-    /// `Timeline::clear_seek_pending` only flips the atomic flag; it does
+    /// `SeekControl::clear_pending` only flips the atomic flag; it does
     /// not wake anything. The HLS peer's `sync_abr_lock()` is invoked only
     /// inside `poll_next`, so when every requested segment is cached and
     /// the peer parks itself in `Poll::Pending`, the ABR lock acquired on
@@ -2254,9 +2254,9 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
     }
 }
 
-/// Classify a [`CurrentFsm`] phase for the shared Timeline `PLAYING` flag.
+/// Classify a [`CurrentFsm`] phase for the shared activity `PLAYING` flag.
 ///
-/// The Downloader peers read `Timeline::is_playing()` in their
+/// The Downloader peers read `Activity::is_playing()` in their
 /// `priority()` method. Every non-terminal phase keeps this track
 /// "listened to" from the user's perspective — buffering, seek-in-
 /// progress, and decoder recreation are all transient windows inside

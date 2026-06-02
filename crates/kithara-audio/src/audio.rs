@@ -647,8 +647,9 @@ impl<S> Audio<S> {
     /// Seek to position in the audio stream.
     ///
     /// This method never blocks. Seek coordination flows entirely through
-    /// Timeline atomics (`FLUSH_START`/`FLUSH_STOP` pattern). The worker thread reads
-    /// the seek target and epoch from Timeline and applies the seek.
+    /// the shared seek-state atomics (`FLUSH_START`/`FLUSH_STOP` pattern). The
+    /// worker thread reads the seek target and epoch from the seek state and
+    /// applies the seek.
     ///
     /// Returns [`SeekOutcome::Landed`] when the reader is now parked
     /// at `position`; [`SeekOutcome::PastEof`] when the target is
@@ -678,7 +679,7 @@ impl<S> Audio<S> {
             worker.wake();
         }
 
-        trace!(?position, epoch, "seek initiated via Timeline");
+        trace!(?position, epoch, "seek initiated via seek state");
         match self.playhead.duration() {
             Some(duration) if position >= duration => {
                 debug_assert!(
@@ -1428,7 +1429,8 @@ mod tests {
     fn empty_audio() -> Audio<()> {
         let (_data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(1, None);
         let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
-        let tl = kithara_stream::Timeline::new();
+        let playhead = Arc::new(kithara_stream::PlayheadState::new());
+        let seek = Arc::new(kithara_stream::SeekState::new());
 
         Audio {
             pcm_rx,
@@ -1439,9 +1441,9 @@ mod tests {
             current_chunk: None,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
-            playhead: tl.playhead_write(),
-            seek: tl.seek_control(),
-            seek_obs: tl.seek_observe(),
+            playhead: Arc::clone(&playhead) as Arc<dyn PlayheadWrite>,
+            seek: Arc::clone(&seek) as Arc<dyn SeekControl>,
+            seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,
@@ -1492,7 +1494,8 @@ mod tests {
     fn audio_with_channel() -> (Audio<()>, crate::runtime::Outlet<Fetch<PcmChunk>>) {
         let (data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(4, None);
         let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
-        let tl = kithara_stream::Timeline::new();
+        let playhead = Arc::new(kithara_stream::PlayheadState::new());
+        let seek = Arc::new(kithara_stream::SeekState::new());
 
         let audio = Audio {
             pcm_rx,
@@ -1503,9 +1506,9 @@ mod tests {
             current_chunk: None,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
-            playhead: tl.playhead_write(),
-            seek: tl.seek_control(),
-            seek_obs: tl.seek_observe(),
+            playhead: Arc::clone(&playhead) as Arc<dyn PlayheadWrite>,
+            seek: Arc::clone(&seek) as Arc<dyn SeekControl>,
+            seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,

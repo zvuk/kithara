@@ -4,8 +4,7 @@ use crate::{preroll::PrerollHint, source::PendingReason};
 ///
 /// Mirrors the meaningful shape of `DecoderChunkOutcome` (in
 /// `kithara-decode`) without the PCM payload — the sink emits events
-/// based on byte-cursor state from the [`Timeline`](crate::Timeline),
-/// not on the raw audio frames.
+/// based on byte-cursor and playhead state, not on the raw audio frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ReaderChunkSignal {

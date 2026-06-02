@@ -37,8 +37,8 @@ pub enum StreamReadError {
 ///
 /// Mirrors the [`ReadOutcome`] shape from
 /// [`Source::read_at`](crate::Source::read_at), but extends each variant
-/// with the authoritative `byte_position` from the stream's
-/// [`Timeline`] for callers that don't want to read it back themselves.
+/// with the authoritative `byte_position` from the source cursor for
+/// callers that don't want to read it back themselves.
 /// `Bytes` carries a [`NonZeroUsize`] count — the type system
 /// guarantees forward progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -749,11 +749,11 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{PlayheadRead, ReadOutcome, Source, SourcePhase, Timeline};
+    use crate::{PlayheadRead, PlayheadState, ReadOutcome, SeekState, Source, SourcePhase};
 
     /// Test helper — script entry that maps to either `Bytes(N)` (with
     /// the source slicing actual `data`) or a terminal `Eof`. Pending
-    /// causes are exercised through the timeline (`initiate_seek`) and
+    /// causes are exercised through the seek state (`begin`) and
     /// the wait-outcome script, not the read script.
     #[derive(Clone, Copy)]
     enum ScriptRead {
@@ -770,7 +770,8 @@ mod tests {
     struct ScriptSource {
         position: Arc<AtomicU64>,
         anchor: Option<SourceSeekAnchor>,
-        timeline: Timeline,
+        seek: Arc<SeekState>,
+        playhead: Arc<PlayheadState>,
         data: Vec<u8>,
         reads: VecDeque<ScriptRead>,
         waits: VecDeque<WaitOutcome>,
@@ -779,13 +780,14 @@ mod tests {
 
     impl ScriptSource {
         fn new(
-            timeline: Timeline,
+            seek: Arc<SeekState>,
             waits: impl IntoIterator<Item = WaitOutcome>,
             reads: impl IntoIterator<Item = ScriptRead>,
             data: Vec<u8>,
         ) -> Self {
             Self {
-                timeline,
+                seek,
+                playhead: Arc::new(PlayheadState::new()),
                 data,
                 position: Arc::new(AtomicU64::new(0)),
                 anchor: None,
@@ -818,7 +820,7 @@ mod tests {
             self.position.load(Ordering::Acquire)
         }
 
-        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
+        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
             let step = self.reads.pop_front().unwrap_or(ScriptRead::Eof);
             match step {
                 ScriptRead::Eof => Ok(ReadOutcome::Eof),
@@ -849,30 +851,30 @@ mod tests {
         }
 
         fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-            self.timeline.playhead_read()
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
         }
 
         fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-            self.timeline.playhead_write()
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
         }
 
         fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            self.timeline.seek_observe()
+            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
         }
 
         fn seek_control(&self) -> Arc<dyn SeekControl> {
-            self.timeline.seek_control()
+            Arc::clone(&self.seek) as Arc<dyn SeekControl>
         }
 
         fn activity(&self) -> Arc<dyn Activity> {
-            self.timeline.activity()
+            Arc::clone(&self.seek) as Arc<dyn Activity>
         }
 
         fn wait_range(
             &mut self,
             _range: Range<u64>,
             _timeout: Option<Duration>,
-        ) -> crate::StreamResult<WaitOutcome> {
+        ) -> StreamResult<WaitOutcome> {
             Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
         }
 
@@ -887,10 +889,7 @@ mod tests {
     }
 
     impl crate::ByteMap for ScriptByteMap {
-        fn anchor_at_time(
-            &self,
-            _position: Duration,
-        ) -> crate::StreamResult<Option<SourceSeekAnchor>> {
+        fn anchor_at_time(&self, _position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
             Ok(self.anchor)
         }
 
@@ -941,7 +940,8 @@ mod tests {
 
     struct SeekDuringWaitSource {
         position: Arc<AtomicU64>,
-        timeline: Timeline,
+        seek: Arc<SeekState>,
+        playhead: Arc<PlayheadState>,
         read_calls: usize,
     }
 
@@ -962,7 +962,7 @@ mod tests {
             self.position.load(Ordering::Acquire)
         }
 
-        fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
+        fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> StreamResult<ReadOutcome> {
             self.read_calls += 1;
             Ok(bytes(4))
         }
@@ -972,34 +972,31 @@ mod tests {
         }
 
         fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-            self.timeline.playhead_read()
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
         }
 
         fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-            self.timeline.playhead_write()
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
         }
 
         fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            self.timeline.seek_observe()
+            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
         }
 
         fn seek_control(&self) -> Arc<dyn SeekControl> {
-            self.timeline.seek_control()
+            Arc::clone(&self.seek) as Arc<dyn SeekControl>
         }
 
         fn activity(&self) -> Arc<dyn Activity> {
-            self.timeline.activity()
+            Arc::clone(&self.seek) as Arc<dyn Activity>
         }
 
         fn wait_range(
             &mut self,
             _range: Range<u64>,
             _timeout: Option<Duration>,
-        ) -> crate::StreamResult<WaitOutcome> {
-            let _ = self
-                .timeline
-                .seek_control()
-                .begin(Duration::from_millis(10));
+        ) -> StreamResult<WaitOutcome> {
+            let _ = SeekControl::begin(&*self.seek, Duration::from_millis(10));
             Ok(WaitOutcome::Ready)
         }
     }
@@ -1012,7 +1009,7 @@ mod tests {
         // it off the forbid path.
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
-            Timeline::new(),
+            Arc::new(SeekState::new()),
             [WaitOutcome::Interrupted],
             [],
             vec![0u8; 8],
@@ -1041,7 +1038,7 @@ mod tests {
         // armed — the distinguishing signal from the worker's deferred arm.
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
-            Timeline::new(),
+            Arc::new(SeekState::new()),
             [WaitOutcome::Interrupted, WaitOutcome::Ready],
             [ScriptRead::Data(4)],
             b"ABCD".to_vec(),
@@ -1068,7 +1065,7 @@ mod tests {
         // the target range is not ready (the wait script is never consulted).
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
-            Timeline::new(),
+            Arc::new(SeekState::new()),
             [WaitOutcome::Interrupted, WaitOutcome::Interrupted],
             [],
             vec![0u8; 100],
@@ -1096,9 +1093,8 @@ mod tests {
 
     #[kithara::test]
     fn try_read_yields_not_ready_on_interrupted_then_recovers_next_probe() {
-        let timeline = Timeline::new();
         let source = ScriptSource::new(
-            timeline.clone(),
+            Arc::new(SeekState::new()),
             [WaitOutcome::Interrupted, WaitOutcome::Ready],
             [ScriptRead::Data(4)],
             b"ABCD".to_vec(),
@@ -1123,9 +1119,9 @@ mod tests {
 
     #[kithara::test]
     fn try_read_returns_seek_pending_when_flushing() {
-        let timeline = Timeline::new();
-        let _ = timeline.seek_control().begin(Duration::from_millis(10));
-        let source = ScriptSource::new(timeline.clone(), [WaitOutcome::Interrupted], [], vec![]);
+        let seek = Arc::new(SeekState::new());
+        let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
+        let source = ScriptSource::new(Arc::clone(&seek), [WaitOutcome::Interrupted], [], vec![]);
         let mut stream = Stream::<DummyType> { source };
         let mut buf = [0u8; 4];
 
@@ -1140,9 +1136,9 @@ mod tests {
 
     #[kithara::test]
     fn try_read_returns_seek_pending_when_epoch_changes_after_wait() {
-        let timeline = Timeline::new();
         let source = SeekDuringWaitSource {
-            timeline: timeline.clone(),
+            seek: Arc::new(SeekState::new()),
+            playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             read_calls: 0,
         };
@@ -1163,8 +1159,7 @@ mod tests {
 
     #[kithara::test]
     fn seek_updates_position() {
-        let timeline = Timeline::new();
-        let source = ScriptSource::new(timeline.clone(), [], [], b"ABCDE".to_vec());
+        let source = ScriptSource::new(Arc::new(SeekState::new()), [], [], b"ABCDE".to_vec());
         let mut stream = Stream::<DummyType> { source };
 
         let pos = stream
@@ -1177,8 +1172,7 @@ mod tests {
 
     #[kithara::test]
     fn seek_time_anchor_does_not_move_position() {
-        let timeline = Timeline::new();
-        let mut source = ScriptSource::new(timeline.clone(), [], [], b"ABCDE".to_vec());
+        let mut source = ScriptSource::new(Arc::new(SeekState::new()), [], [], b"ABCDE".to_vec());
         source.set_position(11);
         source.anchor = Some(SourceSeekAnchor {
             byte_offset: 3,

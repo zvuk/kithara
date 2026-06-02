@@ -14,8 +14,8 @@ use arbitrary::{Arbitrary, Unstructured};
 use kithara_platform::{time::Duration, tokio::runtime::Builder};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, PlayheadRead, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, Source,
-    SourcePhase, Stream, StreamResult, StreamType, Timeline,
+    Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve,
+    SeekState, Source, SourcePhase, Stream, StreamResult, StreamType,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -101,7 +101,8 @@ impl<'a> Arbitrary<'a> for Input {
 
 #[derive(Default)]
 struct ScriptSource {
-    timeline: Timeline,
+    seek: Arc<SeekState>,
+    playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
     data: Vec<u8>,
     reads: VecDeque<ReadOutcome>,
@@ -110,23 +111,23 @@ struct ScriptSource {
 
 impl Source for ScriptSource {
     fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-        self.timeline.playhead_read()
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
     }
 
     fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-        self.timeline.playhead_write()
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
     }
 
     fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        self.timeline.seek_observe()
+        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
     }
 
     fn seek_control(&self) -> Arc<dyn SeekControl> {
-        self.timeline.seek_control()
+        Arc::clone(&self.seek) as Arc<dyn SeekControl>
     }
 
     fn activity(&self) -> Arc<dyn Activity> {
-        self.timeline.activity()
+        Arc::clone(&self.seek) as Arc<dyn Activity>
     }
 
     fn position(&self) -> u64 {
@@ -204,10 +205,9 @@ fuzz_target!(|input: Input| {
         }
     });
 
-    let timeline = Timeline::new();
-    let _ = timeline.clone();
     let source = ScriptSource {
-        timeline,
+        seek: Arc::new(SeekState::new()),
+        playhead: Arc::new(PlayheadState::new()),
         position: Arc::new(AtomicU64::new(0)),
         data: input.data,
         reads: reads.collect(),

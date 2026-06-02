@@ -93,7 +93,7 @@ fn build_fixture() -> HlsFixtureBuilder {
 /// The bug: the source timeline's `committed_position` jumps forward by ~one
 /// segment with no seek when a slow FLAC segment isn't ready by the real-time
 /// deadline ("проглатывание"). Detector: the `committed_ns` USDT probe on
-/// `Timeline::write_playhead` — fail if the committed playhead ever jumps
+/// `PlayheadState::write_playhead` — fail if the committed playhead ever jumps
 /// forward by more than [`MAX_COMMITTED_STEP_SECS`] in a single commit.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::symphonia(DecoderBackend::Symphonia)]

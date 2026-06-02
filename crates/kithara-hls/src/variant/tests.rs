@@ -10,7 +10,7 @@ use kithara_platform::{
     time::{Duration, Instant},
 };
 use kithara_storage::WaitOutcome;
-use kithara_stream::{SeekObserve, SourceError, StreamError, Timeline};
+use kithara_stream::{SeekControl, SeekObserve, SeekState, SourceError, StreamError};
 use kithara_test_utils::kithara;
 use url::Url;
 
@@ -81,7 +81,7 @@ fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) 
         init_size,
         media_sizes,
         ctx,
-        Timeline::new().seek_observe(),
+        Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
     )
 }
 
@@ -558,7 +558,7 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
         VariantParts {
             init,
             playlist_state: Arc::new(PlaylistState::new(Vec::new())),
-            seek_obs: Timeline::new().seek_observe(),
+            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
             codec: None,
             container: None,
             segments: vec![seg],
@@ -730,20 +730,26 @@ fn wait_range_probes_without_sleeping() {
 }
 
 /// The flush short-circuit remains reachable and immediate after the
-/// non-blocking-pull conversion: a flushing timeline yields `Interrupted`
+/// non-blocking-pull conversion: a flushing seek state yields `Interrupted`
 /// without spinning on the budget signal.
 #[kithara::test]
 fn wait_range_flush_short_circuits_without_sleeping() {
     let ctx = test_ctx(3);
-    let timeline = Timeline::new();
-    let v = make_var_with_seek_obs(0, 200, &[400], &ctx, timeline.seek_observe());
+    let seek = Arc::new(SeekState::new());
+    let v = make_var_with_seek_obs(
+        0,
+        200,
+        &[400],
+        &ctx,
+        Arc::clone(&seek) as Arc<dyn SeekObserve>,
+    );
 
-    let _ = timeline.seek_control().begin(Duration::from_millis(10));
+    let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
     let started = Instant::now();
     let interrupted = v.wait_range(0..1, Some(Duration::from_millis(10)));
     assert!(
         matches!(interrupted, Ok(WaitOutcome::Interrupted)),
-        "flushing timeline must Interrupt the probe, got {interrupted:?}"
+        "flushing seek state must Interrupt the probe, got {interrupted:?}"
     );
     assert!(
         started.elapsed() < Duration::from_millis(2),
