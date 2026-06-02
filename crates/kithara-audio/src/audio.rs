@@ -1,7 +1,10 @@
 use std::{
+    error::Error as StdError,
+    fmt,
     io::{Error as IoError, Read, Seek, SeekFrom},
     marker::PhantomData,
     num::{NonZeroU32, NonZeroUsize},
+    ops::Range,
     sync::{
         Arc,
         atomic::{AtomicU32, AtomicU64, Ordering},
@@ -11,12 +14,12 @@ use std::{
 
 use fast_interleave::deinterleave_variable;
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
+use kithara_decode::{DecoderFactory, ErrorClass, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, DeferredBus, EventBus, SeekLifecycleStage, SegmentLocation};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
 use kithara_platform::{CancellationToken, thread::park_timeout, tokio::task::spawn_blocking};
-use kithara_stream::{MediaInfo, Stream, StreamType, Timeline};
+use kithara_stream::{MediaInfo, SourcePhase, Stream, StreamType, Timeline};
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
 use tracing::{debug, info, trace, warn};
@@ -56,6 +59,40 @@ fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
         )))
     })
 }
+
+/// Typed terminal surfaced by [`Audio::create_initial_decoder`]'s init-range
+/// readiness gate when the bytes the construction probe needs never become
+/// readable. Boxed into [`DecodeError::Backend`], so it classifies as
+/// `ErrorClass::Other` — `is_interrupted()` is `false`, distinguishing a
+/// genuinely-unavailable init from the cooperative-retry `Interrupted` signal
+/// a caller would `.expect()` away. Replaces the prior synthetic
+/// `Io(TimedOut)` that conflated "slow" with "broken".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitNotReady {
+    /// The gate spun the full [`Audio::PROBE_WARM_TIMEOUT`] budget without the
+    /// init range becoming `Ready`.
+    Budget,
+    /// The source reached end-of-stream before the init range was readable.
+    Eof,
+    /// The source's cancel token fired while awaiting the init range.
+    Cancelled,
+}
+
+impl fmt::Display for InitNotReady {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Budget => {
+                "initial decoder init range did not become ready within the probe budget"
+            }
+            Self::Eof => "source reached EOF before the initial decoder init range was readable",
+            Self::Cancelled => {
+                "source cancelled before the initial decoder init range was readable"
+            }
+        })
+    }
+}
+
+impl StdError for InitNotReady {}
 
 enum FetchOutcome {
     Continue,
@@ -180,23 +217,28 @@ impl<S> Audio<S> {
     /// Probe buffer size in bytes for initial stream detection.
     const PROBE_BUFFER_SIZE: usize = 1024;
 
-    /// Wall-clock budget for the construction-time blocking warm-read.
+    /// Wall-clock budget for the construction-time init-range readiness gate.
     ///
-    /// The non-blocking-pull read path makes `Stream::read` return
-    /// `Interrupted`/`NotReady` immediately when the first segment has not
-    /// arrived yet (the worker decode loop tolerates this by parking and
-    /// re-ticking). Decoder construction, however, runs once on a
-    /// `spawn_blocking` thread and has no re-tick loop — it must read the
-    /// container prefix synchronously. This budget bounds how long the
-    /// off-RT probe waits for that prefix to download before giving up; a
-    /// broken downloader cannot hang construction, and on the happy path
-    /// the prefix resolves well under it.
+    /// The non-blocking-pull read path makes the source report `Waiting`
+    /// immediately when the init/header bytes have not arrived yet (the worker
+    /// decode loop tolerates this by parking and re-ticking). Decoder
+    /// construction, however, runs once on a `spawn_blocking` thread and has no
+    /// re-tick loop — so [`Self::gate_init_range`] awaits the init range up
+    /// front before the single build. This budget bounds how long that off-RT
+    /// gate spins for the init to download before surfacing a typed
+    /// [`InitNotReady`] terminal; a broken downloader cannot hang construction,
+    /// and on the happy path the init resolves well under it.
     const PROBE_WARM_TIMEOUT: Duration = Duration::from_secs(5);
 
-    /// Backoff between construction-time warm-read retries while the
-    /// prefix is still downloading. Off-RT (construction only), so a short
-    /// sleep is the permitted backoff.
-    const PROBE_WARM_BACKOFF: Duration = Duration::from_millis(2);
+    /// Maximum number of times the construction build is re-issued after a
+    /// genuine concurrent fence move (a seek bumped the seek-epoch, or an
+    /// auto-ABR boundary fenced the active variant) raced the single build.
+    /// Each rebuild applies the fence (`clear_variant_fence` / re-resolved
+    /// gate) and tries once more — this is bounded by *observed fence moves*,
+    /// not a timer: a fence that keeps flapping past this count is a real
+    /// source-state problem, not a slow start, and surfaces the typed terminal
+    /// rather than spinning.
+    const MAX_FENCE_REBUILDS: u8 = 2;
 
     /// Minimum playback-position advance (ms) between `PlaybackProgress`
     /// emissions. Caps progress telemetry to ~10/s so it cannot flood the
@@ -1009,29 +1051,43 @@ where
         DeferredBus::new(bus.clone(), AUDIO_EVENT_CAPACITY)
     }
 
-    /// Build the initial decoder, tolerating the transient `Interrupted`
-    /// retry-signal the construction probe can hit.
+    /// Build the initial decoder behind a deterministic init-range readiness
+    /// gate. Runs the whole sequence once on a `spawn_blocking` thread (off the
+    /// real-time produce core), so a bounded yield-spin is the permitted wait.
     ///
-    /// The decoder probe reads the container header + first packet through the
-    /// source's non-blocking single-probe `Read`. Three transient conditions
-    /// surface there as an `ErrorClass::Interrupted` `io::Error` — not-ready
-    /// bytes (`NotReady`), a flush / seek-epoch bump (`SeekPending`), and an
-    /// auto-ABR variant boundary (`VariantChange`) — none of which is a hard
-    /// codec/container failure. The steady-state decode loop and the
-    /// decoder-recreate path both treat `Interrupted` as "wait for the source,
-    /// retry" (`DecodeStep::Interrupted` / `RecreateOutcome::NeedsSourceWait`);
-    /// construction is the one path that lacked that tolerance and instead
-    /// surfaced `DecodeError::Interrupted` as a fatal creation error
-    /// (`.expect("audio creation")` then panicked under load — flake F2).
+    /// The construction probe reads the container header through the source's
+    /// non-blocking single-probe `Read`. For a segmented source (HLS) that is
+    /// exactly the init segment range (`SegmentLayout::init_segment_range` =
+    /// `0..init_size`), which is knowable up-front — the size estimation that
+    /// runs inside `Stream::new` resolves it before this build. The honest
+    /// "those bytes have not downloaded yet" condition surfaces from the
+    /// non-blocking pull as `ErrorClass::Interrupted`; instead of rebuilding the
+    /// decoder to *poll* that readiness, [`Self::gate_init_range`] awaits the
+    /// init range up front (the `prime_seek_range` shape — probe `phase_at`,
+    /// wake the peer, bounded by [`Self::PROBE_WARM_TIMEOUT`]). Once the init is
+    /// `Ready`, the single [`Self::build_initial_decoder`] read of that range
+    /// cannot return `Pending`. For a non-segmented source (regular file) there
+    /// is no init segment, so the gate falls back to the container probe prefix
+    /// `0..PROBE_BUFFER_SIZE` (file construction never flakes — this preserves
+    /// today's behaviour without a rebuild loop).
     ///
-    /// Mirror the recreate contract here: re-run the build after a short
-    /// off-RT backoff while it reports `Interrupted`, within
-    /// [`Self::PROBE_WARM_TIMEOUT`]. Each attempt rebuilds the config from
-    /// scratch, so `take_reader_hooks` (which mints a fresh handle per call)
-    /// and the `OffsetReader` cursor are reset cleanly. On budget exhaustion
-    /// the error is re-mapped to a typed terminal `TimedOut` so the caller
-    /// never sees the cooperative-retry signal. This does NOT touch the
-    /// `wait_range` / DRM cancel budget gate — it only re-issues the build.
+    /// After the gate the decoder is built EXACTLY ONCE. A genuine concurrent
+    /// fence change can still race the build: a seek bumps the seek-epoch
+    /// (`SeekPending`) or an auto-ABR boundary fences a variant
+    /// (`VariantChange`). Those are not waited-out by rebuilding on a timer —
+    /// they are *applied*: on `VariantChange` the pending variant is
+    /// acknowledged (`clear_variant_fence`, re-resolving the active variant the
+    /// gate then re-awaits), and the build is re-issued once per observed fence
+    /// move, bounded by [`Self::MAX_FENCE_REBUILDS`]. This fixes the previous
+    /// loop's dead defect where `VariantChange` (which classifies as
+    /// `ErrorClass::VariantChange`, not `Interrupted`) propagated as a fatal
+    /// creation error instead of being applied.
+    ///
+    /// On gate exhaustion the source's typed terminal is surfaced verbatim
+    /// ([`InitNotReady`] for a never-arriving init, EOF, or cancellation) —
+    /// never a synthetic `Io(TimedOut)` that would conflate "slow" with
+    /// "broken". This path does NOT touch the `wait_range` / DRM cancel budget
+    /// gate; it only reads the source phase and re-issues the build.
     async fn create_initial_decoder(
         shared_stream: SharedStream<T>,
         initial_media_info: Option<MediaInfo>,
@@ -1041,8 +1097,8 @@ where
         decoder_backend: kithara_decode::DecoderBackend,
     ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation...");
-        let deadline = kithara_platform::time::Instant::now() + Self::PROBE_WARM_TIMEOUT;
-        loop {
+        let mut last_transient: Option<DecodeError> = None;
+        for _ in 0..=Self::MAX_FENCE_REBUILDS {
             let attempt = Self::build_initial_decoder(
                 shared_stream.clone(),
                 initial_media_info.clone(),
@@ -1052,34 +1108,131 @@ where
                 decoder_backend,
             )
             .await;
-            match attempt {
-                Ok(decoder) => {
+            let class = match attempt.as_ref() {
+                Ok(_) => {
                     debug!("Audio::new — decoder created");
-                    return Ok(decoder);
+                    return attempt;
                 }
-                Err(e) if e.is_interrupted() => {
-                    if kithara_platform::time::Instant::now() >= deadline {
-                        debug!(?e, "create_initial_decoder: probe interrupted past budget");
-                        return Err(DecodeError::Io(IoError::new(
-                            std::io::ErrorKind::TimedOut,
-                            "initial decoder probe stayed interrupted past the probe budget",
-                        )));
+                Err(e) => e.classify(),
+            };
+            // Only a genuine concurrent fence move (a `VariantChange` fence or a
+            // seek-epoch `Interrupted`) re-issues the build, bounded by the
+            // rebuild count. `VariantChange` additionally *applies* the pending
+            // switch (`clear_variant_fence`, as `execute_recreation` does) so
+            // the next gate re-resolves the now-active variant. Any other class
+            // — including the gate's own typed [`InitNotReady`] terminal — is
+            // genuine and surfaces verbatim, never rebuilt.
+            if !matches!(class, ErrorClass::VariantChange | ErrorClass::Interrupted) {
+                return attempt;
+            }
+            if class == ErrorClass::VariantChange {
+                shared_stream.clear_variant_fence();
+            }
+            debug!(
+                ?class,
+                "create_initial_decoder: concurrent fence at build — re-resolve + rebuild"
+            );
+            last_transient = attempt.err();
+        }
+        // The fence / transient kept recurring past the bounded rebuild count.
+        // Never surface the cooperative-retry `Interrupted` signal a caller
+        // `.expect()`s away at construction: map the residual transient to the
+        // typed init-not-available terminal (a persistently-unsatisfiable init
+        // at construction is a real source-state problem, not a slow start).
+        debug!(
+            transient = ?last_transient,
+            "create_initial_decoder: transient persisted past rebuild budget"
+        );
+        Err(DecodeError::backend(InitNotReady::Budget))
+    }
+
+    /// Await the byte range the construction probe will read, in the
+    /// [`Stream::seek`] `prime_seek_range` shape: probe the source phase, wake
+    /// the peer when not ready (off-RT — runs inside the `spawn_blocking` probe
+    /// task, so an immediate `notify_now` is allowed and the spin never blocks
+    /// the async executor), and bound the yield-spin by
+    /// [`Self::PROBE_WARM_TIMEOUT`] wall-clock. Exits the moment the range is
+    /// `Ready` and surfaces the source's typed terminal on `Eof` / `Cancelled`
+    /// / budget-exhaustion.
+    ///
+    /// The range is re-resolved every spin from the live source so a DRM
+    /// post-decrypt init shrink (PKCS7 padding stripped on commit, which moves
+    /// `init_size`) gates on what the layout currently resolves the init range
+    /// to, not a stale announced size.
+    fn gate_init_range(shared_stream: &SharedStream<T>) -> Result<(), DecodeError> {
+        let deadline = kithara_platform::time::Instant::now() + Self::PROBE_WARM_TIMEOUT;
+        loop {
+            let range = Self::probe_init_range(shared_stream);
+            match shared_stream.phase_at(range.clone()) {
+                SourcePhase::Ready => return Ok(()),
+                SourcePhase::Eof => {
+                    debug!(?range, "gate_init_range: source at EOF before init ready");
+                    return Err(DecodeError::backend(InitNotReady::Eof));
+                }
+                SourcePhase::Cancelled => {
+                    debug!(?range, "gate_init_range: source cancelled");
+                    return Err(DecodeError::backend(InitNotReady::Cancelled));
+                }
+                // Not yet readable (`Seeking` / `Waiting*` and any future
+                // non-terminal phase): wake the peer to fetch the range and
+                // spin until it lands or the budget elapses.
+                _ => {
+                    if let Some(wake) = shared_stream.peer_wake() {
+                        wake.notify_now();
                     }
-                    trace!(
-                        ?e,
-                        "create_initial_decoder: transient interrupt, retrying build"
-                    );
-                    kithara_platform::time::sleep(Self::PROBE_WARM_BACKOFF).await;
+                    if kithara_platform::time::Instant::now() >= deadline {
+                        debug!(
+                            ?range,
+                            "gate_init_range: init range not ready within budget"
+                        );
+                        return Err(DecodeError::backend(InitNotReady::Budget));
+                    }
+                    kithara_platform::thread::yield_now();
                 }
-                Err(e) => return Err(e),
             }
         }
     }
 
-    /// Single construction-probe attempt: build the decoder config and run the
-    /// blocking probe once on `spawn_blocking`. Returns the transient
-    /// `Interrupted` retry-signal unmodified so [`Self::create_initial_decoder`]
-    /// can decide whether to retry.
+    /// Resolve the byte range the construction decoder probe reads, all of
+    /// which starts at offset 0.
+    ///
+    /// The factory probe reads the container header from byte 0 through one
+    /// probe buffer (`PROBE_BUFFER_SIZE`). Segmented sources (HLS, fragmented
+    /// file-mp4) additionally carry a separate init segment
+    /// ([`SegmentLayout::init_segment_range`] = `0..init_size`, reflecting the
+    /// live — post-decrypt for DRM — `init_size`); a large CMAF init (full
+    /// `moov`) extends past the probe buffer. So the gate awaits
+    /// `0..max(init_size, PROBE_BUFFER_SIZE)`, which is exactly the bytes the
+    /// build reads:
+    /// - CMAF/fMP4 (`init_size` ≫ probe buffer): `0..init_size` — init alone,
+    ///   matching the recreate path's init-range gate.
+    /// - WAV / raw containers (tiny or absent init): `0..PROBE_BUFFER_SIZE` —
+    ///   the prefix the prior best-effort warm read, now the authoritative
+    ///   gate.
+    ///
+    /// Clamped to the source length so the gate never awaits phantom bytes
+    /// past EOF. The gate only reads the source *phase* (`phase_at`), which is
+    /// a point-in-time readiness check — it never advances the reader cursor,
+    /// so this window cannot induce a mid-construction ABR boundary commit
+    /// regardless of how it relates to a segment boundary (the starvation the
+    /// "warm full segment" revert avoided came from cursor-advancing reads, not
+    /// from a wide readiness window).
+    fn probe_init_range(shared_stream: &SharedStream<T>) -> Range<u64> {
+        let init_end = shared_stream
+            .as_segment_layout()
+            .map_or(0, |layout| layout.init_segment_range().end);
+        let end = init_end.max(Self::PROBE_BUFFER_SIZE as u64);
+        let end = shared_stream.len().map_or(end, |len| end.min(len.max(1)));
+        0..end
+    }
+
+    /// Run the init-range readiness gate then the single decoder build, both
+    /// on one `spawn_blocking` thread (off the async executor — the gate's
+    /// bounded yield-spin must not block the runtime that drives the downloader
+    /// peer it is waking). The gate proves the init range readable before the
+    /// build reads it, so a `Pending` from the init read is no longer expected;
+    /// any transient the build returns is a genuine concurrent fence move
+    /// handled by the [`Self::create_initial_decoder`] caller.
     async fn build_initial_decoder(
         shared_stream: SharedStream<T>,
         initial_media_info: Option<MediaInfo>,
@@ -1101,6 +1254,17 @@ where
         let hint_for_decoder = hint;
         let initial_media_info_for_decoder = initial_media_info;
         spawn_blocking(move || {
+            // The init-range gate is the F2 fix for segmented sources (HLS),
+            // whose init range is knowable up-front and whose not-ready signal
+            // is a peer-driven download-in-progress (never a hard error at the
+            // gate). Non-segmented sources (file) have no peer to wake and
+            // their hard failures (503) are surfaced by the blocking warm-read
+            // in `probe_stream_blocking`; gating them on `phase_at` would spin
+            // the budget on an already-failed resource, so they skip the gate
+            // and read the warmed prefix directly.
+            if shared_stream.as_segment_layout().is_some() {
+                Self::gate_init_range(&shared_stream)?;
+            }
             if let Some(ref info) = initial_media_info_for_decoder {
                 DecoderFactory::create_from_media_info(shared_stream, info, decoder_config)
             } else {
@@ -1181,42 +1345,54 @@ where
         byte_pool: &kithara_bufpool::BytePool,
     ) -> Result<Stream<T>, DecodeError> {
         let mut probe_buf = byte_pool.get_with(|b| b.resize(Self::PROBE_BUFFER_SIZE, 0));
-        Self::warm_probe_prefix(&mut stream, &mut probe_buf);
+        // Segmented sources (HLS) have their construction read gated by the
+        // authoritative init-range gate in `build_initial_decoder`
+        // (`gate_init_range`), which subsumes the old probabilistic
+        // 1 KiB-at-offset-0 warm. Non-segmented sources (file) have no init
+        // segment and no downloader peer to wake, so `phase_at` cannot tell a
+        // slow-but-arriving prefix from a hard fetch failure; keep the
+        // blocking warm-read here, which warms a slow prefix yet surfaces a
+        // hard error (e.g. 503) immediately instead of spinning the budget.
+        if stream.as_segment_layout().is_none() {
+            Self::warm_probe_prefix(&mut stream, &mut probe_buf)?;
+        }
         stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
         Ok(stream)
     }
 
-    /// Best-effort warm of the container prefix on the `spawn_blocking` probe
-    /// task before the decoder build runs. Reads exactly one probe buffer at
-    /// offset 0, retrying with a short backoff until the bytes land, a hard
-    /// error surfaces, or [`Self::PROBE_WARM_TIMEOUT`] elapses, then returns
-    /// regardless — the decoder build's own `Interrupted`-retry loop
-    /// ([`Self::create_initial_decoder`]) owns the readiness budget and the
-    /// typed-terminal-on-timeout contract. It deliberately does NOT read
-    /// forward past the first buffer: advancing the cursor across a segment
-    /// boundary here would drive an ABR commit mid-construction. The caller
-    /// seeks back to 0 and the decoder probe reads the warmed prefix.
-    fn warm_probe_prefix(stream: &mut Stream<T>, probe_buf: &mut [u8]) {
-        let deadline = kithara_platform::time::Instant::now() + Self::PROBE_WARM_TIMEOUT;
-        loop {
-            match stream.read(probe_buf) {
-                Ok(_) => return,
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
-                    ) =>
-                {
-                    if kithara_platform::time::Instant::now() >= deadline {
-                        tracing::debug!(?e, "warm_probe_prefix: timed out waiting for prefix");
-                        return;
-                    }
-                    park_timeout(Self::PROBE_WARM_BACKOFF);
-                }
-                Err(e) => {
-                    tracing::debug!(?e, "warm_probe_prefix: probe read failed");
-                    return;
-                }
+    /// Blocking warm of the container prefix for non-segmented sources (file).
+    /// Reads exactly one probe buffer at offset 0 through the blocking
+    /// `Stream::read` adapter, which retries a transient
+    /// `Interrupted`/`WouldBlock` (slow-but-arriving prefix) across its own
+    /// budget and surfaces a genuine source error (e.g. an unavailable
+    /// resource's 503) immediately. A surfaced hard error fails construction
+    /// fast — it is NOT a transient retry-signal, so it never spins the
+    /// init-readiness budget. Does not read past the first buffer; the caller
+    /// seeks back to 0.
+    ///
+    /// # Errors
+    ///
+    /// Returns the source's `io::Error` (as [`DecodeError::Io`]) for a genuine
+    /// read failure. A transient interrupt is not an error here — the read is
+    /// best-effort and the decoder build re-reads the warmed prefix.
+    fn warm_probe_prefix(stream: &mut Stream<T>, probe_buf: &mut [u8]) -> Result<(), DecodeError> {
+        match stream.read(probe_buf) {
+            Ok(_) => Ok(()),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                debug!(
+                    ?e,
+                    "warm_probe_prefix: transient interrupt, leaving to decoder build"
+                );
+                Ok(())
+            }
+            Err(e) => {
+                debug!(?e, "warm_probe_prefix: hard read failure at construction");
+                Err(DecodeError::Io(e))
             }
         }
     }

@@ -2,27 +2,33 @@
 
 //! Deterministic repro for flake F2 (`Audio::new() -> Err(Interrupted)` at
 //! creation under load): the construction-time decoder probe reads the
-//! container header + first packet through the source's non-blocking
-//! single-probe `Read`, so any byte it touches that has not downloaded yet
-//! surfaces immediately as the transient `Interrupted` retry-signal. At
-//! construction there is no decode loop to park and re-tick, so the signal
-//! propagated as a FATAL `DecodeError::Interrupted` (`is_interrupted() ==
-//! true`) — the `.expect("audio creation")` in
-//! `live_real_stream_seek_resume_native_drm` and the cap=1 hot-refetch repro
-//! both panicked on it under CPU contention, before any seek/playback ran.
+//! container header through the source's non-blocking single-probe `Read`, so
+//! any byte it touches that has not downloaded yet surfaces immediately as the
+//! transient `Interrupted` retry-signal. At construction there is no decode
+//! loop to park and re-tick, so the signal propagated as a FATAL
+//! `DecodeError::Interrupted` (`is_interrupted() == true`) — the
+//! `.expect("audio creation")` in `live_real_stream_seek_resume_native_drm`
+//! and the cap=1 hot-refetch repro both panicked on it under CPU contention,
+//! before any seek/playback ran.
 //!
-//! Contract: `Audio::new` must NOT surface the transient `Interrupted`
-//! retry-signal as its error. The construction build retries on
-//! `ErrorClass::Interrupted` (waiting for the source the way the steady-state
-//! decode loop and the decoder-recreate path do) within the probe budget and,
-//! if the data genuinely never arrives, fails with a TYPED terminal error
-//! (`is_interrupted() == false`) — never the cooperative-retry signal a caller
-//! would `.expect()` away as "cannot happen at creation".
+//! Contract (post F2-fix-of-fix, Option A): `Audio::new` runs a deterministic
+//! init-range readiness gate before the single decoder build. The gate awaits
+//! the exact range the probe reads (`0..max(init_size, probe_buffer)`), waking
+//! the downloader peer, bounded by the construction probe budget. So:
+//! - The transient `Interrupted` retry-signal is NEVER surfaced as the
+//!   creation error (`is_interrupted() == false` always).
+//! - If the init bytes genuinely never arrive, the gate surfaces a TYPED
+//!   terminal ("init not available") — NOT the cooperative-retry `Interrupted`
+//!   signal a caller `.expect()`s away, and NOT the prior synthetic
+//!   `Io(TimedOut)` that conflated "slow" with "broken".
+//! - If the bytes arrive (slow start), the gate resolves and the build
+//!   succeeds.
 //!
 //! Determinism: no `sleep`, no real-time pacing, no CPU-load dependence. The
 //! `HlsTestServer` segment gate withholds segment 0's BODY while its size
 //! (HEAD) stays known, so up-front size estimation still completes at
-//! construction but the decoder probe reads not-ready data — exactly the
+//! construction but the decoder probe's read window (which spills past the
+//! 44-byte WAV init into the withheld body) reads not-ready data — exactly the
 //! race the load flake hits non-deterministically.
 
 use std::{num::NonZeroUsize, sync::Arc};
@@ -93,11 +99,15 @@ fn audio_config(server: &HlsTestServer, temp_dir: &TestTempDir) -> AudioConfig<H
         .build()
 }
 
-/// The first segment's body never arrives. `Audio::new` must surface a TYPED
-/// terminal error, NOT the transient `Interrupted` retry-signal that callers
-/// `.expect()` away. RED before the fix: the one-shot decoder probe returned
-/// `DecodeError::Interrupted` (`is_interrupted() == true`) as soon as the
-/// not-ready read hit.
+/// The first segment's body never arrives (the WAV init's 44 bytes are open,
+/// but the probe window spills past them into the withheld body). The
+/// init-range gate spins its bounded budget and then `Audio::new` surfaces a
+/// TYPED terminal error — never the transient `Interrupted` retry-signal that
+/// callers `.expect()` away, and never the prior synthetic `Io(TimedOut)`.
+/// RED before the F2 fix: the one-shot decoder probe returned
+/// `DecodeError::Interrupted` (`is_interrupted() == true`). RED before the
+/// fix-of-fix: the gate-exhaustion path re-mapped to a synthetic
+/// `Io(TimedOut)`.
 #[kithara::test(
     tokio,
     native,
@@ -115,23 +125,31 @@ async fn audio_new_never_surfaces_interrupted_when_first_segment_withheld() {
     let result = Audio::<Stream<Hls>>::new(audio_config(&server, &temp_dir)).await;
     let elapsed = started.elapsed();
 
-    match result {
-        Ok(_audio) => info!(
-            ?elapsed,
-            "Audio::new succeeded (segment landed within budget)"
-        ),
-        Err(e) => {
-            info!(?elapsed, %e, is_interrupted = e.is_interrupted(), "Audio::new failed");
-            assert!(
-                !e.is_interrupted(),
-                "Audio::new surfaced the transient `Interrupted` retry-signal as its \
-                 creation error ({e}) — the not-ready first-segment read must become a \
-                 typed terminal error, never the cooperative-retry signal a caller \
-                 `.expect()`s away (flake F2: live_real_stream_seek_resume_native_drm / \
-                 red_flaky_small_cache_hot_refetch_behind_reader)"
-            );
-        }
-    }
+    let err = result
+        .err()
+        .expect("withheld init body must fail Audio::new, not succeed");
+    let message = err.to_string();
+    info!(?elapsed, %message, is_interrupted = err.is_interrupted(), "Audio::new failed");
+
+    assert!(
+        !err.is_interrupted(),
+        "Audio::new surfaced the transient `Interrupted` retry-signal as its \
+         creation error ({message}) — the not-ready init read must become a \
+         typed terminal error, never the cooperative-retry signal a caller \
+         `.expect()`s away (flake F2: live_real_stream_seek_resume_native_drm / \
+         red_flaky_small_cache_hot_refetch_behind_reader)"
+    );
+    // Typed terminal contract: the gate surfaces an "init range did not become
+    // ready" / "init range was readable" message, not a synthetic timeout.
+    assert!(
+        message.contains("init range"),
+        "Audio::new must surface the typed init-not-available terminal, got: {message}"
+    );
+    assert!(
+        !message.to_ascii_lowercase().contains("timed out")
+            && !message.to_ascii_lowercase().contains("timeout"),
+        "Audio::new must NOT surface a synthetic TimedOut — that conflates slow with broken: {message}"
+    );
 }
 
 /// Happy path under the same gate: once the withheld body is released (modelling
