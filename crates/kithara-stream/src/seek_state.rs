@@ -42,7 +42,7 @@ pub trait Activity: Send + Sync {
 /// `Timeline` holds an `Arc<SeekState>` and delegates all seek/flag/activity
 /// methods to it.
 #[derive(Debug)]
-pub(crate) struct SeekState {
+pub struct SeekState {
     /// Kept as `Arc<AtomicU64>` so `Timeline::seek_epoch_handle` can
     /// hand out a cheap `Arc` clone — same pattern as the original field.
     seek_epoch: Arc<AtomicU64>,
@@ -64,8 +64,9 @@ impl SeekState {
     const NO_PENDING_SEEK: u64 = u64::MAX;
     const NO_SEEK_TARGET: u64 = u64::MAX;
 
+    #[must_use]
     // ast-grep-ignore: style.prefer-default-derive
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             seek_epoch: Arc::new(AtomicU64::new(0)),
             seek_target_ns: AtomicU64::new(Self::NO_SEEK_TARGET),
@@ -78,7 +79,7 @@ impl SeekState {
 
     /// Expose the raw seek-epoch `Arc` for callers that need to share
     /// the atomic directly (e.g. `Timeline::seek_epoch_handle`).
-    pub(crate) fn seek_epoch_arc(&self) -> Arc<AtomicU64> {
+    pub fn seek_epoch_arc(&self) -> Arc<AtomicU64> {
         Arc::clone(&self.seek_epoch)
     }
 
@@ -94,6 +95,12 @@ impl SeekState {
     #[cfg(test)]
     pub(crate) fn remove_flags_raw(&self, flags: TimelineFlags, order: Ordering) {
         self.flags.fetch_and(!flags.bits(), order);
+    }
+}
+
+impl Default for SeekState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -7,7 +7,6 @@ use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
 
 use crate::{
-    Timeline,
     error::StreamResult,
     media::MediaInfo,
     playhead::{PlayheadRead, PlayheadWrite},
@@ -305,38 +304,20 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
         None
     }
 
-    /// Get shared playback timeline.
-    ///
-    /// Timeline is the single source of truth for playback state across all
-    /// stream types (segmented and non-segmented). Sources own their
-    /// Timeline and hand out cheap Arc clones to downstream consumers
-    /// (reader, audio FSM, Downloader peers).
-    fn timeline(&self) -> Timeline;
-
     /// Narrow read-only handle to the playhead position and total duration.
-    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-        self.timeline().playhead_arc()
-    }
+    fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
 
     /// Narrow mutating handle to the playhead — for the decode/produce path.
-    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-        self.timeline().playhead_arc()
-    }
+    fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
 
     /// Narrow read-only handle to seek/flush coordination state.
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        self.timeline().seek_arc()
-    }
+    fn seek_observe(&self) -> Arc<dyn SeekObserve>;
 
     /// Narrow mutating handle to seek coordination (`FLUSH_START` / `FLUSH_STOP`).
-    fn seek_control(&self) -> Arc<dyn SeekControl> {
-        self.timeline().seek_arc()
-    }
+    fn seek_control(&self) -> Arc<dyn SeekControl>;
 
     /// Narrow handle to the playback-activity flag.
-    fn activity(&self) -> Arc<dyn Activity> {
-        self.timeline().seek_arc()
-    }
+    fn activity(&self) -> Arc<dyn Activity>;
 
     /// Wait for data in range to be available.
     ///
@@ -462,6 +443,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::Timeline;
 
     #[kithara::test]
     fn test_source_trait_object_safety() {
@@ -482,8 +464,20 @@ mod tests {
             position: Arc<AtomicU64>,
         }
         impl Source for ReadySource {
-            fn timeline(&self) -> Timeline {
-                self.timeline.clone()
+            fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+                self.timeline.playhead_read()
+            }
+            fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+                self.timeline.playhead_write()
+            }
+            fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+                self.timeline.seek_observe()
+            }
+            fn seek_control(&self) -> Arc<dyn SeekControl> {
+                self.timeline.seek_control()
+            }
+            fn activity(&self) -> Arc<dyn Activity> {
+                self.timeline.activity()
             }
             fn wait_range(
                 &mut self,
@@ -536,8 +530,20 @@ mod tests {
             position: Arc<AtomicU64>,
         }
         impl Source for MinimalSource {
-            fn timeline(&self) -> Timeline {
-                self.timeline.clone()
+            fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+                self.timeline.playhead_read()
+            }
+            fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+                self.timeline.playhead_write()
+            }
+            fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+                self.timeline.seek_observe()
+            }
+            fn seek_control(&self) -> Arc<dyn SeekControl> {
+                self.timeline.seek_control()
+            }
+            fn activity(&self) -> Arc<dyn Activity> {
+                self.timeline.activity()
             }
             fn wait_range(
                 &mut self,

@@ -5,8 +5,8 @@ use kithara_events::EventBus;
 use kithara_platform::{CancellationToken, Mutex, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, MediaInfo, ReadOutcome, SegmentDescriptor, SourcePhase, StreamError, Timeline,
-    dl::PeerHandle,
+    Activity, AudioCodec, MediaInfo, PlayheadRead, PlayheadWrite, ReadOutcome, SeekControl,
+    SeekObserve, SegmentDescriptor, SourcePhase, StreamError, dl::PeerHandle,
 };
 use tracing::trace;
 use url::Url;
@@ -184,13 +184,29 @@ impl kithara_stream::Source for FileSource {
         let hooks = super::reader::FileReaderEventSink::new(
             self.inner.source.bus.clone(),
             Arc::clone(&self.coord),
-            self.coord.timeline().seek_epoch_handle(),
+            self.coord.seek_epoch_handle(),
         );
         Some(Box::new(hooks))
     }
 
-    fn timeline(&self) -> Timeline {
-        self.coord.timeline()
+    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        self.coord.playhead_read()
+    }
+
+    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        self.coord.playhead_write()
+    }
+
+    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        self.coord.seek_observe()
+    }
+
+    fn seek_control(&self) -> Arc<dyn SeekControl> {
+        self.coord.seek_control()
+    }
+
+    fn activity(&self) -> Arc<dyn Activity> {
+        self.coord.activity_handle()
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]

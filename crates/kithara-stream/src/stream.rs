@@ -749,7 +749,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{ReadOutcome, Source, SourcePhase, Timeline};
+    use crate::{PlayheadRead, ReadOutcome, Source, SourcePhase, Timeline};
 
     /// Test helper — script entry that maps to either `Bytes(N)` (with
     /// the source slicing actual `data`) or a terminal `Eof`. Pending
@@ -848,8 +848,24 @@ mod tests {
             self.position.store(pos, Ordering::Release);
         }
 
-        fn timeline(&self) -> Timeline {
-            self.timeline.clone()
+        fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+            self.timeline.playhead_read()
+        }
+
+        fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+            self.timeline.playhead_write()
+        }
+
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            self.timeline.seek_observe()
+        }
+
+        fn seek_control(&self) -> Arc<dyn SeekControl> {
+            self.timeline.seek_control()
+        }
+
+        fn activity(&self) -> Arc<dyn Activity> {
+            self.timeline.activity()
         }
 
         fn wait_range(
@@ -955,8 +971,24 @@ mod tests {
             self.position.store(pos, Ordering::Release);
         }
 
-        fn timeline(&self) -> Timeline {
-            self.timeline.clone()
+        fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+            self.timeline.playhead_read()
+        }
+
+        fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+            self.timeline.playhead_write()
+        }
+
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            self.timeline.seek_observe()
+        }
+
+        fn seek_control(&self) -> Arc<dyn SeekControl> {
+            self.timeline.seek_control()
+        }
+
+        fn activity(&self) -> Arc<dyn Activity> {
+            self.timeline.activity()
         }
 
         fn wait_range(

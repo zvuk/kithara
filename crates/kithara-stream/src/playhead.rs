@@ -14,7 +14,7 @@ const NO_DURATION: u64 = u64::MAX;
 /// Source-agnostic playback playhead. The committed position is the single
 /// coherent value readers need — a lone atomic, no torn read across fields.
 #[derive(Debug)]
-pub(crate) struct PlayheadState {
+pub struct PlayheadState {
     position_ns: AtomicU64,
     total_duration_ns: AtomicU64,
 }
@@ -39,8 +39,9 @@ pub trait PlayheadWrite: PlayheadRead {
 }
 
 impl PlayheadState {
+    #[must_use]
     // ast-grep-ignore: style.prefer-default-derive
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             position_ns: AtomicU64::new(0),
             total_duration_ns: AtomicU64::new(NO_DURATION),
@@ -67,6 +68,12 @@ impl PlayheadState {
     #[kithara::probe(committed_ns = pos.end_position_ns)]
     fn write_playhead(&self, pos: &ChunkPosition) {
         self.write_ns_capped(pos.end_position_ns);
+    }
+}
+
+impl Default for PlayheadState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

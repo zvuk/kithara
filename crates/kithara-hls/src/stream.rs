@@ -11,7 +11,7 @@ use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::EventBus;
 use kithara_platform::{CancellationToken, tokio::sync::mpsc};
 use kithara_stream::{
-    SourceError, StreamType, Timeline,
+    Activity, PlayheadState, PlayheadWrite, SeekObserve, SeekState, SourceError, StreamType,
     dl::{Downloader, DownloaderConfig, Peer},
 };
 
@@ -94,12 +94,12 @@ impl StreamType for Hls {
             .clone()
             .unwrap_or_else(|| BytePool::default().clone());
 
-        let timeline = Timeline::new();
-        let seek_obs = timeline.seek_observe();
-        let activity = timeline.activity();
+        let playhead = Arc::new(PlayheadState::new());
+        let seek = Arc::new(SeekState::new());
+        let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
         let hls_peer = Arc::new(HlsPeer::new(
             Arc::clone(&seek_obs),
-            Arc::clone(&activity),
+            Arc::clone(&seek) as Arc<dyn Activity>,
             config.initial_abr_mode,
         ));
         let peer_handle = downloader
@@ -157,14 +157,14 @@ impl StreamType for Hls {
             }
         }
 
-        timeline.set_total_duration(playlist_state.track_duration());
+        playhead.set_duration(playlist_state.track_duration());
 
         let plan_ctx = PlanCtx {
             master_cancel: cancel.clone(),
             scope: scope.clone(),
             headers: config.headers.clone(),
             prefetch_budget: config.download_batch_size.max(1),
-            seek_epoch: timeline.seek_epoch(),
+            seek_epoch: seek_obs.epoch(),
             look_ahead_bytes: Some(
                 config
                     .look_ahead_bytes
@@ -196,7 +196,8 @@ impl StreamType for Hls {
                 scope: scope.clone(),
                 headers: config.headers.clone(),
             },
-            timeline,
+            playhead,
+            seek,
             peer_handle.abr().clone(),
             Arc::clone(&variants),
             Arc::clone(&playlist_state),

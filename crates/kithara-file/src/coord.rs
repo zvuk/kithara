@@ -6,7 +6,10 @@ use std::sync::{
 };
 
 use kithara_platform::tokio as platform_tokio;
-use kithara_stream::{Activity, SeekObserve, Timeline};
+use kithara_stream::{
+    Activity, PlayheadRead, PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState,
+};
+use kithara_test_utils::kithara;
 use platform_tokio::sync::Notify;
 
 pub(crate) struct FileCoord {
@@ -17,9 +20,14 @@ pub(crate) struct FileCoord {
     read_pos: Arc<AtomicU64>,
     total_bytes: Arc<AtomicU64>,
     reader_advanced: Notify,
-    timeline: Timeline,
-    /// Narrow seek-observe handle (flush gate) — derived from `timeline`'s
-    /// shared `SeekState`, so it observes the same flags without the wide type.
+    /// Backing playhead state — the coord owns the `Arc` directly and
+    /// vends narrow trait-object handles from it.
+    playhead: Arc<PlayheadState>,
+    /// Backing seek/activity state — the coord owns the `Arc` directly and
+    /// vends narrow trait-object handles from it.
+    seek: Arc<SeekState>,
+    /// Narrow seek-observe handle (flush gate) — derived from the shared
+    /// `SeekState`, so it observes the same flags without the wide type.
     seek_obs: Arc<dyn SeekObserve>,
     /// Narrow activity handle (`is_playing`) read by the downloader peer.
     activity: Arc<dyn Activity>,
@@ -32,11 +40,12 @@ impl FileCoord {
     const NO_TOTAL_BYTES: u64 = u64::MAX;
 
     #[must_use]
-    pub(crate) fn new(timeline: Timeline) -> Self {
-        let seek_obs = timeline.seek_observe();
-        let activity = timeline.activity();
+    pub(crate) fn new(playhead: Arc<PlayheadState>, seek: Arc<SeekState>) -> Self {
+        let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
+        let activity = Arc::clone(&seek) as Arc<dyn Activity>;
         Self {
-            timeline,
+            playhead,
+            seek,
             seek_obs,
             activity,
             position: Arc::new(AtomicU64::new(0)),
@@ -67,8 +76,12 @@ impl FileCoord {
         Arc::clone(&self.read_pos)
     }
 
+    /// Report the current download byte position. The value is not stored
+    /// on the coord — it exists only as a USDT probe point
+    /// (`#[kithara::probe]`) for download-progress observability.
+    #[kithara::probe(value)]
     pub(crate) fn set_download_pos(&self, value: u64) {
-        self.timeline.set_download_position(value);
+        let _ = value;
     }
 
     pub(crate) fn set_position(&self, pos: u64) {
@@ -87,8 +100,33 @@ impl FileCoord {
     }
 
     #[must_use]
-    pub(crate) fn timeline(&self) -> Timeline {
-        self.timeline.clone()
+    pub(crate) fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+    }
+
+    #[must_use]
+    pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+    }
+
+    #[must_use]
+    pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+    }
+
+    #[must_use]
+    pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl> {
+        Arc::clone(&self.seek) as Arc<dyn SeekControl>
+    }
+
+    #[must_use]
+    pub(crate) fn activity_handle(&self) -> Arc<dyn Activity> {
+        Arc::clone(&self.seek) as Arc<dyn Activity>
+    }
+
+    #[must_use]
+    pub(crate) fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
+        self.seek.seek_epoch_arc()
     }
 
     #[must_use]
@@ -114,6 +152,6 @@ impl FileCoord {
 
 impl Default for FileCoord {
     fn default() -> Self {
-        Self::new(Timeline::new())
+        Self::new(Arc::new(PlayheadState::new()), Arc::new(SeekState::new()))
     }
 }

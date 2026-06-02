@@ -19,8 +19,9 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ByteMap, ContainerFormat, MediaInfo, PendingReason, PlayheadRead, ReadOutcome, SeekObserve,
-    SegmentDescriptor, SourcePhase, SourceSeekAnchor, StreamResult, Timeline, VariantControl,
+    Activity, ByteMap, ContainerFormat, MediaInfo, PendingReason, PlayheadRead, PlayheadState,
+    PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState, SegmentDescriptor,
+    SourcePhase, SourceSeekAnchor, StreamResult, VariantControl,
 };
 use kithara_test_utils::kithara;
 use tracing::info;
@@ -53,11 +54,16 @@ pub(crate) struct HlsCoord {
     pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
     pub(crate) cancel: CancellationToken,
     pub(crate) headers: Option<kithara_net::Headers>,
-    pub(crate) timeline: Timeline,
-    /// Narrow seek-observe handle — derived from `timeline` at construction.
+    /// Backing playhead state — the coord owns the `Arc` directly and
+    /// vends narrow trait-object handles from it.
+    playhead: Arc<PlayheadState>,
+    /// Backing seek/activity state — the coord owns the `Arc` directly and
+    /// vends narrow trait-object handles from it.
+    seek: Arc<SeekState>,
+    /// Narrow seek-observe handle — derived from `seek` at construction.
     /// Used by internal methods that only need epoch/target/pending reads.
     seek_obs: Arc<dyn SeekObserve>,
-    /// Narrow read-only playhead handle — derived from `timeline` at construction.
+    /// Narrow read-only playhead handle — derived from `playhead` at construction.
     /// Used by internal methods that only need committed position reads.
     playhead_read: Arc<dyn PlayheadRead>,
     playlist_state: Arc<PlaylistState>,
@@ -79,7 +85,8 @@ pub(crate) struct HlsCoord {
 impl HlsCoord {
     pub(crate) fn new(
         env: HlsCoordEnv,
-        timeline: Timeline,
+        playhead: Arc<PlayheadState>,
+        seek: Arc<SeekState>,
         abr: AbrHandle,
         variants: Arc<Vec<Arc<HlsVariant>>>,
         playlist_state: Arc<PlaylistState>,
@@ -92,10 +99,11 @@ impl HlsCoord {
             abr.current_variant_index().is_some(),
             "HlsCoord requires an AbrHandle with state — HlsPeer must construct AbrState"
         );
-        let seek_obs = timeline.seek_observe();
-        let playhead_read = timeline.playhead_read();
+        let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
+        let playhead_read = Arc::clone(&playhead) as Arc<dyn PlayheadRead>;
         Self {
-            timeline,
+            playhead,
+            seek,
             seek_obs,
             playhead_read,
             abr,
@@ -394,8 +402,28 @@ impl HlsCoord {
         }
     }
 
-    pub(crate) fn timeline(&self) -> Timeline {
-        self.timeline.clone()
+    pub(crate) fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+    }
+
+    pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+    }
+
+    pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+    }
+
+    pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl> {
+        Arc::clone(&self.seek) as Arc<dyn SeekControl>
+    }
+
+    pub(crate) fn activity(&self) -> Arc<dyn Activity> {
+        Arc::clone(&self.seek) as Arc<dyn Activity>
+    }
+
+    pub(crate) fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
+        self.seek.seek_epoch_arc()
     }
 
     fn variant_change_pending(&self) -> bool {

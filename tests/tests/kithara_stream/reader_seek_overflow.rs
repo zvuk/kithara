@@ -14,7 +14,8 @@ use std::{
 use kithara_platform::{time::Duration, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ReadOutcome, Source, SourcePhase, Stream, StreamResult, StreamType, Timeline,
+    Activity, PlayheadRead, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, Source,
+    SourcePhase, Stream, StreamResult, StreamType, Timeline,
 };
 use kithara_test_utils::kithara;
 
@@ -51,8 +52,24 @@ impl MockSource {
 }
 
 impl Source for MockSource {
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
+    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        self.timeline.playhead_read()
+    }
+
+    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        self.timeline.playhead_write()
+    }
+
+    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        self.timeline.seek_observe()
+    }
+
+    fn seek_control(&self) -> Arc<dyn SeekControl> {
+        self.timeline.seek_control()
+    }
+
+    fn activity(&self) -> Arc<dyn Activity> {
+        self.timeline.activity()
     }
 
     fn position(&self) -> u64 {

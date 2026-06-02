@@ -7,8 +7,8 @@ use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    BoxedEventSink, ByteMap, DeferredWake, MediaInfo, ReadOutcome, Source, SourcePhase,
-    StreamResult, Timeline,
+    Activity, BoxedEventSink, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadWrite,
+    ReadOutcome, SeekControl, SeekObserve, Source, SourcePhase, StreamResult,
 };
 
 use crate::{
@@ -107,9 +107,29 @@ impl Source for HlsSource {
         let sink = HlsReaderEventSink::new(
             self.bus.clone(),
             Arc::clone(&self.coord),
-            self.coord.timeline.seek_epoch_handle(),
+            self.coord.seek_epoch_handle(),
         );
         Some(Box::new(sink))
+    }
+
+    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        self.coord.playhead_read()
+    }
+
+    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        self.coord.playhead_write()
+    }
+
+    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        self.coord.seek_observe()
+    }
+
+    fn seek_control(&self) -> Arc<dyn SeekControl> {
+        self.coord.seek_control()
+    }
+
+    fn activity(&self) -> Arc<dyn Activity> {
+        self.coord.activity()
     }
 
     delegate! {
@@ -118,7 +138,6 @@ impl Source for HlsSource {
             fn position(&self) -> u64;
             fn advance(&self, n: u64);
             fn set_position(&self, pos: u64);
-            fn timeline(&self) -> Timeline;
             fn phase_at(&self, range: Range<u64>) -> SourcePhase;
             fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome>;
             fn wait_range(

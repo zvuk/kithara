@@ -8,7 +8,6 @@ use std::{
 };
 
 use bitflags::bitflags;
-use kithara_test_utils::kithara;
 
 use crate::{
     playhead::{PlayheadRead, PlayheadState, PlayheadWrite},
@@ -85,18 +84,6 @@ impl Timeline {
             playhead: Arc::new(PlayheadState::new()),
             seek: Arc::new(SeekState::new()),
         }
-    }
-
-    /// Vend a clone of the inner `Arc<PlayheadState>` — used by `Source`
-    /// default methods to produce typed trait-object handles.
-    pub(crate) fn playhead_arc(&self) -> Arc<PlayheadState> {
-        Arc::clone(&self.playhead)
-    }
-
-    /// Vend a clone of the inner `Arc<SeekState>` — used by `Source`
-    /// default methods to produce typed trait-object handles.
-    pub(crate) fn seek_arc(&self) -> Arc<SeekState> {
-        Arc::clone(&self.seek)
     }
 
     /// Narrow mutating playhead handle vended as a trait object.
@@ -183,29 +170,12 @@ impl Timeline {
         self.seek.target()
     }
 
-    /// Report the current download byte position. The value is not
-    /// stored on the timeline — it exists only as a USDT probe point
-    /// (`#[kithara::probe]`) for download-progress observability.
-    #[kithara::probe(position)]
-    pub fn set_download_position(&self, position: u64) {
-        let _ = position;
-    }
-
     /// Toggle the `PLAYING` flag.
     ///
     /// Orthogonal to `FLUSHING` / `SEEK_PENDING`: toggling `PLAYING`
     /// does not affect the seek state.
     pub fn set_playing(&self, playing: bool) {
         self.seek.set_playing(playing);
-    }
-
-    pub fn set_total_duration(&self, duration: Option<Duration>) {
-        self.playhead.set_duration(duration);
-    }
-
-    #[must_use]
-    pub fn total_duration(&self) -> Option<Duration> {
-        self.playhead.duration()
     }
 }
 
@@ -522,7 +492,8 @@ mod tests {
     #[kithara::test]
     fn advance_committed_chunk_updates_position_and_caps_at_duration() {
         let tl = Timeline::new();
-        tl.set_total_duration(Some(Duration::from_secs(10)));
+        tl.playhead_write()
+            .set_duration(Some(Duration::from_secs(10)));
 
         let pos = ChunkPosition {
             frame_offset: 0,

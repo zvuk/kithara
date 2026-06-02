@@ -8,7 +8,7 @@ use kithara_events::EventBus;
 use kithara_platform::{CancellationToken, Mutex, time::Duration, tokio};
 use kithara_storage::StorageError;
 use kithara_stream::{
-    AudioCodec, SourceError as StreamSourceError, StreamType, Timeline,
+    AudioCodec, PlayheadState, SeekState, SourceError as StreamSourceError, StreamType,
     dl::{Downloader, DownloaderConfig},
 };
 use kithara_test_utils::kithara;
@@ -73,8 +73,10 @@ impl File {
             .bus
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
-        let timeline = Timeline::new();
-        let coord = Arc::new(FileCoord::new(timeline));
+        let coord = Arc::new(FileCoord::new(
+            Arc::new(PlayheadState::new()),
+            Arc::new(SeekState::new()),
+        ));
         coord.set_total_bytes(len);
         let total = len.unwrap_or(0);
         coord.set_download_pos(total);
@@ -139,8 +141,10 @@ impl File {
             config.event_channel_capacity,
         )?;
 
-        let timeline = Timeline::new();
-        let coord = Arc::new(FileCoord::new(timeline));
+        let coord = Arc::new(FileCoord::new(
+            Arc::new(PlayheadState::new()),
+            Arc::new(SeekState::new()),
+        ));
 
         // `Ready` means the file is already committed in the cache — no
         // download. `Pending` hands the single non-Clone commit owner to the

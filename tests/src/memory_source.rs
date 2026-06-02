@@ -13,7 +13,8 @@ use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ReadOutcome, Source, SourceError, SourcePhase, Stream, StreamResult, StreamType, Timeline,
+    Activity, PlayheadRead, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, Source,
+    SourceError, SourcePhase, Stream, StreamResult, StreamType, Timeline,
 };
 
 /// Error type for memory-backed sources.
@@ -99,8 +100,24 @@ impl Source for MemorySource {
         Ok(ReadOutcome::Bytes(count))
     }
 
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
+    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        self.timeline.playhead_read()
+    }
+
+    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        self.timeline.playhead_write()
+    }
+
+    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        self.timeline.seek_observe()
+    }
+
+    fn seek_control(&self) -> Arc<dyn SeekControl> {
+        self.timeline.seek_control()
+    }
+
+    fn activity(&self) -> Arc<dyn Activity> {
+        self.timeline.activity()
     }
 
     fn wait_range(
