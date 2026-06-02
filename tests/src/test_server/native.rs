@@ -178,15 +178,35 @@ pub struct SegmentGateHandle {
 }
 
 impl SegmentGateHandle {
-    /// Release the withheld segment so its parked GET response completes.
+    /// Release the withheld segment so its parked GET (body) response completes.
     pub fn release(&self) {
         self.gate.release();
     }
 
-    /// Number of segment GETs this gate has parked, observed in-process.
+    /// Number of segment GET (body) requests this gate has parked, observed
+    /// in-process.
     #[must_use]
     pub fn requested(&self) -> u64 {
         self.gate.requested()
+    }
+
+    /// Withhold the segment's size: subsequent HEAD (size) requests report
+    /// `Content-Length: 0`, so the up-front size-estimation pass learns a zero
+    /// size for it. Models "seek before this segment's size is known".
+    /// Independent of the body [`Self::release`] withhold.
+    pub fn withhold_head(&self) {
+        self.gate.withhold_head();
+    }
+
+    /// Reveal the true size on subsequent HEAD (size) requests.
+    pub fn release_head(&self) {
+        self.gate.release_head();
+    }
+
+    /// Number of HEAD (size) requests this gate has observed in-process.
+    #[must_use]
+    pub fn head_requested(&self) -> u64 {
+        self.gate.head_requested()
     }
 }
 

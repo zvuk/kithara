@@ -1033,7 +1033,7 @@ impl HlsVariant {
             return SourcePhase::Seeking;
         }
         let total = self.total_bytes();
-        if total > 0 && range.start >= total {
+        if total > 0 && range.start >= total && self.sizes_complete() {
             return SourcePhase::Eof;
         }
         SourcePhase::Waiting
@@ -1045,6 +1045,14 @@ impl HlsVariant {
 
     pub(crate) fn range_ready(&self, range: &Range<u64>) -> bool {
         let total = self.total_bytes();
+        // When a served segment's size is still unknown, `total` is a lower
+        // bound, not the stream end. An offset at/past it is NOT "ready"
+        // (clamping `end` to the under-count would falsely report a zero-width
+        // ready range and let the reader spin past a real, not-yet-sized
+        // segment) — treat it as not-ready so the gate holds Waiting.
+        if total > 0 && range.start >= total && !self.sizes_complete() {
+            return false;
+        }
         let end = if total > 0 {
             range.end.min(total)
         } else {
@@ -1093,7 +1101,7 @@ impl HlsVariant {
     #[kithara::hang_watchdog]
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         let total = self.total_bytes();
-        if total > 0 && offset >= total {
+        if total > 0 && offset >= total && self.sizes_complete() {
             return Ok(ReadOutcome::Eof);
         }
 
@@ -1341,6 +1349,15 @@ impl HlsVariant {
         self.layout.total_bytes()
     }
 
+    /// Whether every served segment's byte size is known. While `false`,
+    /// [`Self::total_bytes`] is a lower bound (a segment's size estimate is
+    /// missing), so the byte-EOF gates must hold `Waiting`/`Pending` rather
+    /// than mint EOF for an in-range offset that only looks past-the-end
+    /// against the under-count.
+    pub(crate) fn sizes_complete(&self) -> bool {
+        self.layout.sizes_complete()
+    }
+
     #[kithara::hang_watchdog]
     pub(crate) fn wait_range(
         &self,
@@ -1355,7 +1372,7 @@ impl HlsVariant {
             return Ok(WaitOutcome::Interrupted);
         }
         let total = self.total_bytes();
-        if total > 0 && range.start >= total {
+        if total > 0 && range.start >= total && self.sizes_complete() {
             return Ok(WaitOutcome::Eof);
         }
         // Not ready: the reader driver (`Stream::probe_read` / `read` /

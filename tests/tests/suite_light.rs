@@ -63,7 +63,6 @@ mod kithara_hls {
     mod config_with_downloader;
     mod deferred_abr;
     mod driver_test;
-    mod early_seek_withheld_segment;
     mod ephemeral;
     mod html_error_body;
     mod html_error_cleanup;

@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use kithara_platform::RwLock;
 
@@ -24,6 +24,16 @@ struct Frame {
     /// Cumulative natural byte offsets for media segments, seeded with the
     /// init prefix length.
     offsets: Vec<u64>,
+}
+
+/// The produce-core's lock-free EOF view, computed from a `Frame` under the
+/// write-lock and published into [`Layout`]'s atomics. Both fields move
+/// together so the byte-EOF gates never see `total` from one mutation and
+/// `sizes_complete` from another.
+#[derive(Clone, Copy)]
+struct FrameSnapshot {
+    total: u64,
+    sizes_complete: bool,
 }
 
 impl Frame {
@@ -109,6 +119,36 @@ impl Frame {
         Some((idx, off_virtual, size))
     }
 
+    /// Whether every served segment `[served_from, served_until)` has a
+    /// known (non-zero) byte size. A `0` size means "unknown" — the size
+    /// estimate's HEAD failed (or has not run) for that segment, so its
+    /// bytes are unaccounted-for in `total_bytes`. Until this holds,
+    /// `total_bytes` is a lower bound, NOT the authoritative stream end, and
+    /// must not be used to mint EOF (an in-range offset would falsely look
+    /// past-the-end against the under-count).
+    fn sizes_complete(&self, segments: &[SegmentEntry]) -> bool {
+        let start = self.served_from as usize;
+        let end = (self.served_until as usize).min(segments.len());
+        if start >= end {
+            // No served media segments (init-only / empty): the offset table
+            // alone bounds the stream; treat as complete.
+            return true;
+        }
+        segments[start..end]
+            .iter()
+            .all(|s| s.size.load(Ordering::Acquire) > 0)
+    }
+
+    /// Materialise the lock-free EOF snapshot (`total_bytes` +
+    /// `sizes_complete`) in one read so the caller can drop the write-lock
+    /// guard before publishing the atomics.
+    fn snapshot(&self, segments: &[SegmentEntry], init_size: u64) -> FrameSnapshot {
+        FrameSnapshot {
+            total: self.total_bytes(segments, init_size),
+            sizes_complete: self.sizes_complete(segments),
+        }
+    }
+
     fn total_bytes(&self, segments: &[SegmentEntry], init_size: u64) -> u64 {
         let seg_size = |idx: usize| {
             segments
@@ -150,6 +190,11 @@ impl Frame {
 pub(super) struct Layout {
     frame: RwLock<Frame>,
     total: AtomicU64,
+    /// Lock-free snapshot of [`Frame::sizes_complete`], republished from the
+    /// frame at the end of every write-lock mutation. The produce-core EOF
+    /// gates (`wait_range` / `phase_at` / `read_at`) read it without taking
+    /// the lock, alongside `total`.
+    sizes_complete: AtomicBool,
 }
 
 impl Layout {
@@ -163,10 +208,11 @@ impl Layout {
             offsets: Vec::new(),
         };
         frame.recompute(init_size, segments);
-        let total = frame.total_bytes(segments, init_size);
+        let snapshot = frame.snapshot(segments, init_size);
         Self {
             frame: RwLock::new(frame),
-            total: AtomicU64::new(total),
+            total: AtomicU64::new(snapshot.total),
+            sizes_complete: AtomicBool::new(snapshot.sizes_complete),
         }
     }
 
@@ -177,8 +223,21 @@ impl Layout {
     pub(super) fn set_served_until(&self, until: u32, segments: &[SegmentEntry], init_size: u64) {
         let mut frame = self.frame.lock_sync_write();
         frame.served_until = until;
-        self.total
-            .store(frame.total_bytes(segments, init_size), Ordering::Release);
+        let snapshot = frame.snapshot(segments, init_size);
+        drop(frame);
+        self.republish(snapshot);
+    }
+
+    /// Republish the lock-free `total` + `sizes_complete` snapshot computed
+    /// from the just-mutated frame. The two atomics together form the
+    /// produce-core EOF view, stored in one place at the tail of every
+    /// mutation. The frame guard is dropped before this call (the snapshot is
+    /// already materialised under-lock), so the lock is held no longer than
+    /// the mutation itself.
+    fn republish(&self, snapshot: FrameSnapshot) {
+        self.total.store(snapshot.total, Ordering::Release);
+        self.sizes_complete
+            .store(snapshot.sizes_complete, Ordering::Release);
     }
 
     /// Coherent "is this variant historical?" check: `served_from` and
@@ -226,6 +285,13 @@ impl Layout {
         self.total.load(Ordering::Acquire)
     }
 
+    /// Lock-free `sizes_complete` read for the produce-core EOF gates. `false`
+    /// means at least one served segment's size is still unknown, so
+    /// [`Self::total_bytes`] is a lower bound and must not mint EOF.
+    pub(super) fn sizes_complete(&self) -> bool {
+        self.sizes_complete.load(Ordering::Acquire)
+    }
+
     pub(super) fn clear_init_seed(&self) {
         self.frame.lock_sync_write().init_seed = 0;
     }
@@ -258,8 +324,9 @@ impl Layout {
         frame.byte_shift = shift;
         frame.served_from = from_seg;
         frame.served_until = num;
-        self.total
-            .store(frame.total_bytes(segments, init_size), Ordering::Release);
+        let snapshot = frame.snapshot(segments, init_size);
+        drop(frame);
+        self.republish(snapshot);
     }
 
     /// Collapse to a single-variant layout: `byte_shift = 0`,
@@ -272,8 +339,9 @@ impl Layout {
         frame.served_from = 0;
         frame.served_until = num;
         frame.recompute(init_size, segments);
-        self.total
-            .store(frame.total_bytes(segments, init_size), Ordering::Release);
+        let snapshot = frame.snapshot(segments, init_size);
+        drop(frame);
+        self.republish(snapshot);
     }
 
     /// Apply a settled size and recompute offsets under one write-lock.
@@ -284,7 +352,8 @@ impl Layout {
         let mut frame = self.frame.lock_sync_write();
         let init_size = store();
         frame.recompute(init_size, segments);
-        self.total
-            .store(frame.total_bytes(segments, init_size), Ordering::Release);
+        let snapshot = frame.snapshot(segments, init_size);
+        drop(frame);
+        self.republish(snapshot);
     }
 }

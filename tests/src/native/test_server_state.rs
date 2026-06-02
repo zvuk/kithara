@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, RwLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -59,13 +59,28 @@ struct BehaviorEntry {
 }
 
 /// A test-controlled withhold gate for one `(hls token, variant, segment)`.
-/// While unreleased, the segment's GET response parks on `released`; the
-/// `requested` counter lets a test observe that the gated GET actually reached
-/// the server before it releases. Lives in `TestServerState` (mutable,
-/// per-token) — never in the immutable Arc-cached `GeneratedHls`.
+///
+/// Two independently-controllable seams:
+/// - **Body** (`released`): while unreleased, the segment's GET response parks
+///   on `released`; the `requested` counter lets a test observe that the gated
+///   GET actually reached the server before it releases. Models "this segment's
+///   bytes have not arrived yet".
+/// - **Size/HEAD** (`head_withheld`): while set, the segment's HEAD (size)
+///   response reports `Content-Length: 0`, so the up-front
+///   `loading::size_estimation` pass learns a zero size for it. Models "seek
+///   BEFORE this segment's size is known" — the genuinely-immediate-seek
+///   condition that the body-only gate cannot model (the body gate would block
+///   stream construction, since size estimation HEADs every segment
+///   synchronously at `Audio::new()`). The `head_requested` counter lets a test
+///   observe the HEAD arrival.
+///
+/// Lives in `TestServerState` (mutable, per-token) — never in the immutable
+/// Arc-cached `GeneratedHls`.
 pub(crate) struct SegmentGate {
     released: watch::Sender<bool>,
     requested: AtomicU64,
+    head_withheld: AtomicBool,
+    head_requested: AtomicU64,
 }
 
 impl SegmentGate {
@@ -74,6 +89,8 @@ impl SegmentGate {
         Self {
             released,
             requested: AtomicU64::new(0),
+            head_withheld: AtomicBool::new(false),
+            head_requested: AtomicU64::new(0),
         }
     }
 
@@ -97,6 +114,33 @@ impl SegmentGate {
     /// In-process count of GET requests that reached this gate.
     pub(crate) fn requested(&self) -> u64 {
         self.requested.load(Ordering::Relaxed)
+    }
+
+    /// Mark the segment's HEAD (size) response to report `Content-Length: 0`
+    /// until [`Self::release_head`]. Independent of the body GET withhold.
+    pub(crate) fn withhold_head(&self) {
+        self.head_withheld.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether the HEAD (size) response is currently being withheld
+    /// (reports `Content-Length: 0`). Observed in-process by the route.
+    pub(crate) fn head_is_withheld(&self) -> bool {
+        self.head_withheld.load(Ordering::Relaxed)
+    }
+
+    /// Reveal the true size on subsequent HEAD (size) requests.
+    pub(crate) fn release_head(&self) {
+        self.head_withheld.store(false, Ordering::Relaxed);
+    }
+
+    /// Mark that a HEAD (size) request reached this gate.
+    pub(crate) fn mark_head_requested(&self) {
+        self.head_requested.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// In-process count of HEAD (size) requests that reached this gate.
+    pub(crate) fn head_requested(&self) -> u64 {
+        self.head_requested.load(Ordering::Relaxed)
     }
 }
 

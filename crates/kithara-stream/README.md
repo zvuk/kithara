@@ -91,9 +91,9 @@ Defined here as the single source of truth and re-exported by other crates:
 `Stream::try_read` surfaces `StreamReadOutcome::Eof` only from a `Source` that proves the end is genuinely reached — `WaitOutcome::Eof` from `wait_range` or `ReadOutcome::Eof` from `read_at`. A `Source` must **never** mint `Eof` for an in-range range whose bytes have not yet arrived; that case is `WaitBudgetExceeded`/`Pending(NotReady)` so the reader holds at need-data. Per source:
 
 - File (`FileSource`): EOF keys off the **committed** length (`AssetReader::len()`, `None` while downloading), never the announced `Content-Length`.
-- HLS (`HlsVariant`): EOF keys off the variant layout's published `total_bytes()` (sum of known segment sizes through `served_until`); see `crates/kithara-hls/README.md` "Seek and wait_range Contract".
+- HLS (`HlsVariant`): EOF keys off the variant layout's published `total_bytes()` **gated by `sizes_complete()`** (every served segment's size known). While any served size is still unknown, `total_bytes()` is a lower bound and the gate holds `Pending`, not `Eof`. See `crates/kithara-hls/README.md` "Seek and wait_range Contract".
 
-A premature `Eof` for a withheld in-range segment latches the audio consumer into `AtEof` and drives the queue's silent auto-advance; the empty-buffer (`buf.is_empty()`) zero-length return is a distinct, non-terminal case. Pinned by `tests/tests/kithara_hls/early_seek_withheld_segment.rs`.
+A premature `Eof` for a withheld in-range segment latches the audio consumer into `AtEof` and drives the queue's silent auto-advance; the empty-buffer (`buf.is_empty()`) zero-length return is a distinct, non-terminal case. Pinned by `tests/tests/kithara_queue/early_seek_size_withheld_advance.rs` (`immediate_seek_size_and_body_withheld`).
 
 ## Features
 

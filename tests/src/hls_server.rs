@@ -448,6 +448,35 @@ impl PackagedTestServer {
             .register_segment_gate(server.plain.token(), variant, segment);
         (server, handle)
     }
+
+    /// Build a packaged server whose `plain` fixture withholds the **size**
+    /// (HEAD) of one `(variant, segment)` from construction: the up-front
+    /// `loading::size_estimation` pass learns `Content-Length: 0` for it, so
+    /// the segment's bytes are unaccounted-for in `total_bytes`. Models a seek
+    /// that lands BEFORE the segment's size is known — the genuinely-immediate
+    /// seek the body-only [`Self::with_segment_gate`] cannot model (a body
+    /// withhold would instead block `Audio::new()`, since estimation HEADs
+    /// every segment synchronously at construction).
+    ///
+    /// The body GET stays unblocked. The returned handle can `release_head()`
+    /// to reveal the true size, and `withhold_head()` / `release()` give
+    /// independent control of the size and body seams respectively.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub async fn with_segment_size_gate(
+        variant: usize,
+        segment: usize,
+    ) -> (Self, crate::SegmentGateHandle) {
+        let server = Self::new().await;
+        let handle = server
+            ._helper
+            .register_segment_gate(server.plain.token(), variant, segment);
+        handle.withhold_head();
+        // A registered gate parks the body GET by default; this constructor
+        // withholds only the size, so open the body up front.
+        handle.release();
+        (server, handle)
+    }
 }
 
 #[::kithara_test_utils::kithara::fixture]
@@ -757,5 +786,67 @@ mod tests {
             "released segment GET should succeed, got {status}"
         );
         assert_eq!(gate.requested(), 1, "exactly one GET parked on the gate");
+    }
+
+    /// The size/HEAD gate makes HEAD report `Content-Length: 0` while
+    /// withheld (and counts the HEAD), then the true size after
+    /// `release_head()` — without ever parking the HEAD (which would block
+    /// stream construction). The body GET stays unblocked throughout.
+    #[kithara::test(tokio)]
+    async fn segment_size_gate_reports_zero_until_release_head() {
+        let (server, gate) = PackagedTestServer::with_segment_size_gate(0, 1).await;
+        let url = server.url("/seg/v0_1.m4s");
+        assert_eq!(
+            gate.head_requested(),
+            0,
+            "no HEAD before the test fires one"
+        );
+
+        let withheld = timeout(
+            Duration::from_secs(5),
+            reqwest::Client::new().head(url.clone()).send(),
+        )
+        .await
+        .expect("HEAD must not park while size is withheld")
+        .expect("withheld-size HEAD succeeds");
+        assert!(withheld.status().is_success());
+        assert_eq!(
+            withheld
+                .headers()
+                .get("content-length")
+                .and_then(|v| v.to_str().ok()),
+            Some("0"),
+            "withheld size must be reported as Content-Length: 0"
+        );
+        assert_eq!(gate.head_requested(), 1, "HEAD reached the gate");
+
+        gate.release_head();
+        let revealed = timeout(
+            Duration::from_secs(5),
+            reqwest::Client::new().head(url).send(),
+        )
+        .await
+        .expect("HEAD completes")
+        .expect("revealed-size HEAD succeeds");
+        let revealed_len: u64 = revealed
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok())
+            .expect("revealed HEAD carries a content-length");
+        assert!(
+            revealed_len > 0,
+            "released size must report the true (non-zero) length, got {revealed_len}"
+        );
+
+        // The body GET is independent of the size gate and stays unblocked.
+        let body = timeout(
+            Duration::from_secs(5),
+            reqwest::get(server.url("/seg/v0_1.m4s")),
+        )
+        .await
+        .expect("body GET completes (never parked by the size gate)")
+        .expect("body GET succeeds");
+        assert!(body.status().is_success() || body.status().as_u16() == 206);
     }
 }

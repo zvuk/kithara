@@ -150,9 +150,25 @@ async fn serve_media_segment(
                         fixture.segment_content_type(),
                     ),
                     SegmentMethod::Head => {
-                        let override_len = fixture
-                            .segment_len(variant, segment, true)
-                            .unwrap_or(bytes.len());
+                        // Size/HEAD withhold gate: report Content-Length: 0 so the
+                        // up-front size-estimation pass learns a zero size for this
+                        // segment (models "seek before its size is known"). HEAD is
+                        // counted but never parked — parking it would block stream
+                        // construction, since estimation HEADs every segment
+                        // synchronously at creation.
+                        let head_withheld = state
+                            .segment_gate(hls_spec, variant, segment)
+                            .is_some_and(|gate| {
+                                gate.mark_head_requested();
+                                gate.head_is_withheld()
+                            });
+                        let override_len = if head_withheld {
+                            0
+                        } else {
+                            fixture
+                                .segment_len(variant, segment, true)
+                                .unwrap_or(bytes.len())
+                        };
                         build_range_response_with_len(
                             &bytes,
                             headers,
