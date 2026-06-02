@@ -254,12 +254,17 @@ impl AacDecoder {
         Ok(())
     }
 
-    fn try_new(params: &AudioCodecParameters, _opts: AudioDecoderOptions) -> Result<Self> {
-        let (config, transport) = if let Some(extra) = &params.extra_data {
-            (AacStreamConfig::try_from(&extra[..])?, Transport::Raw)
-        } else {
-            (AacStreamConfig::try_from(params)?, Transport::Adts)
-        };
+    /// Build a fresh fdk-aac C decoder from the stored codec parameters.
+    ///
+    /// Used at construction and on [`Self::reset`] (seek/flush). The fdk-aac
+    /// C handle owns MDCT/QMF/SBR overlap-add state that survives across
+    /// `fill`/`decode_frame` and has no public mid-stream flush, so the only
+    /// way to return it to a cold (zero-overlap) state after a seek is to
+    /// drop and re-create it. Without this, the first access unit decoded
+    /// after a seek inherits the pre-seek overlap-add tail and emits
+    /// contaminated PCM (a ~2-AU phase shift at seek seams). See the
+    /// `kithara-decode` README "Seek pre-roll and trim".
+    fn build_decoder(transport: Transport, params: &AudioCodecParameters) -> Result<Decoder> {
         let mut decoder = Decoder::new(transport);
         if matches!(transport, Transport::Raw)
             && let Some(extra) = &params.extra_data
@@ -268,6 +273,16 @@ impl AacDecoder {
                 .config_raw(extra)
                 .map_err(|e| Error::DecodeError(e.message()))?;
         }
+        Ok(decoder)
+    }
+
+    fn try_new(params: &AudioCodecParameters, _opts: AudioDecoderOptions) -> Result<Self> {
+        let (config, transport) = if let Some(extra) = &params.extra_data {
+            (AacStreamConfig::try_from(&extra[..])?, Transport::Raw)
+        } else {
+            (AacStreamConfig::try_from(params)?, Transport::Adts)
+        };
+        let decoder = Self::build_decoder(transport, params)?;
         let buf = audio_buffer(config.channels, config.sample_rate, 1024)?;
         Ok(Self {
             decoder,
@@ -362,6 +377,22 @@ impl AudioDecoder for AacDecoder {
     }
 
     fn reset(&mut self) {
+        // Re-create the fdk-aac C decoder so its MDCT/QMF/SBR overlap-add
+        // state returns to cold (zero). The C handle exposes no mid-stream
+        // flush, so resetting only `delay_remaining` / `metadata_validated`
+        // would leave the prior overlap tail in place and let the first
+        // post-seek access unit decode against stale state — emitting a
+        // ~2-AU phase-shifted (or contaminated) first chunk that races on
+        // pre-seek decode depth. Rebuild keeps it deterministic; the 2-AU
+        // seek pre-roll back-off re-warms it for mid-stream seeks.
+        match Self::build_decoder(self.transport, &self.codec_params) {
+            Ok(decoder) => self.decoder = decoder,
+            Err(e) => tracing::warn!(
+                target: "kithara_decode::symphonia::aac_fdk",
+                error = %e,
+                "AAC decoder rebuild on reset failed; keeping existing decoder"
+            ),
+        }
         self.delay_remaining = 0;
         self.metadata_validated = false;
     }
