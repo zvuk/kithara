@@ -154,6 +154,8 @@ Init-bearing containers (fMP4/MP4/WAV/MKV/CAF) must recreate at the source's ini
 
 On seek, epoch is incremented atomically. The worker tags each decoded chunk with the current epoch. The consumer discards stale chunks (old epoch), preventing leftover data from reaching output after a seek.
 
+There are two distinct epoch atomics: the **timeline** seek epoch, bumped by the consumer the instant it requests a seek (`Audio::seek` → `Timeline::initiate_seek`), and the **producer's decode epoch** (`StreamAudioSource::epoch`), advanced only when the worker actually *applies* a seek. The decode epoch therefore lags the timeline epoch across the window where a seek has been requested but not yet applied. Decoded chunks are tagged with the decode epoch, and terminal markers (EOF / failure) **must** be tagged the same way — via `AudioWorkerSource::decode_epoch()`, not the live `timeline().seek_epoch()`. A near-end seek can drive the decoder to a genuine EOF in the same window where a newer seek has already bumped the timeline epoch; stamping the marker with the live timeline epoch would make the stale end-of-stream pass the consumer's validator and surface as a false `ReadOutcome::Eof` for the newer (in-range) seek. Tagging with the decode epoch lets the validator discard it. This race only manifests under CPU starvation (the seek-bump and the EOF-stamp interleave), so its regression guard tags the marker through a mocked `decode_epoch` that differs from the timeline epoch.
+
 ## Agent guardrails
 
 - **Node Architecture**: A track is represented by a single `Node` implementation (`DecoderNode`), stored in the shared scheduler as `Box<dyn Node>` through `runtime/`.

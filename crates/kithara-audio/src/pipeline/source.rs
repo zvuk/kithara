@@ -2332,6 +2332,19 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         &self.timeline
     }
 
+    fn decode_epoch(&self) -> u64 {
+        // The epoch the current decode belongs to — stored when a seek is
+        // applied (`ApplyingSeek` / `try_apply_seek`), and the same value
+        // stamped on produced chunks (`decode_one_step`). It LAGS
+        // `timeline().seek_epoch()`, which the consumer bumps the instant it
+        // requests a seek, long before the worker applies it. A terminal
+        // marker (EOF / failure) must carry this decode epoch so a stale
+        // end-of-stream produced for a superseded seek is discarded by the
+        // consumer's validator rather than mistaken for the new seek's
+        // terminal (the oversubscription false-EOF race).
+        self.epoch.load(Ordering::Acquire)
+    }
+
     fn flush_deferred(&mut self) {
         self.session.decoder.flush_reader_signals();
         // Publish the FSM lifecycle events the produce core enqueued this pass,

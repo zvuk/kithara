@@ -30,6 +30,18 @@ pub trait AudioWorkerSource: Send + 'static {
     /// Access the shared timeline for epoch queries.
     fn timeline(&self) -> &Timeline;
 
+    /// The producer's current decode epoch — the seek epoch the most recent
+    /// decode operated under. The worker stamps terminal markers (EOF /
+    /// failure) with this rather than the live `timeline().seek_epoch()`,
+    /// which a concurrent consumer seek may have already advanced: stamping
+    /// the live epoch would mislabel a stale terminal as the newer seek's and
+    /// let the consumer's epoch validator accept it (the oversubscription
+    /// false-EOF race). Defaults to the timeline epoch for sources whose
+    /// decode epoch is the timeline epoch (e.g. test mocks).
+    fn decode_epoch(&self) -> u64 {
+        self.timeline().seek_epoch()
+    }
+
     /// Drain deferred off-core signals armed on the forbid-blocking decode
     /// core: reader-hook events (published to the event bus) and the reader→peer
     /// wake (a cross-thread `notify_one` the RT core must not make). The worker

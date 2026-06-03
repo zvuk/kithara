@@ -163,7 +163,7 @@ impl Node for DecoderNode {
             TrackStep::Eof if self.runtime.eof_sent => TickResult::Backpressured,
 
             TrackStep::Eof => {
-                let epoch = self.source.timeline().seek_epoch();
+                let epoch = self.source.decode_epoch();
                 let marker = Fetch::new(PcmChunk::default(), true, epoch);
                 if let Ok(()) = self.outlet.try_push(marker) {
                     self.complete_preload();
@@ -176,7 +176,7 @@ impl Node for DecoderNode {
             }
 
             TrackStep::Failed => {
-                let epoch = self.source.timeline().seek_epoch();
+                let epoch = self.source.decode_epoch();
                 let marker = Fetch::failure(PcmChunk::default(), epoch);
                 if let Ok(()) = self.outlet.try_push(marker) {
                     self.complete_preload();
@@ -325,6 +325,54 @@ mod tests {
              natural end-of-clip from a transient decoder/source failure, \
              otherwise a post-seek failure cascades into PlayerTrack::\
              Finished and empties the track arena mid-clip"
+        );
+    }
+
+    #[kithara::test]
+    fn eof_marker_carries_decode_epoch_not_live_timeline() {
+        // Regression (oversubscription false-EOF): a near-end seek (decode
+        // epoch N) drives the decoder to a genuine EOF in the same window where
+        // a newer consumer seek has already bumped the *timeline* epoch to N+1
+        // (the consumer bumps it the instant it requests a seek, long before the
+        // worker applies it). The EOF marker must carry the PRODUCER's decode
+        // epoch (N) — `decode_epoch()` — not the live `timeline().seek_epoch()`
+        // (N+1). Stamping the live epoch makes the stale end-of-stream pass the
+        // consumer's epoch validator as the *new* seek's terminal, surfacing a
+        // false `ReadOutcome::Eof` for an in-range seek.
+        use crate::pipeline::fetch::FetchKind;
+
+        let gate = Arc::new(PreloadGate::default());
+        let (outlet, mut inlet) = connect::<Fetch<PcmChunk>>(1, None);
+
+        // Consumer already requested the next seek: timeline epoch is now 1,
+        // ahead of the decode epoch (0) the pending EOF belongs to.
+        let timeline = Timeline::new();
+        let live_epoch = timeline.initiate_seek(Duration::from_secs(1));
+        assert_eq!(live_epoch, 1, "initiate_seek bumps the timeline epoch to 1");
+
+        let source = Box::new(Unimock::new((
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Eof),
+            MockAudioWorkerSource::decode_epoch
+                .next_call(matching!())
+                .returns(0u64),
+            MockAudioWorkerSource::timeline.stub(|each| {
+                each.call(matching!()).returns(timeline.clone());
+            }),
+        )));
+
+        let mut node = test_node(source, outlet, gate);
+        assert_eq!(node.tick(), TickResult::Progress);
+
+        node.outlet.flush();
+        let marker = inlet.try_pop().expect("producer pushed an EOF marker");
+        assert_eq!(marker.kind, FetchKind::NaturalEof);
+        assert_eq!(
+            marker.epoch(),
+            0,
+            "EOF marker must carry the producer's decode epoch (0), not the live \
+             timeline seek epoch (1) the consumer already advanced"
         );
     }
 
