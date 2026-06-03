@@ -1,9 +1,6 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    },
-    time::Duration as StdDuration,
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use kithara_abr::{AbrController, AbrMode, AbrSettings, AbrState, ThroughputEstimator};
@@ -11,7 +8,7 @@ use kithara_events::{
     AbrEvent, AbrProgressSnapshot, BandwidthSource, DEFAULT_EVENT_BUS_CAPACITY, Event, EventBus,
     VariantDuration, VariantIndex, VariantInfo,
 };
-use kithara_platform::time::Duration;
+use kithara_platform::time::{Duration, Duration as StdDuration};
 use kithara_test_utils::kithara;
 
 fn fast_settings() -> AbrSettings {
@@ -101,16 +98,16 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
         for _ in 0..30 {
             reader_bg.fetch_add(1, Ordering::AcqRel);
             committed_bg.fetch_add(1, Ordering::AcqRel);
-            kithara_platform::tokio::time::sleep(StdDuration::from_millis(20)).await;
+            kithara_platform::time::sleep(StdDuration::from_millis(20)).await;
         }
     });
 
-    let deadline = kithara_platform::tokio::time::Instant::now() + StdDuration::from_millis(600);
+    let deadline = kithara_platform::time::Instant::now() + StdDuration::from_millis(600);
 
     let mut saw_incoherence = AtomicBool::new(false);
-    while kithara_platform::tokio::time::Instant::now() < deadline {
+    while kithara_platform::time::Instant::now() < deadline {
         let timeout =
-            kithara_platform::tokio::time::timeout(StdDuration::from_millis(30), rx.recv()).await;
+            kithara_platform::time::timeout(StdDuration::from_millis(30), rx.recv()).await;
         match timeout {
             Ok(Ok(Event::Abr(AbrEvent::Incoherence { .. }))) => {
                 saw_incoherence = AtomicBool::new(true);

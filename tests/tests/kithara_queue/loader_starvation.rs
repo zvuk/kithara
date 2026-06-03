@@ -9,7 +9,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara_assets::StoreOptions;
 use kithara_events::{AbrMode, TrackId, TrackStatus};
@@ -18,11 +18,13 @@ use kithara_integration_tests::{
     offline::OfflineSession, temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, sleep},
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::time::sleep;
 use url::Url;
 
 struct Consts;

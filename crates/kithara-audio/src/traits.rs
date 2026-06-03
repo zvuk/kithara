@@ -1,12 +1,12 @@
 use std::{
     num::{NonZeroU32, NonZeroUsize},
     sync::Arc,
-    time::Duration,
 };
 
 pub use kithara_decode::{DecodeError, DecodeResult};
 use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
+use kithara_platform::time::Duration;
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;

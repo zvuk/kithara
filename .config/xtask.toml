@@ -38,6 +38,5 @@ modules = []
 # bypassing the `paths` exclusions above. Each runs in a second ast-grep pass
 # with no exclude globs; the rule's own `files:`/`ignores:` scope it.
 scan_all_rules = [
-    "arch.no-std-time",
-    "arch.no-web-time",
+    "arch.no-direct-time",
 ]

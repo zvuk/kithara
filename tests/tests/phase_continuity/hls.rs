@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, time::Duration};
+use std::num::NonZeroUsize;
 
 use kithara::{
     abr::AbrMode,
@@ -12,7 +12,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, auto,
     fixture_protocol::{EncryptionRequest, PackagedSignal},
 };
-use kithara_platform::{CancellationToken, tokio::task::spawn_blocking};
+use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
 use kithara_stream::AudioCodec;
 use tracing::{info, warn};
 

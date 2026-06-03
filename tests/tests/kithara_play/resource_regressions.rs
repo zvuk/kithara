@@ -27,9 +27,8 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancellationToken,
-    time::{Duration, Instant, sleep},
+    time::{Duration, Instant, sleep, timeout},
 };
-use tokio::time::timeout;
 use tracing::{debug, info};
 
 use crate::{

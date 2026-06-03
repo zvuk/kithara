@@ -16,6 +16,7 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancellationToken,
+    thread::sleep,
     time::{Duration, Instant},
 };
 use tokio::task;
@@ -116,7 +117,7 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
             let _ = stream.seek(SeekFrom::Start(offset));
             let _ = stream.read(&mut buf);
             while handle.request_count() == 0 && Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(20));
+                sleep(Duration::from_millis(20));
             }
         }
     })

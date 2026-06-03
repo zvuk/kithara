@@ -9,7 +9,7 @@ fn no_context_serializes_to_null() {
 }
 
 mod detector_tests {
-    use std::{thread::sleep, time::Duration};
+    use kithara_platform::{thread::sleep, time::Duration};
 
     use super::super::HangDetector;
     use crate::kithara;
@@ -53,9 +53,9 @@ mod native_detector_tests {
         env,
         panic::{AssertUnwindSafe, catch_unwind},
         path::PathBuf,
-        thread::sleep,
-        time::Duration,
     };
+
+    use kithara_platform::{thread::sleep, time::Duration};
 
     use super::super::{HangDetector, parse_timeout_secs};
     use crate::kithara;

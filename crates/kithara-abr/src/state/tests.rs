@@ -1,9 +1,9 @@
-use std::{sync::Arc, time::Duration as StdDuration};
+use std::sync::Arc;
 
 use kithara_events::{
     AbrMode, AbrReason, BandwidthSource, VariantDuration, VariantIndex, VariantInfo,
 };
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::time::{Duration, Duration as StdDuration, Instant};
 use kithara_test_utils::kithara;
 use proptest::prelude::*;
 

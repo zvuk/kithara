@@ -105,18 +105,15 @@ impl AudioWorkerHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        },
-        time::Duration,
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
     };
 
     use kithara_decode::PcmChunk;
     use kithara_platform::{
         thread::sleep as thread_sleep,
-        time::{Instant, timeout as platform_timeout},
+        time::{Duration, Instant, timeout as platform_timeout},
     };
     use kithara_stream::{SeekControl, SeekObserve, SeekState};
     use kithara_test_utils::kithara;

@@ -1,7 +1,8 @@
-use std::{cmp::min, collections::HashMap, fmt, time::Duration};
+use std::{cmp::min, collections::HashMap, fmt};
 
 use bitflags::bitflags;
 use bon::Builder;
+use kithara_platform::time::Duration;
 
 bitflags! {
     /// HTTP `Accept-Encoding` algorithms the client advertises and is

@@ -1,7 +1,8 @@
-use std::{io::Cursor, time::Duration};
+use std::io::Cursor;
 
 use kithara::decode::{DecoderConfig, DecoderFactory, PcmChunk};
 use kithara_integration_tests::audio_fixture::EmbeddedAudio;
+use kithara_platform::time::Duration;
 #[kithara::test]
 fn test_progressive_file_timeline_monotonic() {
     let audio = EmbeddedAudio::get();
@@ -74,7 +75,7 @@ fn test_progressive_file_seek_resets_frame_offset() {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod hls_timeline {
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
 
     use kithara::{
         assets::StoreOptions,
@@ -87,7 +88,7 @@ mod hls_timeline {
         hls_server::{HlsTestServer, HlsTestServerConfig},
         signal_pcm::signal,
     };
-    use kithara_platform::CancellationToken;
+    use kithara_platform::{CancellationToken, time::Duration};
 
     use crate::common::test_defaults::SawWav;
 

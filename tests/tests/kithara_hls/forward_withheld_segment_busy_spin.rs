@@ -41,7 +41,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
 use kithara::{
@@ -56,7 +55,11 @@ use kithara_integration_tests::{
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use kithara_platform::{CancellationToken, time::Instant, tokio::task::spawn_blocking};
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, Instant, sleep},
+    tokio::task::spawn_blocking,
+};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 use tracing::info;
 
@@ -172,11 +175,11 @@ async fn forward_into_withheld_segment_parks_without_busy_spin() {
                 Instant::now() < deadline,
                 "decode never parked at the withheld boundary within budget"
             );
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep(Duration::from_millis(5)).await;
         }
 
         let before = count_decode_steps(&release_recorder);
-        tokio::time::sleep(OBSERVE_WINDOW).await;
+        sleep(OBSERVE_WINDOW).await;
         let after = count_decode_steps(&release_recorder);
         let delta = after.saturating_sub(before);
         info!(

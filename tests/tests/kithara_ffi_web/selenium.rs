@@ -2,9 +2,9 @@ use std::{
     env,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    time::Duration,
 };
 
+use kithara_platform::time::{Duration, Instant, sleep};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -13,7 +13,6 @@ use thirtyfour::{
     extensions::cdp::ChromeDevTools,
     prelude::*,
 };
-use tokio::time::{Instant, sleep};
 use tracing::warn;
 
 struct Consts;

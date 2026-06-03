@@ -4,7 +4,6 @@
 use std::{
     io::{self, Read, Seek, SeekFrom},
     sync::Arc,
-    time::Duration,
 };
 
 use kithara::{
@@ -15,7 +14,7 @@ use kithara::{
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
 };
-use kithara_platform::tokio::task::spawn_blocking;
+use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use url::Url;
 
 struct Consts;

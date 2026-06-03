@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::time::{Duration, Instant};
-
 use kithara::{
     assets::StoreOptions,
     play::{Resource, ResourceConfig},
@@ -12,8 +10,10 @@ use kithara_integration_tests::{
     PackagedTestServer, fixture_protocol::DelayRule, offline::OfflinePlayer, temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
-use tokio::time::sleep;
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, Instant, sleep},
+};
 
 use crate::common::test_defaults::Consts as Shared;
 

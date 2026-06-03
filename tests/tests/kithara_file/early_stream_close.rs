@@ -4,7 +4,6 @@ use std::{
     fs,
     io::{Read, Seek, SeekFrom},
     sync::Arc,
-    time::Duration,
 };
 
 use kithara::{
@@ -21,7 +20,7 @@ use kithara_integration_tests::{
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancellationToken, thread,
-    time::{sleep, timeout},
+    time::{Duration, sleep, timeout},
     tokio::task::spawn_blocking,
 };
 

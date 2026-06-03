@@ -1,4 +1,6 @@
-use std::{path::Path, time::Duration};
+use std::path::Path;
+
+use kithara_platform::time::Duration;
 
 use super::shared::HangDump;
 

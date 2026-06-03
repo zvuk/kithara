@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{error::Error, io::Read, time::Duration};
+use std::{error::Error, io::Read};
 
 use kithara::{
     assets::StoreOptions,
@@ -13,7 +13,11 @@ use kithara_integration_tests::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::tokio::task::spawn_blocking;
-use kithara_platform::{CancellationToken, time::sleep, tokio::task::spawn};
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, sleep},
+    tokio::task::spawn,
+};
 use tracing::info;
 use url::Url;
 

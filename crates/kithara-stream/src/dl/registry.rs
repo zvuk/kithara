@@ -353,7 +353,7 @@ impl Registry {
 
         if !inner.demand_throttle.is_zero() {
             let preempted_by_urgent = tokio::select! {
-                () = tokio::time::sleep(inner.demand_throttle) => false,
+                () = kithara_platform::time::sleep(inner.demand_throttle) => false,
                 () = self.urgent_notify.notified() => true,
             };
             if preempted_by_urgent {

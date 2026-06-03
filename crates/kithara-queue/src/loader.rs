@@ -143,18 +143,13 @@ impl Loader {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::atomic::{AtomicUsize, Ordering},
-        time::Duration,
-    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use kithara_events::{EventBus, QueueEvent};
+    use kithara_platform::time::{Duration, sleep, timeout};
     use kithara_play::PlayerConfig;
     use kithara_test_utils::kithara;
-    use tokio::{
-        spawn,
-        time::{sleep as tokio_sleep, timeout as tokio_timeout},
-    };
+    use tokio::spawn;
 
     use super::*;
     use crate::track::TrackEntry;
@@ -263,7 +258,7 @@ mod tests {
                     .expect("BUG: semaphore not closed in test");
                 let cur = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
                 max_seen.fetch_max(cur, Ordering::SeqCst);
-                tokio_sleep(Duration::from_millis(50)).await;
+                sleep(Duration::from_millis(50)).await;
                 in_flight.fetch_sub(1, Ordering::SeqCst);
             }));
         }
@@ -296,7 +291,7 @@ mod tests {
         let mut saw_loading = false;
         let mut saw_failed = false;
         for _ in 0..8 {
-            match tokio_timeout(Duration::from_millis(200), rx.recv()).await {
+            match timeout(Duration::from_millis(200), rx.recv()).await {
                 Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged {
                     id: TrackId(42),
                     status: TrackStatus::Loading,

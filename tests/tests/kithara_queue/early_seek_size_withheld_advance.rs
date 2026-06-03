@@ -16,7 +16,7 @@
 //! Auto-advance is observed as a `Queue::current_index()` change against a
 //! multi-track queue.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
@@ -25,7 +25,7 @@ use kithara_integration_tests::{
     PackagedTestServer, SegmentGateHandle, TestTempDir, kithara, offline::OfflineSession,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{CancellationToken, time::Duration};
 use kithara_play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDispatcher};
 use kithara_queue::{Queue, QueueConfig, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};

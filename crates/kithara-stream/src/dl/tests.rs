@@ -5,7 +5,6 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
     task::{Context, Poll},
-    time::Instant,
 };
 
 use axum::{
@@ -20,8 +19,8 @@ use kithara_events::{DownloaderEvent, Event, EventBus};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancellationToken, Mutex,
-    time::Duration,
-    tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn, time as tokio_time},
+    time::{self, Duration, Instant},
+    tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
 };
 use kithara_test_utils::kithara;
 use url::Url;
@@ -53,8 +52,8 @@ fn test_body_stream(chunks: Vec<&'static [u8]>) -> BodyStream {
     BodyStream::wrap_raw(Box::pin(stream))
 }
 
-fn sleep(ms: u64) -> tokio_time::Sleep {
-    tokio_time::sleep(Duration::from_millis(ms))
+async fn sleep(ms: u64) {
+    time::sleep(Duration::from_millis(ms)).await;
 }
 
 #[kithara::test(tokio)]
@@ -147,7 +146,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
     sleep(POLL_MS).await;
     handle.cancel().cancel();
 
-    let (elapsed, result) = tokio_time::timeout(Duration::from_secs(CANCEL_GUARD_SECS), task)
+    let (elapsed, result) = time::timeout(Duration::from_secs(CANCEL_GUARD_SECS), task)
         .await
         .expect("task should complete within CANCEL_GUARD_SECS")
         .expect("task should not panic");
@@ -207,7 +206,7 @@ async fn max_concurrent_limits_inflight_connections() {
                         break;
                     }
                 }
-                tokio_time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
+                time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
                 concurrent.fetch_sub(1, Ordering::SeqCst);
                 "ok"
             }
@@ -281,7 +280,7 @@ async fn many_downloaders_global_peak_stays_bounded() {
                         break;
                     }
                 }
-                tokio_time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
+                time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
                 concurrent.fetch_sub(1, Ordering::SeqCst);
                 "ok"
             }
@@ -367,7 +366,7 @@ async fn poll_next_respects_max_concurrent() {
                         break;
                     }
                 }
-                tokio_time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
+                time::sleep(Duration::from_millis(HANDLER_DELAY_MS)).await;
                 concurrent.fetch_sub(1, Ordering::SeqCst);
                 "ok"
             }
@@ -429,7 +428,7 @@ async fn poll_next_respects_max_concurrent() {
 
     let deadline = Instant::now() + Duration::from_secs(FLOOD_DEADLINE_SECS);
     loop {
-        tokio_time::sleep(Duration::from_millis(FLOOD_POLL_MS)).await;
+        time::sleep(Duration::from_millis(FLOOD_POLL_MS)).await;
         if *peer.remaining.lock_sync() == 0 && concurrent.load(Ordering::SeqCst) == 0 {
             break;
         }
@@ -603,7 +602,7 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     let app = Router::new().route(
         "/slow",
         get(|| async {
-            tokio_time::sleep(Duration::from_millis(SLOW_SERVER_DELAY_MS)).await;
+            time::sleep(Duration::from_millis(SLOW_SERVER_DELAY_MS)).await;
             "ok"
         }),
     );
@@ -631,7 +630,7 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     let deadline = Instant::now() + Duration::from_secs(SLOW_DEADLINE_SECS);
     let mut seen_slow = false;
     while Instant::now() < deadline {
-        match tokio_time::timeout(Duration::from_millis(SLOW_POLL_TIMEOUT_MS), rx.recv()).await {
+        match time::timeout(Duration::from_millis(SLOW_POLL_TIMEOUT_MS), rx.recv()).await {
             Ok(Ok(Event::Downloader(DownloaderEvent::LoadSlow { .. }))) => {
                 seen_slow = true;
                 break;
@@ -735,7 +734,7 @@ async fn spawn_slow_server(delay_ms: u64) -> Url {
     let app = Router::new().route(
         "/data",
         get(move || async move {
-            tokio_time::sleep(Duration::from_millis(delay_ms)).await;
+            time::sleep(Duration::from_millis(delay_ms)).await;
             "ok"
         }),
     );
@@ -796,7 +795,7 @@ async fn active_peer_completes_before_preload_under_contention() {
     let total = CMDS_PER_PEER * 2;
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        tokio_time::sleep(Duration::from_millis(FLOOD_POLL_MS)).await;
+        time::sleep(Duration::from_millis(FLOOD_POLL_MS)).await;
         if completion_counter.load(Ordering::SeqCst) >= total {
             break;
         }
@@ -889,7 +888,7 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
     let total = CMDS_PER_PEER * 2;
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        tokio_time::sleep(Duration::from_millis(FLOOD_POLL_MS)).await;
+        time::sleep(Duration::from_millis(FLOOD_POLL_MS)).await;
         if completion_counter.load(Ordering::SeqCst) >= total {
             break;
         }

@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use kithara_app::{config::AppConfig, sources::build_source};
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
@@ -10,12 +10,14 @@ use kithara_events::{
 };
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, Instant, sleep, timeout},
+};
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
-use tokio::time::{sleep, timeout};
 
 /// Captured from `app.log @ 06:39:13`. `cdn-hls-slicer.zvuk.com` →
 /// `zvuk-prod` provider in baked `app.yaml`.
@@ -214,7 +216,7 @@ struct ScrubObservation<'a> {
     rx: &'a mut EventReceiver,
     recorder: &'a Recorder,
     event_log: &'a mut Vec<TimedEvent>,
-    started_at: tokio::time::Instant,
+    started_at: Instant,
     params: ScrubParams<'a>,
 }
 
@@ -240,7 +242,7 @@ async fn observe_scrub_outcome(obs: ScrubObservation<'_>) -> ScrubOutcome {
         min_growth_secs,
         budget,
     } = obs.params;
-    let deadline = tokio::time::Instant::now() + budget;
+    let deadline = Instant::now() + budget;
     let success_threshold = seek_target_secs + min_growth_secs;
     let mut last_terminal_for_target: Option<AdvanceTrigger> = None;
     loop {
@@ -271,7 +273,7 @@ async fn observe_scrub_outcome(obs: ScrubObservation<'_>) -> ScrubOutcome {
                 };
             }
         }
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             let final_position = obs.queue.position_seconds();
             let position_growth = final_position.map(|p| p - seek_target_secs);
@@ -403,7 +405,7 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
     eprintln!("[harness] chunks_at_seek={chunks_at_seek}");
 
     ctx.queue.seek(SCRUB_TARGET_SECS).expect("seek");
-    let started_at = tokio::time::Instant::now();
+    let started_at = Instant::now();
     let mut event_log: Vec<TimedEvent> = Vec::new();
 
     // Require at least 10 fresh decoded chunks after the seek. One

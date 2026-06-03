@@ -9,7 +9,6 @@ use std::{
         Arc,
         atomic::{AtomicU32, Ordering},
     },
-    time::Duration,
 };
 
 use axum::{
@@ -28,7 +27,7 @@ use kithara::{
     bufpool::PcmPool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
     file::{File, FileConfig},
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     stream::{
         Stream,
@@ -39,6 +38,7 @@ use kithara_audio::{ResamplerParams, ResamplerProcessor};
 use kithara_integration_tests::{TestHttpServer, auto};
 use kithara_platform::{
     CancellationToken,
+    time::Duration,
     tokio::runtime::{Builder, Runtime},
 };
 use tempfile::TempDir;

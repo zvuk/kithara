@@ -5,11 +5,10 @@ use std::{
     fs,
     path::PathBuf,
     process::{self, Child, Command, Stdio},
-    time::Instant,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::time::{Duration, sleep};
+use kithara_platform::time::{Duration, Instant, sleep};
 #[cfg(not(target_arch = "wasm32"))]
 use tempfile::TempDir;
 

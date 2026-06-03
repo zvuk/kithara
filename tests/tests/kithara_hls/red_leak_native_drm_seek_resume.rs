@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{error::Error as StdError, num::NonZeroUsize, time::Duration};
+use std::{error::Error as StdError, num::NonZeroUsize};
 
 use kithara::{
     assets::StoreOptions,
@@ -10,7 +10,11 @@ use kithara::{
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{CancellationToken, thread::active_named_thread_count, time::sleep};
+use kithara_platform::{
+    CancellationToken,
+    thread::active_named_thread_count,
+    time::{Duration, sleep},
+};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tracing::info;
 

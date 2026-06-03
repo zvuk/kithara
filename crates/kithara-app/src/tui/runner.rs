@@ -1,10 +1,11 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
 use kithara::{
     abr::AbrMode,
     events::{AppEvent, Event},
 };
+use kithara_platform::time::Duration;
 use kithara_queue::{Queue, QueueEvent, TrackId, Transition};
 use tokio::{sync::broadcast::error::TryRecvError, task};
 

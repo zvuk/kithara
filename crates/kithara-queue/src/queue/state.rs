@@ -249,9 +249,8 @@ impl Drop for Queue {
 #[cfg(test)]
 pub(super) mod tests {
     use kithara_events::{Event, EventReceiver, QueueEvent};
-    use kithara_platform::time::Duration;
+    use kithara_platform::time::{Duration, Instant, timeout};
     use kithara_test_utils::kithara;
-    use tokio::time::{Instant as TokioInstant, timeout as tokio_timeout};
 
     use super::*;
 
@@ -267,13 +266,13 @@ pub(super) mod tests {
     where
         F: FnMut(&QueueEvent) -> bool,
     {
-        let deadline = TokioInstant::now() + Duration::from_millis(timeout_ms);
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         loop {
-            let remaining = deadline.saturating_duration_since(TokioInstant::now());
+            let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return false;
             }
-            match tokio_timeout(remaining, rx.recv()).await {
+            match timeout(remaining, rx.recv()).await {
                 Ok(Ok(Event::Queue(ev))) if matches(&ev) => return true,
                 Ok(Ok(_)) => continue,
                 Ok(Err(_)) | Err(_) => return false,

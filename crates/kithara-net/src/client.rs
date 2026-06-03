@@ -374,10 +374,10 @@ mod tests {
             Arc,
             atomic::{AtomicU32, Ordering},
         },
-        time::Duration,
     };
 
     use axum::{Router, http::StatusCode, routing::get};
+    use kithara_platform::time::Duration;
     use tokio::net::TcpListener;
 
     use super::*;

@@ -25,15 +25,15 @@ impl crate::runtime::WakeSignal for ThreadWake {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        },
-        time::Duration,
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
     };
 
-    use kithara_platform::thread::{park_timeout, sleep, spawn};
+    use kithara_platform::{
+        thread::{park_timeout, sleep, spawn},
+        time::Duration,
+    };
     use kithara_test_utils::kithara;
 
     use super::ThreadWake;

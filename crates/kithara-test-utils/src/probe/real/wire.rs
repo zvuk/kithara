@@ -1,10 +1,10 @@
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
-    time::Duration,
 };
 
 use kithara_events::{AbrMode, CancelReason, RequestId, RequestPriority};
+use kithara_platform::time::Duration;
 use url::Url;
 
 /// Implemented by `#[derive(kithara::Probe)]` for value-type probe payloads.

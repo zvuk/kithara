@@ -1,6 +1,7 @@
-use std::{num::NonZeroU32, time::Duration};
+use std::num::NonZeroU32;
 
 use kithara_bufpool::PcmPool;
+use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
 use super::{Consts, GaplessTrimmer};

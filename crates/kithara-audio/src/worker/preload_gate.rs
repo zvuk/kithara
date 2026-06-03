@@ -1,9 +1,6 @@
-use std::{
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara_platform::time::sleep;
+use kithara_platform::time::{Duration, sleep};
 
 /// Decoupled startup gate between the worker thread and the async app task.
 ///
@@ -59,9 +56,9 @@ impl PreloadGate {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
 
-    use kithara_platform::time::timeout;
+    use kithara_platform::time::{Duration, timeout};
     use kithara_test_utils::kithara;
 
     use super::PreloadGate;

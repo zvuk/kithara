@@ -14,7 +14,7 @@ use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{offline::OfflinePlayer, temp_dir};
 use kithara_platform::{
     CancellationToken, thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, timeout},
 };
 
 use crate::common::test_defaults::Consts as Shared;
@@ -132,7 +132,7 @@ async fn build_resource(
     let mut resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));
-    tokio::time::timeout(Duration::from_secs(15), resource.preload())
+    timeout(Duration::from_secs(15), resource.preload())
         .await
         .unwrap_or_else(|_| panic!("Resource::preload({url}) timed out after 15s"))
         .unwrap_or_else(|err| panic!("Resource::preload({url}) failed: {err}"));

@@ -8,7 +8,7 @@ use kithara::{
 };
 use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{HlsFixtureBuilder, TestServerHelper, TestTempDir, temp_dir};
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{thread::sleep, time::Duration, tokio::task::spawn_blocking};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -61,7 +61,7 @@ async fn aac_he_v2_hls_produces_pcm(temp_dir: TestTempDir, #[case] backend: Deco
                     collected.extend_from_slice(&buf[..count.get()]);
                 }
                 Ok(ReadOutcome::Pending { .. }) => {
-                    std::thread::sleep(Duration::from_millis(5));
+                    sleep(Duration::from_millis(5));
                 }
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("HE-AAC v2 decode error: {e}"),

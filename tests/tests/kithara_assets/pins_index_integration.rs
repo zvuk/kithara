@@ -5,12 +5,11 @@ use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use kithara::{assets::DiskAssetStore, bufpool::BytePool};
 use kithara_integration_tests::{asset_fixture::PinsIndex, temp_dir};
-use kithara_platform::CancellationToken;
+use kithara_platform::{CancellationToken, time::Duration};
 
 fn pins_path(root: &Path) -> PathBuf {
     root.join("_index").join("pins.bin")

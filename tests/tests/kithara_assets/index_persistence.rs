@@ -4,7 +4,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use kithara_assets::{
@@ -12,6 +11,7 @@ use kithara_assets::{
     index::schema::{ArchivedAvailabilityFile, ArchivedLruIndexFile, ArchivedPinsIndexFile},
 };
 use kithara_integration_tests::{kithara, temp_dir};
+use kithara_platform::time::Duration;
 use rkyv::option::ArchivedOption;
 
 fn index_dir(root: &Path) -> PathBuf {

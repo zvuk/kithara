@@ -14,7 +14,7 @@ use kithara_integration_tests::{
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancellationToken, thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, timeout},
 };
 use url::Url;
 
@@ -122,7 +122,7 @@ async fn build_resource(
     let mut resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));
-    tokio::time::timeout(Duration::from_secs(10), resource.preload())
+    timeout(Duration::from_secs(10), resource.preload())
         .await
         .unwrap_or_else(|_| panic!("Resource::preload({url}) timed out after 10s"))
         .unwrap_or_else(|err| panic!("Resource::preload({url}) failed: {err}"));

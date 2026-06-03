@@ -247,7 +247,7 @@ where
     let started = Instant::now();
     tokio::select! {
         r = &mut fut => r,
-        () = tokio::time::sleep(soft) => {
+        () = kithara_platform::time::sleep(soft) => {
             if let Some(bus) = bus {
                 bus.publish(DownloaderEvent::LoadSlow {
                     request_id,

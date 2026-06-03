@@ -1,7 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::time::{Duration, Instant};
-
 use kithara::{
     abr::AbrMode,
     assets::StoreOptions,
@@ -19,9 +17,11 @@ use kithara_integration_tests::{
     offline::OfflinePlayer,
     swallow_detector::assert_no_committed_swallow,
 };
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, Instant, sleep},
+};
 use kithara_test_utils::probe::capture as probe_capture;
-use tokio::time::sleep;
 
 /// `b"0123456789abcdef"` — the AES-128 key/zero-IV pair used across the
 /// repo's DRM fixtures.

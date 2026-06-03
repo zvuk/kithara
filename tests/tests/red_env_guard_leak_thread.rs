@@ -8,10 +8,13 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
 };
 
 use kithara::test as kithara_test;
+use kithara_platform::{
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
 /// Locate the compiled `suite_light` binary next to our own test binary.
 ///
@@ -99,7 +102,7 @@ fn red_env_guard_no_leak_under_env_lock_contention() {
         }));
     }
 
-    std::thread::sleep(Duration::from_millis(50));
+    sleep(Duration::from_millis(50));
 
     let gap = spawn_and_measure_leak_gap();
 

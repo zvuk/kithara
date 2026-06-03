@@ -1,14 +1,13 @@
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::Arc,
-    time::Duration,
 };
 
 use kithara_platform::{
     CancellationToken,
     sync::mpsc::{self, TryRecvError},
     thread::{spawn_named, yield_now},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use kithara_test_utils::kithara;
 use tracing::{debug, trace, warn};

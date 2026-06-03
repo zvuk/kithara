@@ -1,9 +1,9 @@
 use std::{
     io::{ErrorKind, Read, Seek},
     num::NonZeroUsize,
-    time::Duration,
 };
 
+use kithara_platform::time::Duration;
 use kithara_stream::{
     AudioCodec, NotReadyCause, PendingReason, PrerollHint, StreamPending, StreamReadError,
     VariantChangeError,

@@ -1,7 +1,6 @@
 use std::{
     f64::consts::{PI, TAU},
     fmt,
-    time::Duration,
 };
 
 use kithara::{
@@ -10,6 +9,7 @@ use kithara::{
     stream::{Stream, StreamType},
 };
 use kithara_integration_tests::Xorshift64;
+use kithara_platform::time::Duration;
 use tracing::{info, warn};
 
 pub(crate) const SAMPLE_RATE: u32 = 44_100;

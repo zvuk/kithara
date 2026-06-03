@@ -1,10 +1,11 @@
-use std::{num::NonZeroU32, sync::Arc, time::Duration};
+use std::{num::NonZeroU32, sync::Arc};
 
 use kithara_audio::{
     Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome, ServiceClass,
 };
 use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
+use kithara_platform::time::Duration;
 use kithara_stream::{Stream, StreamType};
 
 use crate::impls::{config::ResourceConfig, source_type::SourceType};

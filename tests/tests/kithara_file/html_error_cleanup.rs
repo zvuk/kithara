@@ -11,8 +11,7 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancellationToken,
-    time::{Duration, Instant},
-    tokio::time::{sleep, timeout},
+    time::{Duration, Instant, sleep, timeout},
 };
 
 const CAPTIVE_PORTAL_HTML: &str = "<html><body>VPN required to access this resource</body></html>";

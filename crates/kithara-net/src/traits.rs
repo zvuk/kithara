@@ -1,13 +1,12 @@
 use std::{
     pin::Pin,
     task::{Context, Poll},
-    time::Duration,
 };
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use kithara_platform::{CancellationToken, MaybeSend, MaybeSync};
+use kithara_platform::{CancellationToken, MaybeSend, MaybeSync, time::Duration};
 use url::Url;
 
 mod kithara {

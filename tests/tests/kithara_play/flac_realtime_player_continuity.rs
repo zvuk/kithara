@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::time::{Duration, Instant};
-
 use kithara::{
     abr::AbrMode,
     assets::StoreOptions,
@@ -14,9 +12,11 @@ use kithara_integration_tests::{
     offline::OfflinePlayer,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, Instant, sleep},
+};
 use kithara_stream::AudioCodec;
-use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::phase_continuity::common::{

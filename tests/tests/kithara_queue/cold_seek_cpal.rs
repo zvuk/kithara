@@ -1,20 +1,19 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::sync::Arc;
 
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_integration_tests::{kithara, temp_dir};
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, Instant, sleep, timeout},
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::time::sleep;
 
 fn install_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
@@ -42,7 +41,7 @@ async fn wait_for_status(
     }
     let start = Instant::now();
     while start.elapsed() < deadline {
-        match tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
+        match timeout(Duration::from_millis(500), rx.recv()).await {
             Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {

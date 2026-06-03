@@ -1,4 +1,6 @@
-use std::{marker::PhantomData, path::PathBuf, time::Duration};
+use std::{marker::PhantomData, path::PathBuf};
+
+use kithara_platform::time::Duration;
 
 pub trait HangDump {
     fn dump_json(&self) -> String;

@@ -7,7 +7,6 @@ use std::{
         Arc, RwLock,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Duration,
 };
 
 use axum::{
@@ -25,7 +24,10 @@ use kithara::net::{
     TimeoutNet,
 };
 use kithara_integration_tests::TestHttpServer;
-use kithara_platform::{CancellationToken, time::sleep};
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, sleep},
+};
 use url::Url;
 
 type TestServer = TestHttpServer;

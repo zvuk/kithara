@@ -1,9 +1,8 @@
 use kithara_events::AbrEvent;
 use kithara_platform::{
     CancellationToken,
-    time::{Duration, Instant},
+    time::{Duration, Instant, sleep},
     tokio,
-    tokio::time::sleep,
 };
 
 use super::{

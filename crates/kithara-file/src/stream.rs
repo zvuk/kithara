@@ -5,7 +5,10 @@ use kithara_assets::{
     ReadSide, ResourceKey, StoreOptions, WriteSide, asset_root_for_url,
 };
 use kithara_events::EventBus;
-use kithara_platform::{CancellationToken, Mutex, time::Duration, tokio};
+use kithara_platform::{
+    CancellationToken, Mutex,
+    time::{Duration, sleep},
+};
 use kithara_storage::StorageError;
 use kithara_stream::{
     AudioCodec, PlayheadState, SeekState, SourceError as StreamSourceError, StreamType,
@@ -241,7 +244,7 @@ impl File {
                 }
                 Err(SourceError::Assets(AssetsError::Storage(StorageError::TmpClaimed(_)))) => {
                     hang_tick!();
-                    tokio::time::sleep(TMP_CLAIMED_POLL_INTERVAL).await;
+                    sleep(TMP_CLAIMED_POLL_INTERVAL).await;
                 }
                 Err(e) => return Err(StreamSourceError::from(e)),
             }

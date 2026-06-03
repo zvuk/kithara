@@ -13,9 +13,8 @@ use kithara_file::{File as FileSource, FileConfig, FileSrc};
 use kithara_integration_tests::offline::resource_from_reader;
 use kithara_platform::{
     CancellationToken,
-    time::{Duration, Instant, sleep},
+    time::{Duration, Instant, sleep, timeout},
 };
-use tokio::time::timeout;
 use tracing::info;
 
 use crate::{common::test_defaults::Consts as Shared, continuity::render_offline_window};

@@ -155,8 +155,8 @@ mod tests {
 
     use std::num::NonZeroU16;
 
-    use ::tokio::time::timeout;
     use futures::stream;
+    use kithara_platform::time::timeout;
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;

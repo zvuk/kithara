@@ -1,4 +1,4 @@
-use std::{io::Read, time::Duration};
+use std::io::Read;
 
 use kithara::{
     assets::StoreOptions,
@@ -14,7 +14,11 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{CancellationToken, time::sleep, tokio::task::spawn_blocking};
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, sleep},
+    tokio::task::spawn_blocking,
+};
 
 #[kithara::test(
     tokio,

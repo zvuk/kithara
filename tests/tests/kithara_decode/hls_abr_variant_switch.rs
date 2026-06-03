@@ -2,7 +2,6 @@ use std::{
     error::Error,
     io::{Read as _, Seek as _, SeekFrom},
     sync::{Arc, Mutex as StdMutex},
-    time::Duration,
 };
 
 use kithara::{
@@ -16,7 +15,11 @@ use kithara_integration_tests::{
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
-use kithara_platform::{CancellationToken, time::sleep, tokio::task::spawn_blocking};
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, sleep},
+    tokio::task::spawn_blocking,
+};
 use tracing::info;
 
 /// Test that ABR variant switch does not cause byte reading glitches.

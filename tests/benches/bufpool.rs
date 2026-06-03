@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
-use std::{hint::black_box, thread, time::Duration};
+use std::{hint::black_box, thread};
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use kithara_bufpool::{ByteBudget, BytePool, PcmPool, Pool};
 use kithara_integration_tests::bufpool_ext::PoolShardTestExt;
+use kithara_platform::time::Duration;
 
 fn run_threaded_get_put(pool: &BytePool, threads: usize, iters_per_thread: usize) {
     let handles: Vec<_> = (0..threads)

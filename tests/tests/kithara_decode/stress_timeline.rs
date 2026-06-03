@@ -1,7 +1,8 @@
-use std::{io::Cursor, time::Duration};
+use std::io::Cursor;
 
 use kithara::decode::{DecoderConfig, DecoderFactory};
 use kithara_integration_tests::{Xorshift64, wav::create_test_wav};
+use kithara_platform::time::Duration;
 
 use crate::common::test_defaults::SawWav;
 

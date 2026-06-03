@@ -6,12 +6,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use axum::{Router, body::Body, extract::State, http::header, response::Response, routing::get};
@@ -23,7 +20,9 @@ use kithara::{
 };
 use kithara_app::waveform::analyze;
 use kithara_integration_tests::{TestHttpServer, create_test_wav};
-use kithara_platform::{CancellationToken, tokio::task::spawn_blocking};
+use kithara_platform::{
+    CancellationToken, thread::sleep, time::Duration, tokio::task::spawn_blocking,
+};
 
 const WAVEFORM_BUCKETS: usize = 100;
 
@@ -48,7 +47,7 @@ fn drain_to_eof(mut resource: Resource) -> bool {
     loop {
         match resource.next_chunk() {
             Ok(ChunkOutcome::Chunk(_)) => {}
-            Ok(ChunkOutcome::Pending { .. }) => std::thread::sleep(Duration::from_millis(2)),
+            Ok(ChunkOutcome::Pending { .. }) => sleep(Duration::from_millis(2)),
             Ok(ChunkOutcome::Eof { .. }) => return true,
             Err(_) => return false,
         }

@@ -4,8 +4,9 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::OnceLock,
-    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+use kithara_platform::time::{Duration, SystemTime};
 
 use super::shared::HangDump;
 
@@ -29,7 +30,7 @@ impl Consts {
 
 fn now_ms() -> u128 {
     SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+        .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis())
 }
 

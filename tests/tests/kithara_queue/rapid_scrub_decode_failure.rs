@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use kithara_assets::StoreOptions;
 use kithara_events::{
@@ -15,11 +15,13 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, Instant, sleep, timeout},
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::time::{sleep, timeout};
 
 /// Track shape: 30 segments × 4 s = 120 s. Long enough that 50 % and
 /// 90 % targets land in distinct cold regions.
@@ -99,14 +101,14 @@ async fn observe_scrub_outcome(
     budget: Duration,
 ) -> ScrubOutcome {
     use kithara_platform::tokio::sync::broadcast::error::RecvError;
-    let deadline = tokio::time::Instant::now() + budget;
+    let deadline = Instant::now() + budget;
     loop {
         if let Some(pos) = queue.position_seconds()
             && pos > seek_target + 0.5
         {
             return ScrubOutcome::Landed { reached: pos };
         }
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return ScrubOutcome::BudgetElapsed {
                 last_position: queue.position_seconds(),

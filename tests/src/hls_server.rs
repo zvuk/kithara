@@ -1,5 +1,6 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
+use kithara_platform::time::Duration;
 use url::Url;
 
 use crate::{
@@ -764,8 +765,7 @@ fn test_key_data() -> Vec<u8> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_platform::time::Duration;
-    use tokio::time::{sleep, timeout};
+    use kithara_platform::time::{Duration, sleep, timeout};
 
     use super::PackagedTestServer;
     use crate::kithara;

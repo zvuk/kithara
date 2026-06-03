@@ -1,6 +1,7 @@
-use std::{fmt, num::NonZeroU32, sync::Arc, time::Duration};
+use std::{fmt, num::NonZeroU32, sync::Arc};
 
 use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_platform::time::Duration;
 
 use crate::gapless::GaplessInfo;
 

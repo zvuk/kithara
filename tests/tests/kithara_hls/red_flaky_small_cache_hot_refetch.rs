@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{num::NonZeroUsize, time::Duration};
+use std::num::NonZeroUsize;
 
 use kithara::{
     assets::StoreOptions,
@@ -9,7 +9,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
-use kithara_platform::time::{Instant, sleep};
+use kithara_platform::time::{Duration, Instant, sleep};
 use tracing::info;
 
 struct Consts;

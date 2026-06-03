@@ -1,10 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
 const NO_DURATION: u64 = u64::MAX;

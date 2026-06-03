@@ -1,6 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use kithara_bufpool::BytePool;
+use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ByteMap};
 use kithara_test_utils::kithara;
 

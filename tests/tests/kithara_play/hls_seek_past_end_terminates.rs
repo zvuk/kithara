@@ -11,8 +11,10 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{CancellationToken, time::Duration};
-use tokio::time::sleep;
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, sleep},
+};
 
 use crate::common::test_defaults::Consts as Shared;
 

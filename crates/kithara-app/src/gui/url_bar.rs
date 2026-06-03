@@ -12,7 +12,7 @@ use iced::{
         text_input::{Status as InputStatus, Style as InputStyle},
     },
 };
-use kithara_platform::time::Duration;
+use kithara_platform::time::{Duration, sleep};
 
 use super::{app::Kithara, fonts, icons::Icon, message::Message};
 use crate::{
@@ -150,10 +150,9 @@ fn submit(state: &mut Kithara) -> Task<Message> {
     });
     state.url.text.clear();
 
-    Task::perform(
-        tokio::time::sleep(Duration::from_millis(FLASH_EXPIRE_MS)),
-        |()| Message::Url(UrlMsg::FlashExpired),
-    )
+    Task::perform(sleep(Duration::from_millis(FLASH_EXPIRE_MS)), |()| {
+        Message::Url(UrlMsg::FlashExpired)
+    })
 }
 
 /// Format chip label, auto-detected from the URL extension. Mirrors the

@@ -2,9 +2,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use kithara_platform::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::tokio;
-#[cfg(not(target_arch = "wasm32"))]
-use tokio::time::timeout;
+use kithara_platform::time::timeout;
 use url::Url;
 
 use crate::{

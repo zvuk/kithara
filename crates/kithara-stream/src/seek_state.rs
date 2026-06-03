@@ -1,14 +1,12 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
-    },
-    time::Duration,
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
 };
 
 use bitflags::bitflags;
+use kithara_platform::time::Duration;
 
 bitflags! {
     /// Boolean playback-state flags stored in a single `AtomicU8` on [`SeekState`].

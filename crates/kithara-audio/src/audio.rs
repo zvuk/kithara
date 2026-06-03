@@ -6,7 +6,6 @@ use std::{
         Arc,
         atomic::{AtomicU32, AtomicU64, Ordering},
     },
-    time::Duration,
 };
 
 use delegate::delegate;
@@ -16,7 +15,9 @@ use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, DeferredBus, EventBus, SeekLifecycleStage, SegmentLocation};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
-use kithara_platform::{CancellationToken, thread::park_timeout, tokio::task::spawn_blocking};
+use kithara_platform::{
+    CancellationToken, thread::park_timeout, time::Duration, tokio::task::spawn_blocking,
+};
 use kithara_stream::{MediaInfo, PlayheadWrite, SeekControl, SeekObserve, Stream, StreamType};
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;

@@ -1,9 +1,10 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use kithara_platform::{
     Mutex,
     sync::mpsc,
     thread::{JoinHandle, park_timeout, spawn_named},
+    time::Duration,
 };
 use kithara_play::{Cmd, PlayError, Reply, SessionDispatcher, SessionState, run_cmd};
 use tracing::warn;

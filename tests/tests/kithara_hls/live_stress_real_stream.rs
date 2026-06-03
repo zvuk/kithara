@@ -4,7 +4,6 @@ use std::{
     num::NonZeroUsize,
     path::Path,
     sync::{Arc, Mutex},
-    time::Duration,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -21,10 +20,10 @@ use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64, abr_fast, auto, temp_dir,
 };
 use kithara_platform::{
-    time::{Instant, sleep},
+    time::{Duration, Instant, sleep, timeout},
     tokio,
 };
-use tokio::{sync::broadcast::error::RecvError, task::spawn, time::timeout};
+use tokio::{sync::broadcast::error::RecvError, task::spawn};
 use tracing::info;
 
 struct Consts;

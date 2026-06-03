@@ -12,8 +12,7 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancellationToken,
-    time::{Duration, Instant},
-    tokio::time::sleep,
+    time::{Duration, Instant, sleep},
 };
 use url::Url;
 

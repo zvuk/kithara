@@ -1,8 +1,9 @@
 #![allow(unsafe_code)]
 
-use std::{ffi::c_void, num::NonZeroU32, ptr::NonNull, time::Duration};
+use std::{ffi::c_void, num::NonZeroU32, ptr::NonNull};
 
 use kithara_bufpool::PcmBuf;
+use kithara_platform::time::Duration;
 use kithara_stream::AudioCodec;
 
 use super::{

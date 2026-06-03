@@ -1,7 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::time::{Duration, Instant};
-
 use kithara_app::{config::AppConfig, sources::build_source};
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_decode::DecoderBackend;
@@ -10,12 +8,14 @@ use kithara_integration_tests::{
     TestTempDir, kithara, offline::OfflinePlayer, swallow_detector::assert_no_committed_swallow,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, Instant, sleep},
+};
 use kithara_play::Resource;
 use kithara_queue::TrackSource;
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::probe::capture as probe_capture;
-use tokio::time::sleep;
 use tracing::info;
 
 /// Production zvuk DRM track with a FLAC lossless top variant (a zvuk

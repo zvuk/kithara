@@ -26,6 +26,12 @@ pub mod sim;
 pub use sim::Instant;
 #[cfg(not(all(feature = "sim-time", not(target_arch = "wasm32"))))]
 pub use web_time::Instant;
+/// Wall-clock timestamp (native: `std::time::SystemTime`, wasm: `web_time`).
+/// Routed through the platform so no crate imports `std::time` directly; unlike
+/// [`Instant`] it is not virtualized under `sim-time` (callers are wall-clock
+/// watchdogs/reports that want real time). Use `SystemTime::UNIX_EPOCH` for the
+/// epoch anchor.
+pub use web_time::SystemTime;
 
 #[cfg(target_arch = "wasm32")]
 pub async fn sleep(duration: Duration) {

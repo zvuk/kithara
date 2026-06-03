@@ -1,7 +1,6 @@
 use std::{
     io::{Read, Seek, SeekFrom},
     sync::{Arc, Mutex as StdMutex},
-    time::Duration,
 };
 
 use kithara::{
@@ -20,7 +19,7 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancellationToken,
-    time::sleep,
+    time::{Duration, sleep},
     tokio::task::{spawn, spawn_blocking},
 };
 use tracing::info;

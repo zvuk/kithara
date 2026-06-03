@@ -1,9 +1,10 @@
-use std::{io::Cursor, time::Duration};
+use std::io::Cursor;
 
 use kithara_decode::{Decoder, DecoderConfig, DecoderFactory, PcmChunk};
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 use kithara_integration_tests::ensure_silence_1s_alac_m4a;
 use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcomeTestExt};
+use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_utils::kithara;
 

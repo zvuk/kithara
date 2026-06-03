@@ -621,9 +621,9 @@ where
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use std::{fs, path::Path, sync::Arc, time::Duration};
+    use std::{fs, path::Path, sync::Arc};
 
-    use kithara_platform::{CancellationToken, thread};
+    use kithara_platform::{CancellationToken, thread, time::Duration};
     use kithara_storage::StorageResource;
     use kithara_test_utils::kithara;
 

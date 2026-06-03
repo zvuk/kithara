@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara::{
     assets::StoreOptions,
@@ -14,7 +14,11 @@ use kithara_integration_tests::{
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use kithara_platform::{CancellationToken, thread, time::Instant, tokio::task::spawn_blocking};
+use kithara_platform::{
+    CancellationToken, thread,
+    time::{Duration, Instant},
+    tokio::task::spawn_blocking,
+};
 use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;

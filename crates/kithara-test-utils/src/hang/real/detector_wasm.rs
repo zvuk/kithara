@@ -1,6 +1,6 @@
-use std::{marker::PhantomData, path::PathBuf, time::Duration};
+use std::{marker::PhantomData, path::PathBuf};
 
-use kithara_platform::time::coarse_now_ms;
+use kithara_platform::time::{Duration, coarse_now_ms};
 
 use super::{
     platform::write_dump,

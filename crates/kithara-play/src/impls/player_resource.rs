@@ -1,7 +1,8 @@
-use std::{num::NonZeroU32, ops::Range, sync::Arc, time::Duration};
+use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
 use kithara_audio::ServiceClass;
 use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_platform::time::Duration;
 use tracing::warn;
 
 #[rustfmt::skip]

@@ -1,10 +1,11 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use iced::{
     Event as IcedEvent, Subscription, Task, Theme, event,
     keyboard::{Event as KeyboardEvent, Key, key::Named},
     time as iced_time, window,
 };
+use kithara_platform::time::Duration;
 
 use super::{
     dj::DjView,

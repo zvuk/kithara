@@ -6,7 +6,6 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Duration,
 };
 
 use bytes::Bytes;
@@ -15,7 +14,7 @@ use kithara_integration_tests::net_fixture::{
     assert_success_all_net_methods, leaked, ok_headers, success_stream, test_url,
 };
 use kithara_net::mock::NetMock;
-use kithara_platform::CancellationToken;
+use kithara_platform::{CancellationToken, time::Duration};
 use unimock::{MockFn, Unimock, matching};
 
 fn should_fail(attempts: &Arc<AtomicUsize>, failures_before_success: usize) -> bool {

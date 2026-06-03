@@ -3,7 +3,6 @@ use std::{
     num::NonZeroUsize,
     path::Path,
     sync::{Arc, Mutex},
-    time::Duration,
 };
 
 use kithara::{
@@ -16,7 +15,7 @@ use kithara::{
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, Xorshift64, temp_dir};
 use kithara_platform::{
-    time::{Instant, sleep},
+    time::{Duration, Instant, sleep},
     tokio::task::spawn,
 };
 use tracing::info;

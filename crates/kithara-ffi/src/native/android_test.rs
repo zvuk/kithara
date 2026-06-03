@@ -4,7 +4,6 @@ use std::{
     fs::File,
     io::{Seek, SeekFrom, Write},
     path::PathBuf,
-    time::{Duration, Instant},
 };
 
 use jni::{
@@ -17,7 +16,8 @@ use kithara::{
     file::{File as FileSource, FileConfig, FileSrc},
     stream::Stream,
 };
-use tokio::{runtime::Builder, time::sleep};
+use kithara_platform::time::{Duration, Instant, sleep};
+use tokio::runtime::Builder;
 use tracing::{error, info};
 
 struct Consts;

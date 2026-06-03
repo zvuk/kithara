@@ -1,18 +1,20 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::time::{Duration, Instant};
-
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_audio::{Audio, AudioConfig, AudioWorkerHandle};
 use kithara_hls::{AbrMode, Hls, HlsConfig};
 use kithara_integration_tests::{TestServerHelper, TestTempDir, kithara, temp_dir};
-use kithara_platform::{CancellationToken, thread::active_named_thread_count};
+use kithara_platform::{
+    CancellationToken,
+    thread::{active_named_thread_count, sleep},
+    time::{Duration, Instant},
+};
 use kithara_stream::Stream;
 use tracing::info;
 
 /// Wait for spawned threads to register with the OS.
 fn settle() {
-    std::thread::sleep(Duration::from_millis(1500));
+    sleep(Duration::from_millis(1500));
 }
 
 fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
@@ -21,7 +23,7 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
     loop {
         let last_count = active_named_thread_count();
         if last_count == target {
-            std::thread::sleep(Duration::from_millis(200));
+            sleep(Duration::from_millis(200));
             let stable_count = active_named_thread_count();
             if stable_count == target {
                 return stable_count;
@@ -32,7 +34,7 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
             return last_count;
         }
 
-        std::thread::sleep(Duration::from_millis(100));
+        sleep(Duration::from_millis(100));
     }
 }
 

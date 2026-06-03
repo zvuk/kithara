@@ -1,12 +1,10 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
 };
 
 use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, BoxedEventSink, ReaderChunkSignal, ReaderSeekSignal};
 use kithara_test_utils::kithara;
 

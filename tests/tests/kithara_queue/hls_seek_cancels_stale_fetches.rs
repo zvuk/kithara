@@ -4,7 +4,6 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::{Duration, Instant},
 };
 
 use kithara_assets::StoreOptions;
@@ -15,12 +14,14 @@ use kithara_integration_tests::{
     offline::OfflineSession, temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancellationToken,
+    time::{Duration, Instant, sleep, timeout},
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::probe::capture as probe_capture;
-use tokio::time::sleep;
 use url::Url;
 
 struct Consts;
@@ -377,7 +378,7 @@ async fn observe_post_seek(
 
     let deadline = seek_at + Consts::POST_SEEK_OBSERVATION;
     while Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
+        match timeout(Duration::from_millis(50), rx.recv()).await {
             Ok(Ok(ev)) => match &ev {
                 Event::Hls(HlsEvent::ReaderSeek { segment_index, .. }) => {
                     if obs.reader_seek.is_none() {

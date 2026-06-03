@@ -576,7 +576,7 @@ where
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use kithara_platform::CancellationToken;
+    use kithara_platform::{CancellationToken, thread::sleep};
     use kithara_storage::{
         MemOptions, MemResource, MmapOptions, MmapResource, Resource, StorageResource,
     };
@@ -725,7 +725,7 @@ mod tests {
             buf
         });
 
-        std::thread::sleep(Duration::from_millis(50));
+        sleep(Duration::from_millis(50));
         assert_eq!(
             call_count.load(Ordering::SeqCst),
             0,
@@ -760,7 +760,7 @@ mod tests {
 
         let handle = std::thread::spawn(move || reader.wait_range(0..16));
 
-        std::thread::sleep(Duration::from_millis(50));
+        sleep(Duration::from_millis(50));
         cancel.cancel();
 
         let outcome = handle
@@ -886,7 +886,7 @@ mod tests {
         let reader_probe = reader.clone();
 
         let handle = std::thread::spawn(move || reader.wait_range(0..16));
-        std::thread::sleep(Duration::from_millis(50));
+        sleep(Duration::from_millis(50));
         drop(writer);
 
         let outcome = handle
