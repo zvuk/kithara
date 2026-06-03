@@ -10,7 +10,7 @@ use kithara_platform::{
     time::{Duration, Instant},
 };
 use kithara_storage::WaitOutcome;
-use kithara_stream::{SourceError, StreamError, Timeline};
+use kithara_stream::{SeekControl, SeekObserve, SeekState, SourceError, StreamError};
 use kithara_test_utils::kithara;
 use url::Url;
 
@@ -76,15 +76,21 @@ fn make_seg(idx: u32, size: u64, scope: &AssetScope<DecryptContext>) -> SegmentE
 }
 
 fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) -> Arc<HlsVariant> {
-    make_var_with_timeline(variant, init_size, media_sizes, ctx, Timeline::new())
+    make_var_with_seek_obs(
+        variant,
+        init_size,
+        media_sizes,
+        ctx,
+        Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+    )
 }
 
-fn make_var_with_timeline(
+fn make_var_with_seek_obs(
     variant: usize,
     init_size: u64,
     media_sizes: &[u64],
     ctx: &PlanCtx,
-    timeline: Timeline,
+    seek_obs: Arc<dyn SeekObserve>,
 ) -> Arc<HlsVariant> {
     let init = make_init(init_size, &ctx.scope);
     let segments: Vec<SegmentEntry> = media_sizes
@@ -104,7 +110,7 @@ fn make_var_with_timeline(
             init,
             segments,
             playlist_state: Arc::new(PlaylistState::new(Vec::new())),
-            timeline,
+            seek_obs,
             codec: None,
             container: None,
         },
@@ -552,7 +558,7 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
         VariantParts {
             init,
             playlist_state: Arc::new(PlaylistState::new(Vec::new())),
-            timeline: Timeline::new(),
+            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
             codec: None,
             container: None,
             segments: vec![seg],
@@ -724,20 +730,26 @@ fn wait_range_probes_without_sleeping() {
 }
 
 /// The flush short-circuit remains reachable and immediate after the
-/// non-blocking-pull conversion: a flushing timeline yields `Interrupted`
+/// non-blocking-pull conversion: a flushing seek state yields `Interrupted`
 /// without spinning on the budget signal.
 #[kithara::test]
 fn wait_range_flush_short_circuits_without_sleeping() {
     let ctx = test_ctx(3);
-    let timeline = Timeline::new();
-    let v = make_var_with_timeline(0, 200, &[400], &ctx, timeline.clone());
+    let seek = Arc::new(SeekState::new());
+    let v = make_var_with_seek_obs(
+        0,
+        200,
+        &[400],
+        &ctx,
+        Arc::clone(&seek) as Arc<dyn SeekObserve>,
+    );
 
-    let _ = timeline.initiate_seek(Duration::from_millis(10));
+    let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
     let started = Instant::now();
     let interrupted = v.wait_range(0..1, Some(Duration::from_millis(10)));
     assert!(
         matches!(interrupted, Ok(WaitOutcome::Interrupted)),
-        "flushing timeline must Interrupt the probe, got {interrupted:?}"
+        "flushing seek state must Interrupt the probe, got {interrupted:?}"
     );
     assert!(
         started.elapsed() < Duration::from_millis(2),

@@ -662,13 +662,17 @@ impl AudioEffect for EqEffect {
 
 #[cfg(test)]
 mod tests {
-    use std::f32::consts::PI;
+    use std::{f32::consts::PI, num::NonZeroU32};
 
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmMeta, PcmSpec};
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    fn pcm_spec(channels: u16, hz: u32) -> PcmSpec {
+        PcmSpec::new(channels, NonZeroU32::new(hz).expect("test rate"))
+    }
 
     fn test_chunk(spec: PcmSpec, pcm: Vec<f32>) -> PcmChunk {
         PcmChunk::new(
@@ -766,11 +770,8 @@ mod tests {
     #[kithara::test]
     fn eq_flat_gain_preserves_magnitude() {
         let bands = generate_log_spaced_bands(10);
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(1, 44100);
+        let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
 
         let warmup = vec![0.0f32; 4096];
         let _ = eq.process(test_chunk(spec, warmup));
@@ -830,10 +831,7 @@ mod tests {
         let mut eq = EqEffect::new(bands, 44100, 2);
 
         eq.set_gain(0, 6.0);
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
+        let spec = pcm_spec(2, 44100);
         let pcm = vec![0.5f32; 256];
         let chunk = test_chunk(spec, pcm);
         let _ = eq.process(chunk);
@@ -854,11 +852,8 @@ mod tests {
             frequency: 1000.0,
             ..Default::default()
         }];
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(1, 44100);
+        let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
         eq.set_gain(0, MIN_GAIN_DB);
         converge_smoother(&mut eq, spec);
 
@@ -872,11 +867,8 @@ mod tests {
     #[kithara::test]
     fn eq_3band_kill_low() {
         let bands = generate_log_spaced_bands(3);
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(1, 44100);
+        let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
         eq.set_gain(0, MIN_GAIN_DB);
         converge_smoother(&mut eq, spec);
 
@@ -895,11 +887,8 @@ mod tests {
     #[kithara::test]
     fn eq_3band_kill_high() {
         let bands = generate_log_spaced_bands(3);
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(1, 44100);
+        let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
         eq.set_gain(2, MIN_GAIN_DB);
         converge_smoother(&mut eq, spec);
 
@@ -915,11 +904,8 @@ mod tests {
     #[kithara::test]
     fn eq_3band_kill_all_produces_silence() {
         let bands = generate_log_spaced_bands(3);
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(1, 44100);
+        let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
         for i in 0..3 {
             eq.set_gain(i, MIN_GAIN_DB);
         }
@@ -937,11 +923,8 @@ mod tests {
     #[kithara::test]
     fn eq_low_shelf_boosts_bass() {
         let bands = generate_log_spaced_bands(3);
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(1, 44100);
+        let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
         eq.set_gain(0, MAX_GAIN_DB);
         converge_smoother(&mut eq, spec);
 
@@ -955,11 +938,8 @@ mod tests {
     #[kithara::test]
     fn eq_high_shelf_boosts_treble() {
         let bands = generate_log_spaced_bands(3);
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(1, 44100);
+        let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
         eq.set_gain(2, MAX_GAIN_DB);
         converge_smoother(&mut eq, spec);
 
@@ -983,11 +963,8 @@ mod tests {
     #[kithara::test]
     fn eq_smooth_gain_converges() {
         let bands = generate_log_spaced_bands(3);
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(1, 44100);
+        let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
         eq.set_gain(0, 6.0);
 
         converge_smoother(&mut eq, spec);
@@ -1001,11 +978,8 @@ mod tests {
     #[kithara::test]
     fn eq_smooth_no_discontinuity() {
         let bands = generate_log_spaced_bands(3);
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(1, 44100);
+        let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
 
         let warmup: Vec<f32> = (0u16..4096)
             .map(|i| (2.0 * PI * 1000.0 * f32::from(i) / 44100.0).sin())
@@ -1042,11 +1016,8 @@ mod tests {
         #[case] gain: Option<(usize, f32)>,
     ) {
         let bands = generate_log_spaced_bands(5);
-        let spec = PcmSpec {
-            channels,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(channels, 44100);
+        let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
         if let Some((band, gain_db)) = gain {
             eq.set_gain(band, gain_db);
         }
@@ -1068,11 +1039,8 @@ mod tests {
     #[kithara::test]
     fn eq_output_never_nan_or_inf() {
         let bands = generate_log_spaced_bands(10);
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(2, 44100);
+        let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
 
         for round in 0..100 {
             let gain = if round % 2 == 0 {
@@ -1096,11 +1064,8 @@ mod tests {
     #[kithara::test]
     fn eq_nan_input_produces_safe_output() {
         let bands = generate_log_spaced_bands(3);
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(1, 44100);
+        let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
         eq.set_gain(0, 6.0);
         converge_smoother(&mut eq, spec);
 
@@ -1119,11 +1084,8 @@ mod tests {
     #[kithara::test]
     fn eq_extreme_gain_oscillation_stays_safe() {
         let bands = generate_log_spaced_bands(3);
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(2, 44100);
+        let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
 
         for round in 0..200 {
             let gain = if round % 2 == 0 {
@@ -1203,11 +1165,8 @@ mod tests {
     #[kithara::test]
     fn eq_bypass_reactivates_after_return_to_unity() {
         let bands = generate_log_spaced_bands(3);
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq_effect = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(1, 44100);
+        let mut eq_effect = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
 
         eq_effect.set_gain(0, 6.0);
         converge_smoother(&mut eq_effect, spec);
@@ -1243,11 +1202,8 @@ mod tests {
     #[kithara::test]
     fn eq_all_min_gain_after_smoothing_is_silence_active() {
         let bands = generate_log_spaced_bands(3);
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq_effect = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        let spec = pcm_spec(1, 44100);
+        let mut eq_effect = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
 
         for i in 0..3 {
             eq_effect.set_gain(i, MIN_GAIN_DB);
@@ -1304,7 +1260,7 @@ mod tests {
     }
 
     fn converge_smoother(eq: &mut EqEffect, spec: PcmSpec) {
-        let frames = (spec.sample_rate as usize) / 5;
+        let frames = (spec.sample_rate.get() as usize) / 5;
         let pcm = vec![0.0f32; frames * spec.channels as usize];
         let chunk = test_chunk(spec, pcm);
         let _ = eq.process(chunk);
@@ -1318,7 +1274,7 @@ mod tests {
         let num_frames = 44100;
         let mut pcm = Vec::with_capacity(num_frames);
         for i in 0..num_frames {
-            let sample = (2.0 * PI * freq_hz * i as f32 / spec.sample_rate as f32).sin();
+            let sample = (2.0 * PI * freq_hz * i as f32 / spec.sample_rate.get() as f32).sin();
             pcm.push(sample);
         }
 

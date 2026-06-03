@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_bufpool::PcmBuf;
 use kithara_platform::time::Duration;
 use kithara_stream::AudioCodec;
@@ -79,17 +81,14 @@ impl SymphoniaCodec {
             .make_audio_decoder(params, &opts)
             .map_err(DecodeError::backend)?;
 
-        let sample_rate = params.sample_rate.ok_or_else(|| {
+        let raw_rate = params.sample_rate.ok_or_else(|| {
             DecodeError::InvalidData("symphonia native params missing sample rate".into())
         })?;
         let channels = params
             .channels
             .as_ref()
             .map_or(2, |c| u16::try_from(c.count()).unwrap_or(2));
-        let spec = PcmSpec {
-            channels,
-            sample_rate,
-        };
+        let spec = PcmSpec::checked(channels, raw_rate, "symphonia.codec.native")?;
         Ok(Self {
             decoder,
             spec,
@@ -146,10 +145,7 @@ impl SymphoniaCodec {
             .gapless
             .map(|info| apply_decoder_algo_delay(info, algo_delay));
 
-        let spec = PcmSpec {
-            channels: track.channels,
-            sample_rate: track.sample_rate,
-        };
+        let spec = PcmSpec::checked(track.channels, track.sample_rate, "symphonia.codec.track")?;
         Ok(Self {
             decoder,
             spec,
@@ -180,7 +176,7 @@ impl FrameCodec for SymphoniaCodec {
         _packet_desc: &[u8],
         out: &mut PcmBuf,
     ) -> DecodeResult<u32> {
-        let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate);
+        let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate.get());
         let packet_pts = Timestamp::new(i64::try_from(pts_ticks).unwrap_or(i64::MAX));
         let packet_ref = PacketRef::new(
             Consts::TRACK_ID,
@@ -212,7 +208,7 @@ impl FrameCodec for SymphoniaCodec {
         if !self.logged_first_frame {
             tracing::info!(
                 target: "kithara_decode::symphonia::codec",
-                declared_rate = self.spec.sample_rate,
+                declared_rate = self.spec.sample_rate.get(),
                 declared_channels = self.spec.channels,
                 actual_rate,
                 actual_channels,
@@ -223,21 +219,18 @@ impl FrameCodec for SymphoniaCodec {
             );
             self.logged_first_frame = true;
         }
-        if actual_rate != 0
-            && (self.spec.sample_rate != actual_rate || self.spec.channels != actual_channels)
+        if let Some(nz_actual_rate) = NonZeroU32::new(actual_rate)
+            && (self.spec.sample_rate != nz_actual_rate || self.spec.channels != actual_channels)
         {
             tracing::debug!(
                 target: "kithara_decode::symphonia::codec",
-                old_rate = self.spec.sample_rate,
+                old_rate = self.spec.sample_rate.get(),
                 old_channels = self.spec.channels,
                 new_rate = actual_rate,
                 new_channels = actual_channels,
                 "SymphoniaCodec: live spec update from decoder output"
             );
-            self.spec = PcmSpec {
-                channels: actual_channels,
-                sample_rate: actual_rate,
-            };
+            self.spec = PcmSpec::new(actual_channels, nz_actual_rate);
         }
         if num_samples == 0 {
             out.clear();
@@ -311,9 +304,6 @@ fn map_codec(codec: AudioCodec) -> DecodeResult<(AudioCodecId, Option<CodecProfi
 }
 
 fn duration_to_ticks(d: Duration, sample_rate: u32) -> u64 {
-    if sample_rate == 0 {
-        return 0;
-    }
     let secs = d.as_secs();
     let subsec_nanos = u64::from(d.subsec_nanos());
     secs.saturating_mul(u64::from(sample_rate))
@@ -321,7 +311,7 @@ fn duration_to_ticks(d: Duration, sample_rate: u32) -> u64 {
 }
 
 #[cfg(test)]
-mod priming_tests {
+mod tests {
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
 
@@ -329,6 +319,7 @@ mod priming_tests {
     use crate::{
         codec::{CodecPriming, FrameCodec},
         demuxer::TrackInfo,
+        error::DecodeError,
         symphonia::config::SymphoniaConfig,
     };
 
@@ -340,6 +331,29 @@ mod priming_tests {
             extra_data: Vec::new(),
             duration: None,
             gapless: None,
+        }
+    }
+
+    fn zero_rate_track() -> TrackInfo {
+        TrackInfo {
+            codec: AudioCodec::Mp3,
+            sample_rate: 0,
+            channels: 2,
+            extra_data: Vec::new(),
+            duration: None,
+            gapless: None,
+        }
+    }
+
+    /// A zero sample rate in `TrackInfo` must be rejected with
+    /// `DecodeError::InvalidSampleRate` instead of silently building a
+    /// `PcmSpec { sample_rate: 0 }`.
+    #[kithara::test]
+    fn open_with_config_zero_rate_returns_invalid_sample_rate() {
+        match SymphoniaCodec::open_with_config(&zero_rate_track(), &SymphoniaConfig::default()) {
+            Err(DecodeError::InvalidSampleRate { .. }) => {}
+            Err(other) => panic!("expected InvalidSampleRate, got {other:?}"),
+            Ok(_) => panic!("zero sample rate must be rejected"),
         }
     }
 

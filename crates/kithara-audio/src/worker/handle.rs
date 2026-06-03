@@ -118,7 +118,7 @@ mod tests {
         thread::sleep as thread_sleep,
         time::{Instant, timeout as platform_timeout},
     };
-    use kithara_stream::Timeline;
+    use kithara_stream::{SeekControl, SeekObserve, SeekState};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -129,7 +129,8 @@ mod tests {
     };
 
     struct MockSource {
-        timeline: Timeline,
+        seek: Arc<dyn SeekControl>,
+        seek_obs: Arc<dyn SeekObserve>,
         ready: bool,
         should_panic: bool,
         chunks_to_produce: usize,
@@ -138,8 +139,12 @@ mod tests {
 
     impl MockSource {
         fn new(chunks: usize) -> Self {
+            let state = Arc::new(SeekState::new());
+            let seek = Arc::clone(&state) as Arc<dyn SeekControl>;
+            let seek_obs = Arc::clone(&state) as Arc<dyn SeekObserve>;
             Self {
-                timeline: Timeline::new(),
+                seek,
+                seek_obs,
                 chunks_to_produce: chunks,
                 cursor: 0,
                 ready: true,
@@ -166,10 +171,10 @@ mod tests {
         type Chunk = PcmChunk;
 
         fn step_track(&mut self) -> TrackStep<PcmChunk> {
-            if self.timeline.is_seek_pending() || self.timeline.is_flushing() {
-                let epoch = self.timeline.seek_epoch();
-                self.timeline.complete_seek(epoch);
-                self.timeline.clear_seek_pending(epoch);
+            if self.seek_obs.is_pending() || self.seek_obs.is_flushing() {
+                let epoch = self.seek_obs.epoch();
+                self.seek.complete(epoch);
+                self.seek.clear_pending(epoch);
                 return TrackStep::StateChanged;
             }
             if !self.ready {
@@ -185,14 +190,21 @@ mod tests {
             TrackStep::Produced(Fetch::new(PcmChunk::default(), false, 0))
         }
 
-        fn timeline(&self) -> &Timeline {
-            &self.timeline
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek_obs)
         }
     }
 
-    #[derive(Default)]
     struct FailingSource {
-        timeline: Timeline,
+        seek_obs: Arc<dyn SeekObserve>,
+    }
+
+    impl Default for FailingSource {
+        fn default() -> Self {
+            Self {
+                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+            }
+        }
     }
 
     impl AudioWorkerSource for FailingSource {
@@ -202,8 +214,8 @@ mod tests {
             TrackStep::Failed
         }
 
-        fn timeline(&self) -> &Timeline {
-            &self.timeline
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek_obs)
         }
     }
 
@@ -356,7 +368,7 @@ mod tests {
         let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
 
         let source = MockSource::new(100);
-        let timeline = source.timeline.clone();
+        let seek = Arc::clone(&source.seek);
         let (reg, mut rx, _) = make_registration(source, 32, 1);
 
         let _id = handle.register_track(reg);
@@ -364,7 +376,7 @@ mod tests {
         let got = wait_for_chunks(&mut rx, 2, Duration::from_secs(5));
         assert!(got >= 2);
 
-        let _ = timeline.initiate_seek(Duration::from_secs(10));
+        let _ = seek.begin(Duration::from_secs(10));
         handle.wake();
 
         thread_sleep(Duration::from_millis(100));
@@ -427,8 +439,9 @@ mod tests {
     async fn worker_preload_gate_reopens_after_seek() {
         let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
 
-        let (reg, _rx, preload_gate) = make_registration(MockSource::new(10), 32, 1);
-        let timeline = reg.source.timeline().clone();
+        let source = MockSource::new(10);
+        let seek = Arc::clone(&source.seek);
+        let (reg, _rx, preload_gate) = make_registration(source, 32, 1);
         let _id = handle.register_track(reg);
 
         platform_timeout(Duration::from_secs(1), preload_gate.wait())
@@ -436,7 +449,7 @@ mod tests {
             .expect("initial preload gate must open");
         assert!(preload_gate.is_ready());
 
-        let _ = timeline.initiate_seek(Duration::from_secs(1));
+        let _ = seek.begin(Duration::from_secs(1));
         handle.wake();
 
         platform_timeout(Duration::from_secs(1), preload_gate.wait())
@@ -526,7 +539,7 @@ mod tests {
     #[kithara::test]
     fn shared_worker_blocking_track_does_not_starve_producing_track() {
         struct BlockingSource {
-            timeline: Timeline,
+            seek_obs: Arc<dyn SeekObserve>,
             blocking: Arc<AtomicBool>,
         }
 
@@ -542,8 +555,8 @@ mod tests {
                 }
             }
 
-            fn timeline(&self) -> &Timeline {
-                &self.timeline
+            fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+                Arc::clone(&self.seek_obs)
             }
         }
 
@@ -554,7 +567,7 @@ mod tests {
 
         let blocking = Arc::new(AtomicBool::new(true));
         let blocking_source = BlockingSource {
-            timeline: Timeline::new(),
+            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
             blocking: Arc::clone(&blocking),
         };
         let (reg_b, _rx_b, _) = make_registration(blocking_source, 32, 0);
@@ -589,7 +602,7 @@ mod tests {
     #[kithara::test]
     fn shared_worker_sync_blocking_step_starves_other_tracks() {
         struct SlowDecodeSource {
-            timeline: Timeline,
+            seek_obs: Arc<dyn SeekObserve>,
             block_ms: u64,
         }
 
@@ -601,8 +614,8 @@ mod tests {
                 TrackStep::Produced(Fetch::new(PcmChunk::default(), false, 0))
             }
 
-            fn timeline(&self) -> &Timeline {
-                &self.timeline
+            fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+                Arc::clone(&self.seek_obs)
             }
         }
 
@@ -612,7 +625,7 @@ mod tests {
         let _id_a = handle.register_track(reg_a);
 
         let slow_source = SlowDecodeSource {
-            timeline: Timeline::new(),
+            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
             block_ms: 10,
         };
         let (reg_b, mut rx_b, _) = make_registration(slow_source, 32, 0);

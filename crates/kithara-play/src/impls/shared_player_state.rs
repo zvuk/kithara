@@ -18,11 +18,11 @@ pub struct SharedPlayerState {
     pub playing: AtomicBool,
     /// Last observed total duration snapshot in seconds.
     ///
-    /// Source of truth is the per-track `Timeline` in the audio pipeline.
+    /// Source of truth is the per-track `PlayheadState` in the audio pipeline.
     pub duration: AtomicF64,
     /// Last observed playback position snapshot in seconds.
     ///
-    /// Source of truth is the per-track `Timeline` in the audio pipeline.
+    /// Source of truth is the per-track `PlayheadState` in the audio pipeline.
     pub position: AtomicF64,
     /// Current sample rate from the audio stream.
     pub sample_rate: AtomicU32,

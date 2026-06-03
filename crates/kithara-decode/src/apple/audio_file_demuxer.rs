@@ -109,7 +109,12 @@ impl AppleAudioFileDemuxer {
 
         let channels = u16::try_from(asbd.mChannelsPerFrame).unwrap_or(2);
         let sample_rate = sample_rate_from_asbd(asbd.mSampleRate);
-        let duration = if sample_rate > 0 && total_packets > 0 {
+        if sample_rate == 0 {
+            return Err(DecodeError::InvalidSampleRate {
+                resource: "apple.audio_file",
+            });
+        }
+        let duration = if total_packets > 0 {
             let frames = total_packets.saturating_mul(u64::from(frames_per_packet));
             Some(duration_for_frames(sample_rate, frames))
         } else {
@@ -200,7 +205,7 @@ impl Demuxer for AppleAudioFileDemuxer {
             return Ok(DemuxOutcome::Eof);
         }
 
-        let sample_rate = self.track_info.sample_rate.max(1);
+        let sample_rate = self.track_info.sample_rate;
         let start_packet = self.next_packet;
         let frame_idx = start_packet.saturating_mul(u64::from(self.frames_per_packet));
         let pts = duration_for_frames(sample_rate, frame_idx);
@@ -261,7 +266,7 @@ impl Demuxer for AppleAudioFileDemuxer {
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
-        let sample_rate = self.track_info.sample_rate.max(1);
+        let sample_rate = self.track_info.sample_rate;
         let total_frames = self
             .total_packets
             .saturating_mul(u64::from(self.frames_per_packet));

@@ -325,7 +325,7 @@ pub fn bump_install_id() -> u64 {
 /// nightly-only) but implements `Hash` over that inner value directly, so
 /// we hash the `ThreadId` itself — no `format!`/`String` allocation. That
 /// matters because this runs on the real-time render path (e.g.
-/// `Timeline::write_playhead`); allocating here would abort under
+/// `PlayheadState::write_playhead`); allocating here would abort under
 /// `-Zsanitizer=realtime`. Equal `ThreadId` values hash to the same `u64`,
 /// distinct values almost certainly do not — the only consumer is "group
 /// probe events by thread" and a hash collision would fold two threads

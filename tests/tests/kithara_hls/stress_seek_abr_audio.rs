@@ -134,7 +134,7 @@ async fn stress_seek_abr_audio() {
         let channels = spec.channels as usize;
         let chunk_duration_secs = 0.05;
         let chunk_samples =
-            (chunk_duration_secs * f64::from(spec.sample_rate) * channels as f64) as usize;
+            (chunk_duration_secs * f64::from(spec.sample_rate.get()) * channels as f64) as usize;
         let mut buf = vec![0.0f32; chunk_samples];
 
         info!("Phase 1: waiting for ABR switch (ascending -> descending)...");

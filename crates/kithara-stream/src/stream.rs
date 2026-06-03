@@ -37,8 +37,8 @@ pub enum StreamReadError {
 ///
 /// Mirrors the [`ReadOutcome`] shape from
 /// [`Source::read_at`](crate::Source::read_at), but extends each variant
-/// with the authoritative `byte_position` from the stream's
-/// [`Timeline`] for callers that don't want to read it back themselves.
+/// with the authoritative `byte_position` from the source cursor for
+/// callers that don't want to read it back themselves.
 /// `Bytes` carries a [`NonZeroUsize`] count — the type system
 /// guarantees forward progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,9 +161,11 @@ impl fmt::Display for VariantChangeError {
 impl StdError for VariantChangeError {}
 
 use crate::{
-    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor, Timeline,
-    error::{SourceError, StreamError},
-    source::{NotReadyCause, PendingReason, ReadOutcome, Source},
+    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor,
+    error::{SourceError, StreamError, StreamResult},
+    playhead::PlayheadWrite,
+    seek_state::{Activity, SeekControl, SeekObserve},
+    source::{NotReadyCause, PendingReason, ReadOutcome, Source, VariantControl},
 };
 
 /// Defines a stream type and how to create it.
@@ -242,7 +244,8 @@ impl<T: StreamType> Stream<T> {
         position: Duration,
     ) -> Result<Option<SourceSeekAnchor>, io::Error> {
         self.source
-            .seek_time_anchor(position)
+            .byte_map()
+            .map_or(Ok(None), |m| m.anchor_at_time(position))
             .map_err(|e| IoError::other(e.to_string()))
     }
 
@@ -251,9 +254,28 @@ impl<T: StreamType> Stream<T> {
         &self.source
     }
 
-    /// Get stream timeline.
-    pub fn timeline(&self) -> Timeline {
-        self.source.timeline()
+    /// Narrow mutating playhead handle — position + duration.
+    #[must_use]
+    pub fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        self.source.playhead_write()
+    }
+
+    /// Narrow seek-control handle — begin / complete / `mark_pending`.
+    #[must_use]
+    pub fn seek_control(&self) -> Arc<dyn SeekControl> {
+        self.source.seek_control()
+    }
+
+    /// Narrow seek-observe handle — read seek state without mutation.
+    #[must_use]
+    pub fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        self.source.seek_observe()
+    }
+
+    /// Narrow activity handle — set/query the `PLAYING` flag.
+    #[must_use]
+    pub fn activity(&self) -> Arc<dyn Activity> {
+        self.source.activity()
     }
 
     delegate::delegate! {
@@ -266,40 +288,57 @@ impl<T: StreamType> Stream<T> {
             pub fn media_info(&self) -> Option<MediaInfo>;
             /// Runtime ABR handle — `Some` for adaptive sources (HLS).
             pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
-            /// Current variant metadata — `Some` for adaptive sources (HLS).
-            pub fn current_variant(&self) -> Option<kithara_events::VariantInfo>;
             /// Get total length if known.
             pub fn len(&self) -> Option<u64>;
-            /// Get current segment byte range (for segmented sources like HLS).
-            /// Transitional — removed in Plan 06.
-            pub fn current_segment_range(&self) -> Option<Range<u64>>;
-            /// Header byte range for decoder recreate after a format change.
-            /// Transitional — removed in Plan 06.
-            ///
-            /// # Errors
-            ///
-            /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS
-            /// sources or HLS variants activated with `served_from > 0`
-            /// (init prefix unreachable via Stream reads).
-            pub fn format_change_segment_range(&self) -> crate::error::StreamResult<Range<u64>>;
-            /// Clear variant fence, allowing reads from the next variant.
-            pub fn clear_variant_fence(&mut self);
-            /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
-            /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
-            pub fn has_variant_change_pending(&self) -> bool;
             /// The reader→peer wake handle — `Some` for segmented sources (HLS)
             /// that push a downloader peer, `None` otherwise.
             pub fn peer_wake(&self) -> Option<Arc<DeferredWake>>;
-            /// Commit the actual post-seek landing after `decoder.seek(...)`.
-            pub fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>);
-            /// Build a fresh reader-side hooks instance from the inner source.
-            pub fn take_reader_hooks(&mut self) -> Option<crate::BoxedHooks>;
-            /// Optional segment-layout handle for segment-aware decoders.
-            pub fn as_segment_layout(&self) -> Option<Arc<dyn crate::SegmentLayout>>;
+            /// Build a fresh reader-side event-sink instance from the inner source.
+            pub fn take_reader_event_sink(&mut self) -> Option<crate::BoxedEventSink>;
+            /// Optional byte-map handle for segment-aware decoders.
+            pub fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>>;
             /// Absolute byte-position set — used by [`Stream::seek`] callers
             /// and audio FSM landings. Forwards to the source's atomic cursor.
             pub fn set_position(&self, pos: u64);
         }
+    }
+
+    /// Optional HLS-only variant-coordination handle — `Some` for adaptive
+    /// sources (HLS), `None` otherwise.
+    #[must_use]
+    pub fn variant_control(&self) -> Option<Arc<dyn VariantControl>> {
+        self.source.variant_control()
+    }
+
+    /// Clear the variant fence, allowing reads from the next variant.
+    /// No-op for non-adaptive sources.
+    pub fn clear_variant_fence(&mut self) {
+        if let Some(vc) = self.source.variant_control() {
+            vc.clear_variant_fence();
+        }
+    }
+
+    /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
+    /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
+    #[must_use]
+    pub fn has_variant_change_pending(&self) -> bool {
+        self.source
+            .variant_control()
+            .is_some_and(|vc| vc.has_variant_change_pending())
+    }
+
+    /// Header byte range for decoder recreate after a format change.
+    ///
+    /// # Errors
+    ///
+    /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS sources
+    /// or HLS variants activated with `served_from > 0` (init prefix
+    /// unreachable via Stream reads).
+    pub fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        self.source.variant_control().map_or(
+            Err(StreamError::Source(SourceError::FormatChangeNotApplicable)),
+            |vc| vc.format_change_segment_range(),
+        )
     }
 }
 
@@ -387,13 +426,17 @@ impl<T: StreamType> Stream<T> {
             });
         }
 
+        let variant_control = self.source.variant_control();
+        let seek_obs = self.source.seek_observe();
         loop {
-            let timeline = self.source.timeline();
-            let read_epoch = timeline.seek_epoch();
+            let read_epoch = seek_obs.epoch();
             let pos = self.source.position();
             let range = pos..pos.saturating_add(buf.len() as u64);
 
-            if self.source.has_variant_change_pending() {
+            if variant_control
+                .as_ref()
+                .is_some_and(|vc| vc.has_variant_change_pending())
+            {
                 return Ok(StreamReadOutcome::Pending(PendingReason::VariantChange));
             }
 
@@ -403,7 +446,7 @@ impl<T: StreamType> Stream<T> {
             let wait_outcome = match wait_result {
                 Ok(outcome) => outcome,
                 Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
-                    if timeline.is_flushing() || timeline.seek_epoch() != read_epoch {
+                    if seek_obs.is_flushing() || seek_obs.epoch() != read_epoch {
                         return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
                     return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
@@ -420,7 +463,7 @@ impl<T: StreamType> Stream<T> {
                     return Ok(StreamReadOutcome::Eof { byte_position: pos });
                 }
                 WaitOutcome::Interrupted => {
-                    if timeline.is_flushing() {
+                    if seek_obs.is_flushing() {
                         return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
                     return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
@@ -429,7 +472,7 @@ impl<T: StreamType> Stream<T> {
                 }
             }
 
-            if timeline.seek_epoch() != read_epoch {
+            if seek_obs.epoch() != read_epoch {
                 return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
             }
 
@@ -439,11 +482,10 @@ impl<T: StreamType> Stream<T> {
                 .map_err(|e| StreamReadError::Source(IoError::other(e.to_string())))?
             {
                 ReadOutcome::Bytes(count) => {
-                    if timeline.seek_epoch() != read_epoch {
+                    if seek_obs.epoch() != read_epoch {
                         return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
                     hang_reset!();
-                    timeline.set_segment_position(pos);
                     self.source.advance(count.get() as u64);
                     let new_pos = self.source.position();
                     return Ok(StreamReadOutcome::Bytes {
@@ -640,16 +682,19 @@ impl<T: StreamType> Stream<T> {
         let pos = self.source.position();
         let len = self.source.len();
         let phase = self.source.phase_at(pos..pos.saturating_add(want as u64));
-        let timeline = self.source.timeline();
+        let seek_obs = self.source.seek_observe();
         StreamPending {
             reason,
             pos,
             want,
             len,
             phase,
-            epoch: timeline.seek_epoch(),
-            flushing: timeline.is_flushing(),
-            variant_fence: self.source.has_variant_change_pending(),
+            epoch: seek_obs.epoch(),
+            flushing: seek_obs.is_flushing(),
+            variant_fence: self
+                .source
+                .variant_control()
+                .is_some_and(|vc| vc.has_variant_change_pending()),
         }
     }
 }
@@ -666,7 +711,7 @@ impl<T: StreamType> Seek for Stream<T> {
         }
         let new_pos = self.resolve_seek_target(pos, self.source.len())?;
 
-        let wait_range = match self.source.format_change_segment_range() {
+        let wait_range = match self.format_change_segment_range() {
             Ok(range) if range.start == new_pos => range,
             _ => new_pos..new_pos.saturating_add(1),
         };
@@ -704,11 +749,11 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{ReadOutcome, Source, SourcePhase};
+    use crate::{PlayheadRead, PlayheadState, ReadOutcome, SeekState, Source, SourcePhase};
 
     /// Test helper — script entry that maps to either `Bytes(N)` (with
     /// the source slicing actual `data`) or a terminal `Eof`. Pending
-    /// causes are exercised through the timeline (`initiate_seek`) and
+    /// causes are exercised through the seek state (`begin`) and
     /// the wait-outcome script, not the read script.
     #[derive(Clone, Copy)]
     enum ScriptRead {
@@ -725,7 +770,8 @@ mod tests {
     struct ScriptSource {
         position: Arc<AtomicU64>,
         anchor: Option<SourceSeekAnchor>,
-        timeline: Timeline,
+        seek: Arc<SeekState>,
+        playhead: Arc<PlayheadState>,
         data: Vec<u8>,
         reads: VecDeque<ScriptRead>,
         waits: VecDeque<WaitOutcome>,
@@ -734,13 +780,14 @@ mod tests {
 
     impl ScriptSource {
         fn new(
-            timeline: Timeline,
+            seek: Arc<SeekState>,
             waits: impl IntoIterator<Item = WaitOutcome>,
             reads: impl IntoIterator<Item = ScriptRead>,
             data: Vec<u8>,
         ) -> Self {
             Self {
-                timeline,
+                seek,
+                playhead: Arc::new(PlayheadState::new()),
                 data,
                 position: Arc::new(AtomicU64::new(0)),
                 anchor: None,
@@ -773,7 +820,7 @@ mod tests {
             self.position.load(Ordering::Acquire)
         }
 
-        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
+        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
             let step = self.reads.pop_front().unwrap_or(ScriptRead::Eof);
             match step {
                 ScriptRead::Eof => Ok(ReadOutcome::Eof),
@@ -792,31 +839,78 @@ mod tests {
             }
         }
 
-        fn seek_time_anchor(
-            &mut self,
-            _position: Duration,
-        ) -> crate::StreamResult<Option<SourceSeekAnchor>> {
-            Ok(self.anchor)
+        fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>> {
+            Some(Arc::new(ScriptByteMap {
+                anchor: self.anchor,
+                len: self.data.len() as u64,
+            }))
         }
 
         fn set_position(&self, pos: u64) {
             self.position.store(pos, Ordering::Release);
         }
 
-        fn timeline(&self) -> Timeline {
-            self.timeline.clone()
+        fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+        }
+
+        fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+        }
+
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+        }
+
+        fn seek_control(&self) -> Arc<dyn SeekControl> {
+            Arc::clone(&self.seek) as Arc<dyn SeekControl>
+        }
+
+        fn activity(&self) -> Arc<dyn Activity> {
+            Arc::clone(&self.seek) as Arc<dyn Activity>
         }
 
         fn wait_range(
             &mut self,
             _range: Range<u64>,
             _timeout: Option<Duration>,
-        ) -> crate::StreamResult<WaitOutcome> {
+        ) -> StreamResult<WaitOutcome> {
             Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
         }
 
         fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
             self.peer_wake.clone()
+        }
+    }
+
+    struct ScriptByteMap {
+        anchor: Option<SourceSeekAnchor>,
+        len: u64,
+    }
+
+    impl crate::ByteMap for ScriptByteMap {
+        fn anchor_at_time(&self, _position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
+            Ok(self.anchor)
+        }
+
+        fn init_segment_range(&self) -> Range<u64> {
+            0..0
+        }
+
+        fn len(&self) -> Option<u64> {
+            Some(self.len)
+        }
+
+        fn segment_after_byte(&self, _byte_offset: u64) -> Option<crate::SegmentDescriptor> {
+            None
+        }
+
+        fn segment_at_time(&self, _t: Duration) -> Option<crate::SegmentDescriptor> {
+            None
+        }
+
+        fn segment_count(&self) -> Option<u32> {
+            None
         }
     }
 
@@ -846,7 +940,8 @@ mod tests {
 
     struct SeekDuringWaitSource {
         position: Arc<AtomicU64>,
-        timeline: Timeline,
+        seek: Arc<SeekState>,
+        playhead: Arc<PlayheadState>,
         read_calls: usize,
     }
 
@@ -867,7 +962,7 @@ mod tests {
             self.position.load(Ordering::Acquire)
         }
 
-        fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
+        fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> StreamResult<ReadOutcome> {
             self.read_calls += 1;
             Ok(bytes(4))
         }
@@ -876,16 +971,32 @@ mod tests {
             self.position.store(pos, Ordering::Release);
         }
 
-        fn timeline(&self) -> Timeline {
-            self.timeline.clone()
+        fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+        }
+
+        fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+        }
+
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+        }
+
+        fn seek_control(&self) -> Arc<dyn SeekControl> {
+            Arc::clone(&self.seek) as Arc<dyn SeekControl>
+        }
+
+        fn activity(&self) -> Arc<dyn Activity> {
+            Arc::clone(&self.seek) as Arc<dyn Activity>
         }
 
         fn wait_range(
             &mut self,
             _range: Range<u64>,
             _timeout: Option<Duration>,
-        ) -> crate::StreamResult<WaitOutcome> {
-            let _ = self.timeline.initiate_seek(Duration::from_millis(10));
+        ) -> StreamResult<WaitOutcome> {
+            let _ = SeekControl::begin(&*self.seek, Duration::from_millis(10));
             Ok(WaitOutcome::Ready)
         }
     }
@@ -898,7 +1009,7 @@ mod tests {
         // it off the forbid path.
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
-            Timeline::new(),
+            Arc::new(SeekState::new()),
             [WaitOutcome::Interrupted],
             [],
             vec![0u8; 8],
@@ -927,7 +1038,7 @@ mod tests {
         // armed — the distinguishing signal from the worker's deferred arm.
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
-            Timeline::new(),
+            Arc::new(SeekState::new()),
             [WaitOutcome::Interrupted, WaitOutcome::Ready],
             [ScriptRead::Data(4)],
             b"ABCD".to_vec(),
@@ -954,7 +1065,7 @@ mod tests {
         // the target range is not ready (the wait script is never consulted).
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
-            Timeline::new(),
+            Arc::new(SeekState::new()),
             [WaitOutcome::Interrupted, WaitOutcome::Interrupted],
             [],
             vec![0u8; 100],
@@ -982,9 +1093,8 @@ mod tests {
 
     #[kithara::test]
     fn try_read_yields_not_ready_on_interrupted_then_recovers_next_probe() {
-        let timeline = Timeline::new();
         let source = ScriptSource::new(
-            timeline.clone(),
+            Arc::new(SeekState::new()),
             [WaitOutcome::Interrupted, WaitOutcome::Ready],
             [ScriptRead::Data(4)],
             b"ABCD".to_vec(),
@@ -1009,9 +1119,9 @@ mod tests {
 
     #[kithara::test]
     fn try_read_returns_seek_pending_when_flushing() {
-        let timeline = Timeline::new();
-        let _ = timeline.initiate_seek(Duration::from_millis(10));
-        let source = ScriptSource::new(timeline.clone(), [WaitOutcome::Interrupted], [], vec![]);
+        let seek = Arc::new(SeekState::new());
+        let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
+        let source = ScriptSource::new(Arc::clone(&seek), [WaitOutcome::Interrupted], [], vec![]);
         let mut stream = Stream::<DummyType> { source };
         let mut buf = [0u8; 4];
 
@@ -1026,9 +1136,9 @@ mod tests {
 
     #[kithara::test]
     fn try_read_returns_seek_pending_when_epoch_changes_after_wait() {
-        let timeline = Timeline::new();
         let source = SeekDuringWaitSource {
-            timeline: timeline.clone(),
+            seek: Arc::new(SeekState::new()),
+            playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             read_calls: 0,
         };
@@ -1049,8 +1159,7 @@ mod tests {
 
     #[kithara::test]
     fn seek_updates_position() {
-        let timeline = Timeline::new();
-        let source = ScriptSource::new(timeline.clone(), [], [], b"ABCDE".to_vec());
+        let source = ScriptSource::new(Arc::new(SeekState::new()), [], [], b"ABCDE".to_vec());
         let mut stream = Stream::<DummyType> { source };
 
         let pos = stream
@@ -1063,8 +1172,7 @@ mod tests {
 
     #[kithara::test]
     fn seek_time_anchor_does_not_move_position() {
-        let timeline = Timeline::new();
-        let mut source = ScriptSource::new(timeline.clone(), [], [], b"ABCDE".to_vec());
+        let mut source = ScriptSource::new(Arc::new(SeekState::new()), [], [], b"ABCDE".to_vec());
         source.set_position(11);
         source.anchor = Some(SourceSeekAnchor {
             byte_offset: 3,

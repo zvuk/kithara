@@ -45,7 +45,7 @@ const MAX_COMMITTED_STEP_SECS: f64 = 1.5;
 /// `committed_position` runs ahead of decoded content with no seek (app.log
 /// 2026-05-27: committed +10.4 s in one step, ~50 s ahead of decoded).
 ///
-/// Detector: the `committed_ns` USDT probe on `Timeline::write_playhead`
+/// Detector: the `committed_ns` USDT probe on `PlayheadState::write_playhead`
 /// fires on every playhead commit. We capture the firing sequence and fail if
 /// the committed playhead ever jumps forward by more than
 /// [`MAX_COMMITTED_STEP_SECS`] in a single commit. The player's served-frame

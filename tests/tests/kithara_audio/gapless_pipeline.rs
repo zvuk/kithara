@@ -1,5 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroU32;
+
 use kithara_decode::{DecoderTrackInfo, GaplessInfo, PcmSpec};
 use kithara_integration_tests::decode_mock::scripted_inner_decoder_with_track_info_loose;
 use kithara_test_utils::kithara;
@@ -12,10 +14,7 @@ fn scripted_decoder_exposes_gapless_track_info() {
     let mut track_info = DecoderTrackInfo::default();
     track_info.gapless = Some(gapless);
 
-    let spec = PcmSpec {
-        channels: 2,
-        sample_rate: 44_100,
-    };
+    let spec = PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
     let (decoder, _) = scripted_inner_decoder_with_track_info_loose(
         spec,
         Vec::new(),

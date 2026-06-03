@@ -2,15 +2,15 @@
 
 use std::{error::Error as StdError, fmt, num::NonZeroUsize, ops::Range, sync::Arc};
 
-use kithara_events::VariantInfo;
 use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
 
 use crate::{
-    Timeline,
-    error::{SourceError, StreamError, StreamResult},
+    error::StreamResult,
     media::MediaInfo,
+    playhead::{PlayheadRead, PlayheadWrite},
+    seek_state::{Activity, SeekControl, SeekObserve},
     wake::DeferredWake,
 };
 
@@ -206,74 +206,14 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// open to grab a lock-free, Arc-shareable view over the segment
     /// table — independent of the byte cursor passed to the decoder
     /// through `Read + Seek`. Default `None` for non-segmented sources.
-    fn as_segment_layout(&self) -> Option<Arc<dyn SegmentLayout>> {
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
         None
     }
 
-    /// Clear variant fence, allowing reads from the next variant.
-    ///
-    /// Called when the decoder is recreated after ABR switch.
-    /// Default no-op for non-HLS sources.
-    fn clear_variant_fence(&mut self) {}
-
-    /// Commit the actual post-seek landing after `decoder.seek(...)`.
-    ///
-    /// Segmented sources can use this hook to reconcile source-local state
-    /// with the authoritative landed reader position in [`Timeline`].
-    ///
-    /// Default no-op for sources that do not need post-seek reconciliation.
-    fn commit_seek_landing(&mut self, _anchor: Option<SourceSeekAnchor>) {}
-
-    /// Current segment byte range (HLS-only).
-    ///
-    /// Transitional — removed in Plan 06 once the audio FSM consumes
-    /// segment boundaries through [`SegmentLayout`].
-    fn current_segment_range(&self) -> Option<Range<u64>> {
+    /// Optional HLS-only variant-coordination handle. Adaptive sources (HLS)
+    /// return `Some`; non-adaptive sources keep the default `None`.
+    fn variant_control(&self) -> Option<Arc<dyn VariantControl>> {
         None
-    }
-
-    /// Current variant's full metadata. Adaptive sources (HLS) return
-    /// the live `VariantInfo` for the active variant — pulled from the
-    /// peer on every call so the UI never sees a stale label. Non-adaptive
-    /// sources keep the default `None`.
-    fn current_variant(&self) -> Option<VariantInfo> {
-        None
-    }
-
-    /// Byte range of the header (init segment or first served segment)
-    /// the decoder must read to re-establish container state after a
-    /// format change (HLS ABR cross-codec switch).
-    ///
-    /// Returns `Ok(range)` — header byte range that `apply_format_change`
-    /// seeks to and the decoder factory's probe reads.
-    ///
-    /// # Errors
-    ///
-    /// `Err(SourceError::FormatChangeNotApplicable)` — source has no
-    /// HLS-style format-change recovery (file source — default impl) or
-    /// the active HLS variant was activated with `served_from > 0` so
-    /// the init prefix lives outside the served virtual byte range.
-    /// Callers should fall back to a non-init recovery anchor (e.g.
-    /// the current segment boundary).
-    ///
-    /// Transitional — removed in Plan 06.
-    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
-        Err(StreamError::Source(SourceError::FormatChangeNotApplicable))
-    }
-
-    /// `true` if a cross-variant transition is in-flight and `read_at` /
-    /// `wait_range` are short-circuited to `Pending(VariantChange)` /
-    /// `Interrupted` until the decoder acks the switch via
-    /// `clear_variant_fence` (HLS) or equivalent.
-    ///
-    /// Sources without a variant fence keep the default `false`. Used by
-    /// the audio decode loop to break out of `Ok(Pending(_))` retry spin
-    /// when Symphonia / other demuxers absorb the underlying
-    /// `VariantChangeError` and surface only an opaque pending — without
-    /// this polled check the loop would yield forever while the fence
-    /// stays closed waiting for a recreate that never starts.
-    fn has_variant_change_pending(&self) -> bool {
-        false
     }
 
     /// Whether the source currently reports zero bytes. Default mirrors
@@ -344,49 +284,40 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// Returns an error if the read fails or the source is in an invalid state.
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome>;
 
-    /// Resolve `position` to a source-specific seek anchor.
-    ///
-    /// Segmented sources (HLS) should map time to a deterministic segment
-    /// boundary and byte offset. Non-segmented sources return `Ok(None)`.
-    ///
-    /// The caller is expected to set stream position to `byte_offset` and
-    /// perform decoder reset/recreation using this anchor.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the source cannot resolve the anchor.
-    fn seek_time_anchor(&mut self, _position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
-        Ok(None)
-    }
-
     /// Absolute set of the byte cursor — used by [`Stream::seek`] and
     /// post-seek landings. Sources implement this via the same atomic
     /// cursor that backs [`Self::position`] / [`Self::advance`].
     fn set_position(&self, pos: u64);
 
-    /// Build a fresh reader-side hooks instance.
+    /// Build a fresh reader-side event-sink instance.
     ///
     /// Returned by Source-impls that want to expose reader-side events
-    /// (`HlsSource`, `FileSource`). The audio pipeline takes the hook
+    /// (`HlsSource`, `FileSource`). The audio pipeline takes the sink
     /// at decoder creation/recreation time and threads it into the
-    /// `HookedDecoder` wrapper. Default `None` keeps mock and test
-    /// sources unhooked.
+    /// composed decoder. Default `None` keeps mock and test sources
+    /// without a sink.
     ///
-    /// `take_*` is a misnomer: each call must return a **fresh** hook
-    /// instance, because decoder recreation (ABR / format change)
-    /// rebuilds the wrapper and the new hook needs a clean state
-    /// cursor.
-    fn take_reader_hooks(&mut self) -> Option<crate::BoxedHooks> {
+    /// Each call must return a **fresh** sink instance, because decoder
+    /// recreation (ABR / format change) rebuilds the decoder and the new
+    /// sink needs a clean state cursor.
+    fn take_reader_event_sink(&mut self) -> Option<crate::BoxedEventSink> {
         None
     }
 
-    /// Get shared playback timeline.
-    ///
-    /// Timeline is the single source of truth for playback state across all
-    /// stream types (segmented and non-segmented). Sources own their
-    /// Timeline and hand out cheap Arc clones to downstream consumers
-    /// (reader, audio FSM, Downloader peers).
-    fn timeline(&self) -> Timeline;
+    /// Narrow read-only handle to the playhead position and total duration.
+    fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
+
+    /// Narrow mutating handle to the playhead — for the decode/produce path.
+    fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
+
+    /// Narrow read-only handle to seek/flush coordination state.
+    fn seek_observe(&self) -> Arc<dyn SeekObserve>;
+
+    /// Narrow mutating handle to seek coordination (`FLUSH_START` / `FLUSH_STOP`).
+    fn seek_control(&self) -> Arc<dyn SeekControl>;
+
+    /// Narrow handle to the playback-activity flag.
+    fn activity(&self) -> Arc<dyn Activity>;
 
     /// Wait for data in range to be available.
     ///
@@ -409,6 +340,32 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     ) -> StreamResult<WaitOutcome>;
 }
 
+/// HLS-only variant-coordination surface, vended as `Some` by adaptive
+/// sources and `None` by everything else. Replaces three former no-op
+/// default `Source` methods — non-adaptive sources no longer pretend to
+/// implement variant fences.
+///
+/// All methods take `&self`; the HLS impl (`HlsCoord`) uses interior
+/// mutability, so callers hold an `Arc<dyn VariantControl>` and never
+/// need `&mut`.
+pub trait VariantControl: Send + Sync + 'static {
+    /// Clear the variant fence after a decoder recreate acks an ABR switch.
+    fn clear_variant_fence(&self);
+
+    /// Whether a cross-variant transition is in-flight (reads/waits are
+    /// short-circuited until the decoder acks via `clear_variant_fence`).
+    fn has_variant_change_pending(&self) -> bool;
+
+    /// Byte range of the header the decoder must re-read after a format
+    /// change (HLS ABR cross-codec switch).
+    ///
+    /// # Errors
+    /// `Err(SourceError::FormatChangeNotApplicable)` when the active variant
+    /// was served with a non-zero `served_from` so the init prefix lives
+    /// outside the virtual range.
+    fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
+}
+
 /// Segment-table view exposed by segmented sources (HLS, fragmented
 /// file-mp4).
 ///
@@ -417,8 +374,18 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
 /// `segment_at_time`, `segment_after_byte`, `segment_count`, and total
 /// `len`. Has no I/O surface: the byte cursor is the decoder's
 /// `Read + Seek` handle, queried independently. Sources that aren't
-/// segment-aware return `None` from [`Source::as_segment_layout`].
-pub trait SegmentLayout: Send + Sync + 'static {
+/// segment-aware return `None` from [`Source::byte_map`].
+pub trait ByteMap: Send + Sync + 'static {
+    /// Resolve `position` to a source-specific seek anchor (segment
+    /// boundary + byte offset). Non-segmented / non-anchoring layouts
+    /// keep the default `Ok(None)`.
+    ///
+    /// # Errors
+    /// Returns an error when the layout cannot resolve the anchor.
+    fn anchor_at_time(&self, _position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
+        Ok(None)
+    }
+
     /// Init segment range (e.g. ftyp+moov from `EXT-X-MAP`) for the
     /// current layout variant. Returns an **empty** range (`0..0`) when
     /// the layout has no init segment (raw TS/AAC/MPEG-ES) or when the
@@ -476,6 +443,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{PlayheadState, SeekState};
 
     #[kithara::test]
     fn test_source_trait_object_safety() {
@@ -492,12 +460,25 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
 
         struct ReadySource {
-            timeline: Timeline,
+            seek: Arc<SeekState>,
+            playhead: Arc<PlayheadState>,
             position: Arc<AtomicU64>,
         }
         impl Source for ReadySource {
-            fn timeline(&self) -> Timeline {
-                self.timeline.clone()
+            fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+                Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+            }
+            fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+                Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+            }
+            fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+                Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+            }
+            fn seek_control(&self) -> Arc<dyn SeekControl> {
+                Arc::clone(&self.seek) as Arc<dyn SeekControl>
+            }
+            fn activity(&self) -> Arc<dyn Activity> {
+                Arc::clone(&self.seek) as Arc<dyn Activity>
             }
             fn wait_range(
                 &mut self,
@@ -526,9 +507,101 @@ mod tests {
             }
         }
         let source = ReadySource {
-            timeline: Timeline::new(),
+            seek: Arc::new(SeekState::new()),
+            playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
         };
         assert_eq!(source.phase(), SourcePhase::Ready);
+    }
+
+    /// Exercises all five narrow `Source` accessor default methods.
+    ///
+    /// Verifies that:
+    /// - `playhead_read().position()` starts at `Duration::ZERO`.
+    /// - `playhead_read().duration()` starts at `None`.
+    /// - `seek_observe().epoch()` starts at `0`.
+    /// - `seek_control().begin(t)` returns a monotonically increasing epoch
+    ///   and `seek_observe().epoch()` observes the new value.
+    /// - `activity().is_playing()` toggles correctly.
+    #[kithara::test]
+    fn narrow_source_accessors_seam() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct MinimalSource {
+            seek: Arc<SeekState>,
+            playhead: Arc<PlayheadState>,
+            position: Arc<AtomicU64>,
+        }
+        impl Source for MinimalSource {
+            fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+                Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+            }
+            fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+                Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+            }
+            fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+                Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+            }
+            fn seek_control(&self) -> Arc<dyn SeekControl> {
+                Arc::clone(&self.seek) as Arc<dyn SeekControl>
+            }
+            fn activity(&self) -> Arc<dyn Activity> {
+                Arc::clone(&self.seek) as Arc<dyn Activity>
+            }
+            fn wait_range(
+                &mut self,
+                _range: Range<u64>,
+                _timeout: Option<Duration>,
+            ) -> StreamResult<WaitOutcome> {
+                Ok(WaitOutcome::Ready)
+            }
+            fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> StreamResult<ReadOutcome> {
+                Ok(ReadOutcome::Eof)
+            }
+            fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+                SourcePhase::Waiting
+            }
+            fn len(&self) -> Option<u64> {
+                None
+            }
+            fn position(&self) -> u64 {
+                self.position.load(Ordering::Acquire)
+            }
+            fn advance(&self, n: u64) {
+                self.position.fetch_add(n, Ordering::AcqRel);
+            }
+            fn set_position(&self, pos: u64) {
+                self.position.store(pos, Ordering::Release);
+            }
+        }
+
+        let src = MinimalSource {
+            seek: Arc::new(SeekState::new()),
+            playhead: Arc::new(PlayheadState::new()),
+            position: Arc::new(AtomicU64::new(0)),
+        };
+
+        // playhead_read / playhead_write
+        assert_eq!(src.playhead_read().position(), Duration::ZERO);
+        assert_eq!(src.playhead_read().duration(), None);
+
+        // seek_observe initial state
+        assert_eq!(src.seek_observe().epoch(), 0);
+        assert!(!src.seek_observe().is_flushing());
+        assert!(src.seek_observe().target().is_none());
+
+        // seek_control.begin bumps the epoch; seek_observe sees it
+        let epoch = src.seek_control().begin(Duration::from_secs(5));
+        assert_eq!(epoch, 1);
+        assert_eq!(src.seek_observe().epoch(), 1);
+        assert_eq!(src.seek_observe().target(), Some(Duration::from_secs(5)));
+        assert!(src.seek_observe().is_flushing());
+
+        // activity toggle
+        assert!(!src.activity().is_playing());
+        src.activity().set_playing(true);
+        assert!(src.activity().is_playing());
+        src.activity().set_playing(false);
+        assert!(!src.activity().is_playing());
     }
 }

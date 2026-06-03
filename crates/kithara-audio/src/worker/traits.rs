@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use kithara_decode::PcmChunk;
-use kithara_stream::Timeline;
+use kithara_stream::SeekObserve;
 
 use crate::{pipeline::track_fsm, traits::AudioEffect};
 
@@ -27,19 +29,19 @@ pub trait AudioWorkerSource: Send + 'static {
     /// - `Failed` — terminal failure.
     fn step_track(&mut self) -> track_fsm::TrackStep<Self::Chunk>;
 
-    /// Access the shared timeline for epoch queries.
-    fn timeline(&self) -> &Timeline;
+    /// Narrow seek-observe handle — epoch queries and decoder-node seek latch.
+    fn seek_observe(&self) -> Arc<dyn SeekObserve>;
 
     /// The producer's current decode epoch — the seek epoch the most recent
     /// decode operated under. The worker stamps terminal markers (EOF /
-    /// failure) with this rather than the live `timeline().seek_epoch()`,
+    /// failure) with this rather than the live `seek_observe().epoch()`,
     /// which a concurrent consumer seek may have already advanced: stamping
     /// the live epoch would mislabel a stale terminal as the newer seek's and
     /// let the consumer's epoch validator accept it (the oversubscription
-    /// false-EOF race). Defaults to the timeline epoch for sources whose
-    /// decode epoch is the timeline epoch (e.g. test mocks).
+    /// false-EOF race). Defaults to the live seek epoch for sources whose
+    /// decode epoch is the seek epoch (e.g. test mocks).
     fn decode_epoch(&self) -> u64 {
-        self.timeline().seek_epoch()
+        self.seek_observe().epoch()
     }
 
     /// Drain deferred off-core signals armed on the forbid-blocking decode
@@ -96,6 +98,8 @@ pub(crate) fn reset_effects(effects: &mut [Box<dyn AudioEffect>]) {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmMeta, PcmSpec};
     use kithara_test_utils::kithara;
@@ -104,10 +108,13 @@ mod tests {
     use super::*;
     use crate::traits::AudioEffectMock;
 
-    const SPEC: PcmSpec = PcmSpec {
-        channels: 1,
-        sample_rate: 48_000,
-    };
+    const SPEC: PcmSpec = PcmSpec::new(
+        1,
+        match NonZeroU32::new(48_000) {
+            Some(r) => r,
+            None => unreachable!(),
+        },
+    );
 
     fn chunk(range: std::ops::Range<u32>) -> PcmChunk {
         let samples: Vec<f32> = range.map(|i| i as f32).collect();

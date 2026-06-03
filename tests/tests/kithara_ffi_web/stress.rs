@@ -292,7 +292,7 @@ async fn stress_read_samples_integrity() {
     let spec = audio.spec();
 
     assert!(spec.channels > 0, "channels must be > 0");
-    assert!(spec.sample_rate > 0, "sample_rate must be > 0");
+    assert!(spec.sample_rate.get() > 0, "sample_rate must be > 0");
     info!(
         channels = spec.channels,
         sample_rate = spec.sample_rate,
@@ -482,7 +482,7 @@ async fn stress_seek_and_read() {
             }
 
             if !position_checked && frames > 0 {
-                let expected_frame = (pos_secs * spec.sample_rate as f64).round() as usize;
+                let expected_frame = (pos_secs * spec.sample_rate.get() as f64).round() as usize;
                 let expected_phase = expected_frame % SAW_PERIOD;
                 let actual_phase = phase_from_f32(buf[0]);
                 let dist = phase_distance(actual_phase, expected_phase);
@@ -904,7 +904,7 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
         .seek(Duration::from_secs_f64(near_start_secs))
         .expect("seek near start must succeed");
 
-    let expected_frame = (near_start_secs * spec.sample_rate as f64).round() as usize;
+    let expected_frame = (near_start_secs * spec.sample_rate.get() as f64).round() as usize;
     let expected_phase = expected_frame % SAW_PERIOD;
     let seg1_start_frames = 200_000 / (channels * 2);
     let seg1_start_phase = seg1_start_frames % SAW_PERIOD;

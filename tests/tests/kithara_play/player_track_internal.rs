@@ -38,10 +38,7 @@ enum TrackStateScenario {
 }
 
 fn mock_spec() -> PcmSpec {
-    PcmSpec {
-        channels: 2,
-        sample_rate: 44100,
-    }
+    PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
 }
 
 fn make_track_with(duration_secs: f64, item_id: Option<Arc<str>>) -> PlayerTrack {

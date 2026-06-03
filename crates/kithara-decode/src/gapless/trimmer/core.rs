@@ -395,7 +395,7 @@ fn flush_heuristic(
             trim_tail_frames(tail_buffer, tail_buffered_frames, silent_suffix);
             let sample_rate = tail_buffer
                 .last()
-                .map_or(0, |chunk| chunk.spec().sample_rate);
+                .map_or(0, |chunk| chunk.spec().sample_rate.get());
             apply_trailing_fade_out(tail_buffer, sample_rate);
         }
     }
@@ -453,7 +453,7 @@ fn arm_fade_in(state: &mut HeuristicState) {
     let sample_rate = state
         .leading_buffer
         .first()
-        .map_or(0, |chunk| chunk.spec().sample_rate);
+        .map_or(0, |chunk| chunk.spec().sample_rate.get());
     state.fade_in = Some(FadeInState::for_sample_rate(sample_rate));
 }
 
@@ -595,7 +595,7 @@ fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
 
     let sample_rate = tail_buffer
         .first()
-        .map_or(48_000, |chunk| chunk.spec().sample_rate)
+        .map_or(48_000, |chunk| chunk.spec().sample_rate.get())
         .max(1);
     let window_frames =
         (u64::from(sample_rate).saturating_mul(Consts::TRAILING_SILENCE_WINDOW_MS) / 1000).max(1);
@@ -736,10 +736,10 @@ fn trim_chunk_start(chunk: &mut PcmChunk, trim_frames: usize) {
     chunk.pcm.truncate(len.saturating_sub(trim_samples));
     chunk.meta.frame_offset = chunk.meta.frame_offset.saturating_add(trim_frames as u64);
     chunk.meta.frames = u32::try_from(chunk.pcm.len() / channels.max(1)).unwrap_or(u32::MAX);
-    chunk.meta.timestamp = chunk
-        .meta
-        .timestamp
-        .saturating_add(duration_for_frames(spec.sample_rate, trim_frames as u64));
+    chunk.meta.timestamp = chunk.meta.timestamp.saturating_add(duration_for_frames(
+        spec.sample_rate.get(),
+        trim_frames as u64,
+    ));
 }
 
 fn trim_chunk_end(chunk: &mut PcmChunk, trim_frames: u64) {

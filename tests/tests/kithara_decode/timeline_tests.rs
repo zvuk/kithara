@@ -16,7 +16,7 @@ fn test_progressive_file_timeline_monotonic() {
     while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
         let meta = chunk.meta;
 
-        assert_eq!(meta.spec.sample_rate, 44100);
+        assert_eq!(meta.spec.sample_rate.get(), 44100);
         assert_eq!(meta.spec.channels, 2);
 
         assert_eq!(
@@ -25,8 +25,9 @@ fn test_progressive_file_timeline_monotonic() {
             meta.frame_offset
         );
 
-        let expected_ts =
-            Duration::from_secs_f64(meta.frame_offset as f64 / f64::from(meta.spec.sample_rate));
+        let expected_ts = Duration::from_secs_f64(
+            meta.frame_offset as f64 / f64::from(meta.spec.sample_rate.get()),
+        );
         let diff = meta.timestamp.abs_diff(expected_ts);
         assert!(
             diff < Duration::from_micros(100),
@@ -134,7 +135,7 @@ mod hls_timeline {
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
         let decoder_config = DecoderConfig::builder()
             .hint("wav".to_string())
-            .maybe_segment_layout(stream.as_segment_layout())
+            .maybe_byte_map(stream.byte_map())
             .build();
 
         let result = tokio::task::spawn_blocking(move || {
@@ -148,7 +149,7 @@ mod hls_timeline {
             while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
                 let meta = chunk.meta;
 
-                assert_eq!(meta.spec.sample_rate, SawWav::DEFAULT.sample_rate);
+                assert_eq!(meta.spec.sample_rate.get(), SawWav::DEFAULT.sample_rate);
                 assert_eq!(meta.spec.channels, SawWav::DEFAULT.channels);
 
                 assert_eq!(
@@ -158,7 +159,7 @@ mod hls_timeline {
                 );
 
                 let expected_ts = Duration::from_secs_f64(
-                    meta.frame_offset as f64 / f64::from(meta.spec.sample_rate),
+                    meta.frame_offset as f64 / f64::from(meta.spec.sample_rate.get()),
                 );
                 let diff = meta.timestamp.abs_diff(expected_ts);
                 assert!(

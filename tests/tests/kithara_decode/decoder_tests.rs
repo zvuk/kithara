@@ -42,7 +42,7 @@ fn decode_with_probe(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &
     let mut decoder = DecoderFactory::create_with_probe(reader, Some(ext), test_config()).unwrap();
     let spec = decoder.spec();
 
-    assert!(spec.sample_rate > 0);
+    assert!(spec.sample_rate.get() > 0);
     assert!(spec.channels > 0);
 
     let outcome = decoder.next_chunk().unwrap();
@@ -92,7 +92,7 @@ fn from_media_info(
     let mut decoder = DecoderFactory::create_from_media_info(reader, info, test_config()).unwrap();
     let spec = decoder.spec();
 
-    assert!(spec.sample_rate > 0);
+    assert!(spec.sample_rate.get() > 0);
     assert!(spec.channels > 0);
 
     let outcome = decoder.next_chunk().unwrap();
@@ -103,12 +103,12 @@ fn from_media_info(
 fn assert_spec(spec: &kithara::decode::PcmSpec, ext: &str) {
     match ext {
         "wav" => {
-            assert_eq!(spec.sample_rate, 44100);
+            assert_eq!(spec.sample_rate.get(), 44100);
             assert_eq!(spec.channels, 2);
         }
         "mp3" => {
             assert!(
-                [44100, 48000, 22050].contains(&spec.sample_rate),
+                [44100, 48000, 22050].contains(&spec.sample_rate.get()),
                 "Unexpected MP3 sample rate: {}",
                 spec.sample_rate
             );

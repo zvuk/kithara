@@ -47,7 +47,7 @@ fn stress_seeks_preserve_timeline_integrity() {
 
             let meta = chunk.meta;
 
-            assert_eq!(meta.spec.sample_rate, SawWav::DEFAULT.sample_rate);
+            assert_eq!(meta.spec.sample_rate.get(), SawWav::DEFAULT.sample_rate);
             assert_eq!(meta.spec.channels, 2);
 
             if j == 0 {
@@ -62,7 +62,7 @@ fn stress_seeks_preserve_timeline_integrity() {
             }
 
             let expected_ts = Duration::from_secs_f64(
-                meta.frame_offset as f64 / f64::from(meta.spec.sample_rate),
+                meta.frame_offset as f64 / f64::from(meta.spec.sample_rate.get()),
             );
             let ts_diff = meta.timestamp.abs_diff(expected_ts);
             assert!(

@@ -50,7 +50,7 @@ fn create_with_probe_with_mp3_hint_succeeds() {
 
     let spec = decoder.spec();
     assert!(spec.channels > 0);
-    assert!(spec.sample_rate > 0);
+    assert!(spec.sample_rate.get() > 0);
 }
 
 #[cfg(feature = "symphonia")]

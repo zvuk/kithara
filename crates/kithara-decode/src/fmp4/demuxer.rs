@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use kithara_bufpool::BytePool;
-use kithara_stream::{AudioCodec, SegmentLayout};
+use kithara_stream::{AudioCodec, ByteMap};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -29,7 +29,7 @@ struct DecodedFrames {
 
 /// fMP4 segment-aware demuxer.
 pub(crate) struct Fmp4SegmentDemuxer {
-    segments: Arc<dyn SegmentLayout>,
+    segments: Arc<dyn ByteMap>,
     source: BoxedSource,
     init: Fmp4InitInfo,
     cursor: Option<SegmentCursor>,
@@ -96,7 +96,7 @@ impl Fmp4SegmentDemuxer {
     ///
     /// `source` is the byte-level Read/Seek cursor; `segments` is the
     /// segment-layout handle (typically obtained from
-    /// [`kithara_stream::Source::as_segment_layout`]) — the demuxer
+    /// [`kithara_stream::Source::byte_map`]) — the demuxer
     /// queries it for `init_segment_range` / `segment_at_time` /
     /// `segment_after_byte`.
     ///
@@ -110,7 +110,7 @@ impl Fmp4SegmentDemuxer {
     /// becomes ready.
     pub(crate) fn open(
         mut source: BoxedSource,
-        segments: Arc<dyn SegmentLayout>,
+        segments: Arc<dyn ByteMap>,
         byte_pool: BytePool,
     ) -> DecodeResult<Self> {
         let init_range = segments.init_segment_range();
@@ -281,7 +281,7 @@ fn compute_preroll_byte(
     target: Duration,
     landed_at: Duration,
     segment_index: u32,
-    layout: &dyn SegmentLayout,
+    layout: &dyn ByteMap,
     priming: &CodecPriming,
 ) -> Option<u64> {
     if priming.byte_margin == 0 {
@@ -309,7 +309,7 @@ fn build_track_info(init: &Fmp4InitInfo, duration: Option<Duration>) -> TrackInf
     }
 }
 
-fn compute_duration(segments: &Arc<dyn SegmentLayout>) -> Option<Duration> {
+fn compute_duration(segments: &Arc<dyn ByteMap>) -> Option<Duration> {
     let last = segments.segment_at_time(Duration::from_secs(u64::MAX / 2))?;
     Some(last.decode_time.saturating_add(last.duration))
 }

@@ -7,7 +7,7 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::sync::Arc;
+use std::{num::NonZeroU32, sync::Arc};
 
 use kithara_decode::PcmSpec;
 use kithara_events::{Event, EventBus, EventReceiver};
@@ -31,10 +31,7 @@ enum RemoveAtScenario {
 }
 
 fn mock_spec() -> PcmSpec {
-    PcmSpec {
-        channels: 2,
-        sample_rate: 44100,
-    }
+    PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
 }
 
 fn make_resource(duration_secs: f64) -> Resource {

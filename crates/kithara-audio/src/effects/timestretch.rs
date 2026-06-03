@@ -23,6 +23,8 @@ impl AudioEffect for TimeStretchProcessor {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmMeta, PcmSpec};
     use kithara_test_utils::kithara;
@@ -32,10 +34,7 @@ mod tests {
     fn chunk() -> PcmChunk {
         PcmChunk::new(
             PcmMeta {
-                spec: PcmSpec {
-                    channels: 2,
-                    sample_rate: 44_100,
-                },
+                spec: PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
                 frames: 2,
                 frame_offset: 128,
                 ..Default::default()

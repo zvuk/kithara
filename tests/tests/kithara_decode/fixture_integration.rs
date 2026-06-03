@@ -173,7 +173,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
     .unwrap_or_else(|error| panic!("probe {format:?} decode failed: {error}"));
 
     let pcm_spec = decoder.spec();
-    assert_eq!(pcm_spec.sample_rate, 44_100);
+    assert_eq!(pcm_spec.sample_rate.get(), 44_100);
     assert_eq!(pcm_spec.channels, 2);
 
     let mut total_frames = 0usize;
@@ -185,7 +185,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
         let Ok(chunk) = PcmChunk::try_from(outcome) else {
             break;
         };
-        assert_eq!(chunk.spec().sample_rate, 44_100);
+        assert_eq!(chunk.spec().sample_rate.get(), 44_100);
         assert_eq!(chunk.spec().channels, 2);
         assert_valid_pcm_samples(&chunk.pcm, format!("{format:?} chunk {chunk_idx}").as_str());
         total_frames += chunk.frames();
@@ -539,7 +539,7 @@ async fn run_packaged_fmp4_decoder_check(label: &str, codec: AudioCodec, backend
         !chunk.pcm.is_empty(),
         "packaged {label} decoder must produce PCM on concat init+segment"
     );
-    assert_eq!(chunk.spec().sample_rate, 44_100);
+    assert_eq!(chunk.spec().sample_rate.get(), 44_100);
     assert_eq!(chunk.spec().channels, 2);
 }
 

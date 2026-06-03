@@ -14,13 +14,15 @@ use std::{
 use kithara_platform::{time::Duration, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ReadOutcome, Source, SourcePhase, Stream, StreamResult, StreamType, Timeline,
+    Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve,
+    SeekState, Source, SourcePhase, Stream, StreamResult, StreamType,
 };
 use kithara_test_utils::kithara;
 
 /// Minimal mock source with known length.
 struct MockSource {
-    timeline: Timeline,
+    seek: Arc<SeekState>,
+    playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
     data: Vec<u8>,
     /// Reported length (may differ from actual data size).
@@ -31,7 +33,8 @@ struct MockSource {
 impl MockSource {
     fn new(len: usize) -> Self {
         Self {
-            timeline: Timeline::new(),
+            seek: Arc::new(SeekState::new()),
+            playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             reported_len: u64::try_from(len).unwrap_or(u64::MAX),
             data: vec![0xAA; len],
@@ -42,7 +45,8 @@ impl MockSource {
     /// Avoids allocating huge buffers when only testing seek bounds.
     fn with_reported_len(reported_len: u64) -> Self {
         Self {
-            timeline: Timeline::new(),
+            seek: Arc::new(SeekState::new()),
+            playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             data: Vec::new(),
             reported_len,
@@ -51,8 +55,24 @@ impl MockSource {
 }
 
 impl Source for MockSource {
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
+    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+    }
+
+    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+    }
+
+    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+    }
+
+    fn seek_control(&self) -> Arc<dyn SeekControl> {
+        Arc::clone(&self.seek) as Arc<dyn SeekControl>
+    }
+
+    fn activity(&self) -> Arc<dyn Activity> {
+        Arc::clone(&self.seek) as Arc<dyn Activity>
     }
 
     fn position(&self) -> u64 {

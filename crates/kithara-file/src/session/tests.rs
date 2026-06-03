@@ -4,7 +4,7 @@ use kithara_assets::{AcquisitionResult, AssetReader, AssetStoreBuilder, WriteSid
 use kithara_events::EventBus;
 use kithara_platform::{CancellationToken, time::Duration};
 use kithara_storage::WaitOutcome;
-use kithara_stream::{ReadOutcome, Source, SourcePhase, Timeline};
+use kithara_stream::{PlayheadState, ReadOutcome, SeekState, Source, SourcePhase};
 use kithara_test_utils::kithara;
 
 use super::source::FileSource;
@@ -14,8 +14,11 @@ fn nz_bytes(n: usize) -> ReadOutcome {
     ReadOutcome::Bytes(NonZeroUsize::new(n).expect("test: byte count must be > 0"))
 }
 
-fn make_coord(timeline: Timeline) -> Arc<FileCoord> {
-    Arc::new(FileCoord::new(timeline))
+fn make_coord() -> Arc<FileCoord> {
+    Arc::new(FileCoord::new(
+        Arc::new(PlayheadState::new()),
+        Arc::new(SeekState::new()),
+    ))
 }
 
 fn make_source(reader: AssetReader, coord: Arc<FileCoord>, bus: EventBus) -> FileSource {
@@ -38,7 +41,7 @@ fn make_source(reader: AssetReader, coord: Arc<FileCoord>, bus: EventBus) -> Fil
 
 #[kithara::test]
 fn test_file_coord_initial_state() {
-    let coord = FileCoord::new(Timeline::new());
+    let coord = make_coord();
     assert_eq!(coord.read_pos(), 0);
 }
 
@@ -46,7 +49,7 @@ fn test_file_coord_initial_state() {
 #[case::read(100, true)]
 #[case::download(500, false)]
 fn test_file_coord_set_and_get_positions(#[case] value: u64, #[case] read_pos: bool) {
-    let coord = FileCoord::new(Timeline::new());
+    let coord = make_coord();
     if read_pos {
         coord.set_read_pos(value);
         assert_eq!(coord.read_pos(), value);
@@ -62,7 +65,7 @@ fn test_file_coord_set_and_get_positions(#[case] value: u64, #[case] read_pos: b
 
 #[kithara::test]
 fn file_coord_total_bytes_roundtrip() {
-    let coord = FileCoord::new(Timeline::new());
+    let coord = make_coord();
     assert_eq!(coord.total_bytes(), None);
     coord.set_total_bytes(Some(123));
     assert_eq!(coord.total_bytes(), Some(123));
@@ -89,7 +92,7 @@ fn test_file_source_read_at() {
     let data = b"hello world from kithara";
     let res = create_committed_resource(data);
 
-    let coord = make_coord(Timeline::new());
+    let coord = make_coord();
     let bus = EventBus::new(16);
 
     coord.set_total_bytes(Some(data.len() as u64));
@@ -120,7 +123,7 @@ fn test_file_source_read_at() {
 fn test_file_source_len() {
     let res = create_committed_resource(b"abc");
 
-    let coord = make_coord(Timeline::new());
+    let coord = make_coord();
     let bus = EventBus::new(16);
 
     coord.set_total_bytes(Some(12345));
@@ -139,7 +142,7 @@ fn file_source_phase_at_range(
     #[case] expected: SourcePhase,
 ) {
     let res = create_committed_resource(data);
-    let coord = make_coord(Timeline::new());
+    let coord = make_coord();
     let bus = EventBus::new(16);
     coord.set_total_bytes(Some(total_bytes));
     let source = make_source(res, coord, bus);
@@ -157,13 +160,13 @@ fn file_source_phase_during_seek(
 ) {
     let data = b"hello world";
     let res = create_committed_resource(data);
-    let timeline = Timeline::new();
-    let coord = make_coord(timeline.clone());
+    let coord = make_coord();
     let bus = EventBus::new(16);
     coord.set_total_bytes(Some(total_bytes));
+    let seek = coord.seek_control();
     let source = make_source(res, coord, bus);
 
-    let _ = timeline.initiate_seek(Duration::from_secs(0));
+    let _ = seek.begin(Duration::from_secs(0));
 
     assert_eq!(source.phase_at(range), expected);
 }
@@ -175,7 +178,7 @@ fn file_source_phase_during_seek(
 fn file_source_phase_parameterless(#[case] position: u64, #[case] expected: SourcePhase) {
     let data = [0xABu8; 64];
     let res = create_committed_resource(&data[..16]);
-    let coord = make_coord(Timeline::new());
+    let coord = make_coord();
     let bus = EventBus::new(16);
     coord.set_total_bytes(Some(data.len() as u64));
     if position > 0 {
@@ -190,13 +193,13 @@ fn file_source_phase_parameterless(#[case] position: u64, #[case] expected: Sour
 fn file_source_wait_range_returns_interrupted_while_flushing() {
     let data = b"hello world from kithara";
     let res = create_committed_resource(data);
-    let timeline = Timeline::new();
-    let coord = make_coord(timeline.clone());
+    let coord = make_coord();
     let bus = EventBus::new(16);
     coord.set_total_bytes(Some(100));
+    let seek = coord.seek_control();
     let mut source = make_source(res, coord, bus);
 
-    let _ = timeline.initiate_seek(Duration::from_secs(0));
+    let _ = seek.begin(Duration::from_secs(0));
 
     let result = Source::wait_range(&mut source, 50..60, Some(Duration::from_secs(1)));
     assert_eq!(result.unwrap(), WaitOutcome::Interrupted);
@@ -206,8 +209,7 @@ fn file_source_wait_range_returns_interrupted_while_flushing() {
 fn file_source_read_at_does_not_advance_timeline_position() {
     let res = create_committed_resource(b"abcdef");
 
-    let timeline = Timeline::new();
-    let coord = make_coord(timeline.clone());
+    let coord = make_coord();
     let bus = EventBus::new(16);
     coord.set_total_bytes(Some(6));
     let mut source = make_source(res, Arc::clone(&coord), bus);

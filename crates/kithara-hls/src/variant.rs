@@ -21,8 +21,8 @@ use kithara_net::{Headers, NetError};
 use kithara_platform::{CancellationToken, Mutex, time::Duration};
 use kithara_storage::{ResourceStatus, WaitOutcome};
 use kithara_stream::{
-    AudioCodec, ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SegmentDescriptor,
-    SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, Timeline,
+    AudioCodec, ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SeekObserve,
+    SegmentDescriptor, SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult,
     dl::{FetchCmd, OnCompleteFn, WriterFn},
 };
 use kithara_test_utils::kithara;
@@ -365,7 +365,7 @@ pub(crate) struct PlanCtx {
     /// `Init` is always emitted regardless — the fMP4 demuxer needs
     /// it before any segment can decode.
     pub(crate) look_ahead_bytes: Option<u64>,
-    /// Snapshot of `Timeline::seek_epoch()` at plan-time. Tagged on
+    /// Snapshot of `SeekObserve::epoch()` at plan-time. Tagged on
     /// every emitted `FetchCmd`'s probe so integration tests can
     /// distinguish fetches that pre-date a user seek from those that
     /// the scheduler issued *after* observing the new epoch.
@@ -427,7 +427,7 @@ pub(crate) struct VariantParts {
     pub(crate) init: InitEntry,
     pub(crate) codec: Option<AudioCodec>,
     pub(crate) container: Option<ContainerFormat>,
-    pub(crate) timeline: Timeline,
+    pub(crate) seek_obs: Arc<dyn SeekObserve>,
     pub(crate) segments: Vec<SegmentEntry>,
 }
 
@@ -442,7 +442,7 @@ impl HlsVariant {
     pub(crate) fn new(
         variant: usize,
         playlist_state: &Arc<PlaylistState>,
-        timeline: &Timeline,
+        seek_obs: Arc<dyn SeekObserve>,
         init_decrypt_ctx: Option<DecryptContext>,
         decrypt_contexts: &[Option<DecryptContext>],
         ctx: &PlanCtx,
@@ -470,7 +470,7 @@ impl HlsVariant {
                 init,
                 segments,
                 playlist_state: Arc::clone(playlist_state),
-                timeline: timeline.clone(),
+                seek_obs,
             },
             ctx,
         )
@@ -874,7 +874,7 @@ impl HlsVariant {
             init,
             codec,
             container,
-            timeline,
+            seek_obs,
             segments,
         } = parts;
         let init_size = init.size.load(Ordering::Acquire);
@@ -884,7 +884,7 @@ impl HlsVariant {
             variant,
             store,
             playlist_state,
-            reader: ReaderRuntime::new(timeline),
+            reader: ReaderRuntime::new(seek_obs),
             layout,
             codec,
             container,
@@ -933,7 +933,7 @@ impl HlsVariant {
     /// question lives in the *caller* (e.g. `init_descriptor_at`) which
     /// combines this with `served_from()` — keeping virtual-space
     /// concerns out of a per-variant primitive avoids silently dropping
-    /// post-commit inits at the `SegmentLayout` boundary.
+    /// post-commit inits at the `ByteMap` boundary.
     #[kithara::probe(variant = self.variant as u64, size = self.init_size())]
     pub(crate) fn init_byte_range(&self) -> Range<u64> {
         0..self.init_size()

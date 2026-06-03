@@ -4,6 +4,7 @@ use std::{
     fs,
     hint::black_box,
     io::{Read, Seek, SeekFrom},
+    num::NonZeroU32,
     sync::{
         Arc,
         atomic::{AtomicU32, Ordering},
@@ -78,10 +79,7 @@ fn make_pcm(frames: usize, channels: usize) -> Vec<f32> {
 fn make_chunk(sample_rate: u32, channels: u16, frames: usize) -> PcmChunk {
     PcmChunk::new(
         PcmMeta {
-            spec: PcmSpec {
-                channels,
-                sample_rate,
-            },
+            spec: PcmSpec::new(channels, NonZeroU32::new(sample_rate).expect("bench rate")),
             ..Default::default()
         },
         PcmPool::default().attach(make_pcm(frames, usize::from(channels))),

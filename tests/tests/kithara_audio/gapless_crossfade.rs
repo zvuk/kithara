@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara::{
     decode::{GaplessInfo, GaplessTrimmer, PcmChunk, PcmMeta, PcmSpec},
     platform::time::Duration,
@@ -14,10 +16,10 @@ const SINE_FREQ_HZ: f64 = 1_000.0;
 
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn synthetic_gapless_tracks_have_no_boundary_energy_dip() {
-    let spec = PcmSpec {
-        channels: GAPLESS_CHANNELS,
-        sample_rate: GAPLESS_SAMPLE_RATE,
-    };
+    let spec = PcmSpec::new(
+        GAPLESS_CHANNELS,
+        NonZeroU32::new(GAPLESS_SAMPLE_RATE).expect("test rate"),
+    );
     let leading_frames = usize::try_from(AAC_GAPLESS_ENCODER_DELAY).expect("AAC delay fits usize");
     let trailing_frames =
         usize::try_from(AAC_GAPLESS_TRAILING_DELAY).expect("AAC padding fits usize");
@@ -119,7 +121,7 @@ fn sine_samples(start_frame: usize, frames: usize, spec: PcmSpec) -> Vec<f32> {
     let mut samples = Vec::with_capacity(frames.saturating_mul(channels));
     let signal = SineWave(SINE_FREQ_HZ);
     for frame in start_frame..start_frame.saturating_add(frames) {
-        let sample = f32::from(signal.sample(frame, spec.sample_rate)) / f32::from(i16::MAX);
+        let sample = f32::from(signal.sample(frame, spec.sample_rate.get())) / f32::from(i16::MAX);
         for _ in 0..channels {
             samples.push(sample);
         }

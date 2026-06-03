@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use kithara_events::{DeferredBus, EventBus, HlsEvent};
-use kithara_stream::{DecoderHooks, PrerollHint, ReaderChunkSignal, ReaderSeekSignal};
+use kithara_stream::{PrerollHint, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 
 use crate::coord::HlsCoord;
 
@@ -18,12 +18,12 @@ const READER_EVENT_CAPACITY: usize = 256;
 /// Decoder→HLS reader hook bridge: turns the decoder's per-chunk and
 /// per-seek signals into [`HlsEvent`]s on the track's [`EventBus`].
 ///
-/// Mirrors `kithara-file`'s `FileReaderHooks` but resolves the landed
-/// byte to its `(variant, segment_index, byte_in_segment)` triple via
-/// the variant-aware [`HlsCoord::find_at_offset`] — this is what makes
-/// the integration tests' `HlsEvent::ReaderSeek { segment_index, .. }`
-/// assertion observable.
-pub(crate) struct HlsReaderHooks {
+/// Mirrors `kithara-file`'s `FileReaderEventSink` but resolves the
+/// landed byte to its `(variant, segment_index, byte_in_segment)` triple
+/// via the variant-aware [`HlsCoord::find_at_offset`] — this is what
+/// makes the integration tests' `HlsEvent::ReaderSeek { segment_index,
+/// .. }` assertion observable.
+pub(crate) struct HlsReaderEventSink {
     coord: Arc<HlsCoord>,
     seek_epoch_handle: Arc<AtomicU64>,
     bus: DeferredBus<HlsEvent>,
@@ -43,7 +43,7 @@ pub(crate) struct HlsReaderHooks {
     last_cursor: u64,
 }
 
-impl HlsReaderHooks {
+impl HlsReaderEventSink {
     pub(crate) fn new(
         bus: EventBus,
         coord: Arc<HlsCoord>,
@@ -115,7 +115,7 @@ impl HlsReaderHooks {
     }
 }
 
-impl DecoderHooks for HlsReaderHooks {
+impl ReaderEventSink for HlsReaderEventSink {
     fn on_chunk(&mut self, signal: ReaderChunkSignal) {
         if !matches!(signal, ReaderChunkSignal::Chunk) {
             return;
@@ -148,7 +148,7 @@ impl DecoderHooks for HlsReaderHooks {
         self.publish_seek(from, to);
     }
 
-    fn flush_pending(&mut self) {
+    fn flush(&mut self) {
         self.bus.flush();
     }
 }

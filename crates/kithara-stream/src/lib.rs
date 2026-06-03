@@ -13,26 +13,28 @@ pub mod dl;
 mod error;
 mod hooks;
 mod media;
+mod playhead;
 mod preroll;
+mod seek_state;
 mod source;
 mod stream;
-mod timeline;
 mod wake;
 
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
 pub use error::{SourceError, StreamError, StreamResult};
-pub use hooks::{BoxedHooks, DecoderHooks, ReaderChunkSignal, ReaderSeekSignal};
+pub use hooks::{BoxedEventSink, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
+pub use playhead::{ChunkPosition, PlayheadRead, PlayheadState, PlayheadWrite};
 pub use preroll::PrerollHint;
+pub use seek_state::{Activity, SeekControl, SeekObserve, SeekState};
 pub use source::{
-    NotReadyCause, PendingReason, ReadOutcome, SegmentDescriptor, SegmentLayout, Source,
-    SourcePhase, SourceSeekAnchor,
+    ByteMap, NotReadyCause, PendingReason, ReadOutcome, SegmentDescriptor, Source, SourcePhase,
+    SourceSeekAnchor, VariantControl,
 };
 pub use stream::{
     Stream, StreamPending, StreamReadError, StreamReadOutcome, StreamSeekPastEof, StreamType,
     VariantChangeError,
 };
-pub use timeline::{ChunkPosition, Timeline};
 pub use wake::DeferredWake;

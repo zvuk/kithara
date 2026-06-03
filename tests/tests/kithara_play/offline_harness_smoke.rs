@@ -1,5 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroU32;
+
 use kithara_decode::PcmSpec;
 use kithara_integration_tests::offline::resource_from_reader;
 use kithara_play::{PlayerConfig, Resource};
@@ -14,10 +16,7 @@ const TARGET_SAMPLES: usize = 8_820;
 const MAX_RENDERED_FRAMES: usize = 9_000;
 
 fn mock_spec() -> PcmSpec {
-    PcmSpec {
-        channels: 2,
-        sample_rate: SAMPLE_RATE,
-    }
+    PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"))
 }
 
 fn make_resource(duration_secs: f64) -> Resource {

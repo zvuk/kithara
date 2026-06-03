@@ -19,8 +19,9 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SegmentDescriptor, SegmentLayout,
-    SourcePhase, SourceSeekAnchor, StreamResult, Timeline,
+    Activity, ByteMap, ContainerFormat, MediaInfo, PendingReason, PlayheadRead, PlayheadState,
+    PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState, SegmentDescriptor,
+    SourcePhase, SourceSeekAnchor, StreamResult, VariantControl,
 };
 use kithara_test_utils::kithara;
 use tracing::info;
@@ -53,7 +54,18 @@ pub(crate) struct HlsCoord {
     pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
     pub(crate) cancel: CancellationToken,
     pub(crate) headers: Option<kithara_net::Headers>,
-    pub(crate) timeline: Timeline,
+    /// Backing playhead state — the coord owns the `Arc` directly and
+    /// vends narrow trait-object handles from it.
+    playhead: Arc<PlayheadState>,
+    /// Backing seek/activity state — the coord owns the `Arc` directly and
+    /// vends narrow trait-object handles from it.
+    seek: Arc<SeekState>,
+    /// Narrow seek-observe handle — derived from `seek` at construction.
+    /// Used by internal methods that only need epoch/target/pending reads.
+    seek_obs: Arc<dyn SeekObserve>,
+    /// Narrow read-only playhead handle — derived from `playhead` at construction.
+    /// Used by internal methods that only need committed position reads.
+    playhead_read: Arc<dyn PlayheadRead>,
     playlist_state: Arc<PlaylistState>,
     /// Last generation acknowledged by the reader. When `<
     /// variant_generation` the read gate is closed; when equal the gate
@@ -73,7 +85,8 @@ pub(crate) struct HlsCoord {
 impl HlsCoord {
     pub(crate) fn new(
         env: HlsCoordEnv,
-        timeline: Timeline,
+        playhead: Arc<PlayheadState>,
+        seek: Arc<SeekState>,
         abr: AbrHandle,
         variants: Arc<Vec<Arc<HlsVariant>>>,
         playlist_state: Arc<PlaylistState>,
@@ -86,8 +99,13 @@ impl HlsCoord {
             abr.current_variant_index().is_some(),
             "HlsCoord requires an AbrHandle with state — HlsPeer must construct AbrState"
         );
+        let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
+        let playhead_read = Arc::clone(&playhead) as Arc<dyn PlayheadRead>;
         Self {
-            timeline,
+            playhead,
+            seek,
+            seek_obs,
+            playhead_read,
             abr,
             variants,
             playlist_state,
@@ -221,9 +239,9 @@ impl HlsCoord {
                 v_new.invalidate_init();
             }
             let target_time = self
-                .timeline
-                .seek_target()
-                .unwrap_or_else(|| self.timeline.committed_position());
+                .seek_obs
+                .target()
+                .unwrap_or_else(|| self.playhead_read.position());
             let target_seg: u32 = self
                 .playlist_state
                 .find_seek_point_for_time(new_v, target_time)
@@ -235,7 +253,7 @@ impl HlsCoord {
             self.abr.apply_decision(&decision, Instant::now());
             v_new.rebuild_with_decoder_probe(ctx, target_seg);
         }
-        let reader_pt = self.timeline.committed_position();
+        let reader_pt = self.playhead_read.position();
         self.abr
             .notify_commit(decision, current_before, reader_pt, Instant::now());
         true
@@ -373,9 +391,9 @@ impl HlsCoord {
         self.abr.invalidate_pending();
     }
 
-    /// Mirror `abr.lock()` state to `timeline.is_seek_pending()`.
+    /// Mirror `abr.lock()` state to `seek_obs.is_pending()`.
     pub(crate) fn sync_abr_lock(&self) {
-        let pending = self.timeline.is_seek_pending();
+        let pending = self.seek_obs.is_pending();
         let locked = self.abr.is_locked();
         if pending && !locked {
             self.abr.lock();
@@ -384,8 +402,28 @@ impl HlsCoord {
         }
     }
 
-    pub(crate) fn timeline(&self) -> Timeline {
-        self.timeline.clone()
+    pub(crate) fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+    }
+
+    pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+    }
+
+    pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+    }
+
+    pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl> {
+        Arc::clone(&self.seek) as Arc<dyn SeekControl>
+    }
+
+    pub(crate) fn activity(&self) -> Arc<dyn Activity> {
+        Arc::clone(&self.seek) as Arc<dyn Activity>
+    }
+
+    pub(crate) fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
+        self.seek.seek_epoch_arc()
     }
 
     fn variant_change_pending(&self) -> bool {
@@ -471,10 +509,32 @@ impl HlsCoord {
     }
 }
 
-/// `SegmentLayout` delegates to whichever variant is currently active —
+/// `VariantControl` exposes the cross-variant fence/format-change surface
+/// to the stream layer. The bodies are the coord's existing inherent
+/// methods — non-adaptive sources vend `None` instead of implementing
+/// these.
+impl VariantControl for HlsCoord {
+    fn clear_variant_fence(&self) {
+        Self::clear_variant_fence(self);
+    }
+
+    fn has_variant_change_pending(&self) -> bool {
+        Self::has_variant_change_pending(self)
+    }
+
+    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        Self::format_change_segment_range(self)
+    }
+}
+
+/// `ByteMap` delegates to whichever variant is currently active —
 /// `HlsCoord` already owns the variants and the active index, so we
 /// implement the trait here instead of a separate view wrapper.
-impl SegmentLayout for HlsCoord {
+impl ByteMap for HlsCoord {
+    fn anchor_at_time(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
+        self.seek_time_anchor(position)
+    }
+
     fn init_segment_range(&self) -> Range<u64> {
         self.active().map(|v| v.init_byte_range()).unwrap_or(0..0)
     }

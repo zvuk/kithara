@@ -7,7 +7,7 @@ use std::{
 };
 
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_stream::{AudioCodec, BoxedHooks, ReaderChunkSignal, ReaderSeekSignal};
+use kithara_stream::{AudioCodec, BoxedEventSink, ReaderChunkSignal, ReaderSeekSignal};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -26,12 +26,12 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     demuxer: D,
     byte_len_handle: Option<Arc<AtomicU64>>,
     duration: Option<Duration>,
-    /// Reader-side observer hooks. Single-owner `Box<dyn DecoderHooks>` —
+    /// Reader-side event sink. Single-owner `Box<dyn ReaderEventSink>` —
     /// `None` skips emission entirely; `Some(_)` calls `on_chunk` /
     /// `on_seek` directly via `&mut` after the inner outcome resolves.
     /// No lock on the produce-core. Folded in from the former
     /// `HookedDecoder` decorator — every decoder is hookable now.
-    hooks: Option<BoxedHooks>,
+    hooks: Option<BoxedEventSink>,
     /// When `Some`, frames whose decode-time end is `<= target` are
     /// dropped before the next chunk is emitted. Cleared after the
     /// first frame past the target is consumed. Lets `seek(target)`
@@ -63,7 +63,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         pool: PcmPool,
         epoch: u64,
         byte_len_handle: Option<Arc<AtomicU64>>,
-        hooks: Option<BoxedHooks>,
+        hooks: Option<BoxedEventSink>,
     ) -> Self {
         let spec = codec.spec();
         let duration = demuxer.duration();
@@ -98,17 +98,13 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         let live_spec = self.codec.spec();
         self.spec = live_spec;
 
-        let chunk_secs = if live_spec.sample_rate > 0 {
-            f64::from(frames) / f64::from(live_spec.sample_rate)
-        } else {
-            0.0
-        };
+        let chunk_secs = f64::from(frames) / f64::from(live_spec.sample_rate.get());
         let frame_duration = Duration::from_secs_f64(chunk_secs);
         let end_timestamp = timestamp.saturating_add(frame_duration);
 
         if self.resync_frame_offset_to_pts {
             self.resync_frame_offset_to_pts = false;
-            self.frame_offset = frame_offset_for(timestamp, live_spec.sample_rate);
+            self.frame_offset = frame_offset_for(timestamp, live_spec.sample_rate.get());
         }
         let frame_offset = self.frame_offset;
         self.frame_offset = self.frame_offset.saturating_add(u64::from(frames));
@@ -184,8 +180,9 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 // WHY: frame straddles target — trim leading samples (README "Seek trim").
                 if frame_pts < target && frames > 0 {
                     let live_spec = self.codec.spec();
-                    let trim_frames_u64 = frames_to_trim(frame_pts, target, live_spec.sample_rate)
-                        .min(u64::from(frames));
+                    let trim_frames_u64 =
+                        frames_to_trim(frame_pts, target, live_spec.sample_rate.get())
+                            .min(u64::from(frames));
                     let trim_frames = u32::try_from(trim_frames_u64).unwrap_or(frames);
                     if trim_frames > 0 && trim_frames < frames {
                         let channels = usize::from(live_spec.channels);
@@ -223,7 +220,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             } => {
                 self.codec.flush()?;
                 self.pending_seek_target = (landed_at < pos).then_some(pos);
-                self.frame_offset = frame_offset_for(landed_at, self.spec.sample_rate);
+                self.frame_offset = frame_offset_for(landed_at, self.spec.sample_rate.get());
                 self.resync_frame_offset_to_pts = true;
                 Ok(DecoderSeekOutcome::Landed {
                     landed_byte,
@@ -282,7 +279,7 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
 
     fn flush_reader_signals(&mut self) {
         if let Some(hooks) = self.hooks.as_mut() {
-            hooks.flush_pending();
+            hooks.flush();
         }
     }
 }
@@ -441,7 +438,7 @@ mod smoke_tests {
             {
                 DecoderChunkOutcome::Chunk(chunk) => {
                     assert!(chunk.frames() > 0, "Chunk frames must be > 0");
-                    assert!(chunk.spec().sample_rate > 0);
+                    assert!(chunk.spec().sample_rate.get() > 0);
                     assert!(chunk.spec().channels > 0);
                     got_chunk = true;
                     break;
@@ -633,7 +630,10 @@ mod test_counting_codec {
 #[cfg(test)]
 mod seek_trim_tests {
 
-    use std::sync::{Arc, atomic::Ordering};
+    use std::{
+        num::NonZeroU32,
+        sync::{Arc, atomic::Ordering},
+    };
 
     use kithara_bufpool::PcmPool;
     use kithara_platform::time::Duration;
@@ -703,10 +703,7 @@ mod seek_trim_tests {
     #[kithara::test]
     fn pre_target_frames_are_decoded_and_dropped_by_pending_seek_target() {
         let codec = CountingCodec::new(
-            PcmSpec {
-                channels: 2,
-                sample_rate: 44_100,
-            },
+            PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             1,
         );
         let calls = Arc::clone(&codec.decode_calls);
@@ -738,11 +735,14 @@ mod seek_trim_tests {
 #[cfg(test)]
 mod hook_tests {
 
-    use std::sync::{Arc, Mutex};
+    use std::{
+        num::NonZeroU32,
+        sync::{Arc, Mutex},
+    };
 
     use kithara_bufpool::PcmPool;
     use kithara_stream::{
-        BoxedHooks, DecoderHooks, PendingReason, ReaderChunkSignal, ReaderSeekSignal,
+        BoxedEventSink, PendingReason, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal,
     };
     use kithara_test_utils::kithara;
 
@@ -762,7 +762,7 @@ mod hook_tests {
         log: Arc<Mutex<CallLog>>,
     }
 
-    impl DecoderHooks for LoggingHooks {
+    impl ReaderEventSink for LoggingHooks {
         fn on_chunk(&mut self, signal: ReaderChunkSignal) {
             let tag = match signal {
                 ReaderChunkSignal::Chunk => "chunk",
@@ -874,13 +874,10 @@ mod hook_tests {
         log: Arc<Mutex<CallLog>>,
     ) -> ComposedDecoder<StubDemuxer, ConstFrameCodec> {
         let codec = ConstFrameCodec::new(
-            PcmSpec {
-                channels: 2,
-                sample_rate: 44_100,
-            },
+            PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             1,
         );
-        let hooks: BoxedHooks = Box::new(LoggingHooks { log });
+        let hooks: BoxedEventSink = Box::new(LoggingHooks { log });
         ComposedDecoder::new(
             demuxer,
             codec,
@@ -980,6 +977,8 @@ mod hook_tests {
 #[cfg(test)]
 mod pool_budget_tests {
 
+    use std::num::NonZeroU32;
+
     use kithara_bufpool::PcmPool;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
@@ -997,10 +996,7 @@ mod pool_budget_tests {
         let warmup_misses = pool.stats().alloc_misses;
 
         let mut codec = ConstFrameCodec::new(
-            PcmSpec {
-                channels: 2,
-                sample_rate: 44_100,
-            },
+            PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             1024,
         );
         for _ in 0..200 {
