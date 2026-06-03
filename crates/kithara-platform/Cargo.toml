@@ -13,6 +13,14 @@ categories = ["wasm", "concurrency"]
 [lints]
 workspace = true
 
+[features]
+# Virtual monotonic clock for fast, deterministic offline playback tests.
+# OFF by default and referenced by no shipping crate, so production builds are
+# unchanged. See src/time/sim.rs and the README. Turn on in the test build to
+# run warm-cache offline tests at CPU speed (compared against the real-time run
+# as ground truth).
+sim-time = []
+
 [dependencies]
 delegate = { workspace = true }
 futures = { workspace = true }

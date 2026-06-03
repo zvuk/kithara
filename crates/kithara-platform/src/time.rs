@@ -16,6 +16,15 @@ use tokio_with_wasm::alias as tokio_alias;
 use wasm_bindgen::{JsCast, JsValue};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::JsFuture;
+
+/// Virtual-clock backing for [`Instant`] under the `sim-time` test feature
+/// (native only). Off by default; see the module and crate README.
+#[cfg(all(feature = "sim-time", not(target_arch = "wasm32")))]
+pub mod sim;
+
+#[cfg(all(feature = "sim-time", not(target_arch = "wasm32")))]
+pub use sim::Instant;
+#[cfg(not(all(feature = "sim-time", not(target_arch = "wasm32"))))]
 pub use web_time::Instant;
 
 #[cfg(target_arch = "wasm32")]

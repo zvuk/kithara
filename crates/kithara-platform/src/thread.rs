@@ -276,10 +276,22 @@ pub fn park() {
 }
 
 /// Block until unparked or until `duration` elapses.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "sim-time")))]
 #[inline]
 pub fn park_timeout(duration: Duration) {
     std::thread::park_timeout(duration);
+}
+
+/// Under `sim-time`, a timed park advances the virtual clock instead of
+/// blocking, so the offline render heartbeat (`park_timeout(block)`) becomes
+/// the clock's sole driver: warm-cache playback runs at CPU speed while
+/// [`time::Instant::now`](crate::time::Instant) still tracks playback time.
+/// See `crate::time::sim` and the crate README.
+#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[inline]
+pub fn park_timeout(duration: Duration) {
+    crate::time::sim::advance(duration);
+    std::thread::yield_now();
 }
 
 /// Block until unparked or until `duration` elapses.

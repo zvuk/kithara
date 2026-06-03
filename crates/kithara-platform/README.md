@@ -54,9 +54,22 @@ time::sleep(std::time::Duration::from_millis(10)).await;
 
 - `time::sleep(duration)`
 - `time::timeout(duration, future)`
-- `time::Instant` (via `web-time`)
+- `time::Instant` (via `web-time`, or the virtual clock under `sim-time`)
 
-On native these delegate to `tokio` runtime primitives, on wasm they use `setTimeout`-based scheduling.
+On native these delegate to `tokio` runtime primitives, on wasm they use `setTimeout`-based scheduling. `web_time` is an internal implementation detail of this crate: no other crate may depend on it directly (enforced by the `arch.no-web-time` ast-grep gate), and `std::time::{Instant, Duration}` is likewise banned outside this crate (`arch.no-std-time`). Routing every timestamp through `time::Instant` is what lets the clock be swapped wholesale, below.
+
+### Virtual time (`sim-time`)
+
+`sim-time` is an off-by-default cargo feature, native and test-only, that replaces the wall clock with a process-global virtual timeline so warm-cache offline playback tests run at CPU speed instead of real time. No shipping crate enables it; production builds are unchanged.
+
+Contract:
+
+- `time::Instant` becomes a drop-in struct backed by `time::sim`'s counter. Same surface (`now`, `elapsed`, `duration_since`, `saturating_duration_since`, `+`/`-`, ordering); all arithmetic saturates.
+- `thread::park_timeout(d)` advances the virtual clock by `d` and returns immediately instead of sleeping. This is the **only** virtualized wait — `thread::sleep`, `time::sleep`, and `time::timeout` stay real (they do not fire in the warm-cache offline path and instant-returning them risks busy-spin).
+- The clock advances **only** at a `park_timeout` (frozen during compute), and `advance` is **additive**, so a sim run targets tests with a single pacing thread — the offline render loop (`render_block` → `park_timeout(block)`), which owns the heartbeat and is never unparked early. The harness needs no change; the gate lives entirely here.
+- `time::sim::{advance, reset}` are the control surface. nextest's per-test process isolation keeps the global counter clean between tests; `reset()` is for runners that share a process.
+
+The intended workflow is two runs compared as ground truth: the default real-time run (catches concurrency/timing bugs) and the `sim-time` run (fast). Divergence in sample-count positions or PCM between them flags that virtualization distorted something.
 
 ## CancellationToken
 
