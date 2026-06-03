@@ -15,7 +15,7 @@ use arc_swap::ArcSwap;
 use delegate::delegate;
 use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, ErrorClass,
-    GaplessMode, PcmChunk, PcmSpec,
+    GaplessMode, PcmChunk, PcmSpec, duration_for_frames,
 };
 use kithara_events::{AudioEvent, AudioFormat, DeferredBus, SeekLifecycleStage, SegmentLocation};
 use kithara_platform::Mutex;
@@ -272,6 +272,19 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     effects: Vec<Box<dyn AudioEffect>>,
     chunks_decoded: u64,
     total_samples: u64,
+    /// Absolute content frame offset just past the most recently emitted chunk
+    /// (the producer's decode head), tagged with its epoch. A mid-playback
+    /// variant-switch recreate continues the new decoder from here — NOT from
+    /// the consumer's lagging `committed_position`: the chunks in
+    /// `[committed..decode_head]` are already queued in the outlet ring (a
+    /// `FormatBoundary` recreate neither flushes it nor bumps the seek epoch),
+    /// so resuming at `committed` would re-emit them and rewind content. Stored
+    /// as an exact frame (not a `Duration`) and converted back with
+    /// `duration_for_frames`; the demuxer quantizes the seek landing to a
+    /// sample and `frame_offset_for` rounds to the nearest frame, so the rebuilt
+    /// decoder relabels its first chunk at exactly this frame. See
+    /// `execute_recreation`.
+    decode_head: Option<(u64, u64)>,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -318,6 +331,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             last_spec: None,
             emit: None,
             resume_target: None,
+            decode_head: None,
         }
     }
 
@@ -1690,6 +1704,9 @@ impl<T: StreamType> StreamAudioSource<T> {
                     );
                     self.update_state(CurrentFsm::decoding());
                 }
+                let fo = chunk.meta.frame_offset;
+                let frames = chunk.meta.frames;
+                self.decode_head = Some((current_epoch, fo.saturating_add(u64::from(frames))));
                 DecodeStep::Produced(Fetch::new(chunk, false, current_epoch))
             }
             Ok(DecoderChunkOutcome::Eof) => {
@@ -1942,13 +1959,28 @@ impl<T: StreamType> StreamAudioSource<T> {
                 return Some(Self::classify_recreate_err(&e, recreate.offset));
             }
             let committed = self.timeline.committed_position();
+            let epoch_now = self.epoch.load(Ordering::Acquire);
+            let sample_rate = self.session.decoder.spec().sample_rate;
+            // Continue the new decoder from the producer's decode head, not the
+            // consumer's lagging `committed`: chunks in [committed..decode_head]
+            // are already queued in the outlet ring (a FormatBoundary recreate
+            // neither flushes it nor bumps the seek epoch), so resuming at
+            // `committed` re-emits them — duplicated content, a backward phase
+            // jump. The decode head is an exact frame; the demuxer quantizes the
+            // seek landing to a sample, and `frame_offset_for` rounds that back
+            // to the nearest frame (consistent with `frames_to_trim`), so the
+            // rebuilt decoder relabels its first chunk at exactly `decode_head`.
+            let decode_head = self
+                .decode_head
+                .filter(|&(epoch, _)| epoch == epoch_now && sample_rate > 0)
+                .map(|(_, frame)| duration_for_frames(sample_rate, frame))
+                .filter(|&head| head > committed)
+                .unwrap_or(committed);
             let target_time = match self.resume_target {
-                Some((seek_epoch, target))
-                    if seek_epoch == self.epoch.load(Ordering::Acquire) && target > committed =>
-                {
+                Some((seek_epoch, target)) if seek_epoch == epoch_now && target > committed => {
                     target
                 }
-                _ => committed,
+                _ => decode_head,
             };
             debug!(
                 ?target_time,
