@@ -192,6 +192,88 @@ async fn player_advance_emits_event() {
     ));
 }
 
+#[kithara::test]
+fn replay_same_item_does_not_re_emit_current_item_changed() {
+    let (player, _session) = make_offline_player(0.0);
+    let (item, id) = make_tagged_resource("item-1", 0.05);
+    player.insert(item, Some(id), None);
+    let mut rx = player.subscribe();
+
+    player.play();
+    let first = drain_player_events(&player, &mut rx);
+    let first_count = first
+        .iter()
+        .filter(|e| matches!(e, PlayerEvent::CurrentItemChanged))
+        .count();
+    assert_eq!(
+        first_count, 1,
+        "first play announces the item once: {first:?}"
+    );
+
+    player.play();
+    let second = drain_player_events(&player, &mut rx);
+    let second_count = second
+        .iter()
+        .filter(|e| matches!(e, PlayerEvent::CurrentItemChanged))
+        .count();
+    assert_eq!(
+        second_count, 0,
+        "resuming the same item must not re-announce CurrentItemChanged: {second:?}"
+    );
+}
+
+#[kithara::test]
+fn re_selecting_the_current_item_does_not_re_announce() {
+    // Centralization delta: re-selecting the already-current index (e.g. while
+    // paused) must not re-announce — announce gates on identity, not on calls.
+    let (player, _session) = make_offline_player(0.0);
+    let (item, id) = make_tagged_resource("item-1", 0.05);
+    player.insert(item, Some(id), None);
+    let mut rx = player.subscribe();
+
+    player.play();
+    let _ = drain_player_events(&player, &mut rx);
+
+    player
+        .select_item(0, false)
+        .expect("re-select current index");
+    let after = drain_player_events(&player, &mut rx);
+    let announces = after
+        .iter()
+        .filter(|e| matches!(e, PlayerEvent::CurrentItemChanged))
+        .count();
+    assert_eq!(
+        announces, 0,
+        "re-selecting the current item must not re-announce: {after:?}"
+    );
+}
+
+#[kithara::test]
+fn replacing_current_item_re_announces_on_next_play() {
+    // Dual of suppression: replacing the audio under the current index must
+    // re-announce on the next play — index equality must not mask a change.
+    let (player, _session) = make_offline_player(0.0);
+    let (item, id) = make_tagged_resource("item-1", 0.05);
+    player.insert(item, Some(id), None);
+    let mut rx = player.subscribe();
+
+    player.play();
+    let _ = drain_player_events(&player, &mut rx);
+
+    let (replacement, _) = make_tagged_resource("item-2", 0.05);
+    player.replace_item_tagged(0, replacement, Some(Arc::from("item-2")));
+    player.play();
+    let after = drain_player_events(&player, &mut rx);
+    let announces = after
+        .iter()
+        .filter(|e| matches!(e, PlayerEvent::CurrentItemChanged))
+        .count();
+    assert_eq!(
+        announces, 1,
+        "replacing the current item must re-announce on the next play: {after:?}"
+    );
+}
+
 #[kithara::test(tokio)]
 async fn player_play_without_audio_hardware_logs_warning() {
     let player = PlayerImpl::new(

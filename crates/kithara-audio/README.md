@@ -91,6 +91,53 @@ flowchart LR
     ST --> DF --> Node --> AW --> Ring --> A
 ```
 
+## Waveform
+
+Pure, synchronous DSP that turns decoded PCM into a `Waveform` for display. No
+async, I/O, cancel, or color types live here - `kithara-audio` is math only;
+the band -> color mapping and orchestration live in the consumer crates.
+
+- **Types** (`waveform/`): `Bucket { low, mid, high }` are three independent
+  per-bucket band heights, each normalized `[0, 1]` on one shared scale. They are
+  not a single bar plus a color: the deck paints them as three concentric
+  mirrored bars (low behind, high in front, Serato-style overlay) so all three
+  bands are visible at once; the tallest band is the outer hull. All-zero is
+  silence. `Waveform` is a sealed `Arc<[Bucket]>` with `buckets()` / `len()` /
+  `is_empty()` accessors (no bare slice deref).
+- **Sealed construction**: a `Waveform` is obtainable only via
+  `WaveformAnalyzer::finalize`, so its invariants hold by construction.
+- **Normalized-position index** (`bucketize`): buckets are indexed by normalized
+  track position `[0, 1]`, never wall-clock seconds. `bucketize` is the single
+  home of that `[0, 1]` mapping: bucket `b` folds the raw range
+  `[b*R/N, (b+1)*R/N)`. A bucket whose range is empty (tracks shorter than the
+  bucket count) is filled with the supplied `empty` value, so the output length
+  always equals the requested bucket count.
+- **Source-only invariant**: analysis runs on the decoded SOURCE signal, never
+  the post-EQ / post-timestretch / post-resample output. The waveform is the
+  track's identity; playback-rate and mixer transforms remap only the time axis
+  and never re-run analysis.
+- **PCM <-> frequency boundary**: `WaveformAnalyzer::new` takes the track
+  `sample_rate` because band crossovers map to FFT bins via
+  `bin_hz = sample_rate / fft_size`. Constant sample rate per track is assumed;
+  build the analyzer once the first chunk's `PcmSpec` is known.
+- **Silence rule**: a silent bucket is `Bucket::default()` (all-zero), renders as
+  nothing, and never produces `NaN`.
+- **Reduction**: per FFT window, band energy is summed into low/mid/high
+  (DC bin zeroed; windows below `energy_floor` RMS contribute nothing) and each
+  band is divided by its bin count, i.e. an energy DENSITY (RMS-like). Without
+  that, the wide mid/high bands outweigh the narrow low band by sheer bin count
+  and mid becomes the hull; the density form lets bass be the hull as it should.
+  Windows overlap, hopped by `fft_size / 4` (75% Hann overlap), so the spectral
+  series is not coarser than the bucket count and a normal-length track is covered
+  end to end; only genuinely short tracks fall back to a single zero-padded window.
+  `finalize` keeps each bucket's loudest window (component-wise max), takes
+  `sqrt` to magnitude, applies the per-band perceptual `band_gain`, then divides
+  all three by one shared global max. Shared (not per-band) normalization keeps
+  the loudness tilt - bass stays the dominant hull and quiet stays quiet - while
+  `band_gain` lifts mid/high, which music tilts toward silence, into visibility
+  without inverting the hierarchy. Tunables (`fft_size`, crossovers,
+  `energy_floor`, `band_gain`) live in `AnalysisParams`.
+
 ## Resampler Quality Levels
 
 <table>

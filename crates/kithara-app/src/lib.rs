@@ -10,6 +10,7 @@ pub mod sources;
 pub mod state;
 pub mod theme;
 pub mod tracing_init;
+mod wave_cache;
 pub mod waveform;
 
 #[cfg(any(feature = "tui", feature = "gui"))]

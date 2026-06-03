@@ -192,6 +192,24 @@ File and HLS pipelines are unconditional: `kithara-play` always links
 - `MediaTime::INVALID` has `timescale == 0`; arithmetic on invalid times stays invalid.
 - Audio-thread `process()` is allocation-, free-, and lock-free.
 
+## Current item
+
+`PlayerEvent::CurrentItemChanged` means the *identity* of the current item
+changed — not merely that playback (re)started. A bare `play()` that resumes
+the already-current item must **not** emit it: consumers (the queue, which
+re-publishes `QueueEvent::CurrentTrackChanged`, and FFI observers) treat the
+event as a track switch and do real work on it — e.g. the DJ studio re-analyses
+the waveform.
+
+`play()` enforces this with `last_announced_index` (sentinel `usize::MAX` until
+the first announce): it emits only when the loaded index differs from the last
+announced one, so first activation announces but a resume does not. The genuine
+track moves (`commit_next`, `advance_to_next_item`, the handover finaliser, the
+jump path) go through `announce_current_item`, which records the index and
+emits. Item-set mutations that change identity under a reused index
+(`remove_all_items`, `remove_at`, `replace_item*` on the announced index) reset
+the sentinel to `usize::MAX`, so the next `play()` re-announces.
+
 ## Testing
 
 The offline render backend for deterministic engine/player tests lives in

@@ -198,6 +198,7 @@ ffmpeg-next = "8.1.0"
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
 ratatui = "0.30.0"
 rubato = "2.0"
+realfft = "3.5"
 audioadapter-buffers = "3.0"
 smallvec = "1"
 num-traits = { version = "0.2", default-features = false }

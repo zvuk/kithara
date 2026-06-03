@@ -1,5 +1,6 @@
-mod envelope;
-mod peaks;
+mod analyzer;
+mod bucket;
+mod bucketize;
 
-pub use envelope::Envelope;
-pub use peaks::PeakAccumulator;
+pub use analyzer::{AnalysisParams, WaveformAnalyzer};
+pub use bucket::{Bucket, Waveform, WaveformBytesError};

@@ -134,6 +134,9 @@ pub struct PlayerImpl {
     rate: AtomicF32,
     volume: AtomicF32,
     current_index: AtomicUsize,
+    /// Index last announced via `CurrentItemChanged` (sentinel `usize::MAX`
+    /// until the first announce).
+    last_announced_index: AtomicUsize,
     /// Master cancel token. Drop fires `cancel.cancel()` so subsystems
     /// observe the pulse before structural Arc teardown unwinds. See
     /// `crates/kithara-play/README.md` "Cancel hierarchy" section.
@@ -205,7 +208,7 @@ impl PlayerImpl {
         if current + 1 < items.len() {
             self.current_index.store(current + 1, Ordering::Relaxed);
             drop(items);
-            self.bus.publish(PlayerEvent::CurrentItemChanged);
+            self.announce_current_item(current + 1);
             debug!(new_index = current + 1, "advanced to next item");
         }
     }
@@ -343,11 +346,8 @@ impl PlayerImpl {
         drop(pending_lock);
 
         self.start_playback(src);
-        let current_index = self.current_index.load(Ordering::Relaxed);
-        if index != current_index {
-            self.current_index.store(index, Ordering::Relaxed);
-            self.bus.publish(PlayerEvent::CurrentItemChanged);
-        }
+        self.current_index.store(index, Ordering::Relaxed);
+        self.announce_current_item(index);
         Ok(())
     }
 
@@ -534,12 +534,12 @@ impl PlayerImpl {
             return;
         }
 
-        let current_index = self.current_index.load(Ordering::Relaxed);
-        if pending.index == current_index || pending.index >= self.item_count() {
+        if pending.index >= self.item_count() {
             return;
         }
-        self.current_index.store(pending.index, Ordering::Relaxed);
-        self.bus.publish(PlayerEvent::CurrentItemChanged);
+        let index = pending.index;
+        self.current_index.store(index, Ordering::Relaxed);
+        self.announce_current_item(index);
     }
 
     fn handle_handover_requested(&self) {
@@ -607,6 +607,15 @@ impl PlayerImpl {
         self.items.lock_sync().len()
     }
 
+    /// Sole publisher of `CurrentItemChanged`: emits only when `index` differs
+    /// from the last announced item, so a `play()` resume of the same item
+    /// stays quiet.
+    fn announce_current_item(&self, index: usize) {
+        if self.last_announced_index.swap(index, Ordering::Relaxed) != index {
+            self.bus.publish(PlayerEvent::CurrentItemChanged);
+        }
+    }
+
     /// Load the current queue item into the active slot.
     ///
     /// Takes the resource out of the queue (replacing with `None`), wraps it
@@ -632,6 +641,7 @@ impl PlayerImpl {
             crossfade_duration: AtomicF32::new(config.crossfade_duration),
             prefetch_duration: AtomicF32::new(config.prefetch_duration.max(0.0)),
             current_index: AtomicUsize::new(0),
+            last_announced_index: AtomicUsize::new(usize::MAX),
             current_slot: Mutex::new(None),
             default_rate: AtomicF32::new(config.default_rate),
             bus,
@@ -681,7 +691,8 @@ impl PlayerImpl {
         let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
 
         self.set_status(PlayerStatus::ReadyToPlay);
-        self.bus.publish(PlayerEvent::CurrentItemChanged);
+        // Resuming the same item is not a track change; announce gates on it.
+        self.announce_current_item(self.current_index.load(Ordering::Relaxed));
         self.bus.publish(PlayerEvent::RateChanged { rate });
         debug!(rate, "play");
     }
@@ -769,6 +780,9 @@ impl PlayerImpl {
         self.unarm_next();
         self.items.lock_sync().clear();
         self.current_index.store(0, Ordering::Relaxed);
+        // Whatever is inserted next is a new identity, so re-open announce.
+        self.last_announced_index
+            .store(usize::MAX, Ordering::Relaxed);
         self.set_status(PlayerStatus::Unknown);
         // Drop the actively playing track from the audio-thread arena and
         // reset the position/duration snapshot; otherwise the stale snapshot
@@ -794,6 +808,9 @@ impl PlayerImpl {
         } else if index == current && current >= items.len() && !items.is_empty() {
             self.current_index.store(items.len() - 1, Ordering::Relaxed);
         }
+        // A removal shifts indices, so re-open announce (index match is stale).
+        self.last_announced_index
+            .store(usize::MAX, Ordering::Relaxed);
         debug!(index, remaining = items.len(), "item removed");
         removed.map(|queued| queued.resource)
     }
@@ -812,6 +829,11 @@ impl PlayerImpl {
         if index < items.len() {
             items[index] = Some(QueuedResource { item_id, resource });
             drop(items);
+            // Replacing the announced item re-opens announce for the next play.
+            if index == self.last_announced_index.load(Ordering::Relaxed) {
+                self.last_announced_index
+                    .store(usize::MAX, Ordering::Relaxed);
+            }
             debug!(index, "item replaced");
         }
     }
@@ -929,7 +951,7 @@ impl PlayerImpl {
         } else {
             self.unarm_next_internal(Some(index));
             self.current_index.store(index, Ordering::Relaxed);
-            self.bus.publish(PlayerEvent::CurrentItemChanged);
+            self.announce_current_item(index);
             self.load_current_item();
         }
 

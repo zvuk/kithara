@@ -35,5 +35,5 @@ pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,
     SeekOutcome,
 };
-pub use waveform::{Envelope, PeakAccumulator};
+pub use waveform::{AnalysisParams, Bucket, Waveform, WaveformAnalyzer, WaveformBytesError};
 pub use worker::{AudioWorkerSource, PreloadGate, handle::AudioWorkerHandle, types::ServiceClass};

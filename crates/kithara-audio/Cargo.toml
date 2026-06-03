@@ -25,10 +25,12 @@ kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 biquad = { workspace = true }
 rubato = { workspace = true }
+realfft = { workspace = true }
 audioadapter-buffers = { workspace = true }
 smallvec = { workspace = true }
 ringbuf = { workspace = true }
 tracing = { workspace = true }
+thiserror = { workspace = true }
 kithara-platform = { workspace = true }
 portable-atomic = { workspace = true }
 fast-interleave = { workspace = true }

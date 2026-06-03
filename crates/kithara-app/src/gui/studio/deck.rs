@@ -157,8 +157,8 @@ fn waveform_cluster(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
     let progress = playhead_progress(head_position, duration);
 
     let canvas: Element<'_, Message> = match state.ui_state.waveform.as_ref() {
-        Some(env) if env.len() >= 2 => widgets::waveform(
-            env.clone(),
+        Some(wave) if !wave.is_empty() => widgets::waveform(
+            wave.clone(),
             progress,
             duration,
             studio_size::WAVEFORM_HEIGHT,

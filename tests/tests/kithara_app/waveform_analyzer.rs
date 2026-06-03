@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use kithara::prelude::ResourceConfig;
+use kithara::{audio::Bucket, prelude::ResourceConfig};
 use kithara_app::waveform::analyze;
 use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
 use kithara_platform::CancellationToken;
@@ -32,16 +32,17 @@ async fn analyze_silent_wav_yields_all_zero_envelope() {
         ResourceConfig::new(url.as_str()).expect("silence URL must build a ResourceConfig");
 
     // A silent 1s WAV must decode end to end and finalise to exactly
-    // `buckets` all-zero values (no frames are loud, so nothing normalises
+    // `buckets` all-zero buckets (no frames are loud, so nothing normalises
     // up to 1.0).
-    let env = analyze(config, 100, CancellationToken::default())
+    let wave = analyze(config, 100, CancellationToken::default())
         .await
-        .expect("silent WAV must decode to a finalised envelope");
+        .expect("silent WAV must decode to a finalised waveform");
 
-    assert_eq!(env.len(), 100, "one value per requested bucket");
+    assert_eq!(wave.len(), 100, "one bucket per requested column");
     assert!(
-        env.iter().all(|&v| v == 0.0),
-        "a silent source must yield all-zero buckets: {env:?}"
+        wave.buckets().iter().all(|b| *b == Bucket::default()),
+        "a silent source must yield all-zero buckets: {:?}",
+        wave.buckets()
     );
 }
 
