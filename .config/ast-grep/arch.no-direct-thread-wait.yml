@@ -1,0 +1,50 @@
+id: arch.no-direct-thread-wait
+message: |
+  Direct use of a blocking std thread wait. Route through
+  `kithara_platform::thread` so the single virtual clock governs every wait:
+  - `std::thread::sleep`        → `kithara_platform::thread::sleep`
+  - `std::thread::park_timeout` → `kithara_platform::thread::park_timeout`
+
+  `park_timeout` is the virtual-clock DRIVER primitive; a direct std call would
+  bypass the single clock entirely. `sleep` is a real wall-clock block that the
+  platform makes virtual under `sim-time`.
+
+      // ❌  use std::thread::sleep;            std::thread::park_timeout(d);
+      // ✅  use kithara_platform::thread::sleep;   thread::park_timeout(d);
+
+  Only `sleep`/`park_timeout` are banned — `std::thread::{spawn, yield_now,
+  park, current, ...}` are not time and stay. A bare `thread::{sleep,
+  park_timeout}` resolving through `use kithara_platform::thread` is allowed.
+
+  This is an ERROR gate covering ALL workspace Rust — production AND tests.
+
+  Suppress with `// ast-grep-ignore: arch.no-direct-thread-wait` ONLY when an
+  external API explicitly requires the std primitive on a native-only path.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+ignores:
+  # The platform crate OWNS the thread-wait primitives (binds them to the
+  # real or virtual clock).
+  - crates/kithara-platform/**
+  # The test-macro crate emits hygienic `::std::thread::sleep` inside `quote!`
+  # token streams (the hang watchdog); rewriting those would force a
+  # kithara-platform dependency onto every macro consumer.
+  - crates/kithara-test-macros/**
+rule:
+  any:
+    # Import of `sleep`/`park_timeout` from std::thread in any shape:
+    # `use std::thread::sleep`, `use std::{..., thread::sleep}`,
+    # `use std::thread::{..., park_timeout}`. Never matches the allowed bare
+    # form resolving through `use kithara_platform::thread`.
+    - kind: use_declaration
+      regex: '\bstd::thread::(sleep|park_timeout)\b'
+    - kind: use_declaration
+      regex: '\bstd::\{[\s\S]*\bthread::(sleep|park_timeout)\b'
+    - kind: use_declaration
+      regex: '\bstd::thread::\{[\s\S]*\b(sleep|park_timeout)\b'
+    # Qualified call sites.
+    - pattern: std::thread::sleep($$$REST)
+    - pattern: std::thread::park_timeout($$$REST)

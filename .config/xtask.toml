@@ -39,4 +39,5 @@ modules = []
 # with no exclude globs; the rule's own `files:`/`ignores:` scope it.
 scan_all_rules = [
     "arch.no-direct-time",
+    "arch.no-direct-thread-wait",
 ]

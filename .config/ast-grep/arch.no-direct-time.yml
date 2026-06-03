@@ -14,15 +14,12 @@ message: |
   - `tokio::time::{sleep, timeout, Instant, interval, ...}` → `kithara_platform::time::{sleep, timeout, Instant}`
     (a direct tokio timer is a second, un-virtualizable clock; the platform
     delegates to tokio on native, so this is a behaviour-preserving swap).
-  - `std::thread::{sleep, park_timeout}` → `kithara_platform::thread::{sleep, park_timeout}`
-    (real blocking wall-clock waits; `park_timeout` is the virtual-clock DRIVER
-    primitive — a direct std call would bypass the single clock entirely). Only
-    `sleep`/`park_timeout` are banned — `std::thread::{spawn, yield_now, park,
-    current, ...}` are not time and stay. A bare `thread::{sleep, park_timeout}`
-    via `use kithara_platform::thread` is already correct.
 
       // ❌  use std::{sync::Arc, time::Duration};   use tokio::time::sleep;
       // ✅  use std::sync::Arc;  use kithara_platform::time::{Duration, sleep};
+
+  Blocking thread waits (`std::thread::{sleep, park_timeout}`) are a sibling
+  ban — see `arch.no-direct-thread-wait`.
 
   This matches GROUPED imports too (`use std::{..., time::Duration}`), which a
   plain `std::time::Duration` pattern misses — that blind spot is exactly how
@@ -52,18 +49,15 @@ ignores:
   - crates/kithara-test-macros/**
 rule:
   any:
-    # Imports (flat OR grouped/multi-line) that pull a `time` segment from a
-    # foreign root, any `web_time`, or `std::thread::{sleep, park_timeout}` in
-    # any import shape (`use std::thread::sleep`, `use std::{..., thread::sleep}`,
-    # `use std::thread::{..., park_timeout}`). `\btime\b` ignores `runtime`, the
-    # `std|tokio` anchor ignores `kithara_platform::time` re-exports, and the
-    # `thread::{sleep,park_timeout}` anchors never match the allowed bare forms
-    # that resolve through `use kithara_platform::thread`.
+    # Imports (flat OR grouped/multi-line) pulling a `time` segment from a
+    # foreign root. `\btime\b` ignores `runtime`; the `std|tokio` anchor
+    # ignores `kithara_platform::time` re-exports.
     - kind: use_declaration
-      regex: '\b(std|tokio)::(time\b|\{[\s\S]*\btime\b)|\bstd::thread::(sleep|park_timeout)\b|\bstd::\{[\s\S]*\bthread::(sleep|park_timeout)\b|\bstd::thread::\{[\s\S]*\b(sleep|park_timeout)\b|\bweb_time\b'
+      regex: '\b(std|tokio)::(time\b|\{[\s\S]*\btime\b)'
+    # Any `web_time` import (the wasm backing — platform-internal only).
+    - kind: use_declaration
+      regex: '\bweb_time\b'
     # Qualified usages in expression/type position (contiguous paths).
     - pattern: std::time::$$$REST
     - pattern: tokio::time::$$$REST
     - pattern: web_time::$$$REST
-    - pattern: std::thread::sleep($$$REST)
-    - pattern: std::thread::park_timeout($$$REST)
