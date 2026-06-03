@@ -37,7 +37,7 @@ async fn prefetch_403_returns_err_quickly(
         .cancel(CancellationToken::default())
         .build();
 
-    let started = std::time::Instant::now();
+    let started = kithara_platform::time::Instant::now();
     let result = tokio::time::timeout(Duration::from_secs(1), Stream::<Hls>::new(config))
         .await
         .map_err(|_| "Stream::<Hls>::new did not return within 1s — silent hang regression")?;

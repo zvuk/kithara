@@ -91,7 +91,7 @@ async fn wait_for_loader_done(
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
-    let start = std::time::Instant::now();
+    let start = kithara_platform::time::Instant::now();
     loop {
         if let Some(entry) = queue.track(track_id) {
             match &entry.status {
@@ -117,7 +117,7 @@ async fn wait_for_position_at_least(
     min_secs: f64,
     deadline: Duration,
 ) -> Result<(), String> {
-    let start = std::time::Instant::now();
+    let start = kithara_platform::time::Instant::now();
     loop {
         if let Some(pos) = queue.position_seconds()
             && pos >= min_secs
@@ -139,7 +139,7 @@ async fn wait_for_position_near(
     tolerance: f64,
     deadline: Duration,
 ) -> Result<(), String> {
-    let start = std::time::Instant::now();
+    let start = kithara_platform::time::Instant::now();
     loop {
         if let Some(pos) = queue.position_seconds()
             && (pos - target).abs() < tolerance

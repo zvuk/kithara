@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
-
 use kithara::{
     assets::StoreOptions,
     events::{DownloaderEvent, Event, EventBus, FileEvent},
@@ -13,7 +11,7 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancellationToken,
-    time::Instant,
+    time::{Duration, Instant},
     tokio::time::{sleep, timeout},
 };
 

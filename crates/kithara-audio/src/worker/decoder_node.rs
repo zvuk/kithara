@@ -205,8 +205,7 @@ impl Node for DecoderNode {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
+    use kithara_platform::time::Duration;
     use kithara_stream::{SeekControl, SeekObserve, SeekState};
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};

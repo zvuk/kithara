@@ -138,7 +138,7 @@ impl From<WavHeader> for Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use kithara_platform::time::Duration;
 
     use crate::{
         kithara,

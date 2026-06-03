@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
-
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
@@ -10,7 +8,7 @@ use kithara::{
 };
 use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{HlsFixtureBuilder, TestServerHelper, TestTempDir, temp_dir};
-use kithara_platform::tokio::task::spawn_blocking;
+use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;

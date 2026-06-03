@@ -165,7 +165,7 @@ async fn wait_for_loader_done(
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
-    let start = std::time::Instant::now();
+    let start = kithara_platform::time::Instant::now();
     loop {
         if let Some(entry) = queue.track(track_id) {
             match &entry.status {
@@ -191,7 +191,7 @@ async fn wait_for_current_id(
     expected: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
-    let start = std::time::Instant::now();
+    let start = kithara_platform::time::Instant::now();
     loop {
         if queue.current().map(|e| e.id) == Some(expected) {
             return Ok(());
@@ -212,7 +212,7 @@ async fn wait_for_current_id(
 /// proof that the loader is parked on the gate (not merely slow), and
 /// synchronizes on an observable rather than on wall-clock timing.
 async fn wait_for_init_requested(gate: &InitGateHandle, deadline: Duration) -> Result<(), String> {
-    let start = std::time::Instant::now();
+    let start = kithara_platform::time::Instant::now();
     loop {
         if gate.requested() >= 1 {
             return Ok(());
@@ -234,7 +234,7 @@ async fn wait_for_status(
     expected: TrackStatus,
     deadline: Duration,
 ) -> Result<(), String> {
-    let start = std::time::Instant::now();
+    let start = kithara_platform::time::Instant::now();
     loop {
         if queue.track(track_id).map(|e| e.status) == Some(expected.clone()) {
             return Ok(());
@@ -268,7 +268,7 @@ async fn assert_no_barge_in(
     slow_id: TrackId,
     fast_id: TrackId,
 ) -> Result<(), String> {
-    let watch_start = std::time::Instant::now();
+    let watch_start = kithara_platform::time::Instant::now();
     let mut history: Vec<Option<TrackId>> = Vec::new();
     while watch_start.elapsed() < Consts::POST_FAST_OBSERVE {
         let cur = queue.current().map(|e| e.id);
@@ -478,7 +478,7 @@ async fn concurrent_completion_race_does_not_barge_in() {
         // Watch a bounded window: once fast becomes current it must stay
         // current (no auto-advance exists to move off it). slow appearing
         // *after* fast is the barge-in.
-        let watch = std::time::Instant::now();
+        let watch = kithara_platform::time::Instant::now();
         let mut saw_fast = false;
         let mut history: Vec<Option<TrackId>> = Vec::new();
         while watch.elapsed() < Consts::RACE_OBSERVE {

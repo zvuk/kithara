@@ -1,6 +1,5 @@
-use std::time::Duration;
-
 use kithara_abr::{AbrMode, AbrSettings, VariantIndex};
+use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
 /// Auto ABR mode seeded with initial variant `idx`. Test-only shorthand for

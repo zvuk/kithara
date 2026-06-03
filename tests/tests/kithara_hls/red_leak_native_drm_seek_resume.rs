@@ -22,7 +22,7 @@ impl Consts {
 }
 
 async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let deadline = kithara_platform::time::Instant::now() + Duration::from_secs(3);
     loop {
         match PcmReader::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => return,
@@ -30,7 +30,7 @@ async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
             Err(e) => panic!("next_chunk decode error at `{label}`: {e}"),
         }
         assert!(
-            std::time::Instant::now() <= deadline,
+            kithara_platform::time::Instant::now() <= deadline,
             "next_chunk timeout at `{label}`"
         );
         sleep(Duration::from_micros(200)).await;

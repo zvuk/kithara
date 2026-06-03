@@ -80,7 +80,7 @@ fn build_client(options: &NetOptions) -> reqwest::Result<Client> {
     let base = Client::builder()
         .cookie_store(true)
         .pool_max_idle_per_host(options.pool_max_idle_per_host)
-        .pool_idle_timeout(Some(std::time::Duration::from_secs(5)))
+        .pool_idle_timeout(Some(kithara_platform::time::Duration::from_secs(5)))
         .danger_accept_invalid_certs(options.is_insecure)
         .read_timeout(options.inactivity_timeout);
     Vec::<ClientBuilderMod>::from(options.compression)

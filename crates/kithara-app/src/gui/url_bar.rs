@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use iced::{
     Alignment, Background, Border, Color, Degrees, Element, Length, Padding, Shadow, Task, Vector,
     alignment::{Horizontal, Vertical},
@@ -14,6 +12,7 @@ use iced::{
         text_input::{Status as InputStatus, Style as InputStyle},
     },
 };
+use kithara_platform::time::Duration;
 
 use super::{app::Kithara, fonts, icons::Icon, message::Message};
 use crate::{

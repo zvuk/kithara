@@ -15,19 +15,31 @@ message: |
   `std::time::Duration` is wasm-safe by itself but workspace policy
   prefers a single import path so it's covered by the same rule.
 
-  Suppress with `// ast-grep-ignore: arch.no-std-time` when interop
+  This is an ERROR gate covering ALL workspace Rust — production AND
+  tests. `kithara_platform::time` is the single time chokepoint: routing
+  every clock/duration through it is what lets the platform crate (and
+  only it) swap in a mock/virtual clock for deterministic, fast tests.
+  Tests are NOT exempt — they are exactly the consumers that need the
+  virtual clock.
+
+  Suppress with `// ast-grep-ignore: arch.no-std-time` ONLY when interop
   requires the std type (e.g. an external trait signature explicitly
   takes `std::time::Duration`).
-severity: warning
+severity: error
 language: Rust
 files:
   - crates/**/*.rs
+  - tests/**/*.rs
 ignores:
-  - "**/tests/**"
-  - "**/test_*.rs"
-  - "**/*_test.rs"
-  - "**/*_tests.rs"
-  - "**/tests.rs"
+  # The platform crate OWNS the time primitive — it is the one place
+  # allowed to reference `std::time` / `web_time` directly so it can swap
+  # in a mock/virtual clock behind the single `kithara_platform::time` API.
+  - crates/kithara-platform/**
+  # The test-macro crate emits hygienic `::std::time::Duration` inside
+  # `quote!` token streams; rewriting those would force a kithara-platform
+  # dependency onto every macro consumer. Duration is a pure value type,
+  # so this does not affect clock virtualization.
+  - crates/kithara-test-macros/**
 rule:
   any:
     - pattern: std::time::Instant

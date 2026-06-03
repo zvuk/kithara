@@ -256,7 +256,7 @@ impl SimHarness {
             }
         }
 
-        let started = std::time::Instant::now();
+        let started = kithara_platform::time::Instant::now();
         let mut landed_at: Option<f64> = None;
         while started.elapsed() < ACTION_BUDGET {
             if let Some(entry) = pre_track.and_then(|id| self.queue.track(id))
@@ -321,8 +321,8 @@ impl SimHarness {
         // `current().id` confirms the engine is now serving the
         // new track. Without this step `do_play_for` captures
         // `pre_pos` from the *previous* track, racing the handover.
-        let switch_deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while std::time::Instant::now() < switch_deadline {
+        let switch_deadline = kithara_platform::time::Instant::now() + Duration::from_secs(5);
+        while kithara_platform::time::Instant::now() < switch_deadline {
             if self.current_track_id() == Some(id) {
                 break;
             }
@@ -370,7 +370,7 @@ impl SimHarness {
         // within `ACTION_BUDGET`. Codec FIELD changes are
         // *expected* when variants differ; what would be a bug is
         // a stall, panic, or track-flip.
-        let started = std::time::Instant::now();
+        let started = kithara_platform::time::Instant::now();
         while started.elapsed() < ACTION_BUDGET {
             if pre_track.is_some() && self.current_track_id() != pre_track {
                 panic!(
@@ -420,13 +420,13 @@ impl SimHarness {
         let mut pre_pos = self.position();
         let pre_track = self.current_track_id();
         let duration = self.duration();
-        let started = std::time::Instant::now();
+        let started = kithara_platform::time::Instant::now();
 
         // Allow up to 2x the requested wall clock so we accept some
         // jitter, but anything beyond that with no progress is a hang.
         let wall_budget = at_least * 2;
         let mut last_pos = pre_pos;
-        let mut stagnant_since = std::time::Instant::now();
+        let mut stagnant_since = kithara_platform::time::Instant::now();
 
         while started.elapsed() < wall_budget {
             if let Some(id) = pre_track
@@ -448,11 +448,11 @@ impl SimHarness {
             if cur + 1.0 < pre_pos {
                 pre_pos = cur;
                 last_pos = cur;
-                stagnant_since = std::time::Instant::now();
+                stagnant_since = kithara_platform::time::Instant::now();
             }
             if cur > last_pos + 0.05 {
                 last_pos = cur;
-                stagnant_since = std::time::Instant::now();
+                stagnant_since = kithara_platform::time::Instant::now();
             }
             if !self.is_playing() {
                 // Two legitimate reasons to be `!is_playing` mid-PlayFor:
@@ -539,7 +539,7 @@ pub(crate) async fn wait_for_loaded(
     id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
-    let start = std::time::Instant::now();
+    let start = kithara_platform::time::Instant::now();
     loop {
         if let Some(entry) = queue.track(id) {
             match &entry.status {
@@ -563,7 +563,7 @@ pub(crate) async fn wait_for_position_at_least(
     min_secs: f64,
     deadline: Duration,
 ) -> Result<(), String> {
-    let start = std::time::Instant::now();
+    let start = kithara_platform::time::Instant::now();
     loop {
         if let Some(p) = queue.position_seconds()
             && p >= min_secs

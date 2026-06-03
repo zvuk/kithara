@@ -6,7 +6,7 @@ use kithara_platform::{CancellationToken, thread::sleep, tokio::task::spawn_bloc
 use tracing::{debug, warn};
 
 mod consts {
-    use std::time::Duration;
+    use kithara_platform::time::Duration;
 
     /// Raw bins per final bucket; oversampling stabilises the shape on long
     /// tracks where the accumulator max-merges.

@@ -3,12 +3,10 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::time::Duration;
-
 use kithara::prelude::ResourceConfig;
 use kithara_app::waveform::analyze;
 use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
-use kithara_platform::CancellationToken;
+use kithara_platform::{CancellationToken, time::Duration};
 
 fn silence_wav_spec() -> SignalSpec {
     SignalSpec {

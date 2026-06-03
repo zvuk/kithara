@@ -118,7 +118,7 @@ async fn wait_for_position_at_least(
     min_secs: f64,
     deadline: Duration,
 ) -> Result<(), String> {
-    let start = std::time::Instant::now();
+    let start = kithara_platform::time::Instant::now();
     loop {
         if let Some(pos) = queue.position_seconds()
             && pos >= min_secs

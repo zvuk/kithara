@@ -20,7 +20,8 @@ use crate::{
 /// failed by the network layer (this wait then returns `Failed`) before the
 /// deadlock-watchdog fires. Only a wait that never returns after the fetch
 /// resolved is a real deadlock.
-const WAIT_HANG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+const WAIT_HANG_TIMEOUT: kithara_platform::time::Duration =
+    kithara_platform::time::Duration::from_secs(180);
 
 impl<D: DriverIo> ResourceCore<D> {
     #[cfg_attr(feature = "perf", hotpath::measure)]

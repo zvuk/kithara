@@ -1,8 +1,6 @@
-use std::time::Duration as StdDuration;
-
 use kithara_abr::{AbrMode, AbrSettings, AbrState, AbrView};
 use kithara_events::{VariantDuration, VariantIndex, VariantInfo};
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::time::{Duration as StdDuration, Duration, Instant};
 use kithara_test_utils::kithara;
 
 fn variants() -> Vec<VariantInfo> {

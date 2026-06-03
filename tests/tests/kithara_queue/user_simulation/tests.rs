@@ -732,7 +732,7 @@ async fn apply_action_to_queue(queue: &Arc<Queue>, action: &Action) {
             if matches!(outcome, SeekOutcome::PastEof { .. }) {
                 return;
             }
-            let started = std::time::Instant::now();
+            let started = kithara_platform::time::Instant::now();
             let budget = Duration::from_secs(10);
             let mut landed = false;
             while started.elapsed() < budget {
@@ -1037,12 +1037,12 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     // ratio of the track. Before mvhd parsing `duration_seconds()`
     // returns `None`, which is the deliberate "unknown" signal. Without
     // this wait, the test would race the demuxer.
-    let dur_deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let dur_deadline = kithara_platform::time::Instant::now() + Duration::from_secs(30);
     let duration = loop {
         if let Some(d) = queue.duration_seconds() {
             break d;
         }
-        if std::time::Instant::now() >= dur_deadline {
+        if kithara_platform::time::Instant::now() >= dur_deadline {
             panic!("duration never became known within 30 s after Loaded");
         }
         sleep(Duration::from_millis(50)).await;
@@ -1061,7 +1061,7 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
              reported_dur={reported_dur:?} queue.duration={duration:.2}s"
         );
     }
-    let started = std::time::Instant::now();
+    let started = kithara_platform::time::Instant::now();
     let budget = Duration::from_secs(15);
     let mut landed = false;
     while started.elapsed() < budget {

@@ -764,8 +764,7 @@ fn test_key_data() -> Vec<u8> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use std::time::Duration;
-
+    use kithara_platform::time::Duration;
     use tokio::time::{sleep, timeout};
 
     use super::PackagedTestServer;

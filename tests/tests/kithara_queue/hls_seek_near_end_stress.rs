@@ -135,7 +135,7 @@ async fn wait_for_loader_done(
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
-    let start = std::time::Instant::now();
+    let start = kithara_platform::time::Instant::now();
     loop {
         if let Some(entry) = queue.track(track_id) {
             match &entry.status {
@@ -159,7 +159,7 @@ async fn wait_for_position_at_least(
     min: f64,
     deadline: Duration,
 ) -> Result<(), String> {
-    let start = std::time::Instant::now();
+    let start = kithara_platform::time::Instant::now();
     loop {
         if let Some(p) = queue.position_seconds()
             && p >= min
@@ -252,7 +252,7 @@ async fn run_one_attempt(
     let target = (duration - target_offset).max(0.0);
     let pos_before = queue.position_seconds().unwrap_or(0.0);
 
-    let seek_started = std::time::Instant::now();
+    let seek_started = kithara_platform::time::Instant::now();
     if let Err(e) = queue.seek(target) {
         tick_handle.abort();
         return IterOutcome::Errored {
@@ -300,7 +300,7 @@ async fn run_one_attempt(
         };
     }
 
-    let post_seek_started = std::time::Instant::now();
+    let post_seek_started = kithara_platform::time::Instant::now();
     let mut pos_after = queue.position_seconds().unwrap_or(0.0);
     while post_seek_started.elapsed() < Consts::POST_SEEK_RENDER_WALL {
         if let Some(entry) = queue.track(track_id)
