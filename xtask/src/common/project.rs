@@ -29,6 +29,12 @@ pub(crate) struct LintExcludeConfig {
     /// Inline-module names / `::`-paths whose violations are dropped from every
     /// lint namespace, regardless of file.
     pub(crate) modules: Vec<String>,
+    /// ast-grep rule IDs that must scan the FULL tree — tests included —
+    /// bypassing [`Self::paths`]. Hard-correctness bans (e.g. `arch.no-std-time`)
+    /// where test code is NOT exempt: routing time through one primitive only
+    /// works if tests obey it too. Run in a second ast-grep pass per rule with
+    /// no exclude globs; the rule's own `files:` / `ignores:` scope it.
+    pub(crate) scan_all_rules: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

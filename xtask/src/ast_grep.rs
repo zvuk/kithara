@@ -105,26 +105,8 @@ fn run_native(args: &AstGrepArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_grouped(args: &AstGrepArgs) -> Result<()> {
-    let mut cmd = Command::new("ast-grep");
-    cmd.arg("scan")
-        .arg("--config")
-        .arg("sgconfig.yml")
-        .arg("--json=stream");
-    add_exclude_globs(&mut cmd)?;
-    if args.strict {
-        cmd.arg("--warning");
-    }
-    for p in &args.paths {
-        cmd.arg(p);
-    }
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::inherit());
-
-    let output = cmd.output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    let mut by_rule: BTreeMap<String, RuleGroup> = BTreeMap::new();
+/// Parse ast-grep `--json=stream` output into the per-rule grouping.
+fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) {
     for line in stdout.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -147,11 +129,58 @@ fn run_grouped(args: &AstGrepArgs) -> Result<()> {
             column: m.range.start.column,
         });
     }
+}
+
+fn run_grouped(args: &AstGrepArgs) -> Result<()> {
+    let project = ProjectConfig::load(Path::new("."))?;
+
+    let mut cmd = Command::new("ast-grep");
+    cmd.arg("scan")
+        .arg("--config")
+        .arg("sgconfig.yml")
+        .arg("--json=stream");
+    add_exclude_globs(&mut cmd)?;
+    if args.strict {
+        cmd.arg("--warning");
+    }
+    for p in &args.paths {
+        cmd.arg(p);
+    }
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::inherit());
+
+    let output = cmd.output()?;
+    let mut by_rule: BTreeMap<String, RuleGroup> = BTreeMap::new();
+    parse_into(&String::from_utf8_lossy(&output.stdout), &mut by_rule);
+    let mut ok = output.status.success();
+
+    // Second pass: hard-correctness rules that must see tests too. The main
+    // scan applied the `[lint_exclude].paths` globs (production-only); re-run
+    // each `scan_all` rule standalone with NO exclude globs so its own
+    // `files:`/`ignores:` are the only scope, then replace its prod-only group.
+    for rule_id in &project.lint_exclude.scan_all_rules {
+        let rule_file = format!(".config/ast-grep/{rule_id}.yml");
+        let mut rule_cmd = Command::new("ast-grep");
+        rule_cmd
+            .arg("scan")
+            .arg("--rule")
+            .arg(&rule_file)
+            .arg("--json=stream");
+        if args.strict {
+            rule_cmd.arg("--warning");
+        }
+        rule_cmd.stdout(Stdio::piped());
+        rule_cmd.stderr(Stdio::inherit());
+        let rule_out = rule_cmd.output()?;
+        by_rule.remove(rule_id);
+        parse_into(&String::from_utf8_lossy(&rule_out.stdout), &mut by_rule);
+        ok = ok && rule_out.status.success();
+    }
 
     print_grouped(&by_rule);
 
-    if !output.status.success() {
-        bail!("ast-grep failed (exit code {:?})", output.status.code());
+    if !ok {
+        bail!("ast-grep failed");
     }
     Ok(())
 }
