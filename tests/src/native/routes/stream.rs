@@ -90,6 +90,14 @@ async fn init_segment(
             if let Some(rule) = fixture.match_http_error(HlsRouteKind::Init, Some(variant), None) {
                 return inject_error(rule);
             }
+            // Deterministic withhold gate (release-driven, not timer-driven):
+            // park the init GET body until the test releases it. `Hls::create`
+            // awaits this body before returning, so the owning track's loader
+            // stays in `Loading` while withheld.
+            if let Some(gate) = state.init_gate(&hls_spec, variant) {
+                gate.mark_requested();
+                gate.wait_until_released().await;
+            }
             fixture.init_bytes(variant).map_or_else(
                 || StatusCode::NOT_FOUND.into_response(),
                 |bytes| {

@@ -71,6 +71,16 @@ pub struct Queue {
     pub(super) loader: Arc<Loader>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
     pub(super) pending_select: Arc<Mutex<SelectPhase>>,
+    /// Serialises a selection-apply against a concurrent [`Queue::select`].
+    /// A track's `spawn_apply_after_load` completion and a later `select`
+    /// that supersedes it both mutate the same selection state (pending,
+    /// current, navigation cursor, `TrackStatus::Cancelled`); without a
+    /// single serialization point the completion can observe-not-cancelled
+    /// then `select_item` *after* the superseding select committed, so the
+    /// superseded track barges in. Held only across the synchronous apply
+    /// critical section — never across an `.await`. See the crate `README.md`
+    /// "Selection serialization".
+    pub(super) select_apply: Arc<Mutex<()>>,
     pub(super) player: Arc<PlayerImpl>,
     /// Kept alongside `tracks` so a `Consumed` track can be re-spawned
     /// on re-selection (user tapping a previously-played track). The
@@ -155,6 +165,7 @@ impl Queue {
             shutdown: cancel,
             navigation: Arc::new(Mutex::new(NavigationState::new())),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
+            select_apply: Arc::new(Mutex::new(())),
             sources: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(test, feature = "probe"))]
             test_resources: Arc::new(Mutex::new(HashMap::new())),
@@ -182,6 +193,16 @@ impl Queue {
         &self,
     ) -> std::sync::MutexGuard<'_, SelectPhase> {
         self.pending_select
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Acquire the selection-apply serialization guard (see
+    /// [`Self::select_apply`]). Taken before `tracks`/`pending_select`/
+    /// `navigation`/`player` in both `select` and the
+    /// `spawn_apply_after_load` completion, so the two cannot interleave.
+    pub(in crate::queue) fn lock_select_apply(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.select_apply
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }

@@ -48,13 +48,34 @@ use crate::{
 /// - `StreamAudioSource` to check `media_info()` for format changes
 pub(crate) struct SharedStream<T: StreamType> {
     inner: Arc<Mutex<Stream<T>>>,
+    /// Construction-phase read mode, shared across clones. When set, `Read`
+    /// routes through the blocking off-RT [`Stream::read`] adapter (waits for
+    /// the seeked range to download, cancel-bounded by its own timeout)
+    /// instead of the non-blocking RT [`Stream::probe_read`]. `Audio::new`
+    /// arms it for the single up-front decoder build (with the init body
+    /// prefetched, the build read normally hits committed bytes; the blocking
+    /// adapter is the bounded safety net for residual lateness) and disarms it
+    /// before the worker is registered, so the RT decode loop the worker then
+    /// drives always uses `probe_read`. See the crate `README.md`
+    /// "Construction reads".
+    blocking: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl<T: StreamType> SharedStream<T> {
     pub(crate) fn new(stream: Stream<T>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(stream)),
+            blocking: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
+    }
+
+    /// Arm/disarm the construction-phase blocking read mode (see the
+    /// `blocking` field). Shared across all clones derived from this handle,
+    /// so arming before the decoder build and disarming before worker
+    /// registration is a staged construction → steady-state ownership
+    /// transfer — never a live toggle once the RT worker runs.
+    pub(crate) fn set_blocking(&self, on: bool) {
+        self.blocking.store(on, Ordering::Release);
     }
 
     delegate! {
@@ -102,13 +123,25 @@ impl<T: StreamType> Clone for SharedStream<T> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
+            blocking: Arc::clone(&self.blocking),
         }
     }
 }
 
 impl<T: StreamType> Read for SharedStream<T> {
+    /// Steady state (RT worker / `OffsetReader`): the non-blocking
+    /// [`Stream::probe_read`] — a not-ready range surfaces immediately so the
+    /// scheduler parks and re-ticks. During construction only (the `blocking`
+    /// flag armed by `Audio::new`), routes through the blocking off-RT
+    /// [`Stream::read`] adapter so the single up-front decoder build waits for
+    /// residual init lateness instead of erroring on the first not-ready probe.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.inner.lock_sync().probe_read(buf)
+        let mut stream = self.inner.lock_sync();
+        if self.blocking.load(Ordering::Acquire) {
+            stream.read(buf)
+        } else {
+            stream.probe_read(buf)
+        }
     }
 }
 

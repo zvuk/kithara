@@ -482,11 +482,19 @@ impl PlayerImpl {
     }
 
     /// Ensure the audio engine is started.
+    ///
+    /// Idempotent under concurrency: if another thread wins the start race
+    /// (the engine is now running), `Engine::start` returns
+    /// `EngineAlreadyRunning`, which is the success case here — the engine
+    /// is started, which is all this method promises.
     pub fn ensure_engine_started(&self) -> Result<(), PlayError> {
-        if !self.engine.is_running() {
-            self.engine.start()?;
+        if self.engine.is_running() {
+            return Ok(());
         }
-        Ok(())
+        match self.engine.start() {
+            Ok(()) | Err(PlayError::EngineAlreadyRunning) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     /// Ensure we have an active slot, allocating one if needed.

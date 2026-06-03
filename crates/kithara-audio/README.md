@@ -102,6 +102,14 @@ flowchart LR
 <tr><td>Maximum</td><td>FFT-based</td><td>Offline / high-end</td></tr>
 </table>
 
+## Construction reads (initial decoder)
+
+`Audio::new` builds the initial decoder **exactly once** (`create_initial_decoder` → one `spawn_blocking`), with **no retry loop and no readiness gate**. The construction read goes through the **blocking** off-RT `Stream::read` adapter — `SharedStream` carries a construction-phase `blocking` flag that `Audio::new` arms before the build and disarms before the RT worker is registered, so the decode loop the worker then drives always uses the non-blocking `probe_read`. (This is a staged construction → steady-state ownership transfer of the read mode, never a live toggle.)
+
+The blocking adapter is what makes construction wait — off the RT worker — for the bytes the build reads (the container header in the init segment, spilling into the first packet). A slow-but-arriving prefix waits up to the stream's blocking-read budget and the build then succeeds, instead of erroring on the first not-ready probe (the old `Audio::new -> Interrupted` flake under load); the wait lives in the stream/byte layer (`Stream::read` wakes the peer downloader), not in a retry loop here. A construction-range byte that genuinely never arrives surfaces the **stream layer's** typed terminal (`Stream::read` → source `io::Error` / typed `StreamPending`) verbatim, bounded by the blocking-read budget — the audio layer never mints its own construction error type, and there is no synthetic `TimedOut`.
+
+A `VariantChange`/`SeekPending` at construction is **not** a rebuild trigger: the variant is settled before the build, and construction never calls `clear_variant_fence` (that stays a recreate-path delegate). Construction always probes at offset 0; a concurrent user seek (play-then-seek) is applied by the post-construction seek path. A `VariantChange` genuinely surfacing at construction would be a stream-state bug to fix in the stream layer, not papered over with a loop. Pinned by `tests/tests/kithara_hls/probe_not_ready_at_creation.rs`.
+
 ## Format Change Handling
 
 On an ABR variant switch, the `DecoderNode` detects the format change via `Source::media_info()` polling and then:

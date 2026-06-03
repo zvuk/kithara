@@ -99,6 +99,13 @@ pub struct EngineImpl {
     /// Whether this engine/player instance is currently running.
     running: AtomicBool,
 
+    /// Serialises [`Engine::start`]'s check-then-act on `running`, so two
+    /// concurrent starters cannot both pass the `!running` gate and
+    /// double-dispatch `session.start_player`. The loser observes
+    /// `running == true` under the lock and returns `EngineAlreadyRunning`.
+    /// See `README.md` "Engine start".
+    start_lock: Mutex<()>,
+
     /// Master output volume for this player instance (linear 0.0 ..= 1.0).
     master_volume: AtomicF32,
 
@@ -254,6 +261,7 @@ impl EngineImpl {
             pcm_pool: resolved_pool,
             player_id: Mutex::new(None),
             running: AtomicBool::new(false),
+            start_lock: Mutex::new(()),
             slot_registry: Mutex::new(ArenaRegistry::with_capacity(max_slots)),
             worker: AudioWorkerHandle::with_cancel(worker_cancel),
             runtime: RuntimeHandle::try_current().ok(),
@@ -405,6 +413,13 @@ impl Engine for EngineImpl {
     }
 
     fn start(&self) -> Result<(), PlayError> {
+        // Hold across the whole check-then-act: `running` flips to `true`
+        // only after `start_player` has fully succeeded, so a concurrent
+        // starter either blocks here and then observes `running == true`
+        // (and returns `EngineAlreadyRunning`) or sees a fully-started
+        // engine — never a half-started one, and never a second
+        // `start_player` dispatch.
+        let _start = self.start_lock.lock_sync();
         if self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineAlreadyRunning);
         }

@@ -140,6 +140,24 @@ The Queue never starts playback on its own: there is no autoplay. The
 caller drives the first `select` / `play` explicitly so playback order
 is deterministic and independent of which load finishes first.
 
+## Selection serialization
+
+`Queue::select` and a track's `spawn_apply_after_load` completion both mutate the
+same selection state — `pending_select`, the navigation cursor, the current item,
+and the `TrackStatus::Cancelled` supersede marker. They are serialized by an
+internal `select_apply` lock, held only across each side's **synchronous**
+critical section (never across an `.await`).
+
+This closes a barge-in race: superseding a still-loading selection works by
+marking the prior pending track `Cancelled` (`override_pending_select` /
+`cancel_stale_pending`), which the completion path reads to skip its
+`select_item`. Without serialization a completion could observe "not cancelled",
+consume `pending_select`, and then run its `select_item` *after* a later
+`select` had already committed — letting the superseded track barge in over the
+new current. The lock makes the completion's cancelled-check and `select_item` a
+single critical section, mutually exclusive with `select`. Pinned by
+`tests/.../track_switch_race.rs`.
+
 ## Minimal Usage
 
 ```rust

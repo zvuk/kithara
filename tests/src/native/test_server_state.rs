@@ -148,6 +148,67 @@ fn segment_gate_key(hls_token: &str, variant: usize, segment: usize) -> String {
     format!("{hls_token}|v{variant}|s{segment}")
 }
 
+/// A test-controlled withhold gate for one `(hls token, variant)` init
+/// (`EXT-X-MAP`) segment.
+///
+/// A track's loader does not resolve `TrackStatus::Loaded` until `Resource::new`
+/// completes, and `Resource::new` builds the initial decoder through the off-RT
+/// **blocking** construction read (`Audio::new`), whose first read of the
+/// container header touches the init body. So while this gate withholds the
+/// init GET body, that blocking read parks and the owning track stays in
+/// `Loading` until the test releases the gate — a release-driven lever for
+/// "this track is still constructing" scenarios that does not depend on
+/// wall-clock segment delays (which only gate media-segment bodies fetched at
+/// playback, not at construction). The blocking construction read is itself
+/// budget-bounded, so the test drives its supersede/select while the gate is
+/// held (microseconds against that budget) rather than relying on the gate
+/// holding indefinitely.
+///
+/// One seam only: the init body GET parks on `released` until [`Self::release`].
+/// The `requested` counter lets a test observe the gated init GET reached the
+/// server. Lives in `TestServerState` (mutable, per-token) — never in the
+/// immutable Arc-cached `GeneratedHls`.
+pub(crate) struct InitGate {
+    released: watch::Sender<bool>,
+    requested: AtomicU64,
+}
+
+impl InitGate {
+    fn new() -> Self {
+        let (released, _rx) = watch::channel(false);
+        Self {
+            released,
+            requested: AtomicU64::new(0),
+        }
+    }
+
+    pub(crate) fn mark_requested(&self) {
+        self.requested.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Park until [`Self::release`] is called. Returns immediately if already
+    /// released — a fresh receiver observes the latest value first.
+    pub(crate) async fn wait_until_released(&self) {
+        let mut rx = self.released.subscribe();
+        // `Err` only if the sender was dropped (gate removed) — proceed then.
+        let _ = rx.wait_for(|released| *released).await;
+    }
+
+    /// Release the withheld init segment so its parked GET (body) completes.
+    pub(crate) fn release(&self) {
+        self.released.send_replace(true);
+    }
+
+    /// In-process count of init GET requests that reached this gate.
+    pub(crate) fn requested(&self) -> u64 {
+        self.requested.load(Ordering::Relaxed)
+    }
+}
+
+fn init_gate_key(hls_token: &str, variant: usize) -> String {
+    format!("{hls_token}|v{variant}|init")
+}
+
 pub(crate) struct TestServerState {
     hls_cache: GeneratedHlsCache,
     hls_blobs: RwLock<HashMap<String, Arc<Vec<u8>>>>,
@@ -155,6 +216,7 @@ pub(crate) struct TestServerState {
     encoded_signals: Cache<String, EncodedSignal>,
     behaviors: RwLock<HashMap<String, Arc<BehaviorEntry>>>,
     segment_gates: RwLock<HashMap<String, Arc<SegmentGate>>>,
+    init_gates: RwLock<HashMap<String, Arc<InitGate>>>,
 }
 
 #[derive(Clone)]
@@ -172,6 +234,7 @@ impl TestServerState {
             encoded_signals: Cache::new(ENCODED_SIGNAL_CACHE_CAPACITY),
             behaviors: RwLock::new(HashMap::new()),
             segment_gates: RwLock::new(HashMap::new()),
+            init_gates: RwLock::new(HashMap::new()),
         })
     }
 
@@ -232,6 +295,22 @@ impl TestServerState {
         let map = self.segment_gates.read().expect("segment gates poisoned");
         map.get(&segment_gate_key(hls_token, variant, segment))
             .map(Arc::clone)
+    }
+
+    /// Register a withhold gate for one `(hls token, variant)` init
+    /// (`EXT-X-MAP`) segment and return its handle. The matching init GET
+    /// parks until [`InitGate::release`], holding the owning track's loader in
+    /// `Loading`.
+    pub(crate) fn register_init_gate(&self, hls_token: &str, variant: usize) -> Arc<InitGate> {
+        let gate = Arc::new(InitGate::new());
+        let mut map = self.init_gates.write().expect("init gates poisoned");
+        map.insert(init_gate_key(hls_token, variant), Arc::clone(&gate));
+        gate
+    }
+
+    pub(crate) fn init_gate(&self, hls_token: &str, variant: usize) -> Option<Arc<InitGate>> {
+        let map = self.init_gates.read().expect("init gates poisoned");
+        map.get(&init_gate_key(hls_token, variant)).map(Arc::clone)
     }
 
     /// Lookup a previously encoded signal payload. Test fixture builders

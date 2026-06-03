@@ -129,6 +129,12 @@ impl Queue {
     /// [`QueueError::NotReady`] if the track is in a terminal failed state,
     /// or [`QueueError::Play`] if the underlying `select_item` call fails.
     pub fn select(&self, id: TrackId, transition: Transition) -> Result<(), QueueError> {
+        // Serialise the whole select against a concurrent
+        // `spawn_apply_after_load` completion (see `select_apply`): the
+        // supersede (marking the prior pending `Cancelled`) and a loading
+        // track's apply must not interleave, or the superseded track barges
+        // in. Held across the synchronous body only.
+        let _apply = self.lock_select_apply();
         let (index, status) = {
             let guard = self.lock_tracks();
             guard
@@ -189,6 +195,7 @@ impl Queue {
         let tracks = Arc::clone(&self.tracks);
         let pending_select = Arc::clone(&self.pending_select);
         let navigation = Arc::clone(&self.navigation);
+        let select_apply = Arc::clone(&self.select_apply);
         let bus = self.bus.clone();
         drop(kithara_platform::tokio::task::spawn(async move {
             let resource = match handle.await {
@@ -199,6 +206,13 @@ impl Queue {
                     return;
                 }
             };
+
+            // Serialise the apply against a concurrent `select` (see
+            // `select_apply`): the cancelled re-check below and the
+            // `select_item` must be atomic w.r.t. a superseding select that
+            // marks this track `Cancelled`. The whole block is synchronous —
+            // the guard is never held across an `.await`.
+            let _apply = select_apply.lock().unwrap_or_else(PoisonError::into_inner);
 
             let was_cancelled = tracks
                 .lock()

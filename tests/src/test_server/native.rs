@@ -15,7 +15,7 @@ use crate::{
     signal_spec::{SignalKind as InternalSignalKind, parse_signal_request},
     signal_url::{SignalKind, SignalSpec, signal_path},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
-    test_server_state::{FixtureBehavior, SegmentGate, TestServerState},
+    test_server_state::{FixtureBehavior, InitGate, SegmentGate, TestServerState},
 };
 
 /// Facade over the process-global shared test server.
@@ -168,6 +168,43 @@ impl TestServerHelper {
             .state
             .register_segment_gate(hls_token, variant, segment);
         SegmentGateHandle { gate }
+    }
+
+    /// Register a withhold gate for the init (`EXT-X-MAP`) segment of one
+    /// variant of the fixture behind `hls_token`, returning a handle that
+    /// releases it and reports how many init GETs it has parked. The matching
+    /// init GET response is withheld until [`InitGateHandle::release`].
+    ///
+    /// The off-RT blocking construction read (`Audio::new`, inside
+    /// `Resource::new`) reads the init body, so a held init gate parks that read
+    /// and keeps the owning track's loader in `TrackStatus::Loading` — a
+    /// release-driven lever (no timers, no wall-clock segment delays) for "this
+    /// track is still constructing" scenarios.
+    #[must_use]
+    pub fn register_init_gate(&self, hls_token: &str, variant: usize) -> InitGateHandle {
+        let gate = self.state.register_init_gate(hls_token, variant);
+        InitGateHandle { gate }
+    }
+}
+
+/// Handle to a registered init-segment withhold gate on the shared server.
+#[derive(Clone)]
+pub struct InitGateHandle {
+    gate: Arc<InitGate>,
+}
+
+impl InitGateHandle {
+    /// Release the withheld init segment so its parked GET (body) response
+    /// completes, letting `Hls::create` (and the owning track's loader) proceed.
+    pub fn release(&self) {
+        self.gate.release();
+    }
+
+    /// Number of init GET (body) requests this gate has parked, observed
+    /// in-process.
+    #[must_use]
+    pub fn requested(&self) -> u64 {
+        self.gate.requested()
     }
 }
 

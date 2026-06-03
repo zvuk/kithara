@@ -110,6 +110,16 @@ it off and drive advance themselves.
 `Engine::crossfade(from, to, config)`. Tear down with `release_slot(id)` then
 `stop()`.
 
+`Engine::start` is **atomic single-start**: the `running` check-then-act is
+serialized by an internal `start_lock`, and `running` flips to `true` only after
+`session.start_player` has fully succeeded. Two concurrent starters (e.g. the
+synchronous `Queue::select` path and an async loader-completion both calling
+`PlayerImpl::ensure_engine_started`) cannot both dispatch `start_player`: the
+loser observes `running == true` under the lock and returns
+`EngineAlreadyRunning`. `ensure_engine_started` treats `EngineAlreadyRunning` as
+success — the engine is started, which is all it promises — so a concurrent start
+is idempotent, never a `"player already started"` session desync.
+
 ## Cancel Hierarchy
 
 A single `CancellationToken` master flows top-down; subsystems (Downloader,
