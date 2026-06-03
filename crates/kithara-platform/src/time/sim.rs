@@ -4,9 +4,26 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+/// Quiescence-driven virtual-clock engine. Submodule of `sim`, which is already
+/// gated on `feature = "sim-time"` + native, so it needs no extra feature gate.
+/// The engine drives `SIM_NANOS` forward at quiescent points. In Inc 0 its sole
+/// consumer is the harness, so the module is `#[cfg(test)]`-scoped; the first
+/// increment that routes a real wait onto it drops this gate.
+#[cfg(test)]
+pub(crate) mod sched;
+
 /// Process-global virtual timeline, in nanoseconds. Only moves forward, via
-/// [`advance`]; starts at [`Instant::BASE_NANOS`].
+/// [`advance`] or the `sched` quiescence engine; starts at
+/// [`Instant::BASE_NANOS`].
 static SIM_NANOS: AtomicU64 = AtomicU64::new(Instant::BASE_NANOS);
+
+/// Current virtual instant in nanoseconds since the timeline origin. Used by the
+/// `sched` engine (test-scoped in Inc 0).
+#[cfg(test)]
+#[inline]
+pub(crate) fn now_nanos() -> u64 {
+    SIM_NANOS.load(Ordering::Acquire)
+}
 
 fn duration_to_nanos(d: Duration) -> u64 {
     // Fold via `u64` seconds + `u32` subsec — no `u128` intermediate, no cast.
@@ -25,11 +42,16 @@ pub fn advance(delta: Duration) {
     SIM_NANOS.fetch_add(duration_to_nanos(delta), Ordering::Release);
 }
 
-/// Reset the timeline to its base. For unit tests that share one process;
-/// production tests get per-test process isolation from nextest.
+/// Reset the timeline to its base and clear the quiescence engine. For unit
+/// tests that share one process; production tests get per-test process
+/// isolation from nextest. Order matters: store the base first, then drop the
+/// engine state, so afterwards the clock reads `Instant::BASE_NANOS` and the
+/// engine is empty. The engine clear is test-scoped in Inc 0 (see `sched`).
 #[inline]
 pub fn reset() {
     SIM_NANOS.store(Instant::BASE_NANOS, Ordering::Release);
+    #[cfg(test)]
+    sched::reset();
 }
 
 /// Drop-in for `web_time::Instant` backed by the virtual clock. Exposes exactly
