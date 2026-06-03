@@ -71,10 +71,6 @@ impl SegmentSlotState {
         Arc::new(Self(AtomicU8::new(Self::MISSING)))
     }
 
-    fn loaded() -> Arc<Self> {
-        Arc::new(Self(AtomicU8::new(Self::LOADED)))
-    }
-
     fn is_loaded(&self) -> bool {
         self.0.load(Ordering::Acquire) == Self::LOADED
     }
@@ -318,22 +314,47 @@ pub(crate) struct InitEntry {
     url: Url,
 }
 
-impl InitEntry {
-    /// Variants without `#EXT-X-MAP` carry this stub. Pairs with
-    /// `size == 0`, so [`HlsVariant::rebuild`] never enqueues `Init`
-    /// (we only enqueue when `size > 0`). The `url`/`resource_id`
-    /// placeholders are never read.
-    fn empty(scope: &AssetScope<DecryptContext>) -> Self {
-        let url: Url = "about:blank"
-            .parse()
-            .expect("static placeholder URL parses");
-        Self {
-            resource_id: scope.key_from_url(&url),
-            url,
-            state: SegmentSlotState::loaded(),
-            size: AtomicU64::new(0),
-            content: SegmentContent::Plain,
+/// Whether a variant carries a *separately fetched* init segment. The
+/// discriminant is the construction-time init size, which subsumes all
+/// three "no separate init fetch" cases that were previously the dynamic
+/// `init_size() == 0` check: no `#EXT-X-MAP`, a byte-range-embedded init
+/// (init lives in segment 0's byte range), or a failed init HEAD. The size
+/// of a [`Pending`](VariantInit::Pending) init only ever shrinks on commit
+/// (HEAD estimate -> committed `final_len`) and never crosses back to 0, so
+/// the frozen discriminant stays equivalent to the old runtime probe — see
+/// the crate `README.md` "Variant init".
+#[derive(Debug)]
+pub(crate) enum VariantInit {
+    /// No separate init fetch. Carries no resource: `rebuild` never enqueues
+    /// `PlannedFetch::Init`, and every init-size query reads as 0.
+    NotApplicable,
+    /// A real, separately fetched init segment (`#EXT-X-MAP` with a known
+    /// size). Always has a real URL.
+    Pending(InitEntry),
+}
+
+impl VariantInit {
+    /// The `Pending` entry, or `None` for [`NotApplicable`](Self::NotApplicable).
+    fn pending(&self) -> Option<&InitEntry> {
+        match self {
+            Self::NotApplicable => None,
+            Self::Pending(entry) => Some(entry),
         }
+    }
+
+    /// In-memory init size: 0 when [`NotApplicable`](Self::NotApplicable),
+    /// else the `Pending` entry's current (possibly post-commit shrunk)
+    /// size atom.
+    fn size(&self) -> u64 {
+        self.pending()
+            .map_or(0, |entry| entry.size.load(Ordering::Acquire))
+    }
+
+    /// Unwrap the `Pending` entry for assertions on a variant known to
+    /// carry a separately fetched init.
+    #[cfg(test)]
+    fn expect_pending(&self) -> &InitEntry {
+        self.pending().expect("init is Pending")
     }
 }
 
@@ -424,7 +445,7 @@ pub(crate) struct HlsVariant {
 /// build it inline from synthesised fixtures.
 pub(crate) struct VariantParts {
     pub(crate) playlist_state: Arc<PlaylistState>,
-    pub(crate) init: InitEntry,
+    pub(crate) init: VariantInit,
     pub(crate) codec: Option<AudioCodec>,
     pub(crate) container: Option<ContainerFormat>,
     pub(crate) seek_obs: Arc<dyn SeekObserve>,
@@ -457,7 +478,7 @@ impl HlsVariant {
             playlist_state.as_ref(),
             decrypt_contexts,
             variant,
-            init.size.load(Ordering::Acquire),
+            init.size(),
             &ctx.scope,
         );
         let codec = playlist_state.variant_codec(variant);
@@ -589,7 +610,7 @@ impl HlsVariant {
         ctx: &PlanCtx,
         handle: Segment<Downloading>,
     ) -> Option<FetchCmd> {
-        let init = self.store.init();
+        let init = self.store.init().pending()?;
         let resource = match &init.content {
             SegmentContent::Plain => ctx
                 .scope
@@ -610,17 +631,24 @@ impl HlsVariant {
         variant_idx: usize,
         decrypt_ctx: Option<DecryptContext>,
         scope: &AssetScope<DecryptContext>,
-    ) -> InitEntry {
-        playlist_state.init_url(variant_idx).map_or_else(
-            || InitEntry::empty(scope),
-            |url| InitEntry {
-                resource_id: scope.key_from_url(&url),
-                url,
-                state: SegmentSlotState::missing(),
-                size: AtomicU64::new(playlist_state.init_size(variant_idx)),
-                content: SegmentContent::from(decrypt_ctx),
-            },
-        )
+    ) -> VariantInit {
+        let size = playlist_state.init_size(variant_idx);
+        // A sized init always carries an `#EXT-X-MAP` URL (size is only
+        // populated from a successful init HEAD, which requires the URL),
+        // so `Pending` always has a real URL.
+        let Some(url) = (size > 0)
+            .then(|| playlist_state.init_url(variant_idx))
+            .flatten()
+        else {
+            return VariantInit::NotApplicable;
+        };
+        VariantInit::Pending(InitEntry {
+            resource_id: scope.key_from_url(&url),
+            url,
+            state: SegmentSlotState::missing(),
+            size: AtomicU64::new(size),
+            content: SegmentContent::from(decrypt_ctx),
+        })
     }
 
     /// Builds per-segment metadata. Segment 0's `segment_byte_offset` from
@@ -759,7 +787,13 @@ impl HlsVariant {
             let Some(planned) = planned else { break };
             match planned {
                 PlannedFetch::Init => {
-                    let init = self.store.init();
+                    // Only a `Pending` init is ever enqueued (the `rebuild`
+                    // gate skips `NotApplicable`), so a missing entry here is
+                    // unreachable; skip defensively rather than claim a slot
+                    // that does not exist.
+                    let Some(init) = self.store.init().pending() else {
+                        continue;
+                    };
                     let Some(handle) = init
                         .state
                         .try_claim(PlannedFetch::Init, Arc::downgrade(self))
@@ -877,7 +911,7 @@ impl HlsVariant {
             seek_obs,
             segments,
         } = parts;
-        let init_size = init.size.load(Ordering::Acquire);
+        let init_size = init.size();
         let layout = Layout::new(init_size, &segments);
         let store = SegmentStore::new(ctx.scope.clone(), init, segments);
         Arc::new(Self {
@@ -910,7 +944,7 @@ impl HlsVariant {
         if self.served_from() != 0 {
             return Err(StreamError::Source(SourceError::FormatChangeNotApplicable));
         }
-        if self.init_size() > 0 {
+        if self.store.init().pending().is_some() {
             return Ok(self.init_byte_range());
         }
         let (_, off, size) = self

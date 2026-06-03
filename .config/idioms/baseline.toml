@@ -40,7 +40,7 @@ schema_version = 1
 "crates/kithara-encode/src/ffmpeg/aac.rs:183:19" = 1
 "crates/kithara-encode/src/ffmpeg/flac.rs:294:19" = 1
 "crates/kithara-ffi/src/native/inner.rs:102:34" = 1
-"crates/kithara-play/src/impls/player.rs:425:21" = 1
+"crates/kithara-play/src/impls/player/queue.rs:218:21" = 1
 
 [nested_if_let_pyramid]
 "crates/kithara-storage/src/decorator/chunked/core.rs:181:depth_2" = 1

@@ -87,6 +87,15 @@ On a post-ABR switch into mid-playback, `rebuild_with_decoder_probe` rebuilds th
 
 `seg 0` is required even when the variant advertises a separate init (CMAF `EXT-X-MAP`): the init covers only a small header, but the probe scans further into the first media chunk. After the probe succeeds, `decoder_seek_safe(target_time)` jumps the decoder forward, so segments `1..from_seg` are never fetched — only `seg 0`. This adds at most one extra segment per switch; if `seg 0` is already cached the scheduler skips the fetch and the queue entry resolves via `committed_final_len` in `dispatch`.
 
+### Variant init
+
+`VariantInit` (in `variant.rs`) records whether a variant carries a *separately fetched* init segment. The discriminant is the construction-time init size:
+
+- `NotApplicable` — no separate init fetch. Covers all three `init_size == 0` cases: no `#EXT-X-MAP`, a byte-range-embedded init (the init lives inside segment 0's byte range, so `try_byte_range` reports `init_size == 0`), or a failed init HEAD. Carries no resource, so `rebuild` never enqueues `PlannedFetch::Init` and every init query reads as 0.
+- `Pending(InitEntry)` — a real `#EXT-X-MAP` init with a known HEAD size. Always has a real URL (the size is only populated from a successful init HEAD, which requires the URL). Enqueued at the front of the fetch queue so the demuxer has the container header before any media segment.
+
+The discriminant is frozen at construction because a `Pending` init's size only ever **shrinks** on commit (encrypted HEAD estimate → committed post-PKCS7 `final_len`) and never crosses back to 0. So matching on `VariantInit` is equivalent to the old dynamic `init_size() > 0` probe at every later read, without a separate runtime flag.
+
 ### Format-change header byte range
 
 `header_byte_range` returns the byte range a demuxer reads to re-establish container state after a format change (variant flip or codec change). It returns `Ok(range)` only when recovery is applicable:

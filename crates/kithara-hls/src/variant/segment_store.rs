@@ -5,7 +5,7 @@ use kithara_drm::DecryptContext;
 use kithara_platform::time::Duration;
 use kithara_stream::{StreamError, StreamResult};
 
-use super::{InitEntry, PlannedFetch, SegmentEntry};
+use super::{PlannedFetch, SegmentEntry, VariantInit};
 use crate::HlsError;
 
 /// Owns the per-variant segment/init content domain: the asset scope plus
@@ -24,14 +24,14 @@ pub(super) struct SegmentStore {
     /// through it; the fetch path acquires *writable* resources via
     /// `PlanCtx::scope` (the same clone), so this field is read-only here.
     scope: AssetScope<DecryptContext>,
-    init: InitEntry,
+    init: VariantInit,
     segments: Vec<SegmentEntry>,
 }
 
 impl SegmentStore {
     pub(super) fn new(
         scope: AssetScope<DecryptContext>,
-        init: InitEntry,
+        init: VariantInit,
         segments: Vec<SegmentEntry>,
     ) -> Self {
         Self {
@@ -41,9 +41,10 @@ impl SegmentStore {
         }
     }
 
-    /// Borrow the init entry — the fetch path (on the facade) reads its
-    /// `url` / `content` / `resource_id` and claims its state atom.
-    pub(super) fn init(&self) -> &InitEntry {
+    /// Borrow the init slot — the fetch path (on the facade) matches on it,
+    /// reading a `Pending` entry's `url` / `content` / `resource_id` and
+    /// claiming its state atom.
+    pub(super) fn init(&self) -> &VariantInit {
         &self.init
     }
 
@@ -59,31 +60,30 @@ impl SegmentStore {
     }
 
     pub(super) fn init_size(&self) -> u64 {
-        self.init.size.load(Ordering::Acquire)
+        self.init.size()
     }
 
     /// Resource key for the variant's init segment — `None` when the
-    /// playlist has no `#EXT-X-MAP` (raw TS/AAC).
+    /// variant has no separately fetched init (raw TS/AAC, byte-range
+    /// embedded, or a failed init HEAD).
     pub(super) fn init_resource(&self) -> Option<ResourceKey> {
-        (self.init_size() > 0).then(|| self.init.resource_id.clone())
+        self.init.pending().map(|e| e.resource_id.clone())
     }
 
     /// Whether the next dispatch should issue the separate init fetch —
-    /// true only for a non-zero, not-yet-loaded init segment.
+    /// true only for a `Pending`, not-yet-loaded init segment.
     pub(super) fn needs_init_fetch(&self) -> bool {
-        self.init_size() > 0 && !self.init.state.is_loaded()
+        self.init.pending().is_some_and(|e| !e.state.is_loaded())
     }
 
     /// Flip the init slot to `Missing`; returns whether the variant
     /// actually carries an init segment, so the caller knows to clear the
     /// Layout seed in step.
     pub(super) fn invalidate_init(&self) -> bool {
-        if self.init_size() > 0 {
-            self.init.state.mark_missing();
+        self.init.pending().is_some_and(|entry| {
+            entry.state.mark_missing();
             true
-        } else {
-            false
-        }
+        })
     }
 
     pub(super) fn segment_resource(&self, seg_idx: u32) -> Option<ResourceKey> {
@@ -124,8 +124,10 @@ impl SegmentStore {
     /// not belong to this variant. Flips `Loaded -> Missing`; queue
     /// reseeding is the caller's job.
     pub(super) fn on_evict(&self, key: &ResourceKey) -> Option<i32> {
-        if self.init_size() > 0 && &self.init.resource_id == key {
-            self.init.state.mark_missing();
+        if let Some(entry) = self.init.pending()
+            && &entry.resource_id == key
+        {
+            entry.state.mark_missing();
             return Some(-1);
         }
         for (seg_idx, entry) in self.segments.iter().enumerate() {
@@ -143,7 +145,14 @@ impl SegmentStore {
     /// observes a new size against a stale offset table.
     pub(super) fn apply_loaded_size(&self, planned: PlannedFetch, final_len: u64) {
         match planned {
-            PlannedFetch::Init => self.init.size.store(final_len, Ordering::Release),
+            PlannedFetch::Init => {
+                // Only a `Pending` init is ever settled (it is the only init
+                // that gets fetched). `NotApplicable` has no size atom; a
+                // stray settle is a no-op rather than resurrecting an init.
+                if let Some(entry) = self.init.pending() {
+                    entry.size.store(final_len, Ordering::Release);
+                }
+            }
             PlannedFetch::Segment(idx) => {
                 if let Some(slot) = self.segments.get(idx as usize) {
                     slot.size.store(final_len, Ordering::Release);
