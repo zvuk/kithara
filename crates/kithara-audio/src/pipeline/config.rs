@@ -14,7 +14,7 @@ use kithara_stream::StreamType;
 use portable_atomic::AtomicF32;
 
 use crate::{
-    effects::timestretch::TimeStretchProcessor,
+    effects::timestretch::{StretchBackendKind, TimeStretchProcessor},
     resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality},
     traits::AudioEffect,
     worker::handle,
@@ -59,6 +59,10 @@ pub struct AudioConfig<T: StreamType> {
     /// Preserve-pitch tempo control. `Some` selects tempo mode (see
     /// `create_effects`); `None` keeps the resampler-first chain.
     pub tempo_ratio: Option<Arc<AtomicF32>>,
+    /// Time-stretch backend used in tempo mode. Ignored when `tempo_ratio`
+    /// is `None`. Defaults to the always-available pure-Rust backend.
+    #[builder(default)]
+    pub stretch_backend: StretchBackendKind,
     /// Optional shared audio worker handle.
     pub worker: Option<handle::AudioWorkerHandle>,
     /// Resampling quality preset.
@@ -119,16 +123,21 @@ pub(crate) fn create_effects(
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
     playback_rate: &Arc<AtomicF32>,
-    tempo_ratio: Option<&Arc<AtomicF32>>,
+    tempo: Option<(&Arc<AtomicF32>, StretchBackendKind)>,
     quality: ResamplerQuality,
     pool: Option<PcmPool>,
     custom_effects: Vec<Box<dyn AudioEffect>>,
 ) -> Vec<Box<dyn AudioEffect>> {
     let mut chain: Vec<Box<dyn AudioEffect>> = Vec::new();
 
-    let resampler_rate = match tempo_ratio {
-        Some(_) => {
-            chain.push(Box::new(TimeStretchProcessor));
+    let resampler_rate = match tempo {
+        Some((tempo_ratio, backend)) => {
+            chain.push(Box::new(TimeStretchProcessor::new(
+                backend,
+                initial_spec,
+                Arc::clone(tempo_ratio),
+                pool.clone().unwrap_or_default(),
+            )));
             Arc::new(AtomicF32::new(1.0))
         }
         None => Arc::clone(playback_rate),
@@ -214,7 +223,7 @@ mod tests {
             spec(),
             &host_sr,
             &playback_rate,
-            Some(&tempo_ratio),
+            Some((&tempo_ratio, StretchBackendKind::default())),
             ResamplerQuality::default(),
             None,
             vec![Box::new(PassthroughEffect)],

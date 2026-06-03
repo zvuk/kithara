@@ -1,12 +1,12 @@
-//! Integration coverage for `kithara_app::waveform::analyze`: decode a
-//! fixture-server WAV end to end and assert the envelope contract.
+//! Integration coverage for `kithara_app::waveform`: decode a fixture-server
+//! WAV end to end and assert the source-analysis contract.
 
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::time::Duration;
 
 use kithara::{audio::Bucket, prelude::ResourceConfig};
-use kithara_app::waveform::analyze;
+use kithara_app::waveform::{analyze, analyze_track};
 use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
 use kithara_platform::CancellationToken;
 
@@ -43,6 +43,37 @@ async fn analyze_silent_wav_yields_all_zero_envelope() {
         wave.buckets().iter().all(|b| *b == Bucket::default()),
         "a silent source must yield all-zero buckets: {:?}",
         wave.buckets()
+    );
+}
+
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(2)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+)]
+async fn analyze_track_silent_wav_yields_waveform() {
+    let server = TestServerHelper::new().await;
+    let url = server.silence(&silence_wav_spec()).await;
+    let config =
+        ResourceConfig::new(url.as_str()).expect("silence URL must build a ResourceConfig");
+
+    let analysis = analyze_track(config, 100, CancellationToken::default())
+        .await
+        .expect("silent WAV must decode to a finalised analysis");
+
+    assert_eq!(
+        analysis.waveform.len(),
+        100,
+        "one bucket per requested column"
+    );
+    assert!(
+        analysis
+            .waveform
+            .buckets()
+            .iter()
+            .all(|b| *b == Bucket::default()),
+        "a silent source must yield all-zero buckets: {:?}",
+        analysis.waveform.buckets()
     );
 }
 

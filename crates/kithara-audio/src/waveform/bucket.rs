@@ -77,6 +77,12 @@ impl Waveform {
     /// Parse a blob produced by [`Self::to_bytes`]. A version mismatch, a body
     /// that is not a whole number of buckets, or a band height outside `[0, 1]`
     /// is a typed error the caller treats as a cache miss.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaveformBytesError::Version`] when the header version does not
+    /// match [`WAVEFORM_BYTES_VERSION`], and [`WaveformBytesError::Corrupt`]
+    /// when the header is missing.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, WaveformBytesError> {
         let header = bytes.get(0..4).ok_or(WaveformBytesError::Corrupt)?;
         let version = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
@@ -87,9 +93,10 @@ impl Waveform {
             });
         }
         let body = &bytes[4..];
-        if body.len() % BUCKET_BYTES != 0 {
+        if !body.len().is_multiple_of(BUCKET_BYTES) {
             return Err(WaveformBytesError::Corrupt);
         }
+        
         let mut buckets = Vec::with_capacity(body.len() / BUCKET_BYTES);
         for c in body.chunks_exact(BUCKET_BYTES) {
             let low = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);

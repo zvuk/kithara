@@ -24,7 +24,7 @@ pub(crate) mod worker;
 pub use audio::Audio;
 pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
-    timestretch::TimeStretchProcessor,
+    timestretch::{StretchBackendKind, TimeStretchProcessor},
 };
 pub use pipeline::{
     config::AudioConfig,

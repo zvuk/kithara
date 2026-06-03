@@ -14,10 +14,17 @@ mod consts {
 }
 use consts::*;
 
-/// Per-deck waveform analysis. Not a singleton: each deck owns one with its
+/// Whole-track source analysis.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct TrackAnalysis {
+    pub waveform: Waveform,
+}
+
+/// Per-deck track analysis. Not a singleton: each deck owns one with its
 /// own cancel scope (a child of the app master), so two decks analyse
 /// independently. Dropping it cancels any in-flight run.
-pub struct WaveformAnalysis {
+pub struct TrackAnalysisRunner {
     cancel: CancellationToken,
     current: Option<RunHandle>,
 }
@@ -31,7 +38,7 @@ struct RunHandle {
     task: JoinHandle<()>,
 }
 
-impl WaveformAnalysis {
+impl TrackAnalysisRunner {
     /// `master` must be a child of the app master cancel; this run scope is a
     /// child of it.
     #[must_use]
@@ -49,7 +56,7 @@ impl WaveformAnalysis {
         &mut self,
         config: ResourceConfig,
         buckets: usize,
-    ) -> watch::Receiver<Option<Waveform>> {
+    ) -> watch::Receiver<Option<TrackAnalysis>> {
         self.clear();
 
         let run = self.cancel.child_token();
@@ -70,7 +77,7 @@ impl WaveformAnalysis {
     }
 }
 
-impl Drop for WaveformAnalysis {
+impl Drop for TrackAnalysisRunner {
     fn drop(&mut self) {
         self.clear();
         self.cancel.cancel();
@@ -83,23 +90,35 @@ async fn run_analysis(
     config: ResourceConfig,
     buckets: usize,
     cancel: CancellationToken,
-    tx: watch::Sender<Option<Waveform>>,
+    tx: watch::Sender<Option<TrackAnalysis>>,
 ) {
-    if let Some(wave) = analyze(config, buckets, cancel).await {
+    if let Some(analysis) = analyze_track(config, buckets, cancel).await {
         // The receiver may be gone (deck swapped); a failed send is fine.
-        let _ = tx.send(Some(wave));
+        let _ = tx.send(Some(analysis));
     }
 }
 
 /// Decode `config` end to end off the player runtime and return the finished
 /// [`Waveform`]. `None` on a zero bucket count, an up-front cancel, a resource
-/// failure, or empty input. This is the one-shot form; [`WaveformAnalysis`]
-/// wraps it with a per-deck cancel scope and a result channel for the UI.
+/// failure, or empty input.
 pub async fn analyze(
     config: ResourceConfig,
     buckets: usize,
     cancel: CancellationToken,
 ) -> Option<Waveform> {
+    analyze_track(config, buckets, cancel)
+        .await
+        .map(|analysis| analysis.waveform)
+}
+
+/// Decode `config` end to end off the player runtime and return the finished
+/// source analysis. `None` on a zero bucket count, an up-front cancel, a
+/// resource failure, or empty input.
+pub async fn analyze_track(
+    config: ResourceConfig,
+    buckets: usize,
+    cancel: CancellationToken,
+) -> Option<TrackAnalysis> {
     if buckets == 0 || cancel.is_cancelled() {
         return None;
     }
@@ -116,20 +135,20 @@ pub async fn analyze(
         return None;
     }
 
-    spawn_blocking(move || decode_waveform(resource, buckets, &cancel))
+    spawn_blocking(move || decode_track(resource, buckets, &cancel))
         .await
         .ok()
         .flatten()
 }
 
-/// Decode the resource into a [`Waveform`] of `buckets` columns. The analyzer
-/// is built lazily on the first chunk so it can take the source `sample_rate`.
+/// Decode the resource into a [`TrackAnalysis`] of `buckets` columns. The analyzer is built lazily
+/// on the first chunk so it can take the source `sample_rate`.
 /// Returns `None` on cancel, decode error, or empty input.
-fn decode_waveform(
+fn decode_track(
     mut resource: Resource,
     buckets: usize,
     cancel: &CancellationToken,
-) -> Option<Waveform> {
+) -> Option<TrackAnalysis> {
     let mut analyzer: Option<WaveformAnalyzer> = None;
     loop {
         if cancel.is_cancelled() {
@@ -146,7 +165,11 @@ fn decode_waveform(
                 analyzer.push_interleaved(&chunk.pcm[..], channels);
             }
             Ok(ChunkOutcome::Pending { .. }) => sleep(PENDING_BACKOFF),
-            Ok(ChunkOutcome::Eof { .. }) => return analyzer.map(|a| a.finalize(buckets)),
+            Ok(ChunkOutcome::Eof { .. }) => {
+                return analyzer.map(|a| TrackAnalysis {
+                    waveform: a.finalize(buckets),
+                });
+            }
             Err(e) => {
                 warn!(?e, "waveform: decode error");
                 return None;

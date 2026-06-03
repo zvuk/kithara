@@ -27,6 +27,7 @@ use super::{
 #[rustfmt::skip]
 use crate::traits::engine::Engine;
 use crate::{
+    TimestretchControls,
     error::PlayError,
     events::PlayerEvent,
     impls::{
@@ -93,6 +94,9 @@ pub struct PlayerConfig {
     /// Maximum concurrent slots in the engine. Default: 4.
     #[builder(default = 4)]
     pub max_slots: usize,
+    /// Per-deck time-stretch control handle.
+    #[builder(default = TimestretchControls::new())]
+    pub timestretch: Arc<TimestretchControls>,
 }
 
 impl fmt::Debug for PlayerConfig {
@@ -125,7 +129,9 @@ impl Default for PlayerConfig {
 pub struct PlayerImpl {
     /// Shared playback rate propagated to the audio pipeline resampler.
     playback_rate_shared: Arc<AtomicF32>,
-
+    /// Sibling of `playback_rate_shared` read by the time-stretch slot in
+    /// tempo (keylock) mode.
+    tempo_ratio_shared: Arc<AtomicF32>,
     auto_advance_enabled: AtomicBool,
     muted: AtomicBool,
     crossfade_duration: AtomicF32,
@@ -650,6 +656,7 @@ impl PlayerImpl {
             muted: AtomicBool::new(false),
             pcm_pool: resolved_pool,
             playback_rate_shared: Arc::new(AtomicF32::new(config.default_rate)),
+            tempo_ratio_shared: Arc::new(AtomicF32::new(config.default_rate)),
             pending_next: Mutex::new(None),
             auto_advance_enabled: AtomicBool::new(config.auto_advance_enabled),
             rate: AtomicF32::new(0.0),
@@ -674,6 +681,7 @@ impl PlayerImpl {
         let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
         self.rate.store(rate, Ordering::Relaxed);
         self.playback_rate_shared.store(rate, Ordering::Relaxed);
+        self.tempo_ratio_shared.store(rate, Ordering::Relaxed);
 
         if let Err(e) = self.ensure_engine_started() {
             warn!(?e, "failed to start engine");
@@ -730,12 +738,19 @@ impl PlayerImpl {
         // player's master when none was supplied.
         let parent = config.cancel.unwrap_or_else(|| self.cancel.clone());
         let cancel = Some(parent.child_token());
+        let tempo_ratio = self
+            .config
+            .timestretch
+            .keylock()
+            .then(|| Arc::clone(&self.tempo_ratio_shared));
         super::config::ResourceConfig {
             bus,
             cancel,
             worker: Some(self.engine.worker().clone()),
             host_sample_rate: std::num::NonZeroU32::new(self.engine.master_sample_rate()),
             gapless_mode: self.config.gapless_mode,
+            tempo_ratio,
+            stretch_backend: self.config.timestretch.backend(),
             ..config
         }
     }
@@ -748,7 +763,7 @@ impl PlayerImpl {
             return;
         };
         let Some(state) = self.engine.slot_shared_state(slot_id) else {
-            tracing::warn!(?slot_id, "process_notifications: slot has no shared state");
+            warn!(?slot_id, "process_notifications: slot has no shared state");
             return;
         };
 
@@ -759,13 +774,13 @@ impl PlayerImpl {
         state.drain_trash();
 
         if !notifications.is_empty() {
-            tracing::debug!(
+            debug!(
                 count = notifications.len(),
                 "process_notifications draining"
             );
         }
         for notification in notifications {
-            tracing::debug!(?notification, "process_notifications: handle");
+            debug!(?notification, "process_notifications: handle");
             self.dispatch_notification(notification);
         }
     }
@@ -1035,6 +1050,9 @@ impl PlayerImpl {
         let clamped = rate.max(Self::MIN_PLAYBACK_RATE);
         self.rate.store(clamped, Ordering::Relaxed);
         self.playback_rate_shared.store(clamped, Ordering::Relaxed);
+        // Mirror into the tempo-mode sibling so a live rate move reaches the
+        // running stretch when keylock is on (it reads this Arc each chunk).
+        self.tempo_ratio_shared.store(clamped, Ordering::Relaxed);
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(clamped));
         self.bus.publish(PlayerEvent::RateChanged { rate: clamped });
     }
@@ -1352,6 +1370,7 @@ mod tests {
             auto_advance_enabled: true,
             session: None,
             cancel: None,
+            timestretch: TimestretchControls::new(),
         };
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);

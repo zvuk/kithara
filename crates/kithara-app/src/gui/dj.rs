@@ -1,27 +1,103 @@
 use iced::{Task, window};
+use kithara::prelude::StretchBackendKind;
 
 use super::{app::Kithara, frontend::window_settings, message::Message};
 
-/// View-local DJ Studio state. Thin by design: waveform analysis is owned
-/// by [`crate::state::StateController`], so the studio only needs to know
-/// whether it is currently open.
+/// View-local DJ Studio state.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct DjView {
     pub(crate) open: bool,
+    pub(crate) timestretch: TimestretchState,
 }
 
-/// DJ Studio control events, grouped so the top-level [`Message`] stays thin.
+/// View-local timestretch deck state.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TimestretchState {
+    /// Tempo bound in ± percent (8 / 16 / 50 / 100).
+    pub(crate) range: u8,
+    /// Tempo offset in percent.
+    pub(crate) tempo: f32,
+}
+
+impl Default for TimestretchState {
+    fn default() -> Self {
+        Self {
+            range: 16,
+            tempo: 0.0,
+        }
+    }
+}
+
+impl TimestretchState {
+    /// Playback speed multiplier for the current tempo offset.
+    pub(crate) fn speed(self) -> f32 {
+        1.0 + self.tempo / 100.0
+    }
+
+    fn clamp_tempo(&mut self) {
+        let r = f32::from(self.range);
+        self.tempo = self.tempo.clamp(-r, r);
+    }
+
+    fn set_range(&mut self, range: u8) {
+        self.range = range;
+        self.clamp_tempo();
+    }
+
+    fn set_tempo(&mut self, tempo: f32) {
+        self.tempo = tempo;
+        self.clamp_tempo();
+    }
+
+    fn nudge(&mut self, delta: f32) {
+        self.tempo = ((self.tempo + delta) * 100.0).round() / 100.0;
+        self.clamp_tempo();
+    }
+}
+
+/// DJ Studio control events.
 #[derive(Debug, Clone)]
 pub(crate) enum DjMsg {
-    /// Toggle between the compact player and the DJ Studio shell. Opens a
-    /// fresh window for the target mode and closes the previous one.
+    /// Toggle between the compact player and the DJ Studio shell.
     Toggle,
+    /// Set the tempo offset (± percent) from the slider.
+    SetTempo(f32),
+    /// Select a tempo range bound (± percent).
+    SetRange(u8),
+    /// Nudge the tempo by a small delta (± percent).
+    Nudge(f32),
+    /// Reset tempo to 0 %.
+    ResetTempo,
+    /// Toggle key-lock (pitch-preserving tempo).
+    ToggleKeyLock,
+    /// Select the time-stretch backend.
+    SelectBackend(StretchBackendKind),
 }
 
 pub(crate) fn handle(state: &mut Kithara, msg: &DjMsg) -> Task<Message> {
     match msg {
-        DjMsg::Toggle => handle_toggle(state),
+        DjMsg::Toggle => return handle_toggle(state),
+        DjMsg::SetTempo(t) => state.dj.timestretch.set_tempo(*t),
+        DjMsg::SetRange(r) => state.dj.timestretch.set_range(*r),
+        DjMsg::Nudge(d) => state.dj.timestretch.nudge(*d),
+        DjMsg::ResetTempo => state.dj.timestretch.tempo = 0.0,
+        DjMsg::ToggleKeyLock => {
+            // Mode change applies at the next track (re)load.
+            let deck = state.controller.deck();
+            deck.set_keylock(!deck.keylock());
+        }
+        DjMsg::SelectBackend(backend) => {
+            // Backend change applies at the next track (re)load.
+            state.controller.deck().set_backend(*backend);
+        }
     }
+
+    // Live tempo: mirror the speed to the queue.
+    state
+        .controller
+        .queue()
+        .set_rate(state.dj.timestretch.speed());
+    Task::none()
 }
 
 /// Swap the live window for the other mode. The new window opens before
@@ -35,4 +111,22 @@ fn handle_toggle(state: &mut Kithara) -> Task<Message> {
     state.window_id = Some(new_id);
     let close_old = old.map_or_else(Task::none, window::close);
     open.discard().chain(close_old)
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::TimestretchState;
+
+    #[kithara::test]
+    fn speed_is_raw_passthrough_floor_owned_by_engine() {
+        let ts = TimestretchState {
+            range: 100,
+            tempo: -100.0,
+            ..TimestretchState::default()
+        };
+
+        assert!(ts.speed().abs() < f32::EPSILON);
+    }
 }

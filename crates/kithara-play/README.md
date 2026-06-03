@@ -67,6 +67,29 @@ in. `CrossfadeConfig` selects the curve (`CrossfadeCurve`: `EqualPower`,
 cut points, and a `beat_aligned` flag. Beat/BPM data types (`BeatGrid`,
 `BpmInfo`) and `DjEvent` exist for callers that supply their own analysis.
 
+## Tempo & Key-Lock
+
+`PlayerImpl` owns two sibling `Arc<AtomicF32>` rate scalars — `playback_rate_shared`
+and `tempo_ratio_shared` — and a `keylock` flag selecting which is live:
+
+- **key-lock off** (default): `playback_rate_shared` drives the resampler; changing
+  speed shifts pitch (vinyl-style).
+- **key-lock on**: `tempo_ratio_shared` drives the pre-resampler time-stretch slot
+  (pitch held); the resampler is pinned to 1.0.
+
+Exactly one scalar is live per mode; the other is a harmless dead write. Rate
+setters (`set_rate`, `play`) mirror the speed into **both** atomics by design, so
+the active mode's value is always current and a live tempo move reaches a running
+stretch (the `kithara-audio` time-stretch slot reads `tempo_ratio` each chunk via
+the shared `Arc` injected through `prepare_config`). This is one value with two
+consumers, not two sources of truth — they never diverge.
+
+`keylock` and the `stretch_backend` (`StretchBackendKind`) are applied at the next
+track **(re)load** — the effect chain is built once per track in `kithara-audio`'s
+`create_effects`, so toggling either rebuilds nothing already playing. Callers that
+want an immediate switch re-select the current track. `Queue` delegates
+`set_keylock` / `set_stretch_backend` / `set_rate` to the player.
+
 ## Events
 
 `tokio::sync::broadcast`, via `player.subscribe()` / `engine.subscribe()`.

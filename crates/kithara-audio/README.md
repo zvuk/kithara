@@ -149,6 +149,28 @@ the band -> color mapping and orchestration live in the consumer crates.
 <tr><td>Maximum</td><td>FFT-based</td><td>Offline / high-end</td></tr>
 </table>
 
+## Time-Stretch (key-lock)
+
+Preserve-pitch tempo lives in the pre-resampler `TimeStretchProcessor` slot.
+`create_effects` builds one of two chains:
+
+- **resampler-first** (`tempo_ratio = None`): the resampler reads `playback_rate`; changing speed shifts pitch (vinyl-style).
+- **tempo mode** (`tempo_ratio = Some`): a `TimeStretchProcessor` runs *before* the resampler (pinned to 1.0) and changes tempo while holding pitch. This is key-lock.
+
+Key-lock toggles *between* these two chains; there is no third rate concept. The chain is built once per track, so toggling key-lock or switching backend applies at the next track (re)load — `tempo_ratio`/`playback_rate` are shared `Arc<AtomicF32>` so live tempo moves within a mode are seamless.
+
+**Backend seam.** `TimeStretchProcessor` owns one `Box<dyn StretchBackend>` chosen at chain build; the trait is DSP-only (interleaved `process`/`flush`/`set_ratio`/`set_pitch`/`max_output_samples`/`reset`) so all `PcmChunk`/pool/timeline plumbing lives in one place and each library is a small adapter. `set_ratio` is the time factor (`output/input`, >1 = slower); `set_pitch` is independent (1.0 = pitch locked) — that decoupling is what makes key-lock real. Backends select statically via `StretchBackendKind` + `cfg`:
+
+- `timestretch` (pure Rust) — always compiled, the only wasm backend.
+- `signalsmith-stretch` (C++ FFI) — native-only, feature `stretch-signalsmith`.
+- `bungee` (C++ FFI) — native-only, feature `stretch-bungee`.
+
+`StretchBackendKind::ALL` lists exactly the backends compiled into the current target, so the UI selector never offers an absent one — selecting an uncompiled backend is un-representable, not a runtime error.
+
+**Timeline.** A stretch changes the output frame *count*, not the rate: each emitted chunk recomputes `meta.frames` but preserves `timestamp`/`end_timestamp`/`spec` verbatim (the resampler's `finalize_resample_chunk` recipe), so the playhead stays in source-track time — a 3-minute track reads `0:00→3:00` even at 50 % tempo. `bungee` has no clean tail drain through its high-level `Stream`, so its `flush` is a no-op (the final ~latency of audio is dropped at EOS rather than padded with stretched silence). If `bungee`'s `Stream::new` ever fails at construction (only on an invalid spec — unreachable for real stereo/mono audio), the backend warns once and then emits silence until the track is reloaded, rather than erroring per chunk.
+
+**CPU.** `cargo bench -p kithara-audio --bench stretch_backends` prints a realtime-factor table per backend × speed over an in-code fixture (decision aid, no thresholds). It benches `StretchBackendKind::ALL`; see the bench file header for the one-line dev-dep edit that adds the native C++ backends.
+
 ## Format Change Handling
 
 On an ABR variant switch, the `DecoderNode` detects the format change via `Source::media_info()` polling and then:
@@ -215,6 +237,8 @@ The whole pipeline runs in one space: **decoder/song time** (`PcmMeta.timestamp`
 <tr><td><code>mock</code></td><td>no</td><td><code>unimock</code> mocks of public traits</td></tr>
 <tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation</td></tr>
 <tr><td><code>memprof</code></td><td>no</td><td>Allocation tracking via <code>hotpath/hotpath-alloc</code></td></tr>
+<tr><td><code>stretch-signalsmith</code></td><td>no</td><td>Native-only <code>signalsmith-stretch</code> (C++) time-stretch backend</td></tr>
+<tr><td><code>stretch-bungee</code></td><td>no</td><td>Native-only <code>bungee</code> (C++) time-stretch backend</td></tr>
 </table>
 
 ## Integration

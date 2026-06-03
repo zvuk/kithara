@@ -15,6 +15,7 @@ mod error;
 mod events;
 mod metadata;
 mod time;
+mod timestretch;
 mod types;
 
 pub mod impls;
@@ -43,10 +44,11 @@ pub use impls::{
     shared_eq::SharedEq,
     source_type::SourceType,
 };
-pub use kithara_audio::{AudioWorkerHandle, SeekOutcome, ServiceClass};
+pub use kithara_audio::{AudioWorkerHandle, SeekOutcome, ServiceClass, StretchBackendKind};
 pub use kithara_net::Headers;
 pub use metadata::{Artwork, Metadata};
 pub use time::MediaTime;
+pub use timestretch::TimestretchControls;
 pub use traits::{
     dj,
     dj::{

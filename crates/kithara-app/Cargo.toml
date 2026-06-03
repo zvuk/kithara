@@ -16,6 +16,11 @@ gui = ["dep:iced"]
 # modules without pulling in iced/ratatui. Used by integration tests
 # (`tests/tests/kithara_queue/real_playlist.rs`).
 lib-only = []
+# Native-only C++ time-stretch backends, opt-in (need a C++ toolchain).
+stretch-signalsmith = ["kithara/stretch-signalsmith"]
+stretch-bungee = ["kithara/stretch-bungee"]
+# Enable all three stretch libraries in the DJ deck's selector.
+stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 
 [dependencies]
 kithara = { workspace = true, features = ["file", "hls"] }

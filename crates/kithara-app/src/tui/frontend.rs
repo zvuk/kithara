@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use kithara::play::TimestretchControls;
 use kithara_queue::Queue;
 
 use super::runner;
@@ -20,7 +21,11 @@ impl Frontend for TuiFrontend {
         })
     }
 
-    fn run_loop(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError> {
+    fn run_loop(
+        &mut self,
+        queue: Arc<Queue>,
+        timestretch: Arc<TimestretchControls>,
+    ) -> Result<(), FrontendError> {
         const WORKER_THREADS: usize = 2;
         const MAX_BLOCKING_THREADS: usize = 4;
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -29,7 +34,7 @@ impl Frontend for TuiFrontend {
             .enable_all()
             .build()?;
 
-        let result = rt.block_on(runner::run_tui(queue, &self.config));
+        let result = rt.block_on(runner::run_tui(queue, timestretch, &self.config));
 
         self.config.shutdown.cancel();
         result

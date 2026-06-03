@@ -21,6 +21,7 @@ pub(crate) enum Icon {
     RepeatOnce,
     Disc,
     PlaylistAdd,
+    Lock,
 }
 
 fn icon_bytes(icon: Icon) -> &'static [u8] {
@@ -40,6 +41,7 @@ fn icon_bytes(icon: Icon) -> &'static [u8] {
         Icon::RepeatOnce => include_bytes!("../../assets/icons/repeat-once.svg"),
         Icon::Disc => include_bytes!("../../assets/icons/disc.svg"),
         Icon::PlaylistAdd => include_bytes!("../../assets/icons/playlist-add.svg"),
+        Icon::Lock => include_bytes!("../../assets/icons/lock.svg"),
     }
 }
 

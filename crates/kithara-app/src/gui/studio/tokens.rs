@@ -23,6 +23,8 @@ pub(super) mod studio_size {
 pub(super) mod studio_radius {
     pub(crate) const SURFACE: f32 = 10.0;
     pub(crate) const BUTTON: f32 = 8.0;
+    /// Small radius for pills, stat tiles, key-lock and nudge controls.
+    pub(crate) const SM: f32 = 6.0;
     pub(crate) const ROUND: f32 = 999.0;
 }
 

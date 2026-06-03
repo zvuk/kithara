@@ -26,11 +26,12 @@ kithara-test-utils = { workspace = true }
 biquad = { workspace = true }
 rubato = { workspace = true }
 realfft = { workspace = true }
+timestretch = { workspace = true }
+thiserror = { workspace = true }
 audioadapter-buffers = { workspace = true }
 smallvec = { workspace = true }
 ringbuf = { workspace = true }
 tracing = { workspace = true }
-thiserror = { workspace = true }
 kithara-platform = { workspace = true }
 portable-atomic = { workspace = true }
 fast-interleave = { workspace = true }
@@ -57,8 +58,15 @@ symphonia = ["kithara-decode/symphonia"]
 # decoder is LC-only; without this feature, HE-AAC v2 streams fail to
 # play through the software fallback.
 fdk-aac = ["kithara-decode/fdk-aac"]
+# Native-only C++ time-stretch backends, opt-in. Each pulls a C++ toolchain
+# (signalsmith: cc+libclang; bungee: cmake). The pure-Rust `timestretch`
+# backend is always compiled, so default + wasm builds need no C++ toolchain.
+stretch-signalsmith = ["dep:signalsmith-stretch"]
+stretch-bungee = ["dep:bungee-rs"]
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
+signalsmith-stretch = { workspace = true, optional = true }
+bungee-rs = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }
@@ -71,6 +79,9 @@ web-sys = { workspace = true, features = [
 [dev-dependencies]
 kithara-audio = { path = ".", default-features = false, features = ["mock", "probe", "symphonia"] }
 assert_no_alloc = { workspace = true }
+kithara-bufpool = { workspace = true }
+portable-atomic = { workspace = true }
+num-traits = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
@@ -80,6 +91,10 @@ tempfile = { workspace = true }
 aes = { workspace = true }
 cbc = { workspace = true }
 wasm-bindgen-test = { workspace = true }
+
+[[bench]]
+name = "stretch_backends"
+harness = false
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { workspace = true }

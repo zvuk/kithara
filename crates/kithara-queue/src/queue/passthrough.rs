@@ -27,6 +27,9 @@ impl Queue {
             pub fn default_rate(&self) -> f32;
             /// Set the default playback rate.
             pub fn set_default_rate(&self, rate: f32);
+            /// Set the live playback rate (mirrors into the tempo-mode sibling
+            /// so a running key-locked stretch tracks the move).
+            pub fn set_rate(&self, rate: f32);
             /// Current volume (0.0..=1.0).
             #[must_use]
             pub fn volume(&self) -> f32;

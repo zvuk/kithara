@@ -52,6 +52,7 @@ pub(super) fn view_deck(state: &Kithara) -> Element<'_, Message> {
             deck_header(state, p),
             waveform_cluster(state, p),
             transport_and_faders_row(state, p),
+            super::timestretch::view_timestretch_panel(state),
         ]
         .spacing(gap::CONTENT),
     )
@@ -156,7 +157,12 @@ fn waveform_cluster(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
     let total = format_time(duration);
     let progress = playhead_progress(head_position, duration);
 
-    let canvas: Element<'_, Message> = match state.ui_state.waveform.as_ref() {
+    let canvas: Element<'_, Message> = match state
+        .ui_state
+        .analysis
+        .as_ref()
+        .map(|analysis| &analysis.waveform)
+    {
         Some(wave) if !wave.is_empty() => widgets::waveform(
             wave.clone(),
             progress,

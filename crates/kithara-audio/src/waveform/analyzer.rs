@@ -160,7 +160,11 @@ impl WaveformAnalyzer {
         }
         let n = self.fill.len().min(self.fft_input.len());
         for (i, dst) in self.fft_input.iter_mut().enumerate() {
-            *dst = if i < n { self.fill[i] * self.hann[i] } else { 0.0 };
+            *dst = if i < n {
+                self.fill[i] * self.hann[i]
+            } else {
+                0.0
+            };
         }
         self.push_window_bands();
     }
@@ -337,7 +341,10 @@ mod tests {
         let wave = a.finalize(10);
         assert_eq!(wave.len(), 10);
         let max = wave.buckets().iter().map(peak).fold(0.0_f32, f32::max);
-        assert!(approx(max, 1.0), "loudest band must normalise to 1.0, got {max}");
+        assert!(
+            approx(max, 1.0),
+            "loudest band must normalise to 1.0, got {max}"
+        );
     }
 
     #[kithara::test]
@@ -415,19 +422,28 @@ mod tests {
     #[kithara::test]
     fn low_frequency_lands_in_low_band() {
         let b = dominant(80.0);
-        assert!(b.low > b.mid && b.low > b.high, "80 Hz must be low-dominant: {b:?}");
+        assert!(
+            b.low > b.mid && b.low > b.high,
+            "80 Hz must be low-dominant: {b:?}"
+        );
     }
 
     #[kithara::test]
     fn mid_frequency_lands_in_mid_band() {
         let b = dominant(1_000.0);
-        assert!(b.mid > b.low && b.mid > b.high, "1 kHz must be mid-dominant: {b:?}");
+        assert!(
+            b.mid > b.low && b.mid > b.high,
+            "1 kHz must be mid-dominant: {b:?}"
+        );
     }
 
     #[kithara::test]
     fn high_frequency_lands_in_high_band() {
         let b = dominant(10_000.0);
-        assert!(b.high > b.low && b.high > b.mid, "10 kHz must be high-dominant: {b:?}");
+        assert!(
+            b.high > b.low && b.high > b.mid,
+            "10 kHz must be high-dominant: {b:?}"
+        );
     }
 
     #[kithara::test]

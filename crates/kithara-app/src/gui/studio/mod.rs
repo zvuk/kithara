@@ -3,6 +3,7 @@ mod library;
 mod shell;
 mod status;
 mod styles;
+mod timestretch;
 mod tokens;
 mod topbar;
 

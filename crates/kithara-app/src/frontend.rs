@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use kithara::play::TimestretchControls;
 use kithara_queue::Queue;
 
 use crate::config::AppConfig;
@@ -24,9 +25,15 @@ pub trait Frontend: Sized {
 
     /// Run the main event loop. Blocks until exit.
     ///
+    /// `timestretch` is the per-deck handle shared with the player.
+    ///
     /// # Errors
     /// Returns an error if the event loop fails.
-    fn run_loop(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError>;
+    fn run_loop(
+        &mut self,
+        queue: Arc<Queue>,
+        timestretch: Arc<TimestretchControls>,
+    ) -> Result<(), FrontendError>;
 
     /// Clean up resources (restore terminal / close window).
     ///

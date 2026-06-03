@@ -808,6 +808,7 @@ where
             pcm_pool: mut pool,
             playback_rate: config_playback_rate,
             tempo_ratio: config_tempo_ratio,
+            stretch_backend: config_stretch_backend,
             decoder_backend,
             preload_chunks,
             resampler_quality,
@@ -863,7 +864,9 @@ where
             initial_spec,
             &host_sample_rate,
             &playback_rate,
-            config_tempo_ratio.as_ref(),
+            config_tempo_ratio
+                .as_ref()
+                .map(|tempo| (tempo, config_stretch_backend)),
             resampler_quality,
             Some(pool.clone()),
             custom_effects,

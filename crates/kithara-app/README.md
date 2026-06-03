@@ -50,31 +50,34 @@ flowchart LR
     gui --> core
 ```
 
-## Waveform cache
+## Track Analysis Cache
 
-The DJ studio colored waveform is an expensive whole-track decode + FFT, so its
-result is memoized (`wave_cache.rs`, owned by the single `StateController`
-listener task). Two distinct identity spaces, kept separate on purpose:
+The DJ Studio source analysis is an expensive whole-track decode. It currently
+derives the colored waveform and an optional source BPM estimate in one pass, so
+the combined result is memoized (`wave_cache.rs`, owned by the single
+`StateController` listener task). Two distinct identity spaces are kept
+separate on purpose:
 
 - **`TrackId`** (session-scoped `u64` from the queue) — the stale-guard for an
   in-flight run and the "still current" check at commit. Never persisted.
-- **`WaveKey`** (source-derived, query/fragment-stripped URL/path, sha256 for
+- **`AnalysisKey`** (source-derived, query/fragment-stripped URL/path, sha256 for
   the filename) — the cross-session cache key. The same source shares one entry
   and the disk tier survives restarts.
 
-These never mix: `TrackId` answers "is this the same queue slot", `WaveKey`
+These never mix: `TrackId` answers "is this the same queue slot", `AnalysisKey`
 answers "is this the same audio source". `start_analysis` (`plan_analysis`)
 skips when the track is already shown or in flight, serves a cache hit without
-wiping the visible waveform, and only wipes + decodes on a genuine miss;
-`commit_waveform` populates both tiers.
+wiping the visible analysis, and only wipes + decodes on a genuine miss;
+`commit_analysis` populates both tiers.
 
 The disk tier lives under the existing audio cache root
-(`file_asset_store.root_dir()/waveforms`), so it shares lifetime with the
+(`file_asset_store.root_dir()/track-analysis`), so it shares lifetime with the
 cached audio bytes. A `TrackSource` variant with no stable source (the reserved
 non-exhaustive seam) is in-memory-only by capability, not a fallback.
 
-Invalidation is by `WAVEFORM_BYTES_VERSION` (kithara-audio): bump it whenever
-the encoding, the analysis parameters, or `WAVEFORM_BUCKETS` change. The
+Invalidation is by `ANALYSIS_BYTES_VERSION` (kithara-app): bump it whenever
+the blob encoding, BPM analysis parameters, waveform encoding, or
+`WAVEFORM_BUCKETS` change. The
 filename is a sha256 of the key — a `std` hasher is not stable across toolchain
 versions and would orphan every blob. Because the key is the source location
 and not the bytes, a file overwritten in place keeps its key until the version
