@@ -10,7 +10,7 @@ use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
     SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir,
 };
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{task::spawn_blocking, time::Duration};
 use tracing::info;
 
 use super::common::{

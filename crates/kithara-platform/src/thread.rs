@@ -175,6 +175,13 @@ pub fn active_named_thread_count() -> usize {
 /// Wrap `f` to bracket its execution with the named-thread counter —
 /// increments on entry (at call site, before spawn), decrements after the
 /// closure returns. Used by all [`spawn_named`] variants.
+///
+/// Under `sim-time` (native) the bracket also owns the quiescence credit: it
+/// resets this thread's credit on entry (a freshly-spawned thread must start
+/// `None`) and drops it on exit (a thread that woke to `Running` and returns
+/// must release its `active` slot). This makes participant accounting intrinsic
+/// to the platform spawn — no consumer registers anything. Off the sim path the
+/// reset/exit calls do not exist.
 fn counted<F, T>(f: F) -> impl FnOnce() -> T + Send + 'static
 where
     F: FnOnce() -> T + Send + 'static,
@@ -182,7 +189,11 @@ where
 {
     ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
     move || {
+        #[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+        crate::time::sim::sched::reset_credit();
         let result = f();
+        #[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+        crate::time::sim::sched::on_participant_exit();
         ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
         result
     }
@@ -282,16 +293,43 @@ pub fn park_timeout(duration: Duration) {
     std::thread::park_timeout(duration);
 }
 
-/// Under `sim-time`, a timed park advances the virtual clock instead of
-/// blocking, so the offline render heartbeat (`park_timeout(block)`) becomes
-/// the clock's sole driver: warm-cache playback runs at CPU speed while
-/// [`time::Instant::now`](crate::time::Instant) still tracks playback time.
-/// See `crate::time::sim` and the crate README.
+/// Under `sim-time`, a timed park registers an unparkable waiter on the
+/// quiescence engine (deadline = virtual now + `duration`) and blocks off-lock
+/// until the engine crosses that deadline OR a peer [`unpark`]s this thread.
+/// The wait consumes no real wall-clock: when every participant is parked the
+/// engine jumps the virtual clock to the earliest deadline. See
+/// `crate::time::sim` and the crate README.
 #[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
 #[inline]
 pub fn park_timeout(duration: Duration) {
-    crate::time::sim::advance(duration);
-    std::thread::yield_now();
+    crate::time::sim::sched::park_timed_unparkable(duration, current_thread_id());
+}
+
+/// Unpark a thread parked in [`park_timeout`].
+///
+/// Native (non-sim) / wasm: delegates to the OS/runtime `Thread::unpark`.
+/// Under `sim-time`: wakes the thread's quiescence-engine entry (or arms a
+/// pending unpark if it is not currently parked), so the wake serializes with
+/// clock jumps under the single engine lock instead of touching the OS park
+/// slot the engine does not own.
+#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[inline]
+pub fn unpark(t: &Thread) {
+    crate::time::sim::sched::unpark(thread_id_hash(t.id()));
+}
+
+/// Unpark a thread parked in [`park_timeout`] (non-sim / OS park slot).
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "sim-time")))]
+#[inline]
+pub fn unpark(t: &Thread) {
+    t.unpark();
+}
+
+/// Unpark a thread parked in [`park_timeout`] (wasm runtime park slot).
+#[cfg(target_arch = "wasm32")]
+#[inline]
+pub fn unpark(t: &Thread) {
+    t.unpark();
 }
 
 /// Block until unparked or until `duration` elapses.
@@ -301,25 +339,22 @@ pub fn park_timeout(duration: Duration) {
     wasm_safe_thread::park_timeout(duration);
 }
 
-/// Hash of the current thread's ID, usable for shard indexing.
-#[cfg(not(target_arch = "wasm32"))]
+/// Stable `u64` hash of a [`ThreadId`]. Used both for shard indexing and (under
+/// `sim-time`) as the engine's thread key: [`current_thread_id`] and
+/// [`unpark`]'s target derive from the SAME hasher so a park and its wake agree.
 #[inline]
 #[must_use]
-pub fn current_thread_id() -> u64 {
-    let id = current().id();
+fn thread_id_hash(id: ThreadId) -> u64 {
     let mut hasher = DefaultHasher::new();
     id.hash(&mut hasher);
     hasher.finish()
 }
 
-#[cfg(target_arch = "wasm32")]
+/// Hash of the current thread's ID, usable for shard indexing.
 #[inline]
 #[must_use]
 pub fn current_thread_id() -> u64 {
-    let id = current().id();
-    let mut hasher = DefaultHasher::new();
-    id.hash(&mut hasher);
-    hasher.finish()
+    thread_id_hash(current().id())
 }
 
 /// Returns the number of hardware threads available.

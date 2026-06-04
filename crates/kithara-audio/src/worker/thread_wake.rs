@@ -18,7 +18,7 @@ impl crate::runtime::WakeSignal for ThreadWake {
     fn wake(&self) {
         let waiter = self.waiter.lock_sync().as_ref().cloned();
         if let Some(waiter) = waiter {
-            waiter.unpark();
+            thread::unpark(&waiter);
         }
     }
 }

@@ -55,7 +55,7 @@ impl SchedulerWake {
     pub(crate) fn wake(&self) {
         self.woken.store(true, Ordering::Release);
         if let Some(waiter) = self.waiter.get() {
-            waiter.unpark();
+            thread::unpark(waiter);
         }
     }
 }

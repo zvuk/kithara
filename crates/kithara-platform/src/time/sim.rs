@@ -6,19 +6,19 @@ use std::{
 
 /// Quiescence-driven virtual-clock engine. Submodule of `sim`, which is already
 /// gated on `feature = "sim-time"` + native, so it needs no extra feature gate.
-/// The engine drives `SIM_NANOS` forward at quiescent points. In Inc 0 its sole
-/// consumer is the harness, so the module is `#[cfg(test)]`-scoped; the first
-/// increment that routes a real wait onto it drops this gate.
-#[cfg(test)]
+/// The engine drives `SIM_NANOS` forward at quiescent points. Its consumers are
+/// the platform wait primitives (`thread::park_timeout`, `sync::Condvar`) plus
+/// the harness, so it compiles whenever `sim-time` is on.
 pub(crate) mod sched;
 
-/// Process-global virtual timeline, in nanoseconds. Only moves forward, via
-/// [`advance`] or the `sched` quiescence engine; starts at
-/// [`Instant::BASE_NANOS`].
+/// Process-global virtual timeline, in nanoseconds. Only moves forward, via the
+/// `sched` quiescence engine (and the test-only additive [`advance`]); starts
+/// at [`Instant::BASE_NANOS`].
 static SIM_NANOS: AtomicU64 = AtomicU64::new(Instant::BASE_NANOS);
 
-/// Current virtual instant in nanoseconds since the timeline origin. Used by the
-/// `sched` engine (test-scoped in Inc 0).
+/// Current virtual instant in nanoseconds since the timeline origin. Read by the
+/// engine harness tests; production reads `SIM_NANOS` directly under `SCHED` or
+/// via `Instant::as_virtual_nanos`.
 #[cfg(test)]
 #[inline]
 pub(crate) fn now_nanos() -> u64 {
@@ -33,12 +33,13 @@ fn duration_to_nanos(d: Duration) -> u64 {
         .saturating_add(u64::from(d.subsec_nanos()))
 }
 
-/// Advance the virtual clock by `delta`. Additive: each caller moves the single
-/// shared timeline forward, so sim runs target tests with exactly one pacing
-/// thread (the offline render loop, whose `park_timeout` calls this). The
-/// harness needs no change.
+/// Manually advance the virtual clock by `delta`. Additive and test-only: the
+/// production clock is driven solely by the quiescence engine (`sched`), so the
+/// engine is the single clock writer. The 4 arithmetic clock tests use this as
+/// a manual bump to exercise `Instant` arithmetic without the engine.
+#[cfg(test)]
 #[inline]
-pub fn advance(delta: Duration) {
+pub(crate) fn advance(delta: Duration) {
     SIM_NANOS.fetch_add(duration_to_nanos(delta), Ordering::Release);
 }
 
@@ -46,11 +47,10 @@ pub fn advance(delta: Duration) {
 /// tests that share one process; production tests get per-test process
 /// isolation from nextest. Order matters: store the base first, then drop the
 /// engine state, so afterwards the clock reads `Instant::BASE_NANOS` and the
-/// engine is empty. The engine clear is test-scoped in Inc 0 (see `sched`).
+/// engine is empty.
 #[inline]
 pub fn reset() {
     SIM_NANOS.store(Instant::BASE_NANOS, Ordering::Release);
-    #[cfg(test)]
     sched::reset();
 }
 
@@ -70,6 +70,13 @@ impl Instant {
     #[must_use]
     pub fn now() -> Self {
         Self(SIM_NANOS.load(Ordering::Acquire))
+    }
+
+    /// Absolute virtual nanoseconds this instant represents. Used by the
+    /// platform `Condvar` to convert a deadline into the engine's nanos space.
+    #[inline]
+    pub(crate) fn as_virtual_nanos(self) -> u64 {
+        self.0
     }
 
     #[inline]

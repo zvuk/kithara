@@ -62,14 +62,71 @@ On native these delegate to `tokio` runtime primitives, on wasm they use `setTim
 
 `sim-time` is an off-by-default cargo feature, native and test-only, that replaces the wall clock with a process-global virtual timeline so warm-cache offline playback tests run at CPU speed instead of real time. No shipping crate enables it; production builds are unchanged.
 
+The clock is **quiescence-driven**, not additive: a single global `SIM_NANOS`
+(read lock-free by `Instant::now`) advances only when every participating root is
+parked, and only ever jumps to the **earliest** registered deadline. Because the
+clock moves to a deterministic minimum over the multiset of pending deadlines,
+the sequence of clock values is a pure function of those deadlines — independent
+of thread scheduling — so a sim run is deterministic and collapses every timed
+wait to zero real time.
+
 Contract:
 
-- `time::Instant` becomes a drop-in struct backed by `time::sim`'s counter. Same surface (`now`, `elapsed`, `duration_since`, `saturating_duration_since`, `+`/`-`, ordering); all arithmetic saturates.
-- `thread::park_timeout(d)` advances the virtual clock by `d` and returns immediately instead of sleeping. This is the **only** virtualized wait — `thread::sleep`, `time::sleep`, and `time::timeout` stay real (they do not fire in the warm-cache offline path and instant-returning them risks busy-spin).
-- The clock advances **only** at a `park_timeout` (frozen during compute), and `advance` is **additive**, so a sim run targets tests with a single pacing thread — the offline render loop (`render_block` → `park_timeout(block)`), which owns the heartbeat and is never unparked early. The harness needs no change; the gate lives entirely here.
-- `time::sim::{advance, reset}` are the control surface. nextest's per-test process isolation keeps the global counter clean between tests; `reset()` is for runners that share a process.
+- `time::Instant` becomes a drop-in struct backed by `SIM_NANOS`. Same surface
+  (`now`, `elapsed`, `duration_since`, `saturating_duration_since`, `+`/`-`,
+  ordering); all arithmetic saturates.
+- Participant accounting is **intrinsic to the platform-wrapped primitives** —
+  there is NO registration API and no consumer ever registers anything. A thread
+  earns its quiescence credit *lazily*, on its first wrapped wait, tracked in a
+  per-thread `Credit` (`None` → `Running` → `Parked`):
+  - A thread that has never entered a wrapped wait is `None`: invisible to the
+    engine. It owns no deadline and is not counted in `active`, so a busy-spin
+    thread cannot stall the clock.
+  - The FIRST wrapped wait *bootstraps*: it moves the thread to `Parked` WITHOUT
+    decrementing `active` (the thread was running uncounted; there was nothing to
+    remove). When the engine wakes that waiter it does `active += 1` and the
+    thread becomes `Running`, balancing the bootstrap.
+  - A subsequent wait on a `Running` thread decrements `active` (`Running` →
+    `Parked`); its wake re-increments (`Parked` → `Running`). A thread that exits
+    while `Running` drops its `active` slot via the spawn bracket.
+- The spawn bracket is where the exit decrement happens — again with no consumer
+  call. `thread::spawn_named` (the named-thread bracket) and the platform
+  `task::spawn_blocking` both reset the credit on entry (a reused pool thread
+  must not inherit a stale credit) and run the exit decrement after the closure
+  returns. A consumer that runs a wrapped wait on a blocking pool thread spawns
+  through `task::spawn_blocking` instead of `tokio::task::spawn_blocking` — that
+  is "use the platform primitive", not "inject accounting".
+- A wrapped wait, in ONE critical section under the engine lock: register its
+  deadline (or, for an untimed condvar wait, an entry with no deadline), account
+  the wait (bootstrap, or `active -= 1` if already `Running`), then evaluate the
+  advance rule. On wake the firer does `active += 1`, removes the entry, and the
+  woken thread marks itself `Running`. Register-deadline and accounting are
+  atomic (single lock hold), closing the wake-to-re-register race. The engine
+  never calls back into a domain lock (lock order is always domain → engine).
+- Virtualized waits:
+  - `thread::park_timeout(d)` registers an **unparkable** timed waiter and
+    blocks off-lock until the clock crosses `now + d` OR a peer
+    `thread::unpark(&t)` wakes it. `unpark` routes through the engine (it does
+    not touch the OS park slot the engine cannot observe); an unpark that
+    arrives before the park is remembered so the next park returns at once.
+  - `sync::Condvar` waits (`wait_sync_timeout`, `wait_sync`) register a
+    condvar-group waiter keyed by a per-condvar id; `notify_all` / `notify_one`
+    signal that group through the engine. The waiter registers its engine entry
+    **before** releasing the domain guard, so a predicate change + notify (which
+    must re-take the domain lock) is serialized after the entry — no lost wake.
+    The caller re-checks its predicate after re-acquiring (storage already
+    loops). `thread::sleep` and the async `time::{sleep, timeout}` stay real for
+    now (later increments route them).
+- `time::reset()` clears the timeline and the engine. nextest's per-test process
+  isolation keeps the global state clean between tests; `reset()` is for runners
+  that share a process.
 
-The intended workflow is two runs compared as ground truth: the default real-time run (catches concurrency/timing bugs) and the `sim-time` run (fast). Divergence in sample-count positions or PCM between them flags that virtualization distorted something.
+The intended workflow is two runs compared as ground truth: the default
+real-time run (catches concurrency/timing bugs) and the `sim-time` run (fast).
+Divergence in sample-count positions or PCM between them flags that
+virtualization distorted something. The FILE phase-continuity cluster is the
+first equivalence oracle: its sub-0.5-sample phase assertions fail on any
+divergence.
 
 ## CancellationToken
 

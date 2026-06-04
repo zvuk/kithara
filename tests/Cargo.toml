@@ -165,6 +165,12 @@ e2e = []
 # Selenium-driven WebDriver tests. Gated off by default so `just test`
 # doesn't try to spin up trunk + chromedriver. Run via `just test-selenium`.
 selenium = []
+# Deterministic virtual-clock test mode. Routes the platform's blocking waits
+# (`thread::park_timeout`, `sync::Condvar`) onto the quiescence engine so timed
+# waits collapse to virtual time. Off by default; enabling it compiles every
+# path-dep against the virtual `kithara_platform::time::Instant`. Used by the
+# phase-continuity equivalence proof.
+sim-time = ["kithara-platform/sim-time"]
 
 [[bin]]
 name = "test_server"
