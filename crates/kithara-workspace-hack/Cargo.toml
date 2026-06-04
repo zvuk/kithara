@@ -86,7 +86,7 @@ tracing-core = { version = "0.1" }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 bit-set = { version = "0.8" }
-bit-vec = { version = "0.8" }
+bit-vec = { version = "0.9" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -133,7 +133,7 @@ zerocopy = { version = "0.8", default-features = false, features = ["derive", "s
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 bit-set = { version = "0.8" }
-bit-vec = { version = "0.8" }
+bit-vec = { version = "0.9" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -182,7 +182,7 @@ zerocopy = { version = "0.8", default-features = false, features = ["derive", "s
 
 [target.x86_64-apple-darwin.dependencies]
 bit-set = { version = "0.8" }
-bit-vec = { version = "0.8" }
+bit-vec = { version = "0.9" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -225,7 +225,7 @@ zerocopy = { version = "0.8", default-features = false, features = ["derive", "s
 
 [target.x86_64-apple-darwin.build-dependencies]
 bit-set = { version = "0.8" }
-bit-vec = { version = "0.8" }
+bit-vec = { version = "0.9" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -270,7 +270,7 @@ zerocopy = { version = "0.8", default-features = false, features = ["derive", "s
 
 [target.aarch64-apple-darwin.dependencies]
 bit-set = { version = "0.8" }
-bit-vec = { version = "0.8" }
+bit-vec = { version = "0.9" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -313,7 +313,7 @@ zerocopy = { version = "0.8", default-features = false, features = ["derive", "s
 
 [target.aarch64-apple-darwin.build-dependencies]
 bit-set = { version = "0.8" }
-bit-vec = { version = "0.8" }
+bit-vec = { version = "0.9" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
 clap = { version = "4", features = ["derive", "env"] }
