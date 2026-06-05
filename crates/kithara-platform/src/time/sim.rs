@@ -214,13 +214,13 @@ impl Wake for TaskGate {
 
 /// Engine-backed `tokio::task::yield_now` under `sim-time`. A cooperative async
 /// yield must let the virtual clock advance — in real time, time passes while a
-/// task yields and other work (a paced fetch, a server throttle) makes progress.
-/// This parks the task as a yield-waiter (its `active_async` slot is released by
-/// the spawn gate when the future returns Pending), so the clock is free to reach
-/// the next event, then re-polls on the next advance or completed fetch. There is
-/// deliberately NO resolve-at-once path: re-polling immediately would re-arm a
-/// busy-poll loop that pins `active_async` and freezes the clock (the bug a naive
-/// `yield_now` causes under quiescence).
+/// task yields and other work (a server throttle) makes progress. This parks the
+/// task as a yield-waiter (its `active_async` slot is released by the spawn gate
+/// when the future returns Pending), so the clock is free to reach the next
+/// event, then re-polls on the next advance. There is deliberately NO
+/// resolve-at-once path: re-polling immediately would re-arm a busy-poll loop
+/// that pins `active_async` and freezes the clock (the bug a naive `yield_now`
+/// causes under quiescence).
 pub struct SimYield {
     handle: Option<(u64, Arc<AtomicBool>)>,
     done: bool,
@@ -426,31 +426,6 @@ pub fn real_time() -> RealTimeScope {
 impl Drop for RealTimeScope {
     fn drop(&mut self) {
         SIM_OFF.with(|c| c.set(c.get().saturating_sub(1)));
-    }
-}
-
-/// RAII guard bracketing a REAL I/O operation (a real socket fetch) for the
-/// quiescence engine. While any guard is live, `io_pending > 0`, so the engine
-/// PACES each virtual-clock advance by a small real quantum (see
-/// [`sched::io_enter`]) — virtual time tracks, never outruns, the outstanding
-/// real loopback bytes. Held for the full duration of the fetch (send + body),
-/// then `io_leave` runs on drop and instant advancement resumes. Off the
-/// `sim-time` path this is a ZST no-op (see the `time` module).
-#[must_use]
-pub struct IoGuard {
-    _priv: (),
-}
-
-/// Enter a real-I/O bracket: pace the engine until the returned guard drops.
-#[must_use]
-pub fn io_guard() -> IoGuard {
-    sched::io_enter();
-    IoGuard { _priv: () }
-}
-
-impl Drop for IoGuard {
-    fn drop(&mut self) {
-        sched::io_leave();
     }
 }
 

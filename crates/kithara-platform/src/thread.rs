@@ -72,12 +72,11 @@ pub fn yield_now() {
 /// Under `sim-time`, a cooperative yield must relinquish the quiescence engine:
 /// a busy-poll loop spinning on `std::thread::yield_now` keeps the thread counted
 /// as running, so the virtual clock can never advance past it — and a loop bounded
-/// by a virtual-time deadline (or polling for data a paced fetch will deliver)
-/// then livelocks (it waits for time its own spinning prevents). The sim path
-/// parks the thread as a yield-waiter so the clock can advance, then wakes it on
-/// the next advance / completed fetch to re-check. Off the sim path (real-time
-/// scope) it stays a plain OS yield, so the real-time / RT worker behaviour is
-/// unchanged. See `crate::time::sim::sched::yield_until_advance`.
+/// by a virtual-time deadline then livelocks (it waits for time its own spinning
+/// prevents). The sim path parks the thread as a yield-waiter so the clock can
+/// advance, then wakes it on the next advance to re-check. Off the sim path
+/// (real-time scope) it stays a plain OS yield, so the real-time / RT worker
+/// behaviour is unchanged. See `crate::time::sim::sched::yield_until_advance`.
 #[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
 #[inline]
 pub fn yield_now() {

@@ -42,7 +42,7 @@ pub async fn sleep(duration: Duration) {
 /// no-op (time is already real), so callers hold it through one stable path
 /// without a `cfg`.
 #[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
-pub use sim::{IoGuard, Participating, RealTimeScope, io_guard, participate, real_time};
+pub use sim::{Participating, RealTimeScope, participate, real_time};
 
 /// Off the sim path: spawning needs no quiescence bracket, so `participate` is
 /// an identity passthrough (the real clock already advances on its own). Under
@@ -66,21 +66,6 @@ pub struct RealTimeScope;
 #[must_use]
 pub fn real_time() -> RealTimeScope {
     RealTimeScope
-}
-
-/// No-op real-I/O guard off the sim path (no virtual clock to pace).
-#[cfg(not(all(not(target_arch = "wasm32"), feature = "sim-time")))]
-#[derive(Debug)]
-pub struct IoGuard;
-
-/// Bracket a real I/O operation. Off the sim path this is a ZST no-op; under
-/// `sim-time` it paces the virtual clock to the outstanding real fetch for the
-/// guard's lifetime, so callers wrap real socket I/O through one stable path.
-#[cfg(not(all(not(target_arch = "wasm32"), feature = "sim-time")))]
-#[inline]
-#[must_use]
-pub fn io_guard() -> IoGuard {
-    IoGuard
 }
 
 #[cfg(target_arch = "wasm32")]

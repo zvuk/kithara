@@ -127,16 +127,6 @@ struct SimSched {
     /// closes the wake→poll window. The engine may advance only when BOTH
     /// `active` and `active_async` are zero.
     active_async: usize,
-    /// Outstanding REAL I/O operations (a real socket fetch in flight, bracketed
-    /// by [`io_enter`]/[`io_leave`]). A real fetch is NOT a quiescence
-    /// participant (it parks on the OS reactor, not a wrapped wait), so the
-    /// engine would otherwise jump the virtual clock straight past it. While
-    /// `io_pending > 0` the engine still advances (so a server-side sim throttle
-    /// can fire and produce the bytes — no freeze, no deadlock), but each
-    /// advance's wake is PACED by a small real quantum off-lock, so virtual time
-    /// cannot outrun the real loopback I/O. Drops to 0 ⇒ advances are instant
-    /// again (pure-virtual phases collapse at full speed).
-    io_pending: usize,
     /// Timed waiters keyed by (virtual deadline nanos, unique id) so the
     /// minimum deadline is `first_key_value`; ties share the same deadline and
     /// differ only by id. The map doubles as entry storage.
@@ -155,8 +145,7 @@ struct SimSched {
     /// Cooperative-yield waiters (sim `thread::yield_now` AND
     /// `tokio::task::yield_now`): a busy-poll loop that relinquishes the engine so
     /// the clock can advance. They carry NO deadline — woken on the NEXT clock
-    /// advance OR an `io_leave` (a completed fetch may have produced the bytes the
-    /// loop polls for), then re-check (the loop's own deadline / poll condition is
+    /// advance, then re-check (the loop's own deadline / poll condition is
     /// re-evaluated on re-poll). A `Sync` entry is a parked OS thread; a `Task`
     /// entry is a parked async task whose `active_async` slot the spawn gate
     /// releases while it waits. Keyed by id.
@@ -177,7 +166,6 @@ impl SimSched {
         Self {
             active: 0,
             active_async: 0,
-            io_pending: 0,
             parked_timed: BTreeMap::new(),
             parked_indef: BTreeMap::new(),
             unpark_pending: BTreeSet::new(),
@@ -395,22 +383,10 @@ pub(crate) fn reset_credit() {
     CREDIT.with(|c| c.set(Credit::None));
 }
 
-/// Real quantum injected before firing a paced advance's wakes (see
-/// [`Advance::paced`]). Off-lock, so it yields real wall-clock to the OS reactor
-/// — enough for a loopback fetch's bytes to arrive before the next virtual step.
-/// Small (the whole real-I/O phase costs ~quantum-per-deadline, still far below
-/// real-time wall clock), but ≥ typical loopback latency for robustness.
-const IO_PACE: std::time::Duration = std::time::Duration::from_millis(1);
-
-/// Result of an advance attempt: the wakes to fire after releasing `SCHED`, plus
-/// whether the firing must be PACED. `paced` is set when the advance actually
-/// moved the clock while real I/O was in flight (`io_pending > 0`); the caller
-/// then sleeps [`IO_PACE`] (real) before firing, so virtual time tracks — never
-/// outruns — the outstanding real fetch. With no real I/O, `paced` is false and
-/// firing is immediate (pure-virtual collapse at full speed).
+/// Result of an advance attempt: the wakes to fire after releasing `SCHED`.
+/// Firing is always immediate (pure-virtual collapse at full speed).
 pub(crate) struct Advance {
     wakes: Vec<Wake>,
-    paced: bool,
 }
 
 /// Evaluate the advance rule while holding `SCHED`. Returns the [`Advance`] whose
@@ -423,10 +399,7 @@ fn try_advance_locked(s: &mut SimSched) -> Advance {
     if s.active != 0 || s.active_async != 0 {
         // A running participant (sync OS thread OR async task mid-poll): do not
         // jump. Both counters must be zero for genuine quiescence.
-        return Advance {
-            wakes: Vec::new(),
-            paced: false,
-        };
+        return Advance { wakes: Vec::new() };
     }
     let Some((&(min, _), _)) = s.parked_timed.iter().next() else {
         // Quiescent (active == active_async == 0) with NO timed waiter to advance
@@ -434,28 +407,22 @@ fn try_advance_locked(s: &mut SimSched) -> Advance {
         // that can make progress: wake them so they re-poll. A `yield_now` must
         // resume once nothing else is runnable and no clock advance is pending —
         // mirroring the sync `yield_until_advance` fallback (which does a real
-        // yield instead of parking when `parked_timed.is_empty() && io == 0`).
-        // Without this, an async `yield_now` with no pending timer/IO is never
+        // yield instead of parking when `parked_timed.is_empty()`).
+        // Without this, an async `yield_now` with no pending timer is never
         // re-polled (the yield-waiter is otherwise drained only on a clock
         // advance), so a probe/loader awaiting an off-runtime producer deadlocks.
         // When a timed waiter DOES exist this branch is skipped and the clock
         // advances normally (draining yield-waiters there), so a yielder racing a
         // timer never freezes the clock.
         if s.yield_waiters.is_empty() {
-            return Advance {
-                wakes: Vec::new(),
-                paced: false,
-            };
+            return Advance { wakes: Vec::new() };
         }
         let woken: Vec<Wake> = std::mem::take(&mut s.yield_waiters).into_values().collect();
         s.active += woken.iter().filter(|w| !w.is_task()).count();
         for w in &woken {
             w.mark_granted_under_lock();
         }
-        return Advance {
-            wakes: woken,
-            paced: false,
-        };
+        return Advance { wakes: woken };
     };
     debug_assert!(
         min >= SIM_NANOS.load(Ordering::Acquire),
@@ -475,9 +442,9 @@ fn try_advance_locked(s: &mut SimSched) -> Advance {
     }
     // A clock advance is progress: wake every cooperative-yield waiter to
     // re-check its poll condition. They carry no deadline, so an advance is the
-    // only thing (besides `io_leave`) that reschedules them. Sync entries are
-    // `active`-bumped + `mark_granted`'d by the loops below (like timed wakes);
-    // Task entries re-acquire their `active_async` slot via the gate's waker.
+    // only thing that reschedules them. Sync entries are `active`-bumped +
+    // `mark_granted`'d by the loops below (like timed wakes); Task entries
+    // re-acquire their `active_async` slot via the gate's waker.
     for (_, wake) in std::mem::take(&mut s.yield_waiters) {
         woken.push(wake);
     }
@@ -490,78 +457,15 @@ fn try_advance_locked(s: &mut SimSched) -> Advance {
     for w in &woken {
         w.mark_granted_under_lock();
     }
-    // Pace this advance iff a real fetch is outstanding: virtual time may not
-    // outrun the real loopback bytes. The pacing sleep itself runs off-lock in
-    // `fire_advance`.
-    let paced = !woken.is_empty() && s.io_pending != 0;
-    Advance {
-        wakes: woken,
-        paced,
-    }
+    Advance { wakes: woken }
 }
 
-/// Fire an [`Advance`]'s wakes after `SCHED` is released. When `paced`, sleep a
-/// real [`IO_PACE`] quantum first so the OS reactor delivers outstanding real
-/// I/O before the woken (timed) waiters run — this paces the whole advance
-/// chain to real wall-clock while a fetch is in flight, without freezing the
-/// clock (so a server-side sim throttle still fires; no deadlock).
+/// Fire an [`Advance`]'s wakes after `SCHED` is released. Firing is immediate:
+/// the advance chain runs at full virtual speed.
 pub(crate) fn fire_advance(adv: Advance) {
-    if adv.paced {
-        std::thread::sleep(IO_PACE);
-    }
     for w in adv.wakes {
         w.fire();
     }
-}
-
-/// Bracket-enter a REAL I/O operation (a real socket fetch). Increments
-/// `io_pending` so subsequent advances are paced. Pairs with [`io_leave`].
-pub(crate) fn io_enter() {
-    let mut s = SCHED.lock();
-    s.io_pending += 1;
-    if std::env::var_os("KITHARA_IO_DBG").is_some() {
-        eprintln!(
-            "[sim io_enter] io={} active={} timed={} now_ns={}",
-            s.io_pending,
-            s.active,
-            s.parked_timed.len(),
-            SIM_NANOS.load(Ordering::Acquire),
-        );
-    }
-}
-
-/// Bracket-leave a REAL I/O operation. Decrements `io_pending` and runs the
-/// advance rule: when this was the last outstanding fetch, the engine resumes
-/// instant (un-paced) advancement and flushes any advance that was waiting.
-pub(crate) fn io_leave() {
-    let mut s = SCHED.lock();
-    debug_assert!(s.io_pending > 0, "io_leave without matching io_enter");
-    s.io_pending -= 1;
-    if std::env::var_os("KITHARA_IO_DBG").is_some() {
-        eprintln!(
-            "[sim io_leave] io={} active={} timed={} now_ns={}",
-            s.io_pending,
-            s.active,
-            s.parked_timed.len(),
-            SIM_NANOS.load(Ordering::Acquire),
-        );
-    }
-    // A completed fetch may have produced the bytes a cooperative-yield waiter is
-    // polling for, with no clock advance to follow — wake them to re-check. Sync
-    // waiters take the firer's `active += 1` (balanced by their `mark_running` on
-    // wake); Task waiters re-acquire their `active_async` slot via the gate's
-    // waker, so only the granted flag is set here.
-    let yields: Vec<Wake> = std::mem::take(&mut s.yield_waiters).into_values().collect();
-    s.active += yields.iter().filter(|w| !w.is_task()).count();
-    for w in &yields {
-        w.mark_granted_under_lock();
-    }
-    let adv = try_advance_locked(&mut s);
-    drop(s);
-    for w in yields {
-        w.fire();
-    }
-    fire_advance(adv);
 }
 
 /// Allocate a fresh condvar id (one per [`crate::sync::Condvar`] under sim).
@@ -683,18 +587,18 @@ pub(crate) fn unpark(thread_id: u64) {
 /// Sim cooperative yield (`thread::yield_now` under `sim-time`). A busy-poll loop
 /// that calls this RELINQUISHES the engine: it parks as a yield-waiter (dropping
 /// its `active` credit) so the virtual clock can advance past it, and is woken on
-/// the next clock advance or completed fetch ([`io_leave`]) to re-check. Without
-/// this a spin loop holds `active != 0` forever, freezing the very clock it polls
-/// against — a livelock (the loop waits for time its own spinning prevents from
-/// advancing). Falls back to a real OS yield ONLY when nothing could ever wake it
-/// (no timed waiter, no in-flight I/O), so a sibling's pure-CPU progress is never
-/// blocked behind a wait that can never fire. Accounting mirrors
-/// [`park_timed_unparkable`]: `enter_wait_locked` drops the credit, the firer
-/// re-adds `active`, and the woken thread `mark_running`s.
+/// the next clock advance to re-check. Without this a spin loop holds
+/// `active != 0` forever, freezing the very clock it polls against — a livelock
+/// (the loop waits for time its own spinning prevents from advancing). Falls
+/// back to a real OS yield ONLY when nothing could ever wake it (no timed
+/// waiter), so a sibling's pure-CPU progress is never blocked behind a wait that
+/// can never fire. Accounting mirrors [`park_timed_unparkable`]:
+/// `enter_wait_locked` drops the credit, the firer re-adds `active`, and the
+/// woken thread `mark_running`s.
 pub(crate) fn yield_until_advance() {
     let token = Token::new();
     let mut s = SCHED.lock();
-    if s.parked_timed.is_empty() && s.io_pending == 0 {
+    if s.parked_timed.is_empty() {
         drop(s);
         std::thread::yield_now();
         return;
@@ -710,14 +614,14 @@ pub(crate) fn yield_until_advance() {
 }
 
 /// Register an ASYNC cooperative-yield waiter (sim `tokio::task::yield_now`).
-/// Parks the task as a yield-waiter (woken on the next clock advance or
-/// completed fetch) and returns its id + granted flag. This is the sim analogue
-/// of a real `yield_now`: real time passes while a task yields, so here the task
-/// releases its `active_async` slot (the spawn gate does so when the yield future
-/// returns Pending) and the virtual clock is free to advance to the next event.
-/// No resolve-at-once path: that would re-poll the task immediately, re-arming a
-/// busy-poll loop that never lets the clock move. The drain (on advance /
-/// `io_leave`) sets `granted` and the gate re-polls.
+/// Parks the task as a yield-waiter (woken on the next clock advance) and returns
+/// its id + granted flag. This is the sim analogue of a real `yield_now`: real
+/// time passes while a task yields, so here the task releases its `active_async`
+/// slot (the spawn gate does so when the yield future returns Pending) and the
+/// virtual clock is free to advance to the next event. No resolve-at-once path:
+/// that would re-poll the task immediately, re-arming a busy-poll loop that never
+/// lets the clock move. The drain (on advance) sets `granted` and the gate
+/// re-polls.
 pub(crate) fn register_yield_async(waker: Waker) -> (u64, Arc<AtomicBool>) {
     let granted = Arc::new(AtomicBool::new(false));
     let mut s = SCHED.lock();
@@ -906,13 +810,7 @@ pub(crate) fn register_notify_async(cvid: u64, waker: Waker) -> (Option<AsyncHan
     let granted = Arc::new(AtomicBool::new(false));
     let mut s = SCHED.lock();
     if s.notify_permit.remove(&cvid) {
-        return (
-            None,
-            Advance {
-                wakes: Vec::new(),
-                paced: false,
-            },
-        );
+        return (None, Advance { wakes: Vec::new() });
     }
     let id = s.fresh_id();
     s.parked_indef.insert(
