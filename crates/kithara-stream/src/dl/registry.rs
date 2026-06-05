@@ -7,10 +7,11 @@ use std::{
 
 use kithara_abr::AbrPeerId;
 use kithara_events::{DownloaderEvent, EventBus, RequestId, RequestPriority};
-use kithara_platform::{CancelGroup, CancellationToken, RwLock, tokio, tokio::sync::mpsc};
+use kithara_platform::{
+    CancelGroup, CancellationToken, RwLock, sync::Notify, tokio, tokio::sync::mpsc,
+};
 use kithara_test_utils::kithara;
 use thunderdome::{Arena, Index};
-use tokio::sync::Notify;
 
 use super::{
     batch::BatchGroup,

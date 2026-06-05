@@ -86,11 +86,9 @@ impl Condvar {
     #[inline]
     #[must_use]
     pub fn wait_sync<'a, T>(&self, mut guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
-        let (token, to_wake) = sched::register_condvar_untimed(self.cvid);
+        let (token, adv) = sched::register_condvar_untimed(self.cvid);
         RawMutexGuard::unlocked(&mut guard.0, move || {
-            for t in to_wake {
-                t.fire();
-            }
+            sched::fire_advance(adv);
             token.wait();
             sched::mark_running_after_condvar();
         });
@@ -111,12 +109,9 @@ impl Condvar {
         mut guard: MutexGuard<'a, T>,
         deadline: Instant,
     ) -> MutexGuard<'a, T> {
-        let (token, to_wake) =
-            sched::register_condvar_timed(deadline.as_virtual_nanos(), self.cvid);
+        let (token, adv) = sched::register_condvar_timed(deadline.as_virtual_nanos(), self.cvid);
         RawMutexGuard::unlocked(&mut guard.0, move || {
-            for t in to_wake {
-                t.fire();
-            }
+            sched::fire_advance(adv);
             token.wait();
             sched::mark_running_after_condvar();
         });

@@ -1,13 +1,16 @@
 use std::{
+    future::Future,
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicUsize, Ordering},
     },
+    task::{Context, Wake, Waker},
     thread,
     time::Instant as RealInstant,
 };
 
-use super::{Duration, Instant, advance, now_nanos, reset, sched};
+use super::{Duration, Instant, advance, now_nanos, participate, reset, sched};
+use crate::sync::Notify;
 
 /// Serialize cases that share the process-global `SIM_NANOS` and `SCHED`.
 /// nextest gives each test its own process, but a thread-based runner would race
@@ -39,6 +42,9 @@ fn assert_fast(start: RealInstant) {
 /// spawn would, since `std::thread::spawn` in tests has no platform bracket.
 fn bracketed<F: FnOnce()>(body: F) {
     sched::reset_credit();
+    // The harness threads stand in for dedicated `spawn_named` pacers, so they must
+    // be counted in `active` exactly as production worker threads are.
+    sched::mark_dedicated();
     body();
     sched::on_participant_exit();
 }
@@ -65,6 +71,56 @@ fn run_parked_waiters(secs: &[u64]) {
     for h in handles {
         h.join().expect("waiter thread panicked");
     }
+}
+
+/// No-op waker for manually polling a future without a runtime.
+struct NoopWake;
+impl Wake for NoopWake {
+    fn wake(self: Arc<Self>) {}
+    fn wake_by_ref(self: &Arc<Self>) {}
+}
+
+/// A parked async task that gets signalled must stay counted as non-quiescent
+/// until it is actually RE-POLLED — not merely until its current poll returns.
+/// Between `waker.wake()` (task queued/runnable) and the next `poll`, the engine
+/// must NOT advance the virtual clock, or it starves the runnable task: the HLS
+/// seek-test `DecodeError::Interrupted` root cause (a parked sync reader's budget
+/// burns while a runnable download task never runs in virtual time). Drives the
+/// production `participate` poll-wrapper directly — no runtime.
+#[test]
+fn woken_async_task_stays_counted_until_repolled() {
+    let _g = guard();
+    reset();
+
+    let notify = Notify::new();
+    let mut task = Box::pin(participate(async {
+        notify.notified().await;
+    }));
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+
+    // First poll: the task registers on the notify and parks. A genuinely parked
+    // task (waker not yet fired) is correctly uncounted.
+    assert!(task.as_mut().poll(&mut cx).is_pending());
+    assert_eq!(sched::async_active_count(), 0, "parked task is uncounted");
+
+    // Signal it. The task is now RUNNABLE (its waker fired, it is queued) but has
+    // NOT been re-polled. It MUST be counted so a concurrent `try_advance` cannot
+    // jump the clock past it.
+    notify.notify_one();
+    assert_eq!(
+        sched::async_active_count(),
+        1,
+        "a woken-but-not-yet-repolled task must keep the engine non-quiescent"
+    );
+
+    // Re-poll resolves it; the slot is released exactly once.
+    assert!(task.as_mut().poll(&mut cx).is_ready());
+    assert_eq!(
+        sched::async_active_count(),
+        0,
+        "a completed task releases its slot exactly once"
+    );
 }
 
 #[test]
@@ -295,16 +351,14 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                     for _ in 0..SPIN_WAITS {
                         let cvid = sched::next_condvar_id();
                         let deadline = now_nanos() + NANOS_PER_SEC;
-                        let (token, to_wake) = sched::register_condvar_timed(deadline, cvid);
+                        let (token, adv) = sched::register_condvar_timed(deadline, cvid);
                         let racer = thread::spawn(move || {
                             if xs(&mut seed) & 1 == 0 {
                                 thread::yield_now();
                             }
                             sched::signal_condvar(cvid, true);
                         });
-                        for t in to_wake {
-                            t.fire();
-                        }
+                        sched::fire_advance(adv);
                         token.wait();
                         sched::mark_running_after_condvar();
                         racer.join().expect("builder signal racer panicked");
@@ -363,26 +417,22 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                         1 => {
                             // Timed condvar raced by a sibling signal.
                             let deadline = now_nanos() + (1 + (idx % 4)) * NANOS_PER_SEC;
-                            let (token, to_wake) = sched::register_condvar_timed(deadline, cvid);
+                            let (token, adv) = sched::register_condvar_timed(deadline, cvid);
+                            sched::fire_advance(adv);
                             let racer = thread::spawn(move || {
                                 if xs(&mut seed) & 1 == 0 {
                                     thread::yield_now();
                                 }
                                 sched::signal_condvar(cvid, true);
                             });
-                            for t in to_wake {
-                                t.fire();
-                            }
                             token.wait();
                             sched::mark_running_after_condvar();
                             racer.join().expect("signal racer panicked");
                         }
                         _ => {
                             // Untimed condvar: released by the main thread only.
-                            let (token, to_wake) = sched::register_condvar_untimed(cvid);
-                            for t in to_wake {
-                                t.fire();
-                            }
+                            let (token, adv) = sched::register_condvar_untimed(cvid);
+                            sched::fire_advance(adv);
                             token.wait();
                             sched::mark_running_after_condvar();
                             left.fetch_sub(1, Ordering::Relaxed);
@@ -470,10 +520,8 @@ fn stress_advance_log_is_deterministic_across_runs() {
                     bracketed(|| {
                         let cvid = sched::next_condvar_id();
                         let deadline = now_nanos() + s * NANOS_PER_SEC;
-                        let (token, to_wake) = sched::register_condvar_timed(deadline, cvid);
-                        for t in to_wake {
-                            t.fire();
-                        }
+                        let (token, adv) = sched::register_condvar_timed(deadline, cvid);
+                        sched::fire_advance(adv);
                         token.wait();
                         sched::mark_running_after_condvar();
                     });

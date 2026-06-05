@@ -1,7 +1,11 @@
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU8, Ordering},
+    },
+    task::Waker,
 };
 
 use parking_lot::{Condvar, Mutex};
@@ -39,12 +43,56 @@ impl Token {
     }
 }
 
+/// How a parked waiter is woken once the engine (or a signal) selects it.
+/// Sync OS-thread waits store a `Token` (a parking_lot flag+condvar the blocked
+/// thread sits on); async-task waits store the task's `Waker`. `try_advance` /
+/// `signal_condvar` collect these and fire them AFTER releasing `SCHED`.
+pub(crate) enum Wake {
+    /// A blocked OS thread (`park_timeout`, `Condvar`): wake via the `Token`.
+    Sync(Arc<Token>),
+    /// A parked async task (`sleep_sim`, async `Notify`): the `granted` flag is
+    /// set just before waking so the future's Drop can tell "I was granted an
+    /// `active` slot" from "I was still parked".
+    Task {
+        waker: Waker,
+        granted: Arc<AtomicBool>,
+    },
+}
+
+impl Wake {
+    pub(crate) fn fire(self) {
+        match self {
+            Self::Sync(t) => t.fire(),
+            Self::Task { waker, .. } => waker.wake(),
+        }
+    }
+
+    /// Mark an async-task wake as granted an `active` slot. MUST run under the
+    /// `SCHED` lock at the same moment the firer does `active += 1`, so a
+    /// concurrent `cancel_async_wait` (which also takes the lock) sees a
+    /// consistent "entry removed ⇒ granted set" and never leaks the slot.
+    fn mark_granted_under_lock(&self) {
+        if let Self::Task { granted, .. } = self {
+            granted.store(true, Ordering::Release);
+        }
+    }
+
+    /// True for an async-task waiter. Async tasks are counted in `active_async`
+    /// by the spawn poll-wrapper (per-poll), NOT by the firer — so a fired
+    /// async waiter is `mark_granted` but never bumps a counter. Sync OS-thread
+    /// waiters (`Sync`) ARE bumped by the firer into `active` (their wake has
+    /// real OS-scheduling latency the bump must cover).
+    fn is_task(&self) -> bool {
+        matches!(self, Self::Task { .. })
+    }
+}
+
 /// What kind of waiter an [`Entry`] is, so a signal targets the right group.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WaitKind {
-    /// A timed park with no early-wake channel (used only by the test harness
-    /// `park_for`): woken solely by the engine crossing its deadline.
-    #[cfg(test)]
+    /// A timed waiter with no early-wake channel: woken solely by the engine
+    /// crossing its deadline. Used by the test harness `park_for` and by the
+    /// async `sleep` future (`register_sleep_async`).
     Timed,
     /// An unparkable thread park (`park_timeout`): woken by the deadline OR by
     /// [`unpark`] targeting this thread id.
@@ -56,7 +104,7 @@ enum WaitKind {
 
 /// A parked waiter's wake handle plus the group it belongs to.
 struct Entry {
-    token: Arc<Token>,
+    wake: Wake,
     kind: WaitKind,
 }
 
@@ -64,8 +112,31 @@ struct Entry {
 /// `SIM_NANOS` is written only by `try_advance_locked` (and the test-only
 /// additive `advance`, which the harness never calls).
 struct SimSched {
-    /// Participants currently RUNNING (not inside a wrapped wait).
+    /// SYNC participants currently RUNNING (OS threads not inside a wrapped
+    /// `park_timeout`/`Condvar` wait). Bumped by the firer on wake (real OS
+    /// scheduling latency must be covered), decremented at the next wait /
+    /// thread exit via the thread-local [`Credit`] bracket.
     active: usize,
+    /// ASYNC tasks the engine counts as NON-QUIESCENT. A task is counted from the
+    /// moment it becomes RUNNABLE — spawned, or woken (its waker fired and it is
+    /// queued to be polled) — until it next PARKS (poll returns `Pending` with no
+    /// pending re-wake), completes, or is dropped. Maintained by the spawn
+    /// poll-wrapper's per-task gate via [`async_acquire`]/[`async_release`], NOT
+    /// the firer. Counting a woken-but-not-yet-repolled task (not merely a
+    /// mid-poll one) is what stops the clock jumping past a runnable task — it
+    /// closes the wake→poll window. The engine may advance only when BOTH
+    /// `active` and `active_async` are zero.
+    active_async: usize,
+    /// Outstanding REAL I/O operations (a real socket fetch in flight, bracketed
+    /// by [`io_enter`]/[`io_leave`]). A real fetch is NOT a quiescence
+    /// participant (it parks on the OS reactor, not a wrapped wait), so the
+    /// engine would otherwise jump the virtual clock straight past it. While
+    /// `io_pending > 0` the engine still advances (so a server-side sim throttle
+    /// can fire and produce the bytes — no freeze, no deadlock), but each
+    /// advance's wake is PACED by a small real quantum off-lock, so virtual time
+    /// cannot outrun the real loopback I/O. Drops to 0 ⇒ advances are instant
+    /// again (pure-virtual phases collapse at full speed).
+    io_pending: usize,
     /// Timed waiters keyed by (virtual deadline nanos, unique id) so the
     /// minimum deadline is `first_key_value`; ties share the same deadline and
     /// differ only by id. The map doubles as entry storage.
@@ -76,6 +147,20 @@ struct SimSched {
     /// Thread ids whose `unpark` arrived while not parked: the next
     /// `park_timed_unparkable` for that id consumes the flag and returns at once.
     unpark_pending: BTreeSet<u64>,
+    /// Condvar ids whose `notify_one`/`notify_waiters` arrived while no waiter
+    /// was registered: the next `notified()` first-poll for that cvid consumes
+    /// the permit and resolves immediately (mirrors `tokio::Notify`'s stored
+    /// permit). Only set by the async [`Notify`](crate::sync::Notify) path.
+    notify_permit: BTreeSet<u64>,
+    /// Cooperative-yield waiters (sim `thread::yield_now` AND
+    /// `tokio::task::yield_now`): a busy-poll loop that relinquishes the engine so
+    /// the clock can advance. They carry NO deadline — woken on the NEXT clock
+    /// advance OR an `io_leave` (a completed fetch may have produced the bytes the
+    /// loop polls for), then re-check (the loop's own deadline / poll condition is
+    /// re-evaluated on re-poll). A `Sync` entry is a parked OS thread; a `Task`
+    /// entry is a parked async task whose `active_async` slot the spawn gate
+    /// releases while it waits. Keyed by id.
+    yield_waiters: BTreeMap<u64, Wake>,
     next_id: u64,
     next_cvid: u64,
     /// Test-only oracle: the sequence of `SIM_NANOS` values the engine jumped
@@ -91,9 +176,13 @@ impl SimSched {
     const fn new() -> Self {
         Self {
             active: 0,
+            active_async: 0,
+            io_pending: 0,
             parked_timed: BTreeMap::new(),
             parked_indef: BTreeMap::new(),
             unpark_pending: BTreeSet::new(),
+            notify_permit: BTreeSet::new(),
+            yield_waiters: BTreeMap::new(),
             next_id: 0,
             next_cvid: 0,
             #[cfg(test)]
@@ -130,6 +219,69 @@ enum Credit {
 
 thread_local! {
     static CREDIT: Cell<Credit> = const { Cell::new(Credit::None) };
+    /// Nesting depth of an async-task poll on THIS OS thread. Non-zero means a
+    /// runtime worker is currently inside [`Participating::poll`](super::Participating)
+    /// — driving a task that occupies an `active_async` slot. A wrapped sync wait
+    /// taken while this is non-zero is a BRIDGED wait: the worker is not a
+    /// dedicated pacer (it returns to the runtime when the poll yields, parking on
+    /// the runtime, never on the engine), and the task it drives is parked for the
+    /// duration of the block. Such a wait releases the `active_async` slot on enter
+    /// and re-acquires it on wake (so the clock can advance while the worker blocks
+    /// on the engine), and NEVER enters the sync `active` count (which would leak —
+    /// the worker has no matching `enter_wait`/exit to balance it).
+    static ASYNC_POLL_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// True when the calling OS thread is inside an async-task poll (a runtime worker
+/// driving a [`Participating`](super::Participating) future). See [`ASYNC_POLL_DEPTH`].
+fn in_async_poll() -> bool {
+    ASYNC_POLL_DEPTH.with(|c| c.get() > 0)
+}
+
+thread_local! {
+    /// True iff this OS thread is a DEDICATED participant: a `spawn_named` thread
+    /// (audio worker, offline render thread, flush hub) that loops on wrapped waits
+    /// and does real work between them. ONLY dedicated threads are counted in the
+    /// sync `active` pacer count — the clock must not advance while one is mid-work,
+    /// so its inter-wait running time pins the clock. Every OTHER thread (a tokio
+    /// runtime worker, the main/test thread, a raw `thread::spawn`) is NOT a pacer:
+    /// its wrapped waits register a wakeup but stay OUT of `active` (entering it
+    /// leaks — such a thread parks on the runtime or exits without the counted
+    /// bracket, so nothing balances the credit). Set by the `spawn_named` bracket
+    /// via [`mark_dedicated`]; default false.
+    static DEDICATED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Mark the current OS thread a DEDICATED virtual-time pacer. Called once by the
+/// `spawn_named` bracket so only those threads are counted in `active`. See [`DEDICATED`].
+pub(crate) fn mark_dedicated() {
+    DEDICATED.with(|c| c.set(true));
+}
+
+/// True iff the current OS thread is a dedicated pacer (see [`DEDICATED`]).
+fn is_dedicated() -> bool {
+    DEDICATED.with(Cell::get)
+}
+
+/// RAII bracket marking the current OS thread as inside an async-task poll for the
+/// guard's lifetime. Held by [`Participating::poll`](super::Participating) around
+/// the inner future's poll, so a wrapped sync wait taken inside that poll is
+/// recognised as bridged (see [`ASYNC_POLL_DEPTH`]). Drop-safe across an unwind.
+pub(crate) struct AsyncPollGuard {
+    _priv: (),
+}
+
+impl AsyncPollGuard {
+    pub(crate) fn enter() -> Self {
+        ASYNC_POLL_DEPTH.with(|c| c.set(c.get().saturating_add(1)));
+        Self { _priv: () }
+    }
+}
+
+impl Drop for AsyncPollGuard {
+    fn drop(&mut self) {
+        ASYNC_POLL_DEPTH.with(|c| c.set(c.get().saturating_sub(1)));
+    }
 }
 
 /// Account this thread as it ENTERS a wrapped wait, under the `SCHED` lock.
@@ -144,6 +296,26 @@ thread_local! {
 ///   `active -= 1` and move to `Parked`.
 /// - `Parked`: unreachable — a thread waits on one thing at a time.
 fn enter_wait_locked(s: &mut SimSched) {
+    if in_async_poll() {
+        // Bridged wait: a runtime worker is blocking on the engine mid async-poll.
+        // The task it drives is parked for the block, so release its `active_async`
+        // slot (re-acquired by `resume_after_wait` on wake) — otherwise the slot
+        // pins the clock and the event that would unblock the wait can never fire.
+        debug_assert!(
+            s.active_async > 0,
+            "bridged wait must be inside a counted async poll"
+        );
+        s.active_async -= 1;
+        return;
+    }
+    if !is_dedicated() {
+        // Non-dedicated, non-async-poll thread (a tokio worker driving a raw-spawned
+        // task, the main/test thread, a raw `thread::spawn`): NOT a virtual-time
+        // pacer. Register the wakeup but stay OUT of `active` — entering it leaks
+        // (nothing balances the firer's wake bump, which `resume_after_wait` instead
+        // undoes). The clock is free to advance while such a thread blocks.
+        return;
+    }
     CREDIT.with(|c| match c.get() {
         Credit::None => c.set(Credit::Parked),
         Credit::Running => {
@@ -156,6 +328,35 @@ fn enter_wait_locked(s: &mut SimSched) {
         }
         Credit::Parked => debug_assert!(false, "a thread cannot enter two wrapped waits at once"),
     });
+}
+
+/// Resume accounting after a wrapped sync wait's `token.wait()` returned. The firer
+/// always `active += 1`'d the woken Sync entry to cover wake latency; how that is
+/// settled depends on the thread:
+/// - BRIDGED (runtime worker mid async-poll): undo the `active` bump and re-acquire
+///   the `active_async` slot released on enter.
+/// - NON-DEDICATED, non-async: undo the `active` bump (the thread is not a pacer and
+///   never entered `active` on the wait side).
+/// - DEDICATED pacer: keep the bump and mark the thread `Running`.
+fn resume_after_wait() {
+    if in_async_poll() {
+        let mut s = SCHED.lock();
+        debug_assert!(s.active > 0, "bridged resume without a firer active bump");
+        s.active -= 1;
+        s.active_async += 1;
+        drop(s);
+        return;
+    }
+    if !is_dedicated() {
+        let mut s = SCHED.lock();
+        debug_assert!(s.active > 0, "non-pacer resume without a firer active bump");
+        s.active -= 1;
+        let adv = try_advance_locked(&mut s);
+        drop(s);
+        fire_advance(adv);
+        return;
+    }
+    mark_running();
 }
 
 /// Mark this thread RUNNING after its wrapped wait returned. The firer already
@@ -182,11 +383,9 @@ pub(crate) fn on_participant_exit() {
     let mut s = SCHED.lock();
     debug_assert!(s.active > 0, "exiting running participant must be counted");
     s.active -= 1;
-    let to_wake = try_advance_locked(&mut s);
+    let adv = try_advance_locked(&mut s);
     drop(s);
-    for t in to_wake {
-        t.fire();
-    }
+    fire_advance(adv);
 }
 
 /// Reset this thread's credit to `None`. Called at the start of a pooled
@@ -196,20 +395,67 @@ pub(crate) fn reset_credit() {
     CREDIT.with(|c| c.set(Credit::None));
 }
 
-/// Evaluate the advance rule while holding `SCHED`. Returns the tokens to fire
-/// AFTER the caller releases the lock (firing under the lock would make the
-/// woken thread immediately contend on SCHED). Operates only on `parked_timed`
-/// — it never fires `parked_indef`, which has no deadline. Fires nothing unless
-/// every participant is parked (`active == 0`) and at least one timed waiter
-/// exists.
-fn try_advance_locked(s: &mut SimSched) -> Vec<Arc<Token>> {
-    if s.active != 0 {
-        return Vec::new();
+/// Real quantum injected before firing a paced advance's wakes (see
+/// [`Advance::paced`]). Off-lock, so it yields real wall-clock to the OS reactor
+/// — enough for a loopback fetch's bytes to arrive before the next virtual step.
+/// Small (the whole real-I/O phase costs ~quantum-per-deadline, still far below
+/// real-time wall clock), but ≥ typical loopback latency for robustness.
+const IO_PACE: std::time::Duration = std::time::Duration::from_millis(1);
+
+/// Result of an advance attempt: the wakes to fire after releasing `SCHED`, plus
+/// whether the firing must be PACED. `paced` is set when the advance actually
+/// moved the clock while real I/O was in flight (`io_pending > 0`); the caller
+/// then sleeps [`IO_PACE`] (real) before firing, so virtual time tracks — never
+/// outruns — the outstanding real fetch. With no real I/O, `paced` is false and
+/// firing is immediate (pure-virtual collapse at full speed).
+pub(crate) struct Advance {
+    wakes: Vec<Wake>,
+    paced: bool,
+}
+
+/// Evaluate the advance rule while holding `SCHED`. Returns the [`Advance`] whose
+/// `wakes` the caller fires AFTER releasing the lock (firing under the lock would
+/// make the woken thread immediately contend on SCHED) via [`fire_advance`].
+/// Operates only on `parked_timed` — it never fires `parked_indef`, which has no
+/// deadline. Fires nothing unless every participant is parked (`active == 0`) and
+/// at least one timed waiter exists.
+fn try_advance_locked(s: &mut SimSched) -> Advance {
+    if s.active != 0 || s.active_async != 0 {
+        // A running participant (sync OS thread OR async task mid-poll): do not
+        // jump. Both counters must be zero for genuine quiescence.
+        return Advance {
+            wakes: Vec::new(),
+            paced: false,
+        };
     }
     let Some((&(min, _), _)) = s.parked_timed.iter().next() else {
-        // active == 0 and no timed waiter: nothing to advance to. (Signal-only
-        // quiescence detection belongs to a later increment + the watchdog.)
-        return Vec::new();
+        // Quiescent (active == active_async == 0) with NO timed waiter to advance
+        // to. If cooperative yield-waiters are parked, they are the only thing
+        // that can make progress: wake them so they re-poll. A `yield_now` must
+        // resume once nothing else is runnable and no clock advance is pending —
+        // mirroring the sync `yield_until_advance` fallback (which does a real
+        // yield instead of parking when `parked_timed.is_empty() && io == 0`).
+        // Without this, an async `yield_now` with no pending timer/IO is never
+        // re-polled (the yield-waiter is otherwise drained only on a clock
+        // advance), so a probe/loader awaiting an off-runtime producer deadlocks.
+        // When a timed waiter DOES exist this branch is skipped and the clock
+        // advances normally (draining yield-waiters there), so a yielder racing a
+        // timer never freezes the clock.
+        if s.yield_waiters.is_empty() {
+            return Advance {
+                wakes: Vec::new(),
+                paced: false,
+            };
+        }
+        let woken: Vec<Wake> = std::mem::take(&mut s.yield_waiters).into_values().collect();
+        s.active += woken.iter().filter(|w| !w.is_task()).count();
+        for w in &woken {
+            w.mark_granted_under_lock();
+        }
+        return Advance {
+            wakes: woken,
+            paced: false,
+        };
     };
     debug_assert!(
         min >= SIM_NANOS.load(Ordering::Acquire),
@@ -224,13 +470,98 @@ fn try_advance_locked(s: &mut SimSched) -> Vec<Arc<Token>> {
             break;
         }
         if let Some((_, entry)) = s.parked_timed.pop_first() {
-            woken.push(entry.token);
+            woken.push(entry.wake);
         }
     }
-    // Pre-increment for the waiters we are about to wake, so a woken thread does
-    // NOT re-increment `active` on return — it just resumes running.
-    s.active += woken.len();
-    woken
+    // A clock advance is progress: wake every cooperative-yield waiter to
+    // re-check its poll condition. They carry no deadline, so an advance is the
+    // only thing (besides `io_leave`) that reschedules them. Sync entries are
+    // `active`-bumped + `mark_granted`'d by the loops below (like timed wakes);
+    // Task entries re-acquire their `active_async` slot via the gate's waker.
+    for (_, wake) in std::mem::take(&mut s.yield_waiters) {
+        woken.push(wake);
+    }
+    // Pre-increment `active` ONLY for sync OS-thread wakes, so a woken thread
+    // does NOT re-increment on return — it just resumes running (the bump covers
+    // its real OS wake latency). Async-task wakes are NOT bumped here: the spawn
+    // poll-wrapper counts them in `active_async` when they are next polled. All
+    // wakes are marked granted under the lock so a racing cancel is consistent.
+    s.active += woken.iter().filter(|w| !w.is_task()).count();
+    for w in &woken {
+        w.mark_granted_under_lock();
+    }
+    // Pace this advance iff a real fetch is outstanding: virtual time may not
+    // outrun the real loopback bytes. The pacing sleep itself runs off-lock in
+    // `fire_advance`.
+    let paced = !woken.is_empty() && s.io_pending != 0;
+    Advance {
+        wakes: woken,
+        paced,
+    }
+}
+
+/// Fire an [`Advance`]'s wakes after `SCHED` is released. When `paced`, sleep a
+/// real [`IO_PACE`] quantum first so the OS reactor delivers outstanding real
+/// I/O before the woken (timed) waiters run — this paces the whole advance
+/// chain to real wall-clock while a fetch is in flight, without freezing the
+/// clock (so a server-side sim throttle still fires; no deadlock).
+pub(crate) fn fire_advance(adv: Advance) {
+    if adv.paced {
+        std::thread::sleep(IO_PACE);
+    }
+    for w in adv.wakes {
+        w.fire();
+    }
+}
+
+/// Bracket-enter a REAL I/O operation (a real socket fetch). Increments
+/// `io_pending` so subsequent advances are paced. Pairs with [`io_leave`].
+pub(crate) fn io_enter() {
+    let mut s = SCHED.lock();
+    s.io_pending += 1;
+    if std::env::var_os("KITHARA_IO_DBG").is_some() {
+        eprintln!(
+            "[sim io_enter] io={} active={} timed={} now_ns={}",
+            s.io_pending,
+            s.active,
+            s.parked_timed.len(),
+            SIM_NANOS.load(Ordering::Acquire),
+        );
+    }
+}
+
+/// Bracket-leave a REAL I/O operation. Decrements `io_pending` and runs the
+/// advance rule: when this was the last outstanding fetch, the engine resumes
+/// instant (un-paced) advancement and flushes any advance that was waiting.
+pub(crate) fn io_leave() {
+    let mut s = SCHED.lock();
+    debug_assert!(s.io_pending > 0, "io_leave without matching io_enter");
+    s.io_pending -= 1;
+    if std::env::var_os("KITHARA_IO_DBG").is_some() {
+        eprintln!(
+            "[sim io_leave] io={} active={} timed={} now_ns={}",
+            s.io_pending,
+            s.active,
+            s.parked_timed.len(),
+            SIM_NANOS.load(Ordering::Acquire),
+        );
+    }
+    // A completed fetch may have produced the bytes a cooperative-yield waiter is
+    // polling for, with no clock advance to follow — wake them to re-check. Sync
+    // waiters take the firer's `active += 1` (balanced by their `mark_running` on
+    // wake); Task waiters re-acquire their `active_async` slot via the gate's
+    // waker, so only the granted flag is set here.
+    let yields: Vec<Wake> = std::mem::take(&mut s.yield_waiters).into_values().collect();
+    s.active += yields.iter().filter(|w| !w.is_task()).count();
+    for w in &yields {
+        w.mark_granted_under_lock();
+    }
+    let adv = try_advance_locked(&mut s);
+    drop(s);
+    for w in yields {
+        w.fire();
+    }
+    fire_advance(adv);
 }
 
 /// Allocate a fresh condvar id (one per [`crate::sync::Condvar`] under sim).
@@ -255,16 +586,14 @@ pub(crate) fn park_for(d: super::Duration) {
     s.parked_timed.insert(
         (deadline, id),
         Entry {
-            token: Arc::clone(&token),
+            wake: Wake::Sync(Arc::clone(&token)),
             kind: WaitKind::Timed,
         },
     );
     enter_wait_locked(&mut s);
-    let to_wake = try_advance_locked(&mut s);
+    let adv = try_advance_locked(&mut s);
     drop(s);
-    for t in to_wake {
-        t.fire();
-    }
+    fire_advance(adv);
     token.wait();
     mark_running();
 }
@@ -289,18 +618,44 @@ pub(crate) fn park_timed_unparkable(d: super::Duration, thread_id: u64) {
     s.parked_timed.insert(
         (deadline, id),
         Entry {
-            token: Arc::clone(&token),
+            wake: Wake::Sync(Arc::clone(&token)),
             kind: WaitKind::Thread(thread_id),
         },
     );
     enter_wait_locked(&mut s);
-    let to_wake = try_advance_locked(&mut s);
+    let adv = try_advance_locked(&mut s);
     drop(s);
-    for t in to_wake {
-        t.fire();
-    }
+    fire_advance(adv);
     token.wait();
-    mark_running();
+    resume_after_wait();
+}
+
+/// Virtual `thread::sleep`: block until the virtual clock reaches `now + d`. A
+/// pure timed waiter ([`WaitKind::Timed`]) — woken SOLELY by the engine crossing
+/// its deadline, never by an `unpark` (a `thread::sleep` cannot be cut short,
+/// unlike [`park_timed_unparkable`]). Computes the deadline and registers the
+/// entry + accounts the wait in ONE `SCHED` hold, so no advance can slip between
+/// reading the clock and inserting. Same accounting as [`park_for`] — the firer
+/// `active += 1`'s the woken entry, [`resume_after_wait`] settles it.
+pub(crate) fn sleep_timed(d: super::Duration) {
+    let delta = super::duration_to_nanos(d);
+    let token = Token::new();
+    let mut s = SCHED.lock();
+    let deadline = SIM_NANOS.load(Ordering::Acquire).saturating_add(delta);
+    let id = s.fresh_id();
+    s.parked_timed.insert(
+        (deadline, id),
+        Entry {
+            wake: Wake::Sync(Arc::clone(&token)),
+            kind: WaitKind::Timed,
+        },
+    );
+    enter_wait_locked(&mut s);
+    let adv = try_advance_locked(&mut s);
+    drop(s);
+    fire_advance(adv);
+    token.wait();
+    resume_after_wait();
 }
 
 /// Wake a thread parked in [`park_timed_unparkable`]. If it is currently parked,
@@ -319,10 +674,67 @@ pub(crate) fn unpark(thread_id: u64) {
     {
         s.active += 1;
         drop(s);
-        entry.token.fire();
+        entry.wake.fire();
         return;
     }
     s.unpark_pending.insert(thread_id);
+}
+
+/// Sim cooperative yield (`thread::yield_now` under `sim-time`). A busy-poll loop
+/// that calls this RELINQUISHES the engine: it parks as a yield-waiter (dropping
+/// its `active` credit) so the virtual clock can advance past it, and is woken on
+/// the next clock advance or completed fetch ([`io_leave`]) to re-check. Without
+/// this a spin loop holds `active != 0` forever, freezing the very clock it polls
+/// against — a livelock (the loop waits for time its own spinning prevents from
+/// advancing). Falls back to a real OS yield ONLY when nothing could ever wake it
+/// (no timed waiter, no in-flight I/O), so a sibling's pure-CPU progress is never
+/// blocked behind a wait that can never fire. Accounting mirrors
+/// [`park_timed_unparkable`]: `enter_wait_locked` drops the credit, the firer
+/// re-adds `active`, and the woken thread `mark_running`s.
+pub(crate) fn yield_until_advance() {
+    let token = Token::new();
+    let mut s = SCHED.lock();
+    if s.parked_timed.is_empty() && s.io_pending == 0 {
+        drop(s);
+        std::thread::yield_now();
+        return;
+    }
+    let id = s.fresh_id();
+    s.yield_waiters.insert(id, Wake::Sync(Arc::clone(&token)));
+    enter_wait_locked(&mut s);
+    let adv = try_advance_locked(&mut s);
+    drop(s);
+    fire_advance(adv);
+    token.wait();
+    resume_after_wait();
+}
+
+/// Register an ASYNC cooperative-yield waiter (sim `tokio::task::yield_now`).
+/// Parks the task as a yield-waiter (woken on the next clock advance or
+/// completed fetch) and returns its id + granted flag. This is the sim analogue
+/// of a real `yield_now`: real time passes while a task yields, so here the task
+/// releases its `active_async` slot (the spawn gate does so when the yield future
+/// returns Pending) and the virtual clock is free to advance to the next event.
+/// No resolve-at-once path: that would re-poll the task immediately, re-arming a
+/// busy-poll loop that never lets the clock move. The drain (on advance /
+/// `io_leave`) sets `granted` and the gate re-polls.
+pub(crate) fn register_yield_async(waker: Waker) -> (u64, Arc<AtomicBool>) {
+    let granted = Arc::new(AtomicBool::new(false));
+    let mut s = SCHED.lock();
+    let id = s.fresh_id();
+    s.yield_waiters.insert(
+        id,
+        Wake::Task {
+            waker,
+            granted: Arc::clone(&granted),
+        },
+    );
+    (id, granted)
+}
+
+/// Drop path for a [`register_yield_async`] waiter cancelled before it resolved.
+pub(crate) fn cancel_yield(id: u64) {
+    SCHED.lock().yield_waiters.remove(&id);
 }
 
 /// Register a TIMED condvar waiter (woken by the deadline OR a signal for
@@ -331,43 +743,48 @@ pub(crate) fn unpark(thread_id: u64) {
 /// advance rule, and returns the token to block on plus the advance-due tokens
 /// the caller must fire AFTER releasing the domain guard. The caller calls
 /// [`mark_running_after_condvar`] once `token.wait()` returns.
-pub(crate) fn register_condvar_timed(
-    deadline_nanos: u64,
-    cvid: u64,
-) -> (Arc<Token>, Vec<Arc<Token>>) {
+pub(crate) fn register_condvar_timed(deadline_nanos: u64, cvid: u64) -> (Arc<Token>, Advance) {
     let token = Token::new();
     let mut s = SCHED.lock();
+    // The caller computed `deadline_nanos` from `Instant::now()` OUTSIDE this
+    // lock; an async sleep could have jumped the clock since, leaving the
+    // deadline below the current virtual instant. Clamp to "now" under the lock
+    // so the monotonic-clock invariant holds (a wait whose virtual timeout has
+    // already elapsed fires on the next advance, and the caller re-checks its
+    // predicate). This enforces "no backward clock" atomically at the single
+    // registration chokepoint.
+    let deadline_nanos = deadline_nanos.max(SIM_NANOS.load(Ordering::Acquire));
     let id = s.fresh_id();
     s.parked_timed.insert(
         (deadline_nanos, id),
         Entry {
-            token: Arc::clone(&token),
+            wake: Wake::Sync(Arc::clone(&token)),
             kind: WaitKind::Condvar(cvid),
         },
     );
     enter_wait_locked(&mut s);
-    let to_wake = try_advance_locked(&mut s);
+    let adv = try_advance_locked(&mut s);
     drop(s);
-    (token, to_wake)
+    (token, adv)
 }
 
 /// Register an UNTIMED condvar waiter (no deadline; woken only by a signal for
 /// `cvid`). Same return shape and accounting as [`register_condvar_timed`].
-pub(crate) fn register_condvar_untimed(cvid: u64) -> (Arc<Token>, Vec<Arc<Token>>) {
+pub(crate) fn register_condvar_untimed(cvid: u64) -> (Arc<Token>, Advance) {
     let token = Token::new();
     let mut s = SCHED.lock();
     let id = s.fresh_id();
     s.parked_indef.insert(
         id,
         Entry {
-            token: Arc::clone(&token),
+            wake: Wake::Sync(Arc::clone(&token)),
             kind: WaitKind::Condvar(cvid),
         },
     );
     enter_wait_locked(&mut s);
-    let to_wake = try_advance_locked(&mut s);
+    let adv = try_advance_locked(&mut s);
     drop(s);
-    (token, to_wake)
+    (token, adv)
 }
 
 /// Mark the calling thread RUNNING after a condvar wait's `token.wait()` has
@@ -375,7 +792,7 @@ pub(crate) fn register_condvar_untimed(cvid: u64) -> (Arc<Token>, Vec<Arc<Token>
 /// so it cannot call the private `mark_running`; this is the crate-internal
 /// hook it uses instead. The firer already `active += 1`'d the woken entry.
 pub(crate) fn mark_running_after_condvar() {
-    mark_running();
+    resume_after_wait();
 }
 
 /// Wake condvar waiters for `cvid`: `all == true` wakes every matching waiter
@@ -403,7 +820,7 @@ pub(crate) fn signal_condvar(cvid: u64, all: bool) {
             break;
         }
         if let Some(entry) = s.parked_timed.remove(&key) {
-            woken.push(entry.token);
+            woken.push(entry.wake);
         }
     }
     for key in indef_keys {
@@ -411,13 +828,326 @@ pub(crate) fn signal_condvar(cvid: u64, all: bool) {
             break;
         }
         if let Some(entry) = s.parked_indef.remove(&key) {
-            woken.push(entry.token);
+            woken.push(entry.wake);
         }
     }
     s.active += woken.len();
+    for w in &woken {
+        w.mark_granted_under_lock();
+    }
     drop(s);
     for t in woken {
         t.fire();
+    }
+}
+
+/// Handle an async waiter future holds for the lifetime of one park. Carries the
+/// engine key so a cancelled (dropped-before-resolve) future can remove its
+/// still-parked entry, and the `granted` flag the firer sets so the future can
+/// tell a real wake from a cancel and balance `active` exactly.
+pub(crate) struct AsyncHandle {
+    timed_key: Option<(u64, u64)>,
+    indef_key: Option<u64>,
+    granted: Arc<AtomicBool>,
+}
+
+impl AsyncHandle {
+    /// True once the engine (or a signal) selected this waiter. The future
+    /// resolves `Ready` on its next poll. Counting is GRANT-driven (only the
+    /// firer sets this), so a clock jump via some OTHER advance never resolves
+    /// the waiter early. No counter is touched on resolve — the task's
+    /// `active_async` slot is owned by the spawn poll-wrapper.
+    pub(crate) fn granted(&self) -> bool {
+        self.granted.load(Ordering::Acquire)
+    }
+}
+
+/// Register a TIMED async sleep waiter `delta_nanos` from the CURRENT virtual
+/// instant, then run the advance rule. The deadline is computed from `SIM_NANOS`
+/// read INSIDE the lock (so no advance can slip between reading the clock and
+/// inserting — a deadline is therefore never below the current clock, the
+/// "no backward" invariant). Registration touches no counter: the task is
+/// already counted in `active_async` by its poll-wrapper for the current poll,
+/// and the waiter is removed by [`cancel_async_wait`] if the future is dropped
+/// before it fires.
+pub(crate) fn register_sleep_async(delta_nanos: u64, waker: Waker) -> (AsyncHandle, Advance) {
+    let granted = Arc::new(AtomicBool::new(false));
+    let mut s = SCHED.lock();
+    let deadline_nanos = SIM_NANOS
+        .load(Ordering::Acquire)
+        .saturating_add(delta_nanos);
+    let id = s.fresh_id();
+    let key = (deadline_nanos, id);
+    s.parked_timed.insert(
+        key,
+        Entry {
+            wake: Wake::Task {
+                waker,
+                granted: Arc::clone(&granted),
+            },
+            kind: WaitKind::Timed,
+        },
+    );
+    let adv = try_advance_locked(&mut s);
+    (
+        AsyncHandle {
+            timed_key: Some(key),
+            indef_key: None,
+            granted,
+        },
+        adv,
+    )
+}
+
+/// Register an UNTIMED async `Notify` waiter for `cvid`, OR consume a stored
+/// permit. Returns `(handle, to_wake)`; `handle` is `None` when a permit was
+/// waiting (the caller resolves at once without parking).
+pub(crate) fn register_notify_async(cvid: u64, waker: Waker) -> (Option<AsyncHandle>, Advance) {
+    let granted = Arc::new(AtomicBool::new(false));
+    let mut s = SCHED.lock();
+    if s.notify_permit.remove(&cvid) {
+        return (
+            None,
+            Advance {
+                wakes: Vec::new(),
+                paced: false,
+            },
+        );
+    }
+    let id = s.fresh_id();
+    s.parked_indef.insert(
+        id,
+        Entry {
+            wake: Wake::Task {
+                waker,
+                granted: Arc::clone(&granted),
+            },
+            kind: WaitKind::Condvar(cvid),
+        },
+    );
+    let adv = try_advance_locked(&mut s);
+    (
+        Some(AsyncHandle {
+            timed_key: None,
+            indef_key: Some(id),
+            granted,
+        }),
+        adv,
+    )
+}
+
+/// Acquire an `active_async` slot for a RUNNABLE async task queued to be polled
+/// (just spawned). Adding a participant can never enable an advance, so this does
+/// NOT run the advance rule. Called once by [`participate`](super::participate) at
+/// construction; the PARKED→RUNNABLE wake re-acquire goes through
+/// [`gate_wake_parked`], which couples the acquire to the state CAS under the lock.
+pub(crate) fn async_acquire() {
+    SCHED.lock().active_async += 1;
+}
+
+/// Decrement the async slot count under a held `SCHED` and return the advance the
+/// quiescent edge may unblock. The caller fires it after releasing the lock.
+fn release_async_locked(s: &mut SimSched) -> Advance {
+    debug_assert!(
+        s.active_async > 0,
+        "async release without a matching acquire"
+    );
+    s.active_async -= 1;
+    try_advance_locked(s)
+}
+
+/// Gate park under the `SCHED` lock: atomically CAS `running`→`parked` and release
+/// the async slot, or — a wake landed mid-poll, so the state is RUNNING_NOTIFIED
+/// and the CAS fails — store `runnable`, keeping the slot for the re-poll the wake
+/// already scheduled. Holding the lock across the CAS and the counter update is
+/// what closes the wake→poll race: a concurrent [`gate_wake_parked`] acquire can no
+/// longer interleave between a lock-free CAS and a separately-locked release, which
+/// would leave a re-runnable task uncounted and over-release on its next park.
+pub(crate) fn gate_park(state: &AtomicU8, running: u8, parked: u8, runnable: u8) {
+    let mut s = SCHED.lock();
+    if state
+        .compare_exchange(running, parked, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        let adv = release_async_locked(&mut s);
+        drop(s);
+        fire_advance(adv);
+    } else {
+        state.store(runnable, Ordering::Release);
+    }
+}
+
+/// Gate completion under the `SCHED` lock: mark `done` and release the slot
+/// atomically (mirrors [`gate_park`]'s release arm for a poll that returned Ready).
+pub(crate) fn gate_complete(state: &AtomicU8, done: u8) {
+    let mut s = SCHED.lock();
+    state.store(done, Ordering::Release);
+    let adv = release_async_locked(&mut s);
+    drop(s);
+    fire_advance(adv);
+}
+
+/// Gate drop under the `SCHED` lock: swap to `done`; release the slot iff the task
+/// still held one (its prior state was counted — RUNNABLE/RUNNING/RUNNING_NOTIFIED).
+pub(crate) fn gate_drop_release(
+    state: &AtomicU8,
+    done: u8,
+    runnable: u8,
+    running: u8,
+    notified: u8,
+) {
+    let mut s = SCHED.lock();
+    let prev = state.swap(done, Ordering::AcqRel);
+    if prev == runnable || prev == running || prev == notified {
+        let adv = release_async_locked(&mut s);
+        drop(s);
+        fire_advance(adv);
+    }
+}
+
+/// Wake a PARKED gate under the `SCHED` lock: CAS `parked`→`runnable` and acquire
+/// the slot atomically. Returns `true` when it transitioned (the caller then
+/// forwards the runtime waker), `false` if the state was not PARKED (the caller's
+/// wake loop re-reads and handles the current state lock-free). Coupling the
+/// acquire to the CAS under the lock is the counterpart to [`gate_park`]'s release.
+pub(crate) fn gate_wake_parked(state: &AtomicU8, parked: u8, runnable: u8) -> bool {
+    let mut s = SCHED.lock();
+    if state
+        .compare_exchange(parked, runnable, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        s.active_async += 1;
+        true
+    } else {
+        false
+    }
+}
+
+/// Drop path for an async waiter future cancelled before it resolved (e.g. it
+/// lost a `tokio::select!`). Just remove its still-parked entry, if any. Async
+/// waiters never hold a counter slot (the firer does not bump `active_async` —
+/// the poll-wrapper owns that count per-poll), so there is nothing to release:
+/// the surrounding task stays counted by its poll-wrapper either way.
+pub(crate) fn cancel_async_wait(handle: AsyncHandle) {
+    let mut s = SCHED.lock();
+    match (handle.timed_key, handle.indef_key) {
+        (Some(key), _) => {
+            s.parked_timed.remove(&key);
+        }
+        (_, Some(id)) => {
+            s.parked_indef.remove(&id);
+        }
+        _ => {}
+    }
+}
+
+/// Signal an async `Notify` for `cvid`: wake at most one (`all == false`) or all
+/// (`all == true`) waiters; if none are parked, store a permit so the next
+/// `notified()` resolves at once (tokio `notify_one` semantics).
+pub(crate) fn signal_notify(cvid: u64, all: bool) {
+    let mut s = SCHED.lock();
+    let indef_keys: Vec<u64> = s
+        .parked_indef
+        .iter()
+        .filter(|(_, e)| e.kind == WaitKind::Condvar(cvid))
+        .map(|(&k, _)| k)
+        .collect();
+    let mut woken = Vec::new();
+    for key in indef_keys {
+        if !all && !woken.is_empty() {
+            break;
+        }
+        if let Some(entry) = s.parked_indef.remove(&key) {
+            woken.push(entry.wake);
+        }
+    }
+    if woken.is_empty() {
+        // No waiter: store a permit (notify_one) so the next notified() returns
+        // immediately. notify_waiters (all) drops with no waiter, like tokio.
+        if !all {
+            s.notify_permit.insert(cvid);
+        }
+    } else {
+        // Async (Task) wakes are counted by the spawn poll-wrapper, not here.
+        s.active += woken.iter().filter(|w| !w.is_task()).count();
+        for w in &woken {
+            w.mark_granted_under_lock();
+        }
+    }
+    drop(s);
+    for t in woken {
+        t.fire();
+    }
+}
+
+/// Register an UNTIMED async channel waiter for `cvid`. Unlike
+/// [`register_notify_async`] this NEVER consumes a permit: a sim channel
+/// (`tokio::sync::mpsc`/`oneshot`) holds its own queue as the source of truth, so
+/// the engine waiter is a pure wakeup with no permit bookkeeping. The caller must
+/// register WHILE holding the channel's own queue lock so a concurrent producer
+/// cannot signal-with-no-waiter between the empty-check and the park (no lost
+/// wakeup). Returns `(handle, advance)`; fire the advance after dropping the
+/// queue lock.
+pub(crate) fn register_channel_async(cvid: u64, waker: Waker) -> (AsyncHandle, Advance) {
+    let granted = Arc::new(AtomicBool::new(false));
+    let mut s = SCHED.lock();
+    let id = s.fresh_id();
+    s.parked_indef.insert(
+        id,
+        Entry {
+            wake: Wake::Task {
+                waker,
+                granted: Arc::clone(&granted),
+            },
+            kind: WaitKind::Condvar(cvid),
+        },
+    );
+    let adv = try_advance_locked(&mut s);
+    (
+        AsyncHandle {
+            timed_key: None,
+            indef_key: Some(id),
+            granted,
+        },
+        adv,
+    )
+}
+
+/// Signal a sim channel `cvid`: wake one (`all == false`) or every
+/// (`all == true`) parked waiter. Unlike [`signal_notify`] it stores NO permit
+/// when none is parked — the channel's queue already holds the produced item (or
+/// the closed flag), and the next receiver/sender poll re-checks that queue (or
+/// the live-count) directly, so a missed signal is harmless. `all` is for the
+/// close edges (a dropped receiver wakes every blocked sender; a dropped last
+/// sender wakes the receiver).
+pub(crate) fn signal_channel(cvid: u64, all: bool) {
+    let mut s = SCHED.lock();
+    let keys: Vec<u64> = s
+        .parked_indef
+        .iter()
+        .filter(|(_, e)| e.kind == WaitKind::Condvar(cvid))
+        .map(|(&k, _)| k)
+        .collect();
+    let mut woken = Vec::new();
+    for key in keys {
+        if !all && !woken.is_empty() {
+            break;
+        }
+        if let Some(entry) = s.parked_indef.remove(&key) {
+            woken.push(entry.wake);
+        }
+    }
+    if woken.is_empty() {
+        return;
+    }
+    // Async (Task) wakes are counted by the spawn poll-wrapper, not here.
+    s.active += woken.iter().filter(|w| !w.is_task()).count();
+    for w in &woken {
+        w.mark_granted_under_lock();
+    }
+    drop(s);
+    for w in woken {
+        w.fire();
     }
 }
 
@@ -455,11 +1185,9 @@ impl Drop for TestHold {
         let mut s = SCHED.lock();
         debug_assert!(s.active > 0, "TestHold drop without matching hold");
         s.active -= 1;
-        let to_wake = try_advance_locked(&mut s);
+        let adv = try_advance_locked(&mut s);
         drop(s);
-        for t in to_wake {
-            t.fire();
-        }
+        fire_advance(adv);
     }
 }
 
@@ -472,6 +1200,14 @@ pub(crate) fn advance_log() -> Vec<u64> {
 #[cfg(test)]
 pub(crate) fn active_count() -> usize {
     SCHED.lock().active
+}
+
+/// Test-only: number of async tasks the engine currently counts as
+/// non-quiescent (runnable or running). A task woken but not yet re-polled MUST
+/// be counted here, or the clock can advance past it.
+#[cfg(test)]
+pub(crate) fn async_active_count() -> usize {
+    SCHED.lock().active_async
 }
 
 /// Test-only: number of currently parked timed waiters.

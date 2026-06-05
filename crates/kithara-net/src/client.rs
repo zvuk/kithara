@@ -3,7 +3,7 @@ use std::{num::NonZeroU16, sync::Arc};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
-use kithara_platform::{CancellationToken, time::sleep, tokio};
+use kithara_platform::{CancellationToken, time::real_timeout};
 use reqwest::Client;
 use url::Url;
 
@@ -156,17 +156,22 @@ impl RawHttp {
     /// Await a request's response under the idle/stall timeout: no response
     /// headers within `inactivity_timeout` ⇒ a transient [`NetError::Timeout`]
     /// so the retry decorator re-issues it. This is the establish-side half of
-    /// the single idle timer (the body half lives in [`resumable_body`]); the
-    /// `sleep` routes through `kithara_platform::time` so it collapses under
-    /// `sim-time`. reqwest's real-time `read_timeout` is gone, so this is the
-    /// only — and simulation-correct — bound on a stalled connect/header wait.
+    /// the single idle timer (the body half lives in [`resumable_body`]).
+    ///
+    /// The bound is a REAL wall-clock timer ([`real_timeout`]), NOT the virtual
+    /// `time::sleep`. It measures a REAL socket operation (connect + header
+    /// wait), so it must tick on real time: a virtual timer would be fired by
+    /// the quiescence engine jumping the clock to the deadline the instant the
+    /// task parks — racing past the in-flight loopback establish and spuriously
+    /// timing out every healthy fetch under `sim-time`. A real timer never fires
+    /// for a fast loopback establish and bounds a genuine stall in real time.
     async fn send_idle_bounded(
         &self,
         req: reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, NetError> {
-        tokio::select! {
-            () = sleep(self.options.inactivity_timeout) => Err(NetError::Timeout),
-            r = req.send() => r.map_err(NetError::from),
+        match real_timeout(self.options.inactivity_timeout, req.send()).await {
+            Ok(r) => r.map_err(NetError::from),
+            Err(_) => Err(NetError::Timeout),
         }
     }
 

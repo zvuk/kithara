@@ -1,9 +1,9 @@
-use std::num::NonZeroUsize;
+use std::{io::Write, num::NonZeroUsize};
 
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
-    file::{File, FileConfig},
+    file::{File, FileConfig, FileSrc},
     stream::Stream,
 };
 use kithara_decode::DecoderBackend;
@@ -116,6 +116,131 @@ async fn run_case(
         "phase continuity broken on {} scan(s) (format={format:?} backend={backend:?} seek_count={seek_count}): {drifts:?}",
         drifts.len(),
     );
+}
+
+/// Encode the sine fixture once (over the loopback test server, the only place
+/// the `pub(crate)` encoder is reachable from `tests/`) and persist the raw
+/// encoded bytes to a file inside `temp_dir`. This HTTP fetch is pure
+/// fixture-build setup on the real tokio runtime; the bytes then live on disk
+/// and the playback path under test (`FileSrc::Local`) never touches a socket.
+async fn write_sine_fixture_to_disk(
+    spec: &SignalSpec,
+    temp_dir: &TestTempDir,
+) -> std::path::PathBuf {
+    let helper = TestServerHelper::new().await;
+    let url = helper.sine(spec, FREQ_HZ).await;
+    let bytes = reqwest::get(url)
+        .await
+        .expect("fetch encoded sine fixture")
+        .bytes()
+        .await
+        .expect("read fixture body");
+    let ext = format_ext(spec.format).expect("known signal format extension");
+    let path = temp_dir.path().join(format!("sine_fixture.{ext}"));
+    let mut file = std::fs::File::create(&path).expect("create fixture file");
+    file.write_all(&bytes).expect("write fixture bytes");
+    file.sync_all().expect("flush fixture file");
+    path
+}
+
+/// Socket-free twin of [`run_case`]: the fixture bytes are read from a local
+/// file via `FileSrc::Local` (which builds its own private `AssetStore` and
+/// never registers a `Downloader` / issues an HTTP request), so the entire
+/// playback pipeline — storage waits, decode, resample — runs without any
+/// loopback transport. This is the path the `sim-time` quiescence engine can
+/// virtualize end to end. Asserts the identical phase-continuity contract.
+async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate: Option<u64>) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
+    let spec = SignalSpec {
+        sample_rate: SAMPLE_RATE,
+        channels: CHANNELS,
+        length: SignalSpecLength::Frames(STREAM_FRAMES as usize),
+        format,
+        bit_rate,
+    };
+
+    let temp_dir = TestTempDir::new();
+    let fixture_path = write_sine_fixture_to_disk(&spec, &temp_dir).await;
+
+    let file_config = FileConfig::for_src(FileSrc::Local(fixture_path)).build();
+    let audio_config = AudioConfig::<File>::for_stream(file_config)
+        .decoder_backend(backend)
+        .maybe_hint(format_ext(format).map(str::to_owned))
+        .build();
+    let mut audio = Audio::<Stream<File>>::new(audio_config)
+        .await
+        .expect("create local Audio<Stream<File>>");
+
+    let total_secs = audio
+        .duration()
+        .map(|d| d.as_secs_f64())
+        .expect("local file fixture should report duration");
+    info!(?format, ?backend, total_secs, "local fixture ready");
+    assert!(
+        total_secs > 30.0 && total_secs < 120.0,
+        "fixture duration out of sane range: {total_secs:.1}s",
+    );
+    let total_frames_truth = (total_secs * f64::from(SAMPLE_RATE)) as u64;
+
+    let aspec = audio.spec();
+    assert_eq!(aspec.sample_rate.get(), SAMPLE_RATE);
+    assert_eq!(u32::from(aspec.channels), u32::from(CHANNELS));
+
+    // Keep the temp dir alive across the blocking scan: the source reads the
+    // fixture from disk for the whole decode, so the backing file must outlive
+    // the `Audio`.
+    let drifts = spawn_blocking(move || -> Vec<PhaseDrift> {
+        let sine = SinePhaseSpec::default_440();
+        let drifts = e2e_phase_scan(&mut audio, sine, total_frames_truth);
+        drop(audio);
+        drifts
+    })
+    .await
+    .expect("spawn_blocking joined");
+    drop(temp_dir);
+
+    assert!(
+        drifts.is_empty(),
+        "phase continuity broken on {} scan(s) over a local file (format={format:?} backend={backend:?}): {drifts:?}",
+        drifts.len(),
+    );
+}
+
+/// First sim-time equivalence proof on a socket-free pipeline.
+///
+/// Reads a sine MP3 fixture straight from disk through `FileSrc::Local` and
+/// runs the production phase-continuity scan. Because `FileSrc::Local` builds
+/// its own `AssetStore` and never registers a `Downloader`, there is no async
+/// HTTP fetch for the virtual clock to race past — the whole pipeline collapses
+/// onto the quiescence engine. Run the SAME test twice for the proof:
+///
+/// - default (real clock):    `cargo test … phase_continuity_file_local_socket_free`
+/// - sim (virtual clock):     `cargo test … --features sim-time phase_continuity_file_local_socket_free`
+///
+/// Both must hold the sub-0.5-sample phase oracle bit-for-bit; the sim run is
+/// deterministic and faster (the storage condvar / park waits collapse to zero
+/// real time). The sub-0.5-sample assertions in `e2e_phase_scan` ARE the PCM
+/// oracle — any virtualization-induced divergence trips them.
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(25)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+#[case::mp3_symphonia(SignalFormat::Mp3, DecoderBackend::Symphonia, Some(320_000))]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::mp3_apple(SignalFormat::Mp3, DecoderBackend::Apple, Some(320_000))
+)]
+async fn phase_continuity_file_local_socket_free(
+    #[case] format: SignalFormat,
+    #[case] backend: DecoderBackend,
+    #[case] bit_rate: Option<u64>,
+) {
+    local_run_case(format, backend, bit_rate).await;
 }
 
 async fn decode_pcm_seconds(

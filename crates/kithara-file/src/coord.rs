@@ -5,12 +5,11 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use kithara_platform::tokio as platform_tokio;
+use kithara_platform::sync::Notify;
 use kithara_stream::{
     Activity, PlayheadRead, PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState,
 };
 use kithara_test_utils::kithara;
-use platform_tokio::sync::Notify;
 
 pub(crate) struct FileCoord {
     /// Authoritative byte cursor exposed via

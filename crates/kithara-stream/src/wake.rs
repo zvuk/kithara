@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use kithara_platform::tokio::sync::Notify;
+use kithara_platform::sync::Notify;
 
 /// Reader→peer wake split into an off-core *arm* and an off-core *flush*, so a
 /// cross-thread `tokio::Notify` wake never fires on the real-time audio produce

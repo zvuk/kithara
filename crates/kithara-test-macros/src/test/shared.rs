@@ -50,6 +50,28 @@ pub(crate) fn make_runtime_builder(args: &TestArgs) -> TokenStream2 {
     }
 }
 
+/// Real-time hint for the block_on **driver** thread (sim-time only; ZST no-op
+/// off the sim path).
+///
+/// Under `sim-time` the test body is the DRIVER: it observes/polls the
+/// system-under-test. Its bounding waits must measure REAL wall-clock so they
+/// neither race ahead of (collapsing virtual time outpacing a real fetch) nor
+/// stall against the engine. The system-under-test — spawned tasks, the
+/// download/server runtimes, the decode/audio worker threads — keeps the
+/// collapsed virtual clock. On a `multi_thread` runtime the `block_on` thread
+/// runs ONLY this future (it does not steal worker tasks), so this marker stays
+/// on the driver and never leaks to a system task. Emitted only for
+/// `multi_thread`; a `current_thread` test shares its one runtime thread between
+/// driver and system, so it stays fully virtual (its driver waits must be
+/// count-bounded, like the phase-continuity pull loop).
+pub(crate) fn make_real_time_hint(_args: &TestArgs) -> TokenStream2 {
+    // EXPERIMENT: no real-time island. The driver runs on the sim clock like
+    // the rest of the system so virtual time advances deadline-by-deadline
+    // (deterministic), instead of the system racing ahead during a real-wall-
+    // clock driver wait.
+    quote! {}
+}
+
 pub(crate) fn make_tracing_init(args: &TestArgs) -> TokenStream2 {
     if let Some(filter) = &args.tracing_filter {
         quote! {
@@ -100,7 +122,10 @@ pub(crate) fn wrap_with_timeout(
             {
                 let __timeout_dur: ::std::time::Duration = #dur;
                 let __body = async { #body };
-                kithara_platform::time::timeout(__timeout_dur, __body)
+                // Wall-clock safety net: must fire on REAL time even under
+                // `sim-time` (a hung test hangs real time too), so use
+                // `real_timeout`, not the sim-collapsing `timeout`.
+                kithara_platform::time::real_timeout(__timeout_dur, __body)
                     .await
                     .unwrap_or_else(|_| panic!(
                         "test `{}` timed out after {:?}",

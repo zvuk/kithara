@@ -8,6 +8,7 @@
 pub use tokio_with_wasm::alias::*;
 
 pub mod runtime;
+pub mod sync;
 pub mod task;
 mod thread_pool;
 

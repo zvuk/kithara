@@ -148,6 +148,12 @@ impl PlayerTrack {
             smooth_seconds: fade_duration,
             settle_epsilon: DEFAULT_SETTLE_EPSILON,
         };
+        // Seed from the resource's already-known duration (set synchronously at
+        // source open, before `Loaded`) so a freshly-loaded track reports its
+        // duration on the first render cycle — before any decode-backed `read`.
+        // Without this the render path publishes 0.0 whenever the decode worker
+        // holds the resource lock, leaving `duration_seconds()` racy at load.
+        let observed_duration = resource.try_lock().ok().map_or(0.0, |r| r.duration());
         let track = Self {
             resource,
             fade_curve,
@@ -162,7 +168,7 @@ impl PlayerTrack {
             prefetch_duration: prefetch_duration.max(0.0),
             sample_rate: sample_rate.get(),
             served_frames: 0,
-            observed_duration: 0.0,
+            observed_duration,
         };
         track.update_service_class(TrackState::Preloading);
         track

@@ -6,8 +6,10 @@
 mod condvar;
 pub mod mpsc;
 mod mutex;
+mod notify;
 mod rwlock;
 
 pub use condvar::Condvar;
 pub use mutex::{Mutex, MutexGuard, NotAvailable};
+pub use notify::Notify;
 pub use rwlock::{RwLock, RwLockReadGuard, RwLockWriteGuard};

@@ -5,9 +5,9 @@ use syn::{Attribute, Ident};
 use super::{
     parse::TestArgs,
     shared::{
-        finalize_body, make_dedicated_worker_config, make_env_setup, make_runtime_builder,
-        make_selenium_attrs, make_serial_attr, make_tracing_init, wrap_with_soft_fail,
-        wrap_with_timeout,
+        finalize_body, make_dedicated_worker_config, make_env_setup, make_real_time_hint,
+        make_runtime_builder, make_selenium_attrs, make_serial_attr, make_tracing_init,
+        wrap_with_soft_fail, wrap_with_timeout,
     },
 };
 
@@ -30,6 +30,7 @@ pub(crate) fn emit_async_runtime_test(
     let env_setup = make_env_setup(&args.env_vars);
     let selenium_attr = make_selenium_attrs(args);
     let runtime_builder = make_runtime_builder(args);
+    let real_time_hint = make_real_time_hint(args);
     let inner_body = if !args.soft_fail_patterns.is_empty() {
         wrap_with_soft_fail(
             &quote! { { #body } },
@@ -54,7 +55,10 @@ pub(crate) fn emit_async_runtime_test(
                 ::kithara_test_utils::probe::bump_install_id();
             __rt.block_on(
                 ::kithara_test_utils::probe::OWNED_INSTALL_ID
-                    .scope(__probe_install_id, async #inner_body),
+                    .scope(__probe_install_id, async {
+                        #real_time_hint
+                        #inner_body
+                    }),
             )
         }
     }
@@ -133,6 +137,7 @@ pub(crate) fn emit_async_timeout_test(
     let env_setup = make_env_setup(&args.env_vars);
     let selenium_attr = make_selenium_attrs(args);
     let runtime_builder = make_runtime_builder(args);
+    let real_time_hint = make_real_time_hint(args);
 
     quote! {
         #(#remaining_attrs)*
@@ -180,18 +185,31 @@ pub(crate) fn emit_async_timeout_test(
             let __result = ::std::panic::catch_unwind(
                 ::std::panic::AssertUnwindSafe(|| {
                     __rt.block_on(
-                        ::kithara_test_utils::probe::OWNED_INSTALL_ID.scope(
-                            __probe_install_id,
-                            async {
-                                kithara_platform::time::timeout(__timeout_dur, async {
-                                    #inner_body
-                                })
-                                .await
-                                .unwrap_or_else(|_| panic!(
-                                    "test `{}` timed out after {:?}",
-                                    #fn_name_str, __timeout_dur,
-                                ))
-                            },
+                        // Wrap the root task in the quiescence poll-wrapper so the
+                        // test driver counts as a running participant while polled
+                        // (identity off the sim path). Without this the virtual
+                        // clock would race past the driver's own work between awaits.
+                        kithara_platform::time::participate(
+                            ::kithara_test_utils::probe::OWNED_INSTALL_ID.scope(
+                                __probe_install_id,
+                                async {
+                                    #real_time_hint
+                                    // Wall-clock safety net: must fire on REAL
+                                    // time even under `sim-time` (a hung test
+                                    // hangs real time too). `real_timeout`, not
+                                    // the sim-collapsing `timeout` — else the
+                                    // engine jumps the virtual clock to the
+                                    // deadline and the test spuriously times out.
+                                    kithara_platform::time::real_timeout(__timeout_dur, async {
+                                        #inner_body
+                                    })
+                                    .await
+                                    .unwrap_or_else(|_| panic!(
+                                        "test `{}` timed out after {:?}",
+                                        #fn_name_str, __timeout_dur,
+                                    ))
+                                },
+                            ),
                         ),
                     )
                 })
