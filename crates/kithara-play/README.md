@@ -69,26 +69,25 @@ cut points, and a `beat_aligned` flag. Beat/BPM data types (`BeatGrid`,
 
 ## Tempo & Key-Lock
 
-`PlayerImpl` owns two sibling `Arc<AtomicF32>` rate scalars — `playback_rate_shared`
-and `tempo_ratio_shared` — and a `keylock` flag selecting which is live:
+`TimestretchControls` (one per deck, in `PlayerConfig`) wraps `kithara-audio`'s
+`StretchControls` — a single `Arc` holding `speed` + `keylock` + `backend`. It is
+the one source of truth, shared with the worker's effect chain, which reads it each
+chunk. Rate setters (`set_rate`, `play`) and `set_keylock` / `set_backend` all write
+this one handle; there is no second rate atomic and no manual mirror.
 
-- **key-lock off** (default): `playback_rate_shared` drives the resampler; changing
-  speed shifts pitch (vinyl-style).
-- **key-lock on**: `tempo_ratio_shared` drives the pre-resampler time-stretch slot
-  (pitch held); the resampler is pinned to 1.0.
+`prepare_config` always passes the shared controls into every track (`stretch =
+Some(..)`), so the effect chain runs a `TimeStretchProcessor` in tempo mode whether
+or not key-lock is on:
 
-Exactly one scalar is live per mode; the other is a harmless dead write. Rate
-setters (`set_rate`, `play`) mirror the speed into **both** atomics by design, so
-the active mode's value is always current and a live tempo move reaches a running
-stretch (the `kithara-audio` time-stretch slot reads `tempo_ratio` each chunk via
-the shared `Arc` injected through `prepare_config`). This is one value with two
-consumers, not two sources of truth — they never diverge.
+- **key-lock off** (default): the stretch slot bypasses (PCM forwarded untouched)
+  and routes `speed` to the resampler — changing speed shifts pitch (vinyl-style).
+- **key-lock on**: the stretch slot changes tempo with pitch held and pins the
+  resampler to 1.0.
 
-`keylock` and the `stretch_backend` (`StretchBackendKind`) are applied at the next
-track **(re)load** — the effect chain is built once per track in `kithara-audio`'s
-`create_effects`, so toggling either rebuilds nothing already playing. Callers that
-want an immediate switch re-select the current track. `Queue` delegates
-`set_keylock` / `set_stretch_backend` / `set_rate` to the player.
+Because the controls are read each chunk, **key-lock, backend, and speed all apply
+live, mid-track — no reload.** Switching key-lock or backend resets the FFT
+backend's buffer, so a brief transient (~100–300 ms) is expected at the switch.
+`Queue` delegates `set_keylock` / `set_backend` / `set_rate` to the player.
 
 ## Events
 

@@ -29,6 +29,31 @@ impl StretchBackendKind {
         #[cfg(all(not(target_arch = "wasm32"), feature = "stretch-bungee"))]
         Self::Bungee,
     ];
+
+    /// Stable discriminant for storing the selection in an atomic. Values are
+    /// fixed regardless of which feature-gated variants are compiled in.
+    pub(crate) const fn to_u8(self) -> u8 {
+        match self {
+            Self::Timestretch => 0,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "stretch-signalsmith"))]
+            Self::Signalsmith => 1,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "stretch-bungee"))]
+            Self::Bungee => 2,
+        }
+    }
+
+    /// Decode a discriminant written by [`Self::to_u8`]. Any value outside the
+    /// compiled-in set decodes to the always-available `Timestretch` (covers
+    /// `0` and the unreachable case of a variant that is not compiled here).
+    pub(crate) const fn from_u8(v: u8) -> Self {
+        match v {
+            #[cfg(all(not(target_arch = "wasm32"), feature = "stretch-signalsmith"))]
+            1 => Self::Signalsmith,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "stretch-bungee"))]
+            2 => Self::Bungee,
+            _ => Self::Timestretch,
+        }
+    }
 }
 
 /// UI label = the variant name (`Timestretch` / `Signalsmith` / `Bungee`),

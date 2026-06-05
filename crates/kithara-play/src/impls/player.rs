@@ -8,7 +8,10 @@ use std::{
 
 use bon::Builder;
 use kithara_abr::{AbrController, AbrSettings};
-use kithara_audio::{AudioWorkerHandle, EqBandConfig, SeekOutcome, generate_log_spaced_bands};
+use kithara_audio::{
+    AudioWorkerHandle, EngineLoad, EngineLoadSnapshot, EqBandConfig, SeekOutcome,
+    generate_log_spaced_bands,
+};
 use kithara_bufpool::PcmPool;
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
@@ -95,7 +98,7 @@ pub struct PlayerConfig {
     #[builder(default = 4)]
     pub max_slots: usize,
     /// Per-deck time-stretch control handle.
-    #[builder(default = TimestretchControls::new())]
+    #[builder(default = TimestretchControls::new(1.0))]
     pub timestretch: Arc<TimestretchControls>,
 }
 
@@ -127,11 +130,8 @@ impl Default for PlayerConfig {
 /// allocated. The current queue item is taken out of the queue, wrapped in
 /// [`PlayerResource`], and sent to the processor via `PlayerCmd::LoadTrack`.
 pub struct PlayerImpl {
-    /// Shared playback rate propagated to the audio pipeline resampler.
-    playback_rate_shared: Arc<AtomicF32>,
-    /// Sibling of `playback_rate_shared` read by the time-stretch slot in
-    /// tempo (keylock) mode.
-    tempo_ratio_shared: Arc<AtomicF32>,
+    /// Live shared cost meter of the audio engine.
+    engine_load: Arc<EngineLoad>,
     auto_advance_enabled: AtomicBool,
     muted: AtomicBool,
     crossfade_duration: AtomicF32,
@@ -465,7 +465,7 @@ impl PlayerImpl {
 
         *self.current_abr_handle.lock_sync() = resource.abr_handle();
 
-        let current_rate = self.playback_rate_shared.load(Ordering::Relaxed);
+        let current_rate = self.config.timestretch.speed();
         resource.set_playback_rate(current_rate);
 
         let host_sr = self.engine.master_sample_rate();
@@ -643,6 +643,8 @@ impl PlayerImpl {
             .cancel
             .clone()
             .expect("BUG: PlayerImpl::new / with_engine must populate config.cancel");
+        // Seed the single speed source with the configured default rate.
+        config.timestretch.set_speed(config.default_rate);
         Self {
             crossfade_duration: AtomicF32::new(config.crossfade_duration),
             prefetch_duration: AtomicF32::new(config.prefetch_duration.max(0.0)),
@@ -655,8 +657,7 @@ impl PlayerImpl {
             current_abr_handle: Mutex::new(None),
             muted: AtomicBool::new(false),
             pcm_pool: resolved_pool,
-            playback_rate_shared: Arc::new(AtomicF32::new(config.default_rate)),
-            tempo_ratio_shared: Arc::new(AtomicF32::new(config.default_rate)),
+            engine_load: Arc::new(EngineLoad::new()),
             pending_next: Mutex::new(None),
             auto_advance_enabled: AtomicBool::new(config.auto_advance_enabled),
             rate: AtomicF32::new(0.0),
@@ -680,8 +681,7 @@ impl PlayerImpl {
     pub fn play(&self) {
         let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
         self.rate.store(rate, Ordering::Relaxed);
-        self.playback_rate_shared.store(rate, Ordering::Relaxed);
-        self.tempo_ratio_shared.store(rate, Ordering::Relaxed);
+        self.config.timestretch.set_speed(rate);
 
         if let Err(e) = self.ensure_engine_started() {
             warn!(?e, "failed to start engine");
@@ -703,6 +703,12 @@ impl PlayerImpl {
         self.announce_current_item(self.current_index.load(Ordering::Relaxed));
         self.bus.publish(PlayerEvent::RateChanged { rate });
         debug!(rate, "play");
+    }
+
+    /// Live cost snapshot of the audio engine (decode + effects).
+    #[must_use]
+    pub fn engine_load(&self) -> EngineLoadSnapshot {
+        self.engine_load.snapshot()
     }
 
     /// Current playback position in seconds.
@@ -738,19 +744,18 @@ impl PlayerImpl {
         // player's master when none was supplied.
         let parent = config.cancel.unwrap_or_else(|| self.cancel.clone());
         let cancel = Some(parent.child_token());
-        let tempo_ratio = self
-            .config
-            .timestretch
-            .keylock()
-            .then(|| Arc::clone(&self.tempo_ratio_shared));
+        // Always engage tempo mode: the stretch slot is present regardless of
+        // key-lock (it bypasses cleanly when off), so key-lock and backend can
+        // be toggled live without reloading the track.
+        let stretch = Some(self.config.timestretch.shared());
         super::config::ResourceConfig {
             bus,
             cancel,
             worker: Some(self.engine.worker().clone()),
             host_sample_rate: std::num::NonZeroU32::new(self.engine.master_sample_rate()),
             gapless_mode: self.config.gapless_mode,
-            tempo_ratio,
-            stretch_backend: self.config.timestretch.backend(),
+            stretch,
+            engine_load: Some(Arc::clone(&self.engine_load)),
             ..config
         }
     }
@@ -1044,15 +1049,13 @@ impl PlayerImpl {
 
     /// Set playback rate.
     ///
-    /// Updates the local rate and propagates to the audio pipeline resampler
-    /// via `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
+    /// Stores the speed in the shared time-stretch controls (the single source
+    /// of truth, read each chunk by the effect chain) and propagates it via
+    /// `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
     pub fn set_rate(&self, rate: f32) {
         let clamped = rate.max(Self::MIN_PLAYBACK_RATE);
         self.rate.store(clamped, Ordering::Relaxed);
-        self.playback_rate_shared.store(clamped, Ordering::Relaxed);
-        // Mirror into the tempo-mode sibling so a live rate move reaches the
-        // running stretch when keylock is on (it reads this Arc each chunk).
-        self.tempo_ratio_shared.store(clamped, Ordering::Relaxed);
+        self.config.timestretch.set_speed(clamped);
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(clamped));
         self.bus.publish(PlayerEvent::RateChanged { rate: clamped });
     }
@@ -1370,7 +1373,7 @@ mod tests {
             auto_advance_enabled: true,
             session: None,
             cancel: None,
-            timestretch: TimestretchControls::new(),
+            timestretch: TimestretchControls::new(1.0),
         };
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
@@ -1434,11 +1437,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn set_rate_updates_shared_atomic() {
+    fn set_rate_updates_shared_speed() {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_rate(2.0);
-        let shared = &player.playback_rate_shared;
-        assert!((shared.load(Ordering::Relaxed) - 2.0).abs() < f32::EPSILON);
+        assert!((player.config.timestretch.speed() - 2.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
@@ -1446,7 +1448,7 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_rate(0.0);
         assert!(player.rate() >= 0.01);
-        assert!(player.playback_rate_shared.load(Ordering::Relaxed) >= 0.01);
+        assert!(player.config.timestretch.speed() >= 0.01);
 
         player.set_rate(-1.0);
         assert!(player.rate() >= 0.01);

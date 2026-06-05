@@ -8,7 +8,9 @@ use std::{
 use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::{AssetStore, FlushHub, StoreOptions};
-use kithara_audio::{AudioConfig, AudioWorkerHandle, ResamplerQuality, StretchBackendKind};
+use kithara_audio::{
+    AudioConfig, AudioWorkerHandle, EngineLoad, ResamplerQuality, StretchControls,
+};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{DecodeError, DecoderBackend};
 use kithara_events::EventBus;
@@ -127,18 +129,15 @@ pub struct ResourceConfig {
     pub name: Option<String>,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
-    /// Shared playback rate atomic for the audio pipeline resampler.
+    /// Shared playback rate atomic for the audio pipeline resampler in the
+    /// non-tempo (no-`stretch`) chain.
     pub playback_rate: Option<Arc<AtomicF32>>,
-    /// Preserve-pitch tempo control. `Some` selects tempo mode (keylock):
-    /// the time-stretch slot reads this shared speed while the resampler is
-    /// pinned to 1.0. `None` keeps the resampler-first chain (pitch follows
-    /// speed). The same `Arc` must flow to every track so live tempo moves
-    /// reach the running stretch.
-    pub tempo_ratio: Option<Arc<AtomicF32>>,
-    /// Time-stretch backend used in tempo mode. Ignored when `tempo_ratio`
-    /// is `None`.
-    #[builder(default)]
-    pub stretch_backend: StretchBackendKind,
+    /// Live time-stretch controls (speed + key-lock + backend). `Some` selects
+    /// tempo mode; the same `Arc` must flow to every track so live changes
+    /// reach the running effect chain. `None` keeps the resampler-first chain.
+    pub stretch: Option<Arc<StretchControls>>,
+    /// Shared live audio-engine cost meter (decode + effects).
+    pub engine_load: Option<Arc<EngineLoad>>,
     /// Shared audio worker handle for cooperative multi-track decoding.
     pub worker: Option<AudioWorkerHandle>,
     /// Resampling quality preset.
@@ -230,8 +229,8 @@ impl ResourceConfig {
             .preload_chunks(self.preload_chunks)
             .decoder_backend(self.decoder_backend)
             .maybe_playback_rate(self.playback_rate)
-            .maybe_tempo_ratio(self.tempo_ratio)
-            .stretch_backend(self.stretch_backend)
+            .maybe_stretch(self.stretch)
+            .maybe_engine_load(self.engine_load)
             .maybe_worker(self.worker)
             .gapless_mode(self.gapless_mode)
             .build()
@@ -280,8 +279,8 @@ impl ResourceConfig {
             .preload_chunks(self.preload_chunks)
             .decoder_backend(self.decoder_backend)
             .maybe_playback_rate(self.playback_rate)
-            .maybe_tempo_ratio(self.tempo_ratio)
-            .stretch_backend(self.stretch_backend)
+            .maybe_stretch(self.stretch)
+            .maybe_engine_load(self.engine_load)
             .maybe_worker(self.worker)
             .gapless_mode(self.gapless_mode)
             .build())

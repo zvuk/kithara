@@ -22,6 +22,7 @@ use portable_atomic::AtomicF32;
 use tracing::{debug, info, trace, warn};
 
 use crate::{
+    effects::timestretch::StretchControls,
     pipeline::{
         config::{AudioConfig, create_effects, expected_output_spec},
         fetch::{EpochValidator, Fetch, FetchKind},
@@ -108,8 +109,15 @@ pub struct Audio<S> {
     /// 0 means "not set".
     host_sample_rate: Arc<AtomicU32>,
 
-    /// Shared playback rate for timeline scaling (1.0 = normal speed).
+    /// Shared playback rate for timeline scaling (1.0 = normal speed). Read by
+    /// the resampler in the non-tempo chain; in tempo mode `set_playback_rate`
+    /// routes into `stretch` instead.
     playback_rate: Arc<AtomicF32>,
+
+    /// Live time-stretch controls when this source runs in tempo mode. `Some`
+    /// makes it the sink for `set_playback_rate` (speed) so the effect chain's
+    /// `TimeStretchProcessor` sees rate moves; `None` for the plain chain.
+    stretch: Option<Arc<StretchControls>>,
 
     /// Wake handle for blocking PCM reads.
     reader_wake: Arc<ThreadWake>,
@@ -807,8 +815,8 @@ where
             pcm_buffer_chunks,
             pcm_pool: mut pool,
             playback_rate: config_playback_rate,
-            tempo_ratio: config_tempo_ratio,
-            stretch_backend: config_stretch_backend,
+            stretch: config_stretch,
+            engine_load: config_engine_load,
             decoder_backend,
             preload_chunks,
             resampler_quality,
@@ -864,9 +872,7 @@ where
             initial_spec,
             &host_sample_rate,
             &playback_rate,
-            config_tempo_ratio
-                .as_ref()
-                .map(|tempo| (tempo, config_stretch_backend)),
+            config_stretch.as_ref(),
             resampler_quality,
             Some(pool.clone()),
             custom_effects,
@@ -921,6 +927,7 @@ where
             preload_gate: preload_gate.clone(),
             preload_chunks: preload_chunks.get(),
             service_class: Arc::clone(&service_class),
+            engine_load: config_engine_load,
         });
 
         Ok(Self {
@@ -929,6 +936,7 @@ where
             bus,
             host_sample_rate,
             playback_rate,
+            stretch: config_stretch,
             preload_gate,
             reader_wake,
             abr_handle,
@@ -1392,7 +1400,12 @@ impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
             .store(sample_rate.get(), Ordering::Relaxed);
     }
     fn set_playback_rate(&self, rate: f32) {
-        self.playback_rate.store(rate, Ordering::Relaxed);
+        // Tempo mode: speed lives in the shared controls (the stretch slot and
+        // its resampler read it). Plain chain: drive the resampler atomic.
+        match &self.stretch {
+            Some(controls) => controls.set_speed(rate),
+            None => self.playback_rate.store(rate, Ordering::Relaxed),
+        }
     }
 
     fn set_service_class(&self, class: ServiceClass) {
@@ -1431,6 +1444,7 @@ mod tests {
             _epoch: Arc::new(AtomicU64::new(0)),
             validator: EpochValidator::default(),
             spec: PcmSpec::default(),
+            stretch: None,
             current_chunk: None,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
@@ -1492,6 +1506,7 @@ mod tests {
             _epoch: Arc::new(AtomicU64::new(0)),
             validator: EpochValidator::default(),
             spec: PcmSpec::default(),
+            stretch: None,
             current_chunk: None,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,

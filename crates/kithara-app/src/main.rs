@@ -112,7 +112,7 @@ fn main() -> AppResult {
         .with_tracks(args.tracks)
         .with_should_accept_invalid_certs(args.insecure);
 
-    let timestretch = TimestretchControls::new();
+    let timestretch = TimestretchControls::new(1.0);
     let player_config = PlayerConfig::builder()
         .cancel(app_cancel.child_token())
         .crossfade_duration(config.crossfade_seconds)

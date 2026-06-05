@@ -154,12 +154,19 @@ the band -> color mapping and orchestration live in the consumer crates.
 Preserve-pitch tempo lives in the pre-resampler `TimeStretchProcessor` slot.
 `create_effects` builds one of two chains:
 
-- **resampler-first** (`tempo_ratio = None`): the resampler reads `playback_rate`; changing speed shifts pitch (vinyl-style).
-- **tempo mode** (`tempo_ratio = Some`): a `TimeStretchProcessor` runs *before* the resampler (pinned to 1.0) and changes tempo while holding pitch. This is key-lock.
+- **resampler-first** (`stretch = None`): no stretch slot; the resampler reads `playback_rate` directly. Used by plain (non-DJ) playback.
+- **tempo mode** (`stretch = Some`): a `TimeStretchProcessor` runs *before* the resampler. It is **always present** in tempo mode regardless of key-lock, and reads the live `StretchControls` (`speed` + `keylock` + `backend`) each chunk.
 
-Key-lock toggles *between* these two chains; there is no third rate concept. The chain is built once per track, so toggling key-lock or switching backend applies at the next track (re)load — `tempo_ratio`/`playback_rate` are shared `Arc<AtomicF32>` so live tempo moves within a mode are seamless.
+**Live speed routing — the one seam to know.** `StretchControls` is the single source of truth, shared (`Arc`) between the consumer/UI and this slot. The slot owns the *speed split* and is the sole writer of the resampler's rate atomic (`resampler_rate`, created in `create_effects` and handed to both the slot and the resampler that follows it):
 
-**Backend seam.** `TimeStretchProcessor` owns one `Box<dyn StretchBackend>` chosen at chain build; the trait is DSP-only (interleaved `process`/`flush`/`set_ratio`/`set_pitch`/`max_output_samples`/`reset`) so all `PcmChunk`/pool/timeline plumbing lives in one place and each library is a small adapter. `set_ratio` is the time factor (`output/input`, >1 = slower); `set_pitch` is independent (1.0 = pitch locked) — that decoupling is what makes key-lock real. Backends select statically via `StretchBackendKind` + `cfg`:
+| mode | what the stretch slot does | `resampler_rate` |
+|---|---|---|
+| key-lock **on** | `set_ratio(1/speed)`, `set_pitch(1.0)` → tempo moves, pitch held | `1.0` |
+| key-lock **off** | true pass-through (chunk forwarded untouched) | `speed` (resampler shifts pitch, vinyl-style) |
+
+Both effects run sequentially on the same worker thread, so the resampler always reads the value written for the current chunk — no cross-thread race, no control-thread mirror. Because the controls are read each chunk, **key-lock, backend, and speed all apply live, mid-track, with no reload.** A live key-lock or backend change discards the FFT backend's internal buffer (`reset`/rebuild), so expect a brief transient (~100–300 ms) at the switch; steady-state key-lock-off audio is byte-identical to the resampler-first chain (the slot never touches the buffer while bypassing).
+
+**Backend seam.** `TimeStretchProcessor` owns one `Box<dyn StretchBackend>` selected from `controls.backend()` and rebuilt in place on a live backend swap (or a source-spec change); the trait is DSP-only (interleaved `process`/`flush`/`set_ratio`/`set_pitch`/`max_output_samples`/`reset`) so all `PcmChunk`/pool/timeline plumbing lives in one place and each library is a small adapter. `set_ratio` is the time factor (`output/input`, >1 = slower); `set_pitch` is independent (1.0 = pitch locked) — that decoupling is what makes key-lock real. Backends select statically via `StretchBackendKind` + `cfg`:
 
 - `timestretch` (pure Rust) — always compiled, the only wasm backend.
 - `signalsmith-stretch` (C++ FFI) — native-only, feature `stretch-signalsmith`.
@@ -169,7 +176,15 @@ Key-lock toggles *between* these two chains; there is no third rate concept. The
 
 **Timeline.** A stretch changes the output frame *count*, not the rate: each emitted chunk recomputes `meta.frames` but preserves `timestamp`/`end_timestamp`/`spec` verbatim (the resampler's `finalize_resample_chunk` recipe), so the playhead stays in source-track time — a 3-minute track reads `0:00→3:00` even at 50 % tempo. `bungee` has no clean tail drain through its high-level `Stream`, so its `flush` is a no-op (the final ~latency of audio is dropped at EOS rather than padded with stretched silence). If `bungee`'s `Stream::new` ever fails at construction (only on an invalid spec — unreachable for real stereo/mono audio), the backend warns once and then emits silence until the track is reloaded, rather than erroring per chunk.
 
-**CPU.** `cargo bench -p kithara-audio --bench stretch_backends` prints a realtime-factor table per backend × speed over an in-code fixture (decision aid, no thresholds). It benches `StretchBackendKind::ALL`; see the bench file header for the one-line dev-dep edit that adds the native C++ backends.
+## Engine load (live cost meter)
+
+The audio worker measures its own processing cost and publishes it to a shared `EngineLoad` (lock-free `portable_atomic::AtomicF32`s — safe on the forbid-blocking produce core, no allocation). Each time `DecoderNode::tick` produces a chunk it times the whole decode→effects step (`source.step_track`: decode + resampler + EQ + time-stretch) with `Instant` and divides by the produced audio duration (`frames / sample_rate`), EWMA-smoothed. `EngineLoadSnapshot` exposes:
+
+- `realtime` — produced audio-seconds per CPU-second (`>1` = faster than realtime); the cost-per-sample metric, the live counterpart of the removed `stretch_backends` bench.
+- `load` — the `busy / audio` fraction (`0.05` = 5%).
+- `ms` — wall time per produced chunk (latency of one processing cycle).
+
+One `Arc<EngineLoad>` is created in `PlayerImpl`, threaded through `AudioConfig::engine_load` → `TrackRegistration` into every track's `DecoderNode`, and read back via `PlayerImpl::engine_load()` → `Queue::engine_load()` for the DJ-studio status bar. The atomics double as the EWMA state; the worker thread is the only writer, so the read-blend-store needs no lock. It reflects whichever track is currently producing and is meaningful whenever audio is flowing — independent of key-lock. `realtime == 0` means "no measurement yet" (paused / not started).
 
 ## Format Change Handling
 
@@ -212,7 +227,7 @@ On seek, epoch is incremented atomically. The worker tags each decoded chunk wit
 
 - **Node Architecture**: A track is represented by a single `Node` implementation (`DecoderNode`), stored in the shared scheduler as `Box<dyn Node>` through `runtime/`.
 - **Operators vs Nodes**: Audio effects are implemented as operators (`AudioEffect`) that are called directly within the track's `Node`. We do not use separate `Node`s or ring buffers between effects.
-- **Chain order**: The effect chain is `[..pre, Resampler, ..custom]`. With `AudioConfig::tempo_ratio` set (tempo mode), a source-domain `TimeStretchProcessor` occupies the `pre` slot before the host resampler, and the resampler's `playback_rate` is pinned to `1.0` (host SRC only). Without it, the chain is resampler-first and `playback_rate` drives the resampler "vinyl" speed+pitch path.
+- **Chain order**: The effect chain is `[..pre, Resampler, ..custom]`. With `AudioConfig::stretch` set (tempo mode), a source-domain `TimeStretchProcessor` occupies the `pre` slot before the host resampler and drives the resampler's rate atomic (`1.0` when key-locked, else `speed`). Without it, the chain is resampler-first and `playback_rate` drives the resampler "vinyl" speed+pitch path.
 - **EOF drain**: At true EOF the whole chain is drained once (`drain_effects`): each stage is flushed to exhaustion after the upstream stage's outputs pass through it, so a buffering effect's multi-pull tail is never truncated. `StreamAudioSource` parks the drained tail in a one-shot `eof_drain_queue` and emits one chunk per call; `EndOfStream` fires once on completion, not at source exhaustion.
 
 ### Coordinate spaces

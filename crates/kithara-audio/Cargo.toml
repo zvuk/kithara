@@ -92,10 +92,6 @@ aes = { workspace = true }
 cbc = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
-[[bench]]
-name = "stretch_backends"
-harness = false
-
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "stream"] }

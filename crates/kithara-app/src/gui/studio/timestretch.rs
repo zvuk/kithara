@@ -175,7 +175,6 @@ fn mini_label(label: String, p: GuiPalette) -> Element<'static, Message> {
     .into()
 }
 
-/// `.ts-stat` tile: small mono label over a tabular value.
 fn stat_tile(label: &str, value: String, p: GuiPalette) -> Element<'static, Message> {
     container(
         column![

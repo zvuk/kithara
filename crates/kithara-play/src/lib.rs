@@ -44,7 +44,9 @@ pub use impls::{
     shared_eq::SharedEq,
     source_type::SourceType,
 };
-pub use kithara_audio::{AudioWorkerHandle, SeekOutcome, ServiceClass, StretchBackendKind};
+pub use kithara_audio::{
+    AudioWorkerHandle, EngineLoadSnapshot, SeekOutcome, ServiceClass, StretchBackendKind,
+};
 pub use kithara_net::Headers;
 pub use metadata::{Artwork, Metadata};
 pub use time::MediaTime;

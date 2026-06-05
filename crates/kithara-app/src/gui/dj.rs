@@ -82,12 +82,12 @@ pub(crate) fn handle(state: &mut Kithara, msg: &DjMsg) -> Task<Message> {
         DjMsg::Nudge(d) => state.dj.timestretch.nudge(*d),
         DjMsg::ResetTempo => state.dj.timestretch.tempo = 0.0,
         DjMsg::ToggleKeyLock => {
-            // Mode change applies at the next track (re)load.
+            // Applies live, mid-track (shared controls read each chunk).
             let deck = state.controller.deck();
             deck.set_keylock(!deck.keylock());
         }
         DjMsg::SelectBackend(backend) => {
-            // Backend change applies at the next track (re)load.
+            // Applies live, mid-track (shared controls read each chunk).
             state.controller.deck().set_backend(*backend);
         }
     }

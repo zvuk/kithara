@@ -6,6 +6,7 @@ use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
 use portable_atomic::AtomicF32;
 use tracing::warn;
 
+use super::controls::StretchControls;
 use super::stretch_backend::StretchBackend;
 use super::stretch_factory::build_backend;
 use super::stretch_kind::StretchBackendKind;
@@ -19,24 +20,34 @@ const MIN_SPEED: f32 = 0.05;
 /// Re-apply the stretch ratio to the backend only when it moves this much.
 const RATIO_EPS: f64 = 1e-4;
 
-/// Pre-resampler time-stretch slot: drives one [`StretchBackend`] (chosen
-/// once at chain build) and owns all chunk / pool / timeline plumbing.
+/// Pre-resampler time-stretch slot. Reads live key-lock, backend, and speed
+/// from the shared [`StretchControls`] each chunk:
 ///
-/// Reads the shared playback `speed` (>1 faster) from `tempo_ratio` and
-/// hands the backend the inverse stretch factor; pitch is held at `1.0`
-/// (tempo mode preserves pitch by definition). Output frame count differs
-/// from input, so each emitted chunk's `frames` is recomputed while the
-/// decoder's `timestamp` / `end_timestamp` / `spec` are preserved verbatim
-/// — the playhead stays in source-track time. See the resampler for the
-/// same meta recipe and `crates/kithara-audio/README.md` for the contract.
+/// - key-lock **on**: drives the backend with the inverse stretch factor
+///   (`1 / speed`), pitch held at `1.0`, and pins the resampler to `1.0`;
+/// - key-lock **off**: a true pass-through — the chunk is forwarded untouched
+///   and `speed` is routed to the resampler instead (pitch follows speed).
+///
+/// It owns the speed split: each chunk it writes the resampler's rate atomic
+/// (`1.0` when key-locked, else `speed`). Both effects run sequentially on the
+/// same worker thread, so the resampler always reads the value written for the
+/// current chunk. See the crate `README.md` ("Live stretch controls").
 pub struct TimeStretchProcessor {
     backend: Box<dyn StretchBackend>,
-    kind: StretchBackendKind,
-    tempo_ratio: Arc<AtomicF32>,
+    /// Backend kind currently built; compared against `controls.backend()` to
+    /// detect a live backend swap.
+    current_kind: StretchBackendKind,
+    controls: Arc<StretchControls>,
+    /// Resampler rate atomic this slot drives. Shared with the resampler that
+    /// follows it in the chain.
+    resampler_rate: Arc<AtomicF32>,
     pool: PcmPool,
     spec: PcmSpec,
     /// Last stretch factor pushed to the backend; avoids redundant updates.
     applied_stretch: f64,
+    /// Whether the previous chunk ran through the backend (key-lock on). Drives
+    /// a clean backend reset on an on->off transition.
+    active: bool,
     /// Most recent input meta, carried onto each output chunk.
     last_input_meta: Option<PcmMeta>,
     /// Interleaved output scratch, reused across calls (alloc-free steady state).
@@ -44,36 +55,51 @@ pub struct TimeStretchProcessor {
 }
 
 impl TimeStretchProcessor {
-    /// Build the slot for `kind` at the source `spec`, driven by the shared
-    /// `tempo_ratio` playback-speed atomic.
+    /// Build the slot at the source `spec`, driven by the shared `controls`.
+    /// `resampler_rate` is the atomic the following resampler reads; this slot
+    /// is its sole writer.
     pub fn new(
-        kind: StretchBackendKind,
+        controls: Arc<StretchControls>,
+        resampler_rate: Arc<AtomicF32>,
         spec: PcmSpec,
-        tempo_ratio: Arc<AtomicF32>,
         pool: PcmPool,
     ) -> Self {
-        let mut backend = build_backend(kind, spec);
+        let current_kind = controls.backend();
+        let mut backend = build_backend(current_kind, spec);
         if let Err(e) = backend.set_pitch(1.0) {
             warn!(error = %e, "time-stretch set_pitch(1.0) failed");
         }
-        let mut me = Self {
+        let me = Self {
             backend,
-            kind,
-            tempo_ratio,
+            current_kind,
+            controls,
+            resampler_rate,
             pool,
             spec,
             applied_stretch: f64::NAN,
+            active: false,
             last_input_meta: None,
             scratch: Vec::new(),
         };
-        me.sync_ratio();
+        me.route_rate();
         me
+    }
+
+    /// Route the playback speed: the resampler stays at `1.0` while key-locked
+    /// (this slot owns the tempo) and follows `speed` otherwise.
+    fn route_rate(&self) {
+        let rate = if self.controls.keylock() {
+            1.0
+        } else {
+            self.controls.speed()
+        };
+        self.resampler_rate.store(rate, Ordering::Relaxed);
     }
 
     /// Pull the shared playback speed and update the backend stretch factor
     /// (`1 / speed`) when it has moved.
     fn sync_ratio(&mut self) {
-        let speed = self.tempo_ratio.load(Ordering::Relaxed).max(MIN_SPEED);
+        let speed = self.controls.speed().max(MIN_SPEED);
         let stretch = 1.0 / f64::from(speed);
         // `NaN` is the "never applied" sentinel; the diff test alone would
         // skip it (every comparison with NaN is false).
@@ -83,6 +109,18 @@ impl TimeStretchProcessor {
                 Err(e) => warn!(error = %e, "time-stretch set_ratio failed"),
             }
         }
+    }
+
+    /// Rebuild the backend for `kind` at the current `spec`, discarding any
+    /// buffered state. Used on a live backend swap and on a source-spec change.
+    fn rebuild_backend(&mut self, kind: StretchBackendKind) {
+        self.backend = build_backend(kind, self.spec);
+        if let Err(e) = self.backend.set_pitch(1.0) {
+            warn!(error = %e, "time-stretch set_pitch(1.0) failed");
+        }
+        self.current_kind = kind;
+        self.applied_stretch = f64::NAN;
+        self.active = false;
     }
 
     /// Assemble an output chunk from `scratch`, preserving decoder timing.
@@ -115,14 +153,31 @@ impl AudioEffect for TimeStretchProcessor {
     }
 
     fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
-        if chunk.spec() != self.spec {
+        // Route the resampler rate first, before any accumulation early-return,
+        // so a live key-lock toggle reaches the resampler on the same chunk.
+        self.route_rate();
+
+        let spec_changed = chunk.spec() != self.spec;
+        if spec_changed {
             self.spec = chunk.spec();
-            self.backend = build_backend(self.kind, self.spec);
-            if let Err(e) = self.backend.set_pitch(1.0) {
-                warn!(error = %e, "time-stretch set_pitch(1.0) failed");
-            }
-            self.applied_stretch = f64::NAN;
         }
+        let want_kind = self.controls.backend();
+        if want_kind != self.current_kind || spec_changed {
+            self.rebuild_backend(want_kind);
+        }
+
+        if !self.controls.keylock() {
+            // Bypass: forward untouched. Clear any buffer left from a prior
+            // key-locked run so the next on-transition starts clean.
+            if self.active {
+                self.backend.reset();
+                self.applied_stretch = f64::NAN;
+                self.active = false;
+            }
+            return Some(chunk);
+        }
+
+        self.active = true;
         self.sync_ratio();
         self.last_input_meta = Some(chunk.meta);
 
@@ -143,6 +198,7 @@ impl AudioEffect for TimeStretchProcessor {
         self.scratch.clear();
         self.last_input_meta = None;
         self.applied_stretch = f64::NAN;
+        self.active = false;
     }
 }
 
@@ -222,18 +278,32 @@ mod tests {
         num_traits::cast((freq * f64_of(N) / f64::from(SR)).round()).unwrap_or(0)
     }
 
-    fn run(kind: StretchBackendKind, speed: f32, in_frames: usize) -> Vec<f32> {
-        let input = sine(in_frames);
-        let tempo = Arc::new(AtomicF32::new(speed));
-        let mut fx = TimeStretchProcessor::new(
-            kind,
-            PcmSpec {
-                channels: CH,
-                sample_rate: SR,
-            },
-            Arc::clone(&tempo),
+    fn spec() -> PcmSpec {
+        PcmSpec {
+            channels: CH,
+            sample_rate: SR,
+        }
+    }
+
+    /// Build a key-locked processor at `speed` on `kind`, plus the resampler
+    /// rate atomic it drives.
+    fn keylocked(kind: StretchBackendKind, speed: f32) -> (TimeStretchProcessor, Arc<AtomicF32>) {
+        let controls = StretchControls::new(speed);
+        controls.set_keylock(true);
+        controls.set_backend(kind);
+        let resampler_rate = Arc::new(AtomicF32::new(1.0));
+        let fx = TimeStretchProcessor::new(
+            controls,
+            Arc::clone(&resampler_rate),
+            spec(),
             PcmPool::default().clone(),
         );
+        (fx, resampler_rate)
+    }
+
+    fn run(kind: StretchBackendKind, speed: f32, in_frames: usize) -> Vec<f32> {
+        let input = sine(in_frames);
+        let (mut fx, _rate) = keylocked(kind, speed);
         let mut out: Vec<f32> = Vec::new();
         let block = 4096 * usize::from(CH);
         for data in input.chunks(block) {
@@ -348,16 +418,7 @@ mod tests {
     #[kithara::test]
     fn output_meta_preserves_decoder_timeline() {
         let channels = usize::from(CH);
-        let tempo = Arc::new(AtomicF32::new(0.5));
-        let mut fx = TimeStretchProcessor::new(
-            StretchBackendKind::Timestretch,
-            PcmSpec {
-                channels: CH,
-                sample_rate: SR,
-            },
-            Arc::clone(&tempo),
-            PcmPool::default().clone(),
-        );
+        let (mut fx, _rate) = keylocked(StretchBackendKind::Timestretch, 0.5);
         let cf = 1024usize;
         let block = sine(cf);
         let mut fed_ends = std::collections::HashSet::new();
@@ -396,5 +457,122 @@ mod tests {
                 "end_timestamp carried verbatim from an input chunk (source-track time)"
             );
         }
+    }
+
+    /// Key-lock off is a true pass-through: PCM is forwarded byte-identical and
+    /// the speed is routed to the resampler (which then moves pitch with it).
+    #[kithara::test]
+    fn bypass_forwards_input_and_routes_speed_to_resampler() {
+        let controls = StretchControls::new(1.5);
+        let rate = Arc::new(AtomicF32::new(1.0));
+        let mut fx = TimeStretchProcessor::new(
+            Arc::clone(&controls),
+            Arc::clone(&rate),
+            spec(),
+            PcmPool::default().clone(),
+        );
+        let input = sine(8192);
+        let block = 4096 * usize::from(CH);
+        let mut out: Vec<f32> = Vec::new();
+        for data in input.chunks(block) {
+            if let Some(c) = fx.process(chunk(data)) {
+                out.extend_from_slice(c.samples());
+            }
+        }
+        assert_eq!(out, input, "key-lock off forwards PCM untouched");
+        assert!(
+            (rate.load(Ordering::Relaxed) - 1.5).abs() < 1e-6,
+            "speed routed to the resampler in bypass"
+        );
+    }
+
+    /// Key-lock on pins the resampler to unity (this slot owns the tempo).
+    #[kithara::test]
+    fn keylock_pins_resampler_to_unity() {
+        let (mut fx, rate) = keylocked(StretchBackendKind::Timestretch, 0.5);
+        let _ = fx.process(chunk(&sine(4096)));
+        assert!(
+            (rate.load(Ordering::Relaxed) - 1.0).abs() < 1e-6,
+            "resampler pinned to 1.0 while key-locked"
+        );
+    }
+
+    /// Flipping key-lock mid-stream switches routing live: bypass + rate=speed
+    /// before, pitch-preserving stretch + rate=1.0 after — no reload.
+    #[kithara::test]
+    fn live_keylock_toggle_switches_routing_and_stretches() {
+        let controls = StretchControls::new(0.5);
+        let rate = Arc::new(AtomicF32::new(1.0));
+        let mut fx = TimeStretchProcessor::new(
+            Arc::clone(&controls),
+            Arc::clone(&rate),
+            spec(),
+            PcmPool::default().clone(),
+        );
+        let block = sine(4096);
+
+        // Phase 1: key-lock off -> untouched passthrough, speed routed out.
+        let off = fx.process(chunk(&block)).expect("bypass emits every chunk");
+        assert_eq!(off.samples(), &block[..], "off: PCM forwarded untouched");
+        assert!(
+            (rate.load(Ordering::Relaxed) - 0.5).abs() < 1e-6,
+            "off: speed routed to resampler"
+        );
+
+        // Phase 2: toggle on mid-stream.
+        controls.set_keylock(true);
+        let mut stretched: Vec<f32> = Vec::new();
+        for _ in 0..24 {
+            if let Some(c) = fx.process(chunk(&block)) {
+                stretched.extend_from_slice(c.samples());
+            }
+        }
+        while let Some(c) = fx.flush() {
+            stretched.extend_from_slice(c.samples());
+        }
+        assert!(
+            (rate.load(Ordering::Relaxed) - 1.0).abs() < 1e-6,
+            "on: resampler pinned to unity"
+        );
+        let mono: Vec<f32> = stretched.iter().step_by(usize::from(CH)).copied().collect();
+        assert!(mono.len() >= N, "on: not enough output for the FFT window");
+        assert!(
+            dominant_bin(&mono).abs_diff(expected_bin(F0)) <= 3,
+            "on: pitch preserved after live toggle"
+        );
+    }
+
+    /// Swapping the backend mid-stream keeps the stream flowing and pitch-locked.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "stretch-signalsmith"))]
+    #[kithara::test]
+    fn live_backend_swap_continues_and_keeps_pitch() {
+        let controls = StretchControls::new(0.5);
+        controls.set_keylock(true);
+        let rate = Arc::new(AtomicF32::new(1.0));
+        let mut fx = TimeStretchProcessor::new(
+            Arc::clone(&controls),
+            rate,
+            spec(),
+            PcmPool::default().clone(),
+        );
+        let block = sine(4096);
+        let mut out: Vec<f32> = Vec::new();
+        for i in 0..24 {
+            if i == 6 {
+                controls.set_backend(StretchBackendKind::Signalsmith);
+            }
+            if let Some(c) = fx.process(chunk(&block)) {
+                out.extend_from_slice(c.samples());
+            }
+        }
+        while let Some(c) = fx.flush() {
+            out.extend_from_slice(c.samples());
+        }
+        let mono: Vec<f32> = out.iter().step_by(usize::from(CH)).copied().collect();
+        assert!(mono.len() >= N, "not enough output after swap for the FFT window");
+        assert!(
+            dominant_bin(&mono).abs_diff(expected_bin(F0)) <= 3,
+            "pitch preserved after live backend swap"
+        );
     }
 }

@@ -7,7 +7,7 @@ use kithara::{
     abr::AbrHandle,
     events::{AbrMode, AppEvent, EngineEvent, Event, PlayerEvent, TrackId, VariantInfo},
     play::TimestretchControls,
-    prelude::ResourceConfig,
+    prelude::{EngineLoadSnapshot, ResourceConfig},
     stream::AudioCodec,
 };
 use kithara_platform::{CancellationToken, sync::Mutex};
@@ -53,6 +53,7 @@ pub struct UiState {
     pub duration: f64,
     pub position: f64,
     pub seek_position: f64,
+    pub engine_load: EngineLoadSnapshot,
 }
 
 impl UiState {
@@ -83,6 +84,7 @@ impl UiState {
             is_seeking: false,
             seek_position: 0.0,
             selected_rate: 1.0,
+            engine_load: EngineLoadSnapshot::default(),
         }
     }
 }
@@ -195,6 +197,7 @@ impl StateController {
         st.volume = self.queue.volume();
         st.position = position;
         st.duration = duration;
+        st.engine_load = self.queue.engine_load();
         if let Some(idx) = self.queue.current_index() {
             st.current_track_index = Some(idx);
         }

@@ -97,7 +97,9 @@ pub mod mock {
 pub mod prelude {
     #[cfg(feature = "hls")]
     pub use kithara_abr::AbrMode;
-    pub use kithara_audio::{Audio, AudioConfig, PcmReader, ResamplerQuality, StretchBackendKind};
+    pub use kithara_audio::{
+        Audio, AudioConfig, EngineLoadSnapshot, PcmReader, ResamplerQuality, StretchBackendKind,
+    };
     pub use kithara_decode::{
         DecodeError, DecodeResult, DecoderTrackInfo, PcmMeta, PcmSpec, TrackMetadata,
     };

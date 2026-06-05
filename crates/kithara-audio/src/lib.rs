@@ -24,7 +24,7 @@ pub(crate) mod worker;
 pub use audio::Audio;
 pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
-    timestretch::{StretchBackendKind, TimeStretchProcessor},
+    timestretch::{StretchBackendKind, StretchControls, TimeStretchProcessor},
 };
 pub use pipeline::{
     config::AudioConfig,
@@ -36,4 +36,7 @@ pub use traits::{
     SeekOutcome,
 };
 pub use waveform::{AnalysisParams, Bucket, Waveform, WaveformAnalyzer, WaveformBytesError};
-pub use worker::{AudioWorkerSource, PreloadGate, handle::AudioWorkerHandle, types::ServiceClass};
+pub use worker::{
+    AudioWorkerSource, EngineLoad, EngineLoadSnapshot, PreloadGate, handle::AudioWorkerHandle,
+    types::ServiceClass,
+};

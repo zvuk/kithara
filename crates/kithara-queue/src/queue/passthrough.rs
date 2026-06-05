@@ -1,6 +1,6 @@
 use delegate::delegate;
 use kithara_events::EventBus;
-use kithara_play::{PlayError, PlayerStatus};
+use kithara_play::{EngineLoadSnapshot, PlayError, PlayerStatus};
 
 use super::Queue;
 
@@ -43,6 +43,9 @@ impl Queue {
             /// Live engine playback status.
             #[must_use]
             pub fn status(&self) -> PlayerStatus;
+            /// Live audio-engine cost (realtime factor / load / ms).
+            #[must_use]
+            pub fn engine_load(&self) -> EngineLoadSnapshot;
             /// Number of EQ bands.
             #[must_use]
             pub fn eq_band_count(&self) -> usize;
