@@ -54,13 +54,13 @@ time::sleep(std::time::Duration::from_millis(10)).await;
 
 - `time::sleep(duration)`
 - `time::timeout(duration, future)`
-- `time::Instant` (via `web-time`, or the virtual clock under `sim-time`)
+- `time::Instant` (via `web-time`, or the virtual clock under `flash-time`)
 
 On native these delegate to `tokio` runtime primitives, on wasm they use `setTimeout`-based scheduling. `web_time` is an internal implementation detail of this crate: no other crate may depend on it directly (enforced by the `arch.no-web-time` ast-grep gate), and `std::time::{Instant, Duration}` is likewise banned outside this crate (`arch.no-std-time`). Routing every timestamp through `time::Instant` is what lets the clock be swapped wholesale, below.
 
-### Virtual time (`sim-time`)
+### Virtual time (`flash-time`)
 
-`sim-time` is an off-by-default cargo feature, native and test-only, that replaces the wall clock with a process-global virtual timeline so warm-cache offline playback tests run at CPU speed instead of real time. No shipping crate enables it; production builds are unchanged.
+`flash-time` is an off-by-default cargo feature, native and test-only, that replaces the wall clock with a process-global virtual timeline so warm-cache offline playback tests run at CPU speed instead of real time. No shipping crate enables it; production builds are unchanged.
 
 The clock is **quiescence-driven**, not additive: a single global `SIM_NANOS`
 (read lock-free by `Instant::now`) advances only when every participating root is
@@ -122,7 +122,7 @@ Contract:
   that share a process.
 
 The intended workflow is two runs compared as ground truth: the default
-real-time run (catches concurrency/timing bugs) and the `sim-time` run (fast).
+real-time run (catches concurrency/timing bugs) and the `flash-time` run (fast).
 Divergence in sample-count positions or PCM between them flags that
 virtualization distorted something. The FILE phase-continuity cluster is the
 first equivalence oracle: its sub-0.5-sample phase assertions fail on any

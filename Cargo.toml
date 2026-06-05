@@ -337,7 +337,7 @@ opt-level = 2
 # and `kithara-decode` drives the per-frame demux/decode loop — both are as
 # debug-slow as the upstream codecs above when left at opt-0 (~100s of ms per
 # chunk). Harmless under real-time playback (decode overlaps the real download),
-# but under `sim-time` the decode sits on the critical path (the virtual clock
+# but under `flash-time` the decode sits on the critical path (the virtual clock
 # waits for it), so the debug cost dominates wall-clock and stalls tests.
 [profile.dev.package.kithara-audio]
 opt-level = 2

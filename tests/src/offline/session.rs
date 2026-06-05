@@ -30,7 +30,7 @@ pub struct OfflineSession {
     cmd_tx: Mutex<mpsc::Sender<OfflineMsg>>,
     /// Render-thread handle, woken after every send so a command (or shutdown) is
     /// drained at once instead of after the next `park_timeout` budget. Under
-    /// `sim-time` this matters for correctness, not just latency: the render
+    /// `flash-time` this matters for correctness, not just latency: the render
     /// thread's `park_timeout` only fires when the virtual clock advances, but at
     /// teardown the joining thread blocks (pinning the clock), so without an
     /// explicit wake the render thread would never see `Shutdown` and the join

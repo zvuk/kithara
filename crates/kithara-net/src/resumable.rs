@@ -9,7 +9,7 @@
 //! the deadline the instant the task parks — racing past the in-flight loopback
 //! bytes and spuriously "stalling" every healthy stream under simulation. The
 //! retry BACKOFF between attempts is a pure wait with no concurrent I/O, so it
-//! stays virtual (`time::sleep`, collapses under `sim-time`).
+//! stays virtual (`time::sleep`, collapses under `flash-time`).
 
 use std::pin::Pin;
 
@@ -245,7 +245,7 @@ mod tests {
     }
 
     /// Withheld body → bounded terminal `RetryExhausted` (not a hang). Works in
-    /// real time and under `sim-time` (virtual clock collapses the waits).
+    /// real time and under `flash-time` (virtual clock collapses the waits).
     fn resumed(stream: ByteStream, skip: u64) -> Resumed {
         Resumed { stream, skip }
     }

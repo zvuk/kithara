@@ -1,7 +1,7 @@
 #[cfg(target_arch = "wasm32")]
 use std::pin::pin;
 pub use std::time::Duration;
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 use std::{
     pin::Pin,
     task::{Context, Poll},
@@ -13,19 +13,19 @@ use futures::future::{self as future_util, Either};
 use js_sys::{Function, Promise, Reflect, global};
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_alias::time as tokio_time;
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "sim-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
 pub use tokio_time::sleep;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_with_wasm::alias as tokio_alias;
 
-/// `sleep` under `sim-time` (native): real-vs-virtual is decided by the per-
+/// `sleep` under `flash-time` (native): real-vs-virtual is decided by the per-
 /// thread real-time flag at first poll (the thread that actually awaits). On a
 /// real-time thread (the test driver, marked by [`real_time`]) it is a true
 /// `tokio` timer; otherwise it registers a virtual deadline on the quiescence
 /// engine, so the wait collapses (the clock jumps once all participants park)
 /// and consumes no real wall-clock. The decision lives at this single chokepoint
 /// — consumers just call `kithara_platform::time::sleep`.
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub async fn sleep(duration: Duration) {
     if sim::sim_enabled() {
         sim::SimSleep::new(duration).await;
@@ -34,34 +34,34 @@ pub async fn sleep(duration: Duration) {
     }
 }
 
-/// Per-thread real-time scope. Under `sim-time` (native) this is the engine's
+/// Per-thread real-time scope. Under `flash-time` (native) this is the engine's
 /// [`sim::RealTimeScope`]: while held, [`Instant::now`] reads the real monotonic
 /// clock and the synchronous wait primitives use their real implementations, so
 /// a real-wall-clock island (the hang watchdog, a real blocking-I/O stretch)
 /// coexists with the surrounding virtual clock. Off the sim path it is a ZST
 /// no-op (time is already real), so callers hold it through one stable path
 /// without a `cfg`.
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub use sim::{Participating, RealTimeScope, participate, real_time};
 
 /// Off the sim path: spawning needs no quiescence bracket, so `participate` is
 /// an identity passthrough (the real clock already advances on its own). Under
-/// `sim-time` this is [`sim::participate`], which wraps the future so it counts
+/// `flash-time` this is [`sim::participate`], which wraps the future so it counts
 /// in the engine's `active_async` while running.
-#[cfg(not(all(not(target_arch = "wasm32"), feature = "sim-time")))]
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
 #[inline]
 pub fn participate<F: Future>(fut: F) -> F {
     fut
 }
 
 /// No-op real-time scope off the sim path (time is already real).
-#[cfg(not(all(not(target_arch = "wasm32"), feature = "sim-time")))]
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
 #[derive(Debug)]
 pub struct RealTimeScope;
 
 /// Enter a real-time scope. Off the sim path this is a ZST no-op; under
-/// `sim-time` it puts the current thread on real time for the guard's lifetime.
-#[cfg(not(all(not(target_arch = "wasm32"), feature = "sim-time")))]
+/// `flash-time` it puts the current thread on real time for the guard's lifetime.
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
 #[inline]
 #[must_use]
 pub fn real_time() -> RealTimeScope {
@@ -73,18 +73,18 @@ use wasm_bindgen::{JsCast, JsValue};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::JsFuture;
 
-/// Virtual-clock backing for [`Instant`] under the `sim-time` test feature
+/// Virtual-clock backing for [`Instant`] under the `flash-time` test feature
 /// (native only). Off by default; see the module and crate README.
-#[cfg(all(feature = "sim-time", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "flash-time", not(target_arch = "wasm32")))]
 pub mod sim;
 
-#[cfg(all(feature = "sim-time", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "flash-time", not(target_arch = "wasm32")))]
 pub use sim::Instant;
-#[cfg(not(all(feature = "sim-time", not(target_arch = "wasm32"))))]
+#[cfg(not(all(feature = "flash-time", not(target_arch = "wasm32"))))]
 pub use web_time::Instant;
 /// Wall-clock timestamp (native: `std::time::SystemTime`, wasm: `web_time`).
 /// Routed through the platform so no crate imports `std::time` directly; unlike
-/// [`Instant`] it is not virtualized under `sim-time` (callers are wall-clock
+/// [`Instant`] it is not virtualized under `flash-time` (callers are wall-clock
 /// watchdogs/reports that want real time). Use `SystemTime::UNIX_EPOCH` for the
 /// epoch anchor.
 pub use web_time::SystemTime;
@@ -128,7 +128,7 @@ impl std::fmt::Display for TimeoutError {
 impl std::error::Error for TimeoutError {}
 
 /// Await `future` with a deadline that lives on the SAME clock as the awaited
-/// work — under `sim-time` a virtual deadline (collapses with the engine), off
+/// work — under `flash-time` a virtual deadline (collapses with the engine), off
 /// it a real `tokio` timer. This is the deadline a PROGRAM imposes on its own
 /// async work (e.g. a fetch total-timeout): under sim it must NOT pin the
 /// runtime's real timer wheel, or the virtual clock cannot collapse past it.
@@ -136,7 +136,7 @@ impl std::error::Error for TimeoutError {}
 /// # Errors
 ///
 /// Returns [`TimeoutError`] if the future does not complete within `duration`.
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "sim-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
 pub async fn timeout<F>(duration: Duration, future: F) -> Result<F::Output, TimeoutError>
 where
     F: Future,
@@ -146,7 +146,7 @@ where
         .map_err(|_| TimeoutError)
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub async fn timeout<F>(duration: Duration, future: F) -> Result<F::Output, TimeoutError>
 where
     F: Future,
@@ -165,15 +165,15 @@ where
 }
 
 /// Races `future` against an engine-backed [`sim::SimSleep`] deadline (see the
-/// `sim-time` [`timeout`]). The future is polled first, so a ready result wins a
+/// `flash-time` [`timeout`]). The future is polled first, so a ready result wins a
 /// tie with the deadline.
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 struct SimTimeout<F> {
     future: F,
     sleep: sim::SimSleep,
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 impl<F: Future> Future for SimTimeout<F> {
     type Output = Result<F::Output, TimeoutError>;
 

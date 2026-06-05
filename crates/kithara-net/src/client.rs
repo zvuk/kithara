@@ -81,7 +81,7 @@ fn build_client(options: &NetOptions) -> reqwest::Result<Client> {
     // No reqwest `.read_timeout`: the idle/stall timeout is owned by the
     // resilient body (`resumable_body`), whose `sleep(inactivity_timeout)`
     // routes through `kithara_platform::time` and so collapses under
-    // `sim-time`. reqwest's timer is real wall-clock and would both
+    // `flash-time`. reqwest's timer is real wall-clock and would both
     // double-own the stall and break simulation determinism.
     let base = Client::builder()
         .cookie_store(true)

@@ -63,13 +63,13 @@ pub type ThreadId = std::thread::ThreadId;
 #[cfg(target_arch = "wasm32")]
 pub type ThreadId = wasm_safe_thread::ThreadId;
 
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "sim-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
 #[inline]
 pub fn yield_now() {
     std::thread::yield_now();
 }
 
-/// Under `sim-time`, a cooperative yield must relinquish the quiescence engine:
+/// Under `flash-time`, a cooperative yield must relinquish the quiescence engine:
 /// a busy-poll loop spinning on `std::thread::yield_now` keeps the thread counted
 /// as running, so the virtual clock can never advance past it — and a loop bounded
 /// by a virtual-time deadline then livelocks (it waits for time its own spinning
@@ -77,7 +77,7 @@ pub fn yield_now() {
 /// advance, then wakes it on the next advance to re-check. Off the sim path
 /// (real-time scope) it stays a plain OS yield, so the real-time / RT worker
 /// behaviour is unchanged. See `crate::time::sim::sched::yield_until_advance`.
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 #[inline]
 pub fn yield_now() {
     if crate::time::sim::sim_enabled() {
@@ -194,7 +194,7 @@ pub fn active_named_thread_count() -> usize {
 /// increments on entry (at call site, before spawn), decrements after the
 /// closure returns. Used by all [`spawn_named`] variants.
 ///
-/// Under `sim-time` (native) the bracket also owns the quiescence credit: it
+/// Under `flash-time` (native) the bracket also owns the quiescence credit: it
 /// resets this thread's credit on entry (a freshly-spawned thread must start
 /// `None`) and drops it on exit (a thread that woke to `Running` and returns
 /// must release its `active` slot). This makes participant accounting intrinsic
@@ -207,7 +207,7 @@ where
 {
     ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
     move || {
-        #[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+        #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
         {
             crate::time::sim::sched::reset_credit();
             // A `spawn_named` thread is a DEDICATED virtual-time pacer: it is the
@@ -217,7 +217,7 @@ where
             crate::time::sim::sched::mark_dedicated();
         }
         let result = f();
-        #[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+        #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
         crate::time::sim::sched::on_participant_exit();
         ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
         result
@@ -285,20 +285,20 @@ where
 }
 
 /// Block the current thread for at least `duration` (native, non-sim).
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "sim-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
 #[inline]
 pub fn sleep(duration: Duration) {
     std::thread::sleep(duration);
 }
 
-/// Under `sim-time`, a sleep registers a pure timed waiter on the quiescence
+/// Under `flash-time`, a sleep registers a pure timed waiter on the quiescence
 /// engine (deadline = virtual now + `duration`) and blocks off-lock until the
 /// engine crosses it — collapsing to zero real wall-clock like every other
 /// virtual wait, so a thread that sleeps to delay a state change cannot be raced
 /// by a peer's virtual wait advancing the clock past it. Real-time scopes keep a
 /// true wall-clock sleep. Unlike [`park_timeout`] a sleep has no early wake. See
 /// `crate::time::sim::sched::sleep_timed`.
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 #[inline]
 pub fn sleep(duration: Duration) {
     if crate::time::sim::sim_enabled() {
@@ -329,19 +329,19 @@ pub fn park() {
 }
 
 /// Block until unparked or until `duration` elapses.
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "sim-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
 #[inline]
 pub fn park_timeout(duration: Duration) {
     std::thread::park_timeout(duration);
 }
 
-/// Under `sim-time`, a timed park registers an unparkable waiter on the
+/// Under `flash-time`, a timed park registers an unparkable waiter on the
 /// quiescence engine (deadline = virtual now + `duration`) and blocks off-lock
 /// until the engine crosses that deadline OR a peer [`unpark`]s this thread.
 /// The wait consumes no real wall-clock: when every participant is parked the
 /// engine jumps the virtual clock to the earliest deadline. See
 /// `crate::time::sim` and the crate README.
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 #[inline]
 pub fn park_timeout(duration: Duration) {
     if crate::time::sim::sim_enabled() {
@@ -355,18 +355,18 @@ pub fn park_timeout(duration: Duration) {
 /// Unpark a thread parked in [`park_timeout`].
 ///
 /// Native (non-sim) / wasm: delegates to the OS/runtime `Thread::unpark`.
-/// Under `sim-time`: wakes the thread's quiescence-engine entry (or arms a
+/// Under `flash-time`: wakes the thread's quiescence-engine entry (or arms a
 /// pending unpark if it is not currently parked), so the wake serializes with
 /// clock jumps under the single engine lock instead of touching the OS park
 /// slot the engine does not own.
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 #[inline]
 pub fn unpark(t: &Thread) {
     crate::time::sim::sched::unpark(thread_id_hash(t.id()));
 }
 
 /// Unpark a thread parked in [`park_timeout`] (non-sim / OS park slot).
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "sim-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
 #[inline]
 pub fn unpark(t: &Thread) {
     t.unpark();
@@ -387,7 +387,7 @@ pub fn park_timeout(duration: Duration) {
 }
 
 /// Stable `u64` hash of a [`ThreadId`]. Used both for shard indexing and (under
-/// `sim-time`) as the engine's thread key: [`current_thread_id`] and
+/// `flash-time`) as the engine's thread key: [`current_thread_id`] and
 /// [`unpark`]'s target derive from the SAME hasher so a park and its wake agree.
 #[inline]
 #[must_use]

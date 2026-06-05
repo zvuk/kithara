@@ -14,11 +14,11 @@ use std::{
 use parking_lot::Mutex;
 
 /// Quiescence-driven virtual-clock engine. Submodule of `sim`, which is already
-/// gated on `feature = "sim-time"` + native, so it needs no extra feature gate.
+/// gated on `feature = "flash-time"` + native, so it needs no extra feature gate.
 /// The engine drives `SIM_NANOS` forward at quiescent points. Its consumers are
 /// the platform wait primitives (`thread::park_timeout`, `sync::Condvar`,
 /// async `SimSleep`/`Notify`) plus the harness, so it compiles whenever
-/// `sim-time` is on. The engine API stays `pub(crate)`.
+/// `flash-time` is on. The engine API stays `pub(crate)`.
 pub mod sched;
 
 /// Engine-backed `sleep` future: registers a virtual deadline + the task waker
@@ -212,7 +212,7 @@ impl Wake for TaskGate {
     }
 }
 
-/// Engine-backed `tokio::task::yield_now` under `sim-time`. A cooperative async
+/// Engine-backed `tokio::task::yield_now` under `flash-time`. A cooperative async
 /// yield must let the virtual clock advance — in real time, time passes while a
 /// task yields and other work (a server throttle) makes progress. This parks the
 /// task as a yield-waiter (its `active_async` slot is released by the spawn gate
@@ -378,13 +378,13 @@ pub fn reset() {
 
 thread_local! {
     /// Nesting depth of [`RealTimeScope`] on this thread. `0` means the virtual
-    /// clock is in effect (the default under `sim-time`); any non-zero value
+    /// clock is in effect (the default under `flash-time`); any non-zero value
     /// means this thread reads REAL time and uses REAL timers for the scope's
     /// duration. A depth (not a bool) so nested scopes compose.
     static SIM_OFF: Cell<u32> = const { Cell::new(0) };
 }
 
-/// True when the virtual clock governs this thread (the `sim-time` default).
+/// True when the virtual clock governs this thread (the `flash-time` default).
 /// False inside a [`RealTimeScope`] — the thread is on real wall-clock time and
 /// real timers, and is NOT a quiescence participant for those waits.
 ///

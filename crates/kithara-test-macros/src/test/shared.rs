@@ -50,10 +50,10 @@ pub(crate) fn make_runtime_builder(args: &TestArgs) -> TokenStream2 {
     }
 }
 
-/// Real-time hint for the block_on **driver** thread (sim-time only; ZST no-op
+/// Real-time hint for the block_on **driver** thread (flash-time only; ZST no-op
 /// off the sim path).
 ///
-/// Under `sim-time` the test body is the DRIVER: it observes/polls the
+/// Under `flash-time` the test body is the DRIVER: it observes/polls the
 /// system-under-test. Its bounding waits must measure REAL wall-clock so they
 /// neither race ahead of (collapsing virtual time outpacing a real fetch) nor
 /// stall against the engine. The system-under-test — spawned tasks, the
@@ -123,7 +123,7 @@ pub(crate) fn wrap_with_timeout(
                 let __timeout_dur: ::std::time::Duration = #dur;
                 let __body = async { #body };
                 // Wall-clock safety net: must fire on REAL time even under
-                // `sim-time` (a hung test hangs real time too).
+                // `flash-time` (a hung test hangs real time too).
                 kithara_platform::time::timeout(__timeout_dur, __body)
                     .await
                     .unwrap_or_else(|_| panic!(

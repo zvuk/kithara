@@ -7,7 +7,7 @@ message: |
 
   `park_timeout` is the virtual-clock DRIVER primitive; a direct std call would
   bypass the single clock entirely. `sleep` is a real wall-clock block that the
-  platform makes virtual under `sim-time`.
+  platform makes virtual under `flash-time`.
 
       // ❌  use std::thread::sleep;            std::thread::park_timeout(d);
       // ✅  use kithara_platform::thread::sleep;   thread::park_timeout(d);

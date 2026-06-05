@@ -1,18 +1,18 @@
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "sim-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
 use parking_lot::Condvar as ParkingLotCondvar;
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 use parking_lot::lock_api::MutexGuard as RawMutexGuard;
 
 use super::MutexGuard;
 use crate::time::Instant;
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 use crate::time::sim::sched;
 
 /// Native condvar backed by `parking_lot`.
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "sim-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
 pub struct Condvar(ParkingLotCondvar);
 
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "sim-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
 impl Condvar {
     #[inline]
     #[must_use]
@@ -49,16 +49,16 @@ impl Condvar {
     }
 }
 
-/// Native condvar under `sim-time`: the real `parking_lot::Condvar` is unused.
+/// Native condvar under `flash-time`: the real `parking_lot::Condvar` is unused.
 /// Waits register a waiter on the quiescence engine (keyed by `cvid`) and
 /// `notify_*` signal that group, so a timed wait collapses the virtual clock
 /// instead of consuming real wall-clock.
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub struct Condvar {
     cvid: u64,
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 impl Condvar {
     #[inline]
     #[must_use]

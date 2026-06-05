@@ -1,5 +1,5 @@
 //! Platform `Notify`: real `tokio::sync::Notify` off the sim path, an
-//! engine-backed event wait under `sim-time`.
+//! engine-backed event wait under `flash-time`.
 //!
 //! The sim variant mirrors the sim [`Condvar`](super::Condvar): a fresh `cvid`
 //! identifies the notify; `notified()` registers an untimed waiter (no deadline
@@ -8,34 +8,34 @@
 //! waiter stores a permit so the next `notified()` resolves immediately. The
 //! wait collapses to zero wall-clock and participates in quiescence.
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 use std::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
 };
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 use crate::time::sim::sched;
 /// Real-tokio `Notify` (off the sim path): a transparent re-export so callers
 /// use one type everywhere.
-#[cfg(not(all(not(target_arch = "wasm32"), feature = "sim-time")))]
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
 pub use crate::tokio::sync::Notify;
 
-/// Engine-backed `Notify` under `sim-time`.
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+/// Engine-backed `Notify` under `flash-time`.
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub struct Notify {
     cvid: u64,
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 impl Default for Notify {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 impl Notify {
     #[must_use]
     pub fn new() -> Self {
@@ -62,8 +62,8 @@ impl Notify {
     }
 }
 
-/// Future returned by [`Notify::notified`] under `sim-time`.
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+/// Future returned by [`Notify::notified`] under `flash-time`.
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub struct Notified<'a> {
     cvid: u64,
     handle: Option<sched::AsyncHandle>,
@@ -71,7 +71,7 @@ pub struct Notified<'a> {
     _notify: &'a Notify,
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 impl Future for Notified<'_> {
     type Output = ();
 
@@ -108,7 +108,7 @@ impl Future for Notified<'_> {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "sim-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 impl Drop for Notified<'_> {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
