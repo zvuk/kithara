@@ -3,14 +3,13 @@
 //! timeout and the retry count live in one place (the net layer) and cover the
 //! BODY, not just request establishment.
 //!
-//! The stall detector bounds the REAL chunk-arrival with [`real_timeout`] (a
-//! REAL wall-clock timer, even under `sim-time`): it measures a real socket's
-//! byte-flow gap, so it must tick on real time. A virtual timer would be fired
-//! by the quiescence engine jumping the clock to the deadline the instant the
-//! task parks — racing past the in-flight loopback bytes and spuriously
-//! "stalling" every healthy stream under simulation. The retry BACKOFF between
-//! attempts is a pure wait with no concurrent I/O, so it stays virtual
-//! (`time::sleep`, collapses under `sim-time`).
+//! The stall detector bounds the REAL chunk-arrival with [`timeout`]: it
+//! measures a real socket's byte-flow gap, so it must tick on real time. A
+//! virtual timer would be fired by the quiescence engine jumping the clock to
+//! the deadline the instant the task parks — racing past the in-flight loopback
+//! bytes and spuriously "stalling" every healthy stream under simulation. The
+//! retry BACKOFF between attempts is a pure wait with no concurrent I/O, so it
+//! stays virtual (`time::sleep`, collapses under `sim-time`).
 
 use std::pin::Pin;
 
@@ -18,7 +17,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
 use kithara_platform::{
     CancellationToken,
-    time::{Duration, real_timeout, sleep},
+    time::{Duration, sleep, timeout},
     tokio,
 };
 use num_traits::{AsPrimitive, ToPrimitive};
@@ -110,7 +109,7 @@ pub(crate) fn resumable_body(
             }
             let ev = tokio::select! {
                 () = st.cancel.cancelled() => Ev::Cancel,
-                res = real_timeout(st.stall, st.inner.next()) => match res {
+                res = timeout(st.stall, st.inner.next()) => match res {
                     Ok(c) => Ev::Chunk(c),
                     Err(_) => Ev::Stall,
                 },

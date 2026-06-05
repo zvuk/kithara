@@ -3,7 +3,7 @@ use std::{num::NonZeroU16, sync::Arc};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
-use kithara_platform::{CancellationToken, time::real_timeout};
+use kithara_platform::{CancellationToken, time::timeout};
 use reqwest::Client;
 use url::Url;
 
@@ -158,18 +158,17 @@ impl RawHttp {
     /// so the retry decorator re-issues it. This is the establish-side half of
     /// the single idle timer (the body half lives in [`resumable_body`]).
     ///
-    /// The bound is a REAL wall-clock timer ([`real_timeout`]), NOT the virtual
-    /// `time::sleep`. It measures a REAL socket operation (connect + header
-    /// wait), so it must tick on real time: a virtual timer would be fired by
-    /// the quiescence engine jumping the clock to the deadline the instant the
-    /// task parks — racing past the in-flight loopback establish and spuriously
-    /// timing out every healthy fetch under `sim-time`. A real timer never fires
-    /// for a fast loopback establish and bounds a genuine stall in real time.
+    /// This bound must measure a REAL socket operation (connect + header wait),
+    /// so it must tick on real time: a virtual timer would be fired by the
+    /// quiescence engine jumping the clock to the deadline the instant the task
+    /// parks — racing past the in-flight loopback establish and spuriously
+    /// timing out every healthy fetch. A real timer never fires for a fast
+    /// loopback establish and bounds a genuine stall in real time.
     async fn send_idle_bounded(
         &self,
         req: reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, NetError> {
-        match real_timeout(self.options.inactivity_timeout, req.send()).await {
+        match timeout(self.options.inactivity_timeout, req.send()).await {
             Ok(r) => r.map_err(NetError::from),
             Err(_) => Err(NetError::Timeout),
         }

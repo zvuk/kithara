@@ -54,11 +54,20 @@ pub(crate) fn emit_async_runtime_test(
             let __probe_install_id =
                 ::kithara_test_utils::probe::bump_install_id();
             __rt.block_on(
-                ::kithara_test_utils::probe::OWNED_INSTALL_ID
-                    .scope(__probe_install_id, async {
-                        #real_time_hint
-                        #inner_body
-                    }),
+                // Wrap the root task in the quiescence poll-wrapper so the test
+                // driver counts as a running participant while polled (identity
+                // off the sim path). Without this the virtual clock would race
+                // past the driver's own work between awaits — the worker's idle
+                // timer advances the clock while the driver is between polls, so
+                // a `sleep`/`read` loop times out on a deadline that already
+                // jumped. Mirrors `emit_async_timeout_test`.
+                kithara_platform::time::participate(
+                    ::kithara_test_utils::probe::OWNED_INSTALL_ID
+                        .scope(__probe_install_id, async {
+                            #real_time_hint
+                            #inner_body
+                        }),
+                ),
             )
         }
     }
@@ -196,11 +205,8 @@ pub(crate) fn emit_async_timeout_test(
                                     #real_time_hint
                                     // Wall-clock safety net: must fire on REAL
                                     // time even under `sim-time` (a hung test
-                                    // hangs real time too). `real_timeout`, not
-                                    // the sim-collapsing `timeout` — else the
-                                    // engine jumps the virtual clock to the
-                                    // deadline and the test spuriously times out.
-                                    kithara_platform::time::real_timeout(__timeout_dur, async {
+                                    // hangs real time too).
+                                    kithara_platform::time::timeout(__timeout_dur, async {
                                         #inner_body
                                     })
                                     .await

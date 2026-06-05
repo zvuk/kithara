@@ -146,9 +146,7 @@ impl std::error::Error for TimeoutError {}
 /// work — under `sim-time` a virtual deadline (collapses with the engine), off
 /// it a real `tokio` timer. This is the deadline a PROGRAM imposes on its own
 /// async work (e.g. a fetch total-timeout): under sim it must NOT pin the
-/// runtime's real timer wheel, or the virtual clock cannot collapse past it. For
-/// a wall-clock SAFETY NET that must fire on real time regardless of the virtual
-/// clock (the `kithara::test` watchdog), use [`real_timeout`].
+/// runtime's real timer wheel, or the virtual clock cannot collapse past it.
 ///
 /// # Errors
 ///
@@ -179,25 +177,6 @@ where
             .await
             .map_err(|_| TimeoutError)
     }
-}
-
-/// Await `future` with a REAL wall-clock deadline, ALWAYS — even under
-/// `sim-time`. For wall-clock safety nets (the `kithara::test` timeout watchdog):
-/// a hung test hangs real time too, so the deadline must fire on real time and
-/// must NOT be collapsed by the virtual clock. Do not use for a program's own
-/// async deadlines (use [`timeout`]).
-///
-/// # Errors
-///
-/// Returns [`TimeoutError`] if the future does not complete within `duration`.
-#[cfg(not(target_arch = "wasm32"))]
-pub async fn real_timeout<F>(duration: Duration, future: F) -> Result<F::Output, TimeoutError>
-where
-    F: Future,
-{
-    tokio_time::timeout(duration, future)
-        .await
-        .map_err(|_| TimeoutError)
 }
 
 /// Races `future` against an engine-backed [`sim::SimSleep`] deadline (see the
@@ -241,15 +220,4 @@ where
         Either::Left((output, _)) => Ok(output),
         Either::Right(((), _)) => Err(TimeoutError),
     }
-}
-
-/// On wasm there is no virtual clock, so the wall-clock safety-net deadline is
-/// the same `setTimeout`-based race as [`timeout`]. Exists so the
-/// `kithara::test` watchdog can call one name across all targets.
-#[cfg(target_arch = "wasm32")]
-pub async fn real_timeout<F>(duration: Duration, future: F) -> Result<F::Output, TimeoutError>
-where
-    F: Future,
-{
-    timeout(duration, future).await
 }
