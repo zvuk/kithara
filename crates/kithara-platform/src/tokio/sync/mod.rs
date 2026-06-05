@@ -13,3 +13,5 @@ pub use tokio_with_wasm::alias::sync::*;
 pub mod mpsc;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub mod oneshot;
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+mod unbounded;

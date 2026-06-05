@@ -69,7 +69,7 @@ impl DemandCell {
             refcount: AtomicUsize::new(0),
             producer_spawned: AtomicBool::new(false),
             producer_cancel,
-            notify: Notify::new(),
+            notify: Notify::default(),
         }
     }
 

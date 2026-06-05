@@ -7,36 +7,20 @@
 //! `JoinHandle`, `JoinError`, etc.). On WASM, `spawn` and `spawn_blocking` are
 //! overridden with Worker-lifecycle-aware versions.
 
-pub use tokio_alias::task::*;
-use tokio_with_wasm::alias as tokio_alias;
+pub use tokio_with_wasm::alias::task::*;
 
-/// Spawn an async task. Under `flash-time` (native) the future is wrapped in the
-/// quiescence poll-wrapper ([`crate::time::participate`]) so the spawned task
-/// counts as a running participant while it is being polled — the virtual clock
-/// cannot advance past an in-progress task. This is THE async-spawn chokepoint;
-/// a raw `tokio::spawn` bypassing it would run uncounted and let the clock race
-/// (forbidden by the `arch.no-raw-tokio-spawn` ast-grep rule). Off the sim path
-/// it delegates straight to `tokio` (shadowing the glob re-export above).
+// Under `flash-time` (native) [`spawn`] wraps the future in the quiescence
+// poll-wrapper and `yield_now` participates in quiescence (a busy-poll
+// `loop { yield_now().await }` must let the virtual clock advance). Both shadow
+// the `tokio_with_wasm::alias::task` glob re-export above; off the sim path the
+// real `tokio` spawn/yield are used unchanged. See `crate::time::flash`.
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
-pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    tokio_alias::task::spawn(crate::time::participate(future))
-}
+mod spawn;
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+pub use spawn::spawn;
 
-/// Cooperative async yield. Under `flash-time` (native) it participates in
-/// quiescence: a busy-poll `loop { yield_now().await }` (e.g. the downloader
-/// awaiting a fetch slot) must let the virtual clock advance, exactly as real
-/// time passes during a yield — else the task's spawn gate pins `active_async`
-/// across every self-wake and the clock freezes (a livelock). Shadows the
-/// `tokio_alias::task::yield_now` glob re-export above; off the sim path that
-/// real yield is used unchanged. See `crate::time::flash::FlashYield`.
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
-pub async fn yield_now() {
-    crate::time::flash::yield_now().await;
-}
+pub use crate::time::flash::yield_now;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm;

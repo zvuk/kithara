@@ -117,7 +117,7 @@ impl StateController {
     pub fn new(queue: Arc<Queue>, config: AppConfig, cancel: CancellationToken) -> Self {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
         let waveform_enabled = Arc::new(AtomicBool::new(false));
-        let waveform_wake = Arc::new(Notify::new());
+        let waveform_wake = Arc::new(Notify::default());
 
         spawn_listener(
             Arc::clone(&queue),

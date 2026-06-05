@@ -67,7 +67,10 @@ struct State {
     to_skip: u64,
     stall: Duration,
     policy: RetryPolicy,
-    attempt: u32,
+    /// How many resume re-fetches this stream has already performed. Bounded by
+    /// `policy.max_retries`; once reached, the stream yields a terminal
+    /// `RetryExhausted` rather than resuming again.
+    resumes: u32,
     cancel: CancellationToken,
     done: bool,
 }
@@ -98,7 +101,7 @@ pub(crate) fn resumable_body(
         to_skip: 0,
         stall,
         policy,
-        attempt: 0,
+        resumes: 0,
         cancel,
         done: false,
     };
@@ -153,7 +156,7 @@ pub(crate) fn resumable_body(
                         st.done = true;
                         return Some((Err(err), st));
                     }
-                    if st.attempt >= st.policy.max_retries {
+                    if st.resumes >= st.policy.max_retries {
                         // Transient, but the retry budget is spent — promote
                         // to the SAME terminal error as the stall path so
                         // downstream sees one `Fatal` exhaustion signal.
@@ -163,7 +166,7 @@ pub(crate) fn resumable_body(
                     // transient + budget remaining: fall through to resume.
                 }
                 Ev::Stall => {
-                    if st.attempt >= st.policy.max_retries {
+                    if st.resumes >= st.policy.max_retries {
                         st.done = true;
                         return Some((
                             Err(exhausted(st.policy.max_retries, NetError::Timeout)),
@@ -175,8 +178,8 @@ pub(crate) fn resumable_body(
             }
             // Resume: back off (virtual under sim), then re-fetch from the
             // consumed offset. A failed re-establish ends the stream.
-            st.attempt += 1;
-            sleep(st.policy.delay_for_attempt(st.attempt)).await;
+            st.resumes += 1;
+            sleep(st.policy.delay_for_attempt(st.resumes)).await;
             let fut = (st.refetch)(st.consumed);
             match fut.await {
                 Ok(resumed) => {

@@ -25,9 +25,10 @@ use error::{SendError, TryRecvError};
 use parking_lot::Mutex;
 pub use tokio_with_wasm::alias::sync::mpsc::error;
 
+pub use super::unbounded::UnboundedSender;
 use crate::time::flash::sched;
 
-struct Inner<T> {
+pub(super) struct Inner<T> {
     queue: VecDeque<T>,
     /// Live sender handles; the receiver observes close at `0`.
     senders: usize,
@@ -35,7 +36,7 @@ struct Inner<T> {
     receiver_alive: bool,
 }
 
-struct Shared<T> {
+pub(super) struct Shared<T> {
     inner: Mutex<Inner<T>>,
     /// Signaled when an item is enqueued (wakes the parked receiver).
     data_cvid: u64,
@@ -58,6 +59,11 @@ impl<T> Shared<T> {
             space_cvid: sched::next_condvar_id(),
             capacity,
         })
+    }
+
+    /// Register an additional live sender handle (a clone).
+    pub(super) fn add_sender(&self) {
+        self.inner.lock().senders += 1;
     }
 }
 
@@ -92,7 +98,7 @@ pub fn unbounded_channel<T>() -> (UnboundedSender<T>, UnboundedReceiver<T>) {
     )
 }
 
-fn push_unbounded<T>(shared: &Shared<T>, value: T) -> Result<(), SendError<T>> {
+pub(super) fn push_unbounded<T>(shared: &Shared<T>, value: T) -> Result<(), SendError<T>> {
     let mut inner = shared.inner.lock();
     if !inner.receiver_alive {
         return Err(SendError(value));
@@ -166,7 +172,7 @@ fn close_receiver<T>(shared: &Shared<T>, pending: &mut Option<sched::AsyncHandle
     }
 }
 
-fn drop_sender<T>(shared: &Shared<T>) {
+pub(super) fn drop_sender<T>(shared: &Shared<T>) {
     let mut inner = shared.inner.lock();
     inner.senders -= 1;
     let last = inner.senders == 0;
@@ -195,7 +201,7 @@ impl<T> Sender<T> {
 
 impl<T> Clone for Sender<T> {
     fn clone(&self) -> Self {
-        self.shared.inner.lock().senders += 1;
+        self.shared.add_sender();
         Self {
             shared: Arc::clone(&self.shared),
         }
@@ -262,36 +268,6 @@ impl<T> Drop for Send<'_, T> {
         if let Some(handle) = self.pending.take() {
             sched::cancel_async_wait(handle);
         }
-    }
-}
-
-/// Unbounded sender (clone for multi-producer); `send` never blocks.
-pub struct UnboundedSender<T> {
-    shared: Arc<Shared<T>>,
-}
-
-impl<T> UnboundedSender<T> {
-    /// Enqueue `value` without blocking.
-    ///
-    /// # Errors
-    /// Returns [`SendError`] (carrying `value`) when the receiver has dropped.
-    pub fn send(&self, value: T) -> Result<(), SendError<T>> {
-        push_unbounded(&self.shared, value)
-    }
-}
-
-impl<T> Clone for UnboundedSender<T> {
-    fn clone(&self) -> Self {
-        self.shared.inner.lock().senders += 1;
-        Self {
-            shared: Arc::clone(&self.shared),
-        }
-    }
-}
-
-impl<T> Drop for UnboundedSender<T> {
-    fn drop(&mut self) {
-        drop_sender(&self.shared);
     }
 }
 
@@ -389,8 +365,11 @@ mod tests {
     use super::{channel, unbounded_channel};
     use crate::{time::flash, tokio::task::spawn};
 
-    const PRODUCERS: usize = 8;
-    const PER_PRODUCER: usize = 200;
+    struct Consts;
+    impl Consts {
+        const PRODUCERS: usize = 8;
+        const PER_PRODUCER: usize = 200;
+    }
 
     /// Bounded channel under a multi-thread runtime: many producers fan into a
     /// single consumer across worker threads, with a capacity small enough to
@@ -404,11 +383,13 @@ mod tests {
     async fn bounded_fan_in_no_lost_wakeup() {
         flash::reset();
         let (tx, mut rx) = channel::<usize>(4);
-        for p in 0..PRODUCERS {
+        for p in 0..Consts::PRODUCERS {
             let tx = tx.clone();
             drop(spawn(async move {
-                for i in 0..PER_PRODUCER {
-                    tx.send(p * PER_PRODUCER + i).await.expect("receiver alive");
+                for i in 0..Consts::PER_PRODUCER {
+                    tx.send(p * Consts::PER_PRODUCER + i)
+                        .await
+                        .expect("receiver alive");
                 }
             }));
         }
@@ -419,8 +400,8 @@ mod tests {
             seen += 1;
             sum += v as u64;
         }
-        assert_eq!(seen, PRODUCERS * PER_PRODUCER);
-        let n = (PRODUCERS * PER_PRODUCER) as u64;
+        assert_eq!(seen, Consts::PRODUCERS * Consts::PER_PRODUCER);
+        let n = (Consts::PRODUCERS * Consts::PER_PRODUCER) as u64;
         assert_eq!(sum, n * (n - 1) / 2);
     }
 
@@ -430,11 +411,12 @@ mod tests {
     async fn unbounded_fan_in_no_lost_wakeup() {
         flash::reset();
         let (tx, mut rx) = unbounded_channel::<usize>();
-        for p in 0..PRODUCERS {
+        for p in 0..Consts::PRODUCERS {
             let tx = tx.clone();
             drop(spawn(async move {
-                for i in 0..PER_PRODUCER {
-                    tx.send(p * PER_PRODUCER + i).expect("receiver alive");
+                for i in 0..Consts::PER_PRODUCER {
+                    tx.send(p * Consts::PER_PRODUCER + i)
+                        .expect("receiver alive");
                 }
             }));
         }
@@ -443,7 +425,7 @@ mod tests {
         while (rx.recv().await).is_some() {
             seen += 1;
         }
-        assert_eq!(seen, PRODUCERS * PER_PRODUCER);
+        assert_eq!(seen, Consts::PRODUCERS * Consts::PER_PRODUCER);
     }
 
     /// Sender-side close wakes a blocked-empty consumer: with all senders

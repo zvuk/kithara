@@ -49,7 +49,7 @@ impl FileCoord {
             activity,
             position: Arc::new(AtomicU64::new(0)),
             read_pos: Arc::new(AtomicU64::new(0)),
-            reader_advanced: Notify::new(),
+            reader_advanced: Notify::default(),
             total_bytes: Arc::new(AtomicU64::new(Self::NO_TOTAL_BYTES)),
         }
     }

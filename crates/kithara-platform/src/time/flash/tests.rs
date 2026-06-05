@@ -92,7 +92,7 @@ fn woken_async_task_stays_counted_until_repolled() {
     let _g = guard();
     reset();
 
-    let notify = Notify::new();
+    let notify = Notify::default();
     let mut task = Box::pin(participate(async {
         notify.notified().await;
     }));

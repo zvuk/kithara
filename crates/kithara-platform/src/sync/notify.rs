@@ -3,8 +3,8 @@
 //!
 //! The sim variant mirrors the sim [`Condvar`](super::Condvar): a fresh `cvid`
 //! identifies the notify; `notified()` registers an untimed waiter (no deadline
-//! — woken only by a `notify_*`, never by a clock jump, matching tokio Notify);
-//! `notify_one`/`notify_waiters` signal that group. A `notify_one` with no
+//! — woken only by a `notify_one`, never by a clock jump, matching tokio Notify);
+//! `notify_one` signals that group. A `notify_one` with no
 //! waiter stores a permit so the next `notified()` resolves immediately. The
 //! wait collapses to zero wall-clock and participates in quiescence.
 
@@ -31,25 +31,16 @@ pub struct Notify {
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 impl Default for Notify {
     fn default() -> Self {
-        Self::new()
+        Self {
+            cvid: sched::next_condvar_id(),
+        }
     }
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 impl Notify {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            cvid: sched::next_condvar_id(),
-        }
-    }
-
     pub fn notify_one(&self) {
-        sched::signal_notify(self.cvid, false);
-    }
-
-    pub fn notify_waiters(&self) {
-        sched::signal_notify(self.cvid, true);
+        sched::signal_notify(self.cvid);
     }
 
     pub fn notified(&self) -> Notified<'_> {

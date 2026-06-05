@@ -8,84 +8,12 @@ use std::{
     task::Waker,
 };
 
-use parking_lot::{Condvar, Mutex};
+use parking_lot::Mutex;
 
-use super::SIM_NANOS;
-
-/// One waiter's wake handle: a flag + condvar so the parked OS thread blocks
-/// off-lock and wakes when the engine (clock jump), an `unpark`, or a
-/// `signal_condvar` fires it. The flag is set under its own lock before
-/// `notify_all`, so a fire that lands before the block is not lost.
-pub(crate) struct Token {
-    woken: Mutex<bool>,
-    cv: Condvar,
-}
-
-impl Token {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            woken: Mutex::new(false),
-            cv: Condvar::new(),
-        })
-    }
-    pub(crate) fn fire(&self) {
-        {
-            let mut g = self.woken.lock();
-            *g = true;
-        }
-        self.cv.notify_all();
-    }
-    pub(crate) fn wait(&self) {
-        let mut g = self.woken.lock();
-        while !*g {
-            self.cv.wait(&mut g);
-        }
-    }
-}
-
-/// How a parked waiter is woken once the engine (or a signal) selects it.
-/// Sync OS-thread waits store a `Token` (a parking_lot flag+condvar the blocked
-/// thread sits on); async-task waits store the task's `Waker`. `try_advance` /
-/// `signal_condvar` collect these and fire them AFTER releasing `SCHED`.
-pub(crate) enum Wake {
-    /// A blocked OS thread (`park_timeout`, `Condvar`): wake via the `Token`.
-    Sync(Arc<Token>),
-    /// A parked async task (`sleep_sim`, async `Notify`): the `granted` flag is
-    /// set just before waking so the future's Drop can tell "I was granted an
-    /// `active` slot" from "I was still parked".
-    Task {
-        waker: Waker,
-        granted: Arc<AtomicBool>,
-    },
-}
-
-impl Wake {
-    pub(crate) fn fire(self) {
-        match self {
-            Self::Sync(t) => t.fire(),
-            Self::Task { waker, .. } => waker.wake(),
-        }
-    }
-
-    /// Mark an async-task wake as granted an `active` slot. MUST run under the
-    /// `SCHED` lock at the same moment the firer does `active += 1`, so a
-    /// concurrent `cancel_async_wait` (which also takes the lock) sees a
-    /// consistent "entry removed ⇒ granted set" and never leaks the slot.
-    fn mark_granted_under_lock(&self) {
-        if let Self::Task { granted, .. } = self {
-            granted.store(true, Ordering::Release);
-        }
-    }
-
-    /// True for an async-task waiter. Async tasks are counted in `active_async`
-    /// by the spawn poll-wrapper (per-poll), NOT by the firer — so a fired
-    /// async waiter is `mark_granted` but never bumps a counter. Sync OS-thread
-    /// waiters (`Sync`) ARE bumped by the firer into `active` (their wake has
-    /// real OS-scheduling latency the bump must cover).
-    fn is_task(&self) -> bool {
-        matches!(self, Self::Task { .. })
-    }
-}
+use super::{
+    SIM_NANOS,
+    wake::{Token, Wake},
+};
 
 /// What kind of waiter an [`Entry`] is, so a signal targets the right group.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -137,7 +65,7 @@ struct SimSched {
     /// Thread ids whose `unpark` arrived while not parked: the next
     /// `park_timed_unparkable` for that id consumes the flag and returns at once.
     unpark_pending: BTreeSet<u64>,
-    /// Condvar ids whose `notify_one`/`notify_waiters` arrived while no waiter
+    /// Condvar ids whose `notify_one` arrived while no waiter
     /// was registered: the next `notified()` first-poll for that cvid consumes
     /// the permit and resolves immediately (mirrors `tokio::Notify`'s stored
     /// permit). Only set by the async [`Notify`](crate::sync::Notify) path.
@@ -939,32 +867,26 @@ pub(crate) fn cancel_async_wait(handle: AsyncHandle) {
     }
 }
 
-/// Signal an async `Notify` for `cvid`: wake at most one (`all == false`) or all
-/// (`all == true`) waiters; if none are parked, store a permit so the next
-/// `notified()` resolves at once (tokio `notify_one` semantics).
-pub(crate) fn signal_notify(cvid: u64, all: bool) {
+/// Signal an async `Notify` for `cvid`: wake at most one waiter; if none are
+/// parked, store a permit so the next `notified()` resolves at once (tokio
+/// `notify_one` semantics).
+pub(crate) fn signal_notify(cvid: u64) {
     let mut s = SCHED.lock();
-    let indef_keys: Vec<u64> = s
+    let woken_key = s
         .parked_indef
         .iter()
-        .filter(|(_, e)| e.kind == WaitKind::Condvar(cvid))
-        .map(|(&k, _)| k)
-        .collect();
+        .find(|(_, e)| e.kind == WaitKind::Condvar(cvid))
+        .map(|(&k, _)| k);
     let mut woken = Vec::new();
-    for key in indef_keys {
-        if !all && !woken.is_empty() {
-            break;
-        }
+    if let Some(key) = woken_key {
         if let Some(entry) = s.parked_indef.remove(&key) {
             woken.push(entry.wake);
         }
     }
     if woken.is_empty() {
         // No waiter: store a permit (notify_one) so the next notified() returns
-        // immediately. notify_waiters (all) drops with no waiter, like tokio.
-        if !all {
-            s.notify_permit.insert(cvid);
-        }
+        // immediately.
+        s.notify_permit.insert(cvid);
     } else {
         // Async (Task) wakes are counted by the spawn poll-wrapper, not here.
         s.active += woken.iter().filter(|w| !w.is_task()).count();
