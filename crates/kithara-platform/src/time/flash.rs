@@ -13,11 +13,11 @@ use std::{
 
 use parking_lot::Mutex;
 
-/// Quiescence-driven virtual-clock engine. Submodule of `sim`, which is already
+/// Quiescence-driven virtual-clock engine. Submodule of `flash`, which is already
 /// gated on `feature = "flash-time"` + native, so it needs no extra feature gate.
 /// The engine drives `SIM_NANOS` forward at quiescent points. Its consumers are
 /// the platform wait primitives (`thread::park_timeout`, `sync::Condvar`,
-/// async `SimSleep`/`Notify`) plus the harness, so it compiles whenever
+/// async `FlashSleep`/`Notify`) plus the harness, so it compiles whenever
 /// `flash-time` is on. The engine API stays `pub(crate)`.
 pub mod sched;
 
@@ -27,12 +27,12 @@ pub mod sched;
 /// participants park). Resolution is GRANT-driven (`handle.granted()`), never a
 /// bare clock check; the task's `active_async` slot is owned by the spawn
 /// poll-wrapper gate ([`Participating`]), so this future touches no counter.
-pub struct SimSleep {
+pub struct FlashSleep {
     delta_nanos: u64,
     handle: Option<sched::AsyncHandle>,
 }
 
-impl SimSleep {
+impl FlashSleep {
     pub(crate) fn new(duration: Duration) -> Self {
         Self {
             delta_nanos: duration_to_nanos(duration),
@@ -41,7 +41,7 @@ impl SimSleep {
     }
 }
 
-impl Future for SimSleep {
+impl Future for FlashSleep {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
@@ -68,7 +68,7 @@ impl Future for SimSleep {
     }
 }
 
-impl Drop for SimSleep {
+impl Drop for FlashSleep {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
             sched::cancel_async_wait(handle);
@@ -221,12 +221,12 @@ impl Wake for TaskGate {
 /// resolve-at-once path: re-polling immediately would re-arm a busy-poll loop
 /// that pins `active_async` and freezes the clock (the bug a naive `yield_now`
 /// causes under quiescence).
-pub struct SimYield {
+pub struct FlashYield {
     handle: Option<(u64, Arc<AtomicBool>)>,
     done: bool,
 }
 
-impl Future for SimYield {
+impl Future for FlashYield {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
@@ -246,7 +246,7 @@ impl Future for SimYield {
     }
 }
 
-impl Drop for SimYield {
+impl Drop for FlashYield {
     fn drop(&mut self) {
         if let Some((id, _)) = self.handle.take() {
             sched::cancel_yield(id);
@@ -254,9 +254,9 @@ impl Drop for SimYield {
     }
 }
 
-/// Cooperative async yield that participates in quiescence (see [`SimYield`]).
-pub fn yield_now() -> SimYield {
-    SimYield {
+/// Cooperative async yield that participates in quiescence (see [`FlashYield`]).
+pub fn yield_now() -> FlashYield {
+    FlashYield {
         handle: None,
         done: false,
     }
@@ -377,15 +377,15 @@ pub fn reset() {
 }
 
 thread_local! {
-    /// Nesting depth of [`RealTimeScope`] on this thread. `0` means the virtual
+    /// Nesting depth of [`FlashScope`] on this thread. `0` means the virtual
     /// clock is in effect (the default under `flash-time`); any non-zero value
     /// means this thread reads REAL time and uses REAL timers for the scope's
     /// duration. A depth (not a bool) so nested scopes compose.
-    static SIM_OFF: Cell<u32> = const { Cell::new(0) };
+    static FLASH_OFF: Cell<u32> = const { Cell::new(0) };
 }
 
 /// True when the virtual clock governs this thread (the `flash-time` default).
-/// False inside a [`RealTimeScope`] — the thread is on real wall-clock time and
+/// False inside a [`FlashScope`] — the thread is on real wall-clock time and
 /// real timers, and is NOT a quiescence participant for those waits.
 ///
 /// This is the per-thread switch the rest of the platform consults: `Instant::
@@ -395,8 +395,8 @@ thread_local! {
 /// its virtual waits on the engine.
 #[inline]
 #[must_use]
-pub fn sim_enabled() -> bool {
-    SIM_OFF.with(|c| c.get() == 0)
+pub fn flash_enabled() -> bool {
+    FLASH_OFF.with(|c| c.get() == 0)
 }
 
 /// RAII guard that puts the current thread on REAL time for its lifetime: while
@@ -411,27 +411,27 @@ pub fn sim_enabled() -> bool {
 /// but the watchdog stays a real-wall-clock safety net that only fires on a true
 /// stall.
 #[must_use]
-pub struct RealTimeScope {
+pub struct FlashScope {
     _priv: (),
 }
 
-/// Enter a [`RealTimeScope`]: read real time / use real timers on this thread
+/// Enter a [`FlashScope`]: read real time / use real timers on this thread
 /// until the returned guard drops.
 #[must_use]
-pub fn real_time() -> RealTimeScope {
-    SIM_OFF.with(|c| c.set(c.get().saturating_add(1)));
-    RealTimeScope { _priv: () }
+pub fn flash_real() -> FlashScope {
+    FLASH_OFF.with(|c| c.set(c.get().saturating_add(1)));
+    FlashScope { _priv: () }
 }
 
-impl Drop for RealTimeScope {
+impl Drop for FlashScope {
     fn drop(&mut self) {
-        SIM_OFF.with(|c| c.set(c.get().saturating_sub(1)));
+        FLASH_OFF.with(|c| c.set(c.get().saturating_sub(1)));
     }
 }
 
 /// Process anchor for the real monotonic clock, sampled once on first use. Real
 /// instants are reported as `BASE_NANOS + elapsed-since-anchor`, so a thread in
-/// a [`RealTimeScope`] sees a forward-moving clock in the same nanos space as
+/// a [`FlashScope`] sees a forward-moving clock in the same nanos space as
 /// the virtual one (the two are never compared across the boundary — a watchdog
 /// samples both its start and its checks in the same mode).
 fn real_now_nanos() -> u64 {
@@ -456,7 +456,7 @@ impl Instant {
     #[inline]
     #[must_use]
     pub fn now() -> Self {
-        if sim_enabled() {
+        if flash_enabled() {
             Self(SIM_NANOS.load(Ordering::Acquire))
         } else {
             Self(real_now_nanos())

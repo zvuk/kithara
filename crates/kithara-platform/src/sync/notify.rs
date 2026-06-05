@@ -16,7 +16,7 @@ use std::{
 };
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
-use crate::time::sim::sched;
+use crate::time::flash::sched;
 /// Real-tokio `Notify` (off the sim path): a transparent re-export so callers
 /// use one type everywhere.
 #[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]

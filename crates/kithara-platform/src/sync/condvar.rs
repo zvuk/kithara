@@ -6,7 +6,7 @@ use parking_lot::lock_api::MutexGuard as RawMutexGuard;
 use super::MutexGuard;
 use crate::time::Instant;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
-use crate::time::sim::sched;
+use crate::time::flash::sched;
 
 /// Native condvar backed by `parking_lot`.
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]

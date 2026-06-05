@@ -76,12 +76,12 @@ pub fn yield_now() {
 /// prevents). The sim path parks the thread as a yield-waiter so the clock can
 /// advance, then wakes it on the next advance to re-check. Off the sim path
 /// (real-time scope) it stays a plain OS yield, so the real-time / RT worker
-/// behaviour is unchanged. See `crate::time::sim::sched::yield_until_advance`.
+/// behaviour is unchanged. See `crate::time::flash::sched::yield_until_advance`.
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 #[inline]
 pub fn yield_now() {
-    if crate::time::sim::sim_enabled() {
-        crate::time::sim::sched::yield_until_advance();
+    if crate::time::flash::flash_enabled() {
+        crate::time::flash::sched::yield_until_advance();
     } else {
         std::thread::yield_now();
     }
@@ -209,16 +209,16 @@ where
     move || {
         #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
         {
-            crate::time::sim::sched::reset_credit();
+            crate::time::flash::sched::reset_credit();
             // A `spawn_named` thread is a DEDICATED virtual-time pacer: it is the
             // only kind of thread counted in the engine's sync `active` set (tokio
             // workers and the main thread are driven by the runtime, not by wrapped
             // waits, so counting them leaks). See `sched::DEDICATED`.
-            crate::time::sim::sched::mark_dedicated();
+            crate::time::flash::sched::mark_dedicated();
         }
         let result = f();
         #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
-        crate::time::sim::sched::on_participant_exit();
+        crate::time::flash::sched::on_participant_exit();
         ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
         result
     }
@@ -297,12 +297,12 @@ pub fn sleep(duration: Duration) {
 /// virtual wait, so a thread that sleeps to delay a state change cannot be raced
 /// by a peer's virtual wait advancing the clock past it. Real-time scopes keep a
 /// true wall-clock sleep. Unlike [`park_timeout`] a sleep has no early wake. See
-/// `crate::time::sim::sched::sleep_timed`.
+/// `crate::time::flash::sched::sleep_timed`.
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 #[inline]
 pub fn sleep(duration: Duration) {
-    if crate::time::sim::sim_enabled() {
-        crate::time::sim::sched::sleep_timed(duration);
+    if crate::time::flash::flash_enabled() {
+        crate::time::flash::sched::sleep_timed(duration);
     } else {
         std::thread::sleep(duration);
     }
@@ -340,12 +340,12 @@ pub fn park_timeout(duration: Duration) {
 /// until the engine crosses that deadline OR a peer [`unpark`]s this thread.
 /// The wait consumes no real wall-clock: when every participant is parked the
 /// engine jumps the virtual clock to the earliest deadline. See
-/// `crate::time::sim` and the crate README.
+/// `crate::time::flash` and the crate README.
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 #[inline]
 pub fn park_timeout(duration: Duration) {
-    if crate::time::sim::sim_enabled() {
-        crate::time::sim::sched::park_timed_unparkable(duration, current_thread_id());
+    if crate::time::flash::flash_enabled() {
+        crate::time::flash::sched::park_timed_unparkable(duration, current_thread_id());
     } else {
         // Real-time scope: a true wall-clock park, invisible to the engine.
         std::thread::park_timeout(duration);
@@ -362,7 +362,7 @@ pub fn park_timeout(duration: Duration) {
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 #[inline]
 pub fn unpark(t: &Thread) {
-    crate::time::sim::sched::unpark(thread_id_hash(t.id()));
+    crate::time::flash::sched::unpark(thread_id_hash(t.id()));
 }
 
 /// Unpark a thread parked in [`park_timeout`] (non-sim / OS park slot).

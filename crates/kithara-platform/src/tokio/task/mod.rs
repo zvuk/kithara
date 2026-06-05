@@ -32,10 +32,10 @@ where
 /// time passes during a yield — else the task's spawn gate pins `active_async`
 /// across every self-wake and the clock freezes (a livelock). Shadows the
 /// `tokio_alias::task::yield_now` glob re-export above; off the sim path that
-/// real yield is used unchanged. See `crate::time::sim::SimYield`.
+/// real yield is used unchanged. See `crate::time::flash::FlashYield`.
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub async fn yield_now() {
-    crate::time::sim::yield_now().await;
+    crate::time::flash::yield_now().await;
 }
 
 #[cfg(target_arch = "wasm32")]

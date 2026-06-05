@@ -11,7 +11,7 @@
 //! registers anything.
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
-use crate::time::sim::sched;
+use crate::time::flash::sched;
 
 /// Spawn a blocking computation on the runtime's blocking pool.
 ///

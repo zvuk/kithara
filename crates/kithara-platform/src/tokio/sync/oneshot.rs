@@ -15,7 +15,7 @@ use std::{
 
 use parking_lot::Mutex;
 
-use crate::time::sim::sched;
+use crate::time::flash::sched;
 
 /// Error observed when the sender drops without sending.
 ///
@@ -153,7 +153,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{RecvError, channel};
-    use crate::{time::sim, tokio::task::spawn};
+    use crate::{time::flash, tokio::task::spawn};
 
     const ROUNDS: usize = 256;
 
@@ -164,7 +164,7 @@ mod tests {
     /// stress the register-under-lock vs. send race.
     #[kithara::test(tokio, multi_thread)]
     async fn round_trip_no_lost_wakeup() {
-        sim::reset();
+        flash::reset();
         let futs = (0..ROUNDS).map(|r| async move {
             let (tx, rx) = channel::<usize>();
             drop(spawn(async move {
@@ -181,7 +181,7 @@ mod tests {
     /// [`RecvError`], never park it forever.
     #[kithara::test(tokio, multi_thread)]
     async fn dropped_sender_resolves_recv_error() {
-        sim::reset();
+        flash::reset();
         let (tx, rx) = channel::<usize>();
         drop(spawn(async move {
             drop(tx);

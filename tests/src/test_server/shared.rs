@@ -38,7 +38,7 @@ pub(crate) fn shared() -> &'static SharedTestServer {
                     // begins, so per-request THROTTLE sleeps stay on the sim clock
                     // and still collapse under `flash-time`.
                     let base_url = {
-                        let _real = kithara_platform::time::real_time();
+                        let _real = kithara_platform::time::flash_real();
                         router_base_url_on_runtime(state_for_thread).await
                     };
                     tx.send(base_url).expect("send shared server base url");

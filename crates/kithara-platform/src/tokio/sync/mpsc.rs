@@ -25,7 +25,7 @@ use error::{SendError, TryRecvError};
 use parking_lot::Mutex;
 pub use tokio_with_wasm::alias::sync::mpsc::error;
 
-use crate::time::sim::sched;
+use crate::time::flash::sched;
 
 struct Inner<T> {
     queue: VecDeque<T>,
@@ -387,7 +387,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{channel, unbounded_channel};
-    use crate::{time::sim, tokio::task::spawn};
+    use crate::{time::flash, tokio::task::spawn};
 
     const PRODUCERS: usize = 8;
     const PER_PRODUCER: usize = 200;
@@ -402,7 +402,7 @@ mod tests {
     /// lock handshake is lost-wakeup free both ways.
     #[kithara::test(tokio, multi_thread)]
     async fn bounded_fan_in_no_lost_wakeup() {
-        sim::reset();
+        flash::reset();
         let (tx, mut rx) = channel::<usize>(4);
         for p in 0..PRODUCERS {
             let tx = tx.clone();
@@ -428,7 +428,7 @@ mod tests {
     /// wakeup of a consumer that races each non-blocking send.
     #[kithara::test(tokio, multi_thread)]
     async fn unbounded_fan_in_no_lost_wakeup() {
-        sim::reset();
+        flash::reset();
         let (tx, mut rx) = unbounded_channel::<usize>();
         for p in 0..PRODUCERS {
             let tx = tx.clone();
@@ -451,7 +451,7 @@ mod tests {
     /// park forever.
     #[kithara::test(tokio, multi_thread)]
     async fn drop_senders_closes_receiver() {
-        sim::reset();
+        flash::reset();
         let (tx, mut rx) = channel::<usize>(2);
         let handle = spawn(async move {
             tx.send(1).await.expect("alive");
