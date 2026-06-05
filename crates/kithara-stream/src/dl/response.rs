@@ -6,11 +6,7 @@ use std::{
 use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
 use kithara_net::{ByteStream, Headers, NetError};
-use kithara_platform::{
-    CancelGroup,
-    time::{Duration, sleep},
-    tokio,
-};
+use kithara_platform::{CancelGroup, tokio};
 
 /// Boxed inner stream used inside [`BodyStream`].
 ///
@@ -89,14 +85,16 @@ impl BodyStream {
         }
     }
 
-    /// Wrap an HTTP [`ByteStream`] with per-chunk cancel + timeout.
-    pub(super) fn wrap_http(
-        byte_stream: ByteStream,
-        cancel: CancelGroup,
-        chunk_timeout: Duration,
-    ) -> Self {
+    /// Wrap an HTTP [`ByteStream`] with per-chunk cancellation.
+    ///
+    /// The idle/stall timeout and its retry/resume live one layer down in
+    /// the net crate's resilient body (`HttpClient` wraps every streaming
+    /// fetch), which is the single owner of stall detection — so this
+    /// wrapper only races the body against the per-fetch cancel and never
+    /// imposes a second, conflicting idle timer.
+    pub(super) fn wrap_http(byte_stream: ByteStream, cancel: CancelGroup) -> Self {
         Self {
-            inner: wrap_with_cancel(byte_stream, cancel, chunk_timeout),
+            inner: wrap_with_cancel(byte_stream, cancel),
         }
     }
 
@@ -136,25 +134,22 @@ impl Stream for BodyStream {
     }
 }
 
-/// State for the cancel+timeout body stream wrapper.
+/// State for the cancel body stream wrapper.
 struct WrapState {
     stream: ByteStream,
     cancel: CancelGroup,
-    timeout: Duration,
     done: bool,
 }
 
-/// Wrap a [`ByteStream`] with per-chunk cancellation and idle timeout.
-fn wrap_with_cancel(
-    byte_stream: ByteStream,
-    cancel: CancelGroup,
-    chunk_timeout: Duration,
-) -> InnerStream {
+/// Wrap a [`ByteStream`] with per-chunk cancellation. The idle/stall
+/// timeout (and its retry/resume) is owned by the net crate's resilient
+/// body one layer down, so there is no second idle timer here — only the
+/// per-fetch cancel races the body.
+fn wrap_with_cancel(byte_stream: ByteStream, cancel: CancelGroup) -> InnerStream {
     Box::pin(stream::unfold(
         WrapState {
             cancel,
             stream: byte_stream,
-            timeout: chunk_timeout,
             done: false,
         },
         |mut state| async {
@@ -167,7 +162,6 @@ fn wrap_with_cancel(
                     return Some((Err(NetError::Cancelled), state));
                 }
                 c = state.stream.next() => c,
-                () = sleep(state.timeout) => None,
             };
             chunk.map(|item| (item, state))
         },

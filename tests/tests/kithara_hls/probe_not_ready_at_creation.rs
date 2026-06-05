@@ -44,6 +44,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
     hls::{Hls, HlsConfig},
+    net::{NetOptions, RetryPolicy},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -94,11 +95,27 @@ fn audio_config(server: &HlsTestServer, temp_dir: &TestTempDir) -> AudioConfig<H
         .is_ephemeral(true)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
+    // Short stall + bounded retries so a withheld body settles the segment
+    // terminally (the net resilient body owns the stall) well within the
+    // 5s assertion: 3 stalls × 400ms + backoffs ≈ 1.3s, never a hang. The
+    // happy-path sibling releases the body before the first stall, so this
+    // does not perturb it. Real timers, real HTTP — no fake transport.
+    let net = NetOptions::builder()
+        .inactivity_timeout(Duration::from_millis(400))
+        .retry_policy(
+            RetryPolicy::builder()
+                .max_retries(2)
+                .base_delay(Duration::from_millis(20))
+                .max_delay(Duration::from_millis(100))
+                .build(),
+        )
+        .build();
     let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(store)
         .cancel(CancellationToken::default())
         // auto(0) mirrors the F2 members (live_real_stream / hot_refetch).
         .initial_abr_mode(auto(0))
+        .net_options(net)
         .build();
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     AudioConfig::<Hls>::for_stream(hls_config)

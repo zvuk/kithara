@@ -363,17 +363,8 @@ impl<T: StreamType> Stream<T> {
     /// ringbuf with margin while staying fair to other tracks.
     const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
 
-    /// Wall-clock budget for the blocking [`Read::read`] adapter that
-    /// direct `Read + Seek` consumers use. `try_read` is a single
-    /// non-blocking probe; the blocking interface retries it across this
-    /// budget so a `read` issued right after a `seek` waits for the
-    /// seeked bytes to download instead of erroring on the first
-    /// not-ready probe. This is the consumer-thread interface, never the
-    /// real-time worker path (the worker uses [`Self::probe_read`]).
-    const BLOCKING_READ_TIMEOUT: Duration = Duration::from_millis(500);
-
     /// Per-spin park between blocking [`Read::read`] probes. Bounds the
-    /// re-check cadence while the seeked range downloads; small enough to
+    /// re-check cadence while the awaited range downloads; small enough to
     /// return promptly once bytes land, large enough to avoid a busy
     /// spin. Off-RT consumer interface only.
     const BLOCKING_READ_BACKOFF: Duration = Duration::from_millis(10);
@@ -630,31 +621,39 @@ impl<T: StreamType> Stream<T> {
 impl<T: StreamType> Read for Stream<T> {
     /// Blocking `std::io::Read` for direct `Read + Seek` consumers.
     ///
-    /// `try_read` is a single non-blocking probe; this adapter retries it
-    /// across [`Self::BLOCKING_READ_TIMEOUT`] so a `read` issued right
-    /// after a `seek` waits for the seeked bytes to download instead of
-    /// erroring on the first not-ready probe. Only the transient
-    /// "data not ready" pending (`NotReady`/`Retry`) is waited on; a
-    /// seek that flushes mid-read (`SeekPending`), a variant boundary, a
-    /// natural EOF, and genuine source errors all return immediately.
-    /// This is the off-RT consumer interface — the real-time worker uses
-    /// [`Self::probe_read`] and never blocks here.
+    /// `try_read` is a single non-blocking probe; this adapter waits across
+    /// repeated probes so a `read` issued right after stream open or a seek
+    /// blocks until the awaited bytes download, instead of erroring on the
+    /// first not-ready probe. The wait is **not** bounded by a wall-clock
+    /// budget here: give-up authority lives lower in the stack, where it can
+    /// tell a slow-but-live transfer from a genuine stall. A fixed budget at
+    /// this layer would fire while a fetch is legitimately in flight and
+    /// surface as `Interrupted` — which decoders misread as a seek.
+    ///
+    /// The loop terminates on a terminal outcome:
+    /// - `Bytes`/`Eof` — data delivered or natural end of stream;
+    /// - `SeekPending` — a seek flushed mid-read (`Interrupted`);
+    /// - `VariantChange` — a variant boundary;
+    /// - a source `Err` — the downloader's per-chunk inactivity timeout
+    ///   failed the fetch, or the cancel hierarchy fired on teardown
+    ///   (`HlsCoord::wait_range` / the storage wait surface both as a
+    ///   terminal error).
+    ///
+    /// Only the transient "data not ready" pending (`NotReady`/`Retry`) is
+    /// waited on, parking [`Self::BLOCKING_READ_BACKOFF`] between probes. A
+    /// genuine wedge (no fetch, no failure, no progress) is caught by the
+    /// downloader's hang watchdog rather than masked here. This is the off-RT
+    /// consumer interface — the real-time worker uses [`Self::probe_read`]
+    /// and never blocks here.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let deadline = Instant::now() + Self::BLOCKING_READ_TIMEOUT;
         loop {
             match self.try_read(buf) {
                 Ok(StreamReadOutcome::Bytes { count, .. }) => return Ok(count.get()),
                 Ok(StreamReadOutcome::Eof { .. }) => return Ok(0),
                 Ok(StreamReadOutcome::Pending(
-                    reason @ (PendingReason::NotReady(_) | PendingReason::Retry),
+                    PendingReason::NotReady(_) | PendingReason::Retry,
                 )) => {
                     self.notify_peer_wake();
-                    if Instant::now() >= deadline {
-                        return Err(IoError::new(
-                            ErrorKind::Interrupted,
-                            self.snapshot_pending(reason, buf.len()),
-                        ));
-                    }
                     park_timeout(Self::BLOCKING_READ_BACKOFF);
                 }
                 Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {

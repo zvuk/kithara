@@ -2,6 +2,7 @@
 
 mod client;
 mod error;
+mod resumable;
 mod retry;
 mod timeout;
 mod traits;

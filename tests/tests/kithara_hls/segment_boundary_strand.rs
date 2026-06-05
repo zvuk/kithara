@@ -3,29 +3,34 @@
 //! Deterministic Tier-B repro for flake F1 (`stress_chunk_integrity_mmap`):
 //! a Symphonia read-ahead byte-strand at a not-ready segment boundary.
 //!
-//! Root: during a post-seek forward read-ahead, Symphonia's
-//! `MediaSourceStream` (MSS) consumes ring-buffered bytes of the tail of
-//! segment N into a packet buffer, then a later internal `fetch` hits the
-//! not-yet-delivered segment N+1 → `Interrupted`. The packet read returns
-//! an error so the half-read packet is discarded, but MSS's `read_pos`
-//! already advanced past the consumed bytes → they are stranded. On resume
-//! `WavReader::next_packet` recomputes pts from the advanced position, so
-//! the stranded ~640 frames are swallowed (the decoded saw-tooth jumps).
+//! Original root (now structurally fixed): during a post-seek forward
+//! read-ahead, Symphonia's `MediaSourceStream` consumed the tail of segment
+//! N into a packet buffer, then the blocking `Stream::read` GAVE UP at the
+//! not-yet-delivered segment N+1 (a fixed read-layer budget) → `Interrupted`
+//! → the half-read packet was discarded with `read_pos` already advanced →
+//! the stranded ~640 frames were swallowed (the saw-tooth jumped).
+//!
+//! The give-up budget at the read layer is gone: give-up authority moved
+//! down into the downloader, which retries a stalled fetch and only surfaces
+//! a TERMINAL error once it permanently fails. So the blocking read no longer
+//! abandons a packet mid-read at a slow-but-arriving boundary — it WAITS for
+//! the bytes. The strand can no longer form by construction; this test now
+//! pins that improved contract: a boundary segment delivered slowly (released
+//! the moment its GET parks at the gate — i.e. exactly when the read is
+//! blocked waiting for it) yields ONE continuous decoded saw-tooth, no
+//! swallowed frames.
 //!
 //! Determinism: no `sleep`, no real-time pacing, no ABR (single variant,
 //! manual mode). The `HlsTestServer` segment gate withholds segment N+1's
 //! BODY while its size (HEAD) stays known, so the decoder reaches the
-//! boundary and goes `Pending` while withheld. The decode loop runs
+//! boundary and blocks on the withheld body. The decode loop runs
 //! synchronously on a blocking thread; a release task observes the parked
 //! GET on the gate's in-process counter and releases it. After release the
-//! decoder must re-deliver the stranded bytes — the decoded saw-tooth must
-//! stay continuous across the boundary (phase +1 per frame, the same metric
+//! blocking read completes — the decoded saw-tooth must stay continuous
+//! across the boundary (phase +1 per frame, the same metric
 //! `stress_chunk_integrity` asserts).
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use kithara::{
     decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory},
@@ -134,22 +139,19 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
         "seeking just before the withheld boundary"
     );
 
-    // The strand only forms if the boundary-crossing packet read is
-    // actually interrupted at the not-ready segment *before* the body
-    // arrives: MSS consumes the seg-(N-1) tail into a packet buffer, the
-    // next `fetch` hits the withheld seg-N → `Interrupted` → the half-read
-    // packet is discarded with MSS's `read_pos` already advanced. If the
-    // gate released the moment the GET parked, the read would complete and
-    // no strand would form. So the releaser waits for BOTH the parked GET
-    // (observable) AND the decoder reporting its first boundary `Pending`
-    // (the strand having formed), then releases.
-    let boundary_pending = Arc::new(AtomicBool::new(false));
+    // The forward read-ahead crosses into the withheld segment, finds it not
+    // ready, and the blocking `Stream::read` parks — dispatching the segment's
+    // GET, which lands on the gate. The parked GET (`requested() > 0`) is thus
+    // the observable proof that the read is *currently blocked waiting for this
+    // exact segment*; releasing then drives the wait-then-resume path. (The old
+    // contract additionally waited for a decoder `Pending`, but the blocking
+    // read no longer surfaces one at a slow boundary — it waits — so that would
+    // deadlock; see the module doc.)
     let release_gate = gate.clone();
-    let release_signal = Arc::clone(&boundary_pending);
     let releaser = tokio::spawn(async move {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
-            if release_gate.requested() > 0 && release_signal.load(Ordering::Acquire) {
+            if release_gate.requested() > 0 {
                 release_gate.release();
                 return true;
             }
@@ -164,7 +166,6 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
     // tokio runtime can drive the HLS peer's segment fetches AND the gate
     // releaser concurrently while the blocking `Stream::read` waits.
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let decode_signal = Arc::clone(&boundary_pending);
     let decode = spawn_blocking(move || -> (Vec<(u64, Vec<f32>)>, usize) {
         let byte_len = stream.len().unwrap_or(0);
         let byte_map = stream.byte_map();
@@ -192,11 +193,11 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
                     chunks.push((chunk.meta.frame_offset, chunk.pcm.clone()));
                 }
                 Ok(DecoderChunkOutcome::Pending(_)) => {
+                    // Not expected under the wait-then-resume contract (the
+                    // blocking read waits across the slow boundary rather than
+                    // surfacing Pending), but counted so the assertions can
+                    // document it. The deadline guards a genuine wedge.
                     pendings += 1;
-                    // Signal the releaser that the boundary read was
-                    // interrupted (the strand has formed). Only then is it
-                    // safe to deliver the segment without masking the strand.
-                    decode_signal.store(true, Ordering::Release);
                     assert!(
                         Instant::now() < deadline,
                         "decode stalled at the withheld boundary past the budget"
@@ -221,10 +222,15 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
         chunk_count = chunks.len(),
         pendings, "decode finished pulling across the boundary"
     );
-    assert!(
-        pendings > 0,
-        "expected at least one Pending while the segment body was withheld; \
-         the gate did not exercise the not-ready boundary"
+    // Under the wait-then-resume contract the blocking read does NOT surface a
+    // Pending at a slow-but-arriving boundary — it waits — so `pendings` is
+    // expected to be 0. The strand was a give-up artifact; its absence is the
+    // fix. Continuity (below) is the load-bearing assertion.
+    assert_eq!(
+        pendings, 0,
+        "the blocking read must WAIT across the slow boundary, not surface a \
+         give-up Pending (a Pending here means the read abandoned a packet \
+         mid-read — the strand bug)"
     );
     assert!(
         chunks.len() >= 8,

@@ -4420,6 +4420,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "memory-stats",
+ "num-traits",
  "reqwest",
  "thiserror 2.0.18",
  "tokio",

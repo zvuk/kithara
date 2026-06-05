@@ -148,7 +148,17 @@ async fn test_retry_exhaustion(#[case] failures_before_success: usize, #[case] m
         Duration::from_millis(10),
     )
     .await;
-    assert!(matches!(result, Err(NetError::Status { .. })));
+    // Once the retry budget is spent on a transient error the decorator gives
+    // up with a TERMINAL `RetryExhausted` (Fatal) wrapping the underlying
+    // status — not the raw (retryable) `Status`, which upstream would mistake
+    // for "try again" and re-issue forever.
+    let Err(NetError::RetryExhausted { source, .. }) = result else {
+        panic!("retry exhaustion must surface a terminal RetryExhausted, got {result:?}");
+    };
+    assert!(
+        matches!(source.as_ref(), NetError::Status { status, .. } if status.get() == 500),
+        "RetryExhausted must wrap the underlying HTTP status, got {source:?}"
+    );
 }
 
 #[kithara::test(tokio)]

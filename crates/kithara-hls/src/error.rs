@@ -40,6 +40,16 @@ pub enum HlsError {
     /// [`SourceError::WaitBudgetExceeded`] for hot-path classification.
     #[error("wait_range budget exceeded")]
     WaitBudgetExceeded,
+
+    /// A segment the reader needs failed terminally: the downloader
+    /// exhausted its retry budget (the net layer's resilient body) and
+    /// settled the slot into the `Failed` typestate. Surfaces as the
+    /// terminal [`SourceError::SegmentUnavailable`] so the reader stops
+    /// instead of spinning on a slot that will never load. The typed
+    /// transport cause is logged at the settle site, not carried in the
+    /// message.
+    #[error("segment data not ready")]
+    SegmentUnavailable,
 }
 
 impl From<HlsError> for SourceError {
@@ -56,6 +66,7 @@ impl From<HlsError> for SourceError {
             HlsError::Cancelled => Self::Cancelled,
             HlsError::Timeout(s) => Self::Timeout(s),
             HlsError::WaitBudgetExceeded => Self::WaitBudgetExceeded,
+            HlsError::SegmentUnavailable => Self::SegmentUnavailable,
         }
     }
 }

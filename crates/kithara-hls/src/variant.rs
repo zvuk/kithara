@@ -17,7 +17,7 @@ use kithara_assets::{
     ReadSide, ResourceKey, WriteSide,
 };
 use kithara_drm::DecryptContext;
-use kithara_net::{Headers, NetError};
+use kithara_net::{Headers, NetError, Retryability};
 use kithara_platform::{CancellationToken, Mutex, time::Duration};
 use kithara_storage::{ResourceStatus, WaitOutcome};
 use kithara_stream::{
@@ -26,7 +26,7 @@ use kithara_stream::{
     dl::{FetchCmd, OnCompleteFn, WriterFn},
 };
 use kithara_test_utils::kithara;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 use url::Url;
 
 use crate::{
@@ -46,13 +46,19 @@ use segment_store::SegmentStore;
 #[cfg(test)]
 mod tests;
 
-/// Lock-free three-valued cache-state discriminant for a segment / init
+/// Lock-free four-valued cache-state discriminant for a segment / init
 /// slot. `Downloading` exists to dedupe in-flight fetches: `dispatch`
 /// only claims (`Missing -> Downloading`) slots before emitting a
 /// `FetchCmd`. The settle path drives `Downloading -> Loaded` (success or
-/// "another writer already committed") and `Downloading -> Missing`
-/// (recoverable failure / cancel). Eviction is the only producer of
-/// `Loaded -> Missing`.
+/// "another writer already committed"), `Downloading -> Missing`
+/// (recoverable failure / cancel), and `Downloading -> Failed` (terminal:
+/// the downloader exhausted its retry budget). Eviction is the only
+/// producer of `Loaded -> Missing`.
+///
+/// `Failed` is terminal by construction: `try_claim` only CAS's from
+/// `Missing`, so a failed slot is never re-dispatched (no extra scheduler
+/// check needed) and a reader observing it via `is_failed` surfaces a
+/// terminal error instead of spinning.
 ///
 /// The bit values are private and the only mutators are the typed
 /// transitions on the phase-specific `impl Segment<Downloading>` /
@@ -66,6 +72,7 @@ impl SegmentSlotState {
     const MISSING: u8 = 0;
     const DOWNLOADING: u8 = 1;
     const LOADED: u8 = 2;
+    const FAILED: u8 = 3;
 
     fn missing() -> Arc<Self> {
         Arc::new(Self(AtomicU8::new(Self::MISSING)))
@@ -73,6 +80,12 @@ impl SegmentSlotState {
 
     fn is_loaded(&self) -> bool {
         self.0.load(Ordering::Acquire) == Self::LOADED
+    }
+
+    /// Terminal-failure probe. A `Failed` slot will never load (the
+    /// downloader gave up); readers surface a terminal error on it.
+    fn is_failed(&self) -> bool {
+        self.0.load(Ordering::Acquire) == Self::FAILED
     }
 
     /// Atomic `Missing -> Downloading` claim. Returns the owned
@@ -109,6 +122,20 @@ impl SegmentSlotState {
     fn mark_missing(&self) {
         self.0.store(Self::MISSING, Ordering::Release);
     }
+
+    fn mark_failed(&self) {
+        self.0.store(Self::FAILED, Ordering::Release);
+    }
+}
+
+/// Whether a fetch error is terminal for the slot. The net layer's
+/// resilient body already retried stalls and transient body errors, so a
+/// `Fatal` error reaching the settle path means the downloader gave up —
+/// the slot must be parked `Failed` rather than re-dispatched. `Cancelled`
+/// is the one `Fatal` variant that stays recoverable: a cancel marks an
+/// epoch rebuild, which owns the re-dispatch, so it keeps `Missing`.
+fn is_terminal_fetch_error(e: &NetError) -> bool {
+    !matches!(e, NetError::Cancelled) && e.retryability() == Retryability::Fatal
 }
 
 mod sealed {
@@ -133,10 +160,15 @@ struct Downloading;
 struct Loaded;
 /// Returned to the dispatch pool (recoverable failure / cancel / evict).
 struct Missing;
+/// Terminal: the downloader exhausted its retry budget on this slot. Never
+/// re-dispatched (`try_claim` only CAS's from `Missing`) and surfaced to
+/// readers as a terminal error via [`SegmentSlotState::is_failed`].
+struct Failed;
 
 impl sealed::Sealed for Downloading {}
 impl sealed::Sealed for Loaded {}
 impl sealed::Sealed for Missing {}
+impl sealed::Sealed for Failed {}
 
 impl SegmentPhase for Downloading {
     type Data = DownloadClaim;
@@ -145,6 +177,9 @@ impl SegmentPhase for Loaded {
     type Data = LoadedProof;
 }
 impl SegmentPhase for Missing {
+    type Data = ();
+}
+impl SegmentPhase for Failed {
     type Data = ();
 }
 
@@ -218,6 +253,21 @@ impl Segment<Downloading> {
     /// before commit). The slot returns to the dispatch pool.
     fn into_missing(mut self) -> Segment<Missing> {
         self.data.slot.mark_missing();
+        self.data.settled = true;
+        Segment {
+            data: (),
+            _phase: PhantomData,
+        }
+    }
+
+    /// `Downloading -> Failed` terminal settle: the downloader exhausted
+    /// its retry budget (the net layer's resilient body already retried
+    /// the stall/transient errors), so the slot is parked permanently —
+    /// `try_claim` will not re-dispatch it and a waiting reader surfaces a
+    /// terminal error. Unlike [`into_missing`](Self::into_missing) the
+    /// slot does NOT return to the dispatch pool.
+    fn into_failed(mut self) -> Segment<Failed> {
+        self.data.slot.mark_failed();
         self.data.settled = true;
         Segment {
             data: (),
@@ -1132,6 +1182,44 @@ impl HlsVariant {
         cursor >= end
     }
 
+    /// Whether any init/media segment covering `range` settled terminally
+    /// (`Failed`): the downloader exhausted its retry budget, so the range
+    /// will never load. [`wait_range`](Self::wait_range) consults this when
+    /// a range is not ready to tell "still downloading" (spin) from
+    /// "permanently failed" (terminal error). Walks the same descriptors as
+    /// [`range_ready`](Self::range_ready), checking slot state rather than
+    /// on-disk bytes; the per-byte `contains_range` walk stays out so this
+    /// only fires on a real terminal settle, never on a transient gap.
+    fn range_has_failed(&self, range: &Range<u64>) -> bool {
+        let total = self.total_bytes();
+        let end = if total > 0 {
+            range.end.min(total)
+        } else {
+            range.end
+        };
+        let mut cursor = range.start;
+        // The init prefix is not a media segment, so `find_at_offset` returns
+        // `None` for a byte inside it — skip past it (jumping to media space)
+        // after checking the init's own terminal state, exactly as
+        // `range_ready` walks init then media.
+        if let Some((_key, init_range)) = self.init_descriptor_at(cursor) {
+            if self.store.init_failed() {
+                return true;
+            }
+            cursor = init_range.end;
+        }
+        while cursor < end {
+            let Some((seg_idx, seg_off, seg_size)) = self.find_at_offset(cursor) else {
+                break;
+            };
+            if self.store.segment_failed(seg_idx) {
+                return true;
+            }
+            cursor = (seg_off + seg_size).max(cursor + 1);
+        }
+        false
+    }
+
     #[kithara::hang_watchdog]
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         let total = self.total_bytes();
@@ -1409,6 +1497,16 @@ impl HlsVariant {
         if total > 0 && range.start >= total && self.sizes_complete() {
             return Ok(WaitOutcome::Eof);
         }
+        // A segment covering this range settled terminally (the downloader
+        // exhausted its retries): the bytes will never arrive, so surface a
+        // terminal error instead of `WaitBudgetExceeded` — the reader stops
+        // here rather than spinning. Checked AFTER flushing/EOF: a seek in
+        // flight may be moving the read position off the failed range, and
+        // the failed check is scoped to the requested range so seeking to a
+        // healthy range still plays.
+        if self.range_has_failed(&range) {
+            return Err(StreamError::Source(HlsError::SegmentUnavailable.into()));
+        }
         // Not ready: the reader driver (`Stream::probe_read` / `read` /
         // `prime_seek_range`) wakes the peer for this range, per its own
         // on-core/off-core context — this method stays wake-free.
@@ -1515,7 +1613,24 @@ impl FetchSlot {
             }
         } else {
             writer.fail(e.to_string());
-            handle.into_missing();
+            // The net layer's resilient body already retried stalls and
+            // transient body errors; a `Fatal` error here (e.g.
+            // `RetryExhausted`) means the downloader gave up, so the slot
+            // is terminal — parking it as `Failed` stops the re-dispatch
+            // loop and lets a waiting reader surface a terminal error.
+            // `Cancelled` is recoverable (epoch rebuild owns it) and stays
+            // `Missing`. The typed cause is logged here; readers see only
+            // the fixed terminal message (no transport detail).
+            if is_terminal_fetch_error(e) {
+                error!(
+                    target: "kithara_hls::settle",
+                    err = %e,
+                    "terminal fetch failure — slot parked Failed, will not re-dispatch"
+                );
+                handle.into_failed();
+            } else {
+                handle.into_missing();
+            }
         }
     }
 

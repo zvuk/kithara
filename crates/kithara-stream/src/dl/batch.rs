@@ -176,7 +176,6 @@ impl BatchGroup {
 /// Spawn an HTTP fetch task for one command.
 fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: CancellationToken) {
     let client = inner.client.clone();
-    let chunk_timeout = inner.chunk_timeout;
     let soft_timeout = inner.soft_timeout;
     let inflight = inner.inflight.clone();
     let fetch_waker = inner.fetch_waker.clone();
@@ -197,16 +196,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     start_request(bus.as_ref(), &inflight, request_id, wait_in_queue);
 
     task::spawn(async move {
-        let result = establish(
-            &client,
-            chunk_timeout,
-            soft_timeout,
-            &cancel,
-            bus.clone(),
-            cmd,
-            request_id,
-        )
-        .await;
+        let result = establish(&client, soft_timeout, &cancel, bus.clone(), cmd, request_id).await;
         deliver(
             request_id,
             DeliveryContext {
@@ -263,7 +253,6 @@ where
 #[kithara::probe(request_id)]
 async fn establish(
     client: &HttpClient,
-    chunk_timeout: Duration,
     soft_timeout: Duration,
     cancel: &CancelGroup,
     bus: Option<EventBus>,
@@ -318,7 +307,7 @@ async fn establish(
     }
 
     let resp_headers = byte_stream.headers.clone();
-    let body = BodyStream::wrap_http(byte_stream, cancel.clone(), chunk_timeout);
+    let body = BodyStream::wrap_http(byte_stream, cancel.clone());
     Ok(FetchResponse {
         body,
         headers: resp_headers,

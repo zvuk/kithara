@@ -475,14 +475,32 @@ async fn test_http_errors(
     assert!(result.is_err());
     let error = result.err().unwrap();
 
-    let NetError::Status { status, .. } = &error else {
-        panic!("Expected HTTP status error, got {error:?}");
+    // A non-retryable status (4xx) surfaces RAW. A retryable status (5xx/429)
+    // is retried to exhaustion and then surfaces as a TERMINAL `RetryExhausted`
+    // (Fatal) wrapping the original status — so the wrapper shape itself
+    // encodes the retryability classification, and the underlying status stays
+    // recoverable from `source`.
+    let status = match &error {
+        NetError::Status { status, .. } => {
+            assert!(
+                !is_retryable,
+                "a retryable status must exhaust into RetryExhausted, not surface raw: {error:?}"
+            );
+            status.get()
+        }
+        NetError::RetryExhausted { source, .. } => {
+            assert!(
+                is_retryable,
+                "only a retried (transient) status exhausts into RetryExhausted: {error:?}"
+            );
+            match source.as_ref() {
+                NetError::Status { status, .. } => status.get(),
+                other => panic!("RetryExhausted must wrap the HTTP status, got {other:?}"),
+            }
+        }
+        other => panic!("expected Status or RetryExhausted, got {other:?}"),
     };
-    assert_eq!(status.get(), expected_status);
-    assert_eq!(
-        error.retryability() == Retryability::Transient,
-        is_retryable
-    );
+    assert_eq!(status, expected_status);
 }
 
 #[kithara::test(

@@ -3,12 +3,13 @@ use std::{num::NonZeroU16, sync::Arc};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
-use kithara_platform::CancellationToken;
+use kithara_platform::{CancellationToken, time::sleep, tokio};
 use reqwest::Client;
 use url::Url;
 
 use crate::{
     error::{NetError, NetResult},
+    resumable::{Refetch, Resumed, resumable_body},
     retry::{DefaultRetryPolicy, RetryNet},
     traits::{Net, NetExt},
     types::{Compression, Headers, NetOptions, RangeSpec},
@@ -77,12 +78,16 @@ impl From<Compression> for Vec<ClientBuilderMod> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn build_client(options: &NetOptions) -> reqwest::Result<Client> {
+    // No reqwest `.read_timeout`: the idle/stall timeout is owned by the
+    // resilient body (`resumable_body`), whose `sleep(inactivity_timeout)`
+    // routes through `kithara_platform::time` and so collapses under
+    // `sim-time`. reqwest's timer is real wall-clock and would both
+    // double-own the stall and break simulation determinism.
     let base = Client::builder()
         .cookie_store(true)
         .pool_max_idle_per_host(options.pool_max_idle_per_host)
         .pool_idle_timeout(Some(kithara_platform::time::Duration::from_secs(5)))
-        .danger_accept_invalid_certs(options.is_insecure)
-        .read_timeout(options.inactivity_timeout);
+        .danger_accept_invalid_certs(options.is_insecure);
     Vec::<ClientBuilderMod>::from(options.compression)
         .into_iter()
         .fold(base, |b, disable| disable(b))
@@ -114,6 +119,9 @@ fn extract_headers(resp: &reqwest::Response) -> Headers {
 struct RawHttp {
     inner: Client,
     options: NetOptions,
+    /// Master-derived cancel, captured by the self-healing body so a re-fetch
+    /// loop exits promptly on teardown. Same token the `RetryNet` layer uses.
+    cancel: CancellationToken,
 }
 
 impl RawHttp {
@@ -145,6 +153,23 @@ impl RawHttp {
         crate::ByteStream::new(headers, Box::pin(stream))
     }
 
+    /// Await a request's response under the idle/stall timeout: no response
+    /// headers within `inactivity_timeout` ⇒ a transient [`NetError::Timeout`]
+    /// so the retry decorator re-issues it. This is the establish-side half of
+    /// the single idle timer (the body half lives in [`resumable_body`]); the
+    /// `sleep` routes through `kithara_platform::time` so it collapses under
+    /// `sim-time`. reqwest's real-time `read_timeout` is gone, so this is the
+    /// only — and simulation-correct — bound on a stalled connect/header wait.
+    async fn send_idle_bounded(
+        &self,
+        req: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, NetError> {
+        tokio::select! {
+            () = sleep(self.options.inactivity_timeout) => Err(NetError::Timeout),
+            r = req.send() => r.map_err(NetError::from),
+        }
+    }
+
     async fn send_checked(
         &self,
         req: reqwest::RequestBuilder,
@@ -158,7 +183,7 @@ impl RawHttp {
         } else {
             req
         };
-        let resp = req.send().await.map_err(NetError::from)?;
+        let resp = self.send_idle_bounded(req).await?;
         let status = resp.status();
 
         let ok = status.is_success() || (accept_partial && status.as_u16() == HTTP_PARTIAL_CONTENT);
@@ -168,6 +193,63 @@ impl RawHttp {
         }
 
         Ok(resp)
+    }
+
+    /// Establish ONE body stream (no self-healing) for `range` (`None` = full
+    /// GET). Shared by the first attempt and by the resume re-fetch — keeping
+    /// it un-wrapped is what prevents the resilient wrapper recursing.
+    async fn raw_body(
+        &self,
+        url: Url,
+        range: Option<RangeSpec>,
+        headers: Option<Headers>,
+        accept_partial: bool,
+    ) -> Result<(crate::ByteStream, bool), NetError> {
+        let mut req = self.inner.get(url.clone());
+        if let Some(range) = &range {
+            req = req.header("Range", range.to_string());
+        }
+        let resp = self.send_checked(req, headers, url, accept_partial).await?;
+        let partial = resp.status().as_u16() == HTTP_PARTIAL_CONTENT;
+        Ok((Self::response_to_stream(resp), partial))
+    }
+
+    /// Wrap a freshly-established body in the self-healing stream: on a stall
+    /// (no chunk within `inactivity_timeout`) or transient body error it
+    /// re-fetches `bytes=base_start+consumed-end` up to the retry policy, then
+    /// surfaces a terminal error. A resume is always a partial (206) request.
+    fn wrap_resumable(
+        &self,
+        first: crate::ByteStream,
+        url: Url,
+        base_start: u64,
+        end: Option<u64>,
+        headers: Option<Headers>,
+    ) -> crate::ByteStream {
+        let out_headers = first.headers.clone();
+        let me = self.clone();
+        let refetch: Refetch = Box::new(move |consumed| {
+            let me = me.clone();
+            let url = url.clone();
+            let headers = headers.clone();
+            let abs = base_start.saturating_add(consumed);
+            let resume = RangeSpec::new(abs, end);
+            Box::pin(async move {
+                let (stream, partial) = me.raw_body(url, Some(resume), headers, true).await?;
+                // `206` → body already starts at `abs` (skip 0); `200` → server
+                // ignored Range and re-sent from zero, drop the consumed prefix.
+                let skip = if partial { 0 } else { abs };
+                Ok(Resumed { stream, skip })
+            })
+        });
+        let body = resumable_body(
+            first,
+            refetch,
+            self.options.inactivity_timeout,
+            self.options.retry_policy.clone(),
+            self.cancel.clone(),
+        );
+        crate::ByteStream::new(out_headers, body)
     }
 }
 
@@ -202,6 +284,7 @@ impl HttpClient {
         let raw = RawHttp {
             inner,
             options: options.clone(),
+            cancel: cancel.clone(),
         };
         let net = Arc::new(raw.with_retry(options.retry_policy.clone(), cancel));
         Self { net, options }
@@ -300,12 +383,10 @@ impl Net for RawHttp {
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> Result<crate::ByteStream, NetError> {
-        let req = self
-            .inner
-            .get(url.clone())
-            .header("Range", range.to_string());
-        let resp = self.send_checked(req, headers, url, true).await?;
-        Ok(Self::response_to_stream(resp))
+        let (first, _partial) = self
+            .raw_body(url.clone(), Some(range.clone()), headers.clone(), true)
+            .await?;
+        Ok(self.wrap_resumable(first, url, range.start, range.end, headers))
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -317,7 +398,7 @@ impl Net for RawHttp {
         } else {
             req
         };
-        let resp = req.send().await.map_err(NetError::from)?;
+        let resp = self.send_idle_bounded(req).await?;
 
         let status = resp.status();
 
@@ -355,9 +436,11 @@ impl Net for RawHttp {
         url: Url,
         headers: Option<Headers>,
     ) -> Result<crate::ByteStream, NetError> {
-        let req = self.inner.get(url.clone());
-        let resp = self.send_checked(req, headers, url, false).await?;
-        Ok(Self::response_to_stream(resp))
+        let (first, _partial) = self
+            .raw_body(url.clone(), None, headers.clone(), false)
+            .await?;
+        // Full GET; a resume re-fetches `bytes=consumed-` (base 0).
+        Ok(self.wrap_resumable(first, url, 0, None, headers))
     }
 }
 
@@ -376,9 +459,10 @@ mod tests {
         },
     };
 
+    // `::tokio` (the real crate) — `super::*` re-exports `kithara_platform::tokio`.
+    use ::tokio::net::TcpListener;
     use axum::{Router, http::StatusCode, routing::get};
     use kithara_platform::time::Duration;
-    use tokio::net::TcpListener;
 
     use super::*;
     use crate::types::RetryPolicy;
@@ -406,7 +490,7 @@ mod tests {
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr: SocketAddr = listener.local_addr().expect("local_addr");
-        tokio::spawn(async move {
+        ::tokio::spawn(async move {
             axum::serve(listener, app.into_make_service())
                 .await
                 .expect("serve");

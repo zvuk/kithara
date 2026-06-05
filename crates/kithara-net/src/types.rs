@@ -80,21 +80,20 @@ impl fmt::Display for RangeSpec {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Builder)]
 #[non_exhaustive]
 pub struct RetryPolicy {
+    #[builder(default = Duration::from_millis(100))]
     pub base_delay: Duration,
+    #[builder(default = Duration::from_secs(5))]
     pub max_delay: Duration,
+    #[builder(default = 3)]
     pub max_retries: u32,
 }
 
 impl Default for RetryPolicy {
     fn default() -> Self {
-        Self {
-            base_delay: Duration::from_millis(100),
-            max_delay: Duration::from_secs(5),
-            max_retries: 3,
-        }
+        Self::builder().build()
     }
 }
 

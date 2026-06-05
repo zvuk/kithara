@@ -59,10 +59,8 @@ impl StreamType for Hls {
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
             let dl_cancel = cancel.child_token();
-            let client = kithara_net::HttpClient::new(
-                kithara_net::NetOptions::default(),
-                dl_cancel.child_token(),
-            );
+            let client =
+                kithara_net::HttpClient::new(config.net_options.clone(), dl_cancel.child_token());
             let dl_config = DownloaderConfig::for_client(client)
                 .cancel(dl_cancel)
                 .build();

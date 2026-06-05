@@ -66,7 +66,6 @@ pub(super) struct DownloaderInner {
     /// connections across all peers and command types.
     pub(super) inflight: Arc<AtomicUsize>,
     pub(super) cancel: CancellationToken,
-    pub(super) chunk_timeout: Duration,
     pub(super) demand_throttle: Duration,
     pub(super) soft_timeout: Duration,
     pub(super) client: HttpClient,
@@ -108,14 +107,12 @@ impl Downloader {
     #[must_use]
     pub fn new(config: super::DownloaderConfig) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let chunk_timeout = config.client.options().inactivity_timeout;
         let soft_timeout = config.soft_timeout;
         #[cfg(not(target_arch = "wasm32"))]
         let runtime = config.runtime;
         let abr = AbrController::new(config.abr_settings);
         Self {
             inner: Arc::new(DownloaderInner {
-                chunk_timeout,
                 soft_timeout,
                 #[cfg(not(target_arch = "wasm32"))]
                 runtime,

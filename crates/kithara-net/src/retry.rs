@@ -63,33 +63,45 @@ impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T, NetError>>,
     {
-        let mut last_error = None;
-
-        for attempt in 0..=self.retry_policy.max_attempts() {
-            match op().await {
+        let max = self.retry_policy.max_attempts();
+        for attempt in 0..=max {
+            let error = match op().await {
                 Ok(value) => return Ok(value),
-                Err(error) => {
-                    if !self.retry_policy.should_retry(&error, attempt) {
-                        return Err(error);
-                    }
-                    last_error = Some(error.clone());
-
-                    if attempt < self.retry_policy.max_attempts() {
-                        let delay = self.retry_policy.delay_for_attempt(attempt);
-                        tokio::select! {
-                            biased;
-                            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
-                            () = sleep(delay) => {}
-                        }
-                    }
+                Err(error) => error,
+            };
+            if self.retry_policy.should_retry(&error, attempt) {
+                let delay = self.retry_policy.delay_for_attempt(attempt);
+                tokio::select! {
+                    biased;
+                    () = self.cancel.cancelled() => return Err(NetError::Cancelled),
+                    () = sleep(delay) => {}
                 }
+                continue;
             }
+            // Not retrying. A transient error after a NON-ZERO budget was
+            // spent is promoted to a terminal `RetryExhausted` (Fatal) so
+            // downstream (HLS settle, readers) treats it as a give-up, not a
+            // transient retry signal. A genuinely fatal error (4xx, decode,
+            // cancel) surfaces as-is; so does a transient error under
+            // `max_retries == 0`, where the decorator is a deliberate
+            // pass-through (no retries were promised, none were exhausted).
+            return Err(
+                if max > 0 && error.retryability() == Retryability::Transient {
+                    NetError::RetryExhausted {
+                        max_retries: max,
+                        source: Box::new(error),
+                    }
+                } else {
+                    error
+                },
+            );
         }
-
-        Err(last_error.unwrap_or_else(|| NetError::RetryExhausted {
-            max_retries: self.retry_policy.max_attempts(),
+        // The `0..=max` loop always returns on its final iteration; this is an
+        // unreachable terminal safety net.
+        Err(NetError::RetryExhausted {
+            max_retries: max,
             source: Box::new(NetError::Unimplemented),
-        }))
+        })
     }
 }
 
