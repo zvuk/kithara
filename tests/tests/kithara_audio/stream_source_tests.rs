@@ -6,7 +6,7 @@ use kithara_integration_tests::{
     create_test_wav, kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
 };
-use kithara_platform::time::{Duration, Instant, sleep, timeout};
+use kithara_platform::time::{self, Duration, Instant, sleep, timeout};
 use kithara_stream::Stream;
 
 fn wav_stream(samples: usize) -> AudioConfig<MemStream> {
@@ -212,7 +212,14 @@ async fn truncated_wav_surfaces_decode_error_or_eof() {
                 break;
             }
             Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(20)).await;
+                // Qualified `time::sleep` so the `#[kithara::test(flash(true))]`
+                // body rewriter virtualizes this wait to match the already-
+                // virtualized `Instant::now()` deadline above. A bare-imported
+                // `sleep` is a single-segment path the rewriter does not match,
+                // leaving it REAL — a mixed driver clock whose virtual deadline
+                // races past while the driver sleeps real, exiting the loop
+                // before the worker's EOF marker is drained.
+                time::sleep(Duration::from_millis(20)).await;
             }
         }
     }

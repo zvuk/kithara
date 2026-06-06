@@ -554,6 +554,7 @@ impl<S> Audio<S> {
         self.recv_outcome_blocking()
     }
 
+    #[kithara::flash(true)]
     #[kithara::hang_watchdog]
     fn recv_outcome_blocking(&mut self) -> RecvOutcome {
         loop {
