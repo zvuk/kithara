@@ -108,7 +108,9 @@ impl Future for FlashYield {
             }
             return Poll::Pending;
         }
-        self.handle = Some(sched::register_yield_async(cx.waker().clone()));
+        let (id, granted, adv) = sched::register_yield_async(cx.waker().clone());
+        self.handle = Some((id, granted));
+        sched::fire_advance(adv);
         Poll::Pending
     }
 }

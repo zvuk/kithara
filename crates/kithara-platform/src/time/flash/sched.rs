@@ -542,15 +542,20 @@ pub(crate) fn yield_until_advance() {
 }
 
 /// Register an ASYNC cooperative-yield waiter (sim `tokio::task::yield_now`).
-/// Parks the task as a yield-waiter (woken on the next clock advance) and returns
-/// its id + granted flag. This is the sim analogue of a real `yield_now`: real
-/// time passes while a task yields, so here the task releases its `active_async`
-/// slot (the spawn gate does so when the yield future returns Pending) and the
-/// virtual clock is free to advance to the next event. No resolve-at-once path:
-/// that would re-poll the task immediately, re-arming a busy-poll loop that never
-/// lets the clock move. The drain (on advance) sets `granted` and the gate
-/// re-polls.
-pub(crate) fn register_yield_async(waker: Waker) -> (u64, Arc<AtomicBool>) {
+/// Parks the task as a yield-waiter (woken on the next clock advance), then runs
+/// the advance rule and returns its id + granted flag + the [`Advance`] the caller
+/// fires (mirroring the sibling `register_*_async` registers). This is the sim
+/// analogue of a real `yield_now`: real time passes while a task yields, so here
+/// the task releases its `active_async` slot (the spawn gate does so when the
+/// yield future returns Pending) and the virtual clock is free to advance to the
+/// next event. Still NO resolve-at-once: the waiter is inserted parked, and the
+/// returned advance only GRANTS it on a quiescent edge (`active == active_async
+/// == 0`) — under a participated poll the task is still running (`active_async >
+/// 0`) so the advance is a no-op and the gate park does the real advance, exactly
+/// as before. The grant (here, the lone-yield rescue, or a later clock advance)
+/// sets `granted` and the waker re-polls. The fired advance unwedges a
+/// genuinely-quiescent non-participated `block_on` whose only `.await` is a yield.
+pub(crate) fn register_yield_async(waker: Waker) -> (u64, Arc<AtomicBool>, Advance) {
     let granted = Arc::new(AtomicBool::new(false));
     let mut s = SCHED.lock();
     let id = s.fresh_id();
@@ -561,7 +566,8 @@ pub(crate) fn register_yield_async(waker: Waker) -> (u64, Arc<AtomicBool>) {
             granted: Arc::clone(&granted),
         },
     );
-    (id, granted)
+    let adv = try_advance_locked(&mut s);
+    (id, granted, adv)
 }
 
 /// Drop path for a [`register_yield_async`] waiter cancelled before it resolved.
