@@ -303,6 +303,40 @@ pub fn with_ambient<F: Future>(on: bool, fut: F) -> WithAmbient<F> {
     WithAmbient { on, fut }
 }
 
+/// Per-poll dynamic-flash assertion for an async PROD `#[kithara::flash(bool)]`
+/// region. The async analogue of the sync [`enter_dynamic`] RAII guard: an async
+/// fn can be polled across `.await` on different worker threads, so a one-time
+/// `enter_dynamic` on the first poll would not survive a yield. This re-asserts
+/// the mode for the duration of EACH poll (the guard drops when the poll returns,
+/// restoring the thread's previous `FLASH_ACTIVE` — no leak across tasks). Same
+/// shape as [`WithAmbient`], with `enter_dynamic` in place of the ambient set.
+pub struct FlashDynamic<F> {
+    on: bool,
+    fut: F,
+}
+
+impl<F: Future> Future for FlashDynamic<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
+        // SAFETY: `fut` is structurally pinned and never moved out of
+        // `FlashDynamic`; it is re-pinned in place for its own poll. `on` is a
+        // `Copy` scalar touched only by value. The `_g` guard is a named binding,
+        // so it drops AFTER `fut.poll(cx)` returns, restoring the previous
+        // `FLASH_ACTIVE`.
+        let this = unsafe { self.get_unchecked_mut() };
+        let _g = enter_dynamic(this.on);
+        let fut = unsafe { Pin::new_unchecked(&mut this.fut) };
+        fut.poll(cx)
+    }
+}
+
+/// Wrap `fut` so the dynamic flash mode is re-asserted around every poll (see
+/// [`FlashDynamic`]).
+pub fn flash_dynamic<F: Future>(on: bool, fut: F) -> FlashDynamic<F> {
+    FlashDynamic { on, fut }
+}
+
 /// Process anchor for the real monotonic clock, sampled once on first use. Real
 /// instants are reported as `BASE_NANOS + elapsed-since-anchor`, so a thread in
 /// a [`FlashScope`] sees a forward-moving clock in the same nanos space as

@@ -44,7 +44,7 @@ pub async fn sleep(duration: Duration) {
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub use flash::{
     AmbientScope, FlashScope, Participating, ambient_scope, ambient_snapshot, enter_dynamic,
-    flash_real, participate, set_ambient_for_spawn,
+    flash_dynamic, flash_real, participate, set_ambient_for_spawn,
 };
 
 /// Off the sim path: spawning needs no quiescence bracket, so `participate` is
@@ -69,6 +69,25 @@ pub struct FlashScope;
 #[must_use]
 pub fn flash_real() -> FlashScope {
     FlashScope
+}
+
+/// Off the sim path: a prod `#[kithara::flash(bool)]` sync region's RAII guard is
+/// a ZST no-op (time is already real), so an annotated fn compiles away to its
+/// bare body. Under `flash-time` this is [`flash::enter_dynamic`].
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
+#[inline]
+#[must_use]
+pub fn enter_dynamic(_on: bool) -> FlashScope {
+    FlashScope
+}
+
+/// Off the sim path: a prod `#[kithara::flash(bool)]` async region is an identity
+/// passthrough (no per-poll re-assert needed when time is already real). Under
+/// `flash-time` this is [`flash::flash_dynamic`].
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
+#[inline]
+pub fn flash_dynamic<F: Future>(_on: bool, fut: F) -> F {
+    fut
 }
 
 #[cfg(target_arch = "wasm32")]
