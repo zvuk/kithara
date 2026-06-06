@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use kithara_platform::time::{Duration, sleep};
+use kithara_test_utils::kithara;
 
 /// Decoupled startup gate between the worker thread and the async app task.
 ///
@@ -47,6 +48,7 @@ impl PreloadGate {
     /// until then the awaiter parks on its own runtime timer. A `signal()`
     /// landing during a sleep is observed on the next poll (worst-case
     /// latency one [`POLL_INTERVAL`](Self::POLL_INTERVAL)).
+    #[kithara::flash(true)]
     pub async fn wait(&self) {
         while !self.is_ready() {
             sleep(Self::POLL_INTERVAL).await;

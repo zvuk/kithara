@@ -183,6 +183,7 @@ const FAIRNESS_YIELD_EVERY: u32 = 16;
 /// on `retain`), deferred buffer recycle, and the idle park. Only the
 /// produce core ([`produce_pass`]) is `#[kithara::rtsan_forbid_blocking]`,
 /// so the Vec `malloc`/`free` here never lands on the checked path.
+#[kithara::flash(true)]
 fn run_loop<N: Node, O: SchedulerObserver>(
     cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
     wake: &SchedulerWake,

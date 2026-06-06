@@ -147,6 +147,7 @@ impl BatchGroup {
     /// number of fetches actually spawned (cancelled cmds don't count),
     /// so [`Registry::tick`](super::registry::Registry::tick) can treat
     /// a non-zero dispatch as forward progress for the hang watchdog.
+    #[kithara::flash(true)]
     pub(super) async fn process(self, inner: &DownloaderInner) -> usize {
         let mut dispatched: usize = 0;
         for group in self.epochs {
