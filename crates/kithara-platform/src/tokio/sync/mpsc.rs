@@ -9,16 +9,24 @@
 //! clock only advances at genuine quiescence. Off the sim path the module is not
 //! compiled; callers get the real `tokio` mpsc through the glob re-export.
 //!
-//! Lost-wakeup freedom: a receiver/sender registers its engine waiter WHILE
-//! holding the queue mutex, so a concurrent producer/consumer either observes
-//! the parked waiter (and signals it) or has not yet taken the mutex.
+//! Lost-wakeup freedom: a receiver/sender registers its waiter (engine handle on
+//! the flash path, or its real [`Waker`] in the shared state off it) WHILE
+//! holding the queue mutex, so a concurrent producer/consumer either observes the
+//! parked waiter (and signals/wakes it) or has not yet taken the mutex.
+//!
+//! Each wait/wake branches on [`flash_enabled`]: flash uses the engine channel
+//! waiter; otherwise the parked half stores its real [`Waker`] under `inner` (the
+//! single receiver's `data_waker`, each blocked sender's `space_wakers`) and the
+//! peer wakes it directly — reactor-free, untouched by engine accounting. The
+//! queue/live-count state is UNIFIED; only the park/wake mechanism branches. The
+//! real path is the only one taken until `#[kithara::flash]` annotations land.
 
 use std::{
     collections::VecDeque,
     future::Future,
     pin::Pin,
     sync::Arc,
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
 };
 
 use error::{SendError, TryRecvError};
@@ -26,7 +34,7 @@ use parking_lot::Mutex;
 pub use tokio_with_wasm::alias::sync::mpsc::error;
 
 pub use super::unbounded::UnboundedSender;
-use crate::time::flash::sched;
+use crate::time::flash::{flash_enabled, sched};
 
 pub(super) struct Inner<T> {
     queue: VecDeque<T>,
@@ -34,6 +42,13 @@ pub(super) struct Inner<T> {
     senders: usize,
     /// Whether the single receiver is alive; senders observe close at `false`.
     receiver_alive: bool,
+    /// Real-wake slot for the single receiver (off the flash path), mirroring
+    /// `data_cvid`. Stored under this mutex after the empty/close re-check.
+    data_waker: Option<Waker>,
+    /// Real-wake slots for senders blocked on capacity (off the flash path),
+    /// mirroring `space_cvid`. Many producers can park, so this is a list; each
+    /// is woken (and the slot drained) per freed slot / on receiver close.
+    space_wakers: Vec<Waker>,
 }
 
 pub(super) struct Shared<T> {
@@ -54,6 +69,8 @@ impl<T> Shared<T> {
                 queue: VecDeque::new(),
                 senders: 1,
                 receiver_alive: true,
+                data_waker: None,
+                space_wakers: Vec::new(),
             }),
             data_cvid: sched::next_condvar_id(),
             space_cvid: sched::next_condvar_id(),
@@ -65,6 +82,40 @@ impl<T> Shared<T> {
     pub(super) fn add_sender(&self) {
         self.inner.lock().senders += 1;
     }
+
+    /// Wake one parked receiver: engine `data_cvid` on the flash path, else the
+    /// stored real waker. `waker` is the receiver's real waker taken under the
+    /// lock by the caller (already dropped); pass `None` on the flash path.
+    fn wake_data(&self, waker: Option<Waker>) {
+        if flash_enabled() {
+            sched::signal_channel(self.data_cvid, false);
+        } else if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    /// Wake parked senders: engine `space_cvid` on the flash path (one if
+    /// `!all`, every if `all`), else the real wakers the caller drained under the
+    /// lock. `wakers` is empty on the flash path.
+    fn wake_space(&self, all: bool, wakers: Vec<Waker>) {
+        if flash_enabled() {
+            sched::signal_channel(self.space_cvid, all);
+        } else {
+            for w in wakers {
+                w.wake();
+            }
+        }
+    }
+}
+
+/// How a [`Recv`]/[`Send`] future parked, so re-poll and `Drop` use the matching
+/// teardown — engine cancel vs. removing the stored real waker. `Real` carries a
+/// clone of the waker so a dropped sender can remove EXACTLY its own entry from
+/// the shared `space_wakers` list (leaving a stale waker there would steal a
+/// freed-slot wake from a still-blocked sender — a lost wakeup).
+enum Parked {
+    Engine(sched::AsyncHandle),
+    Real(Waker),
 }
 
 /// Create a bounded channel with room for `capacity` queued items (min 1, like
@@ -104,17 +155,32 @@ pub(super) fn push_unbounded<T>(shared: &Shared<T>, value: T) -> Result<(), Send
         return Err(SendError(value));
     }
     inner.queue.push_back(value);
+    // Take the receiver's real waker under the same lock the receiver parks
+    // under (no-op on the flash path), so push + wake are atomic w.r.t. a recv.
+    let waker = inner.data_waker.take();
     drop(inner);
-    sched::signal_channel(shared.data_cvid, false);
+    shared.wake_data(waker);
     Ok(())
+}
+
+/// Drain at most one parked sender's real waker (one freed slot wakes one
+/// sender). Returns the empty list on the flash path.
+fn take_one_space_waker<T>(inner: &mut Inner<T>) -> Vec<Waker> {
+    if flash_enabled() || inner.space_wakers.is_empty() {
+        Vec::new()
+    } else {
+        vec![inner.space_wakers.remove(0)]
+    }
 }
 
 fn poll_recv_inner<T>(
     shared: &Shared<T>,
-    pending: &mut Option<sched::AsyncHandle>,
+    pending: &mut Option<Parked>,
     cx: &mut Context<'_>,
 ) -> Poll<Option<T>> {
-    if let Some(handle) = pending.as_ref() {
+    // Engine wait resolves only when granted; a real wait always re-checks the
+    // queue below (a spurious wake re-parks). Clear the marker either way.
+    if let Some(Parked::Engine(handle)) = pending.as_ref() {
         if handle.granted() {
             *pending = None;
         } else {
@@ -124,13 +190,18 @@ fn poll_recv_inner<T>(
     let mut inner = shared.inner.lock();
     if let Some(value) = inner.queue.pop_front() {
         let bounded = shared.capacity.is_some();
-        drop(inner);
         // Every pop frees one slot: wake one parked sender if any (no-op when
         // none). Signalling only on the full→not-full edge would strand the
         // other senders when the consumer drains several slots before a woken
         // sender re-pushes — a lost wakeup that deadlocks under load.
+        let wakers = if bounded {
+            take_one_space_waker(&mut inner)
+        } else {
+            Vec::new()
+        };
+        drop(inner);
         if bounded {
-            sched::signal_channel(shared.space_cvid, false);
+            shared.wake_space(false, wakers);
         }
         return Poll::Ready(Some(value));
     }
@@ -139,10 +210,16 @@ fn poll_recv_inner<T>(
     }
     // Register the wakeup WHILE holding the queue lock so a concurrent send
     // cannot slip its signal between this empty-check and the park.
-    let (handle, adv) = sched::register_channel_async(shared.data_cvid, cx.waker().clone());
-    *pending = Some(handle);
-    drop(inner);
-    sched::fire_advance(adv);
+    if flash_enabled() {
+        let (handle, adv) = sched::register_channel_async(shared.data_cvid, cx.waker().clone());
+        *pending = Some(Parked::Engine(handle));
+        drop(inner);
+        sched::fire_advance(adv);
+    } else {
+        let waker = cx.waker().clone();
+        inner.data_waker = Some(waker.clone());
+        *pending = Some(Parked::Real(waker));
+    }
     Poll::Pending
 }
 
@@ -151,10 +228,15 @@ fn try_recv_inner<T>(shared: &Shared<T>) -> Result<T, TryRecvError> {
     let bounded = shared.capacity.is_some();
     match inner.queue.pop_front() {
         Some(value) => {
-            drop(inner);
             // Wake one parked sender per freed slot (see `poll_recv_inner`).
+            let wakers = if bounded {
+                take_one_space_waker(&mut inner)
+            } else {
+                Vec::new()
+            };
+            drop(inner);
             if bounded {
-                sched::signal_channel(shared.space_cvid, false);
+                shared.wake_space(false, wakers);
             }
             Ok(value)
         }
@@ -163,11 +245,18 @@ fn try_recv_inner<T>(shared: &Shared<T>) -> Result<T, TryRecvError> {
     }
 }
 
-fn close_receiver<T>(shared: &Shared<T>, pending: &mut Option<sched::AsyncHandle>) {
-    shared.inner.lock().receiver_alive = false;
+fn close_receiver<T>(shared: &Shared<T>, pending: &mut Option<Parked>) {
+    let mut inner = shared.inner.lock();
+    inner.receiver_alive = false;
     // Wake every sender blocked on capacity so each observes the closed receiver.
-    sched::signal_channel(shared.space_cvid, true);
-    if let Some(handle) = pending.take() {
+    let wakers = std::mem::take(&mut inner.space_wakers);
+    // Drop our own data waker if we parked real, so no late push wakes us.
+    if matches!(pending, Some(Parked::Real(_))) {
+        inner.data_waker = None;
+    }
+    drop(inner);
+    shared.wake_space(true, wakers);
+    if let Some(Parked::Engine(handle)) = pending.take() {
         sched::cancel_async_wait(handle);
     }
 }
@@ -176,10 +265,11 @@ pub(super) fn drop_sender<T>(shared: &Shared<T>) {
     let mut inner = shared.inner.lock();
     inner.senders -= 1;
     let last = inner.senders == 0;
+    let waker = if last { inner.data_waker.take() } else { None };
     drop(inner);
     if last {
         // Wake the receiver so its next poll observes the closed channel (None).
-        sched::signal_channel(shared.data_cvid, false);
+        shared.wake_data(waker);
     }
 }
 
@@ -218,7 +308,7 @@ impl<T> Drop for Sender<T> {
 pub struct Send<'a, T> {
     shared: &'a Shared<T>,
     value: Option<T>,
-    pending: Option<sched::AsyncHandle>,
+    pending: Option<Parked>,
 }
 
 // The queued value is plain data we move out via `take` — never structurally
@@ -230,7 +320,9 @@ impl<T> Future for Send<'_, T> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        if let Some(handle) = this.pending.as_ref() {
+        // Engine wait resolves only when granted; a real wait always re-checks
+        // capacity/alive below (a spurious wake re-parks). Clear the marker.
+        if let Some(Parked::Engine(handle)) = this.pending.as_ref() {
             if handle.granted() {
                 this.pending = None;
             } else {
@@ -249,24 +341,42 @@ impl<T> Future for Send<'_, T> {
         if inner.queue.len() < cap {
             if let Some(value) = this.value.take() {
                 inner.queue.push_back(value);
+                let waker = inner.data_waker.take();
                 drop(inner);
-                sched::signal_channel(this.shared.data_cvid, false);
+                this.shared.wake_data(waker);
             }
             return Poll::Ready(Ok(()));
         }
-        let (handle, adv) =
-            sched::register_channel_async(this.shared.space_cvid, cx.waker().clone());
-        this.pending = Some(handle);
-        drop(inner);
-        sched::fire_advance(adv);
+        // Full: park on space. Register the waiter WHILE holding the lock so a
+        // concurrent recv (which frees a slot under the same lock, then wakes)
+        // cannot slip its wake between this capacity-check and the park.
+        if flash_enabled() {
+            let (handle, adv) =
+                sched::register_channel_async(this.shared.space_cvid, cx.waker().clone());
+            this.pending = Some(Parked::Engine(handle));
+            drop(inner);
+            sched::fire_advance(adv);
+        } else {
+            let waker = cx.waker().clone();
+            inner.space_wakers.push(waker.clone());
+            this.pending = Some(Parked::Real(waker));
+        }
         Poll::Pending
     }
 }
 
 impl<T> Drop for Send<'_, T> {
     fn drop(&mut self) {
-        if let Some(handle) = self.pending.take() {
-            sched::cancel_async_wait(handle);
+        match self.pending.take() {
+            Some(Parked::Real(waker)) => {
+                // Remove EXACTLY our own waker so a freed slot does not wake a
+                // dropped sender (which would steal the wake from a still-blocked
+                // peer). Other blocked senders' wakers stay in place.
+                let mut inner = self.shared.inner.lock();
+                inner.space_wakers.retain(|w| !w.will_wake(&waker));
+            }
+            Some(Parked::Engine(handle)) => sched::cancel_async_wait(handle),
+            None => {}
         }
     }
 }
@@ -274,7 +384,7 @@ impl<T> Drop for Send<'_, T> {
 /// Bounded receiver (single consumer).
 pub struct Receiver<T> {
     shared: Arc<Shared<T>>,
-    pending: Option<sched::AsyncHandle>,
+    pending: Option<Parked>,
 }
 
 impl<T> Receiver<T> {
@@ -310,7 +420,7 @@ impl<T> Drop for Receiver<T> {
 /// Unbounded receiver (single consumer).
 pub struct UnboundedReceiver<T> {
     shared: Arc<Shared<T>>,
-    pending: Option<sched::AsyncHandle>,
+    pending: Option<Parked>,
 }
 
 impl<T> UnboundedReceiver<T> {
@@ -346,7 +456,7 @@ impl<T> Drop for UnboundedReceiver<T> {
 /// Future returned by [`Receiver::recv`] / [`UnboundedReceiver::recv`].
 pub struct Recv<'a, T> {
     shared: &'a Shared<T>,
-    pending: &'a mut Option<sched::AsyncHandle>,
+    pending: &'a mut Option<Parked>,
 }
 
 impl<T> Future for Recv<'_, T> {

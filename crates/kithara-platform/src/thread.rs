@@ -362,7 +362,13 @@ pub fn park_timeout(duration: Duration) {
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 #[inline]
 pub fn unpark(t: &Thread) {
-    crate::time::flash::sched::unpark(thread_id_hash(t.id()));
+    if crate::time::flash::flash_enabled() {
+        crate::time::flash::sched::unpark(thread_id_hash(t.id()));
+    } else {
+        // Real-time scope: wake the OS park slot, matching the real
+        // `park_timeout` above (the engine does not own that slot).
+        t.unpark();
+    }
 }
 
 /// Unpark a thread parked in [`park_timeout`] (non-sim / OS park slot).
