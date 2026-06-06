@@ -115,6 +115,7 @@ async fn read_audio_some(audio: &mut Audio<Stream<Hls>>, stage: &str) -> usize {
 /// `kithara-app` plays track.mp3 + hls/master.m3u8 + drm/master.m3u8.
 /// ABR switches variant on HLS track → worker hangs → all tracks die.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -175,6 +176,7 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
 /// - post-switch `PcmChunk` reads give root-cause diagnostics;
 /// - `OfflinePlayer::render()` is the player-level continuity oracle.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -313,6 +315,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
 ///
 /// Parameterized: path × ABR mode to isolate DRM vs HLS vs no-ABR.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -427,6 +430,7 @@ async fn stream_continues_after_seek(
 
 /// Same test but without ABR (fixed variant 0) — baseline.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -479,6 +483,7 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
 /// segments whose byte offsets are no longer visible in the `StreamIndex` layout,
 /// causing `read_at` to return Retry forever.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -551,6 +556,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
 /// Same seek pattern as HLS/DRM tests but with `Audio<Stream<File>>`.
 /// Baseline: no ABR, no segments, no variant switching.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -633,6 +639,7 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
 /// Uses chunk metadata (`variant_index`) instead of broadcast events to avoid
 /// broadcast lag issues.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -767,6 +774,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
 /// 148 s of audio. Reading 15 s post-switch must produce at least
 /// `15 × 44_100 × 2 × 0.5 = 661_500` samples (50 % of nominal rate).
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,

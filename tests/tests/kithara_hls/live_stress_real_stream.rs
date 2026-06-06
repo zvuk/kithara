@@ -310,6 +310,7 @@ async fn next_chunk_with_timeout(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     serial,
@@ -370,6 +371,7 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     serial,
@@ -541,6 +543,7 @@ async fn live_ephemeral_revisit_sequence_regression(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -590,6 +593,7 @@ async fn live_real_stream_fixed_seek_window_regression(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -635,6 +639,7 @@ async fn live_real_stream_random_seek_prefix_regression(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -712,6 +717,7 @@ async fn live_real_stream_seek_resume_native(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     serial,
@@ -1027,6 +1033,7 @@ async fn live_stress_real_stream_seek_read_cache(
 /// RED before steps 4-6: downloader hot-spins on empty Batch(vec![]) at
 /// playlist tail, hang detector fires after 30s.
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     serial,
@@ -1092,6 +1099,7 @@ async fn live_ephemeral_small_cache_playback(
 /// RED: seek invalidates the downloader position; with small cache the
 /// sought segment is often evicted → hang detector fires.
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     serial,

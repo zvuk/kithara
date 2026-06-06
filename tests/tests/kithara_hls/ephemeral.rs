@@ -86,6 +86,7 @@ fn count_files(dir: &Path) -> usize {
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,

@@ -14,6 +14,7 @@ fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(browser_timeout(5, 30)),
@@ -34,6 +35,7 @@ async fn fetch_master_playlist_from_network(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(browser_timeout(5, 30)),
@@ -58,6 +60,7 @@ async fn fetch_media_playlist_from_network(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(browser_timeout(5, 30)),
@@ -86,6 +89,7 @@ async fn resolve_url_with_base_override(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(browser_timeout(5, 30)),
@@ -115,6 +119,7 @@ async fn fetch_media_playlist_for_different_variants(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(browser_timeout(5, 30)),
@@ -162,6 +167,7 @@ async fn fetch_manager_error_handling_invalid_url(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(browser_timeout(5, 30)),
@@ -199,6 +205,7 @@ async fn resolve_multiple_relative_urls(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(browser_timeout(5, 30)),

@@ -13,6 +13,7 @@ use kithara_platform::time::Duration;
 use reqwest::Client;
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -31,6 +32,7 @@ async fn test_test_server_helper_serves_audio_fixture_urls() {
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(5)),
@@ -79,6 +81,7 @@ async fn test_test_server_helper_serves_format(
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(10)),
@@ -130,6 +133,7 @@ async fn test_signal_server_encoded_formats_are_decodable(
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(10)),
@@ -207,6 +211,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(5)),
@@ -255,6 +260,7 @@ async fn test_create_packaged_hls_returns_stable_typed_urls() {
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(5)),
@@ -290,6 +296,7 @@ async fn test_packaged_test_server_serves_audio_mp4_resources() {
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(10)),
@@ -408,6 +415,7 @@ async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
 //   - Apple is on for `target_os = "macos" | "ios"`,
 //   - Android is on for `target_os = "android"`.
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(10)),

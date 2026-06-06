@@ -17,7 +17,7 @@ use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 
 use crate::common::test_defaults::Consts;
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 #[case::sw_ext_hint(Some("audio.mp3"), Some("mp3"), DecoderBackend::Symphonia)]
 #[case::sw_ext(Some("audio.mp3"), None, DecoderBackend::Symphonia)]
 #[case::sw_no_ext_hint(None, Some("mp3"), DecoderBackend::Symphonia)]
@@ -121,7 +121,7 @@ async fn audio_file_mp3_decodes_with_duration(
 /// Uses throttled server: Content-Length is sent immediately but body
 /// arrives in small chunks, so only a fraction is downloaded when
 /// the decoder initializes. Duration must still reflect the full track.
-#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
+#[kithara::test(flash(false), tokio, timeout(Duration::from_secs(15)))]
 #[case::throttled_no_hint(None)]
 #[case::throttled_with_hint(Some("mp3"))]
 async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
@@ -167,7 +167,7 @@ async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {

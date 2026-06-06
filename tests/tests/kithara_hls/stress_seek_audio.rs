@@ -48,6 +48,7 @@ impl Consts {
 ///    - Level 3: position (decoded phase ≈ expected phase)
 /// 6. Final seek near the end → read to EOF
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,

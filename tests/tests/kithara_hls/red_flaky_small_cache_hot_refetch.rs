@@ -22,6 +22,7 @@ impl Consts {
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     serial,
     timeout(Duration::from_secs(30)),

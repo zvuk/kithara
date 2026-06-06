@@ -385,6 +385,7 @@ async fn test_head_success(client: &HttpClient, url: Url) -> Result<Headers, Net
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -406,6 +407,7 @@ async fn test_get_bytes_success_cases(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -431,6 +433,7 @@ async fn test_stream_success_cases(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -454,6 +457,7 @@ async fn test_get_range_success_cases(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -504,6 +508,7 @@ async fn test_http_errors(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -520,6 +525,7 @@ async fn test_head_success_case(#[future] test_server: TestServer, http_client: 
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -540,6 +546,7 @@ async fn test_headers_variants(#[future] test_server: TestServer, http_client: H
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -574,6 +581,7 @@ async fn test_timeout_variants(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -592,6 +600,7 @@ async fn test_retry_variants(#[future] test_server: TestServer, http_client: Htt
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -643,6 +652,7 @@ async fn test_invalid_url(http_client: HttpClient) {
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -662,7 +672,7 @@ async fn test_stream_cancellation(#[future] test_server: TestServer, http_client
     drop(stream);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 async fn test_stream_get_returns_expected_bytes() {
     let server = TestServer::new(test_router()).await;
     let url = server.url("/test");
@@ -679,7 +689,7 @@ async fn test_stream_get_returns_expected_bytes() {
     assert_eq!(collected, b"Hello, World!");
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 async fn test_range_request_returns_correct_slice() {
     let server = TestServer::new(test_router()).await;
     let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
@@ -699,7 +709,7 @@ async fn test_range_request_returns_correct_slice() {
     assert_eq!(collected, b"World");
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 async fn test_headers_are_sent_correctly() {
     let server = TestServer::new(test_router()).await;
     let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
@@ -712,7 +722,7 @@ async fn test_headers_are_sent_correctly() {
     assert_eq!(result, Bytes::from("Headers received"));
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 async fn test_get_bytes_simple() {
     let server = TestServer::new(test_router()).await;
     let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
@@ -722,7 +732,7 @@ async fn test_get_bytes_simple() {
     assert_eq!(bytes, Bytes::from("Hello, World!"));
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 async fn test_head_returns_content_length() {
     let server = TestServer::new(test_router()).await;
     let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
@@ -735,7 +745,7 @@ async fn test_head_returns_content_length() {
     assert_eq!(content_length, Some("13"));
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 async fn test_timeout_behavior() {
     let server = TestServer::new(test_router()).await;
     let base = HttpClient::new(NetOptions::default(), CancellationToken::default());
@@ -758,7 +768,7 @@ async fn test_retry_policy_exponential_backoff() {
     assert_eq!(policy.delay_for_attempt(10), Duration::from_millis(100));
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 async fn test_net_builder_creates_functional_client() {
     let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
     let server = TestServer::new(test_router()).await;
@@ -771,7 +781,7 @@ async fn test_net_builder_creates_functional_client() {
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 async fn test_net_builder_with_custom_options() {
     let opts = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(100))
@@ -792,7 +802,7 @@ async fn test_net_builder_with_custom_options() {
     assert!(result.is_ok(), "HttpClient with custom options should work");
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 #[case::headers_passthrough("/key-with-auth", Some("secret-key-token"), 0xab)]
 #[case::query_params_passthrough(
     "/key-with-params?drm_id=test123&version=1.0&extra=ignored",
@@ -819,7 +829,7 @@ async fn test_key_request_passthrough(
     assert_eq!(collected[0], expected_first_byte);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 #[case::missing_auth_header("/key-with-auth", None, 401, "missing auth header")]
 #[case::wrong_auth_header("/key-with-auth", Some("wrong-token"), 401, "wrong auth header")]
 #[case::missing_required_query(
@@ -849,7 +859,7 @@ async fn test_key_request_rejects_bad_credentials(
     assert_http_status(result.map(|_| "stream"), expected_status, context);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 async fn test_key_request_range_with_headers() {
     let server = key_test_server().await;
     let client = HttpClient::new(NetOptions::default(), CancellationToken::default());
@@ -918,7 +928,7 @@ enum TimeoutOp {
     GetRange { start: u64, end: Option<u64> },
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 #[case::get_bytes_times_out_on_body("/slow-body", Duration::from_millis(50), TimeoutOp::GetBytes)]
 #[case::stream_times_out_on_headers("/slow-headers", Duration::from_millis(100), TimeoutOp::Stream)]
 #[case::get_range_times_out_on_headers(
@@ -948,7 +958,7 @@ async fn test_timeout_matrix(#[case] path: &str, #[case] timeout: Duration, #[ca
     }
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(flash(false), tokio)]
 async fn test_range_behavior_contract() {
     let server = TestServer::new(test_router()).await;
     let client = HttpClient::new(NetOptions::default(), CancellationToken::default());

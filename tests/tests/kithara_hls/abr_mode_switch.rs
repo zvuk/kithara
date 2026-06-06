@@ -203,6 +203,7 @@ fn read_until_eof(audio: &mut Audio<Stream<Hls>>, timeout: Duration) -> u64 {
 /// - Subsequent segments download as V1
 /// - Cached V0 segments play out naturally (no re-fetch at V1)
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,
@@ -328,6 +329,7 @@ async fn vod_manual_switch_affects_future_segments() {
 /// deterministic: pre-fix this test trips the watchdog; post-fix it completes
 /// the full track via V1.
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,
@@ -424,6 +426,7 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
 /// pre-seed cold-start behaviour where `Auto(Some(0))` stayed on V0
 /// only because `decide` returned `NoEstimate` until samples arrived.
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,
@@ -594,6 +597,7 @@ async fn multi_track_shared_abr_with_cache() {
 /// switch, downloading the entire new variant from the start. With ABR
 /// oscillation this produces 2× bandwidth usage.
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,
@@ -683,6 +687,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
 /// boundary, fires `VariantApplied`, and subsequent reader segments come
 /// from the chosen variant.
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,
@@ -792,6 +797,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
 /// bug where clicking Manual(3) (FLAC) in the GUI caused a 10s hang
 /// before Phase K's `decode_next_chunk` recovery + `apply_decision` split.
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,
@@ -906,6 +912,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
 /// Manual click, `peek_pending_decision` is never observed, and the
 /// switch stays pending forever.
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,
@@ -1035,6 +1042,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
 /// without going through the ABR controller, masking the wake hook from
 /// `on_mode_changed → tick`.
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,
@@ -1179,6 +1187,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
 /// gate an aggressive up-switch would land at segment 1; with it the
 /// first boundary stays neutral.
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,
@@ -1296,6 +1305,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 /// rewritten to deterministically force the rapid-recreate race
 /// (likely needs `DelayRule` on segment fetches).
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,
@@ -1436,6 +1446,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
 /// variant to imitate the real-world CDN latency that lets the reader
 /// land mid-segment when the user clicks lq.
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,
@@ -1645,6 +1656,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
 ///   FLAC), cross-codec recreate.
 /// - `hw_*` mirror the above on the Apple backend.
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,

@@ -36,6 +36,7 @@ use tracing::info;
 /// - Variant switch should be seamless from reader's perspective
 /// - No gaps or duplicates in byte stream
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(10)),
@@ -151,6 +152,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
 
 /// Simpler test without ABR - just verify basic multi-segment reading works
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(10)),
@@ -218,6 +220,7 @@ async fn test_basic_multi_segment_reading(
 /// 5. BUG: `first_media_segment` stays at 2 instead of updating to 0
 /// 6. This causes gap detection or incorrect offset calculations
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(10)),

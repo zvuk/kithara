@@ -209,7 +209,7 @@ fn build_queue_with_tick(
     (queue, downloader, store, tick_handle)
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::mp3_symphonia(LocalSource::Mp3, 42, DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -375,7 +375,7 @@ where
 /// `wait_for_queue_event`) is fixed (`wait_for_loader_done` polls
 /// `Queue::track()` directly and accepts `Loaded | Consumed`); what
 /// remains is the underlying engine bug.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(180)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

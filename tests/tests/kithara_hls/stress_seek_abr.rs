@@ -23,6 +23,7 @@ use tracing::info;
 /// seek causes deadlock because `detect_format_change` picks wrong
 /// segment offset → decoder created at wrong position → "missing ftyp atom".
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -156,6 +157,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
 /// Uses seek positions observed in logs and asserts that each seek
 /// still yields PCM samples (audio must stay alive).
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,

@@ -262,17 +262,17 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     let _ = ids;
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn queue_seek_one_track_index0(temp_dir: TestTempDir) {
     run_seek_scenario(&["/master.m3u8"], 0, temp_dir).await;
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn queue_seek_two_tracks_index0(temp_dir: TestTempDir) {
     run_seek_scenario(&["/master.m3u8", "/master-encrypted.m3u8"], 0, temp_dir).await;
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn queue_seek_two_tracks_index1(temp_dir: TestTempDir) {
     run_seek_scenario(&["/master.m3u8", "/master-encrypted.m3u8"], 1, temp_dir).await;
 }
@@ -290,7 +290,7 @@ async fn queue_seek_two_tracks_index1(temp_dir: TestTempDir) {
 ///
 /// Без `#[ignore]` — пинит реальную регрессию: пока coalescer не написан,
 /// этот тест падает в `just test` и держит баг на виду.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(20)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(20)))]
 #[ignore = "pins real regression — pending downloader request coalescer (see .docs/plans/2026-04-21-downloader-request-coalescing.md); unignore when single-flight layer lands"]
 async fn queue_seek_same_url_twice_index0(temp_dir: TestTempDir) {
     run_seek_scenario(&["/master.m3u8", "/master.m3u8"], 0, temp_dir).await;
@@ -300,7 +300,7 @@ async fn queue_seek_same_url_twice_index0(temp_dir: TestTempDir) {
 /// every segment fetch to emulate a cold-network CDN. Seeks past the
 /// initial fetched window, into a segment that has to be fetched on
 /// demand, which is the production scenario.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     install_tracing();
 
@@ -383,7 +383,7 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
 /// the physical stream length, so `source.seek(Current(delta))` lands
 /// past EOF forever. `align_decoder_with_seek_anchor` recreates the
 /// decoder but the anchor path then fails again on the same mismatch.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     install_tracing();
 

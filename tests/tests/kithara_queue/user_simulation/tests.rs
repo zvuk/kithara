@@ -190,7 +190,7 @@ async fn run_multi(helper: &TestServerHelper, kinds: &[TrackKind], actions: Vec<
 /// and auto-advance. HLS cases are exercised under every ABR mode so
 /// the same `seek_forward_unbuffered` path hits Auto's switch-decision
 /// arm AND Manual's no-switch arm.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::mp3_streamhq(TrackKind::Mp3StreamHq, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
@@ -214,7 +214,7 @@ async fn user_sim_seek_forward_unbuffered_repro(#[case] kind: TrackKind, #[case]
 
 /// Bug #6 — backward seek causes silent hang. `PlayFor` watchdog in
 /// the harness panics on stuck position.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::mp3_streamhq(TrackKind::Mp3StreamHq, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
@@ -232,7 +232,7 @@ async fn user_sim_seek_backward_repro(#[case] kind: TrackKind, #[case] abr: AbrM
 
 /// Bug #7 — seek to 95-99 % crashes the decoder thread. With the
 /// 64 s fixture, 97 % = 62.08 s leaves ~2 s before EOF.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::mp3_streamhq(TrackKind::Mp3StreamHq, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
@@ -250,7 +250,7 @@ async fn user_sim_seek_near_end_repro(#[case] kind: TrackKind, #[case] abr: AbrM
 
 /// Production symptom: long playback → backward seek → silent hang
 /// or false-EOF.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(90)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(90)))]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
 #[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
@@ -271,7 +271,7 @@ async fn user_sim_seek_backward_after_long_play(#[case] kind: TrackKind, #[case]
 }
 
 /// Pinpoint: play to natural EOF, then seek backward.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(90)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(90)))]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
 #[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
@@ -295,7 +295,7 @@ async fn user_sim_seek_backward_after_natural_eof(#[case] kind: TrackKind, #[cas
 
 /// Scripted scenario from the plan: 90 % → 10 % → 50 %. Each ABR
 /// mode separately because Auto changes variant during the trajectory.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
 #[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
@@ -312,7 +312,7 @@ async fn user_sim_scripted_forward_back_end(#[case] kind: TrackKind, #[case] abr
 
 // ─── Seeded random fuzz ──────────────────────────────────────────────────────
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(240)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(240)))]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
 #[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
@@ -326,7 +326,7 @@ async fn user_sim_random_seed_42(#[case] kind: TrackKind, #[case] abr: AbrMode) 
     run_single(&helper, kind, abr, scenarios::random_seed(42, 12)).await;
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(240)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(240)))]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
 #[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
@@ -344,7 +344,7 @@ async fn user_sim_random_seed_1337(#[case] kind: TrackKind, #[case] abr: AbrMode
 
 /// 30 s playback then backward seek — the production manual repro.
 /// HLS + DRM matrix; ABR Auto since that's the default users hit.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
 #[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
@@ -362,7 +362,7 @@ async fn user_sim_long_play_then_seek_backward(#[case] kind: TrackKind, #[case] 
 }
 
 /// 30 s playback then forward seek — Bug #5 path on long playback.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
 #[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
@@ -383,7 +383,7 @@ async fn user_sim_long_play_then_seek_forward(#[case] kind: TrackKind, #[case] a
 /// This test loads a multi-variant HLS DRM track (matching the
 /// production playlist shape) and seeks the moment status flips to
 /// `Loaded`, exactly like the prod UI does.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::aac_drm(TrackKind::HlsAacLcDrmAbr4, 0.50)]
 #[case::aac_drm_low(TrackKind::HlsAacLcDrmAbr4, 0.20)]
 #[case::aac_drm_high(TrackKind::HlsAacLcDrmAbr4, 0.95)]
@@ -465,7 +465,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
 
 /// Aggressive seek storm — many seeks in rapid succession, like a
 /// user dragging the slider. Loader has to cancel and restart fetches.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
 #[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
 #[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
@@ -484,7 +484,7 @@ async fn user_sim_seek_storm(#[case] kind: TrackKind, #[case] abr: AbrMode) {
 /// Parametrised over Auto (the bug path) AND Manual (the pin — must
 /// always stay green). The Manual cases protect against accidentally
 /// breaking the working path while fixing the Auto one.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
 #[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::manual(3))]
 #[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::manual(0))]
@@ -510,7 +510,7 @@ async fn user_sim_auto_abr_upswitch_then_seek_burst(#[case] kind: TrackKind, #[c
 // queue mixed content and bounce between tracks. The matrix below
 // covers each ordering of DRM/non-DRM combinations.
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::drm_then_plain(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsAacLcAbr4])]
 #[case::plain_then_drm(&[TrackKind::HlsAacLcAbr4, TrackKind::HlsAacLcDrmAbr4])]
 #[case::drm_then_mp3(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::Mp3File])]
@@ -524,7 +524,7 @@ async fn user_sim_switch_track_then_seek(#[case] kinds: &[TrackKind]) {
 
 /// Many `SelectAt` + seek bounces between two tracks. Lights up the
 /// "previous DRM key state still mounted" path if there is one.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(180)))]
 #[case::drm_plain(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsAacLcAbr4])]
 #[case::plain_drm(&[TrackKind::HlsAacLcAbr4, TrackKind::HlsAacLcDrmAbr4])]
 #[case::drm_mp3(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::Mp3File])]
@@ -542,7 +542,7 @@ async fn user_sim_bounce_between_tracks_with_seeks(#[case] kinds: &[TrackKind]) 
 /// Long play on first track, switch to next, seek inside immediately.
 /// Mirrors the user's manual ride: settle into a track for a while,
 /// then jump to another in the playlist and drag the playhead.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(180)))]
 #[case::drm_then_plain(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsAacLcAbr4])]
 #[case::plain_then_drm(&[TrackKind::HlsAacLcAbr4, TrackKind::HlsAacLcDrmAbr4])]
 #[case::drm_then_mp3(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::Mp3File])]
@@ -555,7 +555,7 @@ async fn user_sim_long_play_then_switch_then_seek(#[case] kinds: &[TrackKind]) {
 /// Three-track DRM-heavy playlist: DRM → plain → DRM. The second
 /// DRM track must initialise fresh — covers the per-track DRM key
 /// state isolation path.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(180)))]
 #[case::drm_plain_drm(&[
     TrackKind::HlsAacLcDrmAbr4,
     TrackKind::HlsAacLcAbr4,

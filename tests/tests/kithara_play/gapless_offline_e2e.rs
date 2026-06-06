@@ -59,6 +59,7 @@ fn expected_total_decoded_frames() -> usize {
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(30)),
@@ -118,6 +119,7 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(30)),
@@ -208,6 +210,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(30)),
@@ -260,6 +263,7 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) 
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(30)),
@@ -303,6 +307,7 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(30)),
@@ -403,6 +408,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(30)),

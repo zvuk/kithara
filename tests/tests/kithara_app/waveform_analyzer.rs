@@ -19,6 +19,7 @@ fn silence_wav_spec() -> SignalSpec {
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(2)),
     env(KITHARA_HANG_TIMEOUT_SECS = "2")
@@ -44,6 +45,7 @@ async fn analyze_silent_wav_yields_all_zero_envelope() {
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(2)),
     env(KITHARA_HANG_TIMEOUT_SECS = "2")

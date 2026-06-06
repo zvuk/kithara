@@ -50,6 +50,7 @@ fn arm_panic_marker(marker: &'static str) -> Arc<AtomicBool> {
 /// panic hook that flips a flag when the watchdog's panic message
 /// lands on any thread.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -125,7 +126,7 @@ fn count_files_recursive(root: &Path) -> usize {
 /// behavior, free of ABR-switch noise. The assertion's upper bound is
 /// generous — it catches the "no cap at all" regression rather than a
 /// tight tuning number.
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(20)))]
+#[kithara::test(flash(false), tokio, native, serial, timeout(Duration::from_secs(20)))]
 async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");

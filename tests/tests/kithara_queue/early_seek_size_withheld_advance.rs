@@ -113,6 +113,7 @@ enum Trigger {
 
 /// Size withheld, body open: seek lands where total_bytes under-counts.
 #[kithara::test(
+    flash(false),
     tokio,
     multi_thread,
     serial,
@@ -131,6 +132,7 @@ async fn immediate_seek_size_withheld() {
 /// Both withheld: seek lands on an unsized, undelivered segment — the closest
 /// model of the genuinely-immediate user seek.
 #[kithara::test(
+    flash(false),
     tokio,
     multi_thread,
     serial,

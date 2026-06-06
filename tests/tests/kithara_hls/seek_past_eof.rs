@@ -41,6 +41,7 @@ impl Consts {
 /// - Actual total: `600_000` (3 x `200_000`)
 /// - Seek to `598_000` is valid but fails if `expected_total_length` = HEAD total.
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(15)),

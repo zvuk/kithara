@@ -1443,28 +1443,28 @@ async fn selenium_teardown(session: WasmPlayerSelenium, name: &str, result: Resu
     }
 }
 
-#[kithara::test(selenium)]
+#[kithara::test(flash(false), selenium)]
 async fn selenium_player_scenarios() {
     let (_harness, session) = selenium_setup().await;
     let result = session.run_player_scenarios().await;
     selenium_teardown(session, "player_scenarios", result).await;
 }
 
-#[kithara::test(selenium)]
+#[kithara::test(flash(false), selenium)]
 async fn selenium_diagnostic_suite() {
     let (_harness, session) = selenium_setup().await;
     let result = session.run_diagnostic_suite().await;
     selenium_teardown(session, "diagnostic_suite", result).await;
 }
 
-#[kithara::test(selenium)]
+#[kithara::test(flash(false), selenium)]
 async fn selenium_hls_log_scenario() {
     let (_harness, session) = selenium_setup().await;
     let result = session.run_hls_log_scenario().await;
     selenium_teardown(session, "hls_log_scenario", result).await;
 }
 
-#[kithara::test(selenium)]
+#[kithara::test(flash(false), selenium)]
 async fn selenium_drm_playback_scenario() {
     let (_harness, session) = selenium_setup().await;
     let tracks = session
@@ -1479,7 +1479,7 @@ async fn selenium_drm_playback_scenario() {
 /// - After page load: 0 workers (engine starts lazily)
 /// - Steady state after track load: 2 workers (engine + shared audio)
 /// - Ephemeral `spawn_blocking` workers (probe/decoder) cleaned up
-#[kithara::test(selenium)]
+#[kithara::test(flash(false), selenium)]
 async fn selenium_worker_count() {
     let (_harness, session) = selenium_setup().await;
     let result = session.run_worker_count_scenario().await;

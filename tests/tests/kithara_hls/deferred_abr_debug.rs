@@ -14,6 +14,7 @@ use tracing::info;
 
 /// Diagnostic version with detailed logging and safety limits
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(15)),

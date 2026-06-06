@@ -60,6 +60,7 @@ async fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) {
 
 /// Create Decoder<Stream<File>> and verify spec.
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -79,6 +80,7 @@ async fn decoder_file_creates_successfully(
 
 /// Decoder<Stream<File>> reads MP3 samples (no seek, just read).
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -97,6 +99,7 @@ async fn decoder_file_reads_samples(#[future] server: TestServerHelper, temp_dir
 /// to 0 again. The backward-seek case (which needs a warmup prelude) is a
 /// separate test.
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -128,6 +131,7 @@ async fn decoder_file_single_seek(
 
 /// Decoder<Stream<File>> can seek backward to the beginning after a warmup.
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -150,6 +154,7 @@ async fn decoder_file_seek_backward(#[future] server: TestServerHelper, temp_dir
 
 /// Decoder<Stream<File>> multiple seeks in sequence.
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -181,6 +186,7 @@ async fn decoder_file_seek_multiple(
 
 /// Decoder<Stream<File>> events are emitted on seek.
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),

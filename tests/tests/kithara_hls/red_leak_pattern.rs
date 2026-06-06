@@ -102,6 +102,7 @@ async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn Std
 /// shared Downloader and asserts that the OS thread count does not
 /// grow proportionally.
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(60)),

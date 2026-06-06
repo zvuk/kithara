@@ -430,6 +430,7 @@ fn write_wav_mono_f32(path: &std::path::Path, samples: &[f32], sample_rate: u32)
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -470,6 +471,7 @@ async fn dump_fixture_raw_bytes() {
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -539,6 +541,7 @@ async fn dump_aac_for_listening() {
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -637,6 +640,7 @@ async fn run_codec_compare(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -744,6 +748,7 @@ async fn codec_distortion_profile(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -909,6 +914,7 @@ fn first_signal_window_phase(
 /// they diverged by ~2 access units; the assertion compares against the
 /// production [`TOLERANCE_SAMPLES`] — the same contract `hls.rs:211` enforces.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,

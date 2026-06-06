@@ -27,6 +27,7 @@ impl Consts {
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "10")

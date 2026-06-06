@@ -21,6 +21,7 @@ use kithara_platform::{
 };
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(20)),

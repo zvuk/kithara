@@ -21,6 +21,7 @@ use tracing::info;
 /// Reproduces the production bug where `handle_midstream_switch()` unconditionally
 /// drains all segment requests, discarding the on-demand request from the new seek epoch.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(10)),

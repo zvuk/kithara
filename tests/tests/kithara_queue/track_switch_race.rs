@@ -307,7 +307,7 @@ fn mk_cfg(url: &Url, downloader: &Downloader, store: &StoreOptions) -> ResourceC
 /// the supersede path → `slow` marked `Cancelled`), release `slow`'s init so
 /// its loader completes and skips on the cancelled status, then assert `slow`
 /// never becomes `current()` — including after `fast` plays out.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(60)))]
 async fn supersede_while_loading_cancels_slow_track() {
     let helper = TestServerHelper::new().await;
     let fast = build_hls(
@@ -427,7 +427,7 @@ async fn supersede_while_loading_cancels_slow_track() {
 /// `select_item` landed after `select(fast)` committed fast, stomping it at
 /// ~tens of ms). With the lock the apply and the select are mutually
 /// exclusive, so it must not.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn concurrent_completion_race_does_not_barge_in() {
     let helper = TestServerHelper::new().await;
     let fast = build_hls(

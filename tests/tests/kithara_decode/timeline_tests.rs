@@ -93,6 +93,7 @@ mod hls_timeline {
     use crate::common::test_defaults::SawWav;
 
     #[kithara::test(
+        flash(false),
         tokio,
         timeout(Duration::from_secs(10)),
         env(KITHARA_HANG_TIMEOUT_SECS = "1"),

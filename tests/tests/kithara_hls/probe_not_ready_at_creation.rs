@@ -139,6 +139,7 @@ fn audio_config(server: &HlsTestServer, temp_dir: &TestTempDir) -> AudioConfig<H
 /// (`InitNotReady`, `gate_init_range`, the rebuild loop) is gone; the typed
 /// terminal comes from the stream layer, not the audio layer.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -197,6 +198,7 @@ async fn audio_new_bounded_failure_when_first_segment_withheld() {
 /// a slow-but-arriving first segment), `Audio::new` succeeds. Guards that the
 /// warm-the-window fix did not turn a recoverable slow start into a hard failure.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,

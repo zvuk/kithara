@@ -34,6 +34,7 @@ use tracing::info;
 ///
 /// EXPECTED: seek is processed, segment data is read correctly
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(10)),
@@ -97,6 +98,7 @@ async fn test_driver_seek_after_playlist_finished(
 /// This tests seek backward at the Stream<Hls> level with ABR active,
 /// without the full decoder chain.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(30)),

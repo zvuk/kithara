@@ -14,6 +14,7 @@ const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,

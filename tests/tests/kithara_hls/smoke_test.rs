@@ -20,6 +20,7 @@ use tracing::info;
 use url::Url;
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -64,6 +65,7 @@ async fn test_hls_session_creation(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -93,6 +95,7 @@ async fn test_hls_stream_creation(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -162,6 +165,7 @@ async fn test_hls_invalid_url_handling(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),

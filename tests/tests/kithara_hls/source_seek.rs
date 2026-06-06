@@ -12,6 +12,7 @@ use tracing::info;
 const SEGMENT_SIZE: u64 = 200_000;
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(10)),
@@ -50,6 +51,7 @@ async fn hls_stream_seek_to_segment_start(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(10)),
@@ -79,6 +81,7 @@ async fn hls_stream_seek_current(temp_dir: TestTempDir, rt_cancel: CancellationT
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(10)),
@@ -113,6 +116,7 @@ async fn hls_stream_multiple_seeks(temp_dir: TestTempDir, rt_cancel: Cancellatio
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(10)),
@@ -160,6 +164,7 @@ async fn hls_stream_read_all_then_seek_back(temp_dir: TestTempDir, rt_cancel: Ca
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(10)),
@@ -187,6 +192,7 @@ async fn hls_with_manual_abr_uses_fixed_variant(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(10)),
@@ -234,6 +240,7 @@ async fn hls_seek_across_all_segments_with_fixed_abr(
 /// This test shows that different variants produce different data at the same positions,
 /// which is the foundation for ABR switch + seek correctness.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(15)),

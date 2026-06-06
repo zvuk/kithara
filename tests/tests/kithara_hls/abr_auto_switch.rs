@@ -60,6 +60,7 @@ fn create_pcm_segments() -> Vec<u8> {
 /// is accumulated for buffer level tracking, which is required for up-switch
 /// decisions (`min_buffer_for_up_switch_secs` check).
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,

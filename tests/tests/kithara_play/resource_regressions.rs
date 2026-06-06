@@ -370,6 +370,7 @@ async fn seek_and_read(resource: &mut Resource, position: Duration, stage: &str)
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -429,6 +430,7 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -489,6 +491,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -571,6 +574,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -658,6 +662,7 @@ enum WarmupTeardown {
 /// Sequential HLS warmups from two isolated sessions must not poison each
 /// other. Covers three teardown modes for the first session.
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -746,6 +751,7 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     multi_thread,
     browser,
@@ -775,6 +781,7 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session() {
 /// `PcmMeta` stays contiguous, `PlaybackProgress` remains monotonic, and the offline
 /// player output does not produce sustained silence or over-budget render stalls.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(25)),
@@ -894,6 +901,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -990,6 +998,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
 /// (~11.6ms at 512 frames / 44100Hz), and no silence gaps > 1 block
 /// are allowed during crossfade.
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(60)),
     env(KITHARA_HANG_TIMEOUT_SECS = "10")
@@ -1143,6 +1152,7 @@ async fn stress_offline_crossfade_no_gaps() {
 /// MP3 through `ResourceConfig` (same path as kithara-app) must probe, decode,
 /// and report correct duration — with and without extension/hint.
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(15)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
@@ -1521,6 +1531,7 @@ enum LocalKind {
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "10")

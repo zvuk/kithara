@@ -66,6 +66,7 @@ fn exercise_stream_blocking(mut stream: Stream<Hls>) {
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(30)),

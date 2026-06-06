@@ -39,6 +39,7 @@ impl Consts {
 /// 3. Verify the switch happened via PCM direction change
 /// 4. 200 random seeks with direction + integrity checks
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,

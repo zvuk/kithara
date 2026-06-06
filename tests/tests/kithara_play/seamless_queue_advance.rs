@@ -26,6 +26,7 @@ const POST_ROLL_BLOCKS: usize = 8;
 const SILENCE_THRESHOLD: f32 = 1.0e-3;
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(30)),
@@ -101,6 +102,7 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(30)),

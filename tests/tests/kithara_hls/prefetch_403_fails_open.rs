@@ -15,6 +15,7 @@ use kithara_integration_tests::{
 use kithara_platform::{CancellationToken, time::Duration};
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(2)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1"),

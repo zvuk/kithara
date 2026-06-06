@@ -166,7 +166,7 @@ async fn wait_for_loader_done(
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[ignore = "repro for the still-open queue permit-starvation bug (hung loads hold all loader permits, starving a user-selected track); added in PR #72 without an accompanying scheduling fix — unignore when the loader-permit fairness fix lands. Run with --run-ignored."]
 async fn hung_loads_must_not_starve_user_selected_track() {
     let helper = TestServerHelper::new().await;

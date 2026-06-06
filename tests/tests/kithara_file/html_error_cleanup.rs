@@ -73,7 +73,7 @@ async fn wait_for_download_terminal(
 /// Without the fix this test is RED: `FileInner.res` still holds a clone of
 /// the pre-allocated `AssetResource`, so `LeaseResource::Drop` doesn't fire
 /// until `Stream<File>` itself is dropped at app shutdown.
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(flash(false), tokio, timeout(Duration::from_secs(10)))]
 async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
     temp_dir: TestTempDir,
 ) {
@@ -117,7 +117,7 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
 /// A captive-portal endpoint must not trigger a retry storm on the
 /// Downloader. `run_full_download` is a single attempt; asserting this
 /// explicitly locks the invariant against future accidental retry loops.
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(flash(false), tokio, timeout(Duration::from_secs(10)))]
 async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {

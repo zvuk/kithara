@@ -95,7 +95,7 @@ fn build_fixture() -> HlsFixtureBuilder {
 /// deadline ("проглатывание"). Detector: the `committed_ns` USDT probe on
 /// `PlayheadState::write_playhead` — fail if the committed playhead ever jumps
 /// forward by more than [`MAX_COMMITTED_STEP_SECS`] in a single commit.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

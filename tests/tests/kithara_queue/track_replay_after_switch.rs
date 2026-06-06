@@ -161,7 +161,7 @@ async fn wait_for_loader_done(
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::plain(FixtureMode::Plain)]
 #[case::aes128(FixtureMode::Aes128)]
 async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMode) {

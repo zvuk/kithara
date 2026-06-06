@@ -334,7 +334,7 @@ async fn run_one_attempt(
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::symphonia_no_sidx(DecoderBackend::Symphonia, false)]
 #[case::symphonia_with_sidx(DecoderBackend::Symphonia, true)]
 #[cfg_attr(

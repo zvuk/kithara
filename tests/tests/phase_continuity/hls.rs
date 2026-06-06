@@ -216,6 +216,7 @@ async fn run_case(
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,
@@ -465,6 +466,7 @@ async fn phase_continuity_hls(
 /// underruns — so the symptom needs true real-time cpal pressure or the live
 /// production stream, not a paced offline pull.
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,

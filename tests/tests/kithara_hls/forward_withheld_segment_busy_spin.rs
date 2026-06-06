@@ -93,6 +93,7 @@ fn count_decode_steps(recorder: &Recorder) -> usize {
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     native,
     serial,

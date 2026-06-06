@@ -93,6 +93,7 @@ fn measure_leading_silence(
 }
 
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,
@@ -146,6 +147,7 @@ async fn mp3_raw_decoder_shift_vs_reference(
 /// and re-measure leading silence. Distinguishes "decoder reads tag and
 /// trims" from "decoder ignores tag, emits raw encoder priming".
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,

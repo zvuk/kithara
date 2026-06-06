@@ -72,7 +72,7 @@ async fn render_until_position(
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

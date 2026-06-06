@@ -100,6 +100,7 @@ async fn run_concurrent_hls(n: usize, abr: AbrMode, variants: usize) {
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     browser,
     serial,

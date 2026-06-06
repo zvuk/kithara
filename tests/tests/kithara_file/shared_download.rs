@@ -58,6 +58,7 @@ fn read_to_end(mut stream: Stream<File>) -> Vec<u8> {
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "2")

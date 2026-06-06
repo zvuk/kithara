@@ -55,6 +55,7 @@ fn drain_to_eof(mut resource: Resource) -> bool {
 }
 
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(2)),
     env(KITHARA_HANG_TIMEOUT_SECS = "2")

@@ -98,6 +98,7 @@ async fn run_drm_seek_resume_cycle(
 /// iteration-over-iteration growth indicates a real thread/task leak tied
 /// to the DRM seek path.
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(120)),
