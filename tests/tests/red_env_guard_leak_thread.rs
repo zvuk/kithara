@@ -72,7 +72,10 @@ fn spawn_and_measure_leak_gap() -> Duration {
     exited_at.saturating_duration_since(eof_at)
 }
 
-#[kithara_test(native)]
+// flash(false): measures a real subprocess's wall-clock EOF->exit gap (nextest
+// LEAK heuristic). Its `Instant::now`/`sleep`/spin are wall-clock by nature; the
+// virtual clock cannot model a separate OS process, so this must run real.
+#[kithara_test(flash(false), native)]
 fn red_env_guard_no_leak_in_isolation() {
     let gap = spawn_and_measure_leak_gap();
     assert!(
@@ -83,7 +86,11 @@ fn red_env_guard_no_leak_in_isolation() {
     );
 }
 
-#[kithara_test(native)]
+// flash(false): 32 real spin-loop threads + a real subprocess's wall-clock
+// EOF->exit gap (nextest LEAK heuristic). The spin/`sleep`/`Instant::now` are
+// wall-clock by nature and the virtual clock cannot model a separate OS process,
+// so this must run real (under virtual time it wedges to the nextest timeout).
+#[kithara_test(flash(false), native)]
 fn red_env_guard_no_leak_under_env_lock_contention() {
     const CONTENDERS: usize = 32;
 
