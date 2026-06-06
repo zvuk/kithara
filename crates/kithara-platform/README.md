@@ -117,6 +117,15 @@ Contract:
     The caller re-checks its predicate after re-acquiring (storage already
     loops). `thread::sleep` and the async `time::{sleep, timeout}` stay real for
     now (later increments route them).
+  - `tokio::task::yield_now()` is a cooperative async yield. Like the stateful
+    sync primitives it branches on `flash_ambient` (the per-test ambient gate),
+    NOT `flash_enabled`: engine-backed (a quiescence yield-waiter) only inside an
+    ambient flash test, and a plain scheduler yield otherwise. A yield's grant
+    comes from an engine clock advance, which requires `active_async == 0`; in a
+    non-ambient (`flash(false)` / production) task the surrounding work keeps its
+    `active_async` slot across the yield while its other primitives are real, so
+    an engine-backed yield could never be granted — a circular wedge. Gating on
+    ambient keeps the build behavior-transparent for non-ambient callers.
 - `time::reset()` clears the timeline and the engine. nextest's per-test process
   isolation keeps the global state clean between tests; `reset()` is for runners
   that share a process.

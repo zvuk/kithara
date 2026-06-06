@@ -10,10 +10,15 @@
 pub use tokio_with_wasm::alias::task::*;
 
 // Under `flash-time` (native) [`spawn`] wraps the future in the quiescence
-// poll-wrapper and `yield_now` participates in quiescence (a busy-poll
-// `loop { yield_now().await }` must let the virtual clock advance). Both shadow
-// the `tokio_with_wasm::alias::task` glob re-export above; off the sim path the
-// real `tokio` spawn/yield are used unchanged. See `crate::time::flash`.
+// poll-wrapper and `yield_now` participates in quiescence UNDER AMBIENT (a
+// flash(true) test's busy-poll `loop { yield_now().await }` must let the virtual
+// clock advance). Like the stateful sync primitives it branches on
+// `flash_ambient`: in a flash(false) test / production it is a plain scheduler
+// yield, so the flash-time build stays behavior-transparent (an engine-backed
+// yield could never be granted there — the surrounding task keeps its
+// `active_async` slot across the yield while its other primitives are real). Both
+// shadow the `tokio_with_wasm::alias::task` glob re-export above; off the sim path
+// the real `tokio` spawn/yield are used unchanged. See `crate::time::flash`.
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 mod spawn;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]

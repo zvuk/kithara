@@ -1047,3 +1047,9 @@ pub(crate) fn timed_count() -> usize {
 pub(crate) fn indef_count() -> usize {
     SCHED.lock().parked_indef.len()
 }
+
+/// Test-only: number of currently parked cooperative-yield waiters.
+#[cfg(test)]
+pub(crate) fn diag_yield_count() -> usize {
+    SCHED.lock().yield_waiters.len()
+}

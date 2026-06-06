@@ -123,11 +123,61 @@ impl Drop for FlashYield {
     }
 }
 
-/// Cooperative async yield that participates in quiescence (see [`FlashYield`]).
-pub fn yield_now() -> FlashYield {
-    FlashYield {
-        handle: None,
-        done: false,
+/// Cooperative async yield. Like the stateful sync primitives (Condvar/Notify/
+/// mpsc/oneshot), this branches on [`flash_ambient`], NOT [`flash_enabled`]:
+/// engine-backed ([`FlashYield`]) only inside a flash-eligible (ambient) test,
+/// and a real `tokio::task::yield_now` otherwise. A `yield_now`'s resolution
+/// comes from an engine clock advance, whose grant requires `active_async == 0`;
+/// in a flash(false) test the surrounding task's other primitives are REAL, so it
+/// keeps its `active_async` slot across the yield, and an engine-backed yield can
+/// never be granted (a circular dependency — `active_async` never hits zero while
+/// the only `.await` blocking the task is the yield). Gating on ambient keeps the
+/// flash-time BUILD behavior-transparent for ambient=false (flash(false) tests AND
+/// production), exactly as the stateful-primitive ambient gate does.
+pub fn yield_now() -> Yield {
+    if flash_ambient() {
+        Yield::Flash(FlashYield {
+            handle: None,
+            done: false,
+        })
+    } else {
+        Yield::Real { yielded: false }
+    }
+}
+
+/// Ambient-gated cooperative yield future (see [`yield_now`]). Engine-backed under
+/// ambient, a plain scheduler yield otherwise. The mode is fixed at construction
+/// from the ambient gate, which is uniform per test.
+pub enum Yield {
+    /// Engine-backed quiescence yield (ambient test).
+    Flash(FlashYield),
+    /// Real cooperative yield (ambient off: flash(false) test / production):
+    /// returns `Pending` once after re-arming the waker, then `Ready` — the same
+    /// hand-back-to-the-scheduler semantics as `tokio::task::yield_now`, but
+    /// without naming `tokio`'s unnameable yield future.
+    Real { yielded: bool },
+}
+
+impl Future for Yield {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        // SAFETY: the `Flash` inner future is structurally pinned and re-pinned in
+        // place via `Pin::new_unchecked`; the `Real` variant holds only a `Copy`
+        // scalar touched by value.
+        let this = unsafe { self.get_unchecked_mut() };
+        match this {
+            Self::Flash(f) => unsafe { Pin::new_unchecked(f) }.poll(cx),
+            Self::Real { yielded } => {
+                if *yielded {
+                    Poll::Ready(())
+                } else {
+                    *yielded = true;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+        }
     }
 }
 

@@ -11,7 +11,7 @@ use std::{
 
 use super::{
     Duration, Instant, advance, ambient_scope, enter_dynamic, flash_enabled, now_nanos,
-    participate, reset, sched,
+    participate, reset, sched, yield_now,
 };
 use crate::sync::Notify;
 
@@ -597,4 +597,63 @@ fn stress_advance_log_is_deterministic_across_runs() {
         "clock lands on max deadline"
     );
     assert_eq!(end_b, base_b + 9 * NANOS_PER_SEC);
+}
+
+/// Regression for the flash(false) `yield_now` wedge (the `local_seek_middle_hang`
+/// post-seek silence). With ambient OFF the surrounding task keeps its
+/// `active_async` slot across the yield (its other primitives are REAL), so an
+/// engine-backed yield could never be granted — its grant needs `active_async ==
+/// 0`, a circular dependency the engine cannot break with no driver. `yield_now`
+/// therefore branches on `flash_ambient`: a real scheduler yield when ambient is
+/// off, so it resolves on the next poll WITHOUT the engine.
+#[test]
+fn ambient_off_yield_now_is_real_passthrough() {
+    let _g = guard();
+    reset();
+    assert!(!flash_enabled());
+    // No `ambient_scope(true)`: ambient is OFF (a flash(false) test / production).
+
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+    let mut task = Box::pin(participate(async {
+        yield_now().await;
+    }));
+
+    // First poll yields (Pending after re-arming the waker); it touches NO engine
+    // yield-waiter, so re-poll resolves it with no advance.
+    assert!(task.as_mut().poll(&mut cx).is_pending());
+    assert_eq!(
+        sched::diag_yield_count(),
+        0,
+        "ambient-off yield must not register an engine yield-waiter"
+    );
+    assert!(
+        task.as_mut().poll(&mut cx).is_ready(),
+        "ambient-off yield must resolve on the next poll without an engine advance"
+    );
+}
+
+/// Under ambient ON, `yield_now` stays engine-backed: it registers a yield-waiter
+/// and parks (resolved only by an engine advance / the lone-yield rescue), so a
+/// flash(true) busy-poll loop still relinquishes the virtual clock. This guards
+/// against over-correcting the flash(false) fix into making yield real everywhere.
+#[test]
+fn ambient_on_yield_now_is_engine_backed() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+    let mut task = Box::pin(participate(async {
+        yield_now().await;
+    }));
+
+    // First poll registers an engine yield-waiter. The participated task still
+    // holds its `active_async` slot during the poll, so the lone-yield rescue does
+    // NOT fire mid-poll; the waiter is granted on the gate-park quiescent edge.
+    assert!(task.as_mut().poll(&mut cx).is_pending());
+    // The gate parked it (slot released), and the immediate advance from the park
+    // granted the lone yield-waiter; the re-poll then resolves.
+    assert!(task.as_mut().poll(&mut cx).is_ready());
 }
