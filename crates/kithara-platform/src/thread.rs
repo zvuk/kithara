@@ -206,7 +206,16 @@ where
     T: Send + 'static,
 {
     ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
+    // Snapshot the per-test ambient gate on the PARENT: thread-locals do not
+    // cross `spawn`, so a flash test's spawned graph would otherwise see the
+    // default `false`. The child re-establishes it for its whole lifetime.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+    let ambient = crate::time::flash::ambient_snapshot();
     move || {
+        // Held for the closure's lifetime: restores the previous ambient on the
+        // child thread when the closure returns (it must outlive `f()`).
+        #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+        let _ambient = crate::time::flash::set_ambient_for_spawn(ambient);
         #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
         {
             crate::time::flash::sched::reset_credit();

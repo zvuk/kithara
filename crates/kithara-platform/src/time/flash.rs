@@ -226,11 +226,8 @@ pub fn flash_real() -> FlashScope {
 
 /// RAII guard setting the per-test ambient gate (test macro + spawn
 /// propagation). Saves/restores the previous `FLASH_AMBIENT` on drop.
-///
-/// Crate-private until a non-test consumer lands: the prod spawn wrappers
-/// (`set_ambient_for_spawn`) and the test macro promote this to `pub` then.
 #[must_use]
-struct AmbientScope(bool);
+pub struct AmbientScope(bool);
 
 impl Drop for AmbientScope {
     fn drop(&mut self) {
@@ -238,15 +235,58 @@ impl Drop for AmbientScope {
     }
 }
 
-/// Set the per-test ambient gate; restores the previous value on drop.
-///
-/// Private at this stage (only the in-crate flag tests use it); promoted to
-/// `pub` + re-exported when the prod spawn propagation / test macro consume it.
+/// Set the per-test ambient gate; restores the previous value on drop. The test
+/// macro sets it for the test body; the platform spawn wrappers re-establish it
+/// on each spawned child via [`set_ambient_for_spawn`].
 #[must_use]
-fn ambient_scope(on: bool) -> AmbientScope {
+pub fn ambient_scope(on: bool) -> AmbientScope {
     let prev = FLASH_AMBIENT.with(Cell::get);
     FLASH_AMBIENT.with(|c| c.set(on));
     AmbientScope(prev)
+}
+
+/// Snapshot the per-test ambient gate (for spawn propagation into a child).
+#[inline]
+#[must_use]
+pub fn ambient_snapshot() -> bool {
+    FLASH_AMBIENT.with(Cell::get)
+}
+
+/// Restore a snapshotted ambient on a spawned child, held for its lifetime.
+#[must_use]
+pub fn set_ambient_for_spawn(on: bool) -> AmbientScope {
+    ambient_scope(on)
+}
+
+/// Per-poll ambient assertion for a spawned async task. A tokio task can be
+/// polled on different worker threads across its lifetime, so a one-time ambient
+/// set on the spawning thread would not stick; this re-asserts the snapshotted
+/// ambient for the duration of each poll (the guard drops when the poll returns,
+/// restoring the worker thread's previous ambient). Installed at the async spawn
+/// chokepoint composed around [`participate`].
+pub struct WithAmbient<F> {
+    on: bool,
+    fut: F,
+}
+
+impl<F: Future> Future for WithAmbient<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
+        // SAFETY: `fut` is structurally pinned and never moved out of
+        // `WithAmbient`; it is re-pinned in place for its own poll. `on` is a
+        // `Copy` scalar touched only by value.
+        let this = unsafe { self.get_unchecked_mut() };
+        let _a = set_ambient_for_spawn(this.on);
+        let fut = unsafe { Pin::new_unchecked(&mut this.fut) };
+        fut.poll(cx)
+    }
+}
+
+/// Wrap `fut` so the snapshotted ambient is re-asserted around every poll (see
+/// [`WithAmbient`]).
+pub fn with_ambient<F: Future>(on: bool, fut: F) -> WithAmbient<F> {
+    WithAmbient { on, fut }
 }
 
 /// Process anchor for the real monotonic clock, sampled once on first use. Real
