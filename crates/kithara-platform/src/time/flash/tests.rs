@@ -9,7 +9,10 @@ use std::{
     time::Instant as RealInstant,
 };
 
-use super::{Duration, Instant, advance, now_nanos, participate, reset, sched};
+use super::{
+    Duration, Instant, advance, ambient_scope, enter_dynamic, flash_enabled, now_nanos,
+    participate, reset, sched,
+};
 use crate::sync::Notify;
 
 /// Serialize cases that share the process-global `SIM_NANOS` and `SCHED`.
@@ -80,6 +83,33 @@ impl Wake for NoopWake {
     fn wake_by_ref(self: &Arc<Self>) {}
 }
 
+#[test]
+fn flash_active_defaults_real_and_nests() {
+    let _g = guard();
+    assert!(!flash_enabled(), "default must be real (FLASH_ACTIVE off)");
+    {
+        let _a = ambient_scope(true); // ambient must be on for dynamic to take
+        let _g2 = enter_dynamic(true);
+        assert!(
+            flash_enabled(),
+            "inside an ambient+dynamic scope flash is active"
+        );
+        {
+            let _real = enter_dynamic(false);
+            assert!(!flash_enabled(), "flash(false) carves real");
+        }
+        assert!(flash_enabled(), "restored on carve drop");
+    }
+    assert!(!flash_enabled(), "restored on scope drop");
+}
+
+#[test]
+fn dynamic_is_noop_without_ambient() {
+    let _g = guard();
+    let _d = enter_dynamic(true); // no ambient_scope active
+    assert!(!flash_enabled(), "dynamic flash without ambient stays real");
+}
+
 /// A parked async task that gets signalled must stay counted as non-quiescent
 /// until it is actually RE-POLLED — not merely until its current poll returns.
 /// Between `waker.wake()` (task queued/runnable) and the next `poll`, the engine
@@ -127,6 +157,8 @@ fn woken_async_task_stays_counted_until_repolled() {
 fn now_advances_only_on_advance() {
     let _g = guard();
     reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
     let t0 = Instant::now();
     assert_eq!(Instant::now(), t0, "clock frozen between advances");
     advance(Duration::from_millis(10));
@@ -139,6 +171,8 @@ fn now_advances_only_on_advance() {
 fn elapsed_tracks_virtual_clock() {
     let _g = guard();
     reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
     let start = Instant::now();
     assert_eq!(start.elapsed(), Duration::ZERO);
     advance(Duration::from_secs(5));

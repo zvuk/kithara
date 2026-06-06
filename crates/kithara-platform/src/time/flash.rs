@@ -173,56 +173,80 @@ pub fn reset() {
 }
 
 thread_local! {
-    /// Nesting depth of [`FlashScope`] on this thread. `0` means the virtual
-    /// clock is in effect (the default under `flash-time`); any non-zero value
-    /// means this thread reads REAL time and uses REAL timers for the scope's
-    /// duration. A depth (not a bool) so nested scopes compose.
-    static FLASH_OFF: Cell<u32> = const { Cell::new(0) };
+    /// Per-test gate: "is this test flash-eligible?" Set by the test macro,
+    /// propagated across spawn. Default false = not a flash test. A gate —
+    /// consumers never read it directly; only [`enter_dynamic`] consults it to
+    /// decide whether a prod flash region may take effect.
+    static FLASH_AMBIENT: Cell<bool> = const { Cell::new(false) };
+    /// Dynamic: "is flash propagating on this callstack right now?" Pushed by a
+    /// prod `#[kithara::flash(true)]` guard (only when ambient). Read by the time
+    /// primitives via [`flash_enabled`]. Default false = REAL.
+    static FLASH_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
 
-/// True when the virtual clock governs this thread (the `flash-time` default).
-/// False inside a [`FlashScope`] — the thread is on real wall-clock time and
-/// real timers, and is NOT a quiescence participant for those waits.
-///
-/// This is the per-thread switch the rest of the platform consults: `Instant::
-/// now`, `thread::park_timeout`, and `sync::Condvar` all branch on it so a
-/// real-time island (the hang watchdog's clock reads, a real blocking I/O
-/// stretch) lives on true wall-clock while the surrounding test still collapses
-/// its virtual waits on the engine.
+/// True when flash (virtual clock) governs this callstack. Default false (REAL).
+/// The per-thread switch the platform's time primitives consult: `Instant::now`,
+/// `thread::park_timeout`, `sync::Condvar`, and the engine channels branch on it.
 #[inline]
 #[must_use]
 pub fn flash_enabled() -> bool {
-    FLASH_OFF.with(|c| c.get() == 0)
+    FLASH_ACTIVE.with(Cell::get)
 }
 
-/// RAII guard that puts the current thread on REAL time for its lifetime: while
-/// held, [`Instant::now`] reads the real monotonic clock and the synchronous
-/// wait primitives use their real implementations instead of the engine. Drop
-/// restores the previous mode (scopes nest).
-///
-/// Intended for SYNCHRONOUS islands only (it keys off a thread-local, so holding
-/// it across an `.await` on a shared executor would leak the mode to other
-/// tasks). The hang watchdog uses it so its progress deadline is measured in
-/// real time — the engine may collapse virtual waits and jump the virtual clock,
-/// but the watchdog stays a real-wall-clock safety net that only fires on a true
-/// stall.
+/// RAII guard for a prod `#[kithara::flash(bool)]` region. `on=true` activates
+/// flash for the dynamic extent IFF the test is flash-eligible (ambient);
+/// `on=false` carves REAL inside a flash region. Saves/restores the previous
+/// `FLASH_ACTIVE` so regions nest bidirectionally.
 #[must_use]
-pub struct FlashScope {
-    _priv: (),
-}
-
-/// Enter a [`FlashScope`]: read real time / use real timers on this thread
-/// until the returned guard drops.
-#[must_use]
-pub fn flash_real() -> FlashScope {
-    FLASH_OFF.with(|c| c.set(c.get().saturating_add(1)));
-    FlashScope { _priv: () }
-}
+pub struct FlashScope(bool);
 
 impl Drop for FlashScope {
     fn drop(&mut self) {
-        FLASH_OFF.with(|c| c.set(c.get().saturating_sub(1)));
+        FLASH_ACTIVE.with(|c| c.set(self.0));
     }
+}
+
+/// Push a dynamic flash mode. `on=true` takes only under ambient; `on=false`
+/// always carves real. Returns a guard that restores the previous mode on drop.
+#[must_use]
+pub fn enter_dynamic(on: bool) -> FlashScope {
+    let prev = FLASH_ACTIVE.with(Cell::get);
+    let next = on && FLASH_AMBIENT.with(Cell::get);
+    FLASH_ACTIVE.with(|c| c.set(next));
+    FlashScope(prev)
+}
+
+/// Enter a REAL-time carve on this thread (flash off for the guard's lifetime).
+/// In the default-real model this only matters inside an active flash region;
+/// kept for the real-socket test-server island and the off-feature stub.
+#[must_use]
+pub fn flash_real() -> FlashScope {
+    enter_dynamic(false)
+}
+
+/// RAII guard setting the per-test ambient gate (test macro + spawn
+/// propagation). Saves/restores the previous `FLASH_AMBIENT` on drop.
+///
+/// Crate-private until a non-test consumer lands: the prod spawn wrappers
+/// (`set_ambient_for_spawn`) and the test macro promote this to `pub` then.
+#[must_use]
+struct AmbientScope(bool);
+
+impl Drop for AmbientScope {
+    fn drop(&mut self) {
+        FLASH_AMBIENT.with(|c| c.set(self.0));
+    }
+}
+
+/// Set the per-test ambient gate; restores the previous value on drop.
+///
+/// Private at this stage (only the in-crate flag tests use it); promoted to
+/// `pub` + re-exported when the prod spawn propagation / test macro consume it.
+#[must_use]
+fn ambient_scope(on: bool) -> AmbientScope {
+    let prev = FLASH_AMBIENT.with(Cell::get);
+    FLASH_AMBIENT.with(|c| c.set(on));
+    AmbientScope(prev)
 }
 
 /// Process anchor for the real monotonic clock, sampled once on first use. Real

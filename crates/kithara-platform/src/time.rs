@@ -42,7 +42,7 @@ pub async fn sleep(duration: Duration) {
 /// no-op (time is already real), so callers hold it through one stable path
 /// without a `cfg`.
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
-pub use flash::{FlashScope, Participating, flash_real, participate};
+pub use flash::{FlashScope, Participating, enter_dynamic, flash_real, participate};
 
 /// Off the sim path: spawning needs no quiescence bracket, so `participate` is
 /// an identity passthrough (the real clock already advances on its own). Under
