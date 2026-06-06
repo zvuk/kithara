@@ -40,4 +40,5 @@ modules = []
 scan_all_rules = [
     "arch.no-direct-time",
     "arch.no-direct-thread-wait",
+    "arch.no-flash-time-hacks",
 ]

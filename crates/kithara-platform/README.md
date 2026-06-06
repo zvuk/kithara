@@ -60,7 +60,28 @@ On native these delegate to `tokio` runtime primitives, on wasm they use `setTim
 
 ### Virtual time (`flash-time`)
 
-`flash-time` is an off-by-default cargo feature, native and test-only, that replaces the wall clock with a process-global virtual timeline so warm-cache offline playback tests run at CPU speed instead of real time. No shipping crate enables it; production builds are unchanged.
+`flash-time` is an off-by-default cargo feature, native and test-only, that replaces the wall clock with a process-global virtual timeline so warm-cache offline playback tests run at CPU speed instead of real time. No shipping crate enables it; production builds are unchanged. Off the feature every flash macro is a no-op (identity) and everything is real.
+
+#### Annotation model (REAL by default, virtual only where turned on)
+
+Flash is **opt-in per region**, not a global mode flip. Two per-thread gates decide whether a primitive sees virtual or real time; **both default to false ⇒ REAL by default**, virtual only where a region turns it on.
+
+- `FLASH_AMBIENT` (the per-test gate) is set by `#[kithara::test(flash(bool))]` and **propagated across `spawn` / `spawn_named` / `spawn_blocking`** so every thread/task of a flash test shares one ambient mode. `flash_ambient()` reads it.
+- `FLASH_ACTIVE` (the dynamic gate) is pushed by a production `#[kithara::flash(bool)]` region as it runs, and is itself **gated by ambient** (a dynamic flash takes effect only inside an ambient flash test). `flash_enabled()` reads it.
+
+The two gates govern disjoint primitive classes, because their correctness requirements differ:
+
+- `flash_enabled()` (FLASH_ACTIVE) governs the **stateless** time primitives — `time::sleep` / `time::timeout`, `Instant::now`, `thread::park_timeout` / `thread::sleep`. These read or wait on the clock with no cross-thread handshake, so a per-callstack gate is safe.
+- `flash_ambient()` (FLASH_AMBIENT) governs the **stateful** sync primitives — `Condvar` / `Notify` / `mpsc` / `oneshot` — and `task::yield_now`. A stateful primitive's *wait* and its *signal* run on different threads; if those two sides disagreed on virtual-vs-real (which a per-callstack gate would allow) the wait and the wake would target different engines and the test would hang. The ambient gate is uniform per test, so wait+signal always agree.
+
+The two annotations differ in scope:
+
+- **Production `#[kithara::flash(true|false)]` is DYNAMIC**: it pushes `FLASH_ACTIVE` through the annotated region's call stack and across its spawns (e.g. the audio worker `run_loop`, downloader yield loops, the preload gate), so the prod code's own stateless time reads go virtual while the region runs. It is gated by ambient, so off a flash test it is inert.
+- **Test `#[kithara::test(flash(true|false))]` is LEXICAL**: it rewrites the test BODY's *direct* `time::*` / `Instant::now` / `thread::park_timeout` calls to their virtual variants (body-only — a prod fn the body calls keeps its stateless time real unless that fn is itself `#[flash]`), and sets the ambient gate for the whole test graph. Default is `flash(true)` under the feature; real-socket suites are `flash(false)` (the whole graph stays real, identical to production).
+
+The lexical rewriter keys on the **last two path segments** of a call, so a flash test body MUST use a QUALIFIED time path (`time::sleep`, not a bare-imported `sleep`); a bare single-segment import is intentionally not rewritten and would stay real (a mixed-clock hazard) — see the rewriter doc comment in `kithara-test-macros`.
+
+#### Quiescence engine
 
 The clock is **quiescence-driven**, not additive: a single global `SIM_NANOS`
 (read lock-free by `Instant::now`) advances only when every participating root is
@@ -115,8 +136,9 @@ Contract:
     **before** releasing the domain guard, so a predicate change + notify (which
     must re-take the domain lock) is serialized after the entry — no lost wake.
     The caller re-checks its predicate after re-acquiring (storage already
-    loops). `thread::sleep` and the async `time::{sleep, timeout}` stay real for
-    now (later increments route them).
+    loops). `thread::sleep` and the async `time::{sleep, timeout}` are routed:
+    they branch on `flash_enabled()` — virtual inside an active flash region,
+    real otherwise — like the other stateless time primitives.
   - `tokio::task::yield_now()` is a cooperative async yield. Like the stateful
     sync primitives it branches on `flash_ambient` (the per-test ambient gate),
     NOT `flash_enabled`: engine-backed (a quiescence yield-waiter) only inside an

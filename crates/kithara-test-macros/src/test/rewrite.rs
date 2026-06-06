@@ -13,6 +13,17 @@ use syn::{
 /// primitives, so the rewrite is behaviour-preserving. Matching is by the LAST
 /// TWO path segments — the repo routes all time through `kithara_platform::time`,
 /// so the recognised path set is fixed and small.
+///
+/// CONVENTION (load-bearing): a flash test body MUST use a QUALIFIED time path
+/// (`time::sleep`, `Instant::now`, `thread::park_timeout`), never a bare
+/// single-segment import like `use kithara_platform::time::sleep; sleep(d)`. The
+/// matcher keys on the last two segments, so a bare-imported `sleep(...)` is one
+/// segment and is NOT rewritten — it stays on REAL time inside a flash body, a
+/// mixed-clock hazard that can hang the test (this caused the final C3 failure).
+/// Bare single-segment matching is intentionally NOT supported: a broad
+/// single-segment rule would false-rewrite unrelated `sleep` / `timeout` / `now`
+/// calls on other types. The chosen guards are this convention plus the
+/// `arch.no-flash-time-hacks` deny gate; do NOT broaden the matcher.
 pub(crate) struct FlashRewrite;
 
 impl VisitMut for FlashRewrite {
