@@ -47,6 +47,52 @@ pub use flash::{
     flash_dynamic, flash_real, participate, set_ambient_for_spawn,
 };
 
+/// Virtual `sleep` that hits the quiescence engine UNCONDITIONALLY (no
+/// `flash_enabled()` consult). The lexical test rewriter ([`#[kithara::test(flash(true))]`])
+/// retargets a test body's direct `time::sleep` calls here, so the BODY's own
+/// waits collapse onto virtual time without setting `FLASH_ACTIVE` — a prod fn
+/// the body calls keeps its stateless time reads on REAL (`FLASH_ACTIVE` false).
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+pub fn flash_virtual_sleep(duration: Duration) -> impl Future<Output = ()> {
+    flash::FlashSleep::new(duration)
+}
+
+/// Virtual `timeout` that hits the engine UNCONDITIONALLY (see
+/// [`flash_virtual_sleep`]). Races `future` against an engine-backed deadline.
+///
+/// # Errors
+///
+/// Returns [`TimeoutError`] if the future does not complete within `duration`.
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+pub async fn flash_virtual_timeout<F>(
+    duration: Duration,
+    future: F,
+) -> Result<F::Output, TimeoutError>
+where
+    F: Future,
+{
+    FlashTimeout {
+        future,
+        sleep: flash::FlashSleep::new(duration),
+    }
+    .await
+}
+
+/// Virtual `Instant::now` read UNCONDITIONALLY from the engine clock (see
+/// [`flash_virtual_sleep`]). Mirrors [`flash::Instant::now`]'s flash arm.
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[must_use]
+pub fn flash_virtual_now() -> Instant {
+    Instant::now_virtual()
+}
+
+/// Virtual `park_timeout` that hits the engine UNCONDITIONALLY (see
+/// [`flash_virtual_sleep`]). Mirrors [`crate::thread::park_timeout`]'s flash arm.
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+pub fn flash_virtual_park_timeout(duration: Duration) {
+    crate::thread::park_timeout_virtual(duration);
+}
+
 /// Off the sim path: spawning needs no quiescence bracket, so `participate` is
 /// an identity passthrough (the real clock already advances on its own). Under
 /// `flash-time` this is [`flash::participate`], which wraps the future so it counts
@@ -88,6 +134,69 @@ pub fn enter_dynamic(_on: bool) -> FlashScope {
 #[inline]
 pub fn flash_dynamic<F: Future>(_on: bool, fut: F) -> F {
     fut
+}
+
+/// Off the sim path the lexical test rewriter's `flash_virtual_*` targets alias
+/// the REAL primitives, so a rewritten test body behaves identically to its
+/// unrewritten form (the rewrite is a no-op when `flash-time` is off). The
+/// `#[kithara::test]` macro emits these into EVERY test body, so they must
+/// resolve in the off-feature + wasm configs.
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
+#[inline]
+pub fn flash_virtual_sleep(duration: Duration) -> impl Future<Output = ()> {
+    sleep(duration)
+}
+
+/// Off-feature real alias for the rewriter's virtual `timeout` (see
+/// [`flash_virtual_sleep`]).
+///
+/// # Errors
+///
+/// Returns [`TimeoutError`] if the future does not complete within `duration`.
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
+#[inline]
+pub async fn flash_virtual_timeout<F>(
+    duration: Duration,
+    future: F,
+) -> Result<F::Output, TimeoutError>
+where
+    F: Future,
+{
+    timeout(duration, future).await
+}
+
+/// Off-feature real alias for the rewriter's virtual `Instant::now` (see
+/// [`flash_virtual_sleep`]).
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
+#[inline]
+#[must_use]
+pub fn flash_virtual_now() -> Instant {
+    Instant::now()
+}
+
+/// Off-feature real alias for the rewriter's virtual `park_timeout` (see
+/// [`flash_virtual_sleep`]).
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
+#[inline]
+pub fn flash_virtual_park_timeout(duration: Duration) {
+    crate::thread::park_timeout(duration);
+}
+
+/// No-op per-test ambient gate off the sim path (time is already real). The
+/// `#[kithara::test]` macro emits `ambient_scope(..)` into every test body, so
+/// the guard must exist (as a ZST) in the off-feature + wasm configs. Under
+/// `flash-time` this is [`flash::AmbientScope`] / [`flash::ambient_scope`].
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
+#[derive(Debug)]
+pub struct AmbientScope;
+
+/// Set the per-test ambient gate. Off the sim path this is a ZST no-op (time is
+/// already real); under `flash-time` it is [`flash::ambient_scope`].
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
+#[inline]
+#[must_use]
+pub fn ambient_scope(_on: bool) -> AmbientScope {
+    AmbientScope
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -6,7 +6,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Attribute, Expr, Ident, ItemFn, parse_macro_input};
+use syn::{Attribute, Expr, Ident, ItemFn, parse_macro_input, visit_mut::VisitMut};
 
 use super::{
     case::{Case, case_ident, extract_cases, is_case_attr},
@@ -14,6 +14,7 @@ use super::{
     expand_sync::{emit_native_only_one, emit_one_test},
     fixture_args::{ParamInfo, extract_params, make_preamble},
     parse::TestArgs,
+    rewrite::FlashRewrite,
     shared::{
         finalize_body, make_dedicated_worker_config, make_serial_attr, make_sync_test_attrs,
         make_tracing_init, wrap_with_timeout,
@@ -36,10 +37,30 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
+fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
     let cases = extract_cases(&func.attrs)?;
     let remaining_attrs: Vec<_> = func.attrs.iter().filter(|a| !is_case_attr(a)).collect();
     let params = extract_params(&func);
+
+    // Flash containment (default `true`). Under `flash(true)` lexically retarget
+    // the BODY's direct time-primitive calls onto the unconditional
+    // `flash_virtual_*` variants (so the body collapses without setting
+    // `FLASH_ACTIVE`, leaving callee prod fns on REAL); under `flash(false)`
+    // leave the body untouched. Either way the body opens with an ambient guard
+    // (`#flash_bool`), set uniformly per test and propagated to spawned threads
+    // (B5). Off the `flash-time` feature both `flash_virtual_*` and
+    // `ambient_scope` are real-aliases / no-ops, so the emitted body is
+    // behaviour-identical to the original. Injected ONCE here so every emit path
+    // (sync/async/native/wasm/browser) inherits it via `body_stmts`.
+    let flash = args.flash.unwrap_or(true);
+    if flash {
+        FlashRewrite.visit_block_mut(&mut func.block);
+    }
+    let ambient_stmt: syn::Stmt = syn::parse_quote! {
+        let __flash_ambient = ::kithara_test_utils::kithara_platform::time::ambient_scope(#flash);
+    };
+    func.block.stmts.insert(0, ambient_stmt);
+
     let ctx = GenCtx {
         args: &args,
         params: &params,

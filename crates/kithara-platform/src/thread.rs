@@ -361,6 +361,16 @@ pub fn park_timeout(duration: Duration) {
     }
 }
 
+/// Park onto the quiescence engine UNCONDITIONALLY (no `flash_enabled()`
+/// consult), mirroring [`park_timeout`]'s flash arm. The lexical test rewriter
+/// (`time::flash_virtual_park_timeout`) targets this so a flash test body's
+/// `park_timeout` collapses onto virtual time without setting `FLASH_ACTIVE`.
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[inline]
+pub(crate) fn park_timeout_virtual(duration: Duration) {
+    crate::time::flash::sched::park_timed_unparkable(duration, current_thread_id());
+}
+
 /// Unpark a thread parked in [`park_timeout`].
 ///
 /// Native (non-sim) / wasm: delegates to the OS/runtime `Thread::unpark`.
@@ -453,7 +463,12 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    // `flash(false)`: a real park/unpark timing test. It measures REAL
+    // wall-clock with `std::time::Instant` (not the platform clock) and asserts
+    // the unpark wakes within 250ms. The lexical flash rewrite would retarget
+    // `Instant::now()` onto the engine `flash_virtual_now`, changing the clock
+    // and leaving the `std::time::Instant` import unused, so opt out.
+    #[kithara::test(flash(false))]
     fn park_timeout_returns_after_unpark() {
         #[cfg(not(target_arch = "wasm32"))]
         {

@@ -365,10 +365,20 @@ impl Instant {
     #[must_use]
     pub fn now() -> Self {
         if flash_enabled() {
-            Self(SIM_NANOS.load(Ordering::Acquire))
+            Self::now_virtual()
         } else {
             Self(real_now_nanos())
         }
+    }
+
+    /// The virtual `now`, read UNCONDITIONALLY from the engine clock (no
+    /// `flash_enabled()` consult). The lexical test rewriter (`flash_virtual_now`)
+    /// targets this directly so a flash test body's `Instant::now` collapses
+    /// onto virtual time without setting `FLASH_ACTIVE`.
+    #[inline]
+    #[must_use]
+    pub fn now_virtual() -> Self {
+        Self(SIM_NANOS.load(Ordering::Acquire))
     }
 
     /// Absolute virtual nanoseconds this instant represents. Used by the
