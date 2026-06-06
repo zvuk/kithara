@@ -1,5 +1,5 @@
 //! Platform `Notify`: real `tokio::sync::Notify` off the sim path; under
-//! `flash-time` each op branches on [`flash_enabled`].
+//! `flash-time` each op branches on [`flash_ambient`].
 //!
 //! The flash variant mirrors the sim [`Condvar`](super::Condvar): a fresh `cvid`
 //! identifies the notify; `notified()` registers an untimed waiter (no deadline
@@ -30,7 +30,7 @@ use std::{
 use parking_lot::Mutex;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
-use crate::time::flash::{flash_enabled, sched};
+use crate::time::flash::{flash_ambient, sched};
 /// Real-tokio `Notify` (off the sim path): a transparent re-export so callers
 /// use one type everywhere.
 #[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
@@ -46,8 +46,8 @@ struct RealNotify {
     permit: bool,
 }
 
-/// `Notify` under `flash-time`. Each op branches on [`flash_enabled`]: engine
-/// `cvid` group when flash governs the task, else a real waker list + permit.
+/// `Notify` under `flash-time`. Each op branches on [`flash_ambient`]: engine
+/// `cvid` group when the test is flash-eligible, else a real waker list + permit.
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub struct Notify {
     cvid: u64,
@@ -67,7 +67,7 @@ impl Default for Notify {
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 impl Notify {
     pub fn notify_one(&self) {
-        if flash_enabled() {
+        if flash_ambient() {
             sched::signal_notify(self.cvid);
         } else {
             // Grant + wake one parked waiter; if none, store a permit (tokio
@@ -153,7 +153,7 @@ impl Future for Notified<'_> {
             }
             NotifiedState::Init => {}
         }
-        if flash_enabled() {
+        if flash_ambient() {
             let (handle, adv) = sched::register_notify_async(self.cvid, cx.waker().clone());
             match handle {
                 None => {

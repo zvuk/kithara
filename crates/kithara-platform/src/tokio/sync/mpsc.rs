@@ -14,10 +14,11 @@
 //! holding the queue mutex, so a concurrent producer/consumer either observes the
 //! parked waiter (and signals/wakes it) or has not yet taken the mutex.
 //!
-//! Each wait/wake branches on [`flash_enabled`]: flash uses the engine channel
-//! waiter; otherwise the parked half stores its real [`Waker`] under `inner` (the
-//! single receiver's `data_waker`, each blocked sender's `space_wakers`) and the
-//! peer wakes it directly — reactor-free, untouched by engine accounting. The
+//! Each wait/wake branches on [`flash_ambient`]: a flash-eligible test uses the
+//! engine channel waiter; otherwise the parked half stores its real [`Waker`]
+//! under `inner` (the single receiver's `data_waker`, each blocked sender's
+//! `space_wakers`) and the peer wakes it directly — reactor-free, untouched by
+//! engine accounting. The
 //! queue/live-count state is UNIFIED; only the park/wake mechanism branches. The
 //! real path is the only one taken until `#[kithara::flash]` annotations land.
 
@@ -34,7 +35,7 @@ use parking_lot::Mutex;
 pub use tokio_with_wasm::alias::sync::mpsc::error;
 
 pub use super::unbounded::UnboundedSender;
-use crate::time::flash::{flash_enabled, sched};
+use crate::time::flash::{flash_ambient, sched};
 
 pub(super) struct Inner<T> {
     queue: VecDeque<T>,
@@ -87,7 +88,7 @@ impl<T> Shared<T> {
     /// stored real waker. `waker` is the receiver's real waker taken under the
     /// lock by the caller (already dropped); pass `None` on the flash path.
     fn wake_data(&self, waker: Option<Waker>) {
-        if flash_enabled() {
+        if flash_ambient() {
             sched::signal_channel(self.data_cvid, false);
         } else if let Some(waker) = waker {
             waker.wake();
@@ -98,7 +99,7 @@ impl<T> Shared<T> {
     /// `!all`, every if `all`), else the real wakers the caller drained under the
     /// lock. `wakers` is empty on the flash path.
     fn wake_space(&self, all: bool, wakers: Vec<Waker>) {
-        if flash_enabled() {
+        if flash_ambient() {
             sched::signal_channel(self.space_cvid, all);
         } else {
             for w in wakers {
@@ -166,7 +167,7 @@ pub(super) fn push_unbounded<T>(shared: &Shared<T>, value: T) -> Result<(), Send
 /// Drain at most one parked sender's real waker (one freed slot wakes one
 /// sender). Returns the empty list on the flash path.
 fn take_one_space_waker<T>(inner: &mut Inner<T>) -> Vec<Waker> {
-    if flash_enabled() || inner.space_wakers.is_empty() {
+    if flash_ambient() || inner.space_wakers.is_empty() {
         Vec::new()
     } else {
         vec![inner.space_wakers.remove(0)]
@@ -210,7 +211,7 @@ fn poll_recv_inner<T>(
     }
     // Register the wakeup WHILE holding the queue lock so a concurrent send
     // cannot slip its signal between this empty-check and the park.
-    if flash_enabled() {
+    if flash_ambient() {
         let (handle, adv) = sched::register_channel_async(shared.data_cvid, cx.waker().clone());
         *pending = Some(Parked::Engine(handle));
         drop(inner);
@@ -350,7 +351,7 @@ impl<T> Future for Send<'_, T> {
         // Full: park on space. Register the waiter WHILE holding the lock so a
         // concurrent recv (which frees a slot under the same lock, then wakes)
         // cannot slip its wake between this capacity-check and the park.
-        if flash_enabled() {
+        if flash_ambient() {
             let (handle, adv) =
                 sched::register_channel_async(this.shared.space_cvid, cx.waker().clone());
             this.pending = Some(Parked::Engine(handle));

@@ -6,7 +6,7 @@ use parking_lot::{Condvar as ParkingLotCondvar, lock_api::MutexGuard as RawMutex
 use super::MutexGuard;
 use crate::time::Instant;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
-use crate::time::flash::{flash_enabled, sched};
+use crate::time::flash::{flash_ambient, sched};
 
 /// Native condvar backed by `parking_lot`.
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
@@ -50,7 +50,7 @@ impl Condvar {
 }
 
 /// Native condvar under `flash-time`. Each operation branches on
-/// [`flash_enabled`]: when flash governs the callstack, waits register on the
+/// [`flash_ambient`]: when the test is flash-eligible, waits register on the
 /// quiescence engine (keyed by `cvid`) and `notify_*` signal that group, so a
 /// timed wait collapses the virtual clock; otherwise the real
 /// `parking_lot::Condvar` drives a true wall-clock wait/wake (the default-real
@@ -77,7 +77,7 @@ impl Condvar {
 
     #[inline]
     pub fn notify_all(&self) {
-        if flash_enabled() {
+        if flash_ambient() {
             sched::signal_condvar(self.cvid, true);
         } else {
             self.real.notify_all();
@@ -86,7 +86,7 @@ impl Condvar {
 
     #[inline]
     pub fn notify_one(&self) {
-        if flash_enabled() {
+        if flash_ambient() {
             sched::signal_condvar(self.cvid, false);
         } else {
             self.real.notify_one();
@@ -103,7 +103,7 @@ impl Condvar {
     #[inline]
     #[must_use]
     pub fn wait_sync<'a, T>(&self, mut guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
-        if flash_enabled() {
+        if flash_ambient() {
             let (token, adv) = sched::register_condvar_untimed(self.cvid);
             RawMutexGuard::unlocked(&mut guard.0, move || {
                 sched::fire_advance(adv);
@@ -133,7 +133,7 @@ impl Condvar {
         mut guard: MutexGuard<'a, T>,
         deadline: Instant,
     ) -> MutexGuard<'a, T> {
-        if flash_enabled() {
+        if flash_ambient() {
             let (token, adv) =
                 sched::register_condvar_timed(deadline.as_virtual_nanos(), self.cvid);
             RawMutexGuard::unlocked(&mut guard.0, move || {

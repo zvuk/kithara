@@ -6,8 +6,8 @@
 //! `active` and the virtual clock cannot race past the send. Off the sim path
 //! this module is not compiled and callers get the real `tokio` oneshot.
 //!
-//! Each wait/wake branches on [`flash_enabled`]: when flash governs the task the
-//! handoff uses the engine waiter; otherwise the receiver stores its real
+//! Each wait/wake branches on [`flash_ambient`]: when the test is flash-eligible
+//! the handoff uses the engine waiter; otherwise the receiver stores its real
 //! [`Waker`] in the shared state (under the SAME `inner` mutex that guards the
 //! value) and the sender wakes it directly — a true reactor-free wake that does
 //! not touch the engine's participant accounting. The queue/value/alive state is
@@ -23,7 +23,7 @@ use std::{
 
 use parking_lot::Mutex;
 
-use crate::time::flash::{flash_enabled, sched};
+use crate::time::flash::{flash_ambient, sched};
 
 /// Error observed when the sender drops without sending.
 ///
@@ -114,7 +114,7 @@ impl<T> Sender<T> {
         // the value store and the wake are atomic w.r.t. a receiver poll.
         let waker = inner.real_waker.take();
         drop(inner);
-        if flash_enabled() {
+        if flash_ambient() {
             sched::signal_channel(shared.cvid, false);
         } else if let Some(waker) = waker {
             waker.wake();
@@ -131,7 +131,7 @@ impl<T> Drop for Sender<T> {
             let waker = inner.real_waker.take();
             drop(inner);
             // Wake the receiver so its next poll observes the closed sender.
-            if flash_enabled() {
+            if flash_ambient() {
                 sched::signal_channel(shared.cvid, false);
             } else if let Some(waker) = waker {
                 waker.wake();
@@ -168,7 +168,7 @@ impl<T> Future for Receiver<T> {
         if !inner.sender_alive {
             return Poll::Ready(Err(RecvError));
         }
-        if flash_enabled() {
+        if flash_ambient() {
             let (handle, adv) = sched::register_channel_async(this.shared.cvid, cx.waker().clone());
             this.pending = Some(Parked::Engine(handle));
             drop(inner);

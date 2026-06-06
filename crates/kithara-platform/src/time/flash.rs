@@ -185,12 +185,24 @@ thread_local! {
 }
 
 /// True when flash (virtual clock) governs this callstack. Default false (REAL).
-/// The per-thread switch the platform's time primitives consult: `Instant::now`,
-/// `thread::park_timeout`, `sync::Condvar`, and the engine channels branch on it.
+/// The per-thread switch the STATELESS time primitives consult: `Instant::now`,
+/// `thread::park_timeout`, `thread::sleep`/`yield_now`/`unpark`, `sleep`/`timeout`
+/// branch on it.
 #[inline]
 #[must_use]
 pub fn flash_enabled() -> bool {
     FLASH_ACTIVE.with(Cell::get)
+}
+
+/// True when the current test is flash-eligible (the per-test ambient gate,
+/// propagated across spawn). The STATEFUL sync primitives (Condvar/Notify/mpsc/
+/// oneshot) branch on THIS — not `flash_enabled()` — so a primitive's wait and
+/// its cross-thread signal always agree on real-vs-engine (ambient is uniform
+/// per test; FLASH_ACTIVE is per-callstack and would mismatch across threads).
+#[inline]
+#[must_use]
+pub fn flash_ambient() -> bool {
+    FLASH_AMBIENT.with(Cell::get)
 }
 
 /// RAII guard for a prod `#[kithara::flash(bool)]` region. `on=true` activates
@@ -246,10 +258,12 @@ pub fn ambient_scope(on: bool) -> AmbientScope {
 }
 
 /// Snapshot the per-test ambient gate (for spawn propagation into a child).
+/// Reads the same gate as [`flash_ambient`]; kept as the named spawn-capture
+/// entry point for B5's propagation call sites.
 #[inline]
 #[must_use]
 pub fn ambient_snapshot() -> bool {
-    FLASH_AMBIENT.with(Cell::get)
+    flash_ambient()
 }
 
 /// Restore a snapshotted ambient on a spawned child, held for its lifetime.
