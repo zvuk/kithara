@@ -61,6 +61,16 @@ impl Condvar {
 pub struct Condvar {
     cvid: u64,
     real: ParkingLotCondvar,
+    /// Mechanism captured ONCE at construction: `true` ⇒ engine-backed (the
+    /// creating context was flash-eligible), `false` ⇒ real `parking_lot`. Fixed
+    /// for the condvar's life so EVERY caller — wait AND notify, on ANY thread —
+    /// uses the SAME mechanism. A notifier on a thread that did not inherit the
+    /// test's ambient (e.g. a raw `std::thread::spawn`, which does not propagate
+    /// it) still reaches an engine-parked waiter. Selecting per-call on
+    /// `flash_ambient()` instead would diverge across threads of different
+    /// ambient and silently lose the wakeup (the waiter parks on the engine while
+    /// the notifier signals the real condvar, or vice versa).
+    engine: bool,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
@@ -72,12 +82,13 @@ impl Condvar {
         Self {
             cvid: sched::next_condvar_id(),
             real: ParkingLotCondvar::new(),
+            engine: flash_ambient(),
         }
     }
 
     #[inline]
     pub fn notify_all(&self) {
-        if flash_ambient() {
+        if self.engine {
             sched::signal_condvar(self.cvid, true);
         } else {
             self.real.notify_all();
@@ -86,7 +97,7 @@ impl Condvar {
 
     #[inline]
     pub fn notify_one(&self) {
-        if flash_ambient() {
+        if self.engine {
             sched::signal_condvar(self.cvid, false);
         } else {
             self.real.notify_one();
@@ -103,7 +114,7 @@ impl Condvar {
     #[inline]
     #[must_use]
     pub fn wait_sync<'a, T>(&self, mut guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
-        if flash_ambient() {
+        if self.engine {
             let (token, adv) = sched::register_condvar_untimed(self.cvid);
             RawMutexGuard::unlocked(&mut guard.0, move || {
                 sched::fire_advance(adv);
@@ -133,7 +144,7 @@ impl Condvar {
         mut guard: MutexGuard<'a, T>,
         deadline: Instant,
     ) -> MutexGuard<'a, T> {
-        if flash_ambient() {
+        if self.engine {
             let (token, adv) =
                 sched::register_condvar_timed(deadline.as_virtual_nanos(), self.cvid);
             RawMutexGuard::unlocked(&mut guard.0, move || {

@@ -28,10 +28,10 @@ pub(crate) struct FlashRewrite;
 
 impl VisitMut for FlashRewrite {
     fn visit_expr_call_mut(&mut self, call: &mut ExprCall) {
-        if let Expr::Path(p) = &*call.func {
-            if let Some(repl) = virtual_path(&p.path) {
-                *call.func = Expr::Path(repl);
-            }
+        if let Expr::Path(p) = &*call.func
+            && let Some(repl) = virtual_path(&p.path)
+        {
+            *call.func = Expr::Path(repl);
         }
         // Recurse into args and nested calls (the func above was already mapped).
         visit_mut::visit_expr_call_mut(self, call);

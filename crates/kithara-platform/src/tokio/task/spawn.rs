@@ -30,3 +30,21 @@ where
         crate::time::participate(future),
     ))
 }
+
+/// Spawn a future on a SPECIFIC runtime [`Handle`](tokio::runtime::Handle)
+/// through the chokepoint. Same quiescence + ambient wrapping as [`spawn`], but
+/// onto a stored runtime handle rather than the implicit current runtime — for
+/// orchestrators (e.g. the downloader run loop) that own their runtime. A raw
+/// `handle.spawn(fut)` here would run UNCOUNTED and let the virtual clock race
+/// past the orchestrator's event waits, freezing the clock.
+pub fn spawn_on<F>(handle: &tokio::runtime::Handle, future: F) -> JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let on = crate::time::flash::ambient_snapshot();
+    handle.spawn(crate::time::flash::with_ambient(
+        on,
+        crate::time::participate(future),
+    ))
+}

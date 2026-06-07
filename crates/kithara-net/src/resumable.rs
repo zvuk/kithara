@@ -112,10 +112,7 @@ pub(crate) fn resumable_body(
             }
             let ev = tokio::select! {
                 () = st.cancel.cancelled() => Ev::Cancel,
-                res = timeout(st.stall, st.inner.next()) => match res {
-                    Ok(c) => Ev::Chunk(c),
-                    Err(_) => Ev::Stall,
-                },
+                res = timeout(st.stall, st.inner.next()) => res.map_or(Ev::Stall, Ev::Chunk),
             };
             match ev {
                 Ev::Chunk(Some(Ok(mut bytes))) => {

@@ -52,6 +52,10 @@ struct RealNotify {
 pub struct Notify {
     cvid: u64,
     real: Mutex<RealNotify>,
+    /// Mechanism captured ONCE at construction (see [`super::Condvar`]): every
+    /// `notify_one` AND `notified()` poll uses it, so a notifier on a thread that
+    /// did not inherit the test's ambient still reaches an engine-parked waiter.
+    engine: bool,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
@@ -60,6 +64,7 @@ impl Default for Notify {
         Self {
             cvid: sched::next_condvar_id(),
             real: Mutex::new(RealNotify::default()),
+            engine: flash_ambient(),
         }
     }
 }
@@ -67,7 +72,7 @@ impl Default for Notify {
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 impl Notify {
     pub fn notify_one(&self) {
-        if flash_ambient() {
+        if self.engine {
             sched::signal_notify(self.cvid);
         } else {
             // Grant + wake one parked waiter; if none, store a permit (tokio
@@ -153,7 +158,7 @@ impl Future for Notified<'_> {
             }
             NotifiedState::Init => {}
         }
-        if flash_ambient() {
+        if self.notify.engine {
             let (handle, adv) = sched::register_notify_async(self.cvid, cx.waker().clone());
             match handle {
                 None => {

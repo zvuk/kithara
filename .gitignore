@@ -1,6 +1,10 @@
 # Rust / Cargo
 /target/
 **/target/
+# Flash-time builds use a separate CARGO_TARGET_DIR so the flash/non-flash
+# feature sets don't thrash one cache; keep them out of git AND out of
+# lint / ast-grep scans (generated build code would otherwise trip style rules).
+/target-flash*/
 # Note: Cargo.lock is tracked for reproducible builds in workspace with examples
 
 # Rustfmt / Clippy / IDE noise

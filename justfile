@@ -94,19 +94,49 @@ doc:
 #   * Android       → Android MediaCodec + Symphonia software
 #   * Linux / other → Symphonia only
 #
-#   just test                 # whole workspace, all available backends
-#   just test -p kithara-hls  # one package
+# The flash virtual clock is ENABLED by default (`--features flash-time`): tests
+# run on a deterministic engine-driven clock that collapses artificial waits, so
+# the suite is fast and reproducible. Opt out with `--flash=off` (`--no-flash` /
+# `--flash=false`) to run on the real wall clock — the regression baseline. The
+# `--flash=*` token is stripped before reaching nextest; every other arg passes
+# through unchanged.
+#
+#   just test                 # whole workspace, flash ON, all backends
+#   just test --flash=off     # real wall clock (regression baseline)
+#   just test -p kithara-hls  # one package, flash ON
 #   just test --profile ci    # CI nextest profile
 #   just test EXPR            # nextest filter expression
 test *ARGS:
-    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
+    #!/usr/bin/env bash
+    set -eo pipefail
+    flash_feat="--features flash-time"
+    passthru=""
+    for a in {{ARGS}}; do
+        case "$a" in
+            --flash=off|--flash=false|--no-flash) flash_feat="" ;;
+            --flash=on|--flash=true) flash_feat="--features flash-time" ;;
+            *) passthru="$passthru $a" ;;
+        esac
+    done
+    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release $flash_feat $passthru
 
 # The L2 fixture cache is ON BY DEFAULT (build-fingerprinted temp dir, see
 # tests/src/fixture_cache.rs). This variant instead uses the nextest `cache`
 # profile, whose setup script wipes + recreates a shared cache dir and exports
 # KITHARA_FIXTURE_CACHE — an ephemeral, explicitly-scoped per-run cache.
 test-cached *ARGS:
-    cargo nextest run --profile cache --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
+    #!/usr/bin/env bash
+    set -eo pipefail
+    flash_feat="--features flash-time"
+    passthru=""
+    for a in {{ARGS}}; do
+        case "$a" in
+            --flash=off|--flash=false|--no-flash) flash_feat="" ;;
+            --flash=on|--flash=true) flash_feat="--features flash-time" ;;
+            *) passthru="$passthru $a" ;;
+        esac
+    done
+    cargo nextest run --profile cache --workspace --exclude kithara-fuzz --cargo-profile test-release $flash_feat $passthru
 
 # Doc-tests (cargo nextest doesn't run them).
 test-doc:

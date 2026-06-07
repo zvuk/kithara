@@ -22,10 +22,17 @@ pub use tokio_with_wasm::alias::task::*;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 mod spawn;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
-pub use spawn::spawn;
+pub use spawn::{spawn, spawn_on};
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub use crate::time::flash::yield_now;
+
+// Off-sim baseline `spawn_on` (plain `handle.spawn`) — its own module so this
+// `mod.rs` stays declarations + re-exports only (style.no-items-in-lib-or-mod-rs).
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+mod spawn_baseline;
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+pub use spawn_baseline::spawn_on;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm;

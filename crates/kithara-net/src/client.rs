@@ -168,10 +168,10 @@ impl RawHttp {
         &self,
         req: reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, NetError> {
-        match timeout(self.options.inactivity_timeout, req.send()).await {
-            Ok(r) => r.map_err(NetError::from),
-            Err(_) => Err(NetError::Timeout),
-        }
+        timeout(self.options.inactivity_timeout, req.send())
+            .await
+            .map_err(|_| NetError::Timeout)?
+            .map_err(NetError::from)
     }
 
     async fn send_checked(

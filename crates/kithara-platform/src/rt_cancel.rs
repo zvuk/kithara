@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt,
     sync::{
         Arc,
@@ -6,9 +7,15 @@ use std::{
     },
 };
 
+use parking_lot::Mutex;
 use tokio_util::sync::{
     CancellationToken as AsyncToken, WaitForCancellationFuture, WaitForCancellationFutureOwned,
 };
+
+/// A synchronous cancel-waker: invoked from the cancelling thread when the token
+/// (or an ancestor) is cancelled. Cheap, non-blocking, idempotent — typically a
+/// `Condvar`/`Notify` wake.
+type CancelWaker = Arc<dyn Fn() + Send + Sync>;
 
 /// Real-time-safe cancellation token with correct hierarchy.
 ///
@@ -51,12 +58,30 @@ pub struct CancellationToken {
     chain: Arc<ChainNode>,
 }
 
-/// One link in a token's ancestor chain: this node's own cancel flag plus an
-/// `Arc` to the parent link (`None` at a root master).
+/// One link in a token's ancestor chain: this node's own cancel flag, an `Arc`
+/// to the parent link (`None` at a root master), and a registry of synchronous
+/// cancel-wakers attached to this node (see [`WakerSlots`]).
 #[derive(Default)]
 struct ChainNode {
     flag: AtomicBool,
     parent: Option<Arc<Self>>,
+    /// Sync cancel-wakers registered on THIS node by descendants (and self)
+    /// walking `self → root`. [`CancellationToken::cancel`] fires + drains them
+    /// when this node cancels, so an ancestor cancel wakes every descendant that
+    /// registered up through it. A registration arriving after the drain fires
+    /// at once (the `fired` latch). Off the RT path — `is_cancelled` never reads
+    /// this, so the lock-free read stays lock-free.
+    wakers: Mutex<WakerSlots>,
+}
+
+/// Cancel-waker registry on one [`ChainNode`].
+#[derive(Default)]
+struct WakerSlots {
+    next_id: u64,
+    /// Set once this node has cancelled and drained its wakers; a later
+    /// registration on a fired node fires immediately instead of parking.
+    fired: bool,
+    map: HashMap<u64, CancelWaker>,
 }
 
 impl CancellationToken {
@@ -74,6 +99,7 @@ impl CancellationToken {
             chain: Arc::new(ChainNode {
                 flag: AtomicBool::new(false),
                 parent: Some(Arc::clone(&self.chain)),
+                wakers: Mutex::default(),
             }),
         }
     }
@@ -88,7 +114,66 @@ impl CancellationToken {
     /// siblings do not (their chains do not include this node's flag).
     pub fn cancel(&self) {
         self.chain.flag.store(true, Ordering::Release);
+        // Fire + drain THIS node's sync cancel-wakers BEFORE the async
+        // `inner.cancel()` (which already takes the `tokio_util` lock, so this
+        // path is not RT-safe — `is_cancelled` is the RT read, untouched here).
+        // Descendants that registered up through this node hold their waker here,
+        // so an ancestor cancel wakes them; draining + the `fired` latch make a
+        // late registration fire at once rather than miss the wake.
+        let wakers: Vec<CancelWaker> = {
+            let mut slots = self.chain.wakers.lock();
+            slots.fired = true;
+            slots.map.drain().map(|(_, w)| w).collect()
+        };
+        for w in wakers {
+            w();
+        }
         self.inner.cancel();
+    }
+
+    /// Register a synchronous waker fired when THIS token or any ancestor is
+    /// cancelled — the sync counterpart to [`cancelled`](Self::cancelled) for a
+    /// thread parked on a (flash-aware) `Condvar`/`Notify`, where awaiting the
+    /// async future is not possible.
+    ///
+    /// The waker runs on the cancelling thread: keep it cheap, non-blocking, and
+    /// idempotent (it may fire once per cancelling ancestor). If the token is
+    /// already cancelled it fires immediately. The returned guard unregisters the
+    /// waker on drop — hold it for the wait's lifetime.
+    ///
+    /// To avoid a lost wakeup, the waker should notify under the SAME mutex the
+    /// parked thread atomically releases in its wait (so a cancel racing the park
+    /// either wakes the parked thread or is re-observed by its predicate
+    /// re-check), exactly like any condvar producer.
+    pub fn on_cancel<F>(&self, waker: F) -> CancelWakerGuard
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        let waker: CancelWaker = Arc::new(waker);
+        let mut nodes: Vec<(Arc<ChainNode>, u64)> = Vec::new();
+        let mut node = Arc::clone(&self.chain);
+        loop {
+            let mut slots = node.wakers.lock();
+            if slots.fired {
+                // An ancestor on the path (or self) has already cancelled:
+                // `is_cancelled()` is already true and nothing above can
+                // un-cancel it, so fire now and stop walking.
+                drop(slots);
+                waker();
+                return CancelWakerGuard { nodes };
+            }
+            let id = slots.next_id;
+            slots.next_id += 1;
+            slots.map.insert(id, Arc::clone(&waker));
+            drop(slots);
+            nodes.push((Arc::clone(&node), id));
+            let parent = node.parent.clone();
+            match parent {
+                Some(p) => node = p,
+                None => break,
+            }
+        }
+        CancelWakerGuard { nodes }
     }
 
     /// Lock-free cancelled read — the RT-safe path.
@@ -128,6 +213,30 @@ impl fmt::Debug for CancellationToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CancellationToken")
             .field("cancelled", &self.is_cancelled())
+            .finish()
+    }
+}
+
+/// Drop guard returned by [`CancellationToken::on_cancel`]. Unregisters the
+/// waker from every chain node it was attached to; holding it keeps the
+/// cancel-wake live, dropping it stops a later cancel from firing the waker.
+#[must_use = "dropping the guard immediately unregisters the cancel waker"]
+pub struct CancelWakerGuard {
+    nodes: Vec<(Arc<ChainNode>, u64)>,
+}
+
+impl Drop for CancelWakerGuard {
+    fn drop(&mut self) {
+        for (node, id) in &self.nodes {
+            node.wakers.lock().map.remove(id);
+        }
+    }
+}
+
+impl fmt::Debug for CancelWakerGuard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CancelWakerGuard")
+            .field("nodes", &self.nodes.len())
             .finish()
     }
 }
@@ -289,5 +398,86 @@ mod tests {
             flag_seen,
             "a thread that observed inner cancellation must also see the flag set"
         );
+    }
+
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    fn counter() -> (Arc<AtomicUsize>, impl Fn() + Send + Sync + 'static) {
+        let n = Arc::new(AtomicUsize::new(0));
+        let n2 = Arc::clone(&n);
+        (n, move || {
+            n2.fetch_add(1, Ordering::SeqCst);
+        })
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn on_cancel_fires_on_self_cancel() {
+        let c = CancellationToken::default();
+        let (fired, waker) = counter();
+        let _guard = c.on_cancel(waker);
+        assert_eq!(fired.load(Ordering::SeqCst), 0);
+        c.cancel();
+        assert_eq!(fired.load(Ordering::SeqCst), 1, "waker must fire on cancel");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn on_cancel_fires_on_ancestor_cancel() {
+        // WHY #12/#3: a consumer holding a CHILD token must be woken when a
+        // master/ancestor cancels — the waker is registered up the chain.
+        let master = CancellationToken::default();
+        let child = master.child_token();
+        let (fired, waker) = counter();
+        let _guard = child.on_cancel(waker);
+        master.cancel();
+        assert!(
+            fired.load(Ordering::SeqCst) >= 1,
+            "ancestor cancel must wake a descendant's sync waker"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn on_cancel_already_cancelled_fires_immediately() {
+        let c = CancellationToken::default();
+        c.cancel();
+        let (fired, waker) = counter();
+        let _guard = c.on_cancel(waker);
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            1,
+            "registering on an already-cancelled token fires at once"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn on_cancel_guard_drop_unregisters() {
+        let c = CancellationToken::default();
+        let (fired, waker) = counter();
+        let guard = c.on_cancel(waker);
+        drop(guard);
+        c.cancel();
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            0,
+            "a dropped guard must not fire on a later cancel"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn on_cancel_sibling_cancel_does_not_fire() {
+        let parent = CancellationToken::default();
+        let a = parent.child_token();
+        let b = parent.child_token();
+        let (fired, waker) = counter();
+        let _guard = a.on_cancel(waker);
+        b.cancel();
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            0,
+            "a sibling cancel must not fire this token's waker"
+        );
+        assert!(!a.is_cancelled());
     }
 }

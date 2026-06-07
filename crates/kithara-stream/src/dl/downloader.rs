@@ -226,7 +226,7 @@ impl Downloader {
         else {
             return;
         };
-        handle.spawn(async move { this.run(rx).await });
+        tokio::task::spawn_on(&handle, async move { this.run(rx).await });
     }
 
     #[cfg(target_arch = "wasm32")]

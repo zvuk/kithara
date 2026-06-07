@@ -216,6 +216,21 @@ where
         // child thread when the closure returns (it must outlive `f()`).
         #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
         let _ambient = crate::time::flash::set_ambient_for_spawn(ambient);
+        // A DEDICATED pacer must run its WHOLE callstack in the test's flash mode,
+        // not just propagate ambient. It loops on stateful waits (`Condvar`,
+        // `park_timeout`) keyed on AMBIENT (virtual under a flash test) while
+        // computing their deadlines from `Instant::now()`, which keys on FLASH_ACTIVE
+        // (stateless). If only ambient were set, `Instant::now()` would stay REAL
+        // while the wait registers a VIRTUAL deadline — the pacer feeds a real-clock
+        // deadline into the virtual scheduler, which the virtual clock instantly
+        // overshoots, so the wait never blocks and the pacer spins, pinning the
+        // engine's `active` count and freezing the big clock jump every flash test
+        // needs. Setting FLASH_ACTIVE = ambient here (the audio worker already does
+        // this via its `#[kithara::flash(true)]` run loop; this generalizes it to
+        // EVERY `spawn_named` pacer — flush hub, offline render, …) keeps the
+        // pacer's `Instant::now()` in the same clock domain as its waits.
+        #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+        let _flash = crate::time::flash::enter_dynamic(true);
         #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
         {
             crate::time::flash::sched::reset_credit();
