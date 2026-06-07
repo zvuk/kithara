@@ -128,7 +128,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
     assert!(!lru.exists(), "lru.bin must not exist before any activity");
     assert!(
         !availability.exists(),
-        "availability.bin must not exist before checkpoint()"
+        "no commit yet → the flush worker has nothing to persist"
     );
 
     let key_a = scope.key("segment-a.bin");
@@ -149,7 +149,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
     );
     assert!(
         !availability.exists(),
-        "availability.bin is checkpoint-only; must still be absent"
+        "acquire writes no bytes → still nothing for the worker to persist"
     );
 
     let pinned_now = read_archived_pins_set(&pins);
@@ -175,11 +175,11 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
     let res_a = writer_a
         .commit(Some(payload.len() as u64))
         .expect("commit segment-a");
-    assert!(
-        !availability.exists(),
-        "commit() must NOT auto-persist availability.bin (explicit checkpoint contract)"
-    );
-
+    // After a commit, availability.bin MAY be background-persisted (non-durable,
+    // best-effort) by the flush worker — its on-disk presence here is
+    // timing-dependent (see kithara-assets README "Byte Availability"). The
+    // durable, authoritative snapshot is asserted after checkpoint() below;
+    // the in-memory aggregate is the deterministic post-commit check.
     let ranges_in_memory = scope.store().available_ranges(&key_a);
     let as_vec: Vec<(u64, u64)> = ranges_in_memory.iter().map(|r| (r.start, r.end)).collect();
     assert_eq!(
@@ -205,10 +205,6 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
     writer_b.write_at(0, b"b-payload").expect("write b");
     let res_b = writer_b.commit(Some(9)).expect("commit b");
 
-    assert!(
-        !availability.exists(),
-        "sanity: still no file pre-checkpoint"
-    );
     scope.store().checkpoint().expect("checkpoint must succeed");
     assert!(
         has_nonempty(&availability),

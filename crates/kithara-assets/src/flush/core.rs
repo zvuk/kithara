@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use dashmap::DashSet;
 #[cfg(test)]
 use kithara_platform::thread::sleep;
 #[cfg(test)]
@@ -113,6 +114,13 @@ pub struct FlushHub {
     pub(in crate::flush) policy: FlushPolicy,
     pub(in crate::flush) flush_lock: Mutex<()>,
     pub(in crate::flush) sources: Mutex<Vec<Weak<dyn Flushable>>>,
+    /// Live `Arc` identities of sources whose last flush was non-durable
+    /// (best-effort, via the background worker). An explicit durable
+    /// checkpoint must re-flush these even when their `dirty` flag is clear,
+    /// so a worker flush that landed a stale pre-commit snapshot is always
+    /// superseded by a durable, current one. Pruned to the alive set each
+    /// `flush_dirty` pass; all mutations run under `flush_lock`.
+    pub(in crate::flush) non_durable: DashSet<usize>,
     pub(in crate::flush) worker: WorkerSlot,
 }
 
@@ -127,6 +135,7 @@ impl FlushHub {
             policy,
             flush_lock: Mutex::new(()),
             sources: Mutex::new(Vec::new()),
+            non_durable: DashSet::new(),
             wait: Arc::new(HubWait {
                 cv: Condvar::new(),
                 state: Mutex::new(HubState::default()),
@@ -141,9 +150,22 @@ impl FlushHub {
             g.retain(|w| w.strong_count() > 0);
             g.iter().filter_map(Weak::upgrade).collect()
         };
+        let alive_keys: Vec<usize> = alive
+            .iter()
+            .map(|s| Arc::as_ptr(s).cast::<()>().addr())
+            .collect();
+        self.non_durable.retain(|k| alive_keys.contains(k));
+
         let mut first_err = None;
-        for src in alive {
-            if !src.dirty().swap(false, Ordering::AcqRel) {
+        for src in &alive {
+            let key = Arc::as_ptr(src).cast::<()>().addr();
+            let was_dirty = src.dirty().swap(false, Ordering::AcqRel);
+            // The durable (checkpoint) path also flushes a source the worker
+            // last wrote non-durably, so an explicit checkpoint always lands a
+            // durable, current snapshot — even though that worker flush cleared
+            // `dirty` after persisting a possibly-stale pre-commit state.
+            let needs_flush = was_dirty || durable && self.non_durable.contains(&key);
+            if !needs_flush {
                 continue;
             }
             let result = if durable {
@@ -151,15 +173,24 @@ impl FlushHub {
             } else {
                 src.flush()
             };
-            if let Err(e) = result {
-                tracing::warn!(
-                    source = src.name(),
-                    error = %e,
-                    "FlushHub: source flush failed",
-                );
-                src.dirty().store(true, Ordering::Release);
-                if first_err.is_none() {
-                    first_err = Some(e);
+            match result {
+                Ok(()) => {
+                    if durable {
+                        self.non_durable.remove(&key);
+                    } else {
+                        self.non_durable.insert(key);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        source = src.name(),
+                        error = %e,
+                        "FlushHub: source flush failed",
+                    );
+                    src.dirty().store(true, Ordering::Release);
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
                 }
             }
         }
