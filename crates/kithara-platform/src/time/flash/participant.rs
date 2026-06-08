@@ -199,6 +199,8 @@ impl<F: Future> Future for Participating<F> {
         }
         let gate_waker = Waker::from(Arc::clone(&this.gate));
         let mut gate_cx = Context::from_waker(&gate_waker);
+        // SAFETY: `fut` is structurally pinned, never moved out of the participant
+        // wrapper; it is re-pinned in place for its own poll.
         let fut = unsafe { Pin::new_unchecked(&mut this.fut) };
         // Mark this OS thread as inside an async poll for the duration of the
         // inner poll, so a synchronous wrapped wait taken from within it (e.g. a

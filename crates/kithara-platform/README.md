@@ -148,6 +148,19 @@ Contract:
     `active_async` slot across the yield while its other primitives are real, so
     an engine-backed yield could never be granted — a circular wedge. Gating on
     ambient keeps the build behavior-transparent for non-ambient callers.
+
+    The advance rule carries a sharper invariant than "jump to the earliest
+    deadline once all roots are parked": **the clock must not advance while
+    anything is runnable at the current instant, and a pending yield-waiter IS
+    runnable-now.** So when every other parked waiter is an event-driven `Thread`
+    park (a `park_timeout` watchdog, no real timer), the engine drains the
+    yield-waiters at the current instant instead of jumping to a watchdog
+    deadline — a producer yielding mid-work (e.g. the audio worker between
+    `produce` chunks) gets to unpark a blocked consumer before its watchdog can
+    fire a false hang. A real `Timed`/`Condvar` waiter present means a yielder
+    may be busy-waiting on that timer, so the clock advances normally (draining
+    yielders on the jump); a yielder that cannot make progress re-parks-timed,
+    emptying the yield set, so this never livelocks.
 - `time::reset()` clears the timeline and the engine. nextest's per-test process
   isolation keeps the global state clean between tests; `reset()` is for runners
   that share a process.

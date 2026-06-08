@@ -185,6 +185,7 @@ impl<T> Future for Receiver<T> {
             // waker (and wakes it) or has not yet stored the value we just missed.
             inner.real_waker = Some(cx.waker().clone());
             this.pending = Some(Parked::Real);
+            drop(inner);
         }
         Poll::Pending
     }
@@ -201,7 +202,7 @@ impl<T> Drop for Receiver<T> {
         }
         drop(inner);
         if let Some(Parked::Engine(handle)) = self.pending.take() {
-            sched::cancel_async_wait(handle);
+            sched::cancel_async_wait(&handle);
         }
     }
 }

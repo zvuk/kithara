@@ -24,6 +24,16 @@ mod spawn;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub use spawn::{spawn, spawn_on};
 
+// Under `flash-time`, route `spawn_blocking` through the ambient-propagating
+// wrapper (`crate::task::spawn_blocking`) so a blocking closure spawned from a
+// flash test carries `FLASH_AMBIENT` onto the pool thread for its lifetime —
+// a wrapped wait (`park_timeout`, `Condvar`) on that thread then stays virtual,
+// matching the engine instead of parking on the real clock the engine cannot
+// wake. Shadows the `tokio_with_wasm::alias::task` glob `spawn_blocking` above,
+// exactly as `spawn`/`spawn_on`/`yield_now` shadow their glob counterparts. Off
+// the sim path the raw glob `spawn_blocking` is used unchanged.
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+pub use crate::task::spawn_blocking;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub use crate::time::flash::yield_now;
 

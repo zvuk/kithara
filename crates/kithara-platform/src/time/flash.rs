@@ -74,7 +74,7 @@ impl Future for FlashSleep {
 impl Drop for FlashSleep {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
-            sched::cancel_async_wait(handle);
+            sched::cancel_async_wait(&handle);
         }
     }
 }
@@ -148,6 +148,7 @@ pub fn yield_now() -> Yield {
 /// Ambient-gated cooperative yield future (see [`yield_now`]). Engine-backed under
 /// ambient, a plain scheduler yield otherwise. The mode is fixed at construction
 /// from the ambient gate, which is uniform per test.
+#[must_use = "a Yield future does nothing unless `.await`ed"]
 pub enum Yield {
     /// Engine-backed quiescence yield (ambient test).
     Flash(FlashYield),
@@ -167,6 +168,8 @@ impl Future for Yield {
         // scalar touched by value.
         let this = unsafe { self.get_unchecked_mut() };
         match this {
+            // SAFETY: `f` is a field of the pinned `Self`, never moved out; it is
+            // re-pinned in place for its own poll.
             Self::Flash(f) => unsafe { Pin::new_unchecked(f) }.poll(cx),
             Self::Real { yielded } => {
                 if *yielded {
@@ -250,7 +253,7 @@ pub fn flash_enabled() -> bool {
 /// propagated across spawn). The STATEFUL sync primitives (Condvar/Notify/mpsc/
 /// oneshot) branch on THIS — not `flash_enabled()` — so a primitive's wait and
 /// its cross-thread signal always agree on real-vs-engine (ambient is uniform
-/// per test; FLASH_ACTIVE is per-callstack and would mismatch across threads).
+/// per test; `FLASH_ACTIVE` is per-callstack and would mismatch across threads).
 #[inline]
 #[must_use]
 pub fn flash_ambient() -> bool {
@@ -272,7 +275,6 @@ impl Drop for FlashScope {
 
 /// Push a dynamic flash mode. `on=true` takes only under ambient; `on=false`
 /// always carves real. Returns a guard that restores the previous mode on drop.
-#[must_use]
 pub fn enter_dynamic(on: bool) -> FlashScope {
     let prev = FLASH_ACTIVE.with(Cell::get);
     let next = on && FLASH_AMBIENT.with(Cell::get);
@@ -283,7 +285,6 @@ pub fn enter_dynamic(on: bool) -> FlashScope {
 /// Enter a REAL-time carve on this thread (flash off for the guard's lifetime).
 /// In the default-real model this only matters inside an active flash region;
 /// kept for the real-socket test-server island and the off-feature stub.
-#[must_use]
 pub fn flash_real() -> FlashScope {
     enter_dynamic(false)
 }
@@ -302,7 +303,6 @@ impl Drop for AmbientScope {
 /// Set the per-test ambient gate; restores the previous value on drop. The test
 /// macro sets it for the test body; the platform spawn wrappers re-establish it
 /// on each spawned child via [`set_ambient_for_spawn`].
-#[must_use]
 pub fn ambient_scope(on: bool) -> AmbientScope {
     let prev = FLASH_AMBIENT.with(Cell::get);
     FLASH_AMBIENT.with(|c| c.set(on));
@@ -319,7 +319,6 @@ pub fn ambient_snapshot() -> bool {
 }
 
 /// Restore a snapshotted ambient on a spawned child, held for its lifetime.
-#[must_use]
 pub fn set_ambient_for_spawn(on: bool) -> AmbientScope {
     ambient_scope(on)
 }
@@ -344,6 +343,7 @@ impl<F: Future> Future for WithAmbient<F> {
         // `Copy` scalar touched only by value.
         let this = unsafe { self.get_unchecked_mut() };
         let _a = set_ambient_for_spawn(this.on);
+        // SAFETY: `fut` is structurally pinned, never moved out of `WithAmbient`.
         let fut = unsafe { Pin::new_unchecked(&mut this.fut) };
         fut.poll(cx)
     }
@@ -378,6 +378,7 @@ impl<F: Future> Future for FlashDynamic<F> {
         // `FLASH_ACTIVE`.
         let this = unsafe { self.get_unchecked_mut() };
         let _g = enter_dynamic(this.on);
+        // SAFETY: `fut` is structurally pinned, never moved out of `FlashDynamic`.
         let fut = unsafe { Pin::new_unchecked(&mut this.fut) };
         fut.poll(cx)
     }

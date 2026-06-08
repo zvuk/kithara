@@ -198,12 +198,12 @@ mod sim_chan {
         /// Returns [`TryRecvError`] if no value is available or senders are dropped.
         pub fn try_recv(&self) -> Result<T, TryRecvError> {
             let mut q = self.0.queue.lock_sync();
-            if let Some(v) = q.pop_front() {
-                Ok(v)
-            } else if self.0.senders.load(Ordering::Acquire) == 0 {
-                Err(TryRecvError::Disconnected)
-            } else {
-                Err(TryRecvError::Empty)
+            match q.pop_front() {
+                Some(v) => Ok(v),
+                None if self.0.senders.load(Ordering::Acquire) == 0 => {
+                    Err(TryRecvError::Disconnected)
+                }
+                None => Err(TryRecvError::Empty),
             }
         }
 

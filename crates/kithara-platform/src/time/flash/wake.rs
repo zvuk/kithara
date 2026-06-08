@@ -46,7 +46,7 @@ impl Token {
 }
 
 /// How a parked waiter is woken once the engine (or a signal) selects it.
-/// Sync OS-thread waits store a `Token` (a parking_lot flag+condvar the blocked
+/// Sync OS-thread waits store a `Token` (a `parking_lot` flag+condvar the blocked
 /// thread sits on); async-task waits store the task's `Waker`. `try_advance` /
 /// `signal_condvar` collect these and fire them AFTER releasing `SCHED`.
 pub(crate) enum Wake {

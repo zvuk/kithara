@@ -44,7 +44,7 @@ pub async fn sleep(duration: Duration) {
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub use flash::{
     AmbientScope, FlashScope, Participating, ambient_scope, ambient_snapshot, enter_dynamic,
-    flash_dynamic, flash_real, participate, set_ambient_for_spawn,
+    flash_dynamic, flash_real, participate, set_ambient_for_spawn, with_ambient,
 };
 
 /// Virtual `sleep` that hits the quiescence engine UNCONDITIONALLY (no
@@ -100,6 +100,17 @@ pub fn flash_virtual_park_timeout(duration: Duration) {
 #[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
 #[inline]
 pub fn participate<F: Future>(fut: F) -> F {
+    fut
+}
+
+/// Off the sim path: ambient does not exist, so re-asserting it per poll is an
+/// identity passthrough. Under `flash-time` this is [`flash::with_ambient`],
+/// which re-establishes the snapshotted ambient around every poll so a future
+/// (e.g. the async test body) keeps its flash-eligibility across `.await`
+/// thread-hops instead of relying on a one-shot guard set on the first poll.
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
+#[inline]
+pub fn with_ambient<F: Future>(_on: bool, fut: F) -> F {
     fut
 }
 
@@ -277,6 +288,13 @@ where
         .map_err(|_| TimeoutError)
 }
 
+/// Await `future` with a deadline on the SAME clock as the awaited work — under
+/// `flash-time` an engine-backed virtual deadline (see the off-feature [`timeout`]
+/// for the full contract).
+///
+/// # Errors
+///
+/// Returns [`TimeoutError`] if the future does not complete within `duration`.
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub async fn timeout<F>(duration: Duration, future: F) -> Result<F::Output, TimeoutError>
 where
@@ -312,10 +330,12 @@ impl<F: Future> Future for FlashTimeout<F> {
         // SAFETY: `future` and `sleep` are structurally pinned and never moved
         // out of `FlashTimeout`; each is re-pinned in place for its own poll.
         let this = unsafe { self.get_unchecked_mut() };
+        // SAFETY: `future` is structurally pinned, never moved out of `FlashTimeout`.
         let fut = unsafe { Pin::new_unchecked(&mut this.future) };
         if let Poll::Ready(out) = fut.poll(cx) {
             return Poll::Ready(Ok(out));
         }
+        // SAFETY: `sleep` is structurally pinned, never moved out of `FlashTimeout`.
         let sleep = unsafe { Pin::new_unchecked(&mut this.sleep) };
         match sleep.poll(cx) {
             Poll::Ready(()) => Poll::Ready(Err(TimeoutError)),

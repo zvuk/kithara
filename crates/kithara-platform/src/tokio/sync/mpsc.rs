@@ -225,6 +225,7 @@ fn poll_recv_inner<T>(
         let waker = cx.waker().clone();
         inner.data_waker = Some(waker.clone());
         *pending = Some(Parked::Real(waker));
+        drop(inner);
     }
     Poll::Pending
 }
@@ -263,7 +264,7 @@ fn close_receiver<T>(shared: &Shared<T>, pending: &mut Option<Parked>) {
     drop(inner);
     shared.wake_space(true, wakers);
     if let Some(Parked::Engine(handle)) = pending.take() {
-        sched::cancel_async_wait(handle);
+        sched::cancel_async_wait(&handle);
     }
 }
 
@@ -338,10 +339,11 @@ impl<T> Future for Send<'_, T> {
         let mut inner = this.shared.inner.lock();
         if !inner.receiver_alive {
             drop(inner);
-            return Poll::Ready(match this.value.take() {
-                Some(value) => Err(SendError(value)),
-                None => Ok(()),
-            });
+            return Poll::Ready(
+                this.value
+                    .take()
+                    .map_or_else(|| Ok(()), |value| Err(SendError(value))),
+            );
         }
         let cap = this.shared.capacity.unwrap_or(usize::MAX);
         if inner.queue.len() < cap {
@@ -366,6 +368,7 @@ impl<T> Future for Send<'_, T> {
             let waker = cx.waker().clone();
             inner.space_wakers.push(waker.clone());
             this.pending = Some(Parked::Real(waker));
+            drop(inner);
         }
         Poll::Pending
     }
@@ -381,7 +384,7 @@ impl<T> Drop for Send<'_, T> {
                 let mut inner = self.shared.inner.lock();
                 inner.space_wakers.retain(|w| !w.will_wake(&waker));
             }
-            Some(Parked::Engine(handle)) => sched::cancel_async_wait(handle),
+            Some(Parked::Engine(handle)) => sched::cancel_async_wait(&handle),
             None => {}
         }
     }

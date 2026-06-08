@@ -30,6 +30,7 @@ pub(crate) fn emit_async_runtime_test(
     let env_setup = make_env_setup(&args.env_vars);
     let selenium_attr = make_selenium_attrs(args);
     let runtime_builder = make_runtime_builder(args);
+    let flash = args.flash.unwrap_or(true);
     let inner_body = if !args.soft_fail_patterns.is_empty() {
         wrap_with_soft_fail(
             &quote! { { #body } },
@@ -62,9 +63,18 @@ pub(crate) fn emit_async_runtime_test(
                 // jumped. Mirrors `emit_async_timeout_test`.
                 kithara_platform::time::participate(
                     ::kithara_test_utils::probe::OWNED_INSTALL_ID
-                        .scope(__probe_install_id, async {
-                            #inner_body
-                        }),
+                        .scope(__probe_install_id,
+                            // Re-assert FLASH_AMBIENT around every poll of the
+                            // body: the one-shot ambient guard set at the body's
+                            // head is lost once it resumes on a worker thread
+                            // after an `.await`, so a later `spawn_blocking` from
+                            // the body would capture the wrong ambient and run
+                            // REAL while the engine runs virtual (lost wake).
+                            // `with_ambient` keeps the body flash-eligible across
+                            // `.await`. Identity off the feature.
+                            kithara_platform::time::with_ambient(#flash, async {
+                                #inner_body
+                            })),
                 ),
             )
         }
@@ -144,6 +154,7 @@ pub(crate) fn emit_async_timeout_test(
     let env_setup = make_env_setup(&args.env_vars);
     let selenium_attr = make_selenium_attrs(args);
     let runtime_builder = make_runtime_builder(args);
+    let flash = args.flash.unwrap_or(true);
 
     quote! {
         #(#remaining_attrs)*
@@ -202,9 +213,21 @@ pub(crate) fn emit_async_timeout_test(
                                     // Wall-clock safety net: must fire on REAL
                                     // time even under `flash-time` (a hung test
                                     // hangs real time too).
-                                    kithara_platform::time::timeout(__timeout_dur, async {
-                                        #inner_body
-                                    })
+                                    kithara_platform::time::timeout(
+                                        __timeout_dur,
+                                        // Re-assert FLASH_AMBIENT around every poll
+                                        // of the body so it stays flash-eligible
+                                        // across `.await` (the one-shot ambient
+                                        // guard is lost on a worker-thread resume; a
+                                        // later `spawn_blocking` would then capture
+                                        // the wrong ambient and run REAL against a
+                                        // virtual engine — lost wake). `timeout`
+                                        // itself stays REAL (gates on FLASH_ACTIVE,
+                                        // untouched here).
+                                        kithara_platform::time::with_ambient(#flash, async {
+                                            #inner_body
+                                        }),
+                                    )
                                     .await
                                     .unwrap_or_else(|_| panic!(
                                         "test `{}` timed out after {:?}",

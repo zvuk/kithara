@@ -198,7 +198,7 @@ impl Future for Notified<'_> {
 impl Drop for Notified<'_> {
     fn drop(&mut self) {
         match std::mem::replace(&mut self.state, NotifiedState::Done) {
-            NotifiedState::Engine(handle) => sched::cancel_async_wait(handle),
+            NotifiedState::Engine(handle) => sched::cancel_async_wait(&handle),
             NotifiedState::Real(granted) => {
                 // Remove EXACTLY our own entry (by grant-flag identity) so a
                 // notify_one does not select a dropped future (which would steal

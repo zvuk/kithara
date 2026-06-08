@@ -348,28 +348,35 @@ fn try_advance_locked(s: &mut SimSched) -> Advance {
         // jump. Both counters must be zero for genuine quiescence.
         return Advance { wakes: Vec::new() };
     }
-    let Some((&(min, _), _)) = s.parked_timed.iter().next() else {
-        // Quiescent (active == active_async == 0) with NO timed waiter to advance
-        // to. If cooperative yield-waiters are parked, they are the only thing
-        // that can make progress: wake them so they re-poll. A `yield_now` must
-        // resume once nothing else is runnable and no clock advance is pending —
-        // mirroring the sync `yield_until_advance` fallback (which does a real
-        // yield instead of parking when `parked_timed.is_empty()`).
-        // Without this, an async `yield_now` with no pending timer is never
-        // re-polled (the yield-waiter is otherwise drained only on a clock
-        // advance), so a probe/loader awaiting an off-runtime producer deadlocks.
-        // When a timed waiter DOES exist this branch is skipped and the clock
-        // advances normally (draining yield-waiters there), so a yielder racing a
-        // timer never freezes the clock.
-        if s.yield_waiters.is_empty() {
-            return Advance { wakes: Vec::new() };
-        }
+    // Cooperative yielders re-poll at the CURRENT instant before the clock can
+    // advance to a `Thread` (`park_timeout`) deadline. Such a park is
+    // event-driven — woken by an `unpark` from a peer's progress — and its
+    // deadline is only a watchdog fallback. A pending yielder is an active
+    // participant (e.g. the audio worker mid-produce) that may unpark it, so it
+    // MUST get a chance to make progress before the clock jumps; otherwise the
+    // jump fires the park's watchdog prematurely while the producer still had
+    // work to flush (the audio worker/reader saturation deadlock). A REAL timer
+    // (`Timed`/`Condvar`) could be what a yielder awaits, so when one is the
+    // earliest waiter the clock still advances (below). Vacuously true when
+    // `parked_timed` is empty (the no-timer yielder-drain case).
+    if !s.yield_waiters.is_empty()
+        && s.parked_timed
+            .values()
+            .all(|e| matches!(e.kind, WaitKind::Thread(_)))
+    {
         let woken: Vec<Wake> = std::mem::take(&mut s.yield_waiters).into_values().collect();
         s.active += woken.iter().filter(|w| !w.is_task()).count();
         for w in &woken {
             w.mark_granted_under_lock();
         }
         return Advance { wakes: woken };
+    }
+    let Some((&(min, _), _)) = s.parked_timed.iter().next() else {
+        // Quiescent with NO timed waiter to advance to. Any parked yield-waiter
+        // was already drained above (when `parked_timed` is empty the all-`Thread`
+        // guard is vacuously true), so reaching here means there is nothing
+        // runnable at all: stay put.
+        return Advance { wakes: Vec::new() };
     };
     debug_assert!(
         min >= SIM_NANOS.load(Ordering::Acquire),
@@ -586,6 +593,7 @@ pub(crate) fn register_yield_async(waker: Waker) -> (u64, Arc<AtomicBool>, Advan
         },
     );
     let adv = try_advance_locked(&mut s);
+    drop(s);
     (id, granted, adv)
 }
 
@@ -746,6 +754,7 @@ pub(crate) fn register_sleep_async(delta_nanos: u64, waker: Waker) -> (AsyncHand
         },
     );
     let adv = try_advance_locked(&mut s);
+    drop(s);
     (
         AsyncHandle {
             timed_key: Some(key),
@@ -777,6 +786,7 @@ pub(crate) fn register_notify_async(cvid: u64, waker: Waker) -> (Option<AsyncHan
         },
     );
     let adv = try_advance_locked(&mut s);
+    drop(s);
     (
         Some(AsyncHandle {
             timed_key: None,
@@ -808,7 +818,7 @@ fn release_async_locked(s: &mut SimSched) -> Advance {
 }
 
 /// Gate park under the `SCHED` lock: atomically CAS `running`→`parked` and release
-/// the async slot, or — a wake landed mid-poll, so the state is RUNNING_NOTIFIED
+/// the async slot, or — a wake landed mid-poll, so the state is `RUNNING_NOTIFIED`
 /// and the CAS fails — store `runnable`, keeping the slot for the re-poll the wake
 /// already scheduled. Holding the lock across the CAS and the counter update is
 /// what closes the wake→poll race: a concurrent [`gate_wake_parked`] acquire can no
@@ -839,7 +849,7 @@ pub(crate) fn gate_complete(state: &AtomicU8, done: u8) {
 }
 
 /// Gate drop under the `SCHED` lock: swap to `done`; release the slot iff the task
-/// still held one (its prior state was counted — RUNNABLE/RUNNING/RUNNING_NOTIFIED).
+/// still held one (its prior state was counted — `RUNNABLE`/`RUNNING`/`RUNNING_NOTIFIED`).
 pub(crate) fn gate_drop_release(
     state: &AtomicU8,
     done: u8,
@@ -879,7 +889,7 @@ pub(crate) fn gate_wake_parked(state: &AtomicU8, parked: u8, runnable: u8) -> bo
 /// waiters never hold a counter slot (the firer does not bump `active_async` —
 /// the poll-wrapper owns that count per-poll), so there is nothing to release:
 /// the surrounding task stays counted by its poll-wrapper either way.
-pub(crate) fn cancel_async_wait(handle: AsyncHandle) {
+pub(crate) fn cancel_async_wait(handle: &AsyncHandle) {
     let mut s = SCHED.lock();
     match (handle.timed_key, handle.indef_key) {
         (Some(key), _) => {
@@ -903,10 +913,10 @@ pub(crate) fn signal_notify(cvid: u64) {
         .find(|(_, e)| e.kind == WaitKind::Condvar(cvid))
         .map(|(&k, _)| k);
     let mut woken = Vec::new();
-    if let Some(key) = woken_key {
-        if let Some(entry) = s.parked_indef.remove(&key) {
-            woken.push(entry.wake);
-        }
+    if let Some(key) = woken_key
+        && let Some(entry) = s.parked_indef.remove(&key)
+    {
+        woken.push(entry.wake);
     }
     if woken.is_empty() {
         // No waiter: store a permit (notify_one) so the next notified() returns
@@ -948,6 +958,7 @@ pub(crate) fn register_channel_async(cvid: u64, waker: Waker) -> (AsyncHandle, A
         },
     );
     let adv = try_advance_locked(&mut s);
+    drop(s);
     (
         AsyncHandle {
             timed_key: None,
