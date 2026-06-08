@@ -439,9 +439,18 @@ mod tests {
         let idx1 = AvailabilityIndex::new();
         let k1 = ResourceKey::relative("test_asset", "file1");
         let k2 = ResourceKey::relative("test_asset", "file2");
+        let k3 = ResourceKey::relative("test_asset", "file3");
 
+        // k1: written then committed — a committed range round-trips.
         idx1.record_write(&k1, 0..10);
+        idx1.record_commit(&k1, 10);
+        // k2: committed via final length — round-trips.
         idx1.record_commit(&k2, 50);
+        // k3: written but NEVER committed — the snapshot is a committed-only
+        // crash-recovery contract, so an uncommitted partial write must NOT
+        // round-trip (it would otherwise resurrect a partial segment whose
+        // `.tmp` was never renamed).
+        idx1.record_write(&k3, 0..10);
 
         idx1.persist_to(&atomic).unwrap();
 
@@ -450,6 +459,11 @@ mod tests {
 
         assert!(idx2.contains_range(&k1, 0..10));
         assert_eq!(idx2.final_len(&k2), Some(50));
+        assert!(
+            !idx2.contains_range(&k3, 0..10),
+            "uncommitted partial write must not persist into the snapshot"
+        );
+        assert_eq!(idx2.final_len(&k3), None);
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]

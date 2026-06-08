@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     sync::{Arc, OnceLock, atomic::Ordering},
 };
@@ -137,23 +138,38 @@ fn write_aggregate(
     let assets = inner
         .assets
         .iter()
-        .map(|entry| {
-            let resources = entry
+        .filter_map(|entry| {
+            let resources: BTreeMap<String, ResourceAvailabilityFile> = entry
                 .value()
                 .iter()
-                .map(|res_entry| {
+                .filter_map(|res_entry| {
                     let record = {
                         let avail = res_entry.value().lock_sync();
+                        // The crash-recovery snapshot is a COMMITTED-only
+                        // contract: an uncommitted partial write (whose `.tmp`
+                        // was never renamed) must be invisible after a rebuild,
+                        // exactly as the slow path reports it Missing. Persisting
+                        // its in-flight ranges would let a flush that races the
+                        // writer's cleanup resurrect a partial segment on the
+                        // next open — corrupting availability and a real crash
+                        // recovery alike. The live in-memory ranges still serve
+                        // in-flight readers; only the persisted snapshot filters.
+                        if !avail.committed {
+                            return None;
+                        }
                         ResourceAvailabilityFile {
                             ranges: avail.ranges.iter().map(|r| (r.start, r.end)).collect(),
                             final_len: avail.final_len,
                             is_committed: avail.committed,
                         }
                     };
-                    (res_entry.key().clone(), record)
+                    Some((res_entry.key().clone(), record))
                 })
                 .collect();
-            (entry.key().clone(), AssetAvailabilityFile { resources })
+            if resources.is_empty() {
+                return None;
+            }
+            Some((entry.key().clone(), AssetAvailabilityFile { resources }))
         })
         .collect();
     let file = AvailabilityFile { assets, version: 1 };

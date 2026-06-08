@@ -187,6 +187,36 @@ fn partial_segment_with_no_commit_and_no_checkpoint_is_invisible_after_crash() {
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn partial_uncommitted_write_flushed_before_drop_is_invisible_after_crash() {
+    let dir = tempdir().unwrap();
+
+    {
+        let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+        let scope = store.scope(Consts::ASSET_ROOT);
+        let res = pending(
+            store
+                .acquire_resource(&scope.key(Consts::KEY_NAME), None)
+                .unwrap(),
+        );
+        res.write_at(0, b"partial-bytes").unwrap();
+        // Force the availability snapshot to disk WHILE the uncommitted writer
+        // is still alive. This deterministically reproduces the worker-wins race
+        // (background flush beating the writer's cleanup): the persisted file
+        // must still omit the uncommitted partial range, exactly as the slow
+        // path reports the never-renamed `.tmp` Missing.
+        store.checkpoint().expect("checkpoint");
+        drop(res);
+    }
+
+    let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+    let scope = store.scope(Consts::ASSET_ROOT);
+    let key = scope.key(Consts::KEY_NAME);
+
+    assert!(scope.store().available_ranges(&key).is_empty());
+    assert_eq!(scope.store().final_len(&key), None);
+}
+
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn commit_then_crash_before_checkpoint_recovers_via_slow_path() {
     let dir = tempdir().unwrap();
 
