@@ -19,6 +19,7 @@ use kithara_events::{DownloaderEvent, Event, EventBus};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancellationToken, Mutex,
+    sync::Notify,
     time::{self, Duration, Instant},
     tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
 };
@@ -30,7 +31,6 @@ use crate::{Activity, SeekState};
 
 const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
 const FLOOD_BATCH_SIZE: usize = 10;
-const FLOOD_POLL_MS: u64 = 100;
 const PORT_STRESS_TIMEOUT_SECS: u64 = 60;
 const SLOW_DEADLINE_SECS: u64 = 5;
 
@@ -54,6 +54,55 @@ fn test_body_stream(chunks: Vec<&'static [u8]>) -> BodyStream {
 
 async fn sleep(ms: u64) {
     time::sleep(Duration::from_millis(ms)).await;
+}
+
+/// Event-driven completion barrier. Each finished fetch calls
+/// [`complete`](Self::complete); the `target`-th completion signals the
+/// waiter parked in [`wait`](Self::wait).
+///
+/// This replaces the `sleep(poll)` + wall-clock-deadline busy loops these
+/// tests used to drive: the waiter parks on the completion *event*, not on
+/// a virtual-clock deadline. Under flash a virtual deadline would race the
+/// clock past in-flight real socket bytes and false-trip; parking on the
+/// event lets the clock advance through the (virtual) server delays while
+/// the REAL fetch round-trips drive the count. The harness `timeout(...)`
+/// (REAL wall time) is the only backstop.
+struct CompletionGate {
+    done: AtomicUsize,
+    target: usize,
+    ready: Notify,
+}
+
+impl CompletionGate {
+    fn new(target: usize) -> Arc<Self> {
+        Arc::new(Self {
+            done: AtomicUsize::new(0),
+            target,
+            ready: Notify::default(),
+        })
+    }
+
+    /// Record one completion and signal the waiter on the `target`-th.
+    /// Returns the pre-increment count (the completion order).
+    fn complete(&self) -> usize {
+        let order = self.done.fetch_add(1, Ordering::SeqCst);
+        if order + 1 == self.target {
+            self.ready.notify_one();
+        }
+        order
+    }
+
+    /// Park until `target` completions are recorded. No wall-clock deadline:
+    /// the per-test harness `timeout(...)` is the real-time backstop.
+    async fn wait(&self) {
+        loop {
+            let notified = self.ready.notified();
+            if self.done.load(Ordering::SeqCst) >= self.target {
+                return;
+            }
+            notified.await;
+        }
+    }
 }
 
 #[kithara::test(tokio)]
@@ -341,7 +390,6 @@ async fn poll_next_respects_max_concurrent() {
     const MAX_CONCURRENT: usize = 5;
     const TOTAL_CMDS: usize = 1000;
     const HANDLER_DELAY_MS: u64 = 5;
-    const FLOOD_DEADLINE_SECS: u64 = 20;
 
     let concurrent = Arc::new(AtomicUsize::new(0));
     let peak = Arc::new(AtomicUsize::new(0));
@@ -383,10 +431,12 @@ async fn poll_next_respects_max_concurrent() {
 
     let url = Url::parse(&format!("http://{addr}/slow")).expect("url");
 
-    /// Peer that produces `remaining` HEAD commands via `poll_next`.
+    /// Peer that produces `remaining` HEAD commands via `poll_next`,
+    /// counting each completion into a shared [`CompletionGate`].
     struct FloodPeer {
         url: Url,
         remaining: Mutex<usize>,
+        gate: Arc<CompletionGate>,
     }
 
     impl Abr for FloodPeer {}
@@ -406,7 +456,22 @@ async fn poll_next_respects_max_concurrent() {
                 (batch_size, *rem > 0)
             };
             let cmds: Vec<FetchCmd> = (0..batch_size)
-                .map(|_| FetchCmd::head(self.url.clone()).build())
+                .map(|_| {
+                    let gate = Arc::clone(&self.gate);
+                    // No-op writer: a HEAD carries no body, but the streaming
+                    // deliver path only invokes `on_complete` when a writer is
+                    // present, so we supply one to receive the completion signal.
+                    FetchCmd::head(self.url.clone())
+                        .writer(Box::new(|_chunk: &[u8]| Ok(())))
+                        .on_complete(Box::new(
+                            move |_bytes,
+                                  _headers: Option<&kithara_net::Headers>,
+                                  _err: Option<&kithara_net::NetError>| {
+                                gate.complete();
+                            },
+                        ))
+                        .build()
+                })
                 .collect();
             if more {
                 cx.waker().wake_by_ref();
@@ -420,28 +485,25 @@ async fn poll_next_respects_max_concurrent() {
         ..test_config()
     };
     let dl = Downloader::new(config);
-    let peer = Arc::new(FloodPeer {
+    let gate = CompletionGate::new(TOTAL_CMDS);
+    let handle = dl.register(Arc::new(FloodPeer {
         url,
         remaining: Mutex::new(TOTAL_CMDS),
-    });
-    let handle = dl.register(peer.clone());
+        gate: Arc::clone(&gate),
+    }));
 
-    let deadline = Instant::now() + Duration::from_secs(FLOOD_DEADLINE_SECS);
-    loop {
-        time::sleep(Duration::from_millis(FLOOD_POLL_MS)).await;
-        if *peer.remaining.lock_sync() == 0 && concurrent.load(Ordering::SeqCst) == 0 {
-            break;
-        }
-        if Instant::now() > deadline {
-            panic!(
-                "timed out: remaining={}, concurrent={}",
-                *peer.remaining.lock_sync(),
-                concurrent.load(Ordering::SeqCst),
-            );
-        }
-    }
+    // Wait on the completion event: every HEAD has replied. The server
+    // decrements `concurrent` before sending each reply, so once the last
+    // completion fires `concurrent` is already 0 (asserted below).
+    gate.wait().await;
 
     drop(handle);
+
+    assert_eq!(
+        concurrent.load(Ordering::SeqCst),
+        0,
+        "all in-flight HEADs must have drained once every completion fired"
+    );
 
     let observed_peak = peak.load(Ordering::SeqCst);
     assert!(
@@ -599,21 +661,12 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     const SOFT_TIMEOUT_MS: u64 = 50;
     const EVENT_BUS_CAPACITY: usize = 64;
     const SLOW_POLL_TIMEOUT_MS: u64 = 200;
-    let app = Router::new().route(
-        "/slow",
-        get(|| async {
-            time::sleep(Duration::from_millis(SLOW_SERVER_DELAY_MS)).await;
-            "ok"
-        }),
-    );
-    let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr: SocketAddr = listener.local_addr().expect("local_addr");
-    tokio_spawn(async move {
-        axum::serve(listener, app.into_make_service())
-            .await
-            .expect("serve");
-    });
-    let url = Url::parse(&format!("http://{addr}/slow")).expect("url");
+    // Real server delay via the free fn (NOT flash-rewritten), so the slow
+    // response outlasts the REAL soft_timeout. An inline handler would have
+    // its `time::sleep` rewritten to a virtual sleep that collapses to ~0 wall
+    // time under flash — the real soft_timeout would then never fire and no
+    // LoadSlow would be published.
+    let url = spawn_slow_server(SLOW_SERVER_DELAY_MS).await;
 
     let config = DownloaderConfig::for_client(test_client())
         .soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS))
@@ -657,7 +710,7 @@ type CompletionLog = Arc<Mutex<Vec<(PeerTag, usize)>>>;
 /// tag when the response arrives. `priority()` reads the shared
 /// `SeekState` activity so a mid-stream flip of `set_playing` is observable.
 struct TaggedPriorityPeer {
-    completion_counter: Arc<AtomicUsize>,
+    gate: Arc<CompletionGate>,
     completion_log: CompletionLog,
     remaining: Mutex<usize>,
     tag: PeerTag,
@@ -671,7 +724,7 @@ impl TaggedPriorityPeer {
         seek: Arc<SeekState>,
         url: Url,
         cmds: usize,
-        completion_counter: &Arc<AtomicUsize>,
+        gate: &Arc<CompletionGate>,
         completion_log: &CompletionLog,
     ) -> Self {
         Self {
@@ -679,7 +732,7 @@ impl TaggedPriorityPeer {
             seek,
             url,
             remaining: Mutex::new(cmds),
-            completion_counter: Arc::clone(completion_counter),
+            gate: Arc::clone(gate),
             completion_log: Arc::clone(completion_log),
         }
     }
@@ -701,14 +754,14 @@ impl Peer for TaggedPriorityPeer {
             .map(|_| {
                 let tag = self.tag;
                 let log = Arc::clone(&self.completion_log);
-                let counter = Arc::clone(&self.completion_counter);
+                let gate = Arc::clone(&self.gate);
                 FetchCmd::get(self.url.clone())
                     .writer(Box::new(|_chunk: &[u8]| Ok(())))
                     .on_complete(Box::new(
                         move |_bytes,
                               _headers: Option<&kithara_net::Headers>,
                               _err: Option<&kithara_net::NetError>| {
-                            let order = counter.fetch_add(1, Ordering::SeqCst);
+                            let order = gate.complete();
                             log.lock_sync().push((tag, order));
                         },
                     ))
@@ -766,7 +819,8 @@ async fn active_peer_completes_before_preload_under_contention() {
     let dl = Downloader::new(config);
 
     let completion_log = Arc::new(Mutex::new(Vec::<(PeerTag, usize)>::new()));
-    let completion_counter = Arc::new(AtomicUsize::new(0));
+    let total = CMDS_PER_PEER * 2;
+    let gate = CompletionGate::new(total);
 
     let seek_active = Arc::new(SeekState::new());
     seek_active.set_playing(true);
@@ -775,7 +829,7 @@ async fn active_peer_completes_before_preload_under_contention() {
         seek_active,
         url.clone(),
         CMDS_PER_PEER,
-        &completion_counter,
+        &gate,
         &completion_log,
     ));
 
@@ -785,27 +839,16 @@ async fn active_peer_completes_before_preload_under_contention() {
         seek_preload,
         url,
         CMDS_PER_PEER,
-        &completion_counter,
+        &gate,
         &completion_log,
     ));
 
     let active_handle = dl.register(active.clone());
     let preload_handle = dl.register(preload.clone());
 
-    let total = CMDS_PER_PEER * 2;
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        time::sleep(Duration::from_millis(FLOOD_POLL_MS)).await;
-        if completion_counter.load(Ordering::SeqCst) >= total {
-            break;
-        }
-        if Instant::now() > deadline {
-            panic!(
-                "timed out: completed={}, target={total}",
-                completion_counter.load(Ordering::SeqCst)
-            );
-        }
-    }
+    // Park until every cmd from both peers has completed (event-driven; the
+    // harness timeout(30s) is the real-time backstop).
+    gate.wait().await;
 
     drop(active_handle);
     drop(preload_handle);
@@ -863,14 +906,15 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
     let dl = Downloader::new(config);
 
     let completion_log = Arc::new(Mutex::new(Vec::<(PeerTag, usize)>::new()));
-    let completion_counter = Arc::new(AtomicUsize::new(0));
+    let total = CMDS_PER_PEER * 2;
+    let gate = CompletionGate::new(total);
 
     let a = Arc::new(TaggedPriorityPeer::new(
         PeerTag::Active,
         Arc::new(SeekState::new()),
         url.clone(),
         CMDS_PER_PEER,
-        &completion_counter,
+        &gate,
         &completion_log,
     ));
     let b = Arc::new(TaggedPriorityPeer::new(
@@ -878,27 +922,16 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
         Arc::new(SeekState::new()),
         url,
         CMDS_PER_PEER,
-        &completion_counter,
+        &gate,
         &completion_log,
     ));
 
     let handle_a = dl.register(a);
     let handle_b = dl.register(b);
 
-    let total = CMDS_PER_PEER * 2;
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        time::sleep(Duration::from_millis(FLOOD_POLL_MS)).await;
-        if completion_counter.load(Ordering::SeqCst) >= total {
-            break;
-        }
-        if Instant::now() > deadline {
-            panic!(
-                "timed out: completed={}, target={total}",
-                completion_counter.load(Ordering::SeqCst)
-            );
-        }
-    }
+    // Park until every cmd from both idle peers has drained (event-driven;
+    // the harness timeout(30s) is the real-time backstop).
+    gate.wait().await;
 
     drop(handle_a);
     drop(handle_b);
