@@ -163,7 +163,12 @@ mod dump_tests {
             value: i64,
         }
 
-        let dir: PathBuf = std::env::temp_dir().join("kithara-hang-detector-dump-test");
+        // Per-process subdir (nextest is process-per-test) so concurrent tests
+        // and stale runs never share this scratch path.
+        let dir: PathBuf = std::env::temp_dir().join(format!(
+            "kithara-hang-detector-dump-test-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
 
         write_dump(

@@ -333,8 +333,12 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             );
         }
 
-        let wav_path =
-            std::env::temp_dir().join(format!("kithara_silvercomet_seek_iter_{iter}.wav"));
+        // Per-process debug dump path (nextest is process-per-test) so parallel
+        // tests and stale runs never write the same fixed scratch file.
+        let wav_path = std::env::temp_dir().join(format!(
+            "kithara_silvercomet_seek_iter_{iter}_{}.wav",
+            std::process::id()
+        ));
         write_wav_f32(
             &wav_path,
             &iteration_samples,

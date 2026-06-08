@@ -46,7 +46,11 @@ fn assert_fast(start: RealInstant) {
 fn bracketed<F: FnOnce()>(body: F) {
     sched::reset_credit();
     // The harness threads stand in for dedicated `spawn_named` pacers, so they must
-    // be counted in `active` exactly as production worker threads are.
+    // be counted in `active` exactly as production worker threads are. Production
+    // splits this across the spawn: `pre_count_dedicated()` reserves the `active`
+    // slot on the parent BEFORE the child runs, and `mark_dedicated()` claims it
+    // `Running` on the child. The test has no spawn bracket, so it does both here.
+    sched::pre_count_dedicated();
     sched::mark_dedicated();
     body();
     sched::on_participant_exit();
