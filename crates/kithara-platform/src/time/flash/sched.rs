@@ -172,6 +172,25 @@ thread_local! {
 /// `spawn_named` bracket so only those threads are counted in `active`. See [`DEDICATED`].
 pub(crate) fn mark_dedicated() {
     DEDICATED.with(|c| c.set(true));
+    // The pacer's `active` slot is taken EAGERLY by [`pre_count_dedicated`] on the
+    // PARENT thread at spawn time (closing the spawn→run gap). Here, on the child,
+    // we only claim the credit as `Running` to match that slot — no `active += 1`,
+    // or the slot would be double-counted. The first wrapped wait drops it
+    // (`Running -> Parked`, `active -= 1`); `on_participant_exit` settles it if the
+    // thread returns while `Running`.
+    CREDIT.with(|c| c.set(Credit::Running));
+}
+
+/// Reserve a DEDICATED pacer's `active` slot on the PARENT thread, BEFORE the
+/// child is spawned. A `spawn_named` pacer runs a warm-up burst (decode the first
+/// chunks, fill the ring) before it ever parks; counting it only once the child
+/// runs [`mark_dedicated`] leaves a window — between `spawn` returning and the OS
+/// scheduling the child — in which a sibling consumer can park, see `active == 0`,
+/// and let the virtual clock jump to its watchdog deadline before the pacer has
+/// produced anything. Reserving the slot synchronously at spawn closes that
+/// window; the child's [`mark_dedicated`] then only marks its credit `Running`.
+pub(crate) fn pre_count_dedicated() {
+    SCHED.lock().active += 1;
 }
 
 /// True iff the current OS thread is a dedicated pacer (see [`DEDICATED`]).

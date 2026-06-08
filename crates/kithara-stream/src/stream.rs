@@ -488,8 +488,15 @@ impl<T: StreamType> Stream<T> {
                     return Ok(StreamReadOutcome::Eof { byte_position: pos });
                 }
                 ReadOutcome::Pending(PendingReason::Retry) => {
+                    // Resource evicted between `wait_range` (Ready) and `read_at`:
+                    // re-acquire on the next loop. This is active progress, not a
+                    // wait, so re-loop tightly — the reader stays counted and keeps
+                    // the virtual clock pinned until it re-acquires. Yielding here
+                    // would cede the clock to a peer's watchdog deadline mid-progress
+                    // (under flash the yield jumps the clock to that deadline, firing
+                    // a false hang before the re-acquire completes). The watchdog
+                    // tick still bounds a genuine eviction storm in real time.
                     hang_tick!();
-                    yield_now();
                     continue;
                 }
                 ReadOutcome::Pending(reason) => {

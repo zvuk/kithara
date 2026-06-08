@@ -211,6 +211,13 @@ where
     // default `false`. The child re-establishes it for its whole lifetime.
     #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
     let ambient = crate::time::flash::ambient_snapshot();
+    // Reserve this pacer's `active` slot NOW, on the parent, before the child is
+    // scheduled — so a sibling that parks in the spawn→run gap still sees the
+    // pacer counted and the virtual clock cannot jump past its warm-up. The child
+    // claims this slot as `Running` in `mark_dedicated`; the first wait / exit
+    // releases it. See [`sched::pre_count_dedicated`].
+    #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+    crate::time::flash::sched::pre_count_dedicated();
     move || {
         // Held for the closure's lifetime: restores the previous ambient on the
         // child thread when the closure returns (it must outlive `f()`).

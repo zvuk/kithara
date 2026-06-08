@@ -56,6 +56,18 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
             macro_rules! hang_reset {
                 () => { __hang_detector.reset(); };
             }
+            // Event-driven wait bounded by the liveness budget. `$wait_for` is a
+            // `FnOnce(Duration)` that parks the current thread for at most that
+            // long (woken early by its event): progress wakes it before the
+            // deadline; a genuine stall releases it at the deadline so `tick()`
+            // fires. Replaces the `hang_tick!() + small park_timeout` busy-poll.
+            #[allow(unused_macros)]
+            macro_rules! hang_park {
+                ($wait_for:expr) => {{
+                    ($wait_for)(__hang_detector.remaining());
+                    __hang_detector.tick();
+                }};
+            }
             #(#stmts)*
         }
     };

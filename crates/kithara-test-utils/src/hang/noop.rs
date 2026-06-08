@@ -33,6 +33,15 @@ impl<C: HangDump> HangDetector<C> {
     #[inline(always)]
     pub fn tick(&mut self) {}
 
+    /// No watchdog compiled in: bound an event wait by the fallback timeout
+    /// rather than below it, so a no-`hang` build still re-checks instead of
+    /// blocking forever on a lost wakeup.
+    #[inline(always)]
+    #[must_use]
+    pub fn remaining(&self) -> Duration {
+        default_timeout()
+    }
+
     #[inline(always)]
     pub fn tick_with(&mut self, _ctx: C) {}
 

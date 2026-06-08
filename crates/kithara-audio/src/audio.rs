@@ -186,9 +186,6 @@ impl<S> Audio<S> {
     /// shared bounded event bus and drop control events.
     const PROGRESS_EMIT_MIN_DELTA_MS: u64 = 100;
 
-    /// Backoff duration between receive attempts.
-    const RECV_BACKOFF: Duration = Duration::from_micros(100);
-
     /// Per-buffer frame capacity used to pre-warm the PCM pool for the decode
     /// worker's per-packet buffers. Covers the largest decoder packet across
     /// supported codecs (FLAC's 4608-frame block; AAC/MP3/ALAC are smaller and
@@ -586,8 +583,7 @@ impl<S> Audio<S> {
                 hang_reset!();
                 return RecvOutcome::Closed;
             }
-            hang_tick!();
-            Self::wait_for_fetch();
+            hang_park!(Self::wait_for_fetch);
         }
     }
 
@@ -707,18 +703,22 @@ impl<S> Audio<S> {
         }
     }
 
-    fn wait_for_fetch() {
+    /// Park the reader for at most `timeout`, woken early when the worker
+    /// signals `reader_wake`. `timeout` is the watchdog's remaining liveness
+    /// budget (see `hang_park!`): a genuine stall releases the park at the
+    /// deadline so the watchdog fires; progress unparks it first.
+    fn wait_for_fetch(timeout: Duration) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            park_timeout(Self::RECV_BACKOFF);
+            park_timeout(timeout);
         }
 
         #[cfg(target_arch = "wasm32")]
         {
             if is_worker_thread() {
-                park_timeout(Self::RECV_BACKOFF);
+                park_timeout(timeout);
             } else {
-                thread_sleep(Self::RECV_BACKOFF);
+                thread_sleep(timeout);
             }
         }
     }

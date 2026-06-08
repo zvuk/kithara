@@ -57,6 +57,16 @@ impl<C: HangDump> HangDetector<C> {
         self.fired = false;
     }
 
+    /// Liveness budget left before the deadline, on the current (real or
+    /// virtual) clock; zero once it has passed. An event-driven wait parks
+    /// bounded by this: woken early by its event on progress, or released at
+    /// the deadline so the following [`tick`](Self::tick) fires on a genuine
+    /// stall — no busy-poll, and no dependency on counting the producer.
+    #[must_use]
+    pub fn remaining(&self) -> Duration {
+        self.deadline.saturating_duration_since(Instant::now())
+    }
+
     /// Progress check without updating the stored context. Keeps whatever was
     /// moved in by the last [`tick_with`](Self::tick_with).
     ///
