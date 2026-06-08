@@ -1461,7 +1461,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
 async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     #[case] backend: DecoderBackend,
 ) {
-    use kithara_platform::time::sleep;
+    use kithara_platform::thread::sleep as thread_sleep;
 
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
@@ -1512,25 +1512,42 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     // the network DelayRule-like cadence of the real CDN is imitated.
     // Without the sleep the in-process server feeds the whole track
     // before any switch can land mid-segment.
+    //
+    // Each read loop runs on the tokio BLOCKING pool: `audio.read()`
+    // parks in `recv_outcome_blocking` (`park_timeout`) while it waits
+    // for the worker, and on the single-threaded test runtime that park
+    // would otherwise freeze the one thread that also drives
+    // `Downloader` — under full-suite CPU oversubscription the read can
+    // win that race and stall the network forever (15 s `HangDetector`).
+    // Parking on the blocking pool keeps the Downloader runnable; the
+    // worker still wakes the blocking read via `reader_wake`. Control
+    // ops (seek, set_mode) run back on the runtime thread between the
+    // blocking phases. Mirrors
+    // `seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang`.
     let buf_frames = 4096usize;
     let read_pace = Duration::from_millis(50);
 
     // Phase 1 — play near end. Track ≈ 220 s; pump 180 s of decoded
     // audio so the seek-back step targets a position well before the
     // current playback head.
-    let mut buf = vec![0f32; buf_frames * 2];
-    let target_samples_phase1: u64 = 180 * 44_100;
-    let mut samples_phase1 = 0u64;
-    let deadline = Instant::now() + Duration::from_secs(40);
-    while samples_phase1 < target_samples_phase1 && Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => samples_phase1 += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) => {}
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("phase 1 decode error: {e}"),
+    let (mut audio, samples_phase1) = spawn_blocking(move || {
+        let mut buf = vec![0f32; buf_frames * 2];
+        let target_samples_phase1: u64 = 180 * 44_100;
+        let mut samples = 0u64;
+        let deadline = Instant::now() + Duration::from_secs(40);
+        while samples < target_samples_phase1 && Instant::now() < deadline {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => samples += count.get() as u64,
+                Ok(ReadOutcome::Pending { .. }) => {}
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("phase 1 decode error: {e}"),
+            }
+            thread_sleep(read_pace);
         }
-        sleep(read_pace).await;
-    }
+        (audio, samples)
+    })
+    .await
+    .expect("phase 1 join");
     info!(samples_phase1, "phase 1 done");
     assert!(
         samples_phase1 > 4 * 44_100,
@@ -1544,19 +1561,25 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
 
     // Pump some samples so the post-seek decoder lands mid-segment
     // before the downswitch fires.
-    let mut samples_phase2 = 0u64;
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while samples_phase2 < 2 * 44_100 && Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => samples_phase2 += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) => {}
-            Ok(ReadOutcome::Eof { .. }) => {
-                panic!("unexpected EOF during phase 2 post-seek read")
+    let (mut audio, samples_phase2) = spawn_blocking(move || {
+        let mut buf = vec![0f32; buf_frames * 2];
+        let mut samples = 0u64;
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while samples < 2 * 44_100 && Instant::now() < deadline {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => samples += count.get() as u64,
+                Ok(ReadOutcome::Pending { .. }) => {}
+                Ok(ReadOutcome::Eof { .. }) => {
+                    panic!("unexpected EOF during phase 2 post-seek read")
+                }
+                Err(e) => panic!("phase 2 decode error: {e}"),
             }
-            Err(e) => panic!("phase 2 decode error: {e}"),
+            thread_sleep(read_pace);
         }
-        sleep(read_pace).await;
-    }
+        (audio, samples)
+    })
+    .await
+    .expect("phase 2 join");
     info!(samples_phase2, "phase 2 done");
 
     // Phase 3 — same-codec downswitch shq (v=2, 270 kbps) → slq
@@ -1572,22 +1595,28 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     // Phase 4 — read 10 s post-switch. Bug repro: decoder emits a
     // false `decoder_next_chunk_safe: Eof` ~hundreds of KB after the
     // switch and `handle_decode_eof` surfaces it as terminal EOS.
-    let mut samples_phase4 = 0u64;
-    let mut saw_eof_phase4 = false;
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let post_pace = Duration::from_millis(30);
-    while Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => samples_phase4 += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) => {}
-            Ok(ReadOutcome::Eof { .. }) => {
-                saw_eof_phase4 = true;
-                break;
+    let (samples_phase4, saw_eof_phase4) = spawn_blocking(move || {
+        let mut buf = vec![0f32; buf_frames * 2];
+        let mut samples = 0u64;
+        let mut saw_eof = false;
+        let post_pace = Duration::from_millis(30);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => samples += count.get() as u64,
+                Ok(ReadOutcome::Pending { .. }) => {}
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_eof = true;
+                    break;
+                }
+                Err(e) => panic!("phase 4 decode error: {e}"),
             }
-            Err(e) => panic!("phase 4 decode error: {e}"),
+            thread_sleep(post_pace);
         }
-        sleep(post_pace).await;
-    }
+        (samples, saw_eof)
+    })
+    .await
+    .expect("phase 4 join");
 
     let targets = applied_targets.lock_sync().clone();
     info!(

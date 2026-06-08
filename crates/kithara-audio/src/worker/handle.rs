@@ -490,34 +490,55 @@ mod tests {
         let class_b = Arc::clone(&reg_b.service_class);
         let _id_b = handle.register_track(reg_b);
 
-        thread_sleep(Duration::from_millis(30));
-
-        while rx_a.try_pop().is_some() {}
-        while rx_b.try_pop().is_some() {}
-
+        // Demote A to Idle, promote B to Audible; the worker picks the change up
+        // on its next pass (atomic service class, no command round-trip).
         class_a.store(ServiceClass::Idle);
         class_b.store(ServiceClass::Audible);
         handle.wake();
 
-        thread_sleep(Duration::from_millis(50));
+        // Warm up until the Audible track (B) is clearly being served, which
+        // proves the priority reorder has taken effect, then clear BOTH rings.
+        // A pass already in flight when the class flipped produces in the OLD
+        // order and can hand the Idle track (A) a one-chunk head start that the
+        // count never recovers; draining after the reorder settles discards it
+        // so the measurement window starts from a clean, steady-state slate.
+        // (Under flash this `wait_for_chunks` cannot false-time-out: the virtual
+        // clock is frozen while the worker is actively producing, so its budget
+        // only accrues during genuine worker-idle time.)
+        assert!(wait_for_chunks(&mut rx_b, 5, Duration::from_secs(5)) >= 5);
+        while rx_b.try_pop().is_some() {}
+        while rx_a.try_pop().is_some() {}
 
-        let got_a = {
-            let mut n = 0;
-            while rx_a.try_pop().is_some() {
-                n += 1;
+        // Drain BOTH rings continuously. A saturated ring caps a track at
+        // ring-capacity regardless of priority, so a fixed-sleep-then-count
+        // measures ring size, not the property the scheduler actually
+        // guarantees: within a pass the Audible track is ticked before the
+        // Idle one. Under continuous drain neither ring saturates, so in steady
+        // state the Audible track (B) is delivered no later than the Idle track
+        // (A) and its running count can never fall behind. The loop is bounded
+        // by the Audible track's delivery count — driven by worker production,
+        // not a wall-clock/virtual deadline that could race the clock under flash.
+        const TARGET: usize = 20;
+        let mut got_a = 0usize;
+        let mut got_b = 0usize;
+        while got_b < TARGET {
+            let mut drained = false;
+            if rx_b.try_pop().is_some() {
+                got_b += 1;
+                drained = true;
             }
-            n
-        };
-        let got_b = {
-            let mut n = 0;
-            while rx_b.try_pop().is_some() {
-                n += 1;
+            if rx_a.try_pop().is_some() {
+                got_a += 1;
+                drained = true;
             }
-            n
-        };
+            if !drained {
+                thread_sleep(Duration::from_millis(1));
+            }
+        }
+
         assert!(
             got_b >= got_a,
-            "Audible track should get at least as many chunks: A={got_a}, B={got_b}"
+            "Audible track must be served no later than Idle in steady state: A={got_a}, B={got_b}"
         );
 
         handle.shutdown();

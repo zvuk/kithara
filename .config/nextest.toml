@@ -18,12 +18,14 @@ command = 'cargo run -q -p kithara-integration-tests --bin fixture-cache-setup'
 fail-fast = false
 test-threads = "num-cpus"
 # Wall-clock BACKSTOP only. The real per-test bound is the macro `timeout(...)`
-# on each test (real-socket `flash(false)` suites legitimately run 60–240s of
-# real time); a flash deadlock is caught by the virtual hang-watchdog (~1s).
-# So this must sit ABOVE the largest per-test budget (240s) + margin, or it
-# false-reds correct real-socket tests. 300s (was 120s x 3 = 360s) trims the
-# genuine-hang catch time without preempting any legit budget.
-slow-timeout = { period = "300s", terminate-after = 1 }
+# on each test — its abort watchdog kills a hung test at its own budget+3s, so
+# this backstop only matters for tests with NO per-test timeout. It must sit
+# above the slowest *actual* real runtime (NOT above the largest budget): the
+# full-suite worst case under contention is ~57s (a flash(false) real-socket
+# downswitch test). 120s = ~2x that — well clear of every legit run, while a
+# real wedge fails in 120s instead of 300s. A flash deadlock is normally caught
+# far sooner by the virtual hang-watchdog (~1s).
+slow-timeout = { period = "120s", terminate-after = 1 }
 # Default 100ms is too tight when 12 cores run 1800+ tests concurrently;
 # munmap of a 46MB test binary + stdout flush can exceed it even for
 # sync tests that spawn no threads. A real leak (live worker thread
@@ -47,8 +49,10 @@ leak-timeout = "2s"
 [profile.stress]
 fail-fast = false
 test-threads = "num-cpus"
-# Backstop above the largest per-test `timeout(...)` budget (was 60s x 5 = 300s).
-slow-timeout = { period = "300s", terminate-after = 1 }
+# Wall-clock backstop above the slowest actual runtime (~57s under contention),
+# NOT above the per-test budget — the macro `timeout(...)` abort watchdog is the
+# real per-test bound. A wedge fails in 120s, not 300s.
+slow-timeout = { period = "120s", terminate-after = 1 }
 leak-timeout = "2s"
 
 # Opt-in L2 fixture-cache profile: same settings as default, plus the
@@ -57,7 +61,7 @@ leak-timeout = "2s"
 [profile.cache]
 fail-fast = false
 test-threads = "num-cpus"
-slow-timeout = { period = "300s", terminate-after = 1 }
+slow-timeout = { period = "120s", terminate-after = 1 }
 leak-timeout = "2s"
 
 [[profile.cache.scripts]]
