@@ -3,8 +3,8 @@ use std::sync::Arc;
 use kithara_platform::{
     Mutex,
     sync::mpsc,
-    thread::{JoinHandle, Thread, park_timeout, spawn_named, unpark},
-    time::Duration,
+    thread::{JoinHandle, spawn_named},
+    time::{Duration, Instant},
 };
 use kithara_play::{Cmd, PlayError, Reply, SessionDispatcher, SessionState, run_cmd};
 use tracing::warn;
@@ -28,14 +28,6 @@ enum OfflineMsg {
 
 pub struct OfflineSession {
     cmd_tx: Mutex<mpsc::Sender<OfflineMsg>>,
-    /// Render-thread handle, woken after every send so a command (or shutdown) is
-    /// drained at once instead of after the next `park_timeout` budget. Under
-    /// `flash-time` this matters for correctness, not just latency: the render
-    /// thread's `park_timeout` only fires when the virtual clock advances, but at
-    /// teardown the joining thread blocks (pinning the clock), so without an
-    /// explicit wake the render thread would never see `Shutdown` and the join
-    /// would deadlock. Mirrors the production `SessionClient` unpark-on-push.
-    engine_thread: Thread,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -79,10 +71,8 @@ impl OfflineSession {
         let handle = spawn_named("kithara-engine-offline-instance", move || {
             offline_session_thread(&cmd_rx, auto_render);
         });
-        let engine_thread = handle.thread().clone();
         Self {
             cmd_tx: Mutex::new(cmd_tx),
-            engine_thread,
             worker: Mutex::new(Some(handle)),
         }
     }
@@ -100,7 +90,6 @@ impl OfflineSession {
         {
             return Vec::new();
         }
-        unpark(&self.engine_thread);
         reply_rx.recv_sync().unwrap_or_default()
     }
 }
@@ -113,11 +102,12 @@ impl Default for OfflineSession {
 
 impl Drop for OfflineSession {
     fn drop(&mut self) {
+        // `Shutdown` lands on the engine-aware command channel; `run_auto`/
+        // `run_manual` block on its arrival event (`recv_sync`/`recv_sync_timeout`),
+        // so the render thread wakes the instant this send signals the condvar —
+        // no `unpark`, and no dependence on a virtual-clock advance the joining
+        // thread below would otherwise pin.
         let _ = self.cmd_tx.lock_sync().send_sync(OfflineMsg::Shutdown);
-        // Wake the render thread NOW so it drains `Shutdown` and exits without
-        // waiting on a virtual-clock advance — the joining thread below blocks the
-        // clock, so a `park_timeout`-only wake would deadlock the join under sim.
-        unpark(&self.engine_thread);
         if let Some(handle) = self.worker.lock_sync().take() {
             let _ = handle.join();
         }
@@ -131,7 +121,6 @@ impl SessionDispatcher for OfflineSession {
             .lock_sync()
             .send_sync(OfflineMsg::Cmd { cmd, reply_tx })
             .map_err(|_| PlayError::Internal("offline session worker gone".into()))?;
-        unpark(&self.engine_thread);
         reply_rx
             .recv_sync()
             .map_err(|_| PlayError::Internal("offline session worker gone (reply)".into()))
@@ -176,21 +165,26 @@ fn run_manual(state: &mut SessionState<OfflineBackend>, cmd_rx: &mpsc::Receiver<
 
 fn run_auto(state: &mut SessionState<OfflineBackend>, cmd_rx: &mpsc::Receiver<OfflineMsg>) {
     loop {
-        while let Ok(msg) = cmd_rx.try_recv() {
-            match msg {
-                OfflineMsg::Cmd { cmd, reply_tx } => {
-                    let reply = run_cmd(state, cmd);
-                    let _ = reply_tx.send_sync(reply);
-                }
-                OfflineMsg::Render { frames, reply_tx } => {
-                    let block = render_block(state, frames);
-                    let _ = reply_tx.send_sync(block);
-                }
-                OfflineMsg::Shutdown => return,
+        // Block on the next command, but no longer than one render budget: a
+        // command (or `Shutdown`) wakes us at once through the engine-aware
+        // channel, while the timeout drives the periodic auto-render so playback
+        // advances even when the test thread never sends anything. There is no
+        // `park_timeout` to lose a cross-thread wake against.
+        let deadline = Instant::now() + Duration::from_millis(OFFLINE_PARK_MS);
+        match cmd_rx.recv_sync_timeout(deadline) {
+            Ok(OfflineMsg::Cmd { cmd, reply_tx }) => {
+                let reply = run_cmd(state, cmd);
+                let _ = reply_tx.send_sync(reply);
+            }
+            Ok(OfflineMsg::Render { frames, reply_tx }) => {
+                let block = render_block(state, frames);
+                let _ = reply_tx.send_sync(block);
+            }
+            Ok(OfflineMsg::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let _ = render_block(state, OFFLINE_BLOCK_FRAMES);
             }
         }
-        let _ = render_block(state, OFFLINE_BLOCK_FRAMES);
-        park_timeout(Duration::from_millis(OFFLINE_PARK_MS));
     }
 }
 

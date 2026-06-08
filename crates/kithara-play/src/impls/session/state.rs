@@ -92,9 +92,6 @@ pub struct SessionState<B: AudioBackend> {
 }
 
 impl<B: AudioBackend> SessionState<B> {
-    /// Capacity of the session command ring buffer.
-    pub const CMD_RINGBUF_CAPACITY: usize = 64;
-
     /// Default sample rate hint for the audio session.
     pub const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
