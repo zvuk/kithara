@@ -17,11 +17,13 @@ command = 'cargo run -q -p kithara-integration-tests --bin fixture-cache-setup'
 [profile.default]
 fail-fast = false
 test-threads = "num-cpus"
-# A genuine deadlock is caught by the flash virtual hang-watchdog (~1s virtual)
-# or surfaces fast; this wall-clock backstop only bounds a real-socket / flash
-# (false) hang. 20s is far above any legit single test (~seconds) yet kills a
-# wedge in 20s instead of 360s (was 120s x 3).
-slow-timeout = { period = "20s", terminate-after = 1 }
+# Wall-clock BACKSTOP only. The real per-test bound is the macro `timeout(...)`
+# on each test (real-socket `flash(false)` suites legitimately run 60–240s of
+# real time); a flash deadlock is caught by the virtual hang-watchdog (~1s).
+# So this must sit ABOVE the largest per-test budget (240s) + margin, or it
+# false-reds correct real-socket tests. 300s (was 120s x 3 = 360s) trims the
+# genuine-hang catch time without preempting any legit budget.
+slow-timeout = { period = "300s", terminate-after = 1 }
 # Default 100ms is too tight when 12 cores run 1800+ tests concurrently;
 # munmap of a 46MB test binary + stdout flush can exceed it even for
 # sync tests that spawn no threads. A real leak (live worker thread
@@ -45,9 +47,8 @@ leak-timeout = "2s"
 [profile.stress]
 fail-fast = false
 test-threads = "num-cpus"
-# Heavier per-test work under contention than default, but still seconds, not
-# minutes — kill a wedge in 30s instead of 300s (was 60s x 5).
-slow-timeout = { period = "30s", terminate-after = 1 }
+# Backstop above the largest per-test `timeout(...)` budget (was 60s x 5 = 300s).
+slow-timeout = { period = "300s", terminate-after = 1 }
 leak-timeout = "2s"
 
 # Opt-in L2 fixture-cache profile: same settings as default, plus the
@@ -56,7 +57,7 @@ leak-timeout = "2s"
 [profile.cache]
 fail-fast = false
 test-threads = "num-cpus"
-slow-timeout = { period = "20s", terminate-after = 1 }
+slow-timeout = { period = "300s", terminate-after = 1 }
 leak-timeout = "2s"
 
 [[profile.cache.scripts]]
