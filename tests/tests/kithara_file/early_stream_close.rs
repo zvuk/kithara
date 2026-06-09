@@ -45,7 +45,6 @@ fn clean_temp_dir() -> TestTempDir {
 /// After sequential stream closes at 512KB, seek to 700KB
 /// should trigger on-demand Range request and succeed.
 #[kithara::test(
-    flash(false),
     tokio,
     tracing("kithara_file=debug,kithara_stream::writer=debug,kithara_storage=debug")
 )]

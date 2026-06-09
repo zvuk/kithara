@@ -21,7 +21,6 @@ fn registry_for_host(host: &str, processor: kithara::hls::KeyProcessor) -> KeyPr
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -42,7 +41,6 @@ async fn fetch_and_cache_key(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -73,7 +71,6 @@ async fn key_processor_applied(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -120,7 +117,6 @@ async fn key_manager_error_handling(assets_fixture: TestAssets) -> HlsResult<()>
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -143,7 +139,6 @@ async fn key_manager_caching_behavior(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -168,7 +163,6 @@ async fn unmatched_domain_uses_raw_key(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(30)),

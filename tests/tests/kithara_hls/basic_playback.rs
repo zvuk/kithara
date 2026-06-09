@@ -75,7 +75,6 @@ async fn test_basic_hls_playback(
 
 /// Test that verifies HLS session creation without actual playback.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -106,7 +105,6 @@ async fn test_hls_session_creation(
 
 /// Test HLS with init segments.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -130,7 +128,6 @@ async fn test_hls_with_init_segments(
 
 /// Test HLS with different options configurations.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -238,7 +235,6 @@ async fn test_init_segment_at_stream_start(
 
 /// Test HLS with limited cache.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),

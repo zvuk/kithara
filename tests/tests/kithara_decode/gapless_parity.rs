@@ -20,7 +20,6 @@ use crate::gapless_common::{
 };
 
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(20)),

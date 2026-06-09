@@ -24,7 +24,6 @@ impl Consts {
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     serial,
     timeout(Duration::from_secs(10)),
@@ -138,7 +137,6 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
 ///
 /// This test is RED before steps 4-6 fixes.
 #[kithara::test(
-    flash(false),
     tokio,
     serial,
     timeout(Duration::from_secs(10)),

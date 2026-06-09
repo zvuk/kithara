@@ -36,7 +36,6 @@ fn audio_behavior(helper: &TestServerHelper, content_type: Option<&'static str>)
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -80,7 +79,6 @@ async fn stream_file_seek_start_reads_correct_bytes(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -130,7 +128,6 @@ async fn stream_file_seek_reads_expected_bytes(
 /// fails to load. Production stream URL: `cdn-edge.zvq.me/track/streamhq?id=…`
 /// served as `audio/mpeg`.
 #[kithara::test(
-    flash(false),
     tokio,
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -176,7 +173,6 @@ async fn stream_media_info_carries_container_from_content_type(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
@@ -200,7 +196,6 @@ async fn stream_file_seek_past_eof_fails(temp_dir: TestTempDir) {
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")

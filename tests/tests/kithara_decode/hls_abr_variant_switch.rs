@@ -152,7 +152,6 @@ async fn test_abr_variant_switch_no_byte_glitches(
 
 /// Simpler test without ABR - just verify basic multi-segment reading works
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(10)),

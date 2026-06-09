@@ -157,7 +157,6 @@ async fn run_mixed(file_count: usize, hls_count: usize) {
 
 /// Mixed File + HLS instances running concurrently.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     serial,

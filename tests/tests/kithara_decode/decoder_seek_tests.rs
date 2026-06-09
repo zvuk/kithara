@@ -60,7 +60,6 @@ async fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) {
 
 /// Create Decoder<Stream<File>> and verify spec.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),

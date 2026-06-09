@@ -34,7 +34,6 @@ use tracing::info;
 ///
 /// EXPECTED: seek is processed, segment data is read correctly
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(10)),

@@ -33,7 +33,6 @@ fn variant_from_data(data: &[u8]) -> Option<usize> {
 ///
 /// This tests the basic variant selection without ABR auto-switching.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -79,7 +78,6 @@ async fn manual_variant_returns_correct_data(
 /// When reading sequentially across multiple segments, all data should
 /// come from the same variant (no unexpected switches).
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(15)),
@@ -145,7 +143,6 @@ async fn sequential_read_across_segments_maintains_variant(
 /// Once we seek and commit to a variant, sequential reads should
 /// continue from that variant.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(15)),
@@ -195,7 +192,6 @@ async fn after_seek_sequential_reads_maintain_variant(
 /// Rapidly seeking back and forth should maintain correct variant tracking.
 /// Note: We first read all data to ensure segments are fetched, then seek.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(15)),
@@ -276,7 +272,6 @@ async fn multiple_seeks_maintain_correct_variant(
 /// Test: Seek to exact segment boundary reads correct segment prefix.
 /// Note: With 200KB segments, we only read the first 26 bytes to verify the segment.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(browser_timeout(10, 30)),

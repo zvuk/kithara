@@ -751,7 +751,6 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     multi_thread,
     browser,

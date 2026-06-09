@@ -65,7 +65,6 @@ async fn test_hls_session_creation(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),

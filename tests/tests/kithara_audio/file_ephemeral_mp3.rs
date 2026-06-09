@@ -17,7 +17,7 @@ use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 
 use crate::common::test_defaults::Consts;
 
-#[kithara::test(flash(false), tokio)]
+#[kithara::test(tokio)]
 #[case::sw_ext_hint(Some("audio.mp3"), Some("mp3"), DecoderBackend::Symphonia)]
 #[case::sw_ext(Some("audio.mp3"), None, DecoderBackend::Symphonia)]
 #[case::sw_no_ext_hint(None, Some("mp3"), DecoderBackend::Symphonia)]
@@ -167,7 +167,7 @@ async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
     );
 }
 
-#[kithara::test(flash(false), tokio)]
+#[kithara::test(tokio)]
 async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
