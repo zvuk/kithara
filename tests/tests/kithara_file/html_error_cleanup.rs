@@ -11,7 +11,8 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancellationToken,
-    time::{Duration, Instant, sleep, timeout},
+    time::{Duration, Instant, timeout},
+    tokio::task::yield_now,
 };
 
 const CAPTIVE_PORTAL_HTML: &str = "<html><body>VPN required to access this resource</body></html>";
@@ -73,7 +74,7 @@ async fn wait_for_download_terminal(
 /// Without the fix this test is RED: `FileInner.res` still holds a clone of
 /// the pre-allocated `AssetResource`, so `LeaseResource::Drop` doesn't fire
 /// until `Stream<File>` itself is dropped at app shutdown.
-#[kithara::test(flash(false), tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
     temp_dir: TestTempDir,
 ) {
@@ -100,7 +101,14 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
         "expected DownloadError on html response within 5 s",
     );
 
-    sleep(Duration::from_millis(200)).await;
+    // Cleanup (LeaseResource::Drop) fires eagerly on the download-failure path.
+    // Wait for the cache to ACTUALLY drain rather than guessing a fixed delay:
+    // poll the real on-disk state, yielding (not sleeping) so the failure-handler
+    // task runs without inflating the clock.
+    let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+    while !collect_cache_files(temp_dir.path()).is_empty() && Instant::now() < cleanup_deadline {
+        yield_now().await;
+    }
 
     let leftover = collect_cache_files(temp_dir.path());
     assert!(
@@ -117,7 +125,7 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
 /// A captive-portal endpoint must not trigger a retry storm on the
 /// Downloader. `run_full_download` is a single attempt; asserting this
 /// explicitly locks the invariant against future accidental retry loops.
-#[kithara::test(flash(false), tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
@@ -138,16 +146,28 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     let _ = wait_for_download_terminal(&mut rx, Duration::from_secs(5)).await;
 
     let baseline = handle.request_count();
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline {
-        sleep(Duration::from_millis(100)).await;
-    }
+    // A retry storm surfaces as a NEW `RequestStarted` after the terminal
+    // failure. Wait for one rather than sleeping a fixed window: under flash the
+    // retry backoff collapses, so a real storm fires within the (virtual)
+    // timeout; its absence (timeout elapses with no `RequestStarted`) proves the
+    // failed resource scheduled no retry.
+    let retried = timeout(Duration::from_secs(3), async {
+        loop {
+            match rx.recv().await {
+                Ok(Event::Downloader(DownloaderEvent::RequestStarted { .. })) => break true,
+                Ok(_) => {}
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
     let after = handle.request_count();
 
     assert!(
-        after - baseline <= 1,
+        !retried && after - baseline <= 1,
         "retry storm detected while Stream<File> held a failed resource: \
-         {baseline} → {after} hits over 3 s",
+         {baseline} → {after} hits (retried={retried})",
     );
 
     drop(stream);
