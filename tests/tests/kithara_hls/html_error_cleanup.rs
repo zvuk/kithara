@@ -13,8 +13,7 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancellationToken,
-    time::{Duration, Instant, timeout},
-    tokio::task::yield_now,
+    time::{Duration, timeout},
 };
 use url::Url;
 
@@ -126,28 +125,22 @@ async fn html_playlist_failure_leaves_no_orphan_cache_files(
     let result = Stream::<Hls>::new(config).await;
     assert!(result.is_err(), "{fail_msg}");
 
-    // Wait until the failure-path cleanup has ACTUALLY removed the orphan(s),
-    // polling the real on-disk state (yield, don't sleep, so the resource-drop
-    // runs without inflating the clock) rather than guessing a fixed delay.
-    let cleanup_deadline = Instant::now() + Duration::from_secs(5);
-    let (leftover, suspicious) = loop {
-        let leftover = collect_cache_files(temp_dir.path());
-        let suspicious: Vec<std::path::PathBuf> = match orphan_prefix {
-            None => leftover.clone(),
-            Some(prefix) => leftover
-                .iter()
-                .filter(|p| {
-                    p.file_name()
-                        .and_then(|s| s.to_str())
-                        .is_some_and(|n| n.starts_with(prefix))
-                })
-                .cloned()
-                .collect(),
-        };
-        if suspicious.is_empty() || Instant::now() >= cleanup_deadline {
-            break (leftover, suspicious);
-        }
-        yield_now().await;
+    // The failure-path cleanup (LeaseResource::Drop → remove_resource) runs
+    // synchronously before `Stream::new` returns the Err asserted above, so the
+    // orphan is already gone — assert directly, no wait/poll (the Err IS the
+    // cleanup-done signal).
+    let leftover = collect_cache_files(temp_dir.path());
+    let suspicious: Vec<std::path::PathBuf> = match orphan_prefix {
+        None => leftover.clone(),
+        Some(prefix) => leftover
+            .iter()
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|n| n.starts_with(prefix))
+            })
+            .cloned()
+            .collect(),
     };
 
     assert!(

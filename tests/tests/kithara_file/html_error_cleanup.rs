@@ -12,7 +12,6 @@ use kithara_integration_tests::{
 use kithara_platform::{
     CancellationToken,
     time::{Duration, Instant, timeout},
-    tokio::task::yield_now,
 };
 
 const CAPTIVE_PORTAL_HTML: &str = "<html><body>VPN required to access this resource</body></html>";
@@ -101,15 +100,11 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
         "expected DownloadError on html response within 5 s",
     );
 
-    // Cleanup (LeaseResource::Drop) fires eagerly on the download-failure path.
-    // Wait for the cache to ACTUALLY drain rather than guessing a fixed delay:
-    // poll the real on-disk state, yielding (not sleeping) so the failure-handler
-    // task runs without inflating the clock.
-    let cleanup_deadline = Instant::now() + Duration::from_secs(5);
-    while !collect_cache_files(temp_dir.path()).is_empty() && Instant::now() < cleanup_deadline {
-        yield_now().await;
-    }
-
+    // The failure-path cleanup (LeaseResource::Drop → remove_resource) runs
+    // synchronously on the download-failure path, before the terminal
+    // DownloadError event the wait above already observed — so the cache is
+    // drained by now. Assert directly: the terminal event IS the cleanup-done
+    // signal; no extra wait (and no busy-poll).
     let leftover = collect_cache_files(temp_dir.path());
     assert!(
         leftover.is_empty(),
