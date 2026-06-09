@@ -14,14 +14,9 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancellationToken,
-    time::{Duration, sleep},
-    tokio::task::spawn_blocking,
-};
+use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
 
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(20)),
@@ -70,8 +65,9 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
     let mut stream_a = Stream::<Hls>::new(config_a).await.unwrap();
     let mut stream_b = Stream::<Hls>::new(config_b).await.unwrap();
 
-    sleep(Duration::from_secs(2)).await;
-
+    // No warmup sleep: `read_all` reads to EOF via the blocking `Stream::read`,
+    // which already waits for every byte to download (the client waits for data,
+    // not a fixed delay). Both reads run concurrently on the shared downloader.
     let read_a = spawn_blocking(move || read_all(&mut stream_a));
     let read_b = spawn_blocking(move || read_all(&mut stream_b));
 
