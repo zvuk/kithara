@@ -10,11 +10,12 @@ use std::{
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
+    events::{Event, EventBus},
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
-use kithara_platform::time::{Duration, sleep};
+use kithara_platform::time::{self, Duration};
 
 /// Install a panic hook that flips `flag` when a panic message contains
 /// `marker`. The hook fires on every thread, so we can detect the
@@ -50,7 +51,6 @@ fn arm_panic_marker(marker: &'static str) -> Arc<AtomicBool> {
 /// panic hook that flips a flag when the watchdog's panic message
 /// lands on any thread.
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -77,9 +77,16 @@ async fn idle_does_not_panic_hang_detector(temp_dir: TestTempDir) {
     // not panic.
     let _ = audio.preload();
 
-    // 6s = 3× the 2s budget, leaving ample headroom for the ring to
-    // fill and the watchdog to fire if the path is broken.
-    sleep(Duration::from_secs(6)).await;
+    // Absence-over-time assertion: the watchdog firing is not an event we
+    // can recv — it flips `watchdog_fired` via the global panic hook. So we
+    // let a bounded window (6s = 3× the 2s budget) elapse with nothing to
+    // resolve. The audio worker is itself a flash participant: idle, it
+    // re-polls on its own virtual `thread_sleep` deadlines, emitting
+    // `SchedulerEvent::Waiting` and ticking `HangDetector` against the
+    // virtual clock. Under flash this collapses to ~0 wall while still
+    // advancing the virtual clock past the budget, giving the broken path
+    // the full window to fire before we read the flag.
+    let _ = time::timeout(Duration::from_secs(6), std::future::pending::<()>()).await;
 
     assert!(
         !watchdog_fired.load(Ordering::SeqCst),
@@ -126,7 +133,7 @@ fn count_files_recursive(root: &Path) -> usize {
 /// behavior, free of ABR-switch noise. The assertion's upper bound is
 /// generous — it catches the "no cap at all" regression rather than a
 /// tight tuning number.
-#[kithara::test(flash(false), tokio, native, serial, timeout(Duration::from_secs(20)))]
+#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(20)))]
 async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
@@ -134,18 +141,49 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
     // segments worth of look-ahead — comfortably below the 37-segment
     // variant length so a missing cap is unambiguously visible.
     const LOOK_AHEAD_BYTES: u64 = 256 * 1024;
+    // Shared bus so the downloader's per-fetch `DownloaderEvent`s reach a
+    // root subscriber here — the real signal that prefetch is or is not
+    // still running.
+    let bus = EventBus::new(8192);
+    let mut rx = bus.subscribe();
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
         .initial_abr_mode(AbrMode::manual(0))
         .download_batch_size(1)
         .look_ahead_bytes(LOOK_AHEAD_BYTES)
+        .events(bus.clone())
         .build();
 
-    let _audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
-        .await
-        .expect("audio creation");
+    let _audio = Audio::<Stream<Hls>>::new(
+        AudioConfig::<Hls>::for_stream(hls_config)
+            .events(bus.clone())
+            .build(),
+    )
+    .await
+    .expect("audio creation");
 
-    sleep(Duration::from_secs(3)).await;
+    // Wait for prefetch quiescence on the real signal instead of a fixed
+    // wall: each segment fetch emits `DownloaderEvent` (Enqueued/Started/
+    // Completed). While the downloader is still working under the
+    // look_ahead cap, events keep arriving and reset the window; once the
+    // cap is hit and no reader advances the position, dispatch stops and no
+    // further event arrives. A bounded settle window with no event means
+    // quiescent. Under flash the window collapses to ~0 wall while the
+    // virtual clock advances to the deadline whenever nothing is runnable.
+    const SETTLE_WINDOW: Duration = Duration::from_secs(3);
+    loop {
+        match time::timeout(SETTLE_WINDOW, rx.recv()).await {
+            // A downloader event arrived inside the window: still active,
+            // keep waiting. Lagged is also "events are flowing".
+            Ok(Ok(Event::Downloader(_)))
+            | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+            // Non-downloader event: ignore, keep waiting for quiescence.
+            Ok(Ok(_)) => {}
+            // Bus closed or the settle window elapsed with no event:
+            // prefetch has gone quiescent.
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) | Err(_) => break,
+        }
+    }
 
     let files = count_files_recursive(temp_dir.path());
 

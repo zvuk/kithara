@@ -11,7 +11,6 @@ use kithara::{
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, abr_fast, auto, temp_dir};
 use kithara_platform::{
-    thread,
     time::{Duration, Instant},
     tokio::task::{spawn, spawn_blocking},
 };
@@ -23,7 +22,6 @@ use tracing::info;
 /// seek causes deadlock because `detect_format_change` picks wrong
 /// segment offset → decoder created at wrong position → "missing ftyp atom".
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -72,7 +70,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
 
         info!("Phase 1: warmup — reading PCM samples");
         let mut warmup_samples = 0u64;
-        while start.elapsed() < Duration::from_secs(2) {
+        while warmup_samples == 0 {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => break,
                 Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
@@ -157,7 +155,6 @@ async fn stress_seek_during_abr_switch_real_decoder(
 /// Uses seek positions observed in logs and asserts that each seek
 /// still yields PCM samples (audio must stay alive).
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -185,9 +182,13 @@ async fn seek_sequence_from_log_real_stream(
 
     let result = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
-        let warmup_deadline = Instant::now() + Duration::from_secs(4);
-        while Instant::now() < warmup_deadline {
-            let _ = audio.read(&mut buf);
+        loop {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { .. }) => break,
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Ok(ReadOutcome::Pending { .. }) => continue,
+                Err(e) => panic!("warmup read error: {e}"),
+            }
         }
 
         let seeks = [7.135_147_392, 12.279_818_594, 17.778_684_807];
@@ -196,12 +197,9 @@ async fn seek_sequence_from_log_real_stream(
             audio.seek(pos).expect("seek must not fail");
 
             let mut samples_after_seek = 0usize;
-            let read_deadline = Instant::now() + Duration::from_secs(8);
-            while Instant::now() < read_deadline && samples_after_seek < 16_384 {
+            while samples_after_seek < 16_384 {
                 match audio.read(&mut buf) {
-                    Ok(ReadOutcome::Pending { .. }) => {
-                        thread::sleep(Duration::from_millis(15));
-                    }
+                    Ok(ReadOutcome::Pending { .. }) => continue,
                     Ok(ReadOutcome::Frames { count, .. }) => {
                         samples_after_seek += count.get();
                     }

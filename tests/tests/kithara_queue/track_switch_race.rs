@@ -24,7 +24,7 @@
 use std::sync::Arc;
 
 use kithara_assets::StoreOptions;
-use kithara_events::{AbrMode, EventReceiver, TrackId, TrackStatus};
+use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, InitGateHandle, TestServerHelper, TestTempDir, kithara,
     offline::OfflineSession, temp_dir,
@@ -32,7 +32,8 @@ use kithara_integration_tests::{
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancellationToken,
-    time::{Duration, sleep},
+    time::{Duration, sleep, timeout},
+    tokio::sync::broadcast::error::RecvError,
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
@@ -63,19 +64,19 @@ impl Consts {
     /// arrival, status transition, current-id change). A real stall trips
     /// this rather than being masked.
     const OBSERVE_DEADLINE: Duration = Duration::from_secs(10);
-    /// Window after `fast` becomes current during which the test watches
-    /// `current()` for an unauthorised flip to `slow`. Exceeds
-    /// `FAST_SEGMENT_DURATION_S` so the natural end fires inside the window
-    /// and auto-advance can attempt (and must fail) to play slow.
+    /// Hard cap on the post-`fast` current-track event watch — the window in
+    /// which an unauthorised flip to `slow` would surface as
+    /// `CurrentTrackChanged { id: Some(slow_id) }`. Exceeds
+    /// `FAST_SEGMENT_DURATION_S` so `fast`'s natural end (and the auto-advance
+    /// that must skip the cancelled `slow`) fires inside it.
     const POST_FAST_OBSERVE: Duration = Duration::from_secs(5);
-    /// Polling interval for `current()` during the watch.
-    const POLL_INTERVAL: Duration = Duration::from_millis(50);
-    /// Polling interval for status / counter observables.
+    /// Polling interval for the init-gate counter observable
+    /// (`wait_for_init_requested`).
     const STATUS_POLL: Duration = Duration::from_millis(5);
     /// Gap between `select(slow)` and `select(fast)` in the completion-race
     /// test: long enough for slow's loader completion to fire around the
     /// superseding select (the contended window), short relative to
-    /// `RACE_OBSERVE`.
+    /// `RACE_OBSERVE`. Real-clock (the test is `flash(false)`).
     const RACE_GAP: Duration = Duration::from_millis(50);
     /// Window after the selects during which the completion-race test watches
     /// for a barge-in (slow stomping current fast). Ample for the racing
@@ -162,50 +163,105 @@ fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, Store
     (queue, downloader, store)
 }
 
+/// Await the next [`QueueEvent`] matching `pred` on `rx`, bounded by
+/// `deadline` as a hard safety cap. Returns the matched event, or `None` on
+/// timeout / bus closure. Lagged is non-fatal (the per-test bus has ample
+/// capacity); we re-loop to keep draining, mirroring the sibling-test idiom.
+async fn next_queue_event<F>(
+    rx: &mut EventReceiver,
+    deadline: Duration,
+    mut pred: F,
+) -> Option<QueueEvent>
+where
+    F: FnMut(&QueueEvent) -> bool,
+{
+    let start = kithara_platform::time::Instant::now();
+    loop {
+        let remaining = deadline.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            return None;
+        }
+        match timeout(remaining, rx.recv()).await {
+            Ok(Ok(Event::Queue(ev))) if pred(&ev) => return Some(ev),
+            Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => continue,
+            Ok(Err(RecvError::Closed)) | Err(_) => return None,
+        }
+    }
+}
+
+/// Wait until `track_id` reaches a terminal loaded state, driven by
+/// [`QueueEvent::TrackStatusChanged`]. Subscribes first, then snapshots the
+/// current status (so an already-terminal track returns immediately), then
+/// blocks on the event stream — no polling.
 async fn wait_for_loader_done(
     queue: &Queue,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
-    let start = kithara_platform::time::Instant::now();
-    loop {
-        if let Some(entry) = queue.track(track_id) {
-            match &entry.status {
-                TrackStatus::Loaded | TrackStatus::Consumed | TrackStatus::Cancelled => {
-                    return Ok(());
-                }
-                TrackStatus::Failed(err) => return Err(format!("track entered Failed: {err}")),
-                _ => {}
+    let mut rx = queue.subscribe();
+    if let Some(entry) = queue.track(track_id) {
+        match &entry.status {
+            TrackStatus::Loaded | TrackStatus::Consumed | TrackStatus::Cancelled => {
+                return Ok(());
             }
+            TrackStatus::Failed(err) => return Err(format!("track entered Failed: {err}")),
+            _ => {}
         }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "timeout after {deadline:?} (last status: {:?})",
-                queue.track(track_id).map(|e| e.status)
-            ));
-        }
-        sleep(Consts::STATUS_POLL).await;
+    }
+    let matched = next_queue_event(&mut rx, deadline, |ev| {
+        matches!(
+            ev,
+            QueueEvent::TrackStatusChanged { id, status }
+                if *id == track_id
+                    && matches!(
+                        status,
+                        TrackStatus::Loaded
+                            | TrackStatus::Consumed
+                            | TrackStatus::Cancelled
+                            | TrackStatus::Failed(_)
+                    )
+        )
+    })
+    .await;
+    match matched {
+        Some(QueueEvent::TrackStatusChanged {
+            status: TrackStatus::Failed(err),
+            ..
+        }) => Err(format!("track entered Failed: {err}")),
+        Some(_) => Ok(()),
+        None => Err(format!(
+            "timeout after {deadline:?} (last status: {:?})",
+            queue.track(track_id).map(|e| e.status)
+        )),
     }
 }
 
+/// Wait until `expected` becomes `current()`, driven by
+/// [`QueueEvent::CurrentTrackChanged`]. Subscribes first, snapshots
+/// `current()` (catches an already-current track), then blocks on the event.
 async fn wait_for_current_id(
     queue: &Queue,
     expected: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
-    let start = kithara_platform::time::Instant::now();
-    loop {
-        if queue.current().map(|e| e.id) == Some(expected) {
-            return Ok(());
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "current never became {:?} within {deadline:?} (last={:?})",
-                expected,
-                queue.current().map(|e| e.id),
-            ));
-        }
-        sleep(Consts::POLL_INTERVAL).await;
+    let mut rx = queue.subscribe();
+    if queue.current().map(|e| e.id) == Some(expected) {
+        return Ok(());
+    }
+    let matched = next_queue_event(
+        &mut rx,
+        deadline,
+        |ev| matches!(ev, QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == expected),
+    )
+    .await;
+    if matched.is_some() {
+        Ok(())
+    } else {
+        Err(format!(
+            "current never became {:?} within {deadline:?} (last={:?})",
+            expected,
+            queue.current().map(|e| e.id),
+        ))
     }
 }
 
@@ -229,68 +285,63 @@ async fn wait_for_init_requested(gate: &InitGateHandle, deadline: Duration) -> R
     }
 }
 
-/// Poll until `track_id` reaches `expected`, under a hard deadline.
+/// Wait until `track_id` reaches `expected`, driven by
+/// [`QueueEvent::TrackStatusChanged`]. Subscribes first, snapshots the
+/// current status (catches an already-applied transition), then blocks on the
+/// event stream under `deadline` as a hard safety cap.
 async fn wait_for_status(
     queue: &Queue,
     track_id: TrackId,
     expected: TrackStatus,
     deadline: Duration,
 ) -> Result<(), String> {
-    let start = kithara_platform::time::Instant::now();
-    loop {
-        if queue.track(track_id).map(|e| e.status) == Some(expected.clone()) {
-            return Ok(());
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "status never became {expected:?} within {deadline:?} (last={:?})",
-                queue.track(track_id).map(|e| e.status)
-            ));
-        }
-        sleep(Consts::STATUS_POLL).await;
+    let mut rx = queue.subscribe();
+    if queue.track(track_id).map(|e| e.status) == Some(expected.clone()) {
+        return Ok(());
+    }
+    let matched = next_queue_event(&mut rx, deadline, |ev| {
+        matches!(
+            ev,
+            QueueEvent::TrackStatusChanged { id, status }
+                if *id == track_id && *status == expected
+        )
+    })
+    .await;
+    if matched.is_some() {
+        Ok(())
+    } else {
+        Err(format!(
+            "status never became {expected:?} within {deadline:?} (last={:?})",
+            queue.track(track_id).map(|e| e.status)
+        ))
     }
 }
 
-fn drain_event_backlog(rx: &mut EventReceiver) {
-    use tokio::sync::broadcast::error::TryRecvError;
-    loop {
-        match rx.try_recv() {
-            Ok(_) => {}
-            Err(TryRecvError::Lagged(_)) => continue,
-            Err(_) => break,
-        }
+/// Watch the queue's current-track event stream, asserting `current()` never
+/// flips to `slow_id`. The success terminal (fast plays out, auto-advance
+/// skips the cancelled slow, queue ends) is [`QueueEvent::QueueEnded`] or
+/// [`QueueEvent::CurrentTrackChanged`] with `id: None`; the forbidden event is
+/// `CurrentTrackChanged { id: Some(slow_id) }`. Bounded by
+/// `Consts::POST_FAST_OBSERVE` as a hard cap — exhausting it without a
+/// barge-in is itself the absence-over-the-window success. Caller must have
+/// already confirmed `fast` is current, so the only future current-change is
+/// the end-of-`fast` auto-advance this races.
+async fn assert_no_barge_in(queue: &Queue, slow_id: TrackId) -> Result<(), String> {
+    let mut rx = queue.subscribe();
+    let terminal = next_queue_event(&mut rx, Consts::POST_FAST_OBSERVE, |ev| match ev {
+        QueueEvent::QueueEnded | QueueEvent::CurrentTrackChanged { id: None } => true,
+        QueueEvent::CurrentTrackChanged { id: Some(id) } => *id == slow_id,
+        _ => false,
+    })
+    .await;
+    match terminal {
+        Some(QueueEvent::CurrentTrackChanged { id: Some(id) }) if id == slow_id => Err(format!(
+            "slow_id barged in (CurrentTrackChanged {{ id: Some({slow_id:?}) }})"
+        )),
+        // QueueEnded / CurrentTrackChanged{None} = success; a None timeout
+        // (no current-change at all within the window) is also no barge-in.
+        _ => Ok(()),
     }
-}
-
-/// Watch `current()` for `Consts::POST_FAST_OBSERVE`, asserting it never flips
-/// to `slow_id`. Records the distinct-value history for diagnostics; returns
-/// `Err(diagnostic)` on a barge-in.
-async fn assert_no_barge_in(
-    queue: &Queue,
-    slow_id: TrackId,
-    fast_id: TrackId,
-) -> Result<(), String> {
-    let watch_start = kithara_platform::time::Instant::now();
-    let mut history: Vec<Option<TrackId>> = Vec::new();
-    while watch_start.elapsed() < Consts::POST_FAST_OBSERVE {
-        let cur = queue.current().map(|e| e.id);
-        if cur != history.last().copied().flatten() {
-            history.push(cur);
-        }
-        if cur == Some(slow_id) {
-            return Err(format!(
-                "slow_id barged in after {} ms (history={history:?})",
-                watch_start.elapsed().as_millis(),
-            ));
-        }
-        if cur.is_none() && history.contains(&Some(fast_id)) {
-            // fast played out and auto-advance ran off the end (slow was
-            // skipped as Cancelled) — the success terminal.
-            break;
-        }
-        sleep(Consts::POLL_INTERVAL).await;
-    }
-    Ok(())
 }
 
 fn mk_cfg(url: &Url, downloader: &Downloader, store: &StoreOptions) -> ResourceConfig {
@@ -307,7 +358,7 @@ fn mk_cfg(url: &Url, downloader: &Downloader, store: &StoreOptions) -> ResourceC
 /// the supersede path → `slow` marked `Cancelled`), release `slow`'s init so
 /// its loader completes and skips on the cancelled status, then assert `slow`
 /// never becomes `current()` — including after `fast` plays out.
-#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 async fn supersede_while_loading_cancels_slow_track() {
     let helper = TestServerHelper::new().await;
     let fast = build_hls(
@@ -340,9 +391,6 @@ async fn supersede_while_loading_cancels_slow_track() {
         &downloader,
         &store,
     ))));
-
-    let mut rx = queue.subscribe();
-    drain_event_backlog(&mut rx);
 
     // fast is undelayed and ungated → it reaches a terminal loaded state.
     wait_for_loader_done(&queue, fast_id, Consts::LOAD_DEADLINE)
@@ -402,11 +450,24 @@ async fn supersede_while_loading_cancels_slow_track() {
 
     // Across the whole window — including after fast plays out and
     // auto-advance runs — slow must never become current.
-    assert_no_barge_in(&queue, slow_id, fast_id)
+    assert_no_barge_in(&queue, slow_id)
         .await
         .unwrap_or_else(|e| panic!("{e}"));
 
     tick_handle.abort();
+}
+
+/// Drain any backlog already buffered on `rx` so the completion-race watch
+/// observes only events that follow the selects under test.
+fn drain_event_backlog(rx: &mut EventReceiver) {
+    use tokio::sync::broadcast::error::TryRecvError;
+    loop {
+        match rx.try_recv() {
+            Ok(_) => {}
+            Err(TryRecvError::Lagged(_)) => continue,
+            Err(_) => break,
+        }
+    }
 }
 
 /// Concurrent completion-vs-select race (the `select_apply` regression gate).
@@ -427,6 +488,17 @@ async fn supersede_while_loading_cancels_slow_track() {
 /// `select_item` landed after `select(fast)` committed fast, stomping it at
 /// ~tens of ms). With the lock the apply and the select are mutually
 /// exclusive, so it must not.
+// DEFER (flash(false)): this no-tick barge-in reproducer asserts the ABSENCE
+// of a stomp over a bounded observation window (`RACE_OBSERVE`) while a live
+// audio worker is decoding. The worker re-polls on its own (virtual) cadence
+// rather than parking indefinitely, so the engine never reaches the quiescence
+// the flash clock needs to collapse the absence window to ~0 — under flash the
+// per-iteration window costs real time, and 30 iterations blow the harness
+// budget (verified: TIMEOUT at 120 s). The contended window is a real-clock
+// race, so this test stays on the real wall clock. Its sibling
+// `supersede_while_loading_cancels_slow_track` flips cleanly because it has a
+// real terminal event (`QueueEnded`/`CurrentTrackChanged`) to wait on, not an
+// absence.
 #[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn concurrent_completion_race_does_not_barge_in() {
     let helper = TestServerHelper::new().await;

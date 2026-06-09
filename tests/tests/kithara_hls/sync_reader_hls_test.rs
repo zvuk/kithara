@@ -10,14 +10,9 @@ use kithara_integration_tests::{
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
-use kithara_platform::{
-    CancellationToken,
-    time::{Duration, sleep},
-    tokio::task::spawn_blocking,
-};
+use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
 
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(10)),
@@ -41,8 +36,6 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
         .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
-
-    sleep(Duration::from_secs(2)).await;
 
     let mut all_bytes = Vec::new();
     let mut read_buf = vec![0u8; 64 * 1024];
