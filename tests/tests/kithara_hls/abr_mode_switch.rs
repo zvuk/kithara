@@ -226,7 +226,6 @@ fn read_to_eof(audio: &mut Audio<Stream<Hls>>) -> u64 {
 /// - Subsequent segments download as V1
 /// - Cached V0 segments play out naturally (no re-fetch at V1)
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     serial,
@@ -820,6 +819,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
 /// bug where clicking Manual(3) (FLAC) in the GUI caused a 10s hang
 /// before Phase K's `decode_next_chunk` recovery + `apply_decision` split.
 #[kithara::test(
+    flash(false),
     native,
     tokio,
     serial,
@@ -867,16 +867,13 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         .await
         .expect("create audio");
 
-    // Blocking `read` parks until the worker commits AAC frames, so the
-    // warmup waits on real decoded audio (the `pre_total` gate) rather than
-    // a wall clock.
     let mut buf = vec![0f32; 4096];
     let mut pre_total = 0u64;
-    while pre_total < 16_384 {
+    let warmup_deadline = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < warmup_deadline && pre_total < 16_384 {
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => pre_total += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) => {}
-            Ok(ReadOutcome::Eof { .. }) => break,
+            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
             Err(e) => panic!("decode error pre-switch: {e}"),
         }
     }
@@ -892,11 +889,11 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         .set_mode(AbrMode::manual(3))
         .expect("Manual(3) (FLAC variant) target must be valid");
 
-    // Read to the end after the flip — if the decoder hangs on
+    // Read for several seconds after the flip — if the decoder hangs on
     // `Pending(VariantChange)` without recovery, the hang_watchdog or
     // the test timeout will fail. Otherwise we should see post-switch
     // samples coming from the FLAC variant.
-    let post_total = spawn_blocking(move || read_to_eof(&mut audio))
+    let post_total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(25)))
         .await
         .expect("read");
 

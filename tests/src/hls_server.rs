@@ -247,6 +247,16 @@ impl HlsTestServer {
             .create_hls(builder_from_config(&config))
             .await
             .expect("create configurable HLS fixture");
+        // Arm virtual-time delay gates from this (flash-ambient) setup context so
+        // the per-segment server delay manifests as VIRTUAL elapsed time the
+        // client observes — keeping the real socket while consuming zero real
+        // wall-clock (see `TestServerHelper::arm_delay_gates`).
+        helper.arm_delay_gates(
+            created.token(),
+            config.variant_count,
+            config.segments_per_variant,
+            &config.delay_rules,
+        );
         Self {
             config,
             created,

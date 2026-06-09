@@ -6,6 +6,7 @@ use std::{
     },
 };
 
+use kithara_platform::sync::Notify;
 use moka::sync::Cache;
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -209,6 +210,75 @@ fn init_gate_key(hls_token: &str, variant: usize) -> String {
     format!("{hls_token}|v{variant}|init")
 }
 
+/// A virtual-time withhold gate for one `(hls token, variant, segment)` whose
+/// body delay is driven by a FLASH PARTICIPANT, not the server thread.
+///
+/// The shared test-server thread is a real-time island (no flash ambient), so a
+/// `sleep(delay_ms)` there would burn real wall-clock and stay invisible to the
+/// client's virtual clock — under flash the engine would jump past the client's
+/// fetch without the slow variant ever registering on ABR's throughput estimate.
+///
+/// Instead the segment GET parks on `released` (like [`SegmentGate`]); the delay
+/// is timed by a releaser task spawned from the test's flash-ambient context. The
+/// releaser awaits the GET's arrival (`wait_requested`), then `sleep`s `delay_ms`
+/// of VIRTUAL time (its flash region makes the platform `sleep` engine-backed),
+/// then [`Self::release`]s the body. So the client's fetch-duration spans
+/// `delay_ms` of virtual time — ABR sees the slow variant — while the server
+/// thread consumes zero real wall-clock holding the socket open.
+///
+/// Lives in `TestServerState` (mutable, per-token) — never in the immutable
+/// Arc-cached `GeneratedHls`.
+pub(crate) struct DelayGate {
+    released: watch::Sender<bool>,
+    requested: AtomicU64,
+    request_arrived: Notify,
+}
+
+impl DelayGate {
+    fn new() -> Self {
+        let (released, _rx) = watch::channel(false);
+        Self {
+            released,
+            requested: AtomicU64::new(0),
+            request_arrived: Notify::default(),
+        }
+    }
+
+    /// Mark that a segment GET reached this gate and wake the releaser so its
+    /// virtual countdown starts at the moment the fetch actually arrives.
+    pub(crate) fn mark_requested(&self) {
+        self.requested.fetch_add(1, Ordering::Relaxed);
+        self.request_arrived.notify_one();
+    }
+
+    /// Park until [`Self::release`] is called. Returns immediately if already
+    /// released — a fresh receiver observes the latest value first.
+    pub(crate) async fn wait_until_released(&self) {
+        let mut rx = self.released.subscribe();
+        // `Err` only if the sender was dropped (gate removed) — proceed then.
+        let _ = rx.wait_for(|released| *released).await;
+    }
+
+    /// Park until the gated segment GET has reached the server at least once.
+    /// Returns immediately if a request already arrived before the releaser
+    /// began waiting (the permit from `notify_one` is stored).
+    pub(crate) async fn wait_requested(&self) {
+        if self.requested.load(Ordering::Relaxed) > 0 {
+            return;
+        }
+        self.request_arrived.notified().await;
+    }
+
+    /// Release the withheld segment so its parked GET (body) response completes.
+    pub(crate) fn release(&self) {
+        self.released.send_replace(true);
+    }
+}
+
+fn delay_gate_key(hls_token: &str, variant: usize, segment: usize) -> String {
+    format!("{hls_token}|v{variant}|s{segment}|delay")
+}
+
 pub(crate) struct TestServerState {
     hls_cache: GeneratedHlsCache,
     hls_blobs: RwLock<HashMap<String, Arc<Vec<u8>>>>,
@@ -217,6 +287,7 @@ pub(crate) struct TestServerState {
     behaviors: RwLock<HashMap<String, Arc<BehaviorEntry>>>,
     segment_gates: RwLock<HashMap<String, Arc<SegmentGate>>>,
     init_gates: RwLock<HashMap<String, Arc<InitGate>>>,
+    delay_gates: RwLock<HashMap<String, Arc<DelayGate>>>,
 }
 
 #[derive(Clone)]
@@ -235,6 +306,7 @@ impl TestServerState {
             behaviors: RwLock::new(HashMap::new()),
             segment_gates: RwLock::new(HashMap::new()),
             init_gates: RwLock::new(HashMap::new()),
+            delay_gates: RwLock::new(HashMap::new()),
         })
     }
 
@@ -311,6 +383,36 @@ impl TestServerState {
     pub(crate) fn init_gate(&self, hls_token: &str, variant: usize) -> Option<Arc<InitGate>> {
         let map = self.init_gates.read().expect("init gates poisoned");
         map.get(&init_gate_key(hls_token, variant)).map(Arc::clone)
+    }
+
+    /// Register a virtual-time delay gate for one `(hls token, variant, segment)`
+    /// and return its handle. The matching segment GET parks on the gate until a
+    /// flash-participant releaser fires `delay_ms` of virtual time after the GET
+    /// arrives (see [`DelayGate`]).
+    pub(crate) fn register_delay_gate(
+        &self,
+        hls_token: &str,
+        variant: usize,
+        segment: usize,
+    ) -> Arc<DelayGate> {
+        let gate = Arc::new(DelayGate::new());
+        let mut map = self.delay_gates.write().expect("delay gates poisoned");
+        map.insert(
+            delay_gate_key(hls_token, variant, segment),
+            Arc::clone(&gate),
+        );
+        gate
+    }
+
+    pub(crate) fn delay_gate(
+        &self,
+        hls_token: &str,
+        variant: usize,
+        segment: usize,
+    ) -> Option<Arc<DelayGate>> {
+        let map = self.delay_gates.read().expect("delay gates poisoned");
+        map.get(&delay_gate_key(hls_token, variant, segment))
+            .map(Arc::clone)
     }
 
     /// Lookup a previously encoded signal payload. Test fixture builders

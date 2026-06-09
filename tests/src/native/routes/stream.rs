@@ -144,7 +144,19 @@ async fn serve_media_segment(
                 }
                 let delay_ms = fixture.segment_delay_ms(variant, segment);
                 if delay_ms > 0 {
-                    sleep(Duration::from_millis(delay_ms)).await;
+                    // Virtual-time delay gate (preferred): park the body until a
+                    // flash-participant releaser fires `delay_ms` of VIRTUAL time
+                    // after this GET arrives, so the client's fetch-duration spans
+                    // that delay on the engine clock (ABR sees the slow variant)
+                    // without the real-time server thread burning wall-clock. The
+                    // raw `sleep` is the fallback only when no delay gate is armed
+                    // (e.g. a flash(false) / non-flash test path).
+                    if let Some(gate) = state.delay_gate(hls_spec, variant, segment) {
+                        gate.mark_requested();
+                        gate.wait_until_released().await;
+                    } else {
+                        sleep(Duration::from_millis(delay_ms)).await;
+                    }
                 }
             }
             fixture.segment_bytes(variant, segment).map_or_else(

@@ -1,10 +1,16 @@
 use std::{env, sync::Arc};
 
 use axum::{Router, routing::get};
+use kithara_platform::{
+    time::{Duration, flash_dynamic, sleep},
+    tokio::task::spawn,
+};
 use tower_http::cors::CorsLayer;
+use tracing::trace;
 use url::Url;
 
 use crate::{
+    fixture_protocol::DelayRule,
     hls_url::HlsSpec,
     http_server::TestHttpServer,
     routes::{
@@ -15,7 +21,7 @@ use crate::{
     signal_spec::{SignalKind as InternalSignalKind, parse_signal_request},
     signal_url::{SignalKind, SignalSpec, signal_path},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
-    test_server_state::{FixtureBehavior, InitGate, SegmentGate, TestServerState},
+    test_server_state::{DelayGate, FixtureBehavior, InitGate, SegmentGate, TestServerState},
 };
 
 /// Facade over the process-global shared test server.
@@ -185,6 +191,59 @@ impl TestServerHelper {
         let gate = self.state.register_init_gate(hls_token, variant);
         InitGateHandle { gate }
     }
+
+    /// Arm a virtual-time delay gate for every `(variant, segment)` of `hls_token`
+    /// whose `delay_rules` resolve to a non-zero delay, and spawn its flash-aware
+    /// releaser. Called from the test's flash-ambient setup (`HlsTestServer::new`),
+    /// so each releaser inherits `FLASH_AMBIENT` via the platform async [`spawn`]
+    /// chokepoint and its `sleep` runs on VIRTUAL time — the slow-variant delay
+    /// the client observes is engine-backed, not real wall-clock.
+    pub fn arm_delay_gates(
+        &self,
+        hls_token: &str,
+        variant_count: usize,
+        segments_per_variant: usize,
+        delay_rules: &[DelayRule],
+    ) {
+        if delay_rules.is_empty() {
+            return;
+        }
+        for variant in 0..variant_count {
+            for segment in 0..segments_per_variant {
+                let Some(delay_ms) = delay_rules
+                    .iter()
+                    .find_map(|rule| rule.matches(variant, segment))
+                    .filter(|&ms| ms > 0)
+                else {
+                    continue;
+                };
+                let gate = self.state.register_delay_gate(hls_token, variant, segment);
+                spawn_delay_releaser(gate, delay_ms, variant, segment);
+            }
+        }
+    }
+}
+
+/// Spawn the flash-participant releaser for one delay gate. The body runs inside a
+/// `flash_dynamic(true, ...)` region (which only takes effect under ambient, which
+/// the platform async [`spawn`] propagates), so its `sleep` is engine-backed: it
+/// awaits the segment GET's arrival, burns `delay_ms` of VIRTUAL time, then frees
+/// the parked body. Off the `flash-time` feature `flash_dynamic` is identity and
+/// the `sleep` is a real `tokio` timer — matching the legacy real-delay behaviour.
+fn spawn_delay_releaser(gate: Arc<DelayGate>, delay_ms: u64, variant: usize, segment: usize) {
+    drop(spawn(flash_dynamic(true, async move {
+        gate.wait_requested().await;
+        trace!(
+            variant,
+            segment, delay_ms, "delay gate: request arrived, starting virtual countdown"
+        );
+        sleep(Duration::from_millis(delay_ms)).await;
+        gate.release();
+        trace!(
+            variant,
+            segment, delay_ms, "delay gate: released after virtual delay"
+        );
+    })));
 }
 
 /// Handle to a registered init-segment withhold gate on the shared server.
