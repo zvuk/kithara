@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use kithara::{
     assets::StoreOptions,
+    events::{DownloaderEvent, Event, EventBus},
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
@@ -12,7 +13,8 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancellationToken,
-    time::{Duration, Instant, sleep},
+    time::{Duration, Instant, timeout},
+    tokio::task::yield_now,
 };
 use url::Url;
 
@@ -101,7 +103,7 @@ fn build_scenario(
 ///   the master may remain cached (it succeeded) but no `v0*` orphan may exist
 ///   (exercises the `acquire_resource` → `InvalidContent` path at
 ///   `atomic_fetch.rs:67`).
-#[kithara::test(flash(false), tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 #[case::master_all_html(HtmlScenario::AllHtml, "HTML master playlist must fail Stream::new")]
 #[case::media_after_valid_master(
     HtmlScenario::PartialHtml,
@@ -124,22 +126,29 @@ async fn html_playlist_failure_leaves_no_orphan_cache_files(
     let result = Stream::<Hls>::new(config).await;
     assert!(result.is_err(), "{fail_msg}");
 
-    sleep(Duration::from_millis(200)).await;
-
-    let leftover = collect_cache_files(temp_dir.path());
-    let suspicious: Vec<_> = orphan_prefix.map_or_else(
-        || leftover.iter().collect(),
-        |prefix| {
-            leftover
+    // Wait until the failure-path cleanup has ACTUALLY removed the orphan(s),
+    // polling the real on-disk state (yield, don't sleep, so the resource-drop
+    // runs without inflating the clock) rather than guessing a fixed delay.
+    let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+    let (leftover, suspicious) = loop {
+        let leftover = collect_cache_files(temp_dir.path());
+        let suspicious: Vec<std::path::PathBuf> = match orphan_prefix {
+            None => leftover.clone(),
+            Some(prefix) => leftover
                 .iter()
                 .filter(|p| {
                     p.file_name()
                         .and_then(|s| s.to_str())
                         .is_some_and(|n| n.starts_with(prefix))
                 })
-                .collect()
-        },
-    );
+                .cloned()
+                .collect(),
+        };
+        if suspicious.is_empty() || Instant::now() >= cleanup_deadline {
+            break (leftover, suspicious);
+        }
+        yield_now().await;
+    };
 
     assert!(
         suspicious.is_empty(),
@@ -152,7 +161,7 @@ async fn html_playlist_failure_leaves_no_orphan_cache_files(
 /// Downloader. The current behaviour issues a single `Stream::new` attempt
 /// which fails immediately; if future code wires auto-retry into the
 /// transport, the hit count must still be bounded.
-#[kithara::test(flash(false), tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let master = helper.register_behavior(FixtureBehavior {
@@ -160,24 +169,40 @@ async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
         delivery: Delivery::Normal,
     });
 
+    let bus = EventBus::new(64);
     let cancel = CancellationToken::default();
     let config = HlsConfig::for_url(master.url())
+        .events(bus.clone())
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel.clone())
         .build();
 
     let _ = Stream::<Hls>::new(config).await;
 
+    // Subscribe AFTER the initial (failed) attempt so `rx` only carries FUTURE
+    // requests — a retry storm. The `request_count` delta is the backstop in
+    // case a retry races the subscribe.
+    let mut rx = bus.subscribe();
     let start_hits = master.request_count();
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline {
-        sleep(Duration::from_millis(100)).await;
-    }
+    // Wait for a NEW RequestStarted (the storm signal) rather than sleeping a
+    // fixed window: under flash the retry backoff collapses so a real storm
+    // fires within the virtual timeout; its absence proves no retry was scheduled.
+    let retried = timeout(Duration::from_secs(3), async {
+        loop {
+            match rx.recv().await {
+                Ok(Event::Downloader(DownloaderEvent::RequestStarted { .. })) => break true,
+                Ok(_) => {}
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
     let end_hits = master.request_count();
 
     assert!(
-        end_hits - start_hits <= 1,
-        "retry storm detected: {start_hits} → {end_hits} over 3 s",
+        !retried && end_hits - start_hits <= 1,
+        "retry storm detected: {start_hits} → {end_hits} (retried={retried})",
     );
 
     assert!(
