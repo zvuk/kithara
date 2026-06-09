@@ -194,6 +194,29 @@ fn read_until_eof(audio: &mut Audio<Stream<Hls>>, timeout: Duration) -> u64 {
     total
 }
 
+/// Event-driven read to the natural end of the track.
+///
+/// `Audio::read` is engine-aware blocking (`recv_outcome_blocking` parks
+/// until the worker commits a chunk or the stream ends), so this loop waits
+/// on the real terminal — `ReadOutcome::Eof` — instead of a wall-clock
+/// ceiling. Under flash a virtual deadline would race the clock past
+/// in-flight real socket bytes; parking on the read keeps the engine
+/// non-quiescent while data flows and stops exactly at true EOF. The
+/// harness `timeout(...)` (real wall time) is the only backstop.
+fn read_to_eof(audio: &mut Audio<Stream<Hls>>) -> u64 {
+    let mut buf = vec![0.0f32; 4096];
+    let mut total = 0u64;
+    loop {
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Pending { .. }) => {}
+            Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("decode error: {e}"),
+        }
+    }
+    total
+}
+
 /// VOD single-track: manual quality switch takes effect on future segments.
 ///
 /// - V0 = 5 Mbps (delayed after segment 5 → ABR downswitch trigger)
@@ -256,7 +279,7 @@ async fn vod_manual_switch_affects_future_segments() {
         .await
         .expect("create audio");
 
-    let total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(25)))
+    let total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
 
@@ -426,7 +449,6 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
 /// pre-seed cold-start behaviour where `Auto(Some(0))` stayed on V0
 /// only because `decide` returned `NoEstimate` until samples arrived.
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     serial,
@@ -484,7 +506,7 @@ async fn multi_track_shared_abr_with_cache() {
         .build();
     let mut audio1 = Audio::<Stream<Hls>>::new(config1).await.expect("track 1");
 
-    let t1_samples = spawn_blocking(move || read_until_eof(&mut audio1, Duration::from_secs(15)))
+    let t1_samples = spawn_blocking(move || read_to_eof(&mut audio1))
         .await
         .expect("read t1");
 
@@ -520,7 +542,7 @@ async fn multi_track_shared_abr_with_cache() {
         .build();
     let mut audio2 = Audio::<Stream<Hls>>::new(config2).await.expect("track 2");
 
-    let t2_samples = spawn_blocking(move || read_until_eof(&mut audio2, Duration::from_secs(15)))
+    let t2_samples = spawn_blocking(move || read_to_eof(&mut audio2))
         .await
         .expect("read t2");
 
@@ -557,7 +579,7 @@ async fn multi_track_shared_abr_with_cache() {
         .await
         .expect("track 1 replay");
 
-    let t3_samples = spawn_blocking(move || read_until_eof(&mut audio3, Duration::from_secs(15)))
+    let t3_samples = spawn_blocking(move || read_to_eof(&mut audio3))
         .await
         .expect("read t3");
 
@@ -687,7 +709,6 @@ async fn abr_switch_must_not_redownload_covered_segments() {
 /// boundary, fires `VariantApplied`, and subsequent reader segments come
 /// from the chosen variant.
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     serial,
@@ -742,14 +763,16 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         .expect("create audio");
 
     // Warm up a couple of segments so the reader is past the boundary
-    // commit gate, then trigger a Manual switch via the handle.
+    // commit gate, then trigger a Manual switch via the handle. The
+    // blocking `read` parks until the worker commits frames, so the loop
+    // waits on real decoded audio (the `total` gate), not a wall clock.
     let mut buf = vec![0.0f32; 4096];
     let mut total = 0u64;
-    let warmup_deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < warmup_deadline && total < 8_192 {
+    while total < 8_192 {
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
+            Ok(ReadOutcome::Pending { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => break,
             Err(e) => panic!("decode error in warmup: {e}"),
         }
     }
@@ -762,7 +785,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         .set_mode(AbrMode::manual(2))
         .expect("Manual(2) target is in the variant list");
 
-    let post_total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(15)))
+    let post_total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
 
@@ -797,7 +820,6 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
 /// bug where clicking Manual(3) (FLAC) in the GUI caused a 10s hang
 /// before Phase K's `decode_next_chunk` recovery + `apply_decision` split.
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     serial,
@@ -845,13 +867,16 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         .await
         .expect("create audio");
 
+    // Blocking `read` parks until the worker commits AAC frames, so the
+    // warmup waits on real decoded audio (the `pre_total` gate) rather than
+    // a wall clock.
     let mut buf = vec![0f32; 4096];
     let mut pre_total = 0u64;
-    let warmup_deadline = Instant::now() + Duration::from_secs(4);
-    while Instant::now() < warmup_deadline && pre_total < 16_384 {
+    while pre_total < 16_384 {
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => pre_total += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
+            Ok(ReadOutcome::Pending { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => break,
             Err(e) => panic!("decode error pre-switch: {e}"),
         }
     }
@@ -867,11 +892,11 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         .set_mode(AbrMode::manual(3))
         .expect("Manual(3) (FLAC variant) target must be valid");
 
-    // Read for several seconds after the flip — if the decoder hangs on
+    // Read to the end after the flip — if the decoder hangs on
     // `Pending(VariantChange)` without recovery, the hang_watchdog or
     // the test timeout will fail. Otherwise we should see post-switch
     // samples coming from the FLAC variant.
-    let post_total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(25)))
+    let post_total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
 
