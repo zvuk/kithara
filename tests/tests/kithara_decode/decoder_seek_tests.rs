@@ -7,7 +7,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
-use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_platform::time::{self, Duration, Instant};
 
 #[kithara::fixture]
 async fn server() -> TestServerHelper {
@@ -54,7 +54,7 @@ async fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) {
         );
 
         audio.preload().expect("preload must succeed");
-        sleep(Duration::from_millis(10)).await;
+        time::sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -232,7 +232,7 @@ async fn decoder_file_seek_emits_events(#[future] server: TestServerHelper, temp
         match decoder.read(&mut buf) {
             Ok(ReadOutcome::Pending { .. }) => {
                 decoder.preload().expect("preload must succeed");
-                sleep(Duration::from_millis(10)).await;
+                time::sleep(Duration::from_millis(10)).await;
             }
             Ok(ReadOutcome::Frames { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {

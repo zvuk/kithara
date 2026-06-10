@@ -10,7 +10,7 @@ use std::{
 
 use dashmap::DashSet;
 #[cfg(test)]
-use kithara_platform::thread::sleep;
+use kithara_platform::thread;
 use kithara_platform::{CancellationToken, Condvar, Mutex, time::Duration};
 
 use super::worker::WorkerSlot;
@@ -438,7 +438,7 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(2);
         while src.flush_count() == 0 && Instant::now() < deadline {
-            sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(10)); // M5: real pacing, replace with teardown signal
         }
 
         assert_eq!(
@@ -466,7 +466,7 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(2);
         while src.flush_count() == 0 && Instant::now() < deadline {
-            sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(10)); // M5: real pacing, replace with teardown signal
         }
 
         assert!(
@@ -487,7 +487,7 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(2);
         while src.flush_count() == 0 && Instant::now() < deadline {
-            sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(10)); // M5: real pacing, replace with teardown signal
         }
 
         assert_eq!(src.flush_count(), 1, "cancel must trigger a final flush");

@@ -13,7 +13,7 @@ use kithara_audio::ReadOutcome;
 use kithara_decode::PcmSpec;
 use kithara_events::{AudioEvent, AudioFormat, Event, EventBus};
 use kithara_integration_tests::audio_mock::TestPcmReader;
-use kithara_platform::{time, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_play::Resource;
 use kithara_test_utils::kithara;
 

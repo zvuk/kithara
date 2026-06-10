@@ -509,7 +509,7 @@ pub(crate) fn parse_cputime(s: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::thread::sleep;
+    use kithara_platform::thread;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -564,9 +564,9 @@ mod tests {
             TestObserver,
             CancellationToken::default(),
         );
-        sleep(Duration::from_millis(10));
+        thread::sleep(Duration::from_millis(10)); // M5: real pacing, replace with teardown signal
         handle.shutdown();
-        sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50)); // M5: real pacing, replace with teardown signal
     }
 
     #[kithara::test]
@@ -595,7 +595,7 @@ mod tests {
             },
         );
 
-        sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(100)); // M5: real pacing, replace with teardown signal
         handle.shutdown();
     }
 
@@ -617,10 +617,10 @@ mod tests {
 
         handle.register(1, BackpressureNode);
 
-        sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50)); // M5: real pacing, replace with teardown signal
 
         let cpu_before = cpu_time_ms();
-        sleep(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(500)); // real wall window for CPU sampling
         let cpu_after = cpu_time_ms();
 
         let cpu_used_ms = cpu_after.saturating_sub(cpu_before);

@@ -9,7 +9,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
-use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_platform::time::{self, Duration, Instant};
 use tracing::info;
 
 struct Consts;
@@ -72,7 +72,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("warmup decode error: {e}"),
         }
-        sleep(Duration::from_micros(100)).await;
+        time::sleep(Duration::from_micros(100)).await;
     }
     info!(chunks_read, "warmup done");
 
@@ -90,7 +90,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
                 Ok(ChunkOutcome::Chunk(_)) => {
                     drained += 1;
                     got_chunk = true;
-                    sleep(Duration::from_millis(Consts::READER_SLEEP_MS)).await;
+                    time::sleep(Duration::from_millis(Consts::READER_SLEEP_MS)).await;
                     break;
                 }
                 Ok(ChunkOutcome::Eof { .. }) => {
@@ -100,7 +100,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
                 Ok(ChunkOutcome::Pending { .. }) => {}
                 Err(e) => panic!("drain decode error: {e}"),
             }
-            sleep(Duration::from_micros(100)).await;
+            time::sleep(Duration::from_micros(100)).await;
         }
         if inner_eof {
             reached_eof = true;

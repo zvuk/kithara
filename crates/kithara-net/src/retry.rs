@@ -460,7 +460,10 @@ mod tests {
         assert_eq!(retry_policy.delay_for_attempt(1), Duration::from_millis(50));
     }
 
-    #[kithara::test(tokio)]
+    // Real-clock: the body drives a raw `tokio::spawn` task (invisible to
+    // flash ambient propagation) and bounds it with wall-time waits; flip
+    // together with the raw-tokio migration (#86).
+    #[kithara::test(tokio, flash(false))]
     async fn test_retry_net_cancel_interrupts_sleep() {
         let mock = Unimock::new(
             NetMock::get_bytes

@@ -4,7 +4,7 @@ use std::{
     process::{Child, Command, Stdio},
 };
 
-use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_platform::time::{self, Duration, Instant};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -378,7 +378,7 @@ impl WasmPlayerSelenium {
 
             let status = self.status_text().await;
             if status.contains("cross-origin isolation") && attempt < 2 {
-                sleep(Duration::from_secs(1)).await;
+                time::sleep(Duration::from_secs(1)).await;
                 continue;
             }
 
@@ -569,7 +569,7 @@ impl WasmPlayerSelenium {
             if condition(&last) {
                 return Ok(last);
             }
-            sleep(interval).await;
+            time::sleep(interval).await;
         }
 
         Err(format!(
@@ -653,7 +653,7 @@ impl WasmPlayerSelenium {
         min_pos_delta_ms: f64,
     ) -> Result<(), String> {
         let start = self.snapshot().await;
-        sleep(window).await;
+        time::sleep(window).await;
         let end = self.snapshot().await;
 
         let pos_delta = end.pos.unwrap_or(0.0) - start.pos.unwrap_or(0.0);
@@ -674,7 +674,7 @@ impl WasmPlayerSelenium {
         )
         .await?;
 
-        sleep(Duration::from_secs(self.config.switch_wait_seconds)).await;
+        time::sleep(Duration::from_secs(self.config.switch_wait_seconds)).await;
 
         self.assert_motion(
             &format!("{label} stable after wait"),
@@ -773,7 +773,7 @@ impl WasmPlayerSelenium {
             if (current - value).abs() <= 0.011 {
                 return Ok(());
             }
-            sleep(Consts::CHECK_INTERVAL).await;
+            time::sleep(Consts::CHECK_INTERVAL).await;
         }
 
         Err(format!("volume did not reach {value} in time"))
@@ -897,7 +897,7 @@ impl WasmPlayerSelenium {
     /// track load (engine command worker + shared audio worker).
     async fn run_worker_count_scenario(&self) -> Result<(), String> {
         self.open_player_page().await?;
-        sleep(Duration::from_secs(2)).await;
+        time::sleep(Duration::from_secs(2)).await;
 
         let (baseline, urls_baseline) = self.count_web_workers().await?;
         println!(
@@ -934,7 +934,7 @@ impl WasmPlayerSelenium {
              from baseline), urls={urls_peak:?}"
         );
 
-        sleep(Duration::from_secs(10)).await;
+        time::sleep(Duration::from_secs(10)).await;
 
         self.assert_motion(
             "playback after worker settle",
@@ -1008,7 +1008,7 @@ impl WasmPlayerSelenium {
         let steps = (duration.as_millis() / interval.as_millis()).max(2) as usize;
 
         for _ in 0..steps {
-            sleep(interval).await;
+            time::sleep(interval).await;
             let position = self.get_position_ms().await?;
             if position >= 0.0 {
                 positions.push(position);
@@ -1038,7 +1038,7 @@ impl WasmPlayerSelenium {
 
         let mut seek_ok = false;
         while Instant::now() < deadline {
-            sleep(Consts::POLL_INTERVAL).await;
+            time::sleep(Consts::POLL_INTERVAL).await;
             let pos = self.get_position_ms().await?;
             if (low..=high).contains(&pos) {
                 seek_ok = true;
@@ -1077,7 +1077,7 @@ impl WasmPlayerSelenium {
         let mut seek_ok = false;
         let mut position_samples = Vec::new();
         while Instant::now() < deadline {
-            sleep(Consts::POLL_INTERVAL).await;
+            time::sleep(Consts::POLL_INTERVAL).await;
             let pos = self.get_position_ms().await?;
             position_samples.push(pos);
             if (low..=high).contains(&pos) {
@@ -1094,7 +1094,7 @@ impl WasmPlayerSelenium {
         let mut positions = Vec::new();
         let steps = 16;
         for _ in 0..steps {
-            sleep(Consts::POLL_INTERVAL).await;
+            time::sleep(Consts::POLL_INTERVAL).await;
             let pos = self.get_position_ms().await?;
             positions.push(pos);
         }
@@ -1114,7 +1114,7 @@ impl WasmPlayerSelenium {
     async fn scenario_crossfade(&self, tracks: TrackIndexes) -> Result<(), String> {
         self.select_track_and_wait(tracks.hls, "HLS").await?;
         self.select_track_and_wait(tracks.mp3, "MP3").await?;
-        sleep(Duration::from_secs(15)).await;
+        time::sleep(Duration::from_secs(15)).await;
         self.assert_motion("crossfade stable", Duration::from_secs(3), 250.0)
             .await
     }
@@ -1155,10 +1155,10 @@ impl WasmPlayerSelenium {
     async fn scenario_playlist_crash(&self, tracks: TrackIndexes) -> Result<(), String> {
         for idx in [tracks.hls, tracks.mp3, tracks.hls] {
             self.click_playlist_item(idx).await?;
-            sleep(Duration::from_millis(300)).await;
+            time::sleep(Duration::from_millis(300)).await;
         }
 
-        sleep(Duration::from_secs(5)).await;
+        time::sleep(Duration::from_secs(5)).await;
 
         let count = self
             .driver
@@ -1272,7 +1272,7 @@ impl WasmPlayerSelenium {
         self.select_track_and_wait(tracks.hls, "HLS").await?;
 
         for _ in 0..40 {
-            sleep(Consts::POLL_INTERVAL).await;
+            time::sleep(Consts::POLL_INTERVAL).await;
         }
 
         self.assert_motion(
@@ -1398,7 +1398,7 @@ async fn wait_url_ready(url: &str, timeout: Duration, kind: &str) -> Result<(), 
         if http_ok(url).await {
             return Ok(());
         }
-        sleep(Consts::CHECK_INTERVAL).await;
+        time::sleep(Consts::CHECK_INTERVAL).await;
     }
 
     if kind.is_empty() {

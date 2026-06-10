@@ -1258,7 +1258,10 @@ async fn resource_mp3_no_hint_decodes_with_duration(
 /// No hint, no extension manipulation — exactly what the app does.
 ///
 /// Requires internet (silvercomet) and corporate VPN (zvuk).
+// flash(false): live-internet sockets are invisible to the flash engine; virtual
+// sleep/deadline would outrun the real download and fail spuriously.
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(30)),
     env(
@@ -1433,7 +1436,10 @@ async fn live_remote_resource_decodes_with_duration(
 
 /// Reproduces EXACTLY the app flow: `PlayerImpl` + `prepare_config` + `Resource::new` +
 /// `select_item` + `duration_seconds()`. This is what the GUI reads.
+// flash(false): live-internet sockets are invisible to the flash engine; a virtual
+// 500ms pacing sleep would elapse before the real metadata fetch completes.
 #[kithara::test(
+    flash(false),
     tokio,
     timeout(Duration::from_secs(30)),
     env(

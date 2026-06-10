@@ -9,7 +9,7 @@ use kithara_decode::{GaplessMode, SilenceTrimParams};
 use kithara_events::{AudioEvent, Event, EventReceiver, SeekEpoch, SeekLifecycleStage};
 use kithara_file::{FileConfig, FileSrc};
 use kithara_integration_tests::{TestTempDir, create_test_wav, kithara};
-use kithara_platform::time::{Duration, Instant, sleep, timeout};
+use kithara_platform::time::{self, Duration, Instant};
 use kithara_stream::{ContainerFormat, MediaInfo, Stream};
 use tempfile::NamedTempFile;
 
@@ -24,7 +24,7 @@ async fn wait_for_frames<S>(audio: &mut Audio<S>, budget: Duration) -> usize {
             Ok(ReadOutcome::Frames { count, .. }) => return count.get(),
             Ok(ReadOutcome::Eof { .. }) => return 0,
             Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(20)).await;
+                time::sleep(Duration::from_millis(20)).await;
             }
             Err(error) => panic!("decode error while waiting for frames: {error}"),
         }
@@ -41,7 +41,7 @@ async fn await_seek_request_epoch(events: &mut EventReceiver, budget: Duration) 
             stage: SeekLifecycleStage::SeekRequest,
             seek_epoch,
             ..
-        }))) = timeout(remaining, events.recv()).await
+        }))) = time::timeout(remaining, events.recv()).await
         {
             return seek_epoch;
         }
@@ -267,7 +267,7 @@ async fn test_audio_playback_progress_uses_output_commit() {
             position_ms,
             total_ms,
             seek_epoch,
-        }))) = timeout(Duration::from_millis(40), events.recv()).await
+        }))) = time::timeout(Duration::from_millis(40), events.recv()).await
         {
             assert!(position_ms > 0);
             assert!(total_ms.is_some());
@@ -298,7 +298,7 @@ async fn test_seek_emits_matching_playback_progress() {
     let mut matched_epoch = None;
     while Instant::now() < deadline {
         if let Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { seek_epoch, .. }))) =
-            timeout(Duration::from_millis(40), events.recv()).await
+            time::timeout(Duration::from_millis(40), events.recv()).await
             && seek_epoch == expected_epoch
         {
             matched_epoch = Some(seek_epoch);
@@ -343,7 +343,7 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
     let mut saw_seek_complete = false;
     let mut saw_output_committed = false;
     while Instant::now() < deadline {
-        match timeout(Duration::from_millis(40), events.recv()).await {
+        match time::timeout(Duration::from_millis(40), events.recv()).await {
             Ok(Ok(Event::Audio(AudioEvent::SeekLifecycle {
                 stage: SeekLifecycleStage::OutputCommitted,
                 seek_epoch,

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use kithara_abr::{AbrMode, AbrSettings, AbrState, AbrView};
 use kithara_events::{VariantDuration, VariantIndex, VariantInfo};
-use kithara_platform::time::{Duration, Duration as StdDuration, Instant};
+use kithara_platform::time::{Duration, Duration as StdDuration};
 use kithara_test_utils::kithara;
 
 fn fast_settings() -> AbrSettings {

@@ -7,10 +7,7 @@ use std::path::Path;
 use bytes::Bytes;
 use kithara::assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, WriteSide};
 use kithara_integration_tests::{cancel_token, temp_dir};
-use kithara_platform::{
-    CancellationToken,
-    time::{Duration, sleep},
-};
+use kithara_platform::{CancellationToken, time::Duration};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {
@@ -74,7 +71,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         writer_a.commit(Some(data_a.len() as u64)).unwrap();
     }
 
-    sleep(Duration::from_millis(50)).await;
+    time::sleep(Duration::from_millis(50)).await;
 
     {
         let scope_b = asset_scope_with_root_and_limit(
@@ -95,7 +92,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         writer_b.commit(Some(data_b.len() as u64)).unwrap();
     }
 
-    sleep(Duration::from_millis(50)).await;
+    time::sleep(Duration::from_millis(50)).await;
 
     {
         let scope_c = asset_scope_with_root_and_limit(
@@ -115,7 +112,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         writer_c.commit(Some(1)).unwrap();
     }
 
-    sleep(Duration::from_millis(100)).await;
+    time::sleep(Duration::from_millis(100)).await;
 
     let asset_a_path = dir.join(asset_a_name).join("media/a.bin");
     assert!(

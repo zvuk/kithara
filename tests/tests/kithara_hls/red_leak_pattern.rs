@@ -79,7 +79,7 @@ async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn Std
     drop(handle);
 
     for _ in 0..20 {
-        sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
         if Arc::strong_count(&peer) == 1 {
             break;
         }

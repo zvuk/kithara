@@ -15,7 +15,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
-use kithara_platform::time::{self, Duration};
+use kithara_platform::time::Duration;
 
 /// Install a panic hook that flips `flag` when a panic message contains
 /// `marker`. The hook fires on every thread, so we can detect the

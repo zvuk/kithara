@@ -52,10 +52,6 @@ fn test_body_stream(chunks: Vec<&'static [u8]>) -> BodyStream {
     BodyStream::wrap_raw(Box::pin(stream))
 }
 
-async fn sleep(ms: u64) {
-    time::sleep(Duration::from_millis(ms)).await;
-}
-
 /// Event-driven completion barrier. Each finished fetch calls
 /// [`complete`](Self::complete); the `target`-th completion signals the
 /// waiter parked in [`wait`](Self::wait).
@@ -192,7 +188,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
         (start.elapsed(), result)
     });
 
-    sleep(POLL_MS).await;
+    time::sleep(Duration::from_millis(POLL_MS)).await;
     handle.cancel().cancel();
 
     let (elapsed, result) = time::timeout(Duration::from_secs(CANCEL_GUARD_SECS), task)

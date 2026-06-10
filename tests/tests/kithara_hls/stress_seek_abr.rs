@@ -11,7 +11,7 @@ use kithara::{
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, abr_fast, auto, temp_dir};
 use kithara_platform::{
-    time::{Duration, Instant},
+    time::Duration,
     tokio::task::{spawn, spawn_blocking},
 };
 use tracing::info;

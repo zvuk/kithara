@@ -5,10 +5,7 @@ use std::sync::{
 
 use kithara_assets::{AssetScope, AssetStoreBuilder, ProcessChunkFn};
 use kithara_drm::DecryptContext;
-use kithara_platform::{
-    CancellationToken,
-    time::{Duration, Instant},
-};
+use kithara_platform::{CancellationToken, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{SeekControl, SeekObserve, SeekState, SourceError, StreamError};
 use kithara_test_utils::kithara;

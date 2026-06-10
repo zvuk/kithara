@@ -60,7 +60,7 @@ impl PreloadGate {
 mod tests {
     use std::sync::Arc;
 
-    use kithara_platform::time::{Duration, timeout};
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
     use super::PreloadGate;
@@ -76,7 +76,7 @@ mod tests {
             signaller.signal();
         });
 
-        timeout(Duration::from_secs(1), gate.wait())
+        time::timeout(Duration::from_secs(1), gate.wait())
             .await
             .expect("signal must open the gate");
         assert!(gate.is_ready());
@@ -98,7 +98,7 @@ mod tests {
             re_signaller.signal();
         });
 
-        timeout(Duration::from_secs(1), gate.wait())
+        time::timeout(Duration::from_secs(1), gate.wait())
             .await
             .expect("re-armed gate must reopen on the next signal");
         join.join().expect("re-signaller thread");

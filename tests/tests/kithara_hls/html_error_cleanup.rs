@@ -11,10 +11,7 @@ use kithara::{
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
 };
-use kithara_platform::{
-    CancellationToken,
-    time::{Duration, timeout},
-};
+use kithara_platform::{CancellationToken, time::Duration};
 use url::Url;
 
 /// Walk `root` recursively and collect every file that is not inside the
@@ -180,7 +177,7 @@ async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
     // Wait for a NEW RequestStarted (the storm signal) rather than sleeping a
     // fixed window: under flash the retry backoff collapses so a real storm
     // fires within the virtual timeout; its absence proves no retry was scheduled.
-    let retried = timeout(Duration::from_secs(3), async {
+    let retried = time::timeout(Duration::from_secs(3), async {
         loop {
             match rx.recv().await {
                 Ok(Event::Downloader(DownloaderEvent::RequestStarted { .. })) => break true,

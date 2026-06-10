@@ -11,7 +11,7 @@ use kithara_integration_tests::{
     },
     temp_dir,
 };
-use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_platform::time::{self, Duration, Instant};
 use kithara_play::{PlayerConfig, Resource, ResourceConfig};
 use kithara_stream::AudioCodec;
 
@@ -86,7 +86,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
              position={position:.3}s, rendered_samples={}",
             rendered.len()
         );
-        sleep(Duration::from_millis(10)).await;
+        time::sleep(Duration::from_millis(10)).await;
     }
 }
 

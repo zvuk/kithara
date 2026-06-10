@@ -31,7 +31,7 @@ mod tests {
     };
 
     use kithara_platform::{
-        thread::{park_timeout, sleep, spawn},
+        thread::{self, park_timeout, spawn},
         time::Duration,
     };
     use kithara_test_utils::kithara;
@@ -54,7 +54,7 @@ mod tests {
                 worker_done.store(true, Ordering::Release);
             });
 
-            sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(10)); // M5: real pacing, replace with teardown signal
             wake.wake();
             join.join().expect("wake test thread");
             assert!(done.load(Ordering::Acquire));

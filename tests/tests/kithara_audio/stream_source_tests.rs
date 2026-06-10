@@ -6,7 +6,7 @@ use kithara_integration_tests::{
     create_test_wav, kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
 };
-use kithara_platform::time::{self, Duration, Instant, sleep, timeout};
+use kithara_platform::time::{self, Duration, Instant};
 use kithara_stream::Stream;
 
 fn wav_stream(samples: usize) -> AudioConfig<MemStream> {
@@ -29,7 +29,7 @@ async fn wait_for_frames<S>(audio: &mut Audio<S>, budget: Duration) -> usize {
             Ok(ReadOutcome::Frames { count, .. }) => return count.get(),
             Ok(ReadOutcome::Eof { .. }) => return 0,
             Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(20)).await;
+                time::sleep(Duration::from_millis(20)).await;
             }
             Err(error) => panic!("decode error while waiting for frames: {error}"),
         }
@@ -46,7 +46,7 @@ async fn drain_to_eof<S>(audio: &mut Audio<S>, budget: Duration) -> usize {
             Ok(ReadOutcome::Frames { count, .. }) => total += count.get(),
             Ok(ReadOutcome::Eof { .. }) => return total,
             Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(10)).await;
+                time::sleep(Duration::from_millis(10)).await;
             }
             Err(error) => panic!("decode error while draining: {error}"),
         }
@@ -87,7 +87,7 @@ async fn seek_during_active_decode_completes_without_hang() {
             stage: SeekLifecycleStage::SeekRequest,
             seek_epoch,
             ..
-        }))) = timeout(remaining, events.recv()).await
+        }))) = time::timeout(remaining, events.recv()).await
         {
             observed_epoch = Some(seek_epoch);
             break;
@@ -99,7 +99,7 @@ async fn seek_during_active_decode_completes_without_hang() {
     let mut saw_complete = false;
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        match timeout(remaining, events.recv()).await {
+        match time::timeout(remaining, events.recv()).await {
             Ok(Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. })))
                 if seek_epoch == expected_epoch =>
             {
@@ -146,7 +146,7 @@ async fn rapid_seeks_via_timeline_all_complete() {
                 stage: SeekLifecycleStage::SeekRequest,
                 seek_epoch,
                 ..
-            }))) = timeout(remaining, events.recv()).await
+            }))) = time::timeout(remaining, events.recv()).await
             {
                 captured = Some(seek_epoch);
                 break;
@@ -166,7 +166,7 @@ async fn rapid_seeks_via_timeline_all_complete() {
     let mut last_complete: Option<SeekEpoch> = None;
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        match timeout(remaining, events.recv()).await {
+        match time::timeout(remaining, events.recv()).await {
             Ok(Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))) => {
                 last_complete = Some(seek_epoch);
                 if seek_epoch >= highest_expected {

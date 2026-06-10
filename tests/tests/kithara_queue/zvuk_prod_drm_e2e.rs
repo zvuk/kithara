@@ -162,7 +162,8 @@ async fn wait_for_position_at_least(
 /// ```
 ///
 /// `#[ignore]` because the upstream is VPN-gated and the creds rot.
-#[kithara::test(tokio)]
+// flash(false): prod-CDN e2e; sleep is a wall-clock stall-detection window racing real sockets.
+#[kithara::test(flash(false), tokio)]
 #[ignore = "requires zvuk prod creds baked at build (KITHARA_DRM_PROD_*) — run with --run-ignored=only"]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(

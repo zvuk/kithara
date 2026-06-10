@@ -1,5 +1,5 @@
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
 fn fresh_state(initial: usize) -> AbrState {

@@ -943,7 +943,8 @@ async fn user_sim_prod_drm_seek_immediately_after_loaded_low() {
 /// `wait_for_loaded` mirrors the GUI's "loading…" placeholder before
 /// the track resource is constructed; in `app` the slider is dead
 /// until that point. After `Loaded` we scrub with no further warmup.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+// flash(false): prod-CDN e2e; raw tokio::spawn ticker + wall-clock scrub/settle windows.
+#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
 async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     let prod = build_prod_ctx();

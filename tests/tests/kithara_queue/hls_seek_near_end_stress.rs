@@ -561,7 +561,7 @@ async fn hls_seek_near_end_fresh_player_stress(
     let mut outcomes: Vec<IterOutcome> = Vec::with_capacity(Consts::FRESH_ITERATIONS as usize);
     for iter in 0..Consts::FRESH_ITERATIONS {
         let offset = Consts::NEAR_END_OFFSETS_S[(iter as usize) % Consts::NEAR_END_OFFSETS_S.len()];
-        let outcome = match timeout(
+        let outcome = match time::timeout(
             Consts::ITER_DEADLINE,
             run_one_attempt(iter, &url, offset, backend),
         )

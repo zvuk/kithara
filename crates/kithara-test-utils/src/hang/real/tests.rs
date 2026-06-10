@@ -22,7 +22,10 @@ mod detector_tests {
         }
     }
 
-    #[kithara::test(native)]
+    // Real-clock contract tests of the detector itself: the wait and the
+    // detector's internal `Instant` must read the SAME (real) clock, so the
+    // bodies stay un-rewritten via `flash(false)`.
+    #[kithara::test(native, flash(false))]
     #[should_panic(expected = "HangDetector")]
     fn tick_after_timeout_panics() {
         let mut detector: HangDetector = HangDetector::new("test.wait", Duration::from_millis(1));
@@ -34,14 +37,14 @@ mod detector_tests {
         detector.tick();
     }
 
-    #[kithara::test(wasm)]
+    #[kithara::test(wasm, flash(false))]
     fn tick_after_timeout_does_not_panic_on_wasm() {
         let mut detector: HangDetector = HangDetector::new("test.wait", Duration::from_millis(1));
         sleep(Duration::from_millis(10));
         detector.tick();
     }
 
-    #[kithara::test]
+    #[kithara::test(flash(false))]
     fn reset_extends_deadline() {
         let mut detector: HangDetector = HangDetector::new("test", Duration::from_millis(50));
         sleep(Duration::from_millis(30));
@@ -76,7 +79,8 @@ mod native_detector_tests {
         assert_eq!(parse_timeout_secs("7"), Some(Duration::from_secs(7)));
     }
 
-    #[kithara::test(native)]
+    // Real-clock contract test (see detector_tests above).
+    #[kithara::test(native, flash(false))]
     fn tick_with_stores_context_for_dump() {
         #[derive(serde::Serialize)]
         struct Ctx {

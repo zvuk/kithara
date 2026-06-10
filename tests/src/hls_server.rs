@@ -775,7 +775,7 @@ fn test_key_data() -> Vec<u8> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_platform::time::{Duration, sleep, timeout};
+    use kithara_platform::time::Duration;
 
     use super::PackagedTestServer;
     use crate::kithara;
@@ -793,9 +793,9 @@ mod tests {
 
         let fetch = tokio::spawn(async move { reqwest::get(url).await.map(|r| r.status()) });
 
-        timeout(Duration::from_secs(5), async {
+        time::timeout(Duration::from_secs(5), async {
             while gate.requested() == 0 {
-                sleep(Duration::from_millis(1)).await;
+                time::sleep(Duration::from_millis(1)).await;
             }
         })
         .await
@@ -808,7 +808,7 @@ mod tests {
 
         gate.release();
 
-        let status = timeout(Duration::from_secs(5), fetch)
+        let status = time::timeout(Duration::from_secs(5), fetch)
             .await
             .expect("released GET should complete within budget")
             .expect("segment GET task joins")
@@ -834,7 +834,7 @@ mod tests {
             "no HEAD before the test fires one"
         );
 
-        let withheld = timeout(
+        let withheld = time::timeout(
             Duration::from_secs(5),
             reqwest::Client::new().head(url.clone()).send(),
         )
@@ -853,7 +853,7 @@ mod tests {
         assert_eq!(gate.head_requested(), 1, "HEAD reached the gate");
 
         gate.release_head();
-        let revealed = timeout(
+        let revealed = time::timeout(
             Duration::from_secs(5),
             reqwest::Client::new().head(url).send(),
         )
@@ -872,7 +872,7 @@ mod tests {
         );
 
         // The body GET is independent of the size gate and stays unblocked.
-        let body = timeout(
+        let body = time::timeout(
             Duration::from_secs(5),
             reqwest::get(server.url("/seg/v0_1.m4s")),
         )

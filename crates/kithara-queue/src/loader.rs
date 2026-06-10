@@ -146,7 +146,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use kithara_events::{EventBus, QueueEvent};
-    use kithara_platform::time::{Duration, sleep, timeout};
+    use kithara_platform::time::{Duration, timeout};
     use kithara_play::PlayerConfig;
     use kithara_test_utils::kithara;
     use tokio::spawn;
@@ -258,7 +258,7 @@ mod tests {
                     .expect("BUG: semaphore not closed in test");
                 let cur = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
                 max_seen.fetch_max(cur, Ordering::SeqCst);
-                sleep(Duration::from_millis(50)).await;
+                time::sleep(Duration::from_millis(50)).await;
                 in_flight.fetch_sub(1, Ordering::SeqCst);
             }));
         }

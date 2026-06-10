@@ -8,10 +8,7 @@ use std::{
 
 use kithara_abr::Abr;
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancellationToken, Mutex,
-    time::{Duration, sleep},
-};
+use kithara_platform::{CancellationToken, Mutex, time::Duration};
 use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer, PeerHandle};
 
 /// Peer that stashes its own `PeerHandle` clone after registration —
@@ -89,7 +86,7 @@ async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
     drop(external_handle);
 
     for _ in 0..40 {
-        sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
         if Arc::strong_count(&peer) == 1 {
             break;
         }
@@ -134,7 +131,7 @@ async fn registry_leaks_peer_without_teardown_when_handle_is_self_stored()
     drop(external_handle);
 
     for _ in 0..10 {
-        sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
         if Arc::strong_count(&peer) == 1 {
             break;
         }

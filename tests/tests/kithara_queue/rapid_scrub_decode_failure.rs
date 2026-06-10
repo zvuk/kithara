@@ -60,7 +60,7 @@ async fn wait_for_status(
     {
         return Ok(());
     }
-    let start = kithara_platform::time::Instant::now();
+    let start = Instant::now();
     while start.elapsed() < budget {
         match timeout(Duration::from_millis(200), rx.recv()).await {
             Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
