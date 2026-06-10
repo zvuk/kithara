@@ -934,7 +934,6 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
 /// Manual click, `peek_pending_decision` is never observed, and the
 /// switch stays pending forever.
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     serial,
@@ -975,9 +974,12 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    // Offline pull: park on ring underrun instead of spinning on Pending,
+    // so the warmup loop needs no wall-clock deadline.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -987,22 +989,35 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     // reader so the prefetch can finish on its own thread.
     let mut buf = vec![0.0f32; 4096];
     let mut warmup_samples = 0u64;
-    let warmup_deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < warmup_deadline && warmup_samples < 8_192 {
+    while warmup_samples < 8_192 {
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => {
                 warmup_samples += count.get() as u64;
             }
-            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Ok(ReadOutcome::Pending { .. }) => {}
             Err(e) => panic!("decode error in warmup: {e}"),
         }
     }
     assert!(warmup_samples > 0, "warmup must produce some audio");
 
-    // Give the downloader enough time to finish prefetching every v0
-    // segment and let the peer park itself in `Poll::Pending` — this
-    // is the production state the bug reproduces against.
-    kithara_platform::time::sleep(Duration::from_secs(2)).await;
+    // The downloader must finish prefetching every v0 segment and the
+    // peer must park itself in `Poll::Pending` — the production state
+    // the bug reproduces against. Wait on the collector (event-driven,
+    // bounded by the harness timeout). The trailing sleep covers the
+    // park: under flash it completes only once the system is quiescent
+    // (= the peer parked); in real time it is a short settle after the
+    // last fetch.
+    while collector
+        .segments()
+        .iter()
+        .filter(|s| s.variant == 0 && !s.cached)
+        .count()
+        < segment_count
+    {
+        kithara_platform::time::sleep(Duration::from_millis(50)).await;
+    }
+    kithara_platform::time::sleep(Duration::from_millis(500)).await;
 
     let v0_fetched = collector
         .segments()
@@ -1023,12 +1038,11 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
         .set_mode(AbrMode::manual(1))
         .expect("Manual(1) target must be valid");
 
-    // Give the controller a moment to react. If `set_mode` correctly
-    // wakes the peer, the peer polls, observes the pending decision,
-    // and `commit_variant_switch` fires within tens of ms. The 3-second
-    // window leaves ample slack for the kithara::test serial runtime.
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline && collector.switch_count() == pre_switch {
+    // Wait for the commit, event-driven: if `set_mode` correctly wakes
+    // the parked peer, `commit_variant_switch` fires within tens of ms.
+    // If the wake is lost (the pinned bug) the harness timeout fails
+    // the test.
+    while collector.switch_count() == pre_switch {
         kithara_platform::time::sleep(Duration::from_millis(50)).await;
     }
 

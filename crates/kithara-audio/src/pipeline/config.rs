@@ -39,6 +39,14 @@ pub struct AudioConfig<T: StreamType> {
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = NonZeroUsize::new(3).expect("3 is non-zero"))]
     pub preload_chunks: NonZeroUsize,
+    /// Make a producer-ring underrun block (engine-aware park) instead of
+    /// surfacing an empty outcome. Offline (faster-than-real-time) consumers
+    /// opt in so `read` / `next_chunk` wait for the decode worker instead of
+    /// returning `Pending` / zero frames the caller would have to sleep-poll.
+    /// Real-time hosts must keep the default (`false`): the audio callback
+    /// can never block.
+    #[builder(default)]
+    pub block_on_underrun: bool,
     /// Unified event bus (optional — if not provided, one is created internally).
     #[builder(name = events)]
     pub bus: Option<EventBus>,

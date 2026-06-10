@@ -173,6 +173,10 @@ pub struct Audio<S> {
     /// Whether `preload()` has been called (enables non-blocking mode).
     preloaded: bool,
 
+    /// Offline-consumer opt-in: a ring underrun blocks (engine-aware park)
+    /// instead of returning an empty outcome. Never set on real-time hosts.
+    block_on_underrun: bool,
+
     /// `(seek_epoch, position_ms)` of the last emitted `PlaybackProgress`.
     /// Throttles high-frequency progress telemetry within an epoch so it
     /// cannot starve low-frequency control events on the shared bounded bus;
@@ -699,7 +703,7 @@ impl<S> Audio<S> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.is_preloaded()
+            self.is_preloaded() && !self.block_on_underrun
         }
     }
 
@@ -791,6 +795,7 @@ where
             tempo_ratio: config_tempo_ratio,
             decoder_backend,
             preload_chunks,
+            block_on_underrun,
             resampler_quality,
             stream: stream_config,
             bus: config_bus,
@@ -934,6 +939,7 @@ where
             interleaved: Some(interleaved),
             pcm_pool: pool.clone(),
             preloaded: false,
+            block_on_underrun,
             last_progress_emit: None,
             track_id: Some(track_id),
             worker: Some(worker),
@@ -1421,6 +1427,7 @@ mod tests {
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             preload_gate: Arc::new(PreloadGate::default()),
             preloaded: false,
+            block_on_underrun: false,
             last_progress_emit: None,
             track_id: None,
             worker: None,
@@ -1486,6 +1493,7 @@ mod tests {
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             preload_gate: Arc::new(PreloadGate::default()),
             preloaded: true,
+            block_on_underrun: false,
             last_progress_emit: None,
             track_id: None,
             worker: None,
