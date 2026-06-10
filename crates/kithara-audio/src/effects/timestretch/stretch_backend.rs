@@ -31,7 +31,10 @@ pub trait StretchBackend: Send + 'static {
     /// buffer (e.g. non-finite samples or an internal overflow).
     fn process(&mut self, input: &[f32], out: &mut Vec<f32>) -> Result<(), StretchBackendError>;
 
-    /// Drain the buffered tail at end of stream.
+    /// Drain the buffered tail at end of stream. One-shot: once the tail is
+    /// drained, further calls (until the next `process` or `reset`) must
+    /// append nothing — the worker pulls `flush` in a loop until it yields
+    /// an empty append (`drain_effects`).
     ///
     /// # Errors
     /// Returns [`StretchBackendError::Process`] if the library fails to drain.

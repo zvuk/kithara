@@ -1,29 +1,16 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use kithara::{
     abr::AbrHandle,
-    events::{AbrMode, AppEvent, EngineEvent, Event, PlayerEvent, TrackId, VariantInfo},
-    play::TimestretchControls,
-    prelude::{EngineLoadSnapshot, ResourceConfig},
+    events::{AbrMode, AppEvent, EngineEvent, Event, PlayerEvent, VariantInfo},
+    play::StretchControls,
+    prelude::EngineLoadSnapshot,
     stream::AudioCodec,
 };
 use kithara_platform::{CancellationToken, sync::Mutex};
-use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry, TrackSource};
-use tokio::sync::{Notify, broadcast::error::RecvError, watch};
+use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry};
 
-use crate::{
-    config::AppConfig,
-    sources::build_resource_config,
-    wave_cache::{AnalysisKey, TrackAnalysisCache, source_key},
-    waveform::{TrackAnalysis, TrackAnalysisRunner},
-};
-
-/// Analysis resolution for the colored waveform. Changing it invalidates
-/// cached track-analysis blobs.
-const WAVEFORM_BUCKETS: usize = 1500;
+use crate::{config::AppConfig, waveform::TrackAnalysis};
 
 /// Snapshot of player state shared between the queue, the listener task,
 /// and the UI thread. The struct is cloned cheaply each frame so the UI
@@ -40,7 +27,8 @@ pub struct UiState {
     pub abr_variants: Vec<(usize, String)>,
     pub eq_bands: Vec<f32>,
     pub tracks: Vec<TrackEntry>,
-    /// Source analysis of the current track; `None` until analysed.
+    /// Source analysis of the current track; `None` until analysed (or
+    /// always `None` in builds without the `analysis` feature).
     pub analysis: Option<TrackAnalysis>,
     pub repeat_mode: RepeatMode,
     pub abr_mode_is_auto: bool,
@@ -104,15 +92,9 @@ impl UiState {
 pub struct StateController {
     queue: Arc<Queue>,
     /// Per-deck time-stretch handle.
-    timestretch: Arc<TimestretchControls>,
+    timestretch: Arc<StretchControls>,
     state: Arc<Mutex<UiState>>,
     cancel: CancellationToken,
-    /// Gate for per-track source analysis. `false` keeps the listener
-    /// from decoding whole tracks while the DJ Studio is closed.
-    waveform_enabled: Arc<AtomicBool>,
-    /// Wakes the listener when [`Self::waveform_enabled`] changes so it
-    /// can start (or cancel) analysis without waiting for a queue event.
-    waveform_wake: Arc<Notify>,
 }
 
 impl StateController {
@@ -125,21 +107,17 @@ impl StateController {
     /// `timestretch` is the per-deck handle shared with the player.
     pub fn new(
         queue: Arc<Queue>,
-        timestretch: Arc<TimestretchControls>,
+        timestretch: Arc<StretchControls>,
         config: AppConfig,
         cancel: CancellationToken,
     ) -> Self {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
-        let waveform_enabled = Arc::new(AtomicBool::new(false));
-        let waveform_wake = Arc::new(Notify::new());
 
         spawn_listener(
             Arc::clone(&queue),
             Arc::clone(&state),
             config,
             cancel.clone(),
-            Arc::clone(&waveform_enabled),
-            Arc::clone(&waveform_wake),
         );
 
         Self {
@@ -147,15 +125,7 @@ impl StateController {
             timestretch,
             state,
             cancel,
-            waveform_enabled,
-            waveform_wake,
         }
-    }
-
-    /// Enable or disable per-track source analysis.
-    pub fn set_waveform_enabled(&self, enabled: bool) {
-        self.waveform_enabled.store(enabled, Ordering::SeqCst);
-        self.waveform_wake.notify_one();
     }
 
     /// Apply a closure under the lock. Returns the closure's result.
@@ -176,7 +146,7 @@ impl StateController {
 
     /// The per-deck time-stretch handle.
     #[must_use]
-    pub fn deck(&self) -> &Arc<TimestretchControls> {
+    pub fn deck(&self) -> &Arc<StretchControls> {
         &self.timestretch
     }
 
@@ -234,207 +204,9 @@ fn spawn_listener(
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
     cancel: CancellationToken,
-    waveform_enabled: Arc<AtomicBool>,
-    waveform_wake: Arc<Notify>,
 ) {
-    let mut rx = queue.subscribe();
-
-    tokio::spawn(async move {
-        let dir = config.file_asset_store.root_dir().join("track-analysis");
-        let mut analysis = TrackAnalysisRunner::new(&cancel);
-        let mut cache = TrackAnalysisCache::new(Some(dir));
-        let mut current: Option<Run> = None;
-        let mut displayed: Option<AnalysisKey> = None;
-
-        loop {
-            tokio::select! {
-                biased;
-                () = cancel.cancelled() => break,
-                () = waveform_wake.notified() => {
-                    if waveform_enabled.load(Ordering::SeqCst) {
-                        start_analysis(&queue, &state, &config, &mut analysis, &mut current, &mut cache, &mut displayed);
-                    } else {
-                        analysis.clear();
-                        current = None;
-                        displayed = None;
-                        state.lock_sync().analysis = None;
-                    }
-                }
-                () = wait_result(&mut current) => {
-                    commit_analysis(&state, &mut current, &mut cache, &mut displayed);
-                }
-                event = rx.recv() => match event {
-                    Ok(event) => {
-                        let track_changed =
-                            matches!(event, Event::Queue(QueueEvent::CurrentTrackChanged { .. }));
-                        apply_event(event, &queue, &state);
-                        if track_changed && waveform_enabled.load(Ordering::SeqCst) {
-                            start_analysis(&queue, &state, &config, &mut analysis, &mut current, &mut cache, &mut displayed);
-                        }
-                    }
-                    Err(RecvError::Lagged(_)) => continue,
-                    Err(RecvError::Closed) => break,
-                },
-            }
-        }
-    });
-}
-
-/// An in-flight analysis: the track it is for (stale-guard), its content cache
-/// key (`None` for an unkeyable source), and its result channel.
-struct Run {
-    track_id: TrackId,
-    key: Option<AnalysisKey>,
-    rx: watch::Receiver<Option<TrackAnalysis>>,
-}
-
-/// Await the current run's result, or pend forever when no run is active so the
-/// `select!` branch stays inert.
-async fn wait_result(current: &mut Option<Run>) {
-    match current {
-        Some(run) => {
-            let _ = run.rx.changed().await;
-        }
-        None => std::future::pending::<()>().await,
-    }
-}
-
-/// Commit a finished analysis: cache it under its content key (valid for that
-/// content regardless of the current track), then publish it if its track is
-/// still current. Clears the run either way.
-fn commit_analysis(
-    state: &Arc<Mutex<UiState>>,
-    current: &mut Option<Run>,
-    cache: &mut TrackAnalysisCache,
-    displayed: &mut Option<AnalysisKey>,
-) {
-    let Some(run) = current.take() else {
-        return;
-    };
-    let Some(analysis) = run.rx.borrow().clone() else {
-        return;
-    };
-
-    if let Some(key) = run.key.clone() {
-        cache.put(key, analysis.clone());
-    }
-
-    let mut st = state.lock_sync();
-    let still_current = st
-        .current_track_index
-        .and_then(|i| st.tracks.get(i))
-        .map(|entry| entry.id);
-    let is_current = still_current == Some(run.track_id);
-    if is_current {
-        st.analysis = Some(analysis);
-    }
-    drop(st);
-    if is_current {
-        *displayed = run.key;
-    }
-}
-
-/// What [`start_analysis`] should do for the current track.
-enum Plan {
-    /// Already shown or in flight for this content: leave the analysis as is.
-    Skip,
-    /// Cached (memory or disk): publish it without re-decoding.
-    Serve(TrackAnalysis),
-    /// Not cached (or an unkeyable source): wipe and analyse.
-    Decode,
-}
-
-/// Decide the action for a track, guarding against re-decoding content that is
-/// already shown, in flight, or cached.
-fn plan_analysis(
-    key: Option<&AnalysisKey>,
-    displayed: Option<&AnalysisKey>,
-    in_flight: Option<&AnalysisKey>,
-    cache: &mut TrackAnalysisCache,
-) -> Plan {
-    let Some(key) = key else {
-        // No stable key (the reserved non-exhaustive source seam): cannot
-        // memoize, so always decode.
-        return Plan::Decode;
-    };
-    if displayed == Some(key) || in_flight == Some(key) {
-        return Plan::Skip;
-    }
-    match cache.get(key) {
-        Some(wave) => Plan::Serve(wave),
-        None => Plan::Decode,
-    }
-}
-
-/// Start analysing the current track. Short-circuits when the track is already
-/// displayed or in flight, serves cached analysis (memory or disk) without
-/// re-decoding, and only wipes + decodes on a genuine cache miss.
-fn start_analysis(
-    queue: &Arc<Queue>,
-    state: &Arc<Mutex<UiState>>,
-    config: &AppConfig,
-    analysis: &mut TrackAnalysisRunner,
-    current: &mut Option<Run>,
-    cache: &mut TrackAnalysisCache,
-    displayed: &mut Option<AnalysisKey>,
-) {
-    let track_id = {
-        let st = state.lock_sync();
-        let Some(idx) = st.current_track_index else {
-            return;
-        };
-        let Some(entry) = st.tracks.get(idx) else {
-            return;
-        };
-        entry.id
-    };
-
-    let Some(source) = queue.track_source(track_id) else {
-        analysis.clear();
-        *current = None;
-        return;
-    };
-    let key = source_key(&source);
-    let plan = plan_analysis(
-        key.as_ref(),
-        displayed.as_ref(),
-        current.as_ref().and_then(|run| run.key.as_ref()),
-        cache,
-    );
-
-    match plan {
-        // Already shown or in flight (DJ re-open, or a non-player event): keep.
-        Plan::Skip => {}
-        // Cached (memory or disk): show it immediately, no wipe, no decode.
-        Plan::Serve(analysis_result) => {
-            state.lock_sync().analysis = Some(analysis_result);
-            *displayed = key;
-            *current = None;
-            analysis.clear();
-        }
-        // Genuine miss (or unkeyable source): wipe stale analysis and decode.
-        Plan::Decode => {
-            let Some(resource_cfg) = resource_config_from_source(source, config) else {
-                analysis.clear();
-                *current = None;
-                return;
-            };
-            state.lock_sync().analysis = None;
-            *displayed = None;
-            let rx = analysis.analyze(resource_cfg, WAVEFORM_BUCKETS);
-            *current = Some(Run { track_id, key, rx });
-        }
-    }
-}
-
-/// Build an analysis resource from a track's source, reusing the shared
-/// stores so the analysis and the player share one download.
-fn resource_config_from_source(source: TrackSource, config: &AppConfig) -> Option<ResourceConfig> {
-    match source {
-        TrackSource::Config(cfg) => Some(*cfg),
-        TrackSource::Uri(url) => build_resource_config(&url, config),
-        _ => None,
-    }
+    let rx = queue.subscribe();
+    tokio::spawn(crate::analysis::listen(queue, state, config, cancel, rx));
 }
 
 /// Push the desired EQ gains down to the engine. Calls for bands with no
@@ -445,7 +217,7 @@ fn reapply_eq(queue: &Queue, eq_bands: &[f32]) {
     }
 }
 
-fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
+pub(crate) fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
     match event {
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
@@ -539,13 +311,7 @@ fn variant_short_label(v: &VariantInfo) -> String {
 
 #[cfg(test)]
 mod tests {
-    use kithara::audio::Waveform;
-
-    use super::{Plan, codec_label, plan_analysis};
-    use crate::{
-        wave_cache::{AnalysisKey, TrackAnalysisCache},
-        waveform::TrackAnalysis,
-    };
+    use super::codec_label;
 
     #[test]
     fn codec_label_maps_known_hls_codecs() {
@@ -555,59 +321,5 @@ mod tests {
         assert_eq!(codec_label("flac"), Some("FLAC"));
         assert_eq!(codec_label("opus"), Some("Opus"));
         assert_eq!(codec_label("av01.0"), None);
-    }
-
-    fn one_bucket_wave() -> Waveform {
-        // version 1 + one bucket of three 0.5 band heights (0.5 = 0x3F000000).
-        Waveform::from_bytes(&[1, 0, 0, 0, 0, 0, 0, 63, 0, 0, 0, 63, 0, 0, 0, 63])
-            .expect("hand-built blob is valid")
-    }
-
-    fn analysis() -> TrackAnalysis {
-        TrackAnalysis {
-            waveform: one_bucket_wave(),
-        }
-    }
-
-    #[test]
-    fn plan_skips_shown_or_in_flight_track() {
-        let a = AnalysisKey::from_source("file:///a.mp3");
-        let mut cache = TrackAnalysisCache::new(None);
-        assert!(matches!(
-            plan_analysis(Some(&a), Some(&a), None, &mut cache),
-            Plan::Skip
-        ));
-        assert!(matches!(
-            plan_analysis(Some(&a), None, Some(&a), &mut cache),
-            Plan::Skip
-        ));
-    }
-
-    #[test]
-    fn plan_decodes_a_new_or_unkeyable_track() {
-        let a = AnalysisKey::from_source("file:///a.mp3");
-        let b = AnalysisKey::from_source("file:///b.mp3");
-        let mut cache = TrackAnalysisCache::new(None);
-        // A different shown/in-flight track does not block a fresh decode.
-        assert!(matches!(
-            plan_analysis(Some(&a), Some(&b), Some(&b), &mut cache),
-            Plan::Decode
-        ));
-        // An unkeyable source cannot be memoized.
-        assert!(matches!(
-            plan_analysis(None, None, None, &mut cache),
-            Plan::Decode
-        ));
-    }
-
-    #[test]
-    fn plan_serves_a_cached_track_without_decoding() {
-        let a = AnalysisKey::from_source("file:///a.mp3");
-        let mut cache = TrackAnalysisCache::new(None);
-        cache.put(a.clone(), analysis());
-        assert!(matches!(
-            plan_analysis(Some(&a), None, None, &mut cache),
-            Plan::Serve(_)
-        ));
     }
 }

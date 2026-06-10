@@ -91,6 +91,34 @@ flowchart LR
     ST --> DF --> Node --> AW --> Ring --> A
 ```
 
+## Track analysis (shared worker)
+
+`analysis/` owns the reusable per-track analysis engine consumed by the demo
+app today and by mobile surfaces (kithara-ffi) next:
+
+- **`TrackAnalyzer`** — streaming analyzer fed every decoded chunk once;
+  `finish` folds its result into the shared `TrackAnalysis` aggregate
+  (`waveform` today; bpm/pitch slots come with their analyzers).
+- **`AnalyzerRegistry`** — the set of analyzer factories to run per track.
+  Factories take the first chunk's `PcmSpec`, so analyzers can size to the
+  source sample rate. Decode once, feed all of them.
+- **`analyze_reader`** — the synchronous decode loop over any `PcmReader`:
+  cancel-aware, `Pending`-tolerant, `None` on cancel/error/empty input.
+  Opening the source stays with the caller (`Resource` lives in
+  kithara-play; FFI opens its own reader) so this crate gains no upward
+  dependency.
+- **`AnalysisWorker`** — a long-lived named thread running `analyze_reader`
+  per queued job. Jobs carry caller-owned cancel tokens that must be
+  children of the same scope that owns the worker (one cancel hierarchy);
+  the caller keeps at most one job in flight and cancels the previous token
+  to preempt. Results arrive on a `watch` channel; on failure/cancel the
+  sender drops without a value.
+- **Feature seam, runtime switch**: the `analysis` cargo feature gates only
+  the FFT stack (`realfft` + `WaveformAnalyzer`). The analysis API above is
+  always compiled; `waveform_analyzer(buckets)` returns `None` without the
+  feature, so consumers use one runtime check (empty registry → skip
+  scheduling) instead of spreading `#[cfg]` upward.
+
 ## Waveform
 
 Pure, synchronous DSP that turns decoded PCM into a `Waveform` for display. No
@@ -152,10 +180,12 @@ the band -> color mapping and orchestration live in the consumer crates.
 ## Time-Stretch (key-lock)
 
 Preserve-pitch tempo lives in the pre-resampler `TimeStretchProcessor` slot.
-`create_effects` builds one of two chains:
+The whole stretch DSP exists only when a backend is compiled in
+(`stretch-signalsmith` / `stretch-bungee`, native targets). `create_effects`
+builds one of two chains:
 
 - **resampler-first** (`stretch = None`): no stretch slot; the resampler reads `playback_rate` directly. Used by plain (non-DJ) playback.
-- **tempo mode** (`stretch = Some`): a `TimeStretchProcessor` runs *before* the resampler. It is **always present** in tempo mode regardless of key-lock, and reads the live `StretchControls` (`speed` + `keylock` + `backend`) each chunk.
+- **tempo mode** (`stretch = Some`): a `TimeStretchProcessor` runs *before* the resampler. It is **always present** in tempo mode regardless of key-lock, and reads the live `StretchControls` (`speed` + `keylock` + `backend`) each chunk. Without a compiled-in backend (default native build, wasm) `StretchControls` carries only `speed`, no slot is added, and the resampler follows the speed atomic directly — same audible behavior as key-lock off.
 
 **Live speed routing — the one seam to know.** `StretchControls` is the single source of truth, shared (`Arc`) between the consumer/UI and this slot. The slot owns the *speed split* and is the sole writer of the resampler's rate atomic (`resampler_rate`, created in `create_effects` and handed to both the slot and the resampler that follows it):
 
@@ -168,11 +198,10 @@ Both effects run sequentially on the same worker thread, so the resampler always
 
 **Backend seam.** `TimeStretchProcessor` owns one `Box<dyn StretchBackend>` selected from `controls.backend()` and rebuilt in place on a live backend swap (or a source-spec change); the trait is DSP-only (interleaved `process`/`flush`/`set_ratio`/`set_pitch`/`max_output_samples`/`reset`) so all `PcmChunk`/pool/timeline plumbing lives in one place and each library is a small adapter. `set_ratio` is the time factor (`output/input`, >1 = slower); `set_pitch` is independent (1.0 = pitch locked) — that decoupling is what makes key-lock real. Backends select statically via `StretchBackendKind` + `cfg`:
 
-- `timestretch` (pure Rust) — always compiled, the only wasm backend.
 - `signalsmith-stretch` (C++ FFI) — native-only, feature `stretch-signalsmith`.
 - `bungee` (C++ FFI) — native-only, feature `stretch-bungee`.
 
-`StretchBackendKind::ALL` lists exactly the backends compiled into the current target, so the UI selector never offers an absent one — selecting an uncompiled backend is un-representable, not a runtime error.
+`StretchBackendKind::ALL` lists exactly the backends compiled into the current target (the default is `ALL[0]`, discriminants are stable: 1 = Signalsmith, 2 = Bungee), so the UI selector never offers an absent one — selecting an uncompiled backend is un-representable, not a runtime error. With no `stretch-*` feature the kind, the trait, and the processor are compiled out entirely; only `StretchControls` (speed) remains.
 
 **Timeline.** A stretch changes the output frame *count*, not the rate: each emitted chunk recomputes `meta.frames` but preserves `timestamp`/`end_timestamp`/`spec` verbatim (the resampler's `finalize_resample_chunk` recipe), so the playhead stays in source-track time — a 3-minute track reads `0:00→3:00` even at 50 % tempo. `bungee` has no clean tail drain through its high-level `Stream`, so its `flush` is a no-op (the final ~latency of audio is dropped at EOS rather than padded with stretched silence). If `bungee`'s `Stream::new` ever fails at construction (only on an invalid spec — unreachable for real stereo/mono audio), the backend warns once and then emits silence until the track is reloaded, rather than erroring per chunk.
 
@@ -180,7 +209,7 @@ Both effects run sequentially on the same worker thread, so the resampler always
 
 The audio worker measures its own processing cost and publishes it to a shared `EngineLoad` (lock-free `portable_atomic::AtomicF32`s — safe on the forbid-blocking produce core, no allocation). Each time `DecoderNode::tick` produces a chunk it times the whole decode→effects step (`source.step_track`: decode + resampler + EQ + time-stretch) with `Instant` and divides by the produced audio duration (`frames / sample_rate`), EWMA-smoothed. `EngineLoadSnapshot` exposes:
 
-- `realtime` — produced audio-seconds per CPU-second (`>1` = faster than realtime); the cost-per-sample metric, the live counterpart of the removed `stretch_backends` bench.
+- `realtime` — produced audio-seconds per CPU-second (`>1` = faster than realtime); the cost-per-sample metric for comparing stretch backends live.
 - `load` — the `busy / audio` fraction (`0.05` = 5%).
 - `ms` — wall time per produced chunk (latency of one processing cycle).
 
@@ -254,6 +283,7 @@ The whole pipeline runs in one space: **decoder/song time** (`PcmMeta.timestamp`
 <tr><td><code>memprof</code></td><td>no</td><td>Allocation tracking via <code>hotpath/hotpath-alloc</code></td></tr>
 <tr><td><code>stretch-signalsmith</code></td><td>no</td><td>Native-only <code>signalsmith-stretch</code> (C++) time-stretch backend</td></tr>
 <tr><td><code>stretch-bungee</code></td><td>no</td><td>Native-only <code>bungee</code> (C++) time-stretch backend</td></tr>
+<tr><td><code>analysis</code></td><td>no</td><td>FFT stack for track analysis (<code>realfft</code> + <code>WaveformAnalyzer</code>); without it <code>waveform_analyzer()</code> returns <code>None</code> and the analysis API stays inert</td></tr>
 </table>
 
 ## Integration

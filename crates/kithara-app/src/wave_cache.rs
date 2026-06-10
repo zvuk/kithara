@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fmt::{self, Write as _},
     fs,
     io::Write as _,
@@ -15,6 +15,8 @@ use crate::waveform::TrackAnalysis;
 
 /// Cap on persisted blobs (~18 KB each); the oldest are pruned past it.
 const MAX_DISK_ENTRIES: usize = 512;
+/// Cap on the in-memory tier; past it the oldest entries fall back to disk.
+const MAX_MEM_ENTRIES: usize = 64;
 const ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0001;
 
 /// Stable, source-derived cache key for a track's analysis.
@@ -62,6 +64,8 @@ pub(crate) fn source_key(source: &TrackSource) -> Option<AnalysisKey> {
 /// store. Owned by the single listener task, so it needs no synchronization.
 pub(crate) struct TrackAnalysisCache {
     mem: HashMap<AnalysisKey, TrackAnalysis>,
+    /// Insertion order of `mem` keys; the oldest is evicted past the cap.
+    order: VecDeque<AnalysisKey>,
     dir: Option<PathBuf>,
 }
 
@@ -69,6 +73,7 @@ impl TrackAnalysisCache {
     pub(crate) fn new(dir: Option<PathBuf>) -> Self {
         Self {
             mem: HashMap::new(),
+            order: VecDeque::new(),
             dir,
         }
     }
@@ -81,14 +86,32 @@ impl TrackAnalysisCache {
         }
         let analysis = self.load_disk(key)?;
         debug!("track analysis cache: disk hit");
-        self.mem.insert(key.clone(), analysis.clone());
+        self.remember(key.clone(), analysis.clone());
         Some(analysis)
     }
 
     /// Store freshly derived track analysis in both tiers.
     pub(crate) fn put(&mut self, key: AnalysisKey, analysis: TrackAnalysis) {
+        // An analysis with no meaningful slots would be served forever as
+        // emptiness on later hits; skip memoizing it in either tier.
+        if analysis.waveform.is_none() {
+            return;
+        }
         self.store_disk(&key, &analysis);
-        self.mem.insert(key, analysis);
+        self.remember(key, analysis);
+    }
+
+    /// Insert into the bounded memory tier, evicting the oldest entry past
+    /// [`MAX_MEM_ENTRIES`]. Evicted entries are still served from disk.
+    fn remember(&mut self, key: AnalysisKey, analysis: TrackAnalysis) {
+        if self.mem.insert(key.clone(), analysis).is_none() {
+            self.order.push_back(key);
+        }
+        while self.order.len() > MAX_MEM_ENTRIES {
+            if let Some(old) = self.order.pop_front() {
+                self.mem.remove(&old);
+            }
+        }
     }
 
     fn load_disk(&self, key: &AnalysisKey) -> Option<TrackAnalysis> {
@@ -107,8 +130,13 @@ impl TrackAnalysisCache {
         let Some(dir) = self.dir.as_ref() else {
             return;
         };
+        // The blob format carries the waveform; an analysis without one has
+        // nothing durable to persist.
+        let Some(waveform) = analysis.waveform.as_ref() else {
+            return;
+        };
         let path = dir.join(key.file_name());
-        let bytes = match analysis_to_bytes(analysis) {
+        let bytes = match analysis_to_bytes(waveform) {
             Ok(bytes) => bytes,
             Err(e) => {
                 warn!(?e, ?path, "track analysis cache: encode failed");
@@ -145,8 +173,8 @@ impl fmt::Display for AnalysisBytesError {
     }
 }
 
-fn analysis_to_bytes(analysis: &TrackAnalysis) -> Result<Vec<u8>, AnalysisBytesError> {
-    let waveform = analysis.waveform.to_bytes();
+fn analysis_to_bytes(waveform: &kithara::audio::Waveform) -> Result<Vec<u8>, AnalysisBytesError> {
+    let waveform = waveform.to_bytes();
     let waveform_len = u64::try_from(waveform.len()).map_err(|_| AnalysisBytesError::TooLarge)?;
     let mut out = Vec::with_capacity(4 + 8 + waveform.len());
     out.extend_from_slice(&ANALYSIS_BYTES_VERSION.to_le_bytes());
@@ -175,7 +203,9 @@ fn analysis_from_bytes(bytes: &[u8]) -> Result<TrackAnalysis, AnalysisBytesError
     }
     let waveform = kithara::audio::Waveform::from_bytes(waveform_bytes)
         .map_err(|_| AnalysisBytesError::Corrupt)?;
-    Ok(TrackAnalysis { waveform })
+    let mut analysis = TrackAnalysis::default();
+    analysis.waveform = Some(waveform);
+    Ok(analysis)
 }
 
 fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, AnalysisBytesError> {
@@ -265,9 +295,9 @@ mod tests {
     }
 
     fn analysis() -> TrackAnalysis {
-        TrackAnalysis {
-            waveform: wave(),
-        }
+        let mut analysis = TrackAnalysis::default();
+        analysis.waveform = Some(wave());
+        analysis
     }
 
     #[kithara::test]
@@ -277,7 +307,40 @@ mod tests {
         assert!(cache.get(&key).is_none());
         cache.put(key.clone(), analysis());
         let cached = cache.get(&key).expect("analysis must be cached");
-        assert_eq!(cached.waveform.len(), 1);
+        assert_eq!(cached.waveform.expect("waveform cached").len(), 1);
+    }
+
+    #[kithara::test]
+    fn empty_analysis_is_not_memoized() {
+        let mut cache = TrackAnalysisCache::new(None);
+        let key = AnalysisKey::from_source("file:///empty.mp3");
+        cache.put(key.clone(), TrackAnalysis::default());
+        assert!(
+            cache.get(&key).is_none(),
+            "an analysis with no slots must not be served from the cache"
+        );
+    }
+
+    #[kithara::test]
+    fn memory_tier_is_bounded_with_disk_fallback() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut cache = TrackAnalysisCache::new(Some(dir.path().to_path_buf()));
+        for i in 0..=super::MAX_MEM_ENTRIES {
+            cache.put(
+                AnalysisKey::from_source(&format!("file:///t{i}.mp3")),
+                analysis(),
+            );
+        }
+        assert!(
+            cache.mem.len() <= super::MAX_MEM_ENTRIES,
+            "memory tier stays bounded under a whole-library sweep"
+        );
+        let oldest = AnalysisKey::from_source("file:///t0.mp3");
+        assert!(!cache.mem.contains_key(&oldest), "oldest entry evicted");
+        assert!(
+            cache.get(&oldest).is_some(),
+            "evicted entry is still served from the disk tier"
+        );
     }
 
     #[kithara::test]
@@ -290,6 +353,6 @@ mod tests {
         // A new cache with an empty memory tier must still find the blob.
         let mut reader = TrackAnalysisCache::new(Some(dir.path().to_path_buf()));
         let cached = reader.get(&key).expect("disk analysis must load");
-        assert_eq!(cached.waveform.len(), 1);
+        assert_eq!(cached.waveform.expect("waveform persisted").len(), 1);
     }
 }

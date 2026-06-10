@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use iced::{Size, window};
-use kithara::play::TimestretchControls;
+use kithara::play::StretchControls;
 use kithara_queue::Queue;
 
 use super::{app::Kithara, fonts, update, view};
@@ -66,7 +66,7 @@ impl Frontend for GuiFrontend {
     fn run_loop(
         &mut self,
         queue: Arc<Queue>,
-        timestretch: Arc<TimestretchControls>,
+        timestretch: Arc<StretchControls>,
     ) -> Result<(), FrontendError> {
         let palette = self.palette;
         let config = self.config.clone();

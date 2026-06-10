@@ -4,7 +4,7 @@ use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModif
 use kithara::{
     abr::AbrMode,
     events::{AppEvent, Event},
-    play::TimestretchControls,
+    play::StretchControls,
 };
 use kithara_queue::{Queue, QueueEvent, TrackId, Transition};
 use tokio::{sync::broadcast::error::TryRecvError, task};
@@ -40,7 +40,7 @@ type RunnerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 /// Returns an error if the TUI event loop fails.
 pub(super) async fn run_tui(
     queue: Arc<Queue>,
-    timestretch: Arc<TimestretchControls>,
+    timestretch: Arc<StretchControls>,
     config: &crate::config::AppConfig,
 ) -> RunnerResult {
     let palette: tui::TuiPalette = config.palette.into();

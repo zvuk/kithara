@@ -1,6 +1,7 @@
 #[cfg(not(any(feature = "tui", feature = "gui", feature = "lib-only")))]
 compile_error!("Enable at least one frontend feature: `tui`, `gui`, or `lib-only`");
 
+mod analysis;
 pub mod baked;
 pub mod config;
 pub mod crossfade;

@@ -69,25 +69,30 @@ cut points, and a `beat_aligned` flag. Beat/BPM data types (`BeatGrid`,
 
 ## Tempo & Key-Lock
 
-`TimestretchControls` (one per deck, in `PlayerConfig`) wraps `kithara-audio`'s
-`StretchControls` — a single `Arc` holding `speed` + `keylock` + `backend`. It is
-the one source of truth, shared with the worker's effect chain, which reads it each
-chunk. Rate setters (`set_rate`, `play`) and `set_keylock` / `set_backend` all write
-this one handle; there is no second rate atomic and no manual mirror.
+`kithara-audio`'s `StretchControls` (one per deck, in `PlayerConfig.timestretch`)
+is a single `Arc` holding `speed` — plus `keylock` + `backend` when a stretch
+backend is compiled in (`stretch-signalsmith` / `stretch-bungee`). It is the one
+source of truth, shared between the UI and the worker's effect chain, which reads
+it each chunk. Rate setters (`set_rate`, `play`) and `set_keylock` / `set_backend`
+all write this one handle; there is no second rate atomic and no manual mirror.
 
 `prepare_config` always passes the shared controls into every track (`stretch =
-Some(..)`), so the effect chain runs a `TimeStretchProcessor` in tempo mode whether
-or not key-lock is on:
+Some(..)`). With a compiled-in backend the effect chain runs a
+`TimeStretchProcessor` in tempo mode whether or not key-lock is on:
 
 - **key-lock off** (default): the stretch slot bypasses (PCM forwarded untouched)
   and routes `speed` to the resampler — changing speed shifts pitch (vinyl-style).
 - **key-lock on**: the stretch slot changes tempo with pitch held and pins the
   resampler to 1.0.
 
+Without one (default native build, wasm) there is no key-lock: the resampler
+follows the shared speed atomic directly, identical to key-lock off.
+
 Because the controls are read each chunk, **key-lock, backend, and speed all apply
 live, mid-track — no reload.** Switching key-lock or backend resets the FFT
 backend's buffer, so a brief transient (~100–300 ms) is expected at the switch.
-`Queue` delegates `set_keylock` / `set_backend` / `set_rate` to the player.
+`Queue` delegates `set_rate` to the player; key-lock and backend are set by the
+consumer directly on the shared `StretchControls` handle.
 
 ## Events
 

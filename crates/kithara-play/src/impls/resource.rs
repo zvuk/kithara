@@ -129,6 +129,13 @@ impl Resource {
         self.inner.metadata()
     }
 
+    /// Unwrap into the underlying reader, e.g. to hand the opened source to
+    /// the shared analysis worker (`kithara_audio::analysis`).
+    #[must_use]
+    pub fn into_reader(self) -> Box<dyn PcmReader> {
+        self.inner
+    }
+
     /// Read the next decoded chunk with full metadata.
     ///
     /// # Errors

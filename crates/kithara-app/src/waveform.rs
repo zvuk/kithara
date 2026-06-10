@@ -1,74 +1,90 @@
+use std::sync::Arc;
+
 use kithara::{
-    audio::{AnalysisParams, ChunkOutcome, Waveform, WaveformAnalyzer},
+    audio::{
+        PcmReader,
+        analysis::{AnalysisWorker, AnalyzerRegistry, waveform_analyzer},
+    },
     prelude::{Resource, ResourceConfig},
 };
-use kithara_platform::{CancellationToken, thread::sleep, tokio::task::spawn_blocking};
+use kithara_platform::CancellationToken;
 use tokio::{sync::watch, task::JoinHandle};
-use tracing::{debug, warn};
+use tracing::warn;
 
-mod consts {
-    use std::time::Duration;
+pub use kithara::audio::analysis::TrackAnalysis;
 
-    /// Backoff while the reader is buffering and has no chunk ready.
-    pub(super) const PENDING_BACKOFF: Duration = Duration::from_millis(5);
-}
-use consts::*;
-
-/// Whole-track source analysis.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub struct TrackAnalysis {
-    pub waveform: Waveform,
-}
-
-/// Per-deck track analysis. Not a singleton: each deck owns one with its
-/// own cancel scope (a child of the app master), so two decks analyse
-/// independently. Dropping it cancels any in-flight run.
+/// App-side handle over the shared [`AnalysisWorker`]: opens the resource
+/// off the player runtime, hands the opened reader to the worker thread,
+/// and keeps at most one run in flight. Dropping it cancels the run and
+/// stops the worker.
 pub struct TrackAnalysisRunner {
     cancel: CancellationToken,
+    worker: Arc<AnalysisWorker>,
     current: Option<RunHandle>,
+    /// Whether any analyzer is compiled in; without one a decode pass would
+    /// produce nothing, so the driver skips analysis entirely.
+    active: bool,
 }
 
-/// An in-flight run: its child token and the spawned task. Owned so the task
-/// is never detached. Teardown is cooperative - cancelling the token makes the
-/// decode loop exit at its next per-chunk check; `spawn_blocking` cannot be
-/// force-aborted and `Drop` cannot await, so this is cancellation, not a join.
+/// An in-flight run: its child token and the spawned open/forward task.
+/// Teardown is cooperative — cancelling the token exits the worker's decode
+/// loop at its next per-chunk check.
 struct RunHandle {
     cancel: CancellationToken,
     task: JoinHandle<()>,
 }
 
 impl TrackAnalysisRunner {
-    /// `master` must be a child of the app master cancel; this run scope is a
-    /// child of it.
+    /// `master` must be a child of the app master cancel; the worker thread
+    /// and every run scope live under it. `buckets` is the waveform
+    /// resolution registered with the worker.
     #[must_use]
-    pub fn new(master: &CancellationToken) -> Self {
+    pub fn new(master: &CancellationToken, buckets: usize) -> Self {
+        let cancel = master.child_token();
+        let mut registry = AnalyzerRegistry::default();
+        if let Some(factory) = waveform_analyzer(buckets) {
+            registry.register(factory);
+        }
+        let active = !registry.is_empty();
+        let worker = Arc::new(AnalysisWorker::new(&cancel, registry));
         Self {
-            cancel: master.child_token(),
+            cancel,
+            worker,
             current: None,
+            active,
         }
     }
 
-    /// Cancel any prior run and start analysing `config` into `buckets` off the
-    /// player runtime. The latest result (or none on failure/cancel) arrives on
-    /// the returned receiver.
-    pub fn analyze(
-        &mut self,
-        config: ResourceConfig,
-        buckets: usize,
-    ) -> watch::Receiver<Option<TrackAnalysis>> {
+    /// `false` when the build carries no analyzers (the `analysis` cargo
+    /// feature is off) — the runtime signal to skip analysis scheduling.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Cancel any prior run and queue `config` for analysis. The latest
+    /// result (or none on failure/cancel) arrives on the returned receiver.
+    ///
+    /// Two watch channels bridge here on purpose: this receiver must exist
+    /// before the async `Resource` open completes, while the worker hands
+    /// out its own channel only once the opened reader is queued.
+    pub fn analyze(&mut self, config: ResourceConfig) -> watch::Receiver<Option<TrackAnalysis>> {
         self.clear();
 
         let run = self.cancel.child_token();
         let (tx, rx) = watch::channel(None);
-        let task = tokio::spawn(run_analysis(config, buckets, run.clone(), tx));
+        let task = tokio::spawn(run_analysis(
+            Arc::clone(&self.worker),
+            config,
+            run.clone(),
+            tx,
+        ));
         self.current = Some(RunHandle { cancel: run, task });
         rx
     }
 
-    /// Cancel the in-flight run, if any, without starting a new one. Cancels
-    /// the run token (the blocking decode exits at its next chunk check) and
-    /// aborts the async wrapper so its task and channel drop promptly.
+    /// Cancel the in-flight run, if any, without starting a new one. The
+    /// worker skips or aborts the job at its next cancel check.
     pub fn clear(&mut self) {
         if let Some(prev) = self.current.take() {
             prev.cancel.cancel();
@@ -84,96 +100,49 @@ impl Drop for TrackAnalysisRunner {
     }
 }
 
-/// Open and decode `config` end to end off the player runtime, sending the
-/// finished [`Waveform`] on `tx`. Nothing is sent on failure or cancel.
+/// Open `config` and run it through the shared worker, forwarding the
+/// result to `tx`. Nothing is sent on failure or cancel.
 async fn run_analysis(
+    worker: Arc<AnalysisWorker>,
     config: ResourceConfig,
-    buckets: usize,
     cancel: CancellationToken,
     tx: watch::Sender<Option<TrackAnalysis>>,
 ) {
-    if let Some(analysis) = analyze_track(config, buckets, cancel).await {
+    let Some(reader) = open_reader(config, &cancel).await else {
+        return;
+    };
+    let mut rx = worker.analyze(reader, cancel);
+    if rx.changed().await.is_err() {
+        return;
+    }
+    let analysis = rx.borrow().clone();
+    if let Some(analysis) = analysis {
         // The receiver may be gone (deck swapped); a failed send is fine.
         let _ = tx.send(Some(analysis));
     }
 }
 
-/// Decode `config` end to end off the player runtime and return the finished
-/// [`Waveform`]. `None` on a zero bucket count, an up-front cancel, a resource
-/// failure, or empty input.
-pub async fn analyze(
-    config: ResourceConfig,
-    buckets: usize,
-    cancel: CancellationToken,
-) -> Option<Waveform> {
-    analyze_track(config, buckets, cancel)
-        .await
-        .map(|analysis| analysis.waveform)
-}
-
-/// Decode `config` end to end off the player runtime and return the finished
-/// source analysis. `None` on a zero bucket count, an up-front cancel, a
-/// resource failure, or empty input.
-pub async fn analyze_track(
-    config: ResourceConfig,
-    buckets: usize,
-    cancel: CancellationToken,
-) -> Option<TrackAnalysis> {
-    if buckets == 0 || cancel.is_cancelled() {
+/// Open the resource under the run's cancel scope (so preemption and app
+/// shutdown tear the standalone audio worker down top-down) and unwrap the
+/// reader for the analysis worker.
+async fn open_reader(
+    mut config: ResourceConfig,
+    cancel: &CancellationToken,
+) -> Option<Box<dyn PcmReader>> {
+    if cancel.is_cancelled() {
         return None;
     }
-
+    config.cancel = Some(cancel.child_token());
     let mut resource = match Resource::new(config).await {
         Ok(r) => r,
         Err(e) => {
-            warn!(?e, "waveform: resource open failed");
+            warn!(?e, "analysis: resource open failed");
             return None;
         }
     };
     if let Err(e) = resource.preload().await {
-        warn!(?e, "waveform: preload failed");
+        warn!(?e, "analysis: preload failed");
         return None;
     }
-
-    spawn_blocking(move || decode_track(resource, buckets, &cancel))
-        .await
-        .ok()
-        .flatten()
-}
-
-/// Decode the resource into a [`TrackAnalysis`] of `buckets` columns. The analyzer is built lazily
-/// on the first chunk so it can take the source `sample_rate`.
-/// Returns `None` on cancel, decode error, or empty input.
-fn decode_track(
-    mut resource: Resource,
-    buckets: usize,
-    cancel: &CancellationToken,
-) -> Option<TrackAnalysis> {
-    let mut analyzer: Option<WaveformAnalyzer> = None;
-    loop {
-        if cancel.is_cancelled() {
-            debug!("waveform: analysis cancelled");
-            return None;
-        }
-        match resource.next_chunk() {
-            Ok(ChunkOutcome::Chunk(chunk)) => {
-                let channels = usize::from(chunk.meta.spec.channels);
-                let sample_rate = chunk.meta.spec.sample_rate;
-                let analyzer = analyzer.get_or_insert_with(|| {
-                    WaveformAnalyzer::new(sample_rate, AnalysisParams::default())
-                });
-                analyzer.push_interleaved(&chunk.pcm[..], channels);
-            }
-            Ok(ChunkOutcome::Pending { .. }) => sleep(PENDING_BACKOFF),
-            Ok(ChunkOutcome::Eof { .. }) => {
-                return analyzer.map(|a| TrackAnalysis {
-                    waveform: a.finalize(buckets),
-                });
-            }
-            Err(e) => {
-                warn!(?e, "waveform: decode error");
-                return None;
-            }
-        }
-    }
+    Some(resource.into_reader())
 }

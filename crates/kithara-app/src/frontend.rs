@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kithara::play::TimestretchControls;
+use kithara::play::StretchControls;
 use kithara_queue::Queue;
 
 use crate::config::AppConfig;
@@ -32,7 +32,7 @@ pub trait Frontend: Sized {
     fn run_loop(
         &mut self,
         queue: Arc<Queue>,
-        timestretch: Arc<TimestretchControls>,
+        timestretch: Arc<StretchControls>,
     ) -> Result<(), FrontendError>;
 
     /// Clean up resources (restore terminal / close window).

@@ -12,6 +12,9 @@ pub(crate) struct SignalsmithBackend {
     inner: Stretch,
     channels: usize,
     ratio: f64,
+    /// The latency tail was already drained; `flush` is one-shot per stream
+    /// end or the caller's drain loop (`drain_effects`) would never finish.
+    flushed: bool,
 }
 
 impl SignalsmithBackend {
@@ -23,6 +26,7 @@ impl SignalsmithBackend {
             inner,
             channels,
             ratio: 1.0,
+            flushed: false,
         }
     }
 
@@ -38,6 +42,7 @@ impl StretchBackend for SignalsmithBackend {
         if in_frames == 0 {
             return Ok(());
         }
+        self.flushed = false;
         let start = out.len();
         let want = self.out_frames(in_frames).saturating_mul(self.channels);
         out.resize(start + want, 0.0);
@@ -46,6 +51,10 @@ impl StretchBackend for SignalsmithBackend {
     }
 
     fn flush(&mut self, out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
+        if self.flushed {
+            return Ok(());
+        }
+        self.flushed = true;
         let tail = self.inner.output_latency().saturating_mul(self.channels);
         let start = out.len();
         out.resize(start + tail, 0.0);
@@ -78,5 +87,6 @@ impl StretchBackend for SignalsmithBackend {
 
     fn reset(&mut self) {
         self.inner.reset();
+        self.flushed = false;
     }
 }

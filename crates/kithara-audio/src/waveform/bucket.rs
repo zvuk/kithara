@@ -96,7 +96,7 @@ impl Waveform {
         if !body.len().is_multiple_of(BUCKET_BYTES) {
             return Err(WaveformBytesError::Corrupt);
         }
-        
+
         let mut buckets = Vec::with_capacity(body.len() / BUCKET_BYTES);
         for c in body.chunks_exact(BUCKET_BYTES) {
             let low = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);

@@ -11,7 +11,7 @@ use kithara::{
     assets::{FlushHub, FlushPolicy},
     audio::generate_log_spaced_bands,
     net::{HttpClient, NetOptions},
-    play::{PlayerConfig, PlayerImpl, TimestretchControls},
+    play::{PlayerConfig, PlayerImpl, StretchControls},
     stream::dl::{Downloader, DownloaderConfig},
 };
 #[cfg(not(feature = "tui"))]
@@ -112,7 +112,7 @@ fn main() -> AppResult {
         .with_tracks(args.tracks)
         .with_should_accept_invalid_certs(args.insecure);
 
-    let timestretch = TimestretchControls::new(1.0);
+    let timestretch = StretchControls::new(1.0);
     let player_config = PlayerConfig::builder()
         .cancel(app_cancel.child_token())
         .crossfade_duration(config.crossfade_seconds)

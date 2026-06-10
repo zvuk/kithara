@@ -1,7 +1,8 @@
 //! End-to-end proof that a waveform analysis and a concurrent player of
 //! the same URL, sharing one app-wide `AssetStore`, cooperate on a single
-//! network download. This exercises the real `kithara_app::waveform::analyze`
-//! driver (open + preload + whole-file decode), not a bare `Resource`.
+//! network download. This exercises the production
+//! `kithara_app::waveform::TrackAnalysisRunner` (open + preload + shared
+//! analysis-worker decode), not a bare `Resource`.
 
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
@@ -21,7 +22,7 @@ use kithara::{
     audio::ChunkOutcome,
     prelude::{Resource, ResourceConfig},
 };
-use kithara_app::waveform::analyze;
+use kithara_app::waveform::TrackAnalysisRunner;
 use kithara_integration_tests::{TestHttpServer, create_test_wav};
 use kithara_platform::{CancellationToken, tokio::task::spawn_blocking};
 
@@ -88,11 +89,9 @@ async fn waveform_and_player_share_one_get() {
         .build();
 
     // Run both concurrently so they cooperate on one download.
-    let analysis = tokio::spawn(analyze(
-        waveform_cfg,
-        WAVEFORM_BUCKETS,
-        CancellationToken::default(),
-    ));
+    let master = CancellationToken::default();
+    let mut runner = TrackAnalysisRunner::new(&master, WAVEFORM_BUCKETS);
+    let mut analysis_rx = runner.analyze(waveform_cfg);
 
     let mut player = Resource::new(player_cfg)
         .await
@@ -100,10 +99,16 @@ async fn waveform_and_player_share_one_get() {
     player.preload().await.expect("player preload");
     let player_drain = spawn_blocking(move || drain_to_eof(player));
 
-    let envelope = analysis
+    analysis_rx
+        .changed()
         .await
-        .expect("analysis task")
-        .expect("analysis must produce an envelope");
+        .expect("analysis must produce a result");
+    let envelope = analysis_rx
+        .borrow()
+        .clone()
+        .expect("analysis result present")
+        .waveform
+        .expect("waveform analyzer fills its slot");
     let player_ok = player_drain.await.expect("player drain task");
 
     assert!(player_ok, "player must decode the shared WAV to EOF");

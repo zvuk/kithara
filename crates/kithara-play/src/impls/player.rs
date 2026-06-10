@@ -9,7 +9,7 @@ use std::{
 use bon::Builder;
 use kithara_abr::{AbrController, AbrSettings};
 use kithara_audio::{
-    AudioWorkerHandle, EngineLoad, EngineLoadSnapshot, EqBandConfig, SeekOutcome,
+    AudioWorkerHandle, EngineLoad, EngineLoadSnapshot, EqBandConfig, SeekOutcome, StretchControls,
     generate_log_spaced_bands,
 };
 use kithara_bufpool::PcmPool;
@@ -30,7 +30,6 @@ use super::{
 #[rustfmt::skip]
 use crate::traits::engine::Engine;
 use crate::{
-    TimestretchControls,
     error::PlayError,
     events::PlayerEvent,
     impls::{
@@ -97,9 +96,10 @@ pub struct PlayerConfig {
     /// Maximum concurrent slots in the engine. Default: 4.
     #[builder(default = 4)]
     pub max_slots: usize,
-    /// Per-deck time-stretch control handle.
-    #[builder(default = TimestretchControls::new(1.0))]
-    pub timestretch: Arc<TimestretchControls>,
+    /// Per-deck time-stretch control handle, shared with the UI and the
+    /// worker effect chain (see `kithara_audio::StretchControls`).
+    #[builder(default = StretchControls::new(1.0))]
+    pub timestretch: Arc<StretchControls>,
 }
 
 impl fmt::Debug for PlayerConfig {
@@ -744,10 +744,11 @@ impl PlayerImpl {
         // player's master when none was supplied.
         let parent = config.cancel.unwrap_or_else(|| self.cancel.clone());
         let cancel = Some(parent.child_token());
-        // Always engage tempo mode: the stretch slot is present regardless of
-        // key-lock (it bypasses cleanly when off), so key-lock and backend can
-        // be toggled live without reloading the track.
-        let stretch = Some(self.config.timestretch.shared());
+        // Always engage tempo mode: with a stretch backend compiled in, the
+        // stretch slot is present regardless of key-lock (it bypasses cleanly
+        // when off), so key-lock and backend can be toggled live without
+        // reloading the track. Without one, the resampler follows the speed.
+        let stretch = Some(Arc::clone(&self.config.timestretch));
         super::config::ResourceConfig {
             bus,
             cancel,
@@ -1373,7 +1374,7 @@ mod tests {
             auto_advance_enabled: true,
             session: None,
             cancel: None,
-            timestretch: TimestretchControls::new(1.0),
+            timestretch: StretchControls::new(1.0),
         };
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);

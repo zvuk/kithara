@@ -68,7 +68,10 @@ impl EngineLoad {
             return;
         }
         let busy_secs = busy.as_secs_f64();
-        let load = ewma(self.load.load(Ordering::Relaxed), to_f32(busy_secs / audio_secs));
+        let load = ewma(
+            self.load.load(Ordering::Relaxed),
+            to_f32(busy_secs / audio_secs),
+        );
         let ms = ewma(self.ms.load(Ordering::Relaxed), to_f32(busy_secs * 1000.0));
         let realtime = if load > 0.0 { 1.0 / load } else { 0.0 };
         self.realtime.store(realtime, Ordering::Relaxed);
@@ -129,7 +132,10 @@ mod tests {
         let s = meter.snapshot();
         assert!(s.is_active(), "active after producing: {s:?}");
         assert!(s.realtime > 1.0, "faster than realtime: {s:?}");
-        assert!(s.load > 0.0 && s.load < 1.0, "load fraction in (0,1): {s:?}");
+        assert!(
+            s.load > 0.0 && s.load < 1.0,
+            "load fraction in (0,1): {s:?}"
+        );
         assert!(s.ms > 0.0, "ms populated: {s:?}");
     }
 }

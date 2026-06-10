@@ -216,7 +216,11 @@ impl File {
     /// Wrapped in `#[kithara::hang_watchdog]` so a stale tmp from a
     /// crashed-out previous process (which never releases the
     /// filesystem-level signal) surfaces as a deterministic panic
-    /// rather than an indefinite hang.
+    /// rather than an indefinite hang. A *live* sibling keeps writing,
+    /// so the tmp grows; only a frozen tmp counts as no-progress —
+    /// otherwise a second consumer of the same URL (e.g. waveform
+    /// analysis alongside the player) would panic on any download
+    /// longer than the watchdog timeout.
     #[kithara::hang_watchdog]
     async fn create_remote_wait_for_claim(
         url: url::Url,
@@ -229,14 +233,21 @@ impl File {
         /// `local_queue_playlist_behavior` resolves in a handful of ticks but
         /// long enough not to busy-spin a tokio worker.
         const TMP_CLAIMED_POLL_INTERVAL: Duration = Duration::from_millis(10);
+        let mut last_len: Option<u64> = None;
         loop {
             match Self::create_remote(url.clone(), config.clone(), cancel.clone()) {
                 Ok(src) => {
                     hang_reset!();
                     return Ok(src);
                 }
-                Err(SourceError::Assets(AssetsError::Storage(StorageError::TmpClaimed(_)))) => {
-                    hang_tick!();
+                Err(SourceError::Assets(AssetsError::Storage(StorageError::TmpClaimed(tmp)))) => {
+                    let len = std::fs::metadata(&tmp).ok().map(|m| m.len());
+                    if len == last_len {
+                        hang_tick!();
+                    } else {
+                        last_len = len;
+                        hang_reset!();
+                    }
                     tokio::time::sleep(TMP_CLAIMED_POLL_INTERVAL).await;
                 }
                 Err(e) => return Err(StreamSourceError::from(e)),

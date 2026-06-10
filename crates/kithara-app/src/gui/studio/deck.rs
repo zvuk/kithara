@@ -161,7 +161,7 @@ fn waveform_cluster(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
         .ui_state
         .analysis
         .as_ref()
-        .map(|analysis| &analysis.waveform)
+        .and_then(|analysis| analysis.waveform.as_ref())
     {
         Some(wave) if !wave.is_empty() => widgets::waveform(
             wave.clone(),

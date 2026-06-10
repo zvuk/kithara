@@ -1,25 +1,46 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::Ordering;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+use std::sync::atomic::{AtomicBool, AtomicU8};
 
 use portable_atomic::AtomicF32;
 
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
 use super::stretch_kind::StretchBackendKind;
 
-/// Single source of truth for live time-stretch control, shared (via `Arc`)
+/// Single source of truth for live playback-speed control, shared (via `Arc`)
 /// between the consumer/UI and the audio worker's effect chain. Replaces the
 /// former split `playback_rate` / `tempo_ratio` mirror.
 ///
-/// All fields are read each chunk by [`TimeStretchProcessor`] and may be
-/// written at any time from the control thread; updates take effect on the
-/// next processed chunk. See the crate `README.md` ("Live stretch controls")
-/// for the speed-routing contract.
+/// Key-lock and backend selection exist only when a stretch backend is
+/// compiled in (`stretch-signalsmith` / `stretch-bungee`, native targets);
+/// without one the chain is resampler-first and pitch follows speed.
 ///
-/// [`TimeStretchProcessor`]: super::processor::TimeStretchProcessor
+/// All fields are read each chunk by the effect chain and may be written at
+/// any time from the control thread; updates take effect on the next
+/// processed chunk. See the crate `README.md` ("Live stretch controls")
+/// for the speed-routing contract.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct StretchControls {
-    speed: AtomicF32,
+    /// Shared with the resampler directly when no stretch backend is
+    /// compiled in; with one, `TimeStretchProcessor` reads it per chunk.
+    speed: Arc<AtomicF32>,
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
     keylock: AtomicBool,
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
     backend: AtomicU8,
 }
 
@@ -28,8 +49,16 @@ impl StretchControls {
     #[must_use]
     pub fn new(speed: f32) -> Arc<Self> {
         Arc::new(Self {
-            speed: AtomicF32::new(speed),
+            speed: Arc::new(AtomicF32::new(speed)),
+            #[cfg(all(
+                not(target_arch = "wasm32"),
+                any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+            ))]
             keylock: AtomicBool::new(false),
+            #[cfg(all(
+                not(target_arch = "wasm32"),
+                any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+            ))]
             backend: AtomicU8::new(StretchBackendKind::default().to_u8()),
         })
     }
@@ -46,6 +75,22 @@ impl StretchControls {
         self.speed.store(speed, Ordering::Relaxed);
     }
 
+    /// The speed atomic itself, for chains where the resampler follows the
+    /// speed directly (no stretch backend compiled in).
+    #[cfg(not(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    )))]
+    pub(crate) fn speed_shared(&self) -> Arc<AtomicF32> {
+        Arc::clone(&self.speed)
+    }
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+impl StretchControls {
     /// Whether key-lock (pitch-preserving tempo) is enabled.
     #[must_use]
     pub fn keylock(&self) -> bool {

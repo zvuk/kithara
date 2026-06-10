@@ -1,22 +1,26 @@
 use iced::{
-    Alignment, Background, Border, Degrees, Element, Length, Shadow, Theme,
+    Alignment, Background, Border, Degrees, Element, Length, Theme,
     alignment::Horizontal,
     font::Weight,
     gradient,
-    widget::{
-        Space, button, column, container, container::Style as ContainerStyle, overlay::menu,
-        pick_list, row, text,
-    },
+    widget::{Space, button, column, container, container::Style as ContainerStyle, row, text},
 };
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use iced::{
+    Shadow,
+    widget::{overlay::menu, pick_list},
+};
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara::prelude::StretchBackendKind;
 
 use super::tokens::{studio_radius, studio_type};
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use crate::gui::icons::Icon;
 use crate::{
     gui::{
         app::Kithara,
         dj::{DjMsg, TimestretchState},
         fonts,
-        icons::Icon,
         message::Message,
         tokens::gap,
         view::{mix_colors, with_alpha},
@@ -38,15 +42,12 @@ const PILL_H: f32 = 24.0;
 pub(super) fn view_timestretch_panel(state: &Kithara) -> Element<'static, Message> {
     let p = state.palette;
     let ts = state.dj.timestretch;
-    let deck = state.controller.deck();
-    let keylock = deck.keylock();
-    let backend = deck.backend();
     container(
         column![
-            head_row(ts.tempo, backend, p),
+            head_row(ts.tempo, state, p),
             ranges_row(ts.range, p),
             slider_row(ts.tempo, ts.range, p),
-            stats_row(ts, keylock, p),
+            stats_row(ts, state, p),
         ]
         .spacing(gap::INLINE_WIDE),
     )
@@ -57,14 +58,14 @@ pub(super) fn view_timestretch_panel(state: &Kithara) -> Element<'static, Messag
 
 /// `[• TIMESTRETCH  library pills] … [+0.00%]` — title, backend selector,
 /// and the live tempo value.
-fn head_row(tempo: f32, backend: StretchBackendKind, p: GuiPalette) -> Element<'static, Message> {
+fn head_row(tempo: f32, state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
     row![
         indicator_dot(p),
         text("TIMESTRETCH")
             .size(13.0)
             .font(fonts::display(Weight::Bold))
             .color(p.text),
-        library_select(backend, p),
+        library_select(state, p),
         Space::new().width(Length::Fill),
         container(
             text(format!("{tempo:+.2}%"))
@@ -116,11 +117,11 @@ fn slider_row(tempo: f32, range: u8, p: GuiPalette) -> Element<'static, Message>
     .into()
 }
 
-fn stats_row(ts: TimestretchState, keylock: bool, p: GuiPalette) -> Element<'static, Message> {
+fn stats_row(ts: TimestretchState, state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
     let ratio = ts.speed();
     row![
         stat_tile("RATIO", format!("{ratio:.3}\u{00d7}"), p),
-        keylock_pill(keylock, p),
+        keylock_pill(state, p),
         Space::new().width(Length::Fill),
         nudge_group(p),
     ]
@@ -129,10 +130,17 @@ fn stats_row(ts: TimestretchState, keylock: bool, p: GuiPalette) -> Element<'sta
     .into()
 }
 
+/// Without a compiled-in stretch backend there is no selector to render.
+#[cfg(not(any(feature = "stretch-signalsmith", feature = "stretch-bungee")))]
+fn library_select(_state: &Kithara, _p: GuiPalette) -> Element<'static, Message> {
+    Space::new().into()
+}
+
 /// Narrow stretch-backend selector (dropdown) shown next to the title. Only
-/// backends compiled into this target appear; one option when none of the
-/// native features are enabled.
-fn library_select(active: StretchBackendKind, p: GuiPalette) -> Element<'static, Message> {
+/// backends compiled into this target appear.
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+fn library_select(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
+    let active = state.controller.deck().backend();
     pick_list(StretchBackendKind::ALL, Some(active), |k| {
         Message::Dj(DjMsg::SelectBackend(k))
     })
@@ -195,7 +203,15 @@ fn stat_tile(label: &str, value: String, p: GuiPalette) -> Element<'static, Mess
     .into()
 }
 
-fn keylock_pill(on: bool, p: GuiPalette) -> Element<'static, Message> {
+/// Without a compiled-in stretch backend key-lock does not exist.
+#[cfg(not(any(feature = "stretch-signalsmith", feature = "stretch-bungee")))]
+fn keylock_pill(_state: &Kithara, _p: GuiPalette) -> Element<'static, Message> {
+    Space::new().into()
+}
+
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+fn keylock_pill(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
+    let on = state.controller.deck().keylock();
     let color = if on { p.accent } else { p.muted };
     let background = if on {
         p.accent_soft

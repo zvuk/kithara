@@ -199,9 +199,7 @@ dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "sig
 ratatui = "0.30.0"
 rubato = "2.0"
 realfft = "3.5"
-# Time-stretch backends. `timestretch` is pure-Rust (wasm-safe, always on);
-# signalsmith-stretch / bungee-rs are C++ FFI, native-only behind features.
-timestretch = "0.4"
+# Time-stretch backends: C++ FFI, native-only, behind `stretch-*` features.
 signalsmith-stretch = "0.1.3"
 bungee-rs = "0.1.1"
 audioadapter-buffers = "3.0"
@@ -342,8 +340,6 @@ opt-level = 2
 [profile.dev.package.kithara-workspace-hack]
 opt-level = 2
 # Time-stretch DSP (FFT/phase-vocoder + C++) is ~10× slower in debug.
-[profile.dev.package.timestretch]
-opt-level = 2
 [profile.dev.package.signalsmith-stretch]
 opt-level = 3
 [profile.dev.package.bungee-sys]

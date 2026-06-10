@@ -319,23 +319,6 @@ mod tests {
         out
     }
 
-    /// The C++ backends emit fixed-length output that carries leading
-    /// latency-fill (and bungee also drops its tail), nudging the measured
-    /// duration off an exact 2x on a short clip. The pure-Rust `Timestretch`
-    /// emits variable-length output and lands tight, so only it is held to
-    /// the strict band.
-    fn has_latency_fill(_kind: StretchBackendKind) -> bool {
-        #[cfg(all(not(target_arch = "wasm32"), feature = "stretch-signalsmith"))]
-        if _kind == StretchBackendKind::Signalsmith {
-            return true;
-        }
-        #[cfg(all(not(target_arch = "wasm32"), feature = "stretch-bungee"))]
-        if _kind == StretchBackendKind::Bungee {
-            return true;
-        }
-        false
-    }
-
     /// Half playback speed -> stretch 2.0 -> ~double duration, pitch held.
     /// Shared across every compiled-in backend.
     fn assert_half_speed_contract(kind: StretchBackendKind) {
@@ -344,20 +327,14 @@ mod tests {
         let out = run(kind, 0.5, in_frames);
         let out_frames = out.len() / channels;
 
-        // `Timestretch` (variable output) is held tight (±5%) so pitch leaking
-        // into duration would fail here; the C++ backends carry latency-fill,
-        // so they get a ±10% band — their pitch is still checked tightly below.
-        if has_latency_fill(kind) {
-            assert!(
-                out_frames * 10 >= in_frames * 18 && out_frames * 10 <= in_frames * 22,
-                "{kind:?}: expected ~2x duration, got {out_frames} from {in_frames}"
-            );
-        } else {
-            assert!(
-                out_frames * 100 >= in_frames * 190 && out_frames * 100 <= in_frames * 210,
-                "{kind:?}: expected ~2x duration (±5%), got {out_frames} from {in_frames}"
-            );
-        }
+        // Both C++ backends emit fixed-length output with leading latency-fill
+        // (and bungee drops its tail), nudging the measured duration off an
+        // exact 2x on a short clip — hence the ±10% band. Pitch is still
+        // checked tightly below.
+        assert!(
+            out_frames * 10 >= in_frames * 18 && out_frames * 10 <= in_frames * 22,
+            "{kind:?}: expected ~2x duration, got {out_frames} from {in_frames}"
+        );
 
         // Pitch preserved: dominant bin still at F0 (the load-bearing check —
         // a resampler-in-disguise would shift it).
@@ -391,24 +368,14 @@ mod tests {
         );
     }
 
-    #[kithara::test]
-    fn half_speed_doubles_duration_and_keeps_pitch() {
-        assert_half_speed_contract(StretchBackendKind::Timestretch);
-    }
-
-    #[kithara::test]
-    fn unity_speed_keeps_duration_and_pitch() {
-        assert_unity_contract(StretchBackendKind::Timestretch);
-    }
-
-    #[cfg(all(not(target_arch = "wasm32"), feature = "stretch-signalsmith"))]
+    #[cfg(feature = "stretch-signalsmith")]
     #[kithara::test]
     fn signalsmith_half_speed_and_unity_contracts() {
         assert_half_speed_contract(StretchBackendKind::Signalsmith);
         assert_unity_contract(StretchBackendKind::Signalsmith);
     }
 
-    #[cfg(all(not(target_arch = "wasm32"), feature = "stretch-bungee"))]
+    #[cfg(feature = "stretch-bungee")]
     #[kithara::test]
     fn bungee_half_speed_and_unity_contracts() {
         assert_half_speed_contract(StretchBackendKind::Bungee);
@@ -418,7 +385,7 @@ mod tests {
     #[kithara::test]
     fn output_meta_preserves_decoder_timeline() {
         let channels = usize::from(CH);
-        let (mut fx, _rate) = keylocked(StretchBackendKind::Timestretch, 0.5);
+        let (mut fx, _rate) = keylocked(StretchBackendKind::default(), 0.5);
         let cf = 1024usize;
         let block = sine(cf);
         let mut fed_ends = std::collections::HashSet::new();
@@ -489,7 +456,7 @@ mod tests {
     /// Key-lock on pins the resampler to unity (this slot owns the tempo).
     #[kithara::test]
     fn keylock_pins_resampler_to_unity() {
-        let (mut fx, rate) = keylocked(StretchBackendKind::Timestretch, 0.5);
+        let (mut fx, rate) = keylocked(StretchBackendKind::default(), 0.5);
         let _ = fx.process(chunk(&sine(4096)));
         assert!(
             (rate.load(Ordering::Relaxed) - 1.0).abs() < 1e-6,
@@ -543,11 +510,12 @@ mod tests {
     }
 
     /// Swapping the backend mid-stream keeps the stream flowing and pitch-locked.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "stretch-signalsmith"))]
+    #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     #[kithara::test]
     fn live_backend_swap_continues_and_keeps_pitch() {
         let controls = StretchControls::new(0.5);
         controls.set_keylock(true);
+        controls.set_backend(StretchBackendKind::Bungee);
         let rate = Arc::new(AtomicF32::new(1.0));
         let mut fx = TimeStretchProcessor::new(
             Arc::clone(&controls),
@@ -569,7 +537,10 @@ mod tests {
             out.extend_from_slice(c.samples());
         }
         let mono: Vec<f32> = out.iter().step_by(usize::from(CH)).copied().collect();
-        assert!(mono.len() >= N, "not enough output after swap for the FFT window");
+        assert!(
+            mono.len() >= N,
+            "not enough output after swap for the FFT window"
+        );
         assert!(
             dominant_bin(&mono).abs_diff(expected_bin(F0)) <= 3,
             "pitch preserved after live backend swap"

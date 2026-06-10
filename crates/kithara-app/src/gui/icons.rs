@@ -21,6 +21,8 @@ pub(crate) enum Icon {
     RepeatOnce,
     Disc,
     PlaylistAdd,
+    /// Key-lock pill of the timestretch panel.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     Lock,
 }
 
@@ -41,6 +43,7 @@ fn icon_bytes(icon: Icon) -> &'static [u8] {
         Icon::RepeatOnce => include_bytes!("../../assets/icons/repeat-once.svg"),
         Icon::Disc => include_bytes!("../../assets/icons/disc.svg"),
         Icon::PlaylistAdd => include_bytes!("../../assets/icons/playlist-add.svg"),
+        #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
         Icon::Lock => include_bytes!("../../assets/icons/lock.svg"),
     }
 }

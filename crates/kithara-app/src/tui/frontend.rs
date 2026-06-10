@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kithara::play::TimestretchControls;
+use kithara::play::StretchControls;
 use kithara_queue::Queue;
 
 use super::runner;
@@ -24,7 +24,7 @@ impl Frontend for TuiFrontend {
     fn run_loop(
         &mut self,
         queue: Arc<Queue>,
-        timestretch: Arc<TimestretchControls>,
+        timestretch: Arc<StretchControls>,
     ) -> Result<(), FrontendError> {
         const WORKER_THREADS: usize = 2;
         const MAX_BLOCKING_THREADS: usize = 4;

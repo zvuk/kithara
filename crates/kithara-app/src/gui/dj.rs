@@ -1,4 +1,5 @@
 use iced::{Task, window};
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara::prelude::StretchBackendKind;
 
 use super::{app::Kithara, frontend::window_settings, message::Message};
@@ -69,8 +70,10 @@ pub(crate) enum DjMsg {
     /// Reset tempo to 0 %.
     ResetTempo,
     /// Toggle key-lock (pitch-preserving tempo).
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     ToggleKeyLock,
     /// Select the time-stretch backend.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     SelectBackend(StretchBackendKind),
 }
 
@@ -81,11 +84,13 @@ pub(crate) fn handle(state: &mut Kithara, msg: &DjMsg) -> Task<Message> {
         DjMsg::SetRange(r) => state.dj.timestretch.set_range(*r),
         DjMsg::Nudge(d) => state.dj.timestretch.nudge(*d),
         DjMsg::ResetTempo => state.dj.timestretch.tempo = 0.0,
+        #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
         DjMsg::ToggleKeyLock => {
             // Applies live, mid-track (shared controls read each chunk).
             let deck = state.controller.deck();
             deck.set_keylock(!deck.keylock());
         }
+        #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
         DjMsg::SelectBackend(backend) => {
             // Applies live, mid-track (shared controls read each chunk).
             state.controller.deck().set_backend(*backend);
@@ -104,7 +109,6 @@ pub(crate) fn handle(state: &mut Kithara, msg: &DjMsg) -> Task<Message> {
 /// the old one closes so the daemon always has a window in flight.
 fn handle_toggle(state: &mut Kithara) -> Task<Message> {
     state.dj.open = !state.dj.open;
-    state.controller.set_waveform_enabled(state.dj.open);
 
     let old = state.window_id;
     let (new_id, open) = window::open(window_settings(state.dj.open));

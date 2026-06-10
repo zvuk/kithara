@@ -45,9 +45,11 @@ symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia"]
 # stereo + SBR) streams fail in the software pipeline.
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
 # Native-only C++ time-stretch backends (selectable at runtime in the DJ
-# deck). Each pulls a C++ toolchain; the pure-Rust backend is always on.
+# deck). Each pulls a C++ toolchain; without one, key-lock is compiled out.
 stretch-signalsmith = ["kithara-audio/stretch-signalsmith"]
 stretch-bungee = ["kithara-audio/stretch-bungee"]
+# Per-track source analysis (waveform analyzer registry + worker thread).
+analysis = ["kithara-audio/analysis"]
 file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
 hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net", "dep:kithara-drm"]
 assets = ["dep:kithara-assets", "dep:kithara-storage"]
