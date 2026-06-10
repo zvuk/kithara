@@ -20,7 +20,14 @@ use super::{
 pub struct HangDetector<C: HangDump = NoContext> {
     label: &'static str,
     timeout: Duration,
-    deadline: Instant,
+    /// Stamped lazily on the first observation (`tick`/`remaining`), NOT in
+    /// `new`, so the deadline and every later comparison read the SAME clock.
+    /// Under `flash-time` the constructor can run outside the watched fn's
+    /// flash scope (attribute-expansion order puts the `#[kithara::hang_watchdog]`
+    /// prelude before the `#[kithara::flash(true)]` scope entry), where
+    /// `Instant::now` is real while the body's reads are virtual; an eager
+    /// stamp mixes clocks and false-fires the moment virtual time outruns real.
+    deadline: Option<Instant>,
     ctx: Option<C>,
     dump_dir: Option<PathBuf>,
     _marker: PhantomData<C>,
@@ -31,7 +38,7 @@ impl<C: HangDump> HangDetector<C> {
     #[must_use]
     pub fn new(label: &'static str, timeout: Duration) -> Self {
         Self {
-            deadline: Instant::now() + timeout,
+            deadline: None,
             label,
             timeout,
             ctx: None,
@@ -39,6 +46,12 @@ impl<C: HangDump> HangDetector<C> {
             fired: false,
             _marker: PhantomData,
         }
+    }
+
+    fn deadline(&mut self) -> Instant {
+        *self
+            .deadline
+            .get_or_insert_with(|| Instant::now() + self.timeout)
     }
 
     fn fire_dump(&mut self) {
@@ -53,7 +66,7 @@ impl<C: HangDump> HangDetector<C> {
     }
 
     pub fn reset(&mut self) {
-        self.deadline = Instant::now() + self.timeout;
+        self.deadline = Some(Instant::now() + self.timeout);
         self.fired = false;
     }
 
@@ -63,8 +76,8 @@ impl<C: HangDump> HangDetector<C> {
     /// the deadline so the following [`tick`](Self::tick) fires on a genuine
     /// stall — no busy-poll, and no dependency on counting the producer.
     #[must_use]
-    pub fn remaining(&self) -> Duration {
-        self.deadline.saturating_duration_since(Instant::now())
+    pub fn remaining(&mut self) -> Duration {
+        self.deadline().saturating_duration_since(Instant::now())
     }
 
     /// Progress check without updating the stored context. Keeps whatever was
@@ -74,7 +87,7 @@ impl<C: HangDump> HangDetector<C> {
     ///
     /// Panics when no progress is observed before the configured timeout.
     pub fn tick(&mut self) {
-        if Instant::now() < self.deadline {
+        if Instant::now() < self.deadline() {
             return;
         }
         self.fire_dump();
