@@ -26,6 +26,10 @@ mod detector_tests {
     #[should_panic(expected = "HangDetector")]
     fn tick_after_timeout_panics() {
         let mut detector: HangDetector = HangDetector::new("test.wait", Duration::from_millis(1));
+        // The liveness budget starts at the FIRST observation (lazy deadline
+        // stamp), not at construction: time spent before the watched loop is
+        // entered must not count against it.
+        detector.tick();
         sleep(Duration::from_millis(10));
         detector.tick();
     }
