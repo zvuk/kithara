@@ -321,27 +321,45 @@ impl GeneratedHls {
 
 fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSpecError> {
     if let Some(packaged) = &spec.packaged_audio {
-        let variants = packaged
-            .variants
-            .iter()
-            .enumerate()
-            .map(|(idx, variant)| {
-                let cache = crate::fixture_cache::FixtureCache::from_env();
-                let key = format!("{}|v{idx}", spec.cache_key());
-                if let Some(data) = cache
-                    .get("hls-variant", key.as_bytes())
-                    .and_then(|blob| decode_variant_blob(&blob))
-                {
-                    return Ok(data);
-                }
-                let track = encode_packaged_variant(packaged, variant)
-                    .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
-                let data = mux_audio_track(&track, packaged.gapless_encoding)
-                    .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
-                cache.store("hls-variant", key.as_bytes(), &encode_variant_blob(&data));
-                Ok(data)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        // A cold-cache encode is CPU-bound ffmpeg work running inside the
+        // calling test's wall budget: encode variants concurrently so a fully
+        // cold fixture costs one variant's encode time, not the sum.
+        let variants = std::thread::scope(|scope| {
+            let handles: Vec<_> = packaged
+                .variants
+                .iter()
+                .enumerate()
+                .map(|(idx, variant)| {
+                    scope.spawn(move || {
+                        let cache = crate::fixture_cache::FixtureCache::from_env();
+                        let key = format!("{}|v{idx}", spec.cache_key());
+                        if let Some(data) = cache
+                            .get("hls-variant", key.as_bytes())
+                            .and_then(|blob| decode_variant_blob(&blob))
+                        {
+                            return Ok(data);
+                        }
+                        tracing::info!(key, "cold hls-variant fixture encode");
+                        let track = encode_packaged_variant(packaged, variant)
+                            .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
+                        let data = mux_audio_track(&track, packaged.gapless_encoding)
+                            .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
+                        cache.store("hls-variant", key.as_bytes(), &encode_variant_blob(&data));
+                        Ok(data)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle.join().unwrap_or_else(|_| {
+                        Err(HlsSpecError::PackagedAudio(
+                            "variant encode thread panicked".into(),
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })?;
         return Ok(MaterializedHlsBody::Packaged { variants });
     }
 
