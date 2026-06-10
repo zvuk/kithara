@@ -1962,8 +1962,12 @@ impl<T: StreamType> StreamAudioSource<T> {
                 .map(|(_, frame)| duration_for_frames(sample_rate.get(), frame))
                 .filter(|&head| head > committed)
                 .unwrap_or(committed);
+            // `resume_target` wins only while the target has NOT yet
+            // materialized in produced chunks (`target > decode_head`);
+            // comparing against the consumer's lagging `committed` mislabels
+            // the warmed-up case and re-emits `[target..decode_head)`.
             let target_time = match self.resume_target {
-                Some((seek_epoch, target)) if seek_epoch == epoch_now && target > committed => {
+                Some((seek_epoch, target)) if seek_epoch == epoch_now && target > decode_head => {
                     target
                 }
                 _ => decode_head,
