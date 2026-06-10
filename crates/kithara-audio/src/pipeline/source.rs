@@ -1435,36 +1435,38 @@ impl<T: StreamType> StreamAudioSource<T> {
     ///   the underlying `VariantChangeError` as opaque retryable I/O
     ///   and surface only `Pending`).
     ///
-    /// `no_change_err` is what the caller returns when
-    /// `detect_format_change` reports `NoChange` — for the `Err` path
-    /// it's the original decode error (proxied through); for the
-    /// `Pending` path it's an explicit `InvalidData` contract violation
-    /// because per [`HlsCoord::commit_variant_switch`] the fence
-    /// closes BEFORE `abr.apply_decision`, so by the time the FSM
-    /// reacts a format transition MUST be observable.
+    /// `no_change_err` carries the caller's context for the `NoChange`
+    /// warn trail — the original decode error on the `Err` path, an
+    /// `InvalidData` marker on the `Pending` path. A `NoChange` is NEVER
+    /// terminal: the transition only becomes observable EVENTUALLY.
+    /// [`HlsCoord::commit_variant_switch`] closes the fence
+    /// (`variant_generation`) BEFORE `abr.apply_decision` publishes the
+    /// new variant metadata, so the FSM can legally observe the signal in
+    /// the synchronous window between the two stores.
     #[cold]
-    fn handle_variant_change(&mut self, no_change_err: DecodeError) -> DecodeAction {
+    fn handle_variant_change(&mut self, no_change_err: &DecodeError) -> DecodeAction {
         let FormatChangeDetection::Applicable {
             target: new_info,
             target_offset,
         } = self.detect_format_change()
         else {
-            // A seek can race in between `decode_next_chunk`'s loop-top
-            // `is_seek_pending` check and this `detect_format_change`,
-            // whose seek-epoch suppression then reports `NoChange`. The
-            // seek path owns repositioning, so defer to it (`Interrupted`
-            // re-runs the loop, which handles the seek) instead of failing
-            // the producer on this transient ordering.
-            if self.seek_obs.is_pending() {
-                return DecodeAction::Return(Err(DecodeError::Interrupted));
+            // Two benign orderings report `NoChange` here: a seek raced in
+            // after `decode_next_chunk`'s loop-top `is_seek_pending` check
+            // (seek-epoch suppression), or the commit fence closed before
+            // `abr.apply_decision` published the new metadata. Both windows
+            // are synchronous (no await between the stores), so retry the
+            // loop (`Interrupted`) instead of killing the producer; a
+            // genuinely never-observable transition surfaces as a watchdog
+            // hang with this warn trail.
+            if !self.seek_obs.is_pending() {
+                warn!(
+                    ?no_change_err,
+                    chunks = self.chunks_decoded,
+                    samples = self.total_samples,
+                    "variant change without observable format transition yet — retrying"
+                );
             }
-            warn!(
-                ?no_change_err,
-                chunks = self.chunks_decoded,
-                samples = self.total_samples,
-                "variant change signal without observable format transition"
-            );
-            return DecodeAction::Return(Err(no_change_err));
+            return DecodeAction::Return(Err(DecodeError::Interrupted));
         };
         debug!(
             target_offset,
@@ -1501,7 +1503,7 @@ impl<T: StreamType> StreamAudioSource<T> {
 
             match self.decoder_next_chunk_safe() {
                 Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
-                    match self.handle_variant_change(DecodeError::InvalidData(
+                    match self.handle_variant_change(&DecodeError::InvalidData(
                         "variant change signal without observable format transition".into(),
                     )) {
                         DecodeAction::Yield => return Err(DecodeError::Interrupted),
@@ -1510,7 +1512,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 }
                 Ok(DecoderChunkOutcome::Pending(reason)) => {
                     if self.shared_stream.has_variant_change_pending() {
-                        match self.handle_variant_change(DecodeError::InvalidData(
+                        match self.handle_variant_change(&DecodeError::InvalidData(
                             "variant change signal without observable format transition".into(),
                         )) {
                             DecodeAction::Yield => return Err(DecodeError::Interrupted),
@@ -1547,7 +1549,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                     }
                 }
                 Err(e) => match e.classify() {
-                    ErrorClass::VariantChange => match self.handle_variant_change(e) {
+                    ErrorClass::VariantChange => match self.handle_variant_change(&e) {
                         DecodeAction::Yield => return Err(DecodeError::Interrupted),
                         DecodeAction::Return(result) => return result,
                     },
