@@ -131,6 +131,23 @@ async fn run_case(
     scenario: Vec<(AbrMode, f64)>,
     bit_rate: Option<u64>,
 ) {
+    run_case_paced(fixture, backend, ephemeral, drm, scenario, bit_rate, None).await;
+}
+
+/// `run_case` with an optional consumer pace: a real sleep after every
+/// 128-frame read, emulating the full-suite CPU contention where the
+/// consumer lags the producer and the outlet ring fills. Used by the
+/// paced diagnostic cases to reproduce the load-gated recreate-seam
+/// drift in isolation.
+async fn run_case_paced(
+    fixture: Fixture,
+    backend: DecoderBackend,
+    ephemeral: bool,
+    drm: bool,
+    scenario: Vec<(AbrMode, f64)>,
+    bit_rate: Option<u64>,
+    pace: Option<Duration>,
+) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
@@ -194,16 +211,23 @@ async fn run_case(
     let drifts = spawn_blocking(move || -> Vec<PhaseDrift> {
         let sine = SinePhaseSpec::default_440();
         let mut current = initial_mode;
-        scripted_phase_scan(&mut audio, sine, total_frames_truth, &scenario, |&mode| {
-            if mode != current {
-                if let Some(h) = abr_handle.as_ref()
-                    && let Err(e) = h.set_mode(mode)
-                {
-                    warn!(?e, ?mode, "variant switch failed");
+        scripted_phase_scan(
+            &mut audio,
+            sine,
+            total_frames_truth,
+            &scenario,
+            pace,
+            |&mode| {
+                if mode != current {
+                    if let Some(h) = abr_handle.as_ref()
+                        && let Err(e) = h.set_mode(mode)
+                    {
+                        warn!(?e, ?mode, "variant switch failed");
+                    }
+                    current = mode;
                 }
-                current = mode;
-            }
-        })
+            },
+        )
     })
     .await
     .expect("spawn_blocking joined");
@@ -434,6 +458,59 @@ async fn phase_continuity_hls(
     #[case] bit_rate: Option<u64>,
 ) {
     run_case(fixture, backend, ephemeral, drm, scenario, bit_rate).await;
+}
+
+/// Late-track switch script for the paced pin below: the load-gated
+/// recreate-seam duplicates fired on the 0.83/0.93 switch commits, so the
+/// paced scan covers only that tail instead of the whole track.
+fn late_switches() -> Vec<(AbrMode, f64)> {
+    vec![
+        (AbrMode::manual(0), 0.78),
+        (AbrMode::manual(1), 0.83),
+        (AbrMode::manual(TOP_VARIANT), 0.93),
+    ]
+}
+
+/// Paced pin for the load-gated recreate-seam duplicate (`resume_target`
+/// vs `decode_head` in `execute_recreation`): the same seek+switch seams as
+/// `multi_switch`, but the consumer sleeps after every read so `committed`
+/// lags the producer the way full-suite CPU contention makes it lag.
+#[kithara::test(
+    flash(false),
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(60)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "10")
+)]
+#[case::aac_lc_symphonia_pace1ms(
+    Fixture::Single(Codec::AacLc),
+    DecoderBackend::Symphonia,
+    Some(320_000),
+    1
+)]
+#[case::aac_he_v2_symphonia_pace1ms(
+    Fixture::Single(Codec::AacHeV2),
+    DecoderBackend::Symphonia,
+    None,
+    1
+)]
+async fn phase_continuity_hls_diag_paced(
+    #[case] fixture: Fixture,
+    #[case] backend: DecoderBackend,
+    #[case] bit_rate: Option<u64>,
+    #[case] pace_ms: u64,
+) {
+    run_case_paced(
+        fixture,
+        backend,
+        true,
+        false,
+        late_switches(),
+        bit_rate,
+        Some(Duration::from_millis(pace_ms)),
+    )
+    .await;
 }
 
 /// Pins real, uncompensated decoder-warmup phase drifts at HLS seek/switch

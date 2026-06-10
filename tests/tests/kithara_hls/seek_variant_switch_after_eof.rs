@@ -18,8 +18,10 @@ use tracing::info;
 
 /// Seek after ABR variant switch at EOF must not deadlock.
 ///
-/// Reproduces the production bug where `handle_midstream_switch()` unconditionally
-/// drains all segment requests, discarding the on-demand request from the new seek epoch.
+/// Guards the switch-commit/seek race: `commit_variant_switch` must honor the
+/// pending seek target (`seek_obs`) so the new variant's rebuilt plan includes
+/// the segment the parked reader waits on (historically the midstream-switch
+/// drain discarded the new seek epoch's on-demand request).
 #[kithara::test(
     tokio,
     native,
