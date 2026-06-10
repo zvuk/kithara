@@ -12,7 +12,7 @@ use std::{
 
 use kithara_platform::{
     MaybeSend, MaybeSync,
-    thread::{park_timeout, yield_now},
+    thread::park_timeout,
     time::{Duration, Instant},
     tokio::task,
 };
@@ -343,16 +343,22 @@ impl<T: StreamType> Stream<T> {
 }
 
 impl<T: StreamType> Stream<T> {
-    /// Bounded wall-clock budget for the seek-priming `wait_range` spin.
-    /// `Seek` re-probes `wait_range(new_pos..new_pos+1)` to prime metadata
-    /// (so `source.len()` answers before the seek-past-EOF check). Each
-    /// probe returns immediately under the non-blocking-pull contract, so
-    /// the spin yields between probes and is capped by elapsed time rather
-    /// than an internal sleep: a broken downloader cannot hang the seek,
-    /// and on the happy path local metadata resolves well under this
-    /// budget. This is consumer-thread work, not the real-time worker
-    /// read path.
+    /// Bounded budget for the seek-priming `wait_range` spin. `Seek`
+    /// re-probes `wait_range(new_pos..new_pos+1)` to prime metadata (so
+    /// `source.len()` answers before the seek-past-EOF check). Each probe
+    /// returns immediately under the non-blocking-pull contract; the spin
+    /// parks [`Self::SEEK_PROBE_BACKOFF`] between probes and is capped by
+    /// the elapsed deadline: a broken downloader cannot hang the seek, and
+    /// on the happy path local metadata resolves well under this budget.
+    /// This is consumer-thread work, not the real-time worker read path.
+    /// The park (not a yield) matters under flash: it releases the
+    /// consumer's pacer credit so the clock and the async fetch side can
+    /// advance toward readiness — a yield-spin would pin the clock and the
+    /// virtual deadline could never elapse.
     const SEEK_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
+
+    /// Per-probe park inside [`Self::prime_seek_range`].
+    const SEEK_PROBE_BACKOFF: Duration = Duration::from_millis(1);
 
     /// Per-probe hint passed to [`Source::wait_range`] on the worker read
     /// path. Non-blocking-pull sources (HLS) treat `wait_range` as a single
@@ -378,6 +384,7 @@ impl<T: StreamType> Stream<T> {
     /// non-blocking-pull contract, so the elapsed-time cap (not an
     /// internal sleep) bounds a broken downloader. The outcome is
     /// advisory; `seek` re-checks `source.len()` afterwards.
+    #[kithara::flash(true)]
     fn prime_seek_range(&mut self, range: Range<u64>) {
         let deadline = Instant::now() + Self::SEEK_WAIT_TIMEOUT;
         loop {
@@ -398,7 +405,7 @@ impl<T: StreamType> Stream<T> {
             if !not_ready || Instant::now() >= deadline {
                 return;
             }
-            yield_now();
+            park_timeout(Self::SEEK_PROBE_BACKOFF);
         }
     }
 
@@ -652,6 +659,7 @@ impl<T: StreamType> Read for Stream<T> {
     /// downloader's hang watchdog rather than masked here. This is the off-RT
     /// consumer interface — the real-time worker uses [`Self::probe_read`]
     /// and never blocks here.
+    #[kithara::flash(true)]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             match self.try_read(buf) {

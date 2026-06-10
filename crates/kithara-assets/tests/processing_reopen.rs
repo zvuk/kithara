@@ -26,8 +26,8 @@ fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8])
     let AcquisitionResult::Pending(w) = acq else {
         panic!("expected a Pending writer");
     };
-    w.write_at(0, data).unwrap();
-    drop(w.commit(Some(data.len() as u64)).unwrap());
+    w.write_at(0, data).expect("write_at");
+    drop(w.commit(Some(data.len() as u64)).expect("commit"));
 }
 
 fn xor_process_fn(call_count: Arc<AtomicUsize>) -> ProcessChunkFn<()> {

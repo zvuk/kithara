@@ -19,10 +19,42 @@ use std::{
 /// `flash-time` is on. The engine API stays `pub(crate)`.
 pub mod sched;
 
+/// Participant credit accounting (dedicated pacers, bridged waits, blocking
+/// pacer bracket) split out of `sched` — see `credit.rs`.
+pub(crate) mod credit;
+/// Real-I/O pacing (the `real_io` count, pace anchor maintenance and the
+/// pacer thread) — see `pace.rs` and [`RealIoScope`].
+mod pace;
 mod participant;
 mod wake;
 
 pub use participant::{Participating, participate};
+
+/// RAII bracket for ONE real I/O operation in flight (a socket send / response
+/// or body-chunk await in `kithara-net`). While at least one scope is live the
+/// virtual clock is PACED: it may not advance beyond the real time elapsed
+/// since the first scope opened, so a virtual watchdog or timeout racing the
+/// real-world transit fires only after the equivalent REAL time — never
+/// spuriously ahead of bytes still on the wire. Pace, not pin: a deliberate
+/// virtual delay behind the op (a virtually-delayed test server) still
+/// elapses at real pace, so the peer stays live. Dropping the last scope
+/// resumes full-speed collapse.
+#[must_use]
+pub struct RealIoScope {
+    _priv: (),
+}
+
+/// Open a [`RealIoScope`] (see its contract).
+pub fn real_io() -> RealIoScope {
+    pace::real_io_enter();
+    RealIoScope { _priv: () }
+}
+
+impl Drop for RealIoScope {
+    fn drop(&mut self) {
+        pace::real_io_exit();
+    }
+}
 
 /// Engine-backed `sleep` future: registers a virtual deadline + the task waker
 /// on the quiescence engine on its first poll, then resolves once the engine

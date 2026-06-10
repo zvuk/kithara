@@ -20,7 +20,7 @@ use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancellationToken, Mutex,
     sync::Notify,
-    time::{self, Duration, Instant},
+    time::{self, Duration},
     tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
 };
 use kithara_test_utils::kithara;

@@ -1,5 +1,4 @@
 use std::{
-    cell::Cell,
     collections::{BTreeMap, BTreeSet},
     sync::{
         Arc,
@@ -9,9 +8,13 @@ use std::{
 };
 
 use parking_lot::Mutex;
+use web_time::Instant as RealInstant;
 
+#[cfg(test)]
+use super::credit::mark_running;
 use super::{
     SIM_NANOS,
+    credit::{enter_wait_locked, resume_after_wait},
     wake::{Token, Wake},
 };
 
@@ -39,12 +42,12 @@ struct Entry {
 /// Process-global quiescence scheduler. ALL fields mutate only under this lock.
 /// `SIM_NANOS` is written only by `try_advance_locked` (and the test-only
 /// additive `advance`, which the harness never calls).
-struct SimSched {
+pub(super) struct SimSched {
     /// SYNC participants currently RUNNING (OS threads not inside a wrapped
     /// `park_timeout`/`Condvar` wait). Bumped by the firer on wake (real OS
     /// scheduling latency must be covered), decremented at the next wait /
-    /// thread exit via the thread-local [`Credit`] bracket.
-    active: usize,
+    /// thread exit via the thread-local `Credit` bracket (`credit` module).
+    pub(super) active: usize,
     /// ASYNC tasks the engine counts as NON-QUIESCENT. A task is counted from the
     /// moment it becomes RUNNABLE — spawned, or woken (its waker fired and it is
     /// queued to be polled) — until it next PARKS (poll returns `Pending` with no
@@ -54,7 +57,7 @@ struct SimSched {
     /// mid-poll one) is what stops the clock jumping past a runnable task — it
     /// closes the wake→poll window. The engine may advance only when BOTH
     /// `active` and `active_async` are zero.
-    active_async: usize,
+    pub(super) active_async: usize,
     /// Timed waiters keyed by (virtual deadline nanos, unique id) so the
     /// minimum deadline is `first_key_value`; ties share the same deadline and
     /// differ only by id. The map doubles as entry storage.
@@ -78,6 +81,17 @@ struct SimSched {
     /// entry is a parked async task whose `active_async` slot the spawn gate
     /// releases while it waits. Keyed by id.
     yield_waiters: BTreeMap<u64, Wake>,
+    /// REAL I/O operations currently in flight (socket sends / body-chunk
+    /// awaits bracketed by [`super::RealIoScope`]). While non-zero the clock
+    /// is PACED, not pinned: [`try_advance_locked`] refuses any jump beyond
+    /// `pace_anchor`'s virtual base plus the REAL time elapsed since it was
+    /// set — virtual time may not outrun real time while real-world transit
+    /// is pending. Maintained by `pace::real_io_enter`/`real_io_exit`.
+    pub(super) real_io: usize,
+    /// `(real instant, virtual nanos)` sampled when `real_io` went 0 -> 1.
+    /// The pace limit is `anchor_virtual + (real_now - anchor_real)`; cleared
+    /// when the last op completes so full-speed collapse resumes at once.
+    pub(super) pace_anchor: Option<(RealInstant, u64)>,
     next_id: u64,
     next_cvid: u64,
     /// Test-only oracle: the sequence of `SIM_NANOS` values the engine jumped
@@ -99,6 +113,8 @@ impl SimSched {
             unpark_pending: BTreeSet::new(),
             notify_permit: BTreeSet::new(),
             yield_waiters: BTreeMap::new(),
+            real_io: 0,
+            pace_anchor: None,
             next_id: 0,
             next_cvid: 0,
             #[cfg(test)]
@@ -113,222 +129,7 @@ impl SimSched {
     }
 }
 
-static SCHED: Mutex<SimSched> = Mutex::new(SimSched::new());
-
-/// Per-thread quiescence credit. Participants are NOT registered explicitly:
-/// a thread is invisible to the engine until its FIRST wrapped wait, at which
-/// point it credits itself lazily. This keeps accounting intrinsic to the
-/// platform-wrapped primitives — no consumer ever calls a registration API.
-///
-/// - `None`: the thread has never entered a wrapped wait. It is uncounted: it
-///   cannot stall the engine (it owns no deadline and is not in `active`).
-/// - `Running`: the thread is currently counted in `s.active` (it woke from a
-///   wait, or its first wait already bootstrapped it). The engine will not
-///   advance the clock while any thread is `Running`.
-/// - `Parked`: the thread is inside a wrapped wait, not counted in `active`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Credit {
-    None,
-    Running,
-    Parked,
-}
-
-thread_local! {
-    static CREDIT: Cell<Credit> = const { Cell::new(Credit::None) };
-    /// Nesting depth of an async-task poll on THIS OS thread. Non-zero means a
-    /// runtime worker is currently inside [`Participating::poll`](super::Participating)
-    /// — driving a task that occupies an `active_async` slot. A wrapped sync wait
-    /// taken while this is non-zero is a BRIDGED wait: the worker is not a
-    /// dedicated pacer (it returns to the runtime when the poll yields, parking on
-    /// the runtime, never on the engine), and the task it drives is parked for the
-    /// duration of the block. Such a wait releases the `active_async` slot on enter
-    /// and re-acquires it on wake (so the clock can advance while the worker blocks
-    /// on the engine), and NEVER enters the sync `active` count (which would leak —
-    /// the worker has no matching `enter_wait`/exit to balance it).
-    static ASYNC_POLL_DEPTH: Cell<u32> = const { Cell::new(0) };
-}
-
-/// True when the calling OS thread is inside an async-task poll (a runtime worker
-/// driving a [`Participating`](super::Participating) future). See [`ASYNC_POLL_DEPTH`].
-fn in_async_poll() -> bool {
-    ASYNC_POLL_DEPTH.with(|c| c.get() > 0)
-}
-
-thread_local! {
-    /// True iff this OS thread is a DEDICATED participant: a `spawn_named` thread
-    /// (audio worker, offline render thread, flush hub) that loops on wrapped waits
-    /// and does real work between them. ONLY dedicated threads are counted in the
-    /// sync `active` pacer count — the clock must not advance while one is mid-work,
-    /// so its inter-wait running time pins the clock. Every OTHER thread (a tokio
-    /// runtime worker, the main/test thread, a raw `thread::spawn`) is NOT a pacer:
-    /// its wrapped waits register a wakeup but stay OUT of `active` (entering it
-    /// leaks — such a thread parks on the runtime or exits without the counted
-    /// bracket, so nothing balances the credit). Set by the `spawn_named` bracket
-    /// via [`mark_dedicated`]; default false.
-    static DEDICATED: Cell<bool> = const { Cell::new(false) };
-}
-
-/// Mark the current OS thread a DEDICATED virtual-time pacer. Called once by the
-/// `spawn_named` bracket so only those threads are counted in `active`. See [`DEDICATED`].
-pub(crate) fn mark_dedicated() {
-    DEDICATED.with(|c| c.set(true));
-    // The pacer's `active` slot is taken EAGERLY by [`pre_count_dedicated`] on the
-    // PARENT thread at spawn time (closing the spawn→run gap). Here, on the child,
-    // we only claim the credit as `Running` to match that slot — no `active += 1`,
-    // or the slot would be double-counted. The first wrapped wait drops it
-    // (`Running -> Parked`, `active -= 1`); `on_participant_exit` settles it if the
-    // thread returns while `Running`.
-    CREDIT.with(|c| c.set(Credit::Running));
-}
-
-/// Reserve a DEDICATED pacer's `active` slot on the PARENT thread, BEFORE the
-/// child is spawned. A `spawn_named` pacer runs a warm-up burst (decode the first
-/// chunks, fill the ring) before it ever parks; counting it only once the child
-/// runs [`mark_dedicated`] leaves a window — between `spawn` returning and the OS
-/// scheduling the child — in which a sibling consumer can park, see `active == 0`,
-/// and let the virtual clock jump to its watchdog deadline before the pacer has
-/// produced anything. Reserving the slot synchronously at spawn closes that
-/// window; the child's [`mark_dedicated`] then only marks its credit `Running`.
-pub(crate) fn pre_count_dedicated() {
-    SCHED.lock().active += 1;
-}
-
-/// True iff the current OS thread is a dedicated pacer (see [`DEDICATED`]).
-fn is_dedicated() -> bool {
-    DEDICATED.with(Cell::get)
-}
-
-/// RAII bracket marking the current OS thread as inside an async-task poll for the
-/// guard's lifetime. Held by [`Participating::poll`](super::Participating) around
-/// the inner future's poll, so a wrapped sync wait taken inside that poll is
-/// recognised as bridged (see [`ASYNC_POLL_DEPTH`]). Drop-safe across an unwind.
-pub(crate) struct AsyncPollGuard {
-    _priv: (),
-}
-
-impl AsyncPollGuard {
-    pub(crate) fn enter() -> Self {
-        ASYNC_POLL_DEPTH.with(|c| c.set(c.get().saturating_add(1)));
-        Self { _priv: () }
-    }
-}
-
-impl Drop for AsyncPollGuard {
-    fn drop(&mut self) {
-        ASYNC_POLL_DEPTH.with(|c| c.set(c.get().saturating_sub(1)));
-    }
-}
-
-/// Account this thread as it ENTERS a wrapped wait, under the `SCHED` lock.
-/// Called at the start of EACH wrapped wait (park/condvar) right where the
-/// entry is inserted, replacing the old explicit `active -= 1`.
-///
-/// - `None` (first ever wait): the thread was running uncounted. Bootstrap it
-///   by transitioning to `Parked` WITHOUT decrementing `active` — it was never
-///   added, so there is nothing to remove. Its eventual wake will `active += 1`
-///   (by the firer) and `mark_running` it, balancing the books.
-/// - `Running` (woke from a prior wait, now parking again): it IS counted, so
-///   `active -= 1` and move to `Parked`.
-/// - `Parked`: unreachable — a thread waits on one thing at a time.
-fn enter_wait_locked(s: &mut SimSched) {
-    if in_async_poll() {
-        // Bridged wait: a runtime worker is blocking on the engine mid async-poll.
-        // The task it drives is parked for the block, so release its `active_async`
-        // slot (re-acquired by `resume_after_wait` on wake) — otherwise the slot
-        // pins the clock and the event that would unblock the wait can never fire.
-        debug_assert!(
-            s.active_async > 0,
-            "bridged wait must be inside a counted async poll"
-        );
-        s.active_async -= 1;
-        return;
-    }
-    if !is_dedicated() {
-        // Non-dedicated, non-async-poll thread (a tokio worker driving a raw-spawned
-        // task, the main/test thread, a raw `thread::spawn`): NOT a virtual-time
-        // pacer. Register the wakeup but stay OUT of `active` — entering it leaks
-        // (nothing balances the firer's wake bump, which `resume_after_wait` instead
-        // undoes). The clock is free to advance while such a thread blocks.
-        return;
-    }
-    CREDIT.with(|c| match c.get() {
-        Credit::None => c.set(Credit::Parked),
-        Credit::Running => {
-            debug_assert!(
-                s.active > 0,
-                "running participant must be counted in active"
-            );
-            s.active -= 1;
-            c.set(Credit::Parked);
-        }
-        Credit::Parked => debug_assert!(false, "a thread cannot enter two wrapped waits at once"),
-    });
-}
-
-/// Resume accounting after a wrapped sync wait's `token.wait()` returned. The firer
-/// always `active += 1`'d the woken Sync entry to cover wake latency; how that is
-/// settled depends on the thread:
-/// - BRIDGED (runtime worker mid async-poll): undo the `active` bump and re-acquire
-///   the `active_async` slot released on enter.
-/// - NON-DEDICATED, non-async: undo the `active` bump (the thread is not a pacer and
-///   never entered `active` on the wait side).
-/// - DEDICATED pacer: keep the bump and mark the thread `Running`.
-fn resume_after_wait() {
-    if in_async_poll() {
-        let mut s = SCHED.lock();
-        debug_assert!(s.active > 0, "bridged resume without a firer active bump");
-        s.active -= 1;
-        s.active_async += 1;
-        drop(s);
-        return;
-    }
-    if !is_dedicated() {
-        let mut s = SCHED.lock();
-        debug_assert!(s.active > 0, "non-pacer resume without a firer active bump");
-        s.active -= 1;
-        let adv = try_advance_locked(&mut s);
-        drop(s);
-        fire_advance(adv);
-        return;
-    }
-    mark_running();
-}
-
-/// Mark this thread RUNNING after its wrapped wait returned. The firer already
-/// did `active += 1` for the woken entry; the woken thread only updates its own
-/// credit here.
-fn mark_running() {
-    CREDIT.with(|c| c.set(Credit::Running));
-}
-
-/// Decrement `active` for a thread that EXITS while `Running` — the balancing
-/// half of the bootstrap (`None -> Parked` left `active` untouched; the first
-/// wake then `active += 1`'d it). Called from the spawn bracket after the
-/// thread's body returns. Reads + clears the credit; if it was `Running`, drops
-/// it from `active` and fires any advance the drop unblocks.
-pub(crate) fn on_participant_exit() {
-    let was = CREDIT.with(|c| {
-        let v = c.get();
-        c.set(Credit::None);
-        v
-    });
-    if was != Credit::Running {
-        return;
-    }
-    let mut s = SCHED.lock();
-    debug_assert!(s.active > 0, "exiting running participant must be counted");
-    s.active -= 1;
-    let adv = try_advance_locked(&mut s);
-    drop(s);
-    fire_advance(adv);
-}
-
-/// Reset this thread's credit to `None`. Called at the start of a pooled
-/// thread's body (spawn bracket) so a reused OS thread does not inherit a stale
-/// credit from a previous task.
-pub(crate) fn reset_credit() {
-    CREDIT.with(|c| c.set(Credit::None));
-}
+pub(super) static SCHED: Mutex<SimSched> = Mutex::new(SimSched::new());
 
 /// Result of an advance attempt: the wakes to fire after releasing `SCHED`.
 /// Firing is always immediate (pure-virtual collapse at full speed).
@@ -342,7 +143,7 @@ pub(crate) struct Advance {
 /// Operates only on `parked_timed` — it never fires `parked_indef`, which has no
 /// deadline. Fires nothing unless every participant is parked (`active == 0`) and
 /// at least one timed waiter exists.
-fn try_advance_locked(s: &mut SimSched) -> Advance {
+pub(super) fn try_advance_locked(s: &mut SimSched) -> Advance {
     if s.active != 0 || s.active_async != 0 {
         // A running participant (sync OS thread OR async task mid-poll): do not
         // jump. Both counters must be zero for genuine quiescence.
@@ -378,6 +179,18 @@ fn try_advance_locked(s: &mut SimSched) -> Advance {
         // runnable at all: stay put.
         return Advance { wakes: Vec::new() };
     };
+    if s.real_io != 0
+        && let Some((anchor_real, anchor_virtual)) = s.pace_anchor
+    {
+        // PACE while real I/O is in flight: virtual time may not outrun real
+        // time, so the earliest deadline fires only once the equivalent REAL
+        // time has accrued since the first in-flight op anchored the pace.
+        // Deferred advances are re-attempted by the pace tick (`pace.rs`).
+        let elapsed = u64::try_from(anchor_real.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        if min > anchor_virtual.saturating_add(elapsed) {
+            return Advance { wakes: Vec::new() };
+        }
+    }
     debug_assert!(
         min >= SIM_NANOS.load(Ordering::Acquire),
         "virtual clock must not move backward"
@@ -607,7 +420,8 @@ pub(crate) fn cancel_yield(id: u64) {
 /// domain -> SCHED). Accounts the wait via [`enter_wait_locked`], evaluates the
 /// advance rule, and returns the token to block on plus the advance-due tokens
 /// the caller must fire AFTER releasing the domain guard. The caller calls
-/// [`mark_running_after_condvar`] once `token.wait()` returns.
+/// [`mark_running_after_condvar`](super::credit::mark_running_after_condvar)
+/// once `token.wait()` returns.
 pub(crate) fn register_condvar_timed(deadline_nanos: u64, cvid: u64) -> (Arc<Token>, Advance) {
     let token = Token::new();
     let mut s = SCHED.lock();
@@ -650,14 +464,6 @@ pub(crate) fn register_condvar_untimed(cvid: u64) -> (Arc<Token>, Advance) {
     let adv = try_advance_locked(&mut s);
     drop(s);
     (token, adv)
-}
-
-/// Mark the calling thread RUNNING after a condvar wait's `token.wait()` has
-/// returned. The condvar wrapper blocks off-lock (inside `MutexGuard::unlocked`)
-/// so it cannot call the private `mark_running`; this is the crate-internal
-/// hook it uses instead. The firer already `active += 1`'d the woken entry.
-pub(crate) fn mark_running_after_condvar() {
-    resume_after_wait();
 }
 
 /// Wake condvar waiters for `cvid`: `all == true` wakes every matching waiter

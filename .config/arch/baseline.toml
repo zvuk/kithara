@@ -55,7 +55,7 @@ schema_version = 1
 
 [dead_exports]
 "crates/kithara-assets/src/cache.rs:62:11::release" = 1
-"crates/kithara-assets/src/flush/core.rs:213:11::live_source_count" = 1
+"crates/kithara-assets/src/flush/core.rs:211:11::live_source_count" = 1
 "crates/kithara-assets/src/identity.rs:34:11::from_headers" = 1
 "crates/kithara-assets/src/index/demand.rs:148:11::note_progress" = 1
 "crates/kithara-assets/src/key.rs:103:11::as_absolute_path" = 1

@@ -43,8 +43,9 @@ pub async fn sleep(duration: Duration) {
 /// without a `cfg`.
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
 pub use flash::{
-    AmbientScope, FlashScope, Participating, ambient_scope, ambient_snapshot, enter_dynamic,
-    flash_dynamic, flash_real, participate, set_ambient_for_spawn, with_ambient,
+    AmbientScope, FlashScope, Participating, RealIoScope, ambient_scope, ambient_snapshot,
+    enter_dynamic, flash_dynamic, flash_real, participate, real_io, set_ambient_for_spawn,
+    with_ambient,
 };
 
 /// Virtual `sleep` that hits the quiescence engine UNCONDITIONALLY (no
@@ -191,6 +192,24 @@ pub fn flash_virtual_now() -> Instant {
 #[inline]
 pub fn flash_virtual_park_timeout(duration: Duration) {
     crate::thread::park_timeout(duration);
+}
+
+/// Off the sim path a real I/O operation needs no pacing (time is already
+/// real), so the scope is a ZST no-op. Under `flash-time` it is
+/// [`flash::RealIoScope`]: while held, the virtual clock may not outrun real
+/// time, so virtual watchdogs/timeouts cannot fire spuriously ahead of bytes
+/// still on the wire.
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
+#[derive(Debug)]
+pub struct RealIoScope;
+
+/// Bracket ONE real I/O operation. Off the sim path this is a ZST no-op;
+/// under `flash-time` it paces the virtual clock to real time while held.
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
+#[inline]
+#[must_use]
+pub fn real_io() -> RealIoScope {
+    RealIoScope
 }
 
 /// No-op per-test ambient gate off the sim path (time is already real). The

@@ -11,8 +11,6 @@ use std::{
 use dashmap::DashSet;
 #[cfg(test)]
 use kithara_platform::thread::sleep;
-#[cfg(test)]
-use kithara_platform::time::Instant;
 use kithara_platform::{CancellationToken, Condvar, Mutex, time::Duration};
 
 use super::worker::WorkerSlot;

@@ -3,6 +3,7 @@ use kithara::{
     prelude::{Resource, ResourceConfig},
 };
 use kithara_platform::{CancellationToken, thread::sleep, tokio::task::spawn_blocking};
+use kithara_test_utils::kithara::flash;
 use tracing::{debug, warn};
 
 mod consts {
@@ -48,6 +49,7 @@ pub async fn analyze(
         .flatten()
 }
 
+#[flash(true)]
 fn decode_envelope(
     mut resource: Resource,
     buckets: usize,

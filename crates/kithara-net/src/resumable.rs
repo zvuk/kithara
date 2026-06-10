@@ -3,13 +3,14 @@
 //! timeout and the retry count live in one place (the net layer) and cover the
 //! BODY, not just request establishment.
 //!
-//! The stall detector bounds the REAL chunk-arrival with [`timeout`]: it
-//! measures a real socket's byte-flow gap, so it must tick on real time. A
-//! virtual timer would be fired by the quiescence engine jumping the clock to
-//! the deadline the instant the task parks — racing past the in-flight loopback
-//! bytes and spuriously "stalling" every healthy stream under simulation. The
-//! retry BACKOFF between attempts is a pure wait with no concurrent I/O, so it
-//! stays virtual (`time::sleep`, collapses under `flash-time`).
+//! The stall detector bounds the REAL chunk-arrival gap with [`timeout`] from
+//! inside a `flash(io)` bracket ([`next_chunk`]): a chunk await is a real
+//! socket read, so under `flash-time` the virtual clock is paced to real time
+//! while it is in flight — the quiescence engine cannot fire the (virtual)
+//! stall timer ahead of in-flight loopback bytes; it measures at least the
+//! equivalent real time. The retry BACKOFF between attempts is a pure wait
+//! with no concurrent I/O, so it stays virtual (`time::sleep`, collapses
+//! under `flash-time`).
 
 use std::pin::Pin;
 
@@ -21,6 +22,10 @@ use kithara_platform::{
     tokio,
 };
 use num_traits::{AsPrimitive, ToPrimitive};
+
+mod kithara {
+    pub(crate) use kithara_test_macros::flash;
+}
 
 use crate::{
     ByteStream,
@@ -67,19 +72,65 @@ struct State {
     to_skip: u64,
     stall: Duration,
     policy: RetryPolicy,
-    /// How many resume re-fetches this stream has already performed. Bounded by
-    /// `policy.max_retries`; once reached, the stream yields a terminal
-    /// `RetryExhausted` rather than resuming again.
+    /// Resume re-fetches already performed, bounded by `policy.max_retries`.
     resumes: u32,
     cancel: CancellationToken,
-    done: bool,
 }
 
-/// One loop outcome of the body race.
-enum Ev {
-    Chunk(Option<Result<Bytes, NetError>>),
-    Stall,
-    Cancel,
+impl State {
+    /// Account one received chunk: drop the already-consumed prefix a
+    /// non-range (`200`) resume re-sent, advance `consumed`, and return the
+    /// bytes to yield — `None` when the chunk was prefix only (still
+    /// progress: the stall timer re-arms on the next chunk await).
+    fn take(&mut self, mut bytes: Bytes) -> Option<Bytes> {
+        // `usize -> u64` is a widening cast (lossless on every target), so
+        // `AsPrimitive` is infallible; `u64 -> usize` can narrow, so it goes
+        // through checked `ToPrimitive` — `min` caps the skip at the chunk
+        // length, so it always fits and the fallback is a valid split point.
+        let len: u64 = bytes.len().as_();
+        let skip = self.to_skip.min(len);
+        self.to_skip -= skip;
+        self.consumed = self.consumed.saturating_add(len - skip);
+        let rest = bytes.split_off(skip.to_usize().unwrap_or(bytes.len()));
+        (!rest.is_empty()).then_some(rest)
+    }
+
+    /// Heal one transient failure: spend a unit of retry budget, back off
+    /// (virtual under flash), and re-establish from the consumed offset.
+    ///
+    /// # Errors
+    ///
+    /// Returns the terminal error to yield: the cause itself when it is fatal
+    /// (`Cancelled`, fatal status, decode), [`NetError::RetryExhausted`] when
+    /// the budget is spent, or the re-establish failure.
+    async fn resume(&mut self, cause: NetError) -> Result<(), NetError> {
+        if cause.retryability() == Retryability::Fatal {
+            return Err(cause);
+        }
+        if self.resumes >= self.policy.max_retries {
+            return Err(exhausted(self.policy.max_retries, cause));
+        }
+        self.resumes += 1;
+        sleep(self.policy.delay_for_attempt(self.resumes)).await;
+        let resumed = (self.refetch)(self.consumed).await?;
+        self.inner = resumed.stream;
+        self.to_skip = resumed.skip;
+        Ok(())
+    }
+}
+
+/// Await the next body chunk — a real socket read, so the fn is one
+/// `flash(io)` bracket: the virtual clock is paced to real time while the
+/// chunk is in flight, and the pace drops the moment the await resolves, so
+/// pauses between consumer pulls stay fully virtual. A stall maps to
+/// `Timeout` (transient) and cancellation to `Cancelled` (fatal), so every
+/// failure funnels through [`State::resume`]'s single classification.
+#[kithara::flash(io)]
+async fn next_chunk(st: &mut State) -> Option<Result<Bytes, NetError>> {
+    tokio::select! {
+        () = st.cancel.cancelled() => Some(Err(NetError::Cancelled)),
+        res = timeout(st.stall, st.inner.next()) => res.unwrap_or(Some(Err(NetError::Timeout))),
+    }
 }
 
 /// Wrap a freshly-established body in the self-healing stream. On a stall
@@ -103,90 +154,22 @@ pub(crate) fn resumable_body(
         policy,
         resumes: 0,
         cancel,
-        done: false,
     };
-    Box::pin(stream::unfold(state, |mut st| async move {
+    // `Option<State>` is the unfold's alive/finished switch: a terminal error
+    // is yielded together with `None`, so the next poll ends the stream.
+    Box::pin(stream::unfold(Some(state), |st| async move {
+        let mut st = st?;
         loop {
-            if st.done {
-                return None;
-            }
-            let ev = tokio::select! {
-                () = st.cancel.cancelled() => Ev::Cancel,
-                res = timeout(st.stall, st.inner.next()) => res.map_or(Ev::Stall, Ev::Chunk),
+            let cause = match next_chunk(&mut st).await {
+                Some(Ok(bytes)) => match st.take(bytes) {
+                    Some(out) => return Some((Ok(out), Some(st))),
+                    None => continue,
+                },
+                None => return None,
+                Some(Err(cause)) => cause,
             };
-            match ev {
-                Ev::Chunk(Some(Ok(mut bytes))) => {
-                    // `usize -> u64` is a widening cast (lossless on every
-                    // target), so `AsPrimitive` is infallible; `u64 -> usize`
-                    // can narrow, so it goes through checked `ToPrimitive`.
-                    let chunk_len: u64 = bytes.len().as_();
-                    if st.to_skip > 0 {
-                        // A non-range server re-sent the already-consumed prefix
-                        // (`200` resume): drop it so the consumer's stream stays
-                        // continuous. A skipped chunk is still progress, so the
-                        // stall timer resets on the next loop pass. `min` caps
-                        // the drop at the chunk length, so the narrowing always
-                        // fits; the fallback (the full chunk length) is
-                        // unreachable but a valid slice bound.
-                        let drop_bytes = st.to_skip.min(chunk_len);
-                        let drop = drop_bytes.to_usize().unwrap_or(bytes.len());
-                        st.to_skip -= drop_bytes;
-                        bytes = bytes.slice(drop..);
-                        if bytes.is_empty() {
-                            continue;
-                        }
-                        st.consumed = st.consumed.saturating_add(chunk_len - drop_bytes);
-                        return Some((Ok(bytes), st));
-                    }
-                    st.consumed = st.consumed.saturating_add(chunk_len);
-                    return Some((Ok(bytes), st));
-                }
-                Ev::Chunk(None) => return None,
-                Ev::Cancel => {
-                    st.done = true;
-                    return Some((Err(NetError::Cancelled), st));
-                }
-                Ev::Chunk(Some(Err(err))) => {
-                    if err.retryability() == Retryability::Fatal {
-                        // Already terminal (fatal status / decode error):
-                        // surface it as-is, nothing to resume.
-                        st.done = true;
-                        return Some((Err(err), st));
-                    }
-                    if st.resumes >= st.policy.max_retries {
-                        // Transient, but the retry budget is spent — promote
-                        // to the SAME terminal error as the stall path so
-                        // downstream sees one `Fatal` exhaustion signal.
-                        st.done = true;
-                        return Some((Err(exhausted(st.policy.max_retries, err)), st));
-                    }
-                    // transient + budget remaining: fall through to resume.
-                }
-                Ev::Stall => {
-                    if st.resumes >= st.policy.max_retries {
-                        st.done = true;
-                        return Some((
-                            Err(exhausted(st.policy.max_retries, NetError::Timeout)),
-                            st,
-                        ));
-                    }
-                    // budget remaining: fall through to resume.
-                }
-            }
-            // Resume: back off (virtual under sim), then re-fetch from the
-            // consumed offset. A failed re-establish ends the stream.
-            st.resumes += 1;
-            sleep(st.policy.delay_for_attempt(st.resumes)).await;
-            let fut = (st.refetch)(st.consumed);
-            match fut.await {
-                Ok(resumed) => {
-                    st.inner = resumed.stream;
-                    st.to_skip = resumed.skip;
-                }
-                Err(err) => {
-                    st.done = true;
-                    return Some((Err(err), st));
-                }
+            if let Err(terminal) = st.resume(cause).await {
+                return Some((Err(terminal), None));
             }
         }
     }))
@@ -210,7 +193,6 @@ mod tests {
         atomic::{AtomicU64, Ordering},
     };
 
-    use kithara_platform::time::Instant;
     use kithara_test_utils::kithara;
 
     use super::*;

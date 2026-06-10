@@ -165,6 +165,34 @@ Contract:
   isolation keeps the global state clean between tests; `reset()` is for runners
   that share a process.
 
+#### Real I/O pacing
+
+The engine cannot observe real-world transit: a task awaiting a real socket
+parks and releases its quiescence slot, so without correction the clock would
+jump to the next virtual deadline while bytes are still on the wire — firing
+virtual watchdogs (hang detector budgets, net idle timers) spuriously ahead of
+an in-flight loopback fetch. The corrective invariant extends the BlockingPacer
+one: **virtual time must never outrun real time while real I/O is in flight.**
+
+- `time::real_io()` returns a `RealIoScope` RAII bracket for ONE real I/O
+  operation. `kithara-net` holds it across its socket awaits (request
+  establish, full-body reads, and each `Pending` window of a streaming body
+  chunk via a stream adapter).
+- While at least one scope is live the clock is **paced, not pinned**: the
+  first scope anchors `(real instant, virtual nanos)`, and the advance rule
+  refuses any jump beyond `anchor_virtual + real_elapsed`. A real-time pacer
+  thread (armed only while `real_io > 0`, invisible to the engine) re-runs the
+  advance rule every millisecond so paced deadlines still fire once the
+  equivalent REAL time has passed.
+- Pace, not pin, is what keeps a **virtually-delayed peer** live: a fixture
+  server sleeping on a virtual delay before responding still makes progress at
+  1:1 real pace while the client awaits the response. A hard pin would freeze
+  the very deadline the peer is sleeping on — a deadlock. Conversely a virtual
+  watchdog racing a healthy loaded fetch now measures at least the equivalent
+  real time, so it fires only on a genuine stall.
+- When the last scope drops, the anchor clears and full-speed collapse resumes
+  immediately. Off `flash-time` (and on wasm) the scope is a ZST no-op.
+
 The intended workflow is two runs compared as ground truth: the default
 real-time run (catches concurrency/timing bugs) and the `flash-time` run (fast).
 Divergence in sample-count positions or PCM between them flags that

@@ -19,7 +19,7 @@ use std::{
 
 use parking_lot::Mutex;
 
-use super::sched;
+use super::{credit, sched};
 
 /// Per-task gate for quiescence accounting. It tracks whether the task currently
 /// occupies an `active_async` slot and INTERCEPTS every wake (it is handed to the
@@ -208,7 +208,7 @@ impl<F: Future> Future for Participating<F> {
         // releasing this task's `active_async` slot while it blocks instead of
         // pinning the clock. Drops (restoring the depth) even if the poll unwinds.
         let outcome = {
-            let _poll_guard = sched::AsyncPollGuard::enter();
+            let _poll_guard = credit::AsyncPollGuard::enter();
             fut.poll(&mut gate_cx)
         };
         match outcome {

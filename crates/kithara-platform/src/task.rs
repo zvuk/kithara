@@ -11,15 +11,19 @@
 //! registers anything.
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
-use crate::time::flash::sched;
+use crate::time::flash::credit;
 
 /// Spawn a blocking computation on the runtime's blocking pool.
 ///
 /// Off the sim path: a thin pass-through to [`tokio::task::spawn_blocking`].
-/// Under `flash-time` (native): brackets the closure with `reset_credit()` on
-/// entry and `on_participant_exit()` on exit, so a closure that woke to
-/// `Running` inside a wrapped wait releases its quiescence-engine slot when it
-/// returns (and a reused pool thread never inherits a stale credit).
+/// Under `flash-time` (native), an AMBIENT closure is real work in flight, so
+/// it paces the virtual clock exactly like a `spawn_named` thread: the caller
+/// reserves the `active` slot BEFORE the pool queues the closure (covering the
+/// queue wait), the closure claims it `Running` for its lifetime, and its
+/// engine parks release it as usual — the clock advances while the closure
+/// WAITS, never while it runs or sits queued. Without this the clock outruns
+/// the closure's real execution and virtual deadlines fire against time the
+/// work never had. A non-ambient closure stays invisible to the engine.
 ///
 /// The parent's ambient snapshot is also re-established on the blocking thread
 /// for the closure's lifetime (thread-locals do not cross the pool), so a
@@ -31,18 +35,22 @@ where
     R: Send + 'static,
 {
     let ambient = crate::time::flash::ambient_snapshot();
+    if ambient {
+        credit::pre_count_dedicated();
+    }
     tokio::task::spawn_blocking(move || {
         // Held for the closure's lifetime (must outlive `f()`); restores the
         // pool thread's previous ambient on exit.
         let _ambient = crate::time::flash::set_ambient_for_spawn(ambient);
-        // TODO(flash C3): a prod `#[flash(true)]` closure (the `Audio::new`
-        // decode probe) should ALSO eagerly count this blocking thread as an
-        // `active` engine participant while it runs — that engine-accounting
-        // refinement is deferred to C3. B5 only propagates the ambient flag.
-        sched::reset_credit();
-        let result = f();
-        sched::on_participant_exit();
-        result
+        credit::reset_credit();
+        if ambient {
+            let _pacer = credit::BlockingPacer::enter();
+            f()
+        } else {
+            let result = f();
+            credit::on_participant_exit();
+            result
+        }
     })
 }
 

@@ -3,6 +3,7 @@ use std::{
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicUsize, Ordering},
+        mpsc,
     },
     task::{Context, Wake, Waker},
     thread,
@@ -10,8 +11,8 @@ use std::{
 };
 
 use super::{
-    Duration, Instant, advance, ambient_scope, enter_dynamic, flash_enabled, now_nanos,
-    participate, reset, sched, yield_now,
+    Duration, Instant, advance, ambient_scope, credit, enter_dynamic, flash_enabled, now_nanos,
+    pace, participate, real_io, reset, sched, yield_now,
 };
 use crate::sync::Notify;
 
@@ -44,16 +45,16 @@ fn assert_fast(start: RealInstant) {
 /// and exits drops its `active` slot). The harness uses this everywhere a real
 /// spawn would, since `std::thread::spawn` in tests has no platform bracket.
 fn bracketed<F: FnOnce()>(body: F) {
-    sched::reset_credit();
+    credit::reset_credit();
     // The harness threads stand in for dedicated `spawn_named` pacers, so they must
     // be counted in `active` exactly as production worker threads are. Production
     // splits this across the spawn: `pre_count_dedicated()` reserves the `active`
     // slot on the parent BEFORE the child runs, and `mark_dedicated()` claims it
     // `Running` on the child. The test has no spawn bracket, so it does both here.
-    sched::pre_count_dedicated();
-    sched::mark_dedicated();
+    credit::pre_count_dedicated();
+    credit::mark_dedicated();
     body();
-    sched::on_participant_exit();
+    credit::on_participant_exit();
 }
 
 /// Spawn one parked waiter per duration. Under lazy-credit a thread is invisible
@@ -303,6 +304,98 @@ fn first_park_bootstraps_and_self_advances() {
     assert_eq!(sched::active_count(), 0, "bootstrap balanced on exit");
 }
 
+#[test]
+fn real_io_defers_advance_past_real_pace() {
+    let _g = guard();
+    reset();
+    let t0 = now_nanos();
+
+    let io = real_io();
+    let waiter = thread::spawn(move || bracketed(|| sched::park_for(Duration::from_secs(10))));
+    while sched::timed_count() != 1 {
+        thread::yield_now();
+    }
+
+    // 50ms of REAL time passes while the op is in flight: the 10s virtual
+    // deadline is far beyond the real pace, so the clock must not move.
+    thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        sched::timed_count(),
+        1,
+        "a virtual deadline beyond the real pace must stay parked while real I/O is in flight"
+    );
+    assert_eq!(
+        now_nanos(),
+        t0,
+        "the clock must not advance past the real pace while real I/O is in flight"
+    );
+
+    let real_start = RealInstant::now();
+    drop(io);
+    waiter.join().expect("waiter thread panicked");
+    assert_fast(real_start);
+    assert_eq!(
+        now_nanos(),
+        t0 + 10 * NANOS_PER_SEC,
+        "full-speed collapse resumes the instant the last real I/O op completes"
+    );
+}
+
+#[test]
+fn real_io_paces_deadline_to_real_time_not_pin() {
+    let _g = guard();
+    reset();
+    let t0 = now_nanos();
+
+    let io = real_io();
+    let real_start = RealInstant::now();
+    let waiter = thread::spawn(move || bracketed(|| sched::park_for(Duration::from_millis(20))));
+
+    // The deadline must fire WHILE the op is still in flight, once enough REAL
+    // time has passed (pace, not pin): a virtually-delayed peer (the fixture
+    // server's DelayGate) must make progress even though the client holds a
+    // real-I/O scope across the whole request await — a pin would deadlock it.
+    waiter.join().expect("waiter thread panicked");
+    let waited = real_start.elapsed();
+    drop(io);
+
+    assert!(
+        waited >= Duration::from_millis(15),
+        "deadline fired ahead of its real-time pace: {waited:?}"
+    );
+    assert!(
+        waited < Duration::from_secs(2),
+        "pace must release the deadline at ~20ms real, not pin it: {waited:?}"
+    );
+    assert_eq!(now_nanos(), t0 + 20_000_000);
+}
+
+#[test]
+fn real_io_nests_overlapping_ops() {
+    let _g = guard();
+    reset();
+
+    pace::real_io_enter();
+    pace::real_io_enter();
+    let waiter = thread::spawn(move || bracketed(|| sched::park_for(Duration::from_secs(10))));
+    while sched::timed_count() != 1 {
+        thread::yield_now();
+    }
+
+    pace::real_io_exit();
+    thread::sleep(Duration::from_millis(30));
+    assert_eq!(
+        sched::timed_count(),
+        1,
+        "the deadline must stay deferred while ANY real I/O op is still in flight"
+    );
+
+    let real_start = RealInstant::now();
+    pace::real_io_exit();
+    waiter.join().expect("waiter thread panicked");
+    assert_fast(real_start);
+}
+
 /// Deterministic xorshift so the stress mix is reproducible run-to-run without
 /// pulling a dependency into the platform crate.
 fn xs(state: &mut u64) -> u64 {
@@ -398,7 +491,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                         });
                         sched::fire_advance(adv);
                         token.wait();
-                        sched::mark_running_after_condvar();
+                        credit::mark_running_after_condvar();
                         racer.join().expect("builder signal racer panicked");
                     }
                     // Exit here while `Running`: the bracket must decrement.
@@ -464,7 +557,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                                 sched::signal_condvar(cvid, true);
                             });
                             token.wait();
-                            sched::mark_running_after_condvar();
+                            credit::mark_running_after_condvar();
                             racer.join().expect("signal racer panicked");
                         }
                         _ => {
@@ -472,7 +565,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                             let (token, adv) = sched::register_condvar_untimed(cvid);
                             sched::fire_advance(adv);
                             token.wait();
-                            sched::mark_running_after_condvar();
+                            credit::mark_running_after_condvar();
                             left.fetch_sub(1, Ordering::Relaxed);
                         }
                     });
@@ -561,7 +654,7 @@ fn stress_advance_log_is_deterministic_across_runs() {
                         let (token, adv) = sched::register_condvar_timed(deadline, cvid);
                         sched::fire_advance(adv);
                         token.wait();
-                        sched::mark_running_after_condvar();
+                        credit::mark_running_after_condvar();
                     });
                 })
             })
@@ -660,4 +753,75 @@ fn ambient_on_yield_now_is_engine_backed() {
     // The gate parked it (slot released), and the immediate advance from the park
     // granted the lone yield-waiter; the re-poll then resolves.
     assert!(task.as_mut().poll(&mut cx).is_ready());
+}
+
+/// An ambient `task::spawn_blocking` closure is REAL WORK IN FLIGHT: while it
+/// runs (between engine parks) the virtual clock must not advance, or a parked
+/// sibling sees `active == 0` and jumps its deadline against time the work never
+/// had (the watchdog-burn failure mode). The closure spins until a real-time
+/// helper releases it ~50ms later; a 10ms-virtual engine park taken meanwhile
+/// must be held (measured in REAL elapsed) until the closure exits.
+#[test]
+fn ambient_blocking_closure_pins_virtual_clock() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("build current-thread runtime");
+    let _rt = rt.enter();
+    let entered = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(AtomicUsize::new(0));
+    let entered_in = Arc::clone(&entered);
+    let release_in = Arc::clone(&release);
+    let handle = crate::task::spawn_blocking(move || {
+        entered_in.store(1, Ordering::Release);
+        while release_in.load(Ordering::Acquire) == 0 {
+            std::hint::spin_loop();
+        }
+    });
+    while entered.load(Ordering::Acquire) == 0 {
+        thread::yield_now();
+    }
+    let release_timer = Arc::clone(&release);
+    let releaser = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        release_timer.store(1, Ordering::Release);
+    });
+    let start = RealInstant::now();
+    sched::park_for(Duration::from_millis(10));
+    let waited = start.elapsed();
+    releaser.join().expect("releaser thread");
+    rt.block_on(handle).expect("blocking closure joined");
+    assert!(
+        waited >= Duration::from_millis(40),
+        "virtual clock advanced past a 10ms deadline while an ambient blocking \
+         closure was still running (park returned after {waited:?} real)"
+    );
+}
+
+/// `park_timeout`/`unpark` are a CROSS-THREAD pair, but each side resolves its
+/// mode from its OWN thread flags — and those may disagree. Here the target has
+/// no ambient (a raw pool thread, e.g. `tokio::task::spawn_blocking`) so its park
+/// is a real OS park; the waker runs on a flash-ACTIVE callstack (the audio
+/// worker's `run_loop`). The wake must land on the OS slot too, not vanish into
+/// the engine's `unpark_pending` while the target sleeps out its full real
+/// timeout. Delivery must hold in BOTH orderings (wake-then-park / park-then-wake),
+/// so no synchronization beyond the handle send is needed.
+#[test]
+fn unpark_from_flash_callstack_reaches_real_parked_thread() {
+    let _g = guard();
+    reset();
+    let start = RealInstant::now();
+    let (tx, rx) = mpsc::channel();
+    let target = thread::spawn(move || {
+        tx.send(thread::current()).expect("send park handle");
+        crate::thread::park_timeout(Duration::from_secs(5));
+    });
+    let handle = rx.recv().expect("recv park handle");
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    crate::thread::unpark(&handle);
+    target.join().expect("real-parked target panicked");
+    assert_fast(start);
 }

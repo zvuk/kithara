@@ -7,6 +7,10 @@ use kithara_platform::{CancellationToken, time::timeout};
 use reqwest::Client;
 use url::Url;
 
+mod kithara {
+    pub(crate) use kithara_test_macros::flash;
+}
+
 use crate::{
     error::{NetError, NetResult},
     resumable::{Refetch, Resumed, resumable_body},
@@ -38,6 +42,22 @@ fn truncate_error_body(mut body: String) -> String {
     body.truncate(cut_at);
     body.push_str(&format!("…(truncated, {total} chars total)"));
     body
+}
+
+/// Read an error response's body for [`NetError::Status`] context — a real
+/// socket read, so the fn is one `flash(io)` bracket.
+#[kithara::flash(io)]
+async fn error_body(resp: reqwest::Response) -> String {
+    truncate_error_body(resp.text().await.unwrap_or_default())
+}
+
+/// Collect a full response body — a real socket read, so the fn is one
+/// `flash(io)` bracket. The `Net` trait methods cannot carry the attribute
+/// themselves: `#[async_trait]` rewrites them into sync constructors of boxed
+/// futures, which would drop the bracket before the I/O starts.
+#[kithara::flash(io)]
+async fn body_bytes(resp: reqwest::Response) -> Result<Bytes, NetError> {
+    resp.bytes().await.map_err(NetError::from)
 }
 
 fn status_error(url: Url, status: u16, body: String) -> NetError {
@@ -147,6 +167,9 @@ impl RawHttp {
         self.inner.get(url).header("Range", "bytes=0-0")
     }
 
+    /// Body-chunk awaits on this stream happen inside [`resumable_body`]'s
+    /// `flash(io)` bracket (`next_chunk`) — every streaming fetch is wrapped
+    /// by [`Self::wrap_resumable`] before it reaches a consumer.
     fn response_to_stream(resp: reqwest::Response) -> crate::ByteStream {
         let headers = extract_headers(&resp);
         let stream = resp.bytes_stream().map_err(NetError::from);
@@ -158,12 +181,13 @@ impl RawHttp {
     /// so the retry decorator re-issues it. This is the establish-side half of
     /// the single idle timer (the body half lives in [`resumable_body`]).
     ///
-    /// This bound must measure a REAL socket operation (connect + header wait),
-    /// so it must tick on real time: a virtual timer would be fired by the
-    /// quiescence engine jumping the clock to the deadline the instant the task
-    /// parks — racing past the in-flight loopback establish and spuriously
-    /// timing out every healthy fetch. A real timer never fires for a fast
-    /// loopback establish and bounds a genuine stall in real time.
+    /// This bound measures a REAL socket operation (connect + header wait), so
+    /// the fn is a `flash(io)` bracket: under `flash-time` the virtual clock
+    /// is paced to real time while the op is in flight, so the (virtual) idle
+    /// timer cannot be fired by the quiescence engine racing ahead of an
+    /// in-flight loopback establish — it measures at least the equivalent real
+    /// time, and never fires for a fast healthy fetch.
+    #[kithara::flash(io)]
     async fn send_idle_bounded(
         &self,
         req: reqwest::RequestBuilder,
@@ -192,7 +216,7 @@ impl RawHttp {
 
         let ok = status.is_success() || (accept_partial && status.as_u16() == HTTP_PARTIAL_CONTENT);
         if !ok {
-            let body = truncate_error_body(resp.text().await.unwrap_or_default());
+            let body = error_body(resp).await;
             return Err(status_error(url, status.as_u16(), body));
         }
 
@@ -377,7 +401,7 @@ impl Net for RawHttp {
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         let req = self.inner.get(url.clone());
         let resp = self.send_checked(req, headers, url, false).await?;
-        resp.bytes().await.map_err(NetError::from)
+        body_bytes(resp).await
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -407,7 +431,7 @@ impl Net for RawHttp {
         let status = resp.status();
 
         if !status.is_success() && status.as_u16() != HTTP_PARTIAL_CONTENT {
-            let body = truncate_error_body(resp.text().await.unwrap_or_default());
+            let body = error_body(resp).await;
             return Err(status_error(url, status.as_u16(), body));
         }
 

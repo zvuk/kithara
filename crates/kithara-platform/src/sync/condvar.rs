@@ -6,7 +6,7 @@ use parking_lot::{Condvar as ParkingLotCondvar, lock_api::MutexGuard as RawMutex
 use super::MutexGuard;
 use crate::time::Instant;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
-use crate::time::flash::{flash_ambient, sched};
+use crate::time::flash::{credit, flash_ambient, sched};
 
 /// Native condvar backed by `parking_lot`.
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
@@ -119,7 +119,7 @@ impl Condvar {
             RawMutexGuard::unlocked(&mut guard.0, move || {
                 sched::fire_advance(adv);
                 token.wait();
-                sched::mark_running_after_condvar();
+                credit::mark_running_after_condvar();
             });
         } else {
             self.real.wait(&mut guard.0);
@@ -150,7 +150,7 @@ impl Condvar {
             RawMutexGuard::unlocked(&mut guard.0, move || {
                 sched::fire_advance(adv);
                 token.wait();
-                sched::mark_running_after_condvar();
+                credit::mark_running_after_condvar();
             });
         } else {
             let remaining = deadline.saturating_duration_since(Instant::now());
