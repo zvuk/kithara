@@ -1721,7 +1721,6 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
 ///   FLAC), cross-codec recreate.
 /// - `hw_*` mirror the above on the Apple backend.
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     serial,
@@ -1742,8 +1741,6 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     #[case] backend: DecoderBackend,
     #[case] target_variant: usize,
 ) {
-    use kithara_platform::time::sleep;
-
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
@@ -1829,7 +1826,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     // scheduler has time to emit V_new init + a few media segments
     // around the current reader_pos (matches the app.log emit
     // sequence preceding the hang).
-    sleep(Duration::from_millis(300)).await;
+    kithara_platform::time::sleep(Duration::from_millis(300)).await;
 
     // Phase 3 — seek BACKWARDS to a non-zero offset (37 s, as in
     // app.log run 1). reader_pos ends up at ≈ seg 6 byte-coords of
