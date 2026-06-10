@@ -785,7 +785,10 @@ mod tests {
     /// observe that the GET actually arrived. Polling that counter under a
     /// hard timeout is synchronization on an observable — a real stall fails
     /// the budget rather than being masked.
-    #[kithara::test(tokio)]
+    // Real-clock: drives raw `reqwest`/`tokio::spawn` over a real socket —
+    // hyper's tasks are invisible to the flash engine (no downloader real_io
+    // bracket), so a virtual timeout would outrun the in-flight request.
+    #[kithara::test(tokio, flash(false))]
     async fn segment_gate_withholds_get_until_release() {
         let (server, gate) = PackagedTestServer::with_segment_gate(0, 1).await;
         let url = server.url("/seg/v0_1.m4s");
@@ -824,7 +827,8 @@ mod tests {
     /// withheld (and counts the HEAD), then the true size after
     /// `release_head()` — without ever parking the HEAD (which would block
     /// stream construction). The body GET stays unblocked throughout.
-    #[kithara::test(tokio)]
+    // Real-clock: same raw-reqwest-over-real-socket shape as above.
+    #[kithara::test(tokio, flash(false))]
     async fn segment_size_gate_reports_zero_until_release_head() {
         let (server, gate) = PackagedTestServer::with_segment_size_gate(0, 1).await;
         let url = server.url("/seg/v0_1.m4s");
