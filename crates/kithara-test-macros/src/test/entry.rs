@@ -54,7 +54,20 @@ fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
     // (sync/async/native/wasm/browser) inherits it via `body_stmts`.
     let flash = args.flash.unwrap_or(true);
     if flash {
-        FlashRewrite.visit_block_mut(&mut func.block);
+        let mut rewrite = FlashRewrite::default();
+        rewrite.visit_block_mut(&mut func.block);
+        if let Some((span, name)) = rewrite.bare_time_calls.first() {
+            return Err(syn::Error::new(
+                *span,
+                format!(
+                    "bare `{name}(...)` in a flash test body stays on the REAL clock: the \
+                     flash rewriter matches the last two path segments (`time::{name}`) and \
+                     cannot see a single-segment call — a mixed-clock hazard. Import the \
+                     module (`use kithara_platform::time;`) and call `time::{name}(...)`, \
+                     or mark the test `flash(false)`."
+                ),
+            ));
+        }
     }
     let ambient_stmt: syn::Stmt = syn::parse_quote! {
         let __flash_ambient = ::kithara_test_utils::kithara_platform::time::ambient_scope(#flash);

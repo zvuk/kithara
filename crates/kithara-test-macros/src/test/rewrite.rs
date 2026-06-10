@@ -1,3 +1,4 @@
+use proc_macro2::Span;
 use syn::{
     Expr, ExprCall, ExprPath,
     visit_mut::{self, VisitMut},
@@ -22,16 +23,36 @@ use syn::{
 /// mixed-clock hazard that can hang the test (this caused the final C3 failure).
 /// Bare single-segment matching is intentionally NOT supported: a broad
 /// single-segment rule would false-rewrite unrelated `sleep` / `timeout` / `now`
-/// calls on other types. The chosen guards are this convention plus the
-/// `arch.no-flash-time-hacks` deny gate; do NOT broaden the matcher.
-pub(crate) struct FlashRewrite;
+/// calls on other types. Instead the convention is ENFORCED at expansion time:
+/// a bare single-segment `sleep(...)` / `timeout(...)` call in a flash body is
+/// collected into [`bare_time_calls`](FlashRewrite::bare_time_calls) and the
+/// macro rejects it with a compile error (workspace lints exclude test code,
+/// so this guard is the only chokepoint that sees flash test bodies). Do NOT
+/// broaden the matcher.
+#[derive(Default)]
+pub(crate) struct FlashRewrite {
+    /// Single-segment calls named like a rewritable time primitive: invisible
+    /// to the two-segment matcher, they would stay on the REAL clock inside a
+    /// virtual body — the mixed-clock hazard above. The caller turns these
+    /// into a compile error.
+    pub(crate) bare_time_calls: Vec<(Span, String)>,
+}
 
 impl VisitMut for FlashRewrite {
     fn visit_expr_call_mut(&mut self, call: &mut ExprCall) {
-        if let Expr::Path(p) = &*call.func
-            && let Some(repl) = virtual_path(&p.path)
-        {
-            *call.func = Expr::Path(repl);
+        if let Expr::Path(p) = &*call.func {
+            if let Some(repl) = virtual_path(&p.path) {
+                *call.func = Expr::Path(repl);
+            } else if p.qself.is_none()
+                && p.path.segments.len() == 1
+                && matches!(
+                    p.path.segments[0].ident.to_string().as_str(),
+                    "sleep" | "timeout"
+                )
+            {
+                let ident = &p.path.segments[0].ident;
+                self.bare_time_calls.push((ident.span(), ident.to_string()));
+            }
         }
         // Recurse into args and nested calls (the func above was already mapped).
         visit_mut::visit_expr_call_mut(self, call);
