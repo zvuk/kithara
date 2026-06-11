@@ -11,24 +11,9 @@ use std::{
     task::{Context, Poll},
 };
 
-/// Quiescence-driven virtual-clock engine. Submodule of `flash`, which is already
-/// gated on `feature = "flash"` + native, so it needs no extra feature gate.
-/// The engine drives `SIM_NANOS` forward at quiescent points. Its consumers are
-/// the platform wait primitives (`thread::park_timeout`, `sync::Condvar`,
-/// async `FlashSleep`/`Notify`) plus the harness, so it compiles whenever
-/// `flash` is on. The engine API stays `pub(crate)`.
-pub mod sched;
-
-/// Participant credit accounting (dedicated pacers, bridged waits, blocking
-/// pacer bracket) split out of `sched` — see `credit.rs`.
-pub(crate) mod credit;
-/// Real-I/O pacing (the `real_io` count, pace anchor maintenance and the
-/// pacer thread) — see `pace.rs` and [`RealIoScope`].
-mod pace;
-mod participant;
-mod wake;
-
-pub use participant::{Participating, participate};
+pub use super::participant::{Participating, participate};
+use super::{pace, sched};
+use crate::time::{FlashTimeout, TimeoutError};
 
 /// RAII bracket for ONE real I/O operation in flight (a socket send / response
 /// or body-chunk await in `kithara-net`). While at least one scope is live the
@@ -62,7 +47,7 @@ impl Drop for RealIoScope {
 /// participants park). Resolution is GRANT-driven (`handle.granted()`), never a
 /// bare clock check; the task's `active_async` slot is owned by the spawn
 /// poll-wrapper gate ([`Participating`]), so this future touches no counter.
-pub struct FlashSleep {
+pub(crate) struct FlashSleep {
     delta_nanos: u64,
     handle: Option<sched::AsyncHandle>,
 }
@@ -219,7 +204,7 @@ impl Future for Yield {
 /// Process-global virtual timeline, in nanoseconds. Only moves forward, via the
 /// `sched` quiescence engine (and the test-only additive [`advance`]); starts
 /// at [`Instant::BASE_NANOS`].
-static SIM_NANOS: AtomicU64 = AtomicU64::new(Instant::BASE_NANOS);
+pub(super) static SIM_NANOS: AtomicU64 = AtomicU64::new(Instant::BASE_NANOS);
 
 /// Current virtual instant in nanoseconds since the timeline origin. Read by the
 /// engine harness tests; production reads `SIM_NANOS` directly under `SCHED` or
@@ -230,15 +215,54 @@ pub(crate) fn now_nanos() -> u64 {
     SIM_NANOS.load(Ordering::Acquire)
 }
 
-/// Diagnostic snapshot of the quiescence engine for hang dumps. The test
-/// harness (`kithara-test-utils`) prints it on a test timeout so a wedged
-/// run self-reports every parked participant, deadline and pending signal.
-#[must_use]
-pub fn flash_dump_state() -> String {
-    sched::dump()
+/// Dump the flash quiescence-engine state to stderr. The `#[kithara::test]`
+/// harness calls this from both hang exits (virtual-timeout panic and the
+/// HARD TIMEOUT abort thread) so a wedged run self-reports every parked
+/// participant, deadline and pending signal instead of dying opaque.
+pub fn dump_to_stderr(context: &str) {
+    eprintln!("[flash-dump] {context}:\n{}", sched::dump());
 }
 
-fn duration_to_nanos(d: Duration) -> u64 {
+/// Virtual `sleep` that hits the quiescence engine UNCONDITIONALLY (no
+/// `flash_enabled()` consult). The lexical test rewriter ([`#[kithara::test(flash(true))]`])
+/// retargets a test body's direct `time::sleep` calls here, so the BODY's own
+/// waits collapse onto virtual time without setting `FLASH_ACTIVE` — a prod fn
+/// the body calls keeps its stateless time reads on REAL (`FLASH_ACTIVE` false).
+pub fn virtual_sleep(duration: Duration) -> impl Future<Output = ()> {
+    FlashSleep::new(duration)
+}
+
+/// Virtual `timeout` that hits the engine UNCONDITIONALLY (see
+/// [`virtual_sleep`]). Races `future` against an engine-backed deadline.
+///
+/// # Errors
+///
+/// Returns [`TimeoutError`] if the future does not complete within `duration`.
+pub async fn virtual_timeout<F>(duration: Duration, future: F) -> Result<F::Output, TimeoutError>
+where
+    F: Future,
+{
+    FlashTimeout {
+        future,
+        sleep: FlashSleep::new(duration),
+    }
+    .await
+}
+
+/// Virtual `Instant::now` read UNCONDITIONALLY from the engine clock (see
+/// [`virtual_sleep`]). Mirrors [`Instant::now`]'s flash arm.
+#[must_use]
+pub fn virtual_now() -> Instant {
+    Instant::now_virtual()
+}
+
+/// Virtual `park_timeout` that hits the engine UNCONDITIONALLY (see
+/// [`virtual_sleep`]). Mirrors [`crate::thread::park_timeout`]'s flash arm.
+pub fn virtual_park_timeout(duration: Duration) {
+    crate::thread::park_timeout_virtual(duration);
+}
+
+pub(super) fn duration_to_nanos(d: Duration) -> u64 {
     // Fold via `u64` seconds + `u32` subsec — no `u128` intermediate, no cast.
     const NANOS_PER_SEC: u64 = 1_000_000_000;
     d.as_secs()
@@ -285,7 +309,7 @@ thread_local! {
 /// branch on it.
 #[inline]
 #[must_use]
-pub fn flash_enabled() -> bool {
+pub(crate) fn flash_enabled() -> bool {
     FLASH_ACTIVE.with(Cell::get)
 }
 
@@ -296,7 +320,7 @@ pub fn flash_enabled() -> bool {
 /// per test; `FLASH_ACTIVE` is per-callstack and would mismatch across threads).
 #[inline]
 #[must_use]
-pub fn flash_ambient() -> bool {
+pub(crate) fn flash_ambient() -> bool {
     FLASH_AMBIENT.with(Cell::get)
 }
 
@@ -426,7 +450,7 @@ impl<F: Future> Future for FlashDynamic<F> {
 
 /// Wrap `fut` so the dynamic flash mode is re-asserted around every poll (see
 /// [`FlashDynamic`]).
-pub fn flash_dynamic<F: Future>(on: bool, fut: F) -> FlashDynamic<F> {
+pub fn dynamic<F: Future>(on: bool, fut: F) -> FlashDynamic<F> {
     FlashDynamic { on, fut }
 }
 
@@ -465,7 +489,7 @@ impl Instant {
     }
 
     /// The virtual `now`, read UNCONDITIONALLY from the engine clock (no
-    /// `flash_enabled()` consult). The lexical test rewriter (`flash_virtual_now`)
+    /// `flash_enabled()` consult). The lexical test rewriter (`virtual_now`)
     /// targets this directly so a flash test body's `Instant::now` collapses
     /// onto virtual time without setting `FLASH_ACTIVE`.
     #[inline]
@@ -523,6 +547,3 @@ impl Sub<Self> for Instant {
         self.saturating_duration_since(rhs)
     }
 }
-
-#[cfg(test)]
-mod tests;

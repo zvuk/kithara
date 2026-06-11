@@ -7,6 +7,7 @@
 mod cancel_group;
 #[cfg(not(target_arch = "wasm32"))]
 mod env;
+pub mod flash;
 mod logging;
 mod maybe_send;
 mod rt_cancel;

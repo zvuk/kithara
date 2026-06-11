@@ -6,8 +6,8 @@
 use std::sync::mpsc;
 
 use kithara_platform::{
+    flash::{ambient_scope, ambient_snapshot},
     thread::spawn_named,
-    time::{ambient_scope, ambient_snapshot},
     tokio,
 };
 

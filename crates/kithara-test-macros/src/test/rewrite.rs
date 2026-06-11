@@ -6,7 +6,7 @@ use syn::{
 
 /// Lexical body-only rewrite for `#[kithara::test(flash(true))]`: retargets a
 /// test body's DIRECT calls to the canonical platform time primitives onto the
-/// `flash_virtual_*` variants, which hit the quiescence engine UNCONDITIONALLY.
+/// `flash::virtual_*` variants, which hit the quiescence engine UNCONDITIONALLY.
 /// This collapses the BODY's own waits onto virtual time without setting
 /// `FLASH_ACTIVE`, so a prod fn the body calls keeps its stateless time reads on
 /// REAL (engine-coordinated stateful sync primitives still see the per-test
@@ -60,7 +60,7 @@ impl VisitMut for FlashRewrite {
 }
 
 /// Map a recognised time-fn path (by its last two segments) to the
-/// fully-qualified `flash_virtual_*` path; `None` for anything else.
+/// fully-qualified `flash::virtual_*` path; `None` for anything else.
 fn virtual_path(path: &syn::Path) -> Option<ExprPath> {
     let segs: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
     let n = segs.len();
@@ -70,18 +70,16 @@ fn virtual_path(path: &syn::Path) -> Option<ExprPath> {
     let last2 = (segs[n - 2].as_str(), segs[n - 1].as_str());
     let repl: syn::Path = match last2 {
         ("time", "sleep") => {
-            syn::parse_quote!(::kithara_test_utils::kithara_platform::time::flash_virtual_sleep)
+            syn::parse_quote!(::kithara_test_utils::kithara_platform::flash::virtual_sleep)
         }
         ("time", "timeout") => {
-            syn::parse_quote!(::kithara_test_utils::kithara_platform::time::flash_virtual_timeout)
+            syn::parse_quote!(::kithara_test_utils::kithara_platform::flash::virtual_timeout)
         }
         ("Instant", "now") => {
-            syn::parse_quote!(::kithara_test_utils::kithara_platform::time::flash_virtual_now)
+            syn::parse_quote!(::kithara_test_utils::kithara_platform::flash::virtual_now)
         }
         ("thread", "park_timeout") => {
-            syn::parse_quote!(
-                ::kithara_test_utils::kithara_platform::time::flash_virtual_park_timeout
-            )
+            syn::parse_quote!(::kithara_test_utils::kithara_platform::flash::virtual_park_timeout)
         }
         _ => return None,
     };

@@ -44,11 +44,11 @@ fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
 
     // Flash containment (default `true`). Under `flash(true)` lexically retarget
     // the BODY's direct time-primitive calls onto the unconditional
-    // `flash_virtual_*` variants (so the body collapses without setting
+    // `virtual_*` variants (so the body collapses without setting
     // `FLASH_ACTIVE`, leaving callee prod fns on REAL); under `flash(false)`
     // leave the body untouched. Either way the body opens with an ambient guard
     // (`#flash_bool`), set uniformly per test and propagated to spawned threads
-    // (B5). Off the `flash` feature both `flash_virtual_*` and
+    // (B5). Off the `flash` feature both `virtual_*` and
     // `ambient_scope` are real-aliases / no-ops, so the emitted body is
     // behaviour-identical to the original. Injected ONCE here so every emit path
     // (sync/async/native/wasm/browser) inherits it via `body_stmts`.
@@ -70,7 +70,7 @@ fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
         }
     }
     let ambient_stmt: syn::Stmt = syn::parse_quote! {
-        let __flash_ambient = ::kithara_test_utils::kithara_platform::time::ambient_scope(#flash);
+        let __flash_ambient = ::kithara_test_utils::kithara_platform::flash::ambient_scope(#flash);
     };
     func.block.stmts.insert(0, ambient_stmt);
 

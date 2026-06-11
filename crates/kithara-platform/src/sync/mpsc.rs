@@ -332,7 +332,7 @@ mod tests {
 
     // `flash(false)`: these unit tests build a `crate::time::Instant` deadline and
     // pass it to the crate's own `recv_sync_timeout`. The lexical flash rewrite
-    // would retarget `Instant::now()` onto `::kithara_platform::time::flash_virtual_now`,
+    // would retarget `Instant::now()` onto `::kithara_platform::flash::virtual_now`,
     // whose `Instant` resolves through the dev-dep copy of `kithara_platform`
     // (`kithara-test-utils` pulls a non-flash copy) — a different `Instant` type
     // than the crate-local one the method expects. They do not test flash time

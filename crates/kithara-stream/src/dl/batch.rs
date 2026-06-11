@@ -7,7 +7,8 @@ use kithara_events::{
 use kithara_net::{HttpClient, NetError, Retryability};
 use kithara_platform::{
     CancelGroup, CancellationToken,
-    time::{Duration, Instant, flash_virtual_now},
+    flash::virtual_now,
+    time::{Duration, Instant},
     tokio,
     tokio::task,
 };
@@ -232,12 +233,12 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
 /// real server delay (off-feature / `flash(false)`) is captured by the real
 /// elapsed, a virtual server delay (a flash test's withhold gate) is captured by
 /// the virtual delta, and an instant fetch yields zero on both. Off the
-/// `flash` feature `flash_virtual_now` is real `Instant::now`, so both terms
+/// `flash` feature `virtual_now` is real `Instant::now`, so both terms
 /// collapse to the same real elapsed.
 fn fetch_elapsed(started: Instant) -> Duration {
     started
         .elapsed()
-        .max(flash_virtual_now().saturating_duration_since(started))
+        .max(virtual_now().saturating_duration_since(started))
 }
 
 /// Race `fut` against a `soft_timeout` timer. When the timer wins, publish

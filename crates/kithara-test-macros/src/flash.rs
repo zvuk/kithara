@@ -8,7 +8,7 @@ enum Mode {
     /// `flash` / `flash(true)` / `flash(false)` — dynamic flash guard.
     Dynamic(bool),
     /// `flash(io)` — the fn body is ONE real I/O operation in flight
-    /// ([`kithara_platform::time::real_io`]).
+    /// ([`kithara_platform::flash::real_io`]).
     Io,
 }
 
@@ -16,15 +16,15 @@ enum Mode {
 /// `#[kithara::flash(io)]`.
 ///
 /// `true`/`false` wrap a PROD fn so its body propagates flash dynamically: a
-/// sync fn gets an RAII guard ([`kithara_platform::time::enter_dynamic`]); an
+/// sync fn gets an RAII guard ([`kithara_platform::flash::enter_dynamic`]); an
 /// async fn gets a per-poll combinator
-/// ([`kithara_platform::time::flash_dynamic`]) that survives `.await` (the
+/// ([`kithara_platform::flash::dynamic`]) that survives `.await` (the
 /// mode is a thread-local, so it must be re-asserted on every poll). `on`
 /// defaults to `true`; `#[kithara::flash(false)]` carves a REAL region inside
 /// an otherwise-flash callstack.
 ///
 /// `io` brackets the body as ONE real I/O operation
-/// ([`kithara_platform::time::real_io`]): while it is in flight the virtual
+/// ([`kithara_platform::flash::real_io`]): while it is in flight the virtual
 /// clock is paced to real time. Unlike the dynamic modes this is GLOBAL
 /// engine state, not a thread-local, so one plain RAII guard suffices for
 /// sync and async alike — in an async fn it lives in the future's state
@@ -55,14 +55,14 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let block = &f.block;
     *f.block = match mode {
         Mode::Dynamic(on) if f.sig.asyncness.is_some() => parse_quote!({
-            ::kithara_platform::time::flash_dynamic(#on, async move #block).await
+            ::kithara_platform::flash::dynamic(#on, async move #block).await
         }),
         Mode::Dynamic(on) => parse_quote!({
-            let __flash_guard = ::kithara_platform::time::enter_dynamic(#on);
+            let __flash_guard = ::kithara_platform::flash::enter_dynamic(#on);
             #block
         }),
         Mode::Io => parse_quote!({
-            let __real_io_guard = ::kithara_platform::time::real_io();
+            let __real_io_guard = ::kithara_platform::flash::real_io();
             #block
         }),
     };

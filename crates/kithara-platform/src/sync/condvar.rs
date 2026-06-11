@@ -4,9 +4,9 @@ use parking_lot::Condvar as ParkingLotCondvar;
 use parking_lot::{Condvar as ParkingLotCondvar, lock_api::MutexGuard as RawMutexGuard};
 
 use super::MutexGuard;
-use crate::time::Instant;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
-use crate::time::flash::{credit, flash_ambient, sched};
+use crate::flash::{credit, flash_ambient, sched};
+use crate::time::Instant;
 
 /// Native condvar backed by `parking_lot`.
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]

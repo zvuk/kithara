@@ -35,7 +35,7 @@ use parking_lot::Mutex;
 pub use tokio_with_wasm::alias::sync::mpsc::error;
 
 pub use super::unbounded::UnboundedSender;
-use crate::time::flash::{flash_ambient, sched};
+use crate::flash::{flash_ambient, sched};
 
 pub(super) struct Inner<T> {
     queue: VecDeque<T>,
@@ -482,7 +482,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{channel, unbounded_channel};
-    use crate::{time::flash, tokio::task::spawn};
+    use crate::{flash, tokio::task::spawn};
 
     struct Consts;
     impl Consts {

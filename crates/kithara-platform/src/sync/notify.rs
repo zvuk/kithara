@@ -30,7 +30,7 @@ use std::{
 use parking_lot::Mutex;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
-use crate::time::flash::{flash_ambient, sched};
+use crate::flash::{flash_ambient, sched};
 /// Real-tokio `Notify` (off the sim path): a transparent re-export so callers
 /// use one type everywhere.
 #[cfg(not(all(not(target_arch = "wasm32"), feature = "flash")))]

@@ -2,11 +2,11 @@
 extern crate self as kithara_test_utils;
 
 /// Re-export of `kithara-platform` so the `#[kithara::test]` macro can reach the
-/// flash time API (`ambient_scope`, the lexical-rewrite `flash_virtual_*`
+/// flash control surface (`ambient_scope`, the lexical-rewrite `virtual_*`
 /// targets) through a path present in EVERY crate that uses the macro — they all
 /// depend on `kithara-test-utils` (it vends the macro), but not all depend on
 /// `kithara-platform` directly. The macro emits
-/// `::kithara_test_utils::kithara_platform::time::…` for its body-injected
+/// `::kithara_test_utils::kithara_platform::flash::…` for its body-injected
 /// flash wrapping.
 pub use kithara_platform;
 

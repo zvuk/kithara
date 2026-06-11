@@ -18,7 +18,7 @@ pub use tokio_with_wasm::alias::task::*;
 // yield could never be granted there — the surrounding task keeps its
 // `active_async` slot across the yield while its other primitives are real). Both
 // shadow the `tokio_with_wasm::alias::task` glob re-export above; off the sim path
-// the real `tokio` spawn/yield are used unchanged. See `crate::time::flash`.
+// the real `tokio` spawn/yield are used unchanged. See `crate::flash`.
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 mod spawn;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
@@ -33,9 +33,9 @@ pub use spawn::{spawn, spawn_on};
 // exactly as `spawn`/`spawn_on`/`yield_now` shadow their glob counterparts. Off
 // the sim path the raw glob `spawn_blocking` is used unchanged.
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
-pub use crate::task::spawn_blocking;
+pub use crate::flash::yield_now;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
-pub use crate::time::flash::yield_now;
+pub use crate::task::spawn_blocking;
 
 // Off-sim baseline `spawn_on` (plain `handle.spawn`) — its own module so this
 // `mod.rs` stays declarations + re-exports only (style.no-items-in-lib-or-mod-rs).

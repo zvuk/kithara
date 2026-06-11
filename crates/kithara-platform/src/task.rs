@@ -11,7 +11,7 @@
 //! registers anything.
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
-use crate::time::flash::credit;
+use crate::flash::credit;
 
 /// Spawn a blocking computation on the runtime's blocking pool.
 ///
@@ -34,14 +34,14 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    let ambient = crate::time::flash::ambient_snapshot();
+    let ambient = crate::flash::ambient_snapshot();
     if ambient {
         credit::pre_count_dedicated();
     }
     tokio::task::spawn_blocking(move || {
         // Held for the closure's lifetime (must outlive `f()`); restores the
         // pool thread's previous ambient on exit.
-        let _ambient = crate::time::flash::set_ambient_for_spawn(ambient);
+        let _ambient = crate::flash::set_ambient_for_spawn(ambient);
         credit::reset_credit();
         if ambient {
             let _pacer = credit::BlockingPacer::enter();

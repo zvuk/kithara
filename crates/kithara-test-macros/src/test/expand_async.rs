@@ -61,7 +61,7 @@ pub(crate) fn emit_async_runtime_test(
                 // timer advances the clock while the driver is between polls, so
                 // a `sleep`/`read` loop times out on a deadline that already
                 // jumped. Mirrors `emit_async_timeout_test`.
-                kithara_platform::time::participate(
+                kithara_platform::flash::participate(
                     ::kithara_test_utils::probe::OWNED_INSTALL_ID
                         .scope(__probe_install_id,
                             // Re-assert FLASH_AMBIENT around every poll of the
@@ -72,7 +72,7 @@ pub(crate) fn emit_async_runtime_test(
                             // REAL while the engine runs virtual (lost wake).
                             // `with_ambient` keeps the body flash-eligible across
                             // `.await`. Identity off the feature.
-                            kithara_platform::time::with_ambient(#flash, async {
+                            kithara_platform::flash::with_ambient(#flash, async {
                                 #inner_body
                             })),
                 ),
@@ -183,7 +183,7 @@ pub(crate) fn emit_async_timeout_test(
                              (runtime shutdown blocked). Aborting process.\n",
                             __fn, __timeout_dur,
                         );
-                        ::kithara_test_utils::flash_dump_to_stderr("hard-timeout");
+                        ::kithara_test_utils::kithara_platform::flash::dump_to_stderr("hard-timeout");
                         ::std::process::abort();
                     }
                 });
@@ -207,7 +207,7 @@ pub(crate) fn emit_async_timeout_test(
                         // test driver counts as a running participant while polled
                         // (identity off the sim path). Without this the virtual
                         // clock would race past the driver's own work between awaits.
-                        kithara_platform::time::participate(
+                        kithara_platform::flash::participate(
                             ::kithara_test_utils::probe::OWNED_INSTALL_ID.scope(
                                 __probe_install_id,
                                 async {
@@ -225,13 +225,13 @@ pub(crate) fn emit_async_timeout_test(
                                         // virtual engine — lost wake). `timeout`
                                         // itself stays REAL (gates on FLASH_ACTIVE,
                                         // untouched here).
-                                        kithara_platform::time::with_ambient(#flash, async {
+                                        kithara_platform::flash::with_ambient(#flash, async {
                                             #inner_body
                                         }),
                                     )
                                     .await
                                     .unwrap_or_else(|_| {
-                                        ::kithara_test_utils::flash_dump_to_stderr(
+                                        ::kithara_test_utils::kithara_platform::flash::dump_to_stderr(
                                             "virtual-timeout",
                                         );
                                         panic!(

@@ -15,7 +15,10 @@ use std::{
     time::Instant as RealInstant,
 };
 
-use kithara_platform::time::{self, Duration, ambient_scope};
+use kithara_platform::{
+    flash::ambient_scope,
+    time::{self, Duration},
+};
 
 #[kithara_test_macros::flash(true)]
 async fn does_sleep() {

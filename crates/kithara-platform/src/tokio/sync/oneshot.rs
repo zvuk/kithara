@@ -23,7 +23,7 @@ use std::{
 
 use parking_lot::Mutex;
 
-use crate::time::flash::{flash_ambient, sched};
+use crate::flash::{flash_ambient, sched};
 
 /// Error observed when the sender drops without sending.
 ///
@@ -213,7 +213,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{RecvError, channel};
-    use crate::{time::flash, tokio::task::spawn};
+    use crate::{flash, tokio::task::spawn};
 
     const ROUNDS: usize = 256;
 
