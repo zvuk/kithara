@@ -4,8 +4,7 @@ use kithara_decode::PcmSpec;
 use super::bungee::BungeeBackend;
 #[cfg(feature = "stretch-signalsmith")]
 use super::signalsmith::SignalsmithBackend;
-use super::stretch_backend::StretchBackend;
-use super::stretch_kind::StretchBackendKind;
+use super::{stretch_backend::StretchBackend, stretch_kind::StretchBackendKind};
 
 /// Construct the backend for `kind` at the configured source `spec`. Called
 /// once per chain build (and on a source-spec change inside the processor).

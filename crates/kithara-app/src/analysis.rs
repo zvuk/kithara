@@ -1,6 +1,8 @@
-use std::{collections::VecDeque, path::PathBuf, sync::Arc};
+use std::{collections::VecDeque, sync::Arc};
 
 use kithara::{
+    assets::AssetStore,
+    audio::analysis::beat_cache_tag,
     events::{Event, EventReceiver, TrackId},
     prelude::ResourceConfig,
 };
@@ -21,7 +23,7 @@ use crate::{
 const WAVEFORM_BUCKETS: usize = 1500;
 
 /// Analysis-aware state listener: mirrors queue events into [`UiState`] and
-/// drives the background [`AnalysisDriver`]. Starts analysing the already
+/// drives the background [`AnalysisController`]. Starts analysing the already
 /// loaded library immediately — independent of which UI is open.
 pub(crate) async fn listen(
     queue: Arc<Queue>,
@@ -30,8 +32,7 @@ pub(crate) async fn listen(
     cancel: CancellationToken,
     mut rx: EventReceiver,
 ) {
-    let dir = config.file_asset_store.root_dir().join("track-analysis");
-    let mut driver = AnalysisDriver::new(&cancel, Some(dir));
+    let mut driver = AnalysisController::new(&cancel, Some(Arc::clone(&config.file_asset_store)));
 
     // Analyse whatever is already loaded; later tracks arrive as events.
     driver.on_tracks_changed(&queue, &state, &config);
@@ -66,14 +67,9 @@ pub(crate) async fn listen(
     }
 }
 
-/// Background source-analysis driver owned by the state listener task.
-///
-/// Keeps one analysis in flight at a time and a pending queue of library
-/// tracks, so every loaded track gets analysed in the background — the
-/// current track first — independent of whether any waveform UI is open.
-/// Results land in the two-tier [`TrackAnalysisCache`]; the UI snapshot
-/// only receives the current track's analysis.
-pub(crate) struct AnalysisDriver {
+/// Background source-analysis controller owned by the state listener task.
+/// Results land in the two-tier [`TrackAnalysisCache`];
+pub(crate) struct AnalysisController {
     runner: TrackAnalysisRunner,
     cache: TrackAnalysisCache,
     current: Option<Run>,
@@ -91,13 +87,14 @@ struct Run {
     rx: watch::Receiver<Option<TrackAnalysis>>,
 }
 
-impl AnalysisDriver {
+impl AnalysisController {
     /// `cancel` must be a child of the app master so analysis stops on app
-    /// shutdown; `cache_dir` is the on-disk tier of the analysis cache.
-    pub(crate) fn new(cancel: &CancellationToken, cache_dir: Option<PathBuf>) -> Self {
+    /// shutdown; `store` is the shared file store whose per-track asset
+    /// scopes hold the durable analysis blobs.
+    pub(crate) fn new(cancel: &CancellationToken, store: Option<Arc<AssetStore>>) -> Self {
         Self {
             runner: TrackAnalysisRunner::new(cancel, WAVEFORM_BUCKETS),
-            cache: TrackAnalysisCache::new(cache_dir),
+            cache: TrackAnalysisCache::new(store, analysis_fingerprint()),
             current: None,
             displayed: None,
             pending: VecDeque::new(),
@@ -178,18 +175,22 @@ impl AnalysisDriver {
         if self.current.is_some() {
             return;
         }
-        // No analyzers compiled in: decoding would produce nothing.
+
+        // No analyzers found: decoding would produce nothing.
         if !self.runner.is_active() {
             self.pending.clear();
             return;
         }
+
         while let Some(track_id) = self.pending.pop_front() {
             // Track gone from the queue since it was enqueued: skip.
             let Some(source) = queue.track_source(track_id) else {
                 continue;
             };
+
             let key = source_key(&source);
             let is_current = current_track_id(state) == Some(track_id);
+
             match plan_analysis(key.as_ref(), self.displayed.as_ref(), &mut self.cache) {
                 Plan::Skip => {}
                 Plan::Serve(analysis) => {
@@ -204,13 +205,16 @@ impl AnalysisDriver {
                     if !is_current && key.is_none() {
                         continue;
                     }
+
                     let Some(cfg) = resource_config_from_source(source, config) else {
                         continue;
                     };
+
                     if is_current {
                         state.lock_sync().analysis = None;
                         self.displayed = None;
                     }
+
                     let rx = self.runner.analyze(cfg);
                     self.current = Some(Run { track_id, key, rx });
                     return;
@@ -226,6 +230,7 @@ impl AnalysisDriver {
         let Some(run) = self.current.take() else {
             return;
         };
+
         let Some(analysis) = run.rx.borrow().clone() else {
             return;
         };
@@ -250,7 +255,14 @@ impl AnalysisDriver {
     }
 }
 
-/// What [`AnalysisDriver::pump`] should do for a track.
+/// Fingerprint of the active analysis configuration, stored inside each durable blob.
+/// A mismatch is a cache miss, so config changes re-analyse.
+fn analysis_fingerprint() -> String {
+    let beat = beat_cache_tag().unwrap_or_else(|| "off".to_string());
+    format!("buckets={WAVEFORM_BUCKETS};beat={beat}")
+}
+
+/// What [`AnalysisController::pump`] should do for a track.
 enum Plan {
     /// Already shown for this content: leave the analysis as is.
     Skip,
@@ -273,13 +285,12 @@ fn plan_analysis(
         // memoize, so always decode.
         return Plan::Decode;
     };
+
     if displayed == Some(key) {
         return Plan::Skip;
     }
-    match cache.get(key) {
-        Some(wave) => Plan::Serve(wave),
-        None => Plan::Decode,
-    }
+
+    cache.get(key).map_or(Plan::Decode, Plan::Serve)
 }
 
 /// Library tracks in background-analysis order: the current track first,
@@ -336,10 +347,14 @@ mod tests {
         analysis
     }
 
+    fn cache() -> TrackAnalysisCache {
+        TrackAnalysisCache::new(None, "test".to_string())
+    }
+
     #[test]
     fn plan_skips_shown_track() {
-        let a = AnalysisKey::from_source("file:///a.mp3");
-        let mut cache = TrackAnalysisCache::new(None);
+        let a = AnalysisKey::new("root_a");
+        let mut cache = cache();
         assert!(matches!(
             plan_analysis(Some(&a), Some(&a), &mut cache),
             Plan::Skip
@@ -348,9 +363,9 @@ mod tests {
 
     #[test]
     fn plan_decodes_a_new_or_unkeyable_track() {
-        let a = AnalysisKey::from_source("file:///a.mp3");
-        let b = AnalysisKey::from_source("file:///b.mp3");
-        let mut cache = TrackAnalysisCache::new(None);
+        let a = AnalysisKey::new("root_a");
+        let b = AnalysisKey::new("root_b");
+        let mut cache = cache();
         // A different shown track does not block a fresh decode.
         assert!(matches!(
             plan_analysis(Some(&a), Some(&b), &mut cache),
@@ -365,8 +380,8 @@ mod tests {
 
     #[test]
     fn plan_serves_a_cached_track_without_decoding() {
-        let a = AnalysisKey::from_source("file:///a.mp3");
-        let mut cache = TrackAnalysisCache::new(None);
+        let a = AnalysisKey::new("root_a");
+        let mut cache = cache();
         cache.put(a.clone(), analysis());
         assert!(matches!(
             plan_analysis(Some(&a), None, &mut cache),

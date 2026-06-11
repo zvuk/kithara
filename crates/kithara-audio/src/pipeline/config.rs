@@ -140,32 +140,10 @@ pub(crate) fn create_effects(
 ) -> Vec<Box<dyn AudioEffect>> {
     let mut chain: Vec<Box<dyn AudioEffect>> = Vec::new();
 
-    let resampler_rate = match stretch {
-        #[cfg(all(
-            not(target_arch = "wasm32"),
-            any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-        ))]
-        Some(controls) => {
-            // The stretch slot is the sole writer of this atomic; the resampler
-            // below reads it. Both run on the worker thread in sequence.
-            let resampler_rate = Arc::new(AtomicF32::new(1.0));
-            chain.push(Box::new(TimeStretchProcessor::new(
-                Arc::clone(controls),
-                Arc::clone(&resampler_rate),
-                initial_spec,
-                pool.clone().unwrap_or_default(),
-            )));
-            resampler_rate
-        }
-        #[cfg(not(all(
-            not(target_arch = "wasm32"),
-            any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-        )))]
-        // No stretch backend compiled in: the resampler follows the shared
-        // speed atomic directly (pitch follows speed, no key-lock).
-        Some(controls) => controls.speed_shared(),
-        None => Arc::clone(playback_rate),
-    };
+    let resampler_rate = stretch.map_or_else(
+        || Arc::clone(playback_rate),
+        |controls| stretch_rate(controls, &mut chain, initial_spec, pool.as_ref()),
+    );
 
     let params = ResamplerParams::builder()
         .host_sample_rate(Arc::clone(host_sample_rate))
@@ -179,6 +157,43 @@ pub(crate) fn create_effects(
     chain.push(Box::new(ResamplerProcessor::new(params)));
     chain.extend(custom_effects);
     chain
+}
+
+/// Tempo mode with a compiled-in backend: prepend the stretch slot. It is the
+/// sole writer of the returned rate atomic; the resampler reads it.
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+fn stretch_rate(
+    controls: &Arc<StretchControls>,
+    chain: &mut Vec<Box<dyn AudioEffect>>,
+    initial_spec: PcmSpec,
+    pool: Option<&PcmPool>,
+) -> Arc<AtomicF32> {
+    let resampler_rate = Arc::new(AtomicF32::new(1.0));
+    chain.push(Box::new(TimeStretchProcessor::new(
+        Arc::clone(controls),
+        Arc::clone(&resampler_rate),
+        initial_spec,
+        pool.cloned().unwrap_or_default(),
+    )));
+    resampler_rate
+}
+
+/// No stretch backend compiled in: the resampler follows the shared speed
+/// atomic directly (pitch follows speed, no key-lock).
+#[cfg(not(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+)))]
+fn stretch_rate(
+    controls: &Arc<StretchControls>,
+    _chain: &mut Vec<Box<dyn AudioEffect>>,
+    _initial_spec: PcmSpec,
+    _pool: Option<&PcmPool>,
+) -> Arc<AtomicF32> {
+    controls.speed_shared()
 }
 
 #[cfg(test)]

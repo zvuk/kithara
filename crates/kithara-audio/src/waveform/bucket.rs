@@ -1,24 +1,13 @@
 use std::sync::Arc;
 
-/// Wire/disk format version for [`Waveform::to_bytes`]. Bump when the encoding,
+use crate::blob::{self, Blob, BlobError, Reader, Writer};
+
+/// Wire/disk format version for the [`Waveform`] blob. Bump when the encoding,
 /// the analysis parameters, or the caller's bucket resolution changes.
 pub(crate) const WAVEFORM_BYTES_VERSION: u32 = 1;
 
 /// Bytes per serialized bucket: three little-endian `f32` band heights.
 const BUCKET_BYTES: usize = 12;
-
-/// Failure decoding a [`Waveform`] byte blob. Callers treat it as a cache miss
-/// and re-analyse.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum WaveformBytesError {
-    /// Header version does not match [`WAVEFORM_BYTES_VERSION`] (stale cache).
-    #[error("waveform blob version {found} != expected {expected}")]
-    Version { found: u32, expected: u32 },
-    /// Truncated, mis-sized, or carrying a band height outside `[0, 1]`.
-    #[error("waveform blob is corrupt")]
-    Corrupt,
-}
 
 /// One waveform column: three normalized frequency-band heights, each in
 /// `[0, 1]` on a shared scale after per-band perceptual gain. The deck paints
@@ -33,10 +22,7 @@ pub struct Bucket {
 }
 
 /// A track's analysed waveform: per-bucket band heights in `[0, 1]`, indexed by
-/// normalized track position. Built by [`WaveformAnalyzer::finalize`] or
-/// [`Waveform::from_bytes`]; both uphold the `[0, 1]` invariant.
-///
-/// [`WaveformAnalyzer::finalize`]: super::WaveformAnalyzer::finalize
+/// normalized track position.
 #[derive(Clone, Debug)]
 pub struct Waveform(Arc<[Bucket]>);
 
@@ -64,14 +50,7 @@ impl Waveform {
     /// `f32` band heights per bucket.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(4 + self.0.len() * BUCKET_BYTES);
-        out.extend_from_slice(&WAVEFORM_BYTES_VERSION.to_le_bytes());
-        for b in self.0.iter() {
-            out.extend_from_slice(&b.low.to_le_bytes());
-            out.extend_from_slice(&b.mid.to_le_bytes());
-            out.extend_from_slice(&b.high.to_le_bytes());
-        }
-        out
+        blob::to_bytes(self)
     }
 
     /// Parse a blob produced by [`Self::to_bytes`]. A version mismatch, a body
@@ -80,33 +59,41 @@ impl Waveform {
     ///
     /// # Errors
     ///
-    /// Returns [`WaveformBytesError::Version`] when the header version does not
-    /// match [`WAVEFORM_BYTES_VERSION`], and [`WaveformBytesError::Corrupt`]
-    /// when the header is missing.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, WaveformBytesError> {
-        let header = bytes.get(0..4).ok_or(WaveformBytesError::Corrupt)?;
-        let version = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
-        if version != WAVEFORM_BYTES_VERSION {
-            return Err(WaveformBytesError::Version {
-                found: version,
-                expected: WAVEFORM_BYTES_VERSION,
-            });
-        }
-        let body = &bytes[4..];
-        if !body.len().is_multiple_of(BUCKET_BYTES) {
-            return Err(WaveformBytesError::Corrupt);
-        }
+    /// Returns [`BlobError::Version`] when the header version does not match
+    /// [`WAVEFORM_BYTES_VERSION`], and [`BlobError::Corrupt`] when the body is
+    /// truncated, mis-sized, or carries a band height outside `[0, 1]`.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, BlobError> {
+        blob::from_bytes(bytes)
+    }
+}
 
-        let mut buckets = Vec::with_capacity(body.len() / BUCKET_BYTES);
-        for c in body.chunks_exact(BUCKET_BYTES) {
-            let low = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
-            let mid = f32::from_le_bytes([c[4], c[5], c[6], c[7]]);
-            let high = f32::from_le_bytes([c[8], c[9], c[10], c[11]]);
+impl Blob for Waveform {
+    const VERSION: u32 = WAVEFORM_BYTES_VERSION;
+
+    fn encode(&self, w: &mut Writer<'_>) {
+        w.reserve(self.0.len() * BUCKET_BYTES);
+        for b in self.0.iter() {
+            w.write_f32(b.low);
+            w.write_f32(b.mid);
+            w.write_f32(b.high);
+        }
+    }
+
+    fn decode(r: &mut Reader<'_>) -> Result<Self, BlobError> {
+        if !r.remaining().is_multiple_of(BUCKET_BYTES) {
+            return Err(BlobError::Corrupt);
+        }
+        let count = r.remaining() / BUCKET_BYTES;
+        let mut buckets = Vec::with_capacity(count);
+        for _ in 0..count {
+            let low = r.read_f32()?;
+            let mid = r.read_f32()?;
+            let high = r.read_f32()?;
             // `(0.0..=1.0).contains` is false for NaN/infinities, so this one
             // check covers finiteness and the `[0, 1]` invariant.
             let ok = |v: f32| (0.0..=1.0).contains(&v);
             if !(ok(low) && ok(mid) && ok(high)) {
-                return Err(WaveformBytesError::Corrupt);
+                return Err(BlobError::Corrupt);
             }
             buckets.push(Bucket { low, mid, high });
         }
@@ -118,7 +105,8 @@ impl Waveform {
 mod bytes_tests {
     use kithara_test_utils::kithara;
 
-    use super::{Bucket, WAVEFORM_BYTES_VERSION, Waveform, WaveformBytesError};
+    use super::{Bucket, WAVEFORM_BYTES_VERSION, Waveform};
+    use crate::blob::BlobError;
 
     fn sample() -> Waveform {
         Waveform::from_buckets(vec![
@@ -156,18 +144,14 @@ mod bytes_tests {
         bytes[0] = bytes[0].wrapping_add(1);
         assert!(matches!(
             Waveform::from_bytes(&bytes),
-            Err(WaveformBytesError::Version { expected, .. }) if expected == WAVEFORM_BYTES_VERSION
+            Err(BlobError::Version { expected, .. }) if expected == WAVEFORM_BYTES_VERSION
         ));
     }
 
     #[kithara::test]
     fn rejects_corrupt_blobs() {
-        let corrupt = |bytes: Vec<u8>| {
-            matches!(
-                Waveform::from_bytes(&bytes),
-                Err(WaveformBytesError::Corrupt)
-            )
-        };
+        let corrupt =
+            |bytes: Vec<u8>| matches!(Waveform::from_bytes(&bytes), Err(BlobError::Corrupt));
 
         assert!(corrupt(vec![0, 0]), "shorter than the version header");
 

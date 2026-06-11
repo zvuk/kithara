@@ -12,6 +12,7 @@
 
 pub mod analysis;
 mod audio;
+mod blob;
 pub mod effects;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
@@ -23,11 +24,14 @@ mod waveform;
 pub(crate) mod worker;
 
 pub use audio::Audio;
+pub use blob::BlobError;
 #[cfg(all(
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
-pub use effects::timestretch::{StretchBackendKind, TimeStretchProcessor};
+pub use effects::timestretch::{
+    RegionPlan, RegionPlanError, StretchBackendKind, TimeStretchProcessor,
+};
 pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
     timestretch::StretchControls,
@@ -41,9 +45,7 @@ pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,
     SeekOutcome,
 };
-#[cfg(feature = "analysis")]
-pub use waveform::{AnalysisParams, WaveformAnalyzer};
-pub use waveform::{Bucket, Waveform, WaveformBytesError};
+pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, Waveform, WaveformAnalyzer};
 pub use worker::{
     AudioWorkerSource, EngineLoad, EngineLoadSnapshot, PreloadGate, handle::AudioWorkerHandle,
     types::ServiceClass,

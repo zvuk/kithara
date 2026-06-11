@@ -1,52 +1,42 @@
 use std::{
     collections::{HashMap, VecDeque},
-    fmt::{self, Write as _},
-    fs,
-    io::Write as _,
-    path::{Path, PathBuf},
+    fmt,
+    sync::Arc,
 };
 
+use kithara::{
+    assets::{
+        AcquisitionResult, AssetResourceState, AssetStore, AssetsError, ReadSide, ResourceKey,
+        WriteSide, asset_root_for_url,
+    },
+    audio::{BeatGrid, Waveform},
+    prelude::{ResourceConfig, ResourceSrc},
+};
 use kithara_queue::TrackSource;
-use sha2::{Digest, Sha256};
 use tracing::{debug, warn};
 use url::Url;
 
 use crate::waveform::TrackAnalysis;
 
-/// Cap on persisted blobs (~18 KB each); the oldest are pruned past it.
-const MAX_DISK_ENTRIES: usize = 512;
 /// Cap on the in-memory tier; past it the oldest entries fall back to disk.
 const MAX_MEM_ENTRIES: usize = 64;
-const ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0001;
+const ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0002;
 
-/// Stable, source-derived cache key for a track's analysis.
+/// Analysis artifact resource under the track's asset scope. One blob per
+/// track: the active config fingerprint is checked inside it.
+const ANALYSIS_REL_PATH: &str = "analysis/track.analysis";
+
+/// Cache key for a track's analysis.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct AnalysisKey(String);
+pub(crate) struct AnalysisKey {
+    asset_root: String,
+}
 
 impl AnalysisKey {
-    /// Key from a source string, canonicalized by dropping URL query/fragment
-    /// (signing tokens vary per session); non-URL paths pass through.
-    pub(crate) fn from_source(src: &str) -> Self {
-        let canonical = Url::parse(src).map_or_else(
-            |_| src.to_string(),
-            |mut url| {
-                url.set_query(None);
-                url.set_fragment(None);
-                url.to_string()
-            },
-        );
-        Self(canonical)
-    }
-
-    /// Filesystem-safe blob name: hex sha256 of the canonical key.
-    fn file_name(&self) -> String {
-        let digest = Sha256::digest(self.0.as_bytes());
-        let mut name = String::with_capacity(digest.len() * 2 + 5);
-        for byte in digest {
-            let _ = write!(name, "{byte:02x}");
+    pub(crate) fn new(asset_root: impl Into<String>) -> Self {
+        Self {
+            asset_root: asset_root.into(),
         }
-        name.push_str(".analysis");
-        name
     }
 }
 
@@ -54,38 +44,58 @@ impl AnalysisKey {
 /// cross-session identity.
 pub(crate) fn source_key(source: &TrackSource) -> Option<AnalysisKey> {
     match source {
-        TrackSource::Uri(url) => Some(AnalysisKey::from_source(url)),
-        TrackSource::Config(cfg) => Some(AnalysisKey::from_source(&cfg.src.to_string())),
+        TrackSource::Uri(src) => key_for_src(&ResourceConfig::parse_src(src).ok()?, None),
+        TrackSource::Config(cfg) => key_for_src(&cfg.src, cfg.name.as_deref()),
         _ => None,
     }
 }
 
-/// Two-tier track-analysis memoization: a session in-memory map plus an on-disk blob
-/// store. Owned by the single listener task, so it needs no synchronization.
+/// `asset_root` for a source, mirroring `kithara-file`'s remote derivation
+/// (`name` first, else the URL query).
+fn key_for_src(src: &ResourceSrc, name: Option<&str>) -> Option<AnalysisKey> {
+    match src {
+        ResourceSrc::Url(url) => {
+            let name_or_query = name.or_else(|| url.query()).filter(|s| !s.is_empty());
+            Some(AnalysisKey::new(asset_root_for_url(url, name_or_query)))
+        }
+        ResourceSrc::Path(path) => {
+            let url = Url::from_file_path(path).ok()?;
+            Some(AnalysisKey::new(asset_root_for_url(&url, None)))
+        }
+    }
+}
+
+/// Two-tier track-analysis memoization: a session in-memory map plus durable
+/// blobs stored as resources of each track's `AssetScope` (so they follow the
+/// track's storage lifecycle). Owned by the single listener task, so it needs
+/// no synchronization.
 pub(crate) struct TrackAnalysisCache {
     mem: HashMap<AnalysisKey, TrackAnalysis>,
     /// Insertion order of `mem` keys; the oldest is evicted past the cap.
     order: VecDeque<AnalysisKey>,
-    dir: Option<PathBuf>,
+    store: Option<Arc<AssetStore>>,
+    /// Active analysis configuration; blobs carrying a different one are
+    /// cache misses.
+    fingerprint: String,
 }
 
 impl TrackAnalysisCache {
-    pub(crate) fn new(dir: Option<PathBuf>) -> Self {
+    pub(crate) fn new(store: Option<Arc<AssetStore>>, fingerprint: String) -> Self {
         Self {
             mem: HashMap::new(),
             order: VecDeque::new(),
-            dir,
+            store,
+            fingerprint,
         }
     }
 
-    /// Look up a cached waveform: memory first, then disk (promoting a disk
-    /// hit into memory). `None` on a miss or an unreadable/stale blob.
+    /// Look up a cached analysis: memory first, then the scope resource. 
+    /// `None` on a miss or an unreadable blob.
     pub(crate) fn get(&mut self, key: &AnalysisKey) -> Option<TrackAnalysis> {
         if let Some(analysis) = self.mem.get(key) {
             return Some(analysis.clone());
         }
         let analysis = self.load_disk(key)?;
-        debug!("track analysis cache: disk hit");
         self.remember(key.clone(), analysis.clone());
         Some(analysis)
     }
@@ -94,7 +104,7 @@ impl TrackAnalysisCache {
     pub(crate) fn put(&mut self, key: AnalysisKey, analysis: TrackAnalysis) {
         // An analysis with no meaningful slots would be served forever as
         // emptiness on later hits; skip memoizing it in either tier.
-        if analysis.waveform.is_none() {
+        if analysis.waveform.is_none() && analysis.beat.is_none() {
             return;
         }
         self.store_disk(&key, &analysis);
@@ -114,46 +124,71 @@ impl TrackAnalysisCache {
         }
     }
 
+    fn resource_key(store: &AssetStore, key: &AnalysisKey) -> ResourceKey {
+        store.scope(key.asset_root.as_str()).key(ANALYSIS_REL_PATH)
+    }
+
     fn load_disk(&self, key: &AnalysisKey) -> Option<TrackAnalysis> {
-        let path = self.dir.as_ref()?.join(key.file_name());
-        let bytes = fs::read(&path).ok()?;
-        match analysis_from_bytes(&bytes) {
-            Ok(analysis) => Some(analysis),
+        let store = self.store.as_ref()?;
+        let resource = Self::resource_key(store, key);
+        // Side-effect-free probe first: opening a missing key would create it.
+        match store.resource_state(&resource).ok()? {
+            AssetResourceState::Committed { .. } => {}
+            _ => return None,
+        }
+        let reader = store.open_resource(&resource, None).ok()?;
+        let mut bytes = Vec::new();
+        reader.read_into(&mut bytes).ok()?;
+        match analysis_from_bytes(&bytes, &self.fingerprint) {
+            Ok(analysis) => {
+                debug!("track analysis cache: disk hit");
+                Some(analysis)
+            }
             Err(e) => {
-                warn!(?e, ?path, "track analysis cache: ignoring unreadable blob");
+                warn!(%e, ?resource, "track analysis cache: ignoring stale/unreadable blob");
                 None
             }
         }
     }
 
     fn store_disk(&self, key: &AnalysisKey, analysis: &TrackAnalysis) {
-        let Some(dir) = self.dir.as_ref() else {
+        let Some(store) = self.store.as_ref() else {
             return;
         };
-        // The blob format carries the waveform; an analysis without one has
-        // nothing durable to persist.
-        let Some(waveform) = analysis.waveform.as_ref() else {
-            return;
-        };
-        let path = dir.join(key.file_name());
-        let bytes = match analysis_to_bytes(waveform) {
+        let resource = Self::resource_key(store, key);
+        let bytes = match analysis_to_bytes(analysis, &self.fingerprint) {
             Ok(bytes) => bytes,
             Err(e) => {
-                warn!(?e, ?path, "track analysis cache: encode failed");
+                warn!(%e, ?resource, "track analysis cache: encode failed");
                 return;
             }
         };
-        if let Err(e) = write_durable(dir, &path, &bytes) {
-            warn!(?e, ?path, "track analysis cache: disk write failed");
-            return;
+        if let Err(e) = write_resource(store, &resource, &bytes) {
+            warn!(%e, ?resource, "track analysis cache: blob write failed");
         }
-        prune_disk(dir);
     }
+}
+
+fn write_resource(
+    store: &AssetStore,
+    resource: &ResourceKey,
+    bytes: &[u8],
+) -> Result<(), AssetsError> {
+    let writer = match store.acquire_resource(resource, None)? {
+        AcquisitionResult::Pending(writer) => writer,
+        AcquisitionResult::Ready(reader) => reader.reactivate()?,
+        _ => return Ok(()),
+    };
+    writer.write_at(0, bytes)?;
+    let final_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    writer.commit(Some(final_len))?;
+    Ok(())
 }
 
 #[derive(Debug)]
 enum AnalysisBytesError {
     Version { found: u32, expected: u32 },
+    Fingerprint,
     TooLarge,
     Corrupt,
 }
@@ -167,23 +202,43 @@ impl fmt::Display for AnalysisBytesError {
                     "track analysis blob version {found} != expected {expected}"
                 )
             }
+            Self::Fingerprint => f.write_str("track analysis blob has a stale config fingerprint"),
             Self::TooLarge => f.write_str("track analysis blob is too large"),
             Self::Corrupt => f.write_str("track analysis blob is corrupt"),
         }
     }
 }
 
-fn analysis_to_bytes(waveform: &kithara::audio::Waveform) -> Result<Vec<u8>, AnalysisBytesError> {
-    let waveform = waveform.to_bytes();
-    let waveform_len = u64::try_from(waveform.len()).map_err(|_| AnalysisBytesError::TooLarge)?;
-    let mut out = Vec::with_capacity(4 + 8 + waveform.len());
+fn analysis_to_bytes(
+    analysis: &TrackAnalysis,
+    fingerprint: &str,
+) -> Result<Vec<u8>, AnalysisBytesError> {
+    let waveform = analysis
+        .waveform
+        .as_ref()
+        .map(Waveform::to_bytes)
+        .unwrap_or_default();
+    let beat = analysis
+        .beat
+        .as_ref()
+        .map(BeatGrid::to_bytes)
+        .unwrap_or_default();
+    let mut out =
+        Vec::with_capacity(4 + 4 + fingerprint.len() + 8 + waveform.len() + 8 + beat.len());
     out.extend_from_slice(&ANALYSIS_BYTES_VERSION.to_le_bytes());
-    out.extend_from_slice(&waveform_len.to_le_bytes());
-    out.extend_from_slice(&waveform);
+    let fingerprint_len =
+        u32::try_from(fingerprint.len()).map_err(|_| AnalysisBytesError::TooLarge)?;
+    out.extend_from_slice(&fingerprint_len.to_le_bytes());
+    out.extend_from_slice(fingerprint.as_bytes());
+    write_section(&mut out, &waveform)?;
+    write_section(&mut out, &beat)?;
     Ok(out)
 }
 
-fn analysis_from_bytes(bytes: &[u8]) -> Result<TrackAnalysis, AnalysisBytesError> {
+fn analysis_from_bytes(
+    bytes: &[u8],
+    fingerprint: &str,
+) -> Result<TrackAnalysis, AnalysisBytesError> {
     let mut cursor = 0usize;
     let version = read_u32(bytes, &mut cursor)?;
     if version != ANALYSIS_BYTES_VERSION {
@@ -192,20 +247,51 @@ fn analysis_from_bytes(bytes: &[u8]) -> Result<TrackAnalysis, AnalysisBytesError
             expected: ANALYSIS_BYTES_VERSION,
         });
     }
-    let waveform_len =
-        usize::try_from(read_u64(bytes, &mut cursor)?).map_err(|_| AnalysisBytesError::Corrupt)?;
-    let end = cursor
-        .checked_add(waveform_len)
-        .ok_or(AnalysisBytesError::Corrupt)?;
-    let waveform_bytes = bytes.get(cursor..end).ok_or(AnalysisBytesError::Corrupt)?;
-    if end != bytes.len() {
+    let fingerprint_len =
+        usize::try_from(read_u32(bytes, &mut cursor)?).map_err(|_| AnalysisBytesError::Corrupt)?;
+    let stored = read_slice(bytes, &mut cursor, fingerprint_len)?;
+    if stored != fingerprint.as_bytes() {
+        return Err(AnalysisBytesError::Fingerprint);
+    }
+    let waveform_bytes = read_section(bytes, &mut cursor)?;
+    let beat_bytes = read_section(bytes, &mut cursor)?;
+    if cursor != bytes.len() {
         return Err(AnalysisBytesError::Corrupt);
     }
-    let waveform = kithara::audio::Waveform::from_bytes(waveform_bytes)
-        .map_err(|_| AnalysisBytesError::Corrupt)?;
+
     let mut analysis = TrackAnalysis::default();
-    analysis.waveform = Some(waveform);
+    if !waveform_bytes.is_empty() {
+        analysis.waveform =
+            Some(Waveform::from_bytes(waveform_bytes).map_err(|_| AnalysisBytesError::Corrupt)?);
+    }
+    if !beat_bytes.is_empty() {
+        analysis.beat =
+            Some(BeatGrid::from_bytes(beat_bytes).map_err(|_| AnalysisBytesError::Corrupt)?);
+    }
     Ok(analysis)
+}
+
+fn write_section(out: &mut Vec<u8>, section: &[u8]) -> Result<(), AnalysisBytesError> {
+    let len = u64::try_from(section.len()).map_err(|_| AnalysisBytesError::TooLarge)?;
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(section);
+    Ok(())
+}
+
+fn read_section<'a>(bytes: &'a [u8], cursor: &mut usize) -> Result<&'a [u8], AnalysisBytesError> {
+    let len = usize::try_from(read_u64(bytes, cursor)?).map_err(|_| AnalysisBytesError::Corrupt)?;
+    read_slice(bytes, cursor, len)
+}
+
+fn read_slice<'a>(
+    bytes: &'a [u8],
+    cursor: &mut usize,
+    len: usize,
+) -> Result<&'a [u8], AnalysisBytesError> {
+    let end = cursor.checked_add(len).ok_or(AnalysisBytesError::Corrupt)?;
+    let slice = bytes.get(*cursor..end).ok_or(AnalysisBytesError::Corrupt)?;
+    *cursor = end;
+    Ok(slice)
 }
 
 fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, AnalysisBytesError> {
@@ -230,56 +316,26 @@ fn read_array<const N: usize>(
     Ok(out)
 }
 
-/// Write atomically: stage in a temp file in the same directory, flush, then
-/// rename into place.
-fn write_durable(dir: &Path, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    fs::create_dir_all(dir)?;
-    let tmp = path.with_extension("tmp");
-    {
-        let mut file = fs::File::create(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_data()?;
-    }
-    fs::rename(&tmp, path)
-}
-
-/// Best-effort cap on the number of persisted blobs: when the directory holds
-/// more than [`MAX_DISK_ENTRIES`] `.analysis` files, remove the oldest by mtime.
-fn prune_disk(dir: &Path) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    let mut blobs: Vec<(std::time::SystemTime, PathBuf)> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "analysis") {
-                let mtime = entry.metadata().ok()?.modified().ok()?;
-                Some((mtime, path))
-            } else {
-                None
-            }
-        })
-        .collect();
-    if blobs.len() <= MAX_DISK_ENTRIES {
-        return;
-    }
-    blobs.sort_by_key(|(mtime, _)| *mtime);
-    let excess = blobs.len() - MAX_DISK_ENTRIES;
-    for (_, path) in blobs.into_iter().take(excess) {
-        let _ = fs::remove_file(path);
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::{path::Path, sync::Arc};
+
     // The test macro import shadows the `kithara` crate name; use absolute path.
-    use ::kithara::audio::Waveform;
+    use ::kithara::{
+        assets::{AssetResourceState, AssetStore, AssetStoreBuilder},
+        audio::{BeatGrid, GridSegment, Waveform},
+        prelude::ResourceConfig,
+    };
+    use kithara_queue::TrackSource;
     use kithara_test_utils::kithara;
 
+    use super::{
+        ANALYSIS_REL_PATH, AnalysisBytesError, AnalysisKey, TrackAnalysisCache,
+        analysis_from_bytes, analysis_to_bytes, source_key,
+    };
     use crate::waveform::TrackAnalysis;
 
-    use super::{AnalysisKey, TrackAnalysisCache};
+    const FP: &str = "buckets=1500;beat=test";
 
     fn wave() -> Waveform {
         // version 1 + one bucket of three 0.5 band heights (0.5 = 0x3F000000).
@@ -287,33 +343,134 @@ mod tests {
             .expect("hand-built blob is valid")
     }
 
-    #[kithara::test]
-    fn url_key_strips_query_and_fragment() {
-        let a = AnalysisKey::from_source("https://h/track.mp3?token=abc#x");
-        let b = AnalysisKey::from_source("https://h/track.mp3?token=zzz");
-        assert_eq!(a, b, "signing query/fragment must not change the key");
+    fn grid() -> BeatGrid {
+        BeatGrid::new(
+            128.0,
+            vec![0, 10_000, 20_000],
+            vec![0, 40_000],
+            vec![GridSegment::new(0, 40_000, 1.01)],
+        )
     }
 
-    fn analysis() -> TrackAnalysis {
+    fn full_analysis() -> TrackAnalysis {
+        let mut analysis = TrackAnalysis::default();
+        analysis.waveform = Some(wave());
+        analysis.beat = Some(grid());
+        analysis
+    }
+
+    fn wave_only() -> TrackAnalysis {
         let mut analysis = TrackAnalysis::default();
         analysis.waveform = Some(wave());
         analysis
     }
 
+    fn store_in(dir: &Path) -> Arc<AssetStore> {
+        Arc::new(AssetStoreBuilder::new().root_dir(dir).build())
+    }
+
+    fn cache_over(store: &Arc<AssetStore>) -> TrackAnalysisCache {
+        TrackAnalysisCache::new(Some(Arc::clone(store)), FP.to_string())
+    }
+
     #[kithara::test]
-    fn memory_round_trips_without_dir() {
-        let mut cache = TrackAnalysisCache::new(None);
-        let key = AnalysisKey::from_source("file:///a.mp3");
+    fn codec_round_trips_waveform_and_beat() {
+        let analysis = full_analysis();
+        let bytes = analysis_to_bytes(&analysis, FP).expect("encodes");
+        let back = analysis_from_bytes(&bytes, FP).expect("decodes");
+        assert_eq!(
+            back.waveform.expect("waveform survives").buckets(),
+            wave().buckets()
+        );
+        assert_eq!(back.beat.expect("beat grid survives"), grid());
+    }
+
+    #[kithara::test]
+    fn codec_round_trips_without_beat() {
+        let bytes = analysis_to_bytes(&wave_only(), FP).expect("encodes");
+        let back = analysis_from_bytes(&bytes, FP).expect("decodes");
+        assert!(back.waveform.is_some());
+        assert!(back.beat.is_none(), "absent beat must stay absent");
+    }
+
+    #[kithara::test]
+    fn codec_round_trips_beat_only() {
+        let mut analysis = TrackAnalysis::default();
+        analysis.beat = Some(grid());
+        let bytes = analysis_to_bytes(&analysis, FP).expect("encodes");
+        let back = analysis_from_bytes(&bytes, FP).expect("decodes");
+        assert!(back.waveform.is_none());
+        assert_eq!(back.beat.expect("beat grid survives"), grid());
+    }
+
+    #[kithara::test]
+    fn stale_fingerprint_is_a_miss() {
+        let bytes = analysis_to_bytes(&full_analysis(), FP).expect("encodes");
+        assert!(
+            matches!(
+                analysis_from_bytes(&bytes, "buckets=1500;beat=other"),
+                Err(AnalysisBytesError::Fingerprint)
+            ),
+            "a config change must invalidate the blob"
+        );
+    }
+
+    #[kithara::test]
+    fn url_query_distinguishes_tracks_like_the_stream_layer() {
+        let a = source_key(&TrackSource::Uri(
+            "https://h.example/track/streamhq?id=123".to_string(),
+        ))
+        .expect("url source is keyable");
+        let b = source_key(&TrackSource::Uri(
+            "https://h.example/track/streamhq?id=456".to_string(),
+        ))
+        .expect("url source is keyable");
+        assert_ne!(a, b, "query carries track identity in the file layer");
+
+        let again = source_key(&TrackSource::Uri(
+            "https://h.example/track/streamhq?id=123".to_string(),
+        ))
+        .expect("url source is keyable");
+        assert_eq!(a, again, "keys are stable across calls");
+    }
+
+    #[kithara::test]
+    fn config_source_shares_the_players_asset_root() {
+        // A Config source must key by the same name-or-query rule the
+        // file layer uses for its asset root.
+        let cfg = ResourceConfig::for_src("https://h.example/a.mp3?token=1")
+            .expect("valid url")
+            .build();
+        let from_cfg =
+            source_key(&TrackSource::Config(Box::new(cfg))).expect("config source is keyable");
+        let from_uri = source_key(&TrackSource::Uri(
+            "https://h.example/a.mp3?token=1".to_string(),
+        ))
+        .expect("url source is keyable");
+        assert_eq!(from_cfg, from_uri);
+    }
+
+    #[kithara::test(native)]
+    fn local_path_sources_are_keyable() {
+        let key = source_key(&TrackSource::Uri("/tmp/song.mp3".to_string()));
+        assert!(key.is_some(), "local files must cache their analysis");
+    }
+
+    #[kithara::test]
+    fn memory_round_trips_without_store() {
+        let mut cache = TrackAnalysisCache::new(None, FP.to_string());
+        let key = AnalysisKey::new("root_a");
         assert!(cache.get(&key).is_none());
-        cache.put(key.clone(), analysis());
+        cache.put(key.clone(), full_analysis());
         let cached = cache.get(&key).expect("analysis must be cached");
         assert_eq!(cached.waveform.expect("waveform cached").len(), 1);
+        assert!(cached.beat.is_some(), "beat grid rides along");
     }
 
     #[kithara::test]
     fn empty_analysis_is_not_memoized() {
-        let mut cache = TrackAnalysisCache::new(None);
-        let key = AnalysisKey::from_source("file:///empty.mp3");
+        let mut cache = TrackAnalysisCache::new(None, FP.to_string());
+        let key = AnalysisKey::new("root_empty");
         cache.put(key.clone(), TrackAnalysis::default());
         assert!(
             cache.get(&key).is_none(),
@@ -324,18 +481,16 @@ mod tests {
     #[kithara::test]
     fn memory_tier_is_bounded_with_disk_fallback() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut cache = TrackAnalysisCache::new(Some(dir.path().to_path_buf()));
+        let store = store_in(dir.path());
+        let mut cache = cache_over(&store);
         for i in 0..=super::MAX_MEM_ENTRIES {
-            cache.put(
-                AnalysisKey::from_source(&format!("file:///t{i}.mp3")),
-                analysis(),
-            );
+            cache.put(AnalysisKey::new(format!("root_{i}")), full_analysis());
         }
         assert!(
             cache.mem.len() <= super::MAX_MEM_ENTRIES,
             "memory tier stays bounded under a whole-library sweep"
         );
-        let oldest = AnalysisKey::from_source("file:///t0.mp3");
+        let oldest = AnalysisKey::new("root_0");
         assert!(!cache.mem.contains_key(&oldest), "oldest entry evicted");
         assert!(
             cache.get(&oldest).is_some(),
@@ -346,13 +501,61 @@ mod tests {
     #[kithara::test]
     fn disk_survives_a_fresh_cache_instance() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let key = AnalysisKey::from_source("file:///b.mp3");
-        let mut writer = TrackAnalysisCache::new(Some(dir.path().to_path_buf()));
-        writer.put(key.clone(), analysis());
+        let store = store_in(dir.path());
+        let key = AnalysisKey::new("root_b");
+        let mut writer = cache_over(&store);
+        writer.put(key.clone(), full_analysis());
 
         // A new cache with an empty memory tier must still find the blob.
-        let mut reader = TrackAnalysisCache::new(Some(dir.path().to_path_buf()));
+        let mut reader = cache_over(&store);
         let cached = reader.get(&key).expect("disk analysis must load");
         assert_eq!(cached.waveform.expect("waveform persisted").len(), 1);
+        assert_eq!(cached.beat.expect("beat grid persisted"), grid());
+    }
+
+    #[kithara::test]
+    fn artifact_is_a_scope_resource_and_dies_with_the_asset() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = store_in(dir.path());
+        let key = AnalysisKey::new("track_root");
+        let mut cache = cache_over(&store);
+        cache.put(key.clone(), full_analysis());
+
+        // The artifact is a resource of the track's scope...
+        let scope = store.scope("track_root");
+        let resource = scope.key(ANALYSIS_REL_PATH);
+        assert!(
+            matches!(
+                store.resource_state(&resource),
+                Ok(AssetResourceState::Committed { .. })
+            ),
+            "analysis blob must be a committed resource under the track scope"
+        );
+        // Deleting the asset takes the analysis with it.
+        scope.delete_asset().expect("asset deletes");
+        let mut fresh = cache_over(&store);
+        assert!(
+            fresh.get(&key).is_none(),
+            "analysis must follow the track asset's lifecycle"
+        );
+    }
+
+    #[kithara::test]
+    fn stale_fingerprint_blob_is_re_analysed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = store_in(dir.path());
+        let key = AnalysisKey::new("root_fp");
+        let mut old = TrackAnalysisCache::new(Some(Arc::clone(&store)), "old-config".to_string());
+        old.put(key.clone(), full_analysis());
+
+        let mut current = cache_over(&store);
+        assert!(
+            current.get(&key).is_none(),
+            "a blob from another analysis config must be a miss"
+        );
+        // Overwriting with the current config works.
+        current.put(key.clone(), full_analysis());
+        let mut fresh = cache_over(&store);
+        assert!(fresh.get(&key).is_some());
     }
 }

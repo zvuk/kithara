@@ -1,26 +1,24 @@
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
-use std::sync::atomic::{AtomicBool, AtomicU8};
+use std::sync::{Arc, atomic::Ordering};
 
 use portable_atomic::AtomicF32;
-
 #[cfg(all(
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
-use super::stretch_kind::StretchBackendKind;
+use {
+    super::region_plan::RegionPlan,
+    super::stretch_kind::StretchBackendKind,
+    arc_swap::ArcSwapOption,
+    std::sync::atomic::{AtomicBool, AtomicU8},
+};
 
 /// Single source of truth for live playback-speed control, shared (via `Arc`)
 /// between the consumer/UI and the audio worker's effect chain. Replaces the
 /// former split `playback_rate` / `tempo_ratio` mirror.
 ///
-/// Key-lock and backend selection exist only when a stretch backend is
-/// compiled in (`stretch-signalsmith` / `stretch-bungee`, native targets);
-/// without one the chain is resampler-first and pitch follows speed.
+/// Key-lock, backend selection, and the region plan exist only when a stretch
+/// backend is compiled in (`stretch-signalsmith` / `stretch-bungee`, native
+/// targets); without one the chain is resampler-first and pitch follows speed.
 ///
 /// All fields are read each chunk by the effect chain and may be written at
 /// any time from the control thread; updates take effect on the next
@@ -36,12 +34,19 @@ pub struct StretchControls {
         not(target_arch = "wasm32"),
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
     ))]
+    engine: EngineControls,
+}
+
+/// Stretch-engine controls present only when a backend is compiled in.
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+#[derive(Debug)]
+struct EngineControls {
     keylock: AtomicBool,
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
     backend: AtomicU8,
+    region_plan: ArcSwapOption<RegionPlan>,
 }
 
 impl StretchControls {
@@ -54,12 +59,11 @@ impl StretchControls {
                 not(target_arch = "wasm32"),
                 any(feature = "stretch-signalsmith", feature = "stretch-bungee")
             ))]
-            keylock: AtomicBool::new(false),
-            #[cfg(all(
-                not(target_arch = "wasm32"),
-                any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-            ))]
-            backend: AtomicU8::new(StretchBackendKind::default().to_u8()),
+            engine: EngineControls {
+                keylock: AtomicBool::new(false),
+                backend: AtomicU8::new(StretchBackendKind::default().to_u8()),
+                region_plan: ArcSwapOption::const_empty(),
+            },
         })
     }
 
@@ -94,22 +98,35 @@ impl StretchControls {
     /// Whether key-lock (pitch-preserving tempo) is enabled.
     #[must_use]
     pub fn keylock(&self) -> bool {
-        self.keylock.load(Ordering::Relaxed)
+        self.engine.keylock.load(Ordering::Relaxed)
     }
 
     /// Enable/disable key-lock.
     pub fn set_keylock(&self, on: bool) {
-        self.keylock.store(on, Ordering::Relaxed);
+        self.engine.keylock.store(on, Ordering::Relaxed);
     }
 
     /// The selected time-stretch backend.
     #[must_use]
     pub fn backend(&self) -> StretchBackendKind {
-        StretchBackendKind::from_u8(self.backend.load(Ordering::Relaxed))
+        StretchBackendKind::from_u8(self.engine.backend.load(Ordering::Relaxed))
     }
 
     /// Select the time-stretch backend.
     pub fn set_backend(&self, backend: StretchBackendKind) {
-        self.backend.store(backend.to_u8(), Ordering::Relaxed);
+        self.engine
+            .backend
+            .store(backend.to_u8(), Ordering::Relaxed);
+    }
+
+    /// The active region-stretch plan, if any.
+    #[must_use]
+    pub fn region_plan(&self) -> Option<Arc<RegionPlan>> {
+        self.engine.region_plan.load_full()
+    }
+
+    /// Install or clear the region-stretch plan; picked up on the next chunk.
+    pub fn set_region_plan(&self, plan: Option<Arc<RegionPlan>>) {
+        self.engine.region_plan.store(plan);
     }
 }

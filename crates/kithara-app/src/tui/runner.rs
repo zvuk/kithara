@@ -233,10 +233,10 @@ fn handle_event(
         Event::Engine(ee) => {
             ui.log_line(&format!("engine {ee:?}"), state)?;
         }
-        Event::Hls(_) | Event::File(_) | Event::Audio(_) => {
-            if !is_progress_event(event) || progress_log.should_emit() {
-                ui.log_line(&format!("{event:?}"), state)?;
-            }
+        Event::Hls(_) | Event::File(_) | Event::Audio(_)
+            if !is_progress_event(event) || progress_log.should_emit() =>
+        {
+            ui.log_line(&format!("{event:?}"), state)?;
         }
         _ => {}
     }

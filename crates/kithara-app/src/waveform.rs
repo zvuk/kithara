@@ -1,17 +1,16 @@
 use std::sync::Arc;
 
+pub use kithara::audio::analysis::TrackAnalysis;
 use kithara::{
     audio::{
         PcmReader,
-        analysis::{AnalysisWorker, AnalyzerRegistry, waveform_analyzer},
+        analysis::{AnalysisWorker, AnalyzerBuilder},
     },
     prelude::{Resource, ResourceConfig},
 };
 use kithara_platform::CancellationToken;
 use tokio::{sync::watch, task::JoinHandle};
 use tracing::warn;
-
-pub use kithara::audio::analysis::TrackAnalysis;
 
 /// App-side handle over the shared [`AnalysisWorker`]: opens the resource
 /// off the player runtime, hands the opened reader to the worker thread,
@@ -41,12 +40,11 @@ impl TrackAnalysisRunner {
     #[must_use]
     pub fn new(master: &CancellationToken, buckets: usize) -> Self {
         let cancel = master.child_token();
-        let mut registry = AnalyzerRegistry::default();
-        if let Some(factory) = waveform_analyzer(buckets) {
-            registry.register(factory);
-        }
-        let active = !registry.is_empty();
-        let worker = Arc::new(AnalysisWorker::new(&cancel, registry));
+        let builder = AnalyzerBuilder::default()
+            .with_waveform(buckets)
+            .with_beat();
+        let active = !builder.is_empty();
+        let worker = Arc::new(AnalysisWorker::new(&cancel, builder));
         Self {
             cancel,
             worker,
@@ -55,8 +53,8 @@ impl TrackAnalysisRunner {
         }
     }
 
-    /// `false` when the build carries no analyzers (the `analysis` cargo
-    /// feature is off) — the runtime signal to skip analysis scheduling.
+    /// `false` when no analyzer is configured (`builder.is_empty()`) — the
+    /// runtime signal to skip analysis scheduling.
     #[must_use]
     pub fn is_active(&self) -> bool {
         self.active

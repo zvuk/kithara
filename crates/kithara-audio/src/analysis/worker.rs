@@ -3,8 +3,10 @@ use std::sync::mpsc;
 use kithara_platform::{CancellationToken, thread, tokio::sync::watch};
 use tracing::warn;
 
-use super::analyzer::{AnalyzerRegistry, TrackAnalysis};
-use super::run::analyze_reader;
+use super::{
+    analyzer::{AnalyzerBuilder, TrackAnalysis},
+    run::analyze_reader,
+};
 use crate::traits::PcmReader;
 
 /// Long-lived analysis thread: decodes each queued track once and feeds
@@ -29,12 +31,12 @@ impl AnalysisWorker {
     /// `parent` must be a child of the consumer-crate master cancel; the
     /// worker thread stops on parent cancel or drop.
     #[must_use]
-    pub fn new(parent: &CancellationToken, registry: AnalyzerRegistry) -> Self {
+    pub fn new(parent: &CancellationToken, builder: AnalyzerBuilder) -> Self {
         let cancel = parent.child_token();
         let thread_cancel = cancel.clone();
         let (jobs, rx) = mpsc::channel();
         thread::spawn_named("kithara-analysis", move || {
-            run_jobs(&rx, &registry, &thread_cancel);
+            run_jobs(&rx, &builder, &thread_cancel);
         });
         Self { jobs, cancel }
     }
@@ -61,7 +63,7 @@ impl Drop for AnalysisWorker {
     }
 }
 
-fn run_jobs(jobs: &mpsc::Receiver<Job>, registry: &AnalyzerRegistry, cancel: &CancellationToken) {
+fn run_jobs(jobs: &mpsc::Receiver<Job>, builder: &AnalyzerBuilder, cancel: &CancellationToken) {
     while let Ok(mut job) = jobs.recv() {
         if cancel.is_cancelled() {
             break;
@@ -69,57 +71,8 @@ fn run_jobs(jobs: &mpsc::Receiver<Job>, registry: &AnalyzerRegistry, cancel: &Ca
         if job.cancel.is_cancelled() {
             continue;
         }
-        if let Some(out) = analyze_reader(job.reader.as_mut(), registry, &job.cancel) {
+        if let Some(out) = analyze_reader(job.reader.as_mut(), builder, &job.cancel) {
             let _ = job.tx.send(Some(out));
         }
-    }
-}
-
-#[cfg(all(test, feature = "analysis"))]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::super::analyzer::waveform_analyzer;
-    use super::super::fake::{FakeReader, sine};
-    use super::*;
-
-    fn registry() -> AnalyzerRegistry {
-        let mut registry = AnalyzerRegistry::default();
-        registry.register(waveform_analyzer(16).expect("analysis feature is on in tests"));
-        registry
-    }
-
-    #[kithara::test(tokio)]
-    async fn delivers_result_on_its_own_thread() {
-        let master = CancellationToken::default();
-        let worker = AnalysisWorker::new(&master, registry());
-        let mut rx = worker.analyze(
-            Box::new(FakeReader::chunked(&sine(8192), 3)),
-            master.child_token(),
-        );
-        rx.changed().await.expect("worker sends a result");
-        assert!(rx.borrow().as_ref().is_some_and(|a| a.waveform.is_some()));
-    }
-
-    #[kithara::test(tokio)]
-    async fn preempted_job_sends_nothing_and_next_job_runs() {
-        let master = CancellationToken::default();
-        let worker = AnalysisWorker::new(&master, registry());
-
-        let stale = master.child_token();
-        stale.cancel();
-        let mut stale_rx = worker.analyze(Box::new(FakeReader::chunked(&sine(8192), 3)), stale);
-
-        let mut live_rx = worker.analyze(
-            Box::new(FakeReader::chunked(&sine(8192), 3)),
-            master.child_token(),
-        );
-        live_rx.changed().await.expect("live job completes");
-        assert!(live_rx.borrow().is_some());
-        assert!(
-            stale_rx.changed().await.is_err(),
-            "preempted job must drop its sender without a result"
-        );
-        assert!(stale_rx.borrow().is_none());
     }
 }

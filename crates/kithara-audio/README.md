@@ -166,6 +166,27 @@ the band -> color mapping and orchestration live in the consumer crates.
   without inverting the hierarchy. Tunables (`fft_size`, crossovers,
   `energy_floor`, `band_gain`) live in `AnalysisParams`.
 
+## Blob codec
+
+Analysis artifacts that persist to the on-disk cache (`Waveform`, `BeatGrid`)
+share one versioned little-endian encoding via the internal crate-level `blob`
+module (domain-agnostic, not waveform-specific). The `Blob` trait owns the
+format frame; each artifact only implements its body.
+
+- **Frame**: `to_bytes` writes a `u32` version header (`Blob::VERSION`) then the
+  artifact body; `from_bytes` checks the version, decodes the body, and requires
+  the cursor to consume the blob exactly (trailing bytes are corruption).
+- **Versioning**: each artifact owns its `VERSION` constant. A mismatch is a
+  typed `BlobError::Version`; a truncated, mis-sized, or out-of-range body is
+  `BlobError::Corrupt`. Both are cache misses — the caller re-analyses and
+  overwrites. There is no in-place migration of old blobs.
+- **Boundary**: `BlobError` is the only piece that crosses the crate boundary
+  (it is the public `from_bytes` error). `Blob`, `Reader`, and `Writer` are
+  crate-internal; consumers serialize through the artifacts' inherent
+  `to_bytes` / `from_bytes`. The composite track-analysis blob (version +
+  config fingerprint + per-artifact sections) is a separate app-layer concern
+  owned by `kithara-app`, not this codec.
+
 ## Resampler Quality Levels
 
 <table>
@@ -202,6 +223,8 @@ Both effects run sequentially on the same worker thread, so the resampler always
 - `bungee` (C++ FFI) — native-only, feature `stretch-bungee`.
 
 `StretchBackendKind::ALL` lists exactly the backends compiled into the current target (the default is `ALL[0]`, discriminants are stable: 1 = Signalsmith, 2 = Bungee), so the UI selector never offers an absent one — selecting an uncompiled backend is un-representable, not a runtime error. With no `stretch-*` feature the kind, the trait, and the processor are compiled out entirely; only `StretchControls` (speed) remains.
+
+**Region plan (beat-aligned stretch).** `StretchControls` optionally carries a `RegionPlan` (`ArcSwapOption`, installed via `set_region_plan`, read each chunk — the same live-swap shape as the other controls): sorted, non-overlapping `[start_frame, end_frame)` segments in **source frames** (`PcmMeta.frame_offset` space, never output time), each with a `ratio_correction` (validated at construction with a typed `RegionPlanError`). In key-lock mode the processor maps each chunk's `frame_offset` to its segment (cached cursor, binary search on a miss after seek/swap), splits chunks at segment boundaries, and drives the backend at `1/speed × ratio_correction`. The backend is `flush`ed (tail drained at the old ratio) + `reset` **only** when a boundary actually moves the effective ratio beyond `RATIO_EPS`; equal-ratio boundaries and gaps between segments (correction `1.0`) cost nothing, and live speed moves inside one region glide via `set_ratio` without a reset. An empty or absent plan is exactly the planless path. For region work prefer `signalsmith` (`bungee`'s no-op `flush` drops the tail at every real ratio boundary).
 
 **Timeline.** A stretch changes the output frame *count*, not the rate: each emitted chunk recomputes `meta.frames` but preserves `timestamp`/`end_timestamp`/`spec` verbatim (the resampler's `finalize_resample_chunk` recipe), so the playhead stays in source-track time — a 3-minute track reads `0:00→3:00` even at 50 % tempo. `bungee` has no clean tail drain through its high-level `Stream`, so its `flush` is a no-op (the final ~latency of audio is dropped at EOS rather than padded with stretched silence). If `bungee`'s `Stream::new` ever fails at construction (only on an invalid spec — unreachable for real stereo/mono audio), the backend warns once and then emits silence until the track is reloaded, rather than erroring per chunk.
 

@@ -48,8 +48,9 @@ fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
 # deck). Each pulls a C++ toolchain; without one, key-lock is compiled out.
 stretch-signalsmith = ["kithara-audio/stretch-signalsmith"]
 stretch-bungee = ["kithara-audio/stretch-bungee"]
-# Per-track source analysis (waveform analyzer registry + worker thread).
-analysis = ["kithara-audio/analysis"]
+# NN beat/downbeat detector (kithara-beat, embedded small model) in the
+# analysis registry.
+beat-nn = ["kithara-audio/beat-nn"]
 file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
 hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net", "dep:kithara-drm"]
 assets = ["dep:kithara-assets", "dep:kithara-storage"]

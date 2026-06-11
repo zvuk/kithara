@@ -1,15 +1,17 @@
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::Ordering};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
 use portable_atomic::AtomicF32;
 use tracing::warn;
 
-use super::controls::StretchControls;
-use super::stretch_backend::StretchBackend;
-use super::stretch_factory::build_backend;
-use super::stretch_kind::StretchBackendKind;
+use super::{
+    controls::StretchControls,
+    region_plan::{ActiveRegion, RegionPlan},
+    stretch_backend::StretchBackend,
+    stretch_factory::build_backend,
+    stretch_kind::StretchBackendKind,
+};
 use crate::traits::AudioEffect;
 
 /// Floor for the shared playback speed before inverting to a stretch
@@ -27,6 +29,12 @@ const RATIO_EPS: f64 = 1e-4;
 ///   (`1 / speed`), pitch held at `1.0`, and pins the resampler to `1.0`;
 /// - key-lock **off**: a true pass-through — the chunk is forwarded untouched
 ///   and `speed` is routed to the resampler instead (pitch follows speed).
+///
+/// In key-lock mode an optional [`RegionPlan`] (also on the controls) maps
+/// `frame_offset` to per-region ratio corrections: chunks split at segment
+/// boundaries and the effective stretch is `1/speed × ratio_correction`.
+/// The backend is flushed + reset only when a boundary actually moves the
+/// ratio beyond `RATIO_EPS`; equal-ratio boundaries cost nothing.
 ///
 /// It owns the speed split: each chunk it writes the resampler's rate atomic
 /// (`1.0` when key-locked, else `speed`). Both effects run sequentially on the
@@ -52,6 +60,11 @@ pub struct TimeStretchProcessor {
     last_input_meta: Option<PcmMeta>,
     /// Interleaved output scratch, reused across calls (alloc-free steady state).
     scratch: Vec<f32>,
+    /// Region plan cached from the controls; `Arc::ptr_eq` detects a live swap.
+    plan: Option<Arc<RegionPlan>>,
+    /// Region covering the playhead — the lookup cursor. `None` forces a
+    /// fresh binary search (first chunk, plan swap, region exit, seek).
+    region: Option<ActiveRegion>,
 }
 
 impl TimeStretchProcessor {
@@ -80,6 +93,8 @@ impl TimeStretchProcessor {
             active: false,
             last_input_meta: None,
             scratch: Vec::new(),
+            plan: None,
+            region: None,
         };
         me.route_rate();
         me
@@ -96,18 +111,57 @@ impl TimeStretchProcessor {
         self.resampler_rate.store(rate, Ordering::Relaxed);
     }
 
-    /// Pull the shared playback speed and update the backend stretch factor
-    /// (`1 / speed`) when it has moved.
-    fn sync_ratio(&mut self) {
-        let speed = self.controls.speed().max(MIN_SPEED);
-        let stretch = 1.0 / f64::from(speed);
-        // `NaN` is the "never applied" sentinel; the diff test alone would
-        // skip it (every comparison with NaN is false).
-        if self.applied_stretch.is_nan() || (stretch - self.applied_stretch).abs() > RATIO_EPS {
-            match self.backend.set_ratio(stretch) {
-                Ok(()) => self.applied_stretch = stretch,
-                Err(e) => warn!(error = %e, "time-stretch set_ratio failed"),
+    /// Pull the live region plan handle; on a swap drop the region cursor.
+    fn sync_plan(&mut self) {
+        let want = self.controls.region_plan();
+        let same = match (&self.plan, &want) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        };
+        if !same {
+            self.plan = want;
+            self.region = None;
+        }
+    }
+
+    /// Region covering `frame`, plus whether the playhead just crossed out
+    /// of a previously resolved region (a plan boundary or a seek).
+    fn region_for(&mut self, frame: u64) -> (ActiveRegion, bool) {
+        if let Some(r) = self.region
+            && r.contains(frame)
+        {
+            return (r, false);
+        }
+        let next = self
+            .plan
+            .as_ref()
+            .map_or(ActiveRegion::UNBOUNDED, |p| p.region_at(frame));
+        let crossed = self.region.is_some();
+        self.region = Some(next);
+        (next, crossed)
+    }
+
+    /// Push `stretch` to the backend when it moved beyond `RATIO_EPS`. At a
+    /// region `boundary` the old region's tail is drained (`flush`, into
+    /// `scratch`) and the backend restarted so the new ratio starts clean;
+    /// live speed moves glide via `set_ratio` alone. Boundaries whose ratio
+    /// did not move cost nothing. `NaN` is the "never applied" sentinel; the
+    /// diff test alone would skip it (every comparison with `NaN` is false).
+    fn apply_stretch(&mut self, stretch: f64, boundary: bool) {
+        let first = self.applied_stretch.is_nan();
+        if !first && (stretch - self.applied_stretch).abs() <= RATIO_EPS {
+            return;
+        }
+        if boundary && !first {
+            if let Err(e) = self.backend.flush(&mut self.scratch) {
+                warn!(error = %e, "time-stretch flush at region boundary failed");
             }
+            self.backend.reset();
+        }
+        match self.backend.set_ratio(stretch) {
+            Ok(()) => self.applied_stretch = stretch,
+            Err(e) => warn!(error = %e, "time-stretch set_ratio failed"),
         }
     }
 
@@ -178,17 +232,36 @@ impl AudioEffect for TimeStretchProcessor {
         }
 
         self.active = true;
-        self.sync_ratio();
+        self.sync_plan();
         self.last_input_meta = Some(chunk.meta);
-
-        let needed = self.backend.max_output_samples(chunk.frames());
-        if self.scratch.capacity() < needed {
-            self.scratch.reserve(needed - self.scratch.len());
-        }
         self.scratch.clear();
-        if let Err(e) = self.backend.process(chunk.samples(), &mut self.scratch) {
-            warn!(error = %e, "time-stretch backend process failed; dropping chunk");
-            return None;
+
+        let speed = self.controls.speed().max(MIN_SPEED);
+        let base = 1.0 / f64::from(speed);
+        let channels = usize::from(self.spec.channels.max(1));
+        let frames = chunk.frames();
+        let samples = chunk.samples();
+        let mut consumed = 0_usize;
+        let mut frame = chunk.meta.frame_offset;
+        // Walk the chunk region by region: a plan boundary mid-chunk splits
+        // it at the boundary sample, each sub-chunk at its own ratio.
+        while consumed < frames {
+            let (region, crossed) = self.region_for(frame);
+            let left = u64::try_from(frames - consumed).unwrap_or(u64::MAX);
+            let span = region.end.saturating_sub(frame).min(left).max(1);
+            let sub = usize::try_from(span).unwrap_or(frames - consumed);
+            self.apply_stretch(base * region.correction, crossed);
+            let needed = self.scratch.len() + self.backend.max_output_samples(sub);
+            if self.scratch.capacity() < needed {
+                self.scratch.reserve(needed - self.scratch.len());
+            }
+            let part = &samples[consumed * channels..(consumed + sub) * channels];
+            if let Err(e) = self.backend.process(part, &mut self.scratch) {
+                warn!(error = %e, "time-stretch backend process failed; dropping chunk");
+                return None;
+            }
+            consumed += sub;
+            frame = frame.saturating_add(span);
         }
         self.emit()
     }
@@ -199,6 +272,7 @@ impl AudioEffect for TimeStretchProcessor {
         self.last_input_meta = None;
         self.applied_stretch = f64::NAN;
         self.active = false;
+        self.region = None;
     }
 }
 

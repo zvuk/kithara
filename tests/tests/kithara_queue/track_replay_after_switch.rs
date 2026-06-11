@@ -335,12 +335,21 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
 
     // If the bookkeeping switched but the arena kept playing B, the
     // duration snapshot stays at B's 64 s and this times out.
-    wait_for(&queue, switch_deadline, "arena sounds A again", &sounds_like_a).await;
+    wait_for(
+        &queue,
+        switch_deadline,
+        "arena sounds A again",
+        &sounds_like_a,
+    )
+    .await;
     let pos = wait_for_position(&queue, switch_deadline, "A restarted near head", |p| {
         p > 0.0 && p <= 12.0
     })
     .await;
-    wait_for_position(&queue, switch_deadline, "A keeps playing", |p| p >= pos + 1.0).await;
+    wait_for_position(&queue, switch_deadline, "A keeps playing", |p| {
+        p >= pos + 1.0
+    })
+    .await;
     assert_eq!(
         queue.current_index(),
         Some(0),

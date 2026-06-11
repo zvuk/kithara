@@ -9,12 +9,11 @@ publish = false
 workspace = true
 
 [features]
-default = ["tui", "gui", "analysis"]
+default = ["tui", "gui"]
 tui = ["dep:ratatui", "dep:crossterm"]
 gui = ["dep:iced"]
-# Background per-track analysis (colored waveform). Disable to build the
-# app without the analyzer stack entirely.
-analysis = ["kithara/analysis"]
+# NN beat/downbeat detection.
+beat-nn = ["kithara/beat-nn"]
 # Build kithara-app as a plain library — exposes `config`/`sources`/`drm`
 # modules without pulling in iced/ratatui. Used by integration tests
 # (`tests/tests/kithara_queue/real_playlist.rs`).

@@ -17,7 +17,7 @@ ignored = ["serial_test"]
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara = { workspace = true, features = ["full", "probe"] }
-kithara-audio = { workspace = true, features = ["probe", "symphonia", "analysis"] }
+kithara-audio = { workspace = true, features = ["probe", "symphonia"] }
 kithara-abr = { workspace = true, features = ["probe"] }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
@@ -25,7 +25,7 @@ kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
 kithara-hls = { workspace = true, features = ["probe"] }
 kithara-queue = { workspace = true, features = ["backend-cpal", "probe"] }
-kithara-app = { workspace = true, default-features = false, features = ["lib-only", "analysis"] }
+kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
 kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 rkyv = { workspace = true }
 kithara-net = { workspace = true, features = ["mock", "probe"] }

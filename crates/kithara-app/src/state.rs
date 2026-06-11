@@ -27,8 +27,7 @@ pub struct UiState {
     pub abr_variants: Vec<(usize, String)>,
     pub eq_bands: Vec<f32>,
     pub tracks: Vec<TrackEntry>,
-    /// Source analysis of the current track; `None` until analysed (or
-    /// always `None` in builds without the `analysis` feature).
+    /// Source analysis of the current track; `None` until analysed.
     pub analysis: Option<TrackAnalysis>,
     pub repeat_mode: RepeatMode,
     pub abr_mode_is_auto: bool,

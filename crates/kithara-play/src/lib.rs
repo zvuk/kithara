@@ -52,7 +52,7 @@ pub use time::MediaTime;
 pub use traits::{
     dj,
     dj::{
-        bpm::{BeatGrid, BpmInfo},
+        bpm::{BeatGrid, BpmInfo, GridSegment},
         crossfade::{CrossfadeConfig, CrossfadeCurve},
         eq::Equalizer,
     },

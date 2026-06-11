@@ -8,5 +8,6 @@ pub use timestretch::StretchControls;
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
 pub use timestretch::{
-    StretchBackend, StretchBackendError, StretchBackendKind, TimeStretchProcessor,
+    RegionPlan, RegionPlanError, StretchBackend, StretchBackendError, StretchBackendKind,
+    TimeStretchProcessor,
 };

@@ -78,7 +78,9 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
     // Registered but never completed: stands in for a stalled loader.
     let _id_b = queue.register_for_test();
 
-    queue.select(id_a, Transition::None).expect("select track A");
+    queue
+        .select(id_a, Transition::None)
+        .expect("select track A");
     let first_pcm = render_loop(&queue, &harness, BLOCK_BUDGET);
     assert!(
         first_onset_frame(&first_pcm, 0.005).is_some(),
@@ -118,12 +120,16 @@ async fn switch_back_to_consumed_track_switches_audio() {
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, QUIET));
     let id_b = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, LOUD));
 
-    queue.select(id_a, Transition::None).expect("select track A");
+    queue
+        .select(id_a, Transition::None)
+        .expect("select track A");
     let pcm_a = render_loop(&queue, &harness, WARMUP_BLOCKS);
     let mean_a = mean_abs(&pcm_a[pcm_a.len() / 2..]);
     assert!(mean_a > 0.005, "track A must be audible: mean={mean_a}");
 
-    queue.select(id_b, Transition::None).expect("select track B");
+    queue
+        .select(id_b, Transition::None)
+        .expect("select track B");
     let pcm_b = render_loop(&queue, &harness, WARMUP_BLOCKS);
     let mean_b = mean_abs(&pcm_b[pcm_b.len() / 2..]);
     assert!(
@@ -174,7 +180,9 @@ async fn play_button_then_switch_away_and_back_switches_audio() {
     assert!(mean_a > 0.005, "Play must start track A: mean={mean_a}");
 
     // Step 2: double-click track 2.
-    queue.select(id_b, Transition::None).expect("select track B");
+    queue
+        .select(id_b, Transition::None)
+        .expect("select track B");
     let pcm_b = render_loop(&queue, &harness, WARMUP_BLOCKS);
     let mean_b = mean_abs(&pcm_b[pcm_b.len() / 2..]);
     assert!(
@@ -242,7 +250,9 @@ async fn reselect_playing_track_cancels_pending_switch() {
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_VALUE));
     let id_b = queue.register_for_test();
 
-    queue.select(id_a, Transition::None).expect("select track A");
+    queue
+        .select(id_a, Transition::None)
+        .expect("select track A");
     let warmup_pcm = render_loop(&queue, &harness, WARMUP_BLOCKS);
     assert!(
         first_onset_frame(&warmup_pcm, 0.005).is_some(),

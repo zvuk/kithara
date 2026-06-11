@@ -128,7 +128,6 @@ mod tests {
         let ts = TimestretchState {
             range: 100,
             tempo: -100.0,
-            ..TimestretchState::default()
         };
 
         assert!(ts.speed().abs() < f32::EPSILON);

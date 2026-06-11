@@ -70,9 +70,10 @@ skips when the track is already shown or in flight, serves a cache hit without
 wiping the visible analysis, and only wipes + decodes on a genuine miss;
 `commit_analysis` populates both tiers.
 
-The disk tier lives under the existing audio cache root
-(`file_asset_store.root_dir()/track-analysis`), so it shares lifetime with the
-cached audio bytes. A `TrackSource` variant with no stable source (the reserved
+The disk tier stores one blob per track as a resource of the track's
+`AssetScope` (`analysis/track.analysis`), so the artifact follows the track's
+cache lifecycle: it is evicted, moved, and deleted together with the cached
+audio bytes. A `TrackSource` variant with no stable source (the reserved
 non-exhaustive seam) is in-memory-only by capability, not a fallback.
 
 Invalidation is by `ANALYSIS_BYTES_VERSION` (kithara-app): bump it whenever

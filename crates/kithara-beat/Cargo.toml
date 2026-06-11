@@ -1,0 +1,25 @@
+[package]
+name = "kithara-beat"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Beat / downbeat detection: pure-Rust NN inference (beat_this port on rten)."
+keywords = ["audio", "beat", "tempo", "bpm", "dsp"]
+categories = ["multimedia::audio"]
+
+[lints]
+workspace = true
+
+
+[dependencies]
+num-traits = { workspace = true }
+rten = { workspace = true }
+rten-tensor = { workspace = true }
+thiserror = { workspace = true }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
