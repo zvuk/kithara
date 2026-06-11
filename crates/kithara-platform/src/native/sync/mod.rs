@@ -1,5 +1,13 @@
+//! Platform-optimal synchronization primitives (native), backed by
+//! [`parking_lot`] (no poisoning, smaller footprint).
+
 pub(crate) mod condvar;
-pub(crate) mod mpsc;
+pub mod mpsc;
 pub(crate) mod mutex;
 pub(crate) mod notify;
 pub(crate) mod rwlock;
+
+pub use condvar::Condvar;
+pub use mutex::{Mutex, MutexGuard, NotAvailable};
+pub use notify::Notify;
+pub use rwlock::{RwLock, RwLockReadGuard, RwLockWriteGuard};

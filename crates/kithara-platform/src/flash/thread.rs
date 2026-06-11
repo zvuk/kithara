@@ -1,10 +1,13 @@
 use std::sync::atomic::Ordering;
 
-pub(crate) use crate::native::thread::{ACTIVE_NAMED_THREADS, thread_id_hash};
-pub use crate::native::thread::{
-    Duration, JoinHandle, Thread, ThreadId, active_named_thread_count, assert_main_thread,
-    assert_not_main_thread, available_parallelism, current, current_thread_id, is_main_thread,
-    is_worker_thread, park, spawn,
+use crate::common::thread_id::{ACTIVE_NAMED_THREADS, thread_id_hash};
+pub use crate::{
+    common::thread_id::active_named_thread_count,
+    native::thread::{
+        Duration, JoinHandle, Thread, ThreadId, assert_main_thread, assert_not_main_thread,
+        available_parallelism, current, current_thread_id, is_main_thread, is_worker_thread, park,
+        spawn,
+    },
 };
 
 /// Under `flash`, a cooperative yield must relinquish the quiescence engine:

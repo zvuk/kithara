@@ -2,7 +2,7 @@ use std::ops::{Deref, DerefMut};
 
 use wasm_safe_thread::Mutex as WasmMutex;
 
-pub use crate::native::sync::mutex::NotAvailable;
+pub use crate::common::error::NotAvailable;
 
 pub struct Mutex<T>(WasmMutex<T>);
 

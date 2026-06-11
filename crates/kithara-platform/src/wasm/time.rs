@@ -5,9 +5,8 @@ use futures::future::{self as future_util, Either};
 use js_sys::{Function, Promise, Reflect, global};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
-pub use web_time::{Instant, SystemTime};
 
-pub use crate::native::time::TimeoutError;
+pub use crate::common::time::{Instant, SystemTime, TimeoutError};
 
 pub async fn sleep(duration: Duration) {
     let ms = i32::try_from(duration.as_millis()).unwrap_or(i32::MAX);

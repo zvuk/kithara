@@ -2,6 +2,8 @@ use std::ops::{Deref, DerefMut};
 
 use parking_lot::Mutex as ParkingLotMutex;
 
+pub use crate::common::error::NotAvailable;
+
 pub struct Mutex<T>(ParkingLotMutex<T>);
 
 impl<T> Mutex<T> {
@@ -50,15 +52,3 @@ impl<T> DerefMut for MutexGuard<'_, T> {
         &mut self.0
     }
 }
-
-/// `try_lock()` failed because the mutex is already held.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NotAvailable;
-
-impl std::fmt::Display for NotAvailable {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("mutex is already locked")
-    }
-}
-
-impl std::error::Error for NotAvailable {}

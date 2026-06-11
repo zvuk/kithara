@@ -3,19 +3,8 @@ pub use std::time::Duration;
 use tokio_alias::time as tokio_time;
 pub use tokio_time::sleep;
 use tokio_with_wasm::alias as tokio_alias;
-pub use web_time::{Instant, SystemTime};
 
-/// Error returned when an async operation exceeds its deadline.
-#[derive(Debug)]
-pub struct TimeoutError;
-
-impl std::fmt::Display for TimeoutError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("operation timed out")
-    }
-}
-
-impl std::error::Error for TimeoutError {}
+pub use crate::common::time::{Instant, SystemTime, TimeoutError};
 
 /// Await `future` with a deadline that lives on the SAME clock as the awaited
 /// work — under `flash` a virtual deadline (collapses with the engine), off

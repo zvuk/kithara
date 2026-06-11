@@ -1,18 +1,11 @@
 //! Pure native backend. Zero flash knowledge; cross-platform code lives
-//! here and the other backends re-import it.
+//! in `crate::common` and is re-imported here. Compiled only off wasm32
+//! (gated in `lib.rs`), so the tree itself carries no cfg.
 
-// parking_lot is declared for non-wasm targets only, so the
-// platform-dependent submodules carry the one legal backend cfg.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod env;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod logging;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod maybe_send;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod sync;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod thread;
-pub(crate) mod time;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod tokio;
+pub mod env;
+pub mod logging;
+pub mod maybe_send;
+pub mod sync;
+pub mod thread;
+pub mod time;
+pub mod tokio;

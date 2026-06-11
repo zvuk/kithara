@@ -1,9 +1,10 @@
 //! wasm32 backend. Mirrors the facade tree 1:1; cross-platform code is
-//! re-imported from `native`.
+//! re-imported from `crate::common`. Compiled only on wasm32 (gated in
+//! `lib.rs`), so the tree itself carries no cfg.
 
-pub(crate) mod logging;
-pub(crate) mod maybe_send;
-pub(crate) mod sync;
-pub(crate) mod thread;
-pub(crate) mod time;
-pub(crate) mod tokio;
+pub mod logging;
+pub mod maybe_send;
+pub mod sync;
+pub mod thread;
+pub mod time;
+pub mod tokio;

@@ -1,14 +1,11 @@
+use std::sync::OnceLock;
 pub use std::time::Duration;
-use std::{
-    hash::{DefaultHasher, Hash, Hasher},
-    sync::{
-        OnceLock,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
 
 use wasm_bindgen::JsCast;
 use wasm_safe_thread::Builder as WasmThreadBuilder;
+
+pub use crate::common::thread_id::active_named_thread_count;
+use crate::common::thread_id::{counted, thread_id_hash};
 
 /// Process-wide cell for the wasm-bindgen JS shim filename (without `.js`)
 /// that spawned Workers import for `initSync`. The consumer crate sets this
@@ -95,37 +92,6 @@ pub fn current() -> Thread {
     wasm_safe_thread::current()
 }
 
-/// Number of active threads spawned via [`spawn_named`].
-///
-/// Incremented on spawn, decremented when the thread function returns.
-/// Used by thread-budget tests to count only kithara-owned threads.
-///
-/// Duplicate of `native::thread::ACTIVE_NAMED_THREADS` until 1.11b/common:
-/// the native backend is gated off on wasm32, so wasm carries its own copy.
-static ACTIVE_NAMED_THREADS: AtomicUsize = AtomicUsize::new(0);
-
-/// Returns the number of currently active threads spawned via [`spawn_named`].
-#[must_use]
-pub fn active_named_thread_count() -> usize {
-    ACTIVE_NAMED_THREADS.load(Ordering::Acquire)
-}
-
-/// Wrap `f` to bracket its execution with the named-thread counter —
-/// increments on entry (at call site, before spawn), decrements after the
-/// closure returns. Used by all [`spawn_named`] variants.
-fn counted<F, T>(f: F) -> impl FnOnce() -> T + Send + 'static
-where
-    F: FnOnce() -> T + Send + 'static,
-    T: Send + 'static,
-{
-    ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
-    move || {
-        let result = f();
-        ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
-        result
-    }
-}
-
 /// Spawn a new named thread (WASM variant).
 ///
 /// # Panics
@@ -183,18 +149,6 @@ pub fn park_timeout(duration: Duration) {
 #[inline]
 pub fn unpark(t: &Thread) {
     t.unpark();
-}
-
-/// Stable `u64` hash of a [`ThreadId`], usable for shard indexing.
-///
-/// Duplicate of `native::thread::thread_id_hash` until 1.11b/common: the
-/// native backend is gated off on wasm32, so wasm carries its own copy.
-#[inline]
-#[must_use]
-fn thread_id_hash(id: ThreadId) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    id.hash(&mut hasher);
-    hasher.finish()
 }
 
 /// Hash of the current thread's ID, usable for shard indexing.
