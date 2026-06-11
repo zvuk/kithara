@@ -1,7 +1,7 @@
 //! Synchronous MPSC channel.
 //!
 //! * **Native, non-sim** — thin wrapper over [`std::sync::mpsc`].
-//! * **Native, `flash-time`** — backed by the platform [`Mutex`] + [`Condvar`], so
+//! * **Native, `flash`** — backed by the platform [`Mutex`] + [`Condvar`], so
 //!   a blocking `recv_sync` parks on the quiescence engine (sim-accounted: it
 //!   drops the caller's `active` credit) and `send_sync` wakes it via the
 //!   condvar. A raw `std::sync::mpsc::recv()` blocks on a real OS condvar that
@@ -10,24 +10,24 @@
 //!   because the channel wake and the engine park are different mechanisms).
 //! * **WASM** — backed by `wasm_safe_thread::mpsc`.
 
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 pub use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError};
 
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 use crate::time::Instant;
 
 /// Create a new unbounded channel.
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 #[must_use]
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     let (tx, rx) = std::sync::mpsc::channel();
     (Sender(tx), Receiver(rx))
 }
 
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 pub struct Sender<T>(std::sync::mpsc::Sender<T>);
 
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 impl<T> Sender<T> {
     /// Send a value synchronously.
     ///
@@ -39,17 +39,17 @@ impl<T> Sender<T> {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 impl<T> Clone for Sender<T> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 pub struct Receiver<T>(std::sync::mpsc::Receiver<T>);
 
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 impl<T> Receiver<T> {
     /// Block until a value arrives.
     ///
@@ -83,17 +83,17 @@ impl<T> Receiver<T> {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub use sim_chan::{
     Receiver, RecvError, RecvTimeoutError, SendError, Sender, TryRecvError, channel,
 };
 
 /// Sim-time MPSC: a condvar-backed queue. Both the [`Mutex`](crate::Mutex) and
 /// the [`Condvar`](crate::sync::Condvar) it stands on are already engine-aware
-/// under `flash-time`, so `recv_sync` parks on the quiescence engine (its `active`
+/// under `flash`, so `recv_sync` parks on the quiescence engine (its `active`
 /// credit drops while it waits) and `send_sync`/sender-drop wake it through the
 /// condvar — composing with `park_timeout`/`Instant` on the single virtual clock.
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 mod sim_chan {
     pub use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError};
     use std::{

@@ -1,7 +1,7 @@
 //! Off-sim baseline [`spawn_on`]: a plain `handle.spawn`.
 //!
-//! Without `flash-time` there is no quiescence engine, so spawning onto a
-//! specific runtime [`Handle`] needs no wrapping. The `flash-time` build uses
+//! Without `flash` there is no quiescence engine, so spawning onto a
+//! specific runtime [`Handle`] needs no wrapping. The `flash` build uses
 //! [`super::spawn::spawn_on`] instead, which additionally wraps the future in
 //! the engine poll-wrapper + ambient snapshot so the orchestrator's event waits
 //! stay counted by the virtual clock.

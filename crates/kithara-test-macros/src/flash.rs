@@ -34,7 +34,7 @@ enum Mode {
 /// would drop before the I/O even starts — annotate the inherent async fn it
 /// delegates to instead.
 ///
-/// Off the `flash-time` feature all three are no-ops, so the attribute
+/// Off the `flash` feature all three are no-ops, so the attribute
 /// compiles away to the bare body.
 pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mode = if attr.is_empty() {

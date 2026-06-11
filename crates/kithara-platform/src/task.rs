@@ -1,7 +1,7 @@
 //! Platform-aware blocking task spawning.
 //!
 //! [`spawn_blocking`] is the chokepoint for offloading a blocking computation
-//! onto a runtime thread. It exists so that, under the `flash-time` test feature,
+//! onto a runtime thread. It exists so that, under the `flash` test feature,
 //! the offloaded closure participates in the quiescence clock the same way a
 //! named thread does — its credit is reset on entry and dropped on exit by the
 //! same bracket [`crate::thread::spawn_named`] uses. Consumers that run a
@@ -10,13 +10,13 @@
 //! participant accounting stays intrinsic to the platform — no consumer ever
 //! registers anything.
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 use crate::time::flash::credit;
 
 /// Spawn a blocking computation on the runtime's blocking pool.
 ///
 /// Off the sim path: a thin pass-through to [`tokio::task::spawn_blocking`].
-/// Under `flash-time` (native), an AMBIENT closure is real work in flight, so
+/// Under `flash` (native), an AMBIENT closure is real work in flight, so
 /// it paces the virtual clock exactly like a `spawn_named` thread: the caller
 /// reserves the `active` slot BEFORE the pool queues the closure (covering the
 /// queue wait), the closure claims it `Running` for its lifetime, and its
@@ -28,7 +28,7 @@ use crate::time::flash::credit;
 /// The parent's ambient snapshot is also re-established on the blocking thread
 /// for the closure's lifetime (thread-locals do not cross the pool), so a
 /// blocking computation spawned from a flash test stays flash-eligible.
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub fn spawn_blocking<F, R>(f: F) -> tokio::task::JoinHandle<R>
 where
     F: FnOnce() -> R + Send + 'static,
@@ -55,7 +55,7 @@ where
 }
 
 /// Spawn a blocking computation on the runtime's blocking pool (non-sim native).
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 pub fn spawn_blocking<F, R>(f: F) -> tokio::task::JoinHandle<R>
 where
     F: FnOnce() -> R + Send + 'static,

@@ -351,7 +351,7 @@ pub(crate) fn unpark(thread_id: u64) {
     s.unpark_pending.insert(thread_id);
 }
 
-/// Sim cooperative yield (`thread::yield_now` under `flash-time`). A busy-poll loop
+/// Sim cooperative yield (`thread::yield_now` under `flash`). A busy-poll loop
 /// that calls this RELINQUISHES the engine: it parks as a yield-waiter (dropping
 /// its `active` credit) so the virtual clock can advance past it, and is woken on
 /// the next clock advance to re-check. Without this a spin loop holds

@@ -3,8 +3,8 @@
 //! (a flash-eligible test) `flash(true)` collapses virtual waits; without ambient
 //! it is a no-op so waits stay REAL. `#[kithara::flash(io)]` brackets the body
 //! as ONE real I/O op: the virtual clock is paced to real time while it is in
-//! flight. Gated on `flash-time` (native only).
-#![cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+//! flight. Gated on `flash` (native only).
+#![cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 
 use std::{
     sync::{

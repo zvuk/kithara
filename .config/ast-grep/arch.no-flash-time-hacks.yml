@@ -1,6 +1,6 @@
 id: arch.no-flash-time-hacks
 message: |
-  Reintroduction of a deleted flash-time determinism hack. The flash-time
+  Reintroduction of a deleted flash determinism hack. The flash
   redesign DELETED two crutches that papered over quiescence bugs instead of
   fixing the underlying contract; this gate stops them from creeping back.
 
@@ -19,7 +19,7 @@ message: |
   (real-by-default timeout, the credit bracket, `flash(false)` for real I/O).
   Fix the state contract, do not resurrect the hack. See
   `.docs/flash-time/blocking-primitive-coverage.md` and the kithara-platform
-  README "Virtual time (flash-time)" section.
+  README "Virtual time (flash)" section.
 
   This is an ERROR gate covering ALL workspace Rust — production AND tests.
 severity: error

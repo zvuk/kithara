@@ -63,13 +63,13 @@ pub type ThreadId = std::thread::ThreadId;
 #[cfg(target_arch = "wasm32")]
 pub type ThreadId = wasm_safe_thread::ThreadId;
 
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 #[inline]
 pub fn yield_now() {
     std::thread::yield_now();
 }
 
-/// Under `flash-time`, a cooperative yield must relinquish the quiescence engine:
+/// Under `flash`, a cooperative yield must relinquish the quiescence engine:
 /// a busy-poll loop spinning on `std::thread::yield_now` keeps the thread counted
 /// as running, so the virtual clock can never advance past it — and a loop bounded
 /// by a virtual-time deadline then livelocks (it waits for time its own spinning
@@ -77,7 +77,7 @@ pub fn yield_now() {
 /// advance, then wakes it on the next advance to re-check. Off the sim path
 /// (real-time scope) it stays a plain OS yield, so the real-time / RT worker
 /// behaviour is unchanged. See `crate::time::flash::sched::yield_until_advance`.
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 #[inline]
 pub fn yield_now() {
     if crate::time::flash::flash_enabled() {
@@ -194,7 +194,7 @@ pub fn active_named_thread_count() -> usize {
 /// increments on entry (at call site, before spawn), decrements after the
 /// closure returns. Used by all [`spawn_named`] variants.
 ///
-/// Under `flash-time` (native) the bracket also owns the quiescence credit: it
+/// Under `flash` (native) the bracket also owns the quiescence credit: it
 /// resets this thread's credit on entry (a freshly-spawned thread must start
 /// `None`) and drops it on exit (a thread that woke to `Running` and returns
 /// must release its `active` slot). This makes participant accounting intrinsic
@@ -209,19 +209,19 @@ where
     // Snapshot the per-test ambient gate on the PARENT: thread-locals do not
     // cross `spawn`, so a flash test's spawned graph would otherwise see the
     // default `false`. The child re-establishes it for its whole lifetime.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
     let ambient = crate::time::flash::ambient_snapshot();
     // Reserve this pacer's `active` slot NOW, on the parent, before the child is
     // scheduled — so a sibling that parks in the spawn→run gap still sees the
     // pacer counted and the virtual clock cannot jump past its warm-up. The child
     // claims this slot as `Running` in `mark_dedicated`; the first wait / exit
     // releases it. See `credit::pre_count_dedicated`.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
     crate::time::flash::credit::pre_count_dedicated();
     move || {
         // Held for the closure's lifetime: restores the previous ambient on the
         // child thread when the closure returns (it must outlive `f()`).
-        #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+        #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
         let _ambient = crate::time::flash::set_ambient_for_spawn(ambient);
         // A DEDICATED pacer must run its WHOLE callstack in the test's flash mode,
         // not just propagate ambient. It loops on stateful waits (`Condvar`,
@@ -236,9 +236,9 @@ where
         // this via its `#[kithara::flash(true)]` run loop; this generalizes it to
         // EVERY `spawn_named` pacer — flush hub, offline render, …) keeps the
         // pacer's `Instant::now()` in the same clock domain as its waits.
-        #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+        #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
         let _flash = crate::time::flash::enter_dynamic(true);
-        #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+        #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
         {
             crate::time::flash::credit::reset_credit();
             // A `spawn_named` thread is a DEDICATED virtual-time pacer: it is the
@@ -248,7 +248,7 @@ where
             crate::time::flash::credit::mark_dedicated();
         }
         let result = f();
-        #[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+        #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
         crate::time::flash::credit::on_participant_exit();
         ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
         result
@@ -316,20 +316,20 @@ where
 }
 
 /// Block the current thread for at least `duration` (native, non-sim).
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 #[inline]
 pub fn sleep(duration: Duration) {
     std::thread::sleep(duration);
 }
 
-/// Under `flash-time`, a sleep registers a pure timed waiter on the quiescence
+/// Under `flash`, a sleep registers a pure timed waiter on the quiescence
 /// engine (deadline = virtual now + `duration`) and blocks off-lock until the
 /// engine crosses it — collapsing to zero real wall-clock like every other
 /// virtual wait, so a thread that sleeps to delay a state change cannot be raced
 /// by a peer's virtual wait advancing the clock past it. Real-time scopes keep a
 /// true wall-clock sleep. Unlike [`park_timeout`] a sleep has no early wake. See
 /// `crate::time::flash::sched::sleep_timed`.
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 #[inline]
 pub fn sleep(duration: Duration) {
     if crate::time::flash::flash_enabled() {
@@ -360,19 +360,19 @@ pub fn park() {
 }
 
 /// Block until unparked or until `duration` elapses.
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 #[inline]
 pub fn park_timeout(duration: Duration) {
     std::thread::park_timeout(duration);
 }
 
-/// Under `flash-time`, a timed park registers an unparkable waiter on the
+/// Under `flash`, a timed park registers an unparkable waiter on the
 /// quiescence engine (deadline = virtual now + `duration`) and blocks off-lock
 /// until the engine crosses that deadline OR a peer [`unpark`]s this thread.
 /// The wait consumes no real wall-clock: when every participant is parked the
 /// engine jumps the virtual clock to the earliest deadline. See
 /// `crate::time::flash` and the crate README.
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 #[inline]
 pub fn park_timeout(duration: Duration) {
     if crate::time::flash::flash_enabled() {
@@ -387,7 +387,7 @@ pub fn park_timeout(duration: Duration) {
 /// consult), mirroring [`park_timeout`]'s flash arm. The lexical test rewriter
 /// (`time::flash_virtual_park_timeout`) targets this so a flash test body's
 /// `park_timeout` collapses onto virtual time without setting `FLASH_ACTIVE`.
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 #[inline]
 pub(crate) fn park_timeout_virtual(duration: Duration) {
     crate::time::flash::sched::park_timed_unparkable(duration, current_thread_id());
@@ -396,14 +396,14 @@ pub(crate) fn park_timeout_virtual(duration: Duration) {
 /// Unpark a thread parked in [`park_timeout`].
 ///
 /// Native (non-sim) / wasm: delegates to the OS/runtime `Thread::unpark`.
-/// Under `flash-time`: the park MODE is decided by the TARGET's own thread
+/// Under `flash`: the park MODE is decided by the TARGET's own thread
 /// flags, which may disagree with this caller's (a no-ambient pool thread
 /// parks on the real OS slot while a flash worker wakes it). A flash-ACTIVE
 /// caller therefore fires BOTH slots: the engine entry (serialized with clock
 /// jumps under the engine lock, or armed pending) AND the OS park slot. The
 /// redundant token costs at most one spurious early return, which the std
 /// park contract already permits.
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 #[inline]
 pub fn unpark(t: &Thread) {
     if crate::time::flash::flash_enabled() {
@@ -413,7 +413,7 @@ pub fn unpark(t: &Thread) {
 }
 
 /// Unpark a thread parked in [`park_timeout`] (non-sim / OS park slot).
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 #[inline]
 pub fn unpark(t: &Thread) {
     t.unpark();
@@ -434,7 +434,7 @@ pub fn park_timeout(duration: Duration) {
 }
 
 /// Stable `u64` hash of a [`ThreadId`]. Used both for shard indexing and (under
-/// `flash-time`) as the engine's thread key: [`current_thread_id`] and
+/// `flash`) as the engine's thread key: [`current_thread_id`] and
 /// [`unpark`]'s target derive from the SAME hasher so a park and its wake agree.
 #[inline]
 #[must_use]

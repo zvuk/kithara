@@ -48,7 +48,7 @@ fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
     // `FLASH_ACTIVE`, leaving callee prod fns on REAL); under `flash(false)`
     // leave the body untouched. Either way the body opens with an ambient guard
     // (`#flash_bool`), set uniformly per test and propagated to spawned threads
-    // (B5). Off the `flash-time` feature both `flash_virtual_*` and
+    // (B5). Off the `flash` feature both `flash_virtual_*` and
     // `ambient_scope` are real-aliases / no-ops, so the emitted body is
     // behaviour-identical to the original. Injected ONCE here so every emit path
     // (sync/async/native/wasm/browser) inherits it via `body_stmts`.

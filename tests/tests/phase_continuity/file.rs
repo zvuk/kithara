@@ -149,7 +149,7 @@ async fn write_sine_fixture_to_disk(
 /// file via `FileSrc::Local` (which builds its own private `AssetStore` and
 /// never registers a `Downloader` / issues an HTTP request), so the entire
 /// playback pipeline — storage waits, decode, resample — runs without any
-/// loopback transport. This is the path the `flash-time` quiescence engine can
+/// loopback transport. This is the path the `flash` quiescence engine can
 /// virtualize end to end. Asserts the identical phase-continuity contract.
 async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate: Option<u64>) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -210,7 +210,7 @@ async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate:
     );
 }
 
-/// First flash-time equivalence proof on a socket-free pipeline.
+/// First flash equivalence proof on a socket-free pipeline.
 ///
 /// Reads a sine MP3 fixture straight from disk through `FileSrc::Local` and
 /// runs the production phase-continuity scan. Because `FileSrc::Local` builds
@@ -219,7 +219,7 @@ async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate:
 /// onto the quiescence engine. Run the SAME test twice for the proof:
 ///
 /// - default (real clock):    `cargo test … phase_continuity_file_local_socket_free`
-/// - sim (virtual clock):     `cargo test … --features flash-time phase_continuity_file_local_socket_free`
+/// - sim (virtual clock):     `cargo test … --features flash phase_continuity_file_local_socket_free`
 ///
 /// Both must hold the sub-0.5-sample phase oracle bit-for-bit; the sim run is
 /// deterministic and faster (the storage condvar / park waits collapse to zero

@@ -228,7 +228,7 @@ impl TestServerHelper {
 /// `flash_dynamic(true, ...)` region (which only takes effect under ambient, which
 /// the platform async [`spawn`] propagates), so its `sleep` is engine-backed: it
 /// awaits the segment GET's arrival, burns `delay_ms` of VIRTUAL time, then frees
-/// the parked body. Off the `flash-time` feature `flash_dynamic` is identity and
+/// the parked body. Off the `flash` feature `flash_dynamic` is identity and
 /// the `sleep` is a real `tokio` timer — matching the legacy real-delay behaviour.
 fn spawn_delay_releaser(gate: Arc<DelayGate>, delay_ms: u64, variant: usize, segment: usize) {
     drop(spawn(flash_dynamic(true, async move {

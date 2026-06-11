@@ -12,11 +12,11 @@ use std::{
 };
 
 /// Quiescence-driven virtual-clock engine. Submodule of `flash`, which is already
-/// gated on `feature = "flash-time"` + native, so it needs no extra feature gate.
+/// gated on `feature = "flash"` + native, so it needs no extra feature gate.
 /// The engine drives `SIM_NANOS` forward at quiescent points. Its consumers are
 /// the platform wait primitives (`thread::park_timeout`, `sync::Condvar`,
 /// async `FlashSleep`/`Notify`) plus the harness, so it compiles whenever
-/// `flash-time` is on. The engine API stays `pub(crate)`.
+/// `flash` is on. The engine API stays `pub(crate)`.
 pub mod sched;
 
 /// Participant credit accounting (dedicated pacers, bridged waits, blocking
@@ -111,7 +111,7 @@ impl Drop for FlashSleep {
     }
 }
 
-/// Engine-backed `tokio::task::yield_now` under `flash-time`. A cooperative async
+/// Engine-backed `tokio::task::yield_now` under `flash`. A cooperative async
 /// yield must let the virtual clock advance — in real time, time passes while a
 /// task yields and other work (a server throttle) makes progress. This parks the
 /// task as a yield-waiter (its `active_async` slot is released by the spawn gate
@@ -164,7 +164,7 @@ impl Drop for FlashYield {
 /// keeps its `active_async` slot across the yield, and an engine-backed yield can
 /// never be granted (a circular dependency — `active_async` never hits zero while
 /// the only `.await` blocking the task is the yield). Gating on ambient keeps the
-/// flash-time BUILD behavior-transparent for ambient=false (flash(false) tests AND
+/// flash BUILD behavior-transparent for ambient=false (flash(false) tests AND
 /// production), exactly as the stateful-primitive ambient gate does.
 pub fn yield_now() -> Yield {
     if flash_ambient() {

@@ -10,7 +10,7 @@ use syn::{
 /// This collapses the BODY's own waits onto virtual time without setting
 /// `FLASH_ACTIVE`, so a prod fn the body calls keeps its stateless time reads on
 /// REAL (engine-coordinated stateful sync primitives still see the per-test
-/// ambient gate). Off the `flash-time` feature the targets alias the real
+/// ambient gate). Off the `flash` feature the targets alias the real
 /// primitives, so the rewrite is behaviour-preserving. Matching is by the LAST
 /// TWO path segments — the repo routes all time through `kithara_platform::time`,
 /// so the recognised path set is fixed and small.

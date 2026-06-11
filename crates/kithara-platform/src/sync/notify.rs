@@ -1,5 +1,5 @@
 //! Platform `Notify`: real `tokio::sync::Notify` off the sim path; under
-//! `flash-time` each op branches on [`flash_ambient`].
+//! `flash` each op branches on [`flash_ambient`].
 //!
 //! The flash variant mirrors the sim [`Condvar`](super::Condvar): a fresh `cvid`
 //! identifies the notify; `notified()` registers an untimed waiter (no deadline
@@ -14,7 +14,7 @@
 //! UNIFIED across both mechanisms. The real path is the only one taken until
 //! `#[kithara::flash]` annotations land.
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 use std::{
     collections::VecDeque,
     future::Future,
@@ -26,29 +26,29 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 use parking_lot::Mutex;
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 use crate::time::flash::{flash_ambient, sched};
 /// Real-tokio `Notify` (off the sim path): a transparent re-export so callers
 /// use one type everywhere.
-#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash-time")))]
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "flash")))]
 pub use crate::tokio::sync::Notify;
 
 /// Real-wake state for the off-flash path: FIFO queue of parked waiters (each a
 /// grant flag + waker, mirroring the engine's `granted`) plus a pending
 /// `notify_one` permit (consumed by the next `notified()`).
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 #[derive(Default)]
 struct RealNotify {
     waiters: VecDeque<(Arc<AtomicBool>, Waker)>,
     permit: bool,
 }
 
-/// `Notify` under `flash-time`. Each op branches on [`flash_ambient`]: engine
+/// `Notify` under `flash`. Each op branches on [`flash_ambient`]: engine
 /// `cvid` group when the test is flash-eligible, else a real waker list + permit.
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub struct Notify {
     cvid: u64,
     real: Mutex<RealNotify>,
@@ -58,7 +58,7 @@ pub struct Notify {
     engine: bool,
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 impl Default for Notify {
     fn default() -> Self {
         Self {
@@ -69,7 +69,7 @@ impl Default for Notify {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 impl Notify {
     pub fn notify_one(&self) {
         if self.engine {
@@ -111,7 +111,7 @@ impl Notify {
 /// grant (never re-parks past a `notify_one`) and `Drop` removes EXACTLY its own
 /// entry from the shared waiter queue (leaving a stale one would steal a
 /// `notify_one` from a still-parked waiter — a lost wakeup).
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 enum NotifiedState {
     Init,
     Engine(sched::AsyncHandle),
@@ -119,15 +119,15 @@ enum NotifiedState {
     Done,
 }
 
-/// Future returned by [`Notify::notified`] under `flash-time`.
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+/// Future returned by [`Notify::notified`] under `flash`.
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub struct Notified<'a> {
     cvid: u64,
     state: NotifiedState,
     notify: &'a Notify,
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 impl Future for Notified<'_> {
     type Output = ();
 
@@ -194,7 +194,7 @@ impl Future for Notified<'_> {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 impl Drop for Notified<'_> {
     fn drop(&mut self) {
         match std::mem::replace(&mut self.state, NotifiedState::Done) {

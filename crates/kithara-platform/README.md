@@ -54,13 +54,13 @@ time::sleep(std::time::Duration::from_millis(10)).await;
 
 - `time::sleep(duration)`
 - `time::timeout(duration, future)`
-- `time::Instant` (via `web-time`, or the virtual clock under `flash-time`)
+- `time::Instant` (via `web-time`, or the virtual clock under `flash`)
 
 On native these delegate to `tokio` runtime primitives, on wasm they use `setTimeout`-based scheduling. `web_time` is an internal implementation detail of this crate: no other crate may depend on it directly (enforced by the `arch.no-web-time` ast-grep gate), and `std::time::{Instant, Duration}` is likewise banned outside this crate (`arch.no-std-time`). Routing every timestamp through `time::Instant` is what lets the clock be swapped wholesale, below.
 
-### Virtual time (`flash-time`)
+### Virtual time (`flash`)
 
-`flash-time` is an off-by-default cargo feature, native and test-only, that replaces the wall clock with a process-global virtual timeline so warm-cache offline playback tests run at CPU speed instead of real time. No shipping crate enables it; production builds are unchanged. Off the feature every flash macro is a no-op (identity) and everything is real.
+`flash` is an off-by-default cargo feature, native and test-only, that replaces the wall clock with a process-global virtual timeline so warm-cache offline playback tests run at CPU speed instead of real time. No shipping crate enables it; production builds are unchanged. Off the feature every flash macro is a no-op (identity) and everything is real.
 
 #### Annotation model (REAL by default, virtual only where turned on)
 
@@ -191,10 +191,10 @@ one: **virtual time must never outrun real time while real I/O is in flight.**
   watchdog racing a healthy loaded fetch now measures at least the equivalent
   real time, so it fires only on a genuine stall.
 - When the last scope drops, the anchor clears and full-speed collapse resumes
-  immediately. Off `flash-time` (and on wasm) the scope is a ZST no-op.
+  immediately. Off `flash` (and on wasm) the scope is a ZST no-op.
 
 The intended workflow is two runs compared as ground truth: the default
-real-time run (catches concurrency/timing bugs) and the `flash-time` run (fast).
+real-time run (catches concurrency/timing bugs) and the `flash` run (fast).
 Divergence in sample-count positions or PCM between them flags that
 virtualization distorted something. The FILE phase-continuity cluster is the
 first equivalence oracle: its sub-0.5-sample phase assertions fail on any

@@ -43,7 +43,7 @@ pub fn fixture(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// `#[kithara::flash]` / `#[kithara::flash(true|false)]` — PROD dynamic-flash
 /// guard. Wraps a fn so its body propagates flash through the callstack and
-/// spawn (sync: RAII guard; async: per-poll combinator). No-op off `flash-time`.
+/// spawn (sync: RAII guard; async: per-poll combinator). No-op off `flash`.
 /// См. [`flash`] для деталей.
 #[proc_macro_attribute]
 pub fn flash(attr: TokenStream, item: TokenStream) -> TokenStream {

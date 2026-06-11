@@ -1,4 +1,4 @@
-//! Sim-participating `tokio::sync::mpsc` under `flash-time` (native).
+//! Sim-participating `tokio::sync::mpsc` under `flash` (native).
 //!
 //! A real `tokio` mpsc parks a receiver/sender on the runtime's reactor, which
 //! is invisible to the quiescence engine — so the virtual clock would advance

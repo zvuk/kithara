@@ -101,7 +101,7 @@ pub(crate) fn wrap_with_timeout(
                 let __timeout_dur: ::std::time::Duration = #dur;
                 let __body = async { #body };
                 // Wall-clock safety net: must fire on REAL time even under
-                // `flash-time` (a hung test hangs real time too).
+                // `flash` (a hung test hangs real time too).
                 kithara_platform::time::timeout(__timeout_dur, __body)
                     .await
                     .unwrap_or_else(|_| panic!(

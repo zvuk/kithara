@@ -1,4 +1,4 @@
-//! Sim-participating `tokio::sync::oneshot` under `flash-time` (native).
+//! Sim-participating `tokio::sync::oneshot` under `flash` (native).
 //!
 //! Same rationale as the sibling [`mpsc`](super::mpsc): the single value handoff
 //! goes through the quiescence engine (an untimed channel waiter) instead of the

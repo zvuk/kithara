@@ -22,7 +22,7 @@ pub struct HangDetector<C: HangDump = NoContext> {
     timeout: Duration,
     /// Stamped lazily on the first observation (`tick`/`remaining`), NOT in
     /// `new`, so the deadline and every later comparison read the SAME clock.
-    /// Under `flash-time` the constructor can run outside the watched fn's
+    /// Under `flash` the constructor can run outside the watched fn's
     /// flash scope (attribute-expansion order puts the `#[kithara::hang_watchdog]`
     /// prelude before the `#[kithara::flash(true)]` scope entry), where
     /// `Instant::now` is real while the body's reads are virtual; an eager

@@ -212,7 +212,7 @@ pub(crate) fn emit_async_timeout_test(
                                 __probe_install_id,
                                 async {
                                     // Wall-clock safety net: must fire on REAL
-                                    // time even under `flash-time` (a hung test
+                                    // time even under `flash` (a hung test
                                     // hangs real time too).
                                     kithara_platform::time::timeout(
                                         __timeout_dur,

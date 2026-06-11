@@ -1,18 +1,18 @@
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 use parking_lot::Condvar as ParkingLotCondvar;
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 use parking_lot::{Condvar as ParkingLotCondvar, lock_api::MutexGuard as RawMutexGuard};
 
 use super::MutexGuard;
 use crate::time::Instant;
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 use crate::time::flash::{credit, flash_ambient, sched};
 
 /// Native condvar backed by `parking_lot`.
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 pub struct Condvar(ParkingLotCondvar);
 
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash-time")))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 impl Condvar {
     #[inline]
     #[must_use]
@@ -49,7 +49,7 @@ impl Condvar {
     }
 }
 
-/// Native condvar under `flash-time`. Each operation branches on
+/// Native condvar under `flash`. Each operation branches on
 /// [`flash_ambient`]: when the test is flash-eligible, waits register on the
 /// quiescence engine (keyed by `cvid`) and `notify_*` signal that group, so a
 /// timed wait collapses the virtual clock; otherwise the real
@@ -57,7 +57,7 @@ impl Condvar {
 /// path, and the only path until `#[kithara::flash]` annotations land). The
 /// engine `cvid` and the real condvar share the SAME domain mutex, so the
 /// unified predicate state is consistent across both park/wake mechanisms.
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub struct Condvar {
     cvid: u64,
     real: ParkingLotCondvar,
@@ -73,7 +73,7 @@ pub struct Condvar {
     engine: bool,
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 impl Condvar {
     #[inline]
     #[must_use]

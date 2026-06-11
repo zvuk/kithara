@@ -5,12 +5,12 @@
 //!
 //! The stall detector bounds the REAL chunk-arrival gap with [`timeout`] from
 //! inside a `flash(io)` bracket ([`next_chunk`]): a chunk await is a real
-//! socket read, so under `flash-time` the virtual clock is paced to real time
+//! socket read, so under `flash` the virtual clock is paced to real time
 //! while it is in flight — the quiescence engine cannot fire the (virtual)
 //! stall timer ahead of in-flight loopback bytes; it measures at least the
 //! equivalent real time. The retry BACKOFF between attempts is a pure wait
 //! with no concurrent I/O, so it stays virtual (`time::sleep`, collapses
-//! under `flash-time`).
+//! under `flash`).
 
 use std::pin::Pin;
 
@@ -227,7 +227,7 @@ mod tests {
     }
 
     /// Withheld body → bounded terminal `RetryExhausted` (not a hang). Works in
-    /// real time and under `flash-time` (virtual clock collapses the waits).
+    /// real time and under `flash` (virtual clock collapses the waits).
     fn resumed(stream: ByteStream, skip: u64) -> Resumed {
         Resumed { stream, skip }
     }

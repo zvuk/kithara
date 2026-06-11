@@ -36,7 +36,7 @@ pub(crate) fn shared() -> &'static SharedTestServer {
                     // clock — which the caller has frozen by blocking on `rx.recv()`
                     // below (a deadlock otherwise). The scope drops before serving
                     // begins, so per-request THROTTLE sleeps stay on the sim clock
-                    // and still collapse under `flash-time`.
+                    // and still collapse under `flash`.
                     let base_url = {
                         let _real = kithara_platform::time::flash_real();
                         router_base_url_on_runtime(state_for_thread).await

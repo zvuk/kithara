@@ -101,7 +101,7 @@ fn build_client(options: &NetOptions) -> reqwest::Result<Client> {
     // No reqwest `.read_timeout`: the idle/stall timeout is owned by the
     // resilient body (`resumable_body`), whose `sleep(inactivity_timeout)`
     // routes through `kithara_platform::time` and so collapses under
-    // `flash-time`. reqwest's timer is real wall-clock and would both
+    // `flash`. reqwest's timer is real wall-clock and would both
     // double-own the stall and break simulation determinism.
     let base = Client::builder()
         .cookie_store(true)
@@ -182,7 +182,7 @@ impl RawHttp {
     /// the single idle timer (the body half lives in [`resumable_body`]).
     ///
     /// This bound measures a REAL socket operation (connect + header wait), so
-    /// the fn is a `flash(io)` bracket: under `flash-time` the virtual clock
+    /// the fn is a `flash(io)` bracket: under `flash` the virtual clock
     /// is paced to real time while the op is in flight, so the (virtual) idle
     /// timer cannot be fired by the quiescence engine racing ahead of an
     /// in-flight loopback establish — it measures at least the equivalent real

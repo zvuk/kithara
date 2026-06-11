@@ -18,10 +18,10 @@ fmt-check:
 
 clippy:
     cargo clippy --workspace -- -D warnings
-    # The flash virtual-clock engine is entirely `#[cfg(feature = "flash-time")]`,
+    # The flash virtual-clock engine is entirely `#[cfg(feature = "flash")]`,
     # so the default pass never compiles it. Lint it under its own flag too, or its
     # code drifts un-checked (the gate's historical blind spot).
-    cargo clippy --workspace --features flash-time -- -D warnings
+    cargo clippy --workspace --features flash -- -D warnings
 
 # Apply clippy's machine-applicable suggestions in place. Refuses to run
 # on a dirty working tree by default — pass --allow-dirty to override.
@@ -98,7 +98,7 @@ doc:
 #   * Android       → Android MediaCodec + Symphonia software
 #   * Linux / other → Symphonia only
 #
-# The flash virtual clock is ENABLED by default (`--features flash-time`): tests
+# The flash virtual clock is ENABLED by default (`--features flash`): tests
 # run on a deterministic engine-driven clock that collapses artificial waits, so
 # the suite is fast and reproducible. Opt out with `--flash=off` (`--no-flash` /
 # `--flash=false`) to run on the real wall clock — the regression baseline. The
@@ -113,12 +113,12 @@ doc:
 test *ARGS:
     #!/usr/bin/env bash
     set -eo pipefail
-    flash_feat="--features flash-time"
+    flash_feat="--features flash"
     passthru=""
     for a in {{ARGS}}; do
         case "$a" in
             --flash=off|--flash=false|--no-flash) flash_feat="" ;;
-            --flash=on|--flash=true) flash_feat="--features flash-time" ;;
+            --flash=on|--flash=true) flash_feat="--features flash" ;;
             *) passthru="$passthru $a" ;;
         esac
     done
@@ -131,7 +131,7 @@ gate *ARGS:
     #!/usr/bin/env bash
     set -eo pipefail
     echo "=== gate: flash ON ==="
-    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features flash-time {{ARGS}}
+    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features flash {{ARGS}}
     echo "=== gate: flash OFF ==="
     CARGO_TARGET_DIR=target-flash-off cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
 
@@ -142,12 +142,12 @@ gate *ARGS:
 test-cached *ARGS:
     #!/usr/bin/env bash
     set -eo pipefail
-    flash_feat="--features flash-time"
+    flash_feat="--features flash"
     passthru=""
     for a in {{ARGS}}; do
         case "$a" in
             --flash=off|--flash=false|--no-flash) flash_feat="" ;;
-            --flash=on|--flash=true) flash_feat="--features flash-time" ;;
+            --flash=on|--flash=true) flash_feat="--features flash" ;;
             *) passthru="$passthru $a" ;;
         esac
     done

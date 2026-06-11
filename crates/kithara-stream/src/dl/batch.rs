@@ -221,10 +221,10 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     });
 }
 
-/// Measured duration of a fetch, robust to the flash-time clock split.
+/// Measured duration of a fetch, robust to the flash clock split.
 ///
 /// `started` is captured in the `#[kithara::flash(true)]` dispatch (`process`),
-/// so under `flash-time` it reads the VIRTUAL clock; this delivery runs in a
+/// so under `flash` it reads the VIRTUAL clock; this delivery runs in a
 /// non-flash fetch task (its real-socket I/O and timeouts must stay on real
 /// time), where `started.elapsed()` reads the REAL clock. A virtual `started`
 /// minus a real `now` would saturate to ZERO (and silently drop the bandwidth
@@ -232,7 +232,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
 /// real server delay (off-feature / `flash(false)`) is captured by the real
 /// elapsed, a virtual server delay (a flash test's withhold gate) is captured by
 /// the virtual delta, and an instant fetch yields zero on both. Off the
-/// `flash-time` feature `flash_virtual_now` is real `Instant::now`, so both terms
+/// `flash` feature `flash_virtual_now` is real `Instant::now`, so both terms
 /// collapse to the same real elapsed.
 fn fetch_elapsed(started: Instant) -> Duration {
     started

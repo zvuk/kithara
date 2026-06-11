@@ -4,8 +4,8 @@
 //! the VIRTUAL clock WITHOUT setting `FLASH_ACTIVE`. A prod-like fn the body
 //! calls is NOT rewritten and its stateless time reads see `FLASH_ACTIVE` false,
 //! so they stay on the REAL clock. This is the lexical/body-only containment.
-//! Gated on `flash-time` (native only).
-#![cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+//! Gated on `flash` (native only).
+#![cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 
 use kithara_platform::time::{self, Duration, Instant};
 use kithara_test_utils::kithara;

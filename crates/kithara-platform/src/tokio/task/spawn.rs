@@ -1,4 +1,4 @@
-//! Native `flash-time` task spawning and cooperative yield.
+//! Native `flash` task spawning and cooperative yield.
 
 use std::future::Future;
 
@@ -6,7 +6,7 @@ use tokio_with_wasm::alias as tokio_alias;
 
 use super::JoinHandle;
 
-/// Spawn an async task. Under `flash-time` (native) the future is wrapped in the
+/// Spawn an async task. Under `flash` (native) the future is wrapped in the
 /// quiescence poll-wrapper ([`crate::time::participate`]) so the spawned task
 /// counts as a running participant while it is being polled — the virtual clock
 /// cannot advance past an in-progress task. This is THE async-spawn chokepoint;
