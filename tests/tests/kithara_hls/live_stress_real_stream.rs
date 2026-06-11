@@ -22,7 +22,7 @@ use kithara_integration_tests::{
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::time;
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::{task::spawn_blocking, thread};
+use kithara_platform::{thread, tokio::task::spawn_blocking};
 use kithara_platform::{time::Duration, tokio};
 use tokio::{sync::broadcast::error::RecvError, task::spawn};
 use tracing::info;

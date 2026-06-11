@@ -16,7 +16,7 @@ use kithara_events::{AudioEvent, DeferredBus, EventBus, SeekLifecycleStage, Segm
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
 use kithara_platform::{
-    CancellationToken, task::spawn_blocking, thread::park_timeout, time::Duration,
+    CancellationToken, thread::park_timeout, time::Duration, tokio::task::spawn_blocking,
 };
 use kithara_stream::{MediaInfo, PlayheadWrite, SeekControl, SeekObserve, Stream, StreamType};
 use kithara_test_utils::kithara;

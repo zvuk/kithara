@@ -14,7 +14,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, Xorshift64, temp_dir};
-use kithara_platform::{task::spawn_blocking, thread, time::Duration, tokio::task::spawn};
+use kithara_platform::{
+    thread,
+    time::Duration,
+    tokio::task::{spawn, spawn_blocking},
+};
 use tracing::info;
 
 struct Consts;

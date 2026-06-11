@@ -258,9 +258,6 @@ pub fn next_thread_probe_seq() -> u64 {
 
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::tokio;
-
 /// Process-wide install-generation counter.
 ///
 /// Bumped once per [`bump_install_id`]; the probe macro stamps the

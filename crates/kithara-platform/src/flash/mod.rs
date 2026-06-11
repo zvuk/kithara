@@ -37,6 +37,8 @@ pub(crate) mod thread;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub(crate) mod time;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
+pub(crate) mod tokio;
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 mod wake;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]

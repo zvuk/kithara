@@ -13,7 +13,7 @@ use kithara_integration_tests::{
     phase_distance, phase_from_f32,
     signal_pcm::signal,
 };
-use kithara_platform::{CancellationToken, task::spawn_blocking, time::Duration};
+use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;

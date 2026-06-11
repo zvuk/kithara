@@ -14,10 +14,9 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_platform::{
-    CancellationToken,
-    task::spawn_blocking,
-    thread,
+    CancellationToken, thread,
     time::{Duration, Instant, sleep, timeout},
+    tokio::task::spawn_blocking,
 };
 use tracing::info;
 

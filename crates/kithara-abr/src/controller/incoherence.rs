@@ -75,7 +75,7 @@ impl AbrController {
 
         let deadline = self.settings.incoherence_deadline;
         let controller_weak = self.self_weak.clone();
-        tokio::spawn(async move {
+        tokio::task::spawn(async move {
             tokio::select! {
                 () = sleep(deadline) => {}
                 () = token.cancelled() => return,

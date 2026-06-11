@@ -774,7 +774,7 @@ fn ambient_blocking_closure_pins_virtual_clock() {
     let release = Arc::new(AtomicUsize::new(0));
     let entered_in = Arc::clone(&entered);
     let release_in = Arc::clone(&release);
-    let handle = crate::task::spawn_blocking(move || {
+    let handle = crate::tokio::task::spawn_blocking(move || {
         entered_in.store(1, Ordering::Release);
         while release_in.load(Ordering::Acquire) == 0 {
             std::hint::spin_loop();

@@ -10,7 +10,7 @@ use kithara_integration_tests::{
     TestTempDir, auto,
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
-use kithara_platform::{CancellationToken, task::spawn_blocking, time::Duration};
+use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 use crate::common::{

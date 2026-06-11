@@ -14,3 +14,5 @@ pub(crate) mod sync;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod thread;
 pub(crate) mod time;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod tokio;

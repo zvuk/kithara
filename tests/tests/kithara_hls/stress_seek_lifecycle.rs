@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use kithara_platform::{CancellationToken, task::spawn_blocking, thread, time::Duration};
+use kithara_platform::{CancellationToken, thread, time::Duration, tokio::task::spawn_blocking};
 use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;

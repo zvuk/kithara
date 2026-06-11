@@ -1,3 +1,10 @@
+//! Platform-aware async task spawning (wasm32): custom dispatch — main thread
+//! vs Web Worker.
+//!
+//! Baseline re-exported from `tokio_with_wasm::alias::task` (provides
+//! `yield_now`, etc.); [`spawn`] and [`spawn_blocking`] shadow the glob with
+//! Worker-lifecycle-aware versions.
+
 use std::{
     future::Future,
     pin::Pin,
@@ -6,6 +13,7 @@ use std::{
 
 use futures::channel::oneshot;
 use tokio_with_wasm::alias as tww_alias;
+pub use tokio_with_wasm::alias::task::*;
 use tww_alias::task as tww_task;
 
 /// Forward a `tokio_with_wasm` JoinHandle into our own oneshot-backed

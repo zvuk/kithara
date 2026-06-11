@@ -1,0 +1,112 @@
+//! Flash (native) task spawning: the async and blocking quiescence chokepoints.
+//!
+//! [`spawn_blocking`] is the chokepoint for offloading a blocking computation
+//! onto a runtime thread. It exists so that, under the `flash` test feature,
+//! the offloaded closure participates in the quiescence clock the same way a
+//! named thread does — its credit is reset on entry and dropped on exit by the
+//! same bracket [`crate::thread::spawn_named`] uses. Consumers that run a
+//! wrapped wait (`thread::park_timeout`, `sync::Condvar`) on a blocking thread
+//! must spawn through this wrapper instead of `tokio::task::spawn_blocking`, so
+//! participant accounting stays intrinsic to the platform — no consumer ever
+//! registers anything.
+
+use std::future::Future;
+
+use tokio_with_wasm::alias as tokio_alias;
+pub use tokio_with_wasm::alias::task::*;
+
+use crate::flash::credit;
+// Under `flash` (native) [`spawn`] wraps the future in the quiescence
+// poll-wrapper and `yield_now` participates in quiescence UNDER AMBIENT (a
+// flash(true) test's busy-poll `loop { yield_now().await }` must let the virtual
+// clock advance). Like the stateful sync primitives it branches on
+// `flash_ambient`: in a flash(false) test / production it is a plain scheduler
+// yield, so the flash build stays behavior-transparent (an engine-backed
+// yield could never be granted there — the surrounding task keeps its
+// `active_async` slot across the yield while its other primitives are real). Both
+// shadow the `tokio_with_wasm::alias::task` glob re-export above; off the sim path
+// the real `tokio` spawn/yield are used unchanged. See `crate::flash`.
+pub use crate::flash::yield_now;
+
+/// Spawn an async task. Under `flash` (native) the future is wrapped in the
+/// quiescence poll-wrapper ([`crate::flash::participate`]) so the spawned task
+/// counts as a running participant while it is being polled — the virtual clock
+/// cannot advance past an in-progress task. This is THE async-spawn chokepoint;
+/// a raw `tokio::spawn` bypassing it would run uncounted and let the clock race
+/// (forbidden by the `arch.no-raw-tokio-spawn` ast-grep rule). Off the sim path
+/// it delegates straight to `tokio` (shadowing the glob re-export above).
+///
+/// The future is also wrapped in [`crate::flash::with_ambient`] carrying
+/// the parent's ambient snapshot, re-asserted per-poll so the task sees the
+/// test's flash-eligibility gate even when tokio moves it between worker threads
+/// (thread-locals do not cross `spawn`). The ambient wrap is OUTER so both
+/// `participate`'s accounting and the task body run under the asserted ambient.
+pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let on = crate::flash::ambient_snapshot();
+    tokio_alias::task::spawn(crate::flash::with_ambient(
+        on,
+        crate::flash::participate(future),
+    ))
+}
+
+/// Spawn a future on a SPECIFIC runtime [`Handle`](tokio::runtime::Handle)
+/// through the chokepoint. Same quiescence + ambient wrapping as [`spawn`], but
+/// onto a stored runtime handle rather than the implicit current runtime — for
+/// orchestrators (e.g. the downloader run loop) that own their runtime. A raw
+/// `handle.spawn(fut)` here would run UNCOUNTED and let the virtual clock race
+/// past the orchestrator's event waits, freezing the clock.
+pub fn spawn_on<F>(handle: &tokio::runtime::Handle, future: F) -> JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let on = crate::flash::ambient_snapshot();
+    handle.spawn(crate::flash::with_ambient(
+        on,
+        crate::flash::participate(future),
+    ))
+}
+
+/// Spawn a blocking computation on the runtime's blocking pool.
+///
+/// Off the sim path: a thin pass-through to [`tokio::task::spawn_blocking`].
+/// Under `flash` (native), an AMBIENT closure is real work in flight, so
+/// it paces the virtual clock exactly like a `spawn_named` thread: the caller
+/// reserves the `active` slot BEFORE the pool queues the closure (covering the
+/// queue wait), the closure claims it `Running` for its lifetime, and its
+/// engine parks release it as usual — the clock advances while the closure
+/// WAITS, never while it runs or sits queued. Without this the clock outruns
+/// the closure's real execution and virtual deadlines fire against time the
+/// work never had. A non-ambient closure stays invisible to the engine.
+///
+/// The parent's ambient snapshot is also re-established on the blocking thread
+/// for the closure's lifetime (thread-locals do not cross the pool), so a
+/// blocking computation spawned from a flash test stays flash-eligible.
+pub fn spawn_blocking<F, R>(f: F) -> JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let ambient = crate::flash::ambient_snapshot();
+    if ambient {
+        credit::pre_count_dedicated();
+    }
+    tokio::task::spawn_blocking(move || {
+        // Held for the closure's lifetime (must outlive `f()`); restores the
+        // pool thread's previous ambient on exit.
+        let _ambient = crate::flash::set_ambient_for_spawn(ambient);
+        credit::reset_credit();
+        if ambient {
+            let _pacer = credit::BlockingPacer::enter();
+            f()
+        } else {
+            let result = f();
+            credit::on_participant_exit();
+            result
+        }
+    })
+}
