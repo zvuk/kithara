@@ -1,6 +1,6 @@
 use std::sync::PoisonError;
 
-use kithara_events::{Event, PlayerEvent, QueueEvent};
+use kithara_events::{Event, PlayerEvent, QueueEvent, TrackStatus};
 use tokio::sync::broadcast::error::TryRecvError;
 use tracing::debug;
 
@@ -122,6 +122,23 @@ impl Queue {
             Transition::None
         };
         let _ = self.advance_to_next(transition);
+    }
+
+    /// Start playback. The player consumes the current slot's resource
+    /// (`items[i].take()`), so the current `Loaded` track is marked
+    /// `Consumed` to keep the status truthful: a later re-select must go
+    /// through the loader-respawn path, not select an emptied slot.
+    pub fn play(&self) {
+        let entry = {
+            let guard = self.lock_tracks();
+            guard
+                .get(self.player.current_index())
+                .map(|e| (e.id, e.status.clone()))
+        };
+        self.player.play();
+        if let Some((id, TrackStatus::Loaded)) = entry {
+            self.set_status(id, TrackStatus::Consumed);
+        }
     }
 
     /// Latest monotonic playback position for the current track in

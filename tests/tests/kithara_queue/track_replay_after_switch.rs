@@ -105,9 +105,22 @@ fn build_queue_with_tick(
     StoreOptions,
     tokio::task::JoinHandle<()>,
 ) {
+    build_queue_with_tick_cf(temp_dir, 0.0)
+}
+
+fn build_queue_with_tick_cf(
+    temp_dir: &TestTempDir,
+    crossfade_seconds: f32,
+) -> (
+    Arc<Queue>,
+    Downloader,
+    StoreOptions,
+    tokio::task::JoinHandle<()>,
+) {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
             .session(OfflineSession::arc_auto())
+            .crossfade_duration(crossfade_seconds)
             .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
@@ -218,4 +231,135 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
         matches!(status, TrackStatus::Loaded | TrackStatus::Consumed),
         "[{mode:?}] track A re-load ended in unexpected terminal status: {status:?}"
     );
+}
+
+/// Wait until the engine-reported position satisfies `pred`. The position
+/// is written by the audio thread from the track that is *actually
+/// sounding*, so it discriminates "the UI switched but the audio kept
+/// playing the old track".
+async fn wait_for_position(
+    queue: &Queue,
+    deadline: Duration,
+    label: &str,
+    pred: impl Fn(f64) -> bool,
+) -> f64 {
+    let start = std::time::Instant::now();
+    loop {
+        let pos = queue.position_seconds().unwrap_or(0.0);
+        if pred(pos) {
+            return pos;
+        }
+        assert!(
+            start.elapsed() < deadline,
+            "position never satisfied [{label}] within {deadline:?}; last pos={pos:.2}"
+        );
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// User scenario: mp3 (A) played first, HLS (B) audibly playing, then
+/// switch back to A. The *audio* must switch: the engine position must
+/// restart from A's head instead of continuing along B. The crossfade
+/// case mirrors the GUI Prev button (`Transition::Crossfade`, cf=5 s).
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[case::cut(0.0, Transition::None)]
+#[case::crossfade(5.0, Transition::Crossfade)]
+async fn switch_back_to_mp3_restarts_audio_not_just_ui(
+    #[case] crossfade_seconds: f32,
+    #[case] transition: Transition,
+) {
+    let helper = TestServerHelper::new().await;
+    let url_a = helper.asset("track.mp3");
+    // 16 × 4 s = 64 s: long enough that B is still mid-play when we switch
+    // back, and far from the mp3's 162 s so the duration marker is unambiguous.
+    let url_b = helper
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(16)
+                .segment_duration_secs(4.0)
+                .packaged_audio_aac_lc(44_100, 2),
+        )
+        .await
+        .expect("create long HLS fixture")
+        .master_url();
+
+    let temp = temp_dir();
+    let (queue, downloader, store, tick_handle) =
+        build_queue_with_tick_cf(&temp, crossfade_seconds);
+
+    let mk_cfg = |url: &Url| {
+        ResourceConfig::for_src(url.as_str())
+            .expect("valid fixture URL")
+            .downloader(downloader.clone())
+            .store(store.clone())
+            .initial_abr_mode(AbrMode::Auto(None))
+            .build()
+    };
+
+    let id_a = queue.append(TrackSource::Config(Box::new(mk_cfg(&url_a))));
+    let id_b = queue.append(TrackSource::Config(Box::new(mk_cfg(&url_b))));
+    wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
+        .await
+        .expect("initial load A");
+    wait_for_loader_done(&queue, id_b, Consts::LOAD_DEADLINE)
+        .await
+        .expect("initial load B");
+
+    // The engine duration snapshot is written from the arena's sounding
+    // track, so it discriminates the two fixtures: mp3 ≈ 162 s, HLS = 64 s.
+    let sounds_like_a = |queue: &Queue| {
+        queue
+            .duration_seconds()
+            .is_some_and(|d| (d - 162.0).abs() < 20.0)
+    };
+    let sounds_like_b = |queue: &Queue| {
+        queue
+            .duration_seconds()
+            .is_some_and(|d| (d - 64.0).abs() < 20.0)
+    };
+
+    queue.select(id_a, Transition::None).expect("select A");
+    wait_for_position(&queue, Consts::LOAD_DEADLINE, "A playing", |p| p >= 3.0).await;
+    assert!(sounds_like_a(&queue), "arena must be sounding the mp3");
+
+    queue.select(id_b, transition).expect("select B");
+    let switch_deadline = Duration::from_secs(30);
+    wait_for(&queue, switch_deadline, "arena sounds B", &sounds_like_b).await;
+    wait_for_position(&queue, switch_deadline, "B playing", |p| p >= 2.5).await;
+
+    queue.select(id_a, transition).expect("switch back to A");
+    wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
+        .await
+        .expect("A reloaded after switch-back");
+
+    // If the bookkeeping switched but the arena kept playing B, the
+    // duration snapshot stays at B's 64 s and this times out.
+    wait_for(&queue, switch_deadline, "arena sounds A again", &sounds_like_a).await;
+    let pos = wait_for_position(&queue, switch_deadline, "A restarted near head", |p| {
+        p > 0.0 && p <= 12.0
+    })
+    .await;
+    wait_for_position(&queue, switch_deadline, "A keeps playing", |p| p >= pos + 1.0).await;
+    assert_eq!(
+        queue.current_index(),
+        Some(0),
+        "queue must report track A as current after the switch-back"
+    );
+
+    tick_handle.abort();
+}
+
+/// Wait until `pred(queue)` holds, panicking past `deadline`.
+async fn wait_for(queue: &Queue, deadline: Duration, label: &str, pred: &dyn Fn(&Queue) -> bool) {
+    let start = std::time::Instant::now();
+    while !pred(queue) {
+        assert!(
+            start.elapsed() < deadline,
+            "[{label}] not reached within {deadline:?}; pos={:?} dur={:?}",
+            queue.position_seconds(),
+            queue.duration_seconds()
+        );
+        sleep(Duration::from_millis(100)).await;
+    }
 }

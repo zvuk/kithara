@@ -7,8 +7,6 @@ use super::Queue;
 impl Queue {
     delegate! {
         to self.player {
-            /// Start playback.
-            pub fn play(&self);
             /// Pause playback.
             pub fn pause(&self);
             /// Whether playback is active.

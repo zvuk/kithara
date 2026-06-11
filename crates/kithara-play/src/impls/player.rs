@@ -956,17 +956,33 @@ impl PlayerImpl {
             )));
         }
 
+        let armed_for_index = self
+            .pending_next
+            .lock_sync()
+            .as_ref()
+            .is_some_and(|p| !p.activated && p.index == index);
+        // An armed item's resource already lives in the processor; otherwise
+        // the slot must still hold one — `enqueue_to_processor` takes it out,
+        // so an emptied slot means the caller's view of the item is stale.
+        // Fail before any bookkeeping so the UI cannot drift from the audio.
+        if !armed_for_index
+            && self
+                .items
+                .lock_sync()
+                .get(index)
+                .is_none_or(Option::is_none)
+        {
+            return Err(PlayError::Internal(format!(
+                "item {index} has no resource (already consumed)"
+            )));
+        }
+
         self.ensure_engine_started()?;
         self.ensure_slot()?;
 
         let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(crossfade_seconds));
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
 
-        let armed_for_index = self
-            .pending_next
-            .lock_sync()
-            .as_ref()
-            .is_some_and(|p| !p.activated && p.index == index);
         if armed_for_index {
             self.commit_next(index)?;
         } else {
@@ -1460,6 +1476,23 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         let _w = player.worker();
         let _w2 = player.worker().clone();
+    }
+
+    /// `enqueue_to_processor` takes the resource out of the slot, so a
+    /// select against an emptied (consumed) slot has nothing to load: it
+    /// must fail loudly instead of moving `current_index` / announcing
+    /// `CurrentItemChanged` while the old audio keeps playing.
+    #[kithara::test]
+    fn select_item_on_consumed_slot_errors_without_bookkeeping() {
+        let player = PlayerImpl::new(PlayerConfig::default());
+        player.reserve_slots(2);
+        let result = player.select_item_with_crossfade(1, false, 0.0);
+        assert!(result.is_err(), "selecting an emptied slot must fail");
+        assert_eq!(
+            player.current_index(),
+            0,
+            "bookkeeping must not move on a failed select"
+        );
     }
 
     #[kithara::test]
