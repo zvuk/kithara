@@ -11,7 +11,7 @@ use kithara::{
     assets::{FlushHub, FlushPolicy},
     audio::generate_log_spaced_bands,
     net::{HttpClient, NetOptions},
-    play::{PlayerConfig, PlayerImpl},
+    play::{PlayerConfig, PlayerImpl, StretchControls},
     stream::dl::{Downloader, DownloaderConfig},
 };
 #[cfg(not(feature = "tui"))]
@@ -112,10 +112,12 @@ fn main() -> AppResult {
         .with_tracks(args.tracks)
         .with_should_accept_invalid_certs(args.insecure);
 
+    let timestretch = StretchControls::new(1.0);
     let player_config = PlayerConfig::builder()
         .cancel(app_cancel.child_token())
         .crossfade_duration(config.crossfade_seconds)
         .eq_layout(generate_log_spaced_bands(config.eq_band_count))
+        .timestretch(Arc::clone(&timestretch))
         .build();
     let player = Arc::new(PlayerImpl::new(player_config));
     let queue_config = QueueConfig::default()
@@ -129,26 +131,19 @@ fn main() -> AppResult {
         Mode::Tui | Mode::Auto => {
             let mut frontend = TuiFrontend::new(&config)?;
             frontend.start(Arc::clone(&queue))?;
-            frontend.run_loop(Arc::clone(&queue))?;
+            frontend.run_loop(Arc::clone(&queue), Arc::clone(&timestretch))?;
             frontend.shutdown()?;
         }
         #[cfg(feature = "gui")]
         Mode::Gui => {
             let mut frontend = GuiFrontend::new(&config)?;
             frontend.start(Arc::clone(&queue))?;
-            frontend.run_loop(Arc::clone(&queue))?;
+            frontend.run_loop(Arc::clone(&queue), Arc::clone(&timestretch))?;
             frontend.shutdown()?;
         }
         #[cfg(not(feature = "gui"))]
         Mode::Gui => {
             return Err("GUI mode not available: compile with --features gui".into());
-        }
-        #[cfg_attr(
-            feature = "tui",
-            expect(unreachable_patterns, reason = "depends on enabled features")
-        )]
-        _ => {
-            return Err("No frontend available for the selected mode".into());
         }
     }
 

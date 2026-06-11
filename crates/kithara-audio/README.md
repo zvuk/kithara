@@ -91,6 +91,102 @@ flowchart LR
     ST --> DF --> Node --> AW --> Ring --> A
 ```
 
+## Track analysis (shared worker)
+
+`analysis/` owns the reusable per-track analysis engine consumed by the demo
+app today and by mobile surfaces (kithara-ffi) next:
+
+- **`TrackAnalyzer`** — streaming analyzer fed every decoded chunk once;
+  `finish` folds its result into the shared `TrackAnalysis` aggregate
+  (`waveform` today; bpm/pitch slots come with their analyzers).
+- **`AnalyzerRegistry`** — the set of analyzer factories to run per track.
+  Factories take the first chunk's `PcmSpec`, so analyzers can size to the
+  source sample rate. Decode once, feed all of them.
+- **`analyze_reader`** — the synchronous decode loop over any `PcmReader`:
+  cancel-aware, `Pending`-tolerant, `None` on cancel/error/empty input.
+  Opening the source stays with the caller (`Resource` lives in
+  kithara-play; FFI opens its own reader) so this crate gains no upward
+  dependency.
+- **`AnalysisWorker`** — a long-lived named thread running `analyze_reader`
+  per queued job. Jobs carry caller-owned cancel tokens that must be
+  children of the same scope that owns the worker (one cancel hierarchy);
+  the caller keeps at most one job in flight and cancels the previous token
+  to preempt. Results arrive on a `watch` channel; on failure/cancel the
+  sender drops without a value.
+- **Feature seam, runtime switch**: the `analysis` cargo feature gates only
+  the FFT stack (`realfft` + `WaveformAnalyzer`). The analysis API above is
+  always compiled; `waveform_analyzer(buckets)` returns `None` without the
+  feature, so consumers use one runtime check (empty registry → skip
+  scheduling) instead of spreading `#[cfg]` upward.
+
+## Waveform
+
+Pure, synchronous DSP that turns decoded PCM into a `Waveform` for display. No
+async, I/O, cancel, or color types live here - `kithara-audio` is math only;
+the band -> color mapping and orchestration live in the consumer crates.
+
+- **Types** (`waveform/`): `Bucket { low, mid, high }` are three independent
+  per-bucket band heights, each normalized `[0, 1]` on one shared scale. They are
+  not a single bar plus a color: the deck paints them as three concentric
+  mirrored bars (low behind, high in front, Serato-style overlay) so all three
+  bands are visible at once; the tallest band is the outer hull. All-zero is
+  silence. `Waveform` is a sealed `Arc<[Bucket]>` with `buckets()` / `len()` /
+  `is_empty()` accessors (no bare slice deref).
+- **Sealed construction**: a `Waveform` is obtainable only via
+  `WaveformAnalyzer::finalize`, so its invariants hold by construction.
+- **Normalized-position index** (`bucketize`): buckets are indexed by normalized
+  track position `[0, 1]`, never wall-clock seconds. `bucketize` is the single
+  home of that `[0, 1]` mapping: bucket `b` folds the raw range
+  `[b*R/N, (b+1)*R/N)`. A bucket whose range is empty (tracks shorter than the
+  bucket count) is filled with the supplied `empty` value, so the output length
+  always equals the requested bucket count.
+- **Source-only invariant**: analysis runs on the decoded SOURCE signal, never
+  the post-EQ / post-timestretch / post-resample output. The waveform is the
+  track's identity; playback-rate and mixer transforms remap only the time axis
+  and never re-run analysis.
+- **PCM <-> frequency boundary**: `WaveformAnalyzer::new` takes the track
+  `sample_rate` because band crossovers map to FFT bins via
+  `bin_hz = sample_rate / fft_size`. Constant sample rate per track is assumed;
+  build the analyzer once the first chunk's `PcmSpec` is known.
+- **Silence rule**: a silent bucket is `Bucket::default()` (all-zero), renders as
+  nothing, and never produces `NaN`.
+- **Reduction**: per FFT window, band energy is summed into low/mid/high
+  (DC bin zeroed; windows below `energy_floor` RMS contribute nothing) and each
+  band is divided by its bin count, i.e. an energy DENSITY (RMS-like). Without
+  that, the wide mid/high bands outweigh the narrow low band by sheer bin count
+  and mid becomes the hull; the density form lets bass be the hull as it should.
+  Windows overlap, hopped by `fft_size / 4` (75% Hann overlap), so the spectral
+  series is not coarser than the bucket count and a normal-length track is covered
+  end to end; only genuinely short tracks fall back to a single zero-padded window.
+  `finalize` keeps each bucket's loudest window (component-wise max), takes
+  `sqrt` to magnitude, applies the per-band perceptual `band_gain`, then divides
+  all three by one shared global max. Shared (not per-band) normalization keeps
+  the loudness tilt - bass stays the dominant hull and quiet stays quiet - while
+  `band_gain` lifts mid/high, which music tilts toward silence, into visibility
+  without inverting the hierarchy. Tunables (`fft_size`, crossovers,
+  `energy_floor`, `band_gain`) live in `AnalysisParams`.
+
+## Blob codec
+
+Analysis artifacts that persist to the on-disk cache (`Waveform`, `BeatGrid`)
+share one versioned little-endian encoding via the internal crate-level `blob`
+module (domain-agnostic, not waveform-specific). The `Blob` trait owns the
+format frame; each artifact only implements its body.
+
+- **Frame**: `to_bytes` writes a `u32` version header (`Blob::VERSION`) then the
+  artifact body; `from_bytes` checks the version, decodes the body, and requires
+  the cursor to consume the blob exactly (trailing bytes are corruption).
+- **Versioning**: each artifact owns its `VERSION` constant. A mismatch is a
+  typed `BlobError::Version`; a truncated, mis-sized, or out-of-range body is
+  `BlobError::Corrupt`. Both are cache misses — the caller re-analyses and
+  overwrites. There is no in-place migration of old blobs.
+- **Boundary**: `BlobError` is the only piece that crosses the crate boundary
+  (it is the public `from_bytes` error). `Blob`, `Reader`, and `Writer` are
+  crate-internal; consumers serialize through the artifacts' inherent
+  `to_bytes` / `from_bytes`. The composite track-analysis blob (version +
+  config fingerprint + per-artifact sections) is a separate app-layer concern
+  owned by `kithara-app`, not this codec.
+
 ## Resampler Quality Levels
 
 <table>
@@ -101,6 +197,46 @@ flowchart LR
 <tr><td>High (default)</td><td>256-tap sinc, cubic</td><td>Recommended for music</td></tr>
 <tr><td>Maximum</td><td>FFT-based</td><td>Offline / high-end</td></tr>
 </table>
+
+## Time-Stretch (key-lock)
+
+Preserve-pitch tempo lives in the pre-resampler `TimeStretchProcessor` slot.
+The whole stretch DSP exists only when a backend is compiled in
+(`stretch-signalsmith` / `stretch-bungee`, native targets). `create_effects`
+builds one of two chains:
+
+- **resampler-first** (`stretch = None`): no stretch slot; the resampler reads `playback_rate` directly. Used by plain (non-DJ) playback.
+- **tempo mode** (`stretch = Some`): a `TimeStretchProcessor` runs *before* the resampler. It is **always present** in tempo mode regardless of key-lock, and reads the live `StretchControls` (`speed` + `keylock` + `backend`) each chunk. Without a compiled-in backend (default native build, wasm) `StretchControls` carries only `speed`, no slot is added, and the resampler follows the speed atomic directly — same audible behavior as key-lock off.
+
+**Live speed routing — the one seam to know.** `StretchControls` is the single source of truth, shared (`Arc`) between the consumer/UI and this slot. The slot owns the *speed split* and is the sole writer of the resampler's rate atomic (`resampler_rate`, created in `create_effects` and handed to both the slot and the resampler that follows it):
+
+| mode | what the stretch slot does | `resampler_rate` |
+|---|---|---|
+| key-lock **on** | `set_ratio(1/speed)`, `set_pitch(1.0)` → tempo moves, pitch held | `1.0` |
+| key-lock **off** | true pass-through (chunk forwarded untouched) | `speed` (resampler shifts pitch, vinyl-style) |
+
+Both effects run sequentially on the same worker thread, so the resampler always reads the value written for the current chunk — no cross-thread race, no control-thread mirror. Because the controls are read each chunk, **key-lock, backend, and speed all apply live, mid-track, with no reload.** A live key-lock or backend change discards the FFT backend's internal buffer (`reset`/rebuild), so expect a brief transient (~100–300 ms) at the switch; steady-state key-lock-off audio is byte-identical to the resampler-first chain (the slot never touches the buffer while bypassing).
+
+**Backend seam.** `TimeStretchProcessor` owns one `Box<dyn StretchBackend>` selected from `controls.backend()` and rebuilt in place on a live backend swap (or a source-spec change); the trait is DSP-only (interleaved `process`/`flush`/`set_ratio`/`set_pitch`/`max_output_samples`/`reset`) so all `PcmChunk`/pool/timeline plumbing lives in one place and each library is a small adapter. `set_ratio` is the time factor (`output/input`, >1 = slower); `set_pitch` is independent (1.0 = pitch locked) — that decoupling is what makes key-lock real. Backends select statically via `StretchBackendKind` + `cfg`:
+
+- `signalsmith-stretch` (C++ FFI) — native-only, feature `stretch-signalsmith`.
+- `bungee` (C++ FFI) — native-only, feature `stretch-bungee`.
+
+`StretchBackendKind::ALL` lists exactly the backends compiled into the current target (the default is `ALL[0]`, discriminants are stable: 1 = Signalsmith, 2 = Bungee), so the UI selector never offers an absent one — selecting an uncompiled backend is un-representable, not a runtime error. With no `stretch-*` feature the kind, the trait, and the processor are compiled out entirely; only `StretchControls` (speed) remains.
+
+**Region plan (beat-aligned stretch).** `StretchControls` optionally carries a `RegionPlan` (`ArcSwapOption`, installed via `set_region_plan`, read each chunk — the same live-swap shape as the other controls): sorted, non-overlapping `[start_frame, end_frame)` segments in **source frames** (`PcmMeta.frame_offset` space, never output time), each with a `ratio_correction` (validated at construction with a typed `RegionPlanError`). In key-lock mode the processor maps each chunk's `frame_offset` to its segment (cached cursor, binary search on a miss after seek/swap), splits chunks at segment boundaries, and drives the backend at `1/speed × ratio_correction`. The backend is `flush`ed (tail drained at the old ratio) + `reset` **only** when a boundary actually moves the effective ratio beyond `RATIO_EPS`; equal-ratio boundaries and gaps between segments (correction `1.0`) cost nothing, and live speed moves inside one region glide via `set_ratio` without a reset. An empty or absent plan is exactly the planless path. For region work prefer `signalsmith` (`bungee`'s no-op `flush` drops the tail at every real ratio boundary).
+
+**Timeline.** A stretch changes the output frame *count*, not the rate: each emitted chunk recomputes `meta.frames` but preserves `timestamp`/`end_timestamp`/`spec` verbatim (the resampler's `finalize_resample_chunk` recipe), so the playhead stays in source-track time — a 3-minute track reads `0:00→3:00` even at 50 % tempo. `bungee` has no clean tail drain through its high-level `Stream`, so its `flush` is a no-op (the final ~latency of audio is dropped at EOS rather than padded with stretched silence). If `bungee`'s `Stream::new` ever fails at construction (only on an invalid spec — unreachable for real stereo/mono audio), the backend warns once and then emits silence until the track is reloaded, rather than erroring per chunk.
+
+## Engine load (live cost meter)
+
+The audio worker measures its own processing cost and publishes it to a shared `EngineLoad` (lock-free `portable_atomic::AtomicF32`s — safe on the forbid-blocking produce core, no allocation). Each time `DecoderNode::tick` produces a chunk it times the whole decode→effects step (`source.step_track`: decode + resampler + EQ + time-stretch) with `Instant` and divides by the produced audio duration (`frames / sample_rate`), EWMA-smoothed. `EngineLoadSnapshot` exposes:
+
+- `realtime` — produced audio-seconds per CPU-second (`>1` = faster than realtime); the cost-per-sample metric for comparing stretch backends live.
+- `load` — the `busy / audio` fraction (`0.05` = 5%).
+- `ms` — wall time per produced chunk (latency of one processing cycle).
+
+One `Arc<EngineLoad>` is created in `PlayerImpl`, threaded through `AudioConfig::engine_load` → `TrackRegistration` into every track's `DecoderNode`, and read back via `PlayerImpl::engine_load()` → `Queue::engine_load()` for the DJ-studio status bar. The atomics double as the EWMA state; the worker thread is the only writer, so the read-blend-store needs no lock. It reflects whichever track is currently producing and is meaningful whenever audio is flowing — independent of key-lock. `realtime == 0` means "no measurement yet" (paused / not started).
 
 ## Format Change Handling
 
@@ -143,7 +279,7 @@ On seek, epoch is incremented atomically. The worker tags each decoded chunk wit
 
 - **Node Architecture**: A track is represented by a single `Node` implementation (`DecoderNode`), stored in the shared scheduler as `Box<dyn Node>` through `runtime/`.
 - **Operators vs Nodes**: Audio effects are implemented as operators (`AudioEffect`) that are called directly within the track's `Node`. We do not use separate `Node`s or ring buffers between effects.
-- **Chain order**: The effect chain is `[..pre, Resampler, ..custom]`. With `AudioConfig::tempo_ratio` set (tempo mode), a source-domain `TimeStretchProcessor` occupies the `pre` slot before the host resampler, and the resampler's `playback_rate` is pinned to `1.0` (host SRC only). Without it, the chain is resampler-first and `playback_rate` drives the resampler "vinyl" speed+pitch path.
+- **Chain order**: The effect chain is `[..pre, Resampler, ..custom]`. With `AudioConfig::stretch` set (tempo mode), a source-domain `TimeStretchProcessor` occupies the `pre` slot before the host resampler and drives the resampler's rate atomic (`1.0` when key-locked, else `speed`). Without it, the chain is resampler-first and `playback_rate` drives the resampler "vinyl" speed+pitch path.
 - **EOF drain**: At true EOF the whole chain is drained once (`drain_effects`): each stage is flushed to exhaustion after the upstream stage's outputs pass through it, so a buffering effect's multi-pull tail is never truncated. `StreamAudioSource` parks the drained tail in a one-shot `eof_drain_queue` and emits one chunk per call; `EndOfStream` fires once on completion, not at source exhaustion.
 
 ### Coordinate spaces
@@ -168,6 +304,9 @@ The whole pipeline runs in one space: **decoder/song time** (`PcmMeta.timestamp`
 <tr><td><code>mock</code></td><td>no</td><td><code>unimock</code> mocks of public traits</td></tr>
 <tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation</td></tr>
 <tr><td><code>memprof</code></td><td>no</td><td>Allocation tracking via <code>hotpath/hotpath-alloc</code></td></tr>
+<tr><td><code>stretch-signalsmith</code></td><td>no</td><td>Native-only <code>signalsmith-stretch</code> (C++) time-stretch backend</td></tr>
+<tr><td><code>stretch-bungee</code></td><td>no</td><td>Native-only <code>bungee</code> (C++) time-stretch backend</td></tr>
+<tr><td><code>analysis</code></td><td>no</td><td>FFT stack for track analysis (<code>realfft</code> + <code>WaveformAnalyzer</code>); without it <code>waveform_analyzer()</code> returns <code>None</code> and the analysis API stays inert</td></tr>
 </table>
 
 ## Integration

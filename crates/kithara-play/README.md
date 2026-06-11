@@ -67,6 +67,33 @@ in. `CrossfadeConfig` selects the curve (`CrossfadeCurve`: `EqualPower`,
 cut points, and a `beat_aligned` flag. Beat/BPM data types (`BeatGrid`,
 `BpmInfo`) and `DjEvent` exist for callers that supply their own analysis.
 
+## Tempo & Key-Lock
+
+`kithara-audio`'s `StretchControls` (one per deck, in `PlayerConfig.timestretch`)
+is a single `Arc` holding `speed` — plus `keylock` + `backend` when a stretch
+backend is compiled in (`stretch-signalsmith` / `stretch-bungee`). It is the one
+source of truth, shared between the UI and the worker's effect chain, which reads
+it each chunk. Rate setters (`set_rate`, `play`) and `set_keylock` / `set_backend`
+all write this one handle; there is no second rate atomic and no manual mirror.
+
+`prepare_config` always passes the shared controls into every track (`stretch =
+Some(..)`). With a compiled-in backend the effect chain runs a
+`TimeStretchProcessor` in tempo mode whether or not key-lock is on:
+
+- **key-lock off** (default): the stretch slot bypasses (PCM forwarded untouched)
+  and routes `speed` to the resampler — changing speed shifts pitch (vinyl-style).
+- **key-lock on**: the stretch slot changes tempo with pitch held and pins the
+  resampler to 1.0.
+
+Without one (default native build, wasm) there is no key-lock: the resampler
+follows the shared speed atomic directly, identical to key-lock off.
+
+Because the controls are read each chunk, **key-lock, backend, and speed all apply
+live, mid-track — no reload.** Switching key-lock or backend resets the FFT
+backend's buffer, so a brief transient (~100–300 ms) is expected at the switch.
+`Queue` delegates `set_rate` to the player; key-lock and backend are set by the
+consumer directly on the shared `StretchControls` handle.
+
 ## Events
 
 `tokio::sync::broadcast`, via `player.subscribe()` / `engine.subscribe()`.
@@ -191,6 +218,24 @@ File and HLS pipelines are unconditional: `kithara-play` always links
 - `Player::slot_id()` is `None` until registered with the engine.
 - `MediaTime::INVALID` has `timescale == 0`; arithmetic on invalid times stays invalid.
 - Audio-thread `process()` is allocation-, free-, and lock-free.
+
+## Current item
+
+`PlayerEvent::CurrentItemChanged` means the *identity* of the current item
+changed — not merely that playback (re)started. A bare `play()` that resumes
+the already-current item must **not** emit it: consumers (the queue, which
+re-publishes `QueueEvent::CurrentTrackChanged`, and FFI observers) treat the
+event as a track switch and do real work on it — e.g. the DJ studio re-analyses
+the waveform.
+
+`play()` enforces this with `last_announced_index` (sentinel `usize::MAX` until
+the first announce): it emits only when the loaded index differs from the last
+announced one, so first activation announces but a resume does not. The genuine
+track moves (`commit_next`, `advance_to_next_item`, the handover finaliser, the
+jump path) go through `announce_current_item`, which records the index and
+emits. Item-set mutations that change identity under a reused index
+(`remove_all_items`, `remove_at`, `replace_item*` on the announced index) reset
+the sentinel to `usize::MAX`, so the next `play()` re-announces.
 
 ## Testing
 

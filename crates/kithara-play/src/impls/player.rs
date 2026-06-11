@@ -8,7 +8,10 @@ use std::{
 
 use bon::Builder;
 use kithara_abr::{AbrController, AbrSettings};
-use kithara_audio::{AudioWorkerHandle, EqBandConfig, SeekOutcome, generate_log_spaced_bands};
+use kithara_audio::{
+    AudioWorkerHandle, EngineLoad, EngineLoadSnapshot, EqBandConfig, SeekOutcome, StretchControls,
+    generate_log_spaced_bands,
+};
 use kithara_bufpool::PcmPool;
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
@@ -93,6 +96,10 @@ pub struct PlayerConfig {
     /// Maximum concurrent slots in the engine. Default: 4.
     #[builder(default = 4)]
     pub max_slots: usize,
+    /// Per-deck time-stretch control handle, shared with the UI and the
+    /// worker effect chain (see `kithara_audio::StretchControls`).
+    #[builder(default = StretchControls::new(1.0))]
+    pub timestretch: Arc<StretchControls>,
 }
 
 impl fmt::Debug for PlayerConfig {
@@ -123,9 +130,8 @@ impl Default for PlayerConfig {
 /// allocated. The current queue item is taken out of the queue, wrapped in
 /// [`PlayerResource`], and sent to the processor via `PlayerCmd::LoadTrack`.
 pub struct PlayerImpl {
-    /// Shared playback rate propagated to the audio pipeline resampler.
-    playback_rate_shared: Arc<AtomicF32>,
-
+    /// Live shared cost meter of the audio engine.
+    engine_load: Arc<EngineLoad>,
     auto_advance_enabled: AtomicBool,
     muted: AtomicBool,
     crossfade_duration: AtomicF32,
@@ -134,6 +140,9 @@ pub struct PlayerImpl {
     rate: AtomicF32,
     volume: AtomicF32,
     current_index: AtomicUsize,
+    /// Index last announced via `CurrentItemChanged` (sentinel `usize::MAX`
+    /// until the first announce).
+    last_announced_index: AtomicUsize,
     /// Master cancel token. Drop fires `cancel.cancel()` so subsystems
     /// observe the pulse before structural Arc teardown unwinds. See
     /// `crates/kithara-play/README.md` "Cancel hierarchy" section.
@@ -205,7 +214,7 @@ impl PlayerImpl {
         if current + 1 < items.len() {
             self.current_index.store(current + 1, Ordering::Relaxed);
             drop(items);
-            self.bus.publish(PlayerEvent::CurrentItemChanged);
+            self.announce_current_item(current + 1);
             debug!(new_index = current + 1, "advanced to next item");
         }
     }
@@ -343,11 +352,8 @@ impl PlayerImpl {
         drop(pending_lock);
 
         self.start_playback(src);
-        let current_index = self.current_index.load(Ordering::Relaxed);
-        if index != current_index {
-            self.current_index.store(index, Ordering::Relaxed);
-            self.bus.publish(PlayerEvent::CurrentItemChanged);
-        }
+        self.current_index.store(index, Ordering::Relaxed);
+        self.announce_current_item(index);
         Ok(())
     }
 
@@ -459,7 +465,7 @@ impl PlayerImpl {
 
         *self.current_abr_handle.lock_sync() = resource.abr_handle();
 
-        let current_rate = self.playback_rate_shared.load(Ordering::Relaxed);
+        let current_rate = self.config.timestretch.speed();
         resource.set_playback_rate(current_rate);
 
         let host_sr = self.engine.master_sample_rate();
@@ -534,12 +540,12 @@ impl PlayerImpl {
             return;
         }
 
-        let current_index = self.current_index.load(Ordering::Relaxed);
-        if pending.index == current_index || pending.index >= self.item_count() {
+        if pending.index >= self.item_count() {
             return;
         }
-        self.current_index.store(pending.index, Ordering::Relaxed);
-        self.bus.publish(PlayerEvent::CurrentItemChanged);
+        let index = pending.index;
+        self.current_index.store(index, Ordering::Relaxed);
+        self.announce_current_item(index);
     }
 
     fn handle_handover_requested(&self) {
@@ -607,6 +613,15 @@ impl PlayerImpl {
         self.items.lock_sync().len()
     }
 
+    /// Sole publisher of `CurrentItemChanged`: emits only when `index` differs
+    /// from the last announced item, so a `play()` resume of the same item
+    /// stays quiet.
+    fn announce_current_item(&self, index: usize) {
+        if self.last_announced_index.swap(index, Ordering::Relaxed) != index {
+            self.bus.publish(PlayerEvent::CurrentItemChanged);
+        }
+    }
+
     /// Load the current queue item into the active slot.
     ///
     /// Takes the resource out of the queue (replacing with `None`), wraps it
@@ -628,10 +643,13 @@ impl PlayerImpl {
             .cancel
             .clone()
             .expect("BUG: PlayerImpl::new / with_engine must populate config.cancel");
+        // Seed the single speed source with the configured default rate.
+        config.timestretch.set_speed(config.default_rate);
         Self {
             crossfade_duration: AtomicF32::new(config.crossfade_duration),
             prefetch_duration: AtomicF32::new(config.prefetch_duration.max(0.0)),
             current_index: AtomicUsize::new(0),
+            last_announced_index: AtomicUsize::new(usize::MAX),
             current_slot: Mutex::new(None),
             default_rate: AtomicF32::new(config.default_rate),
             bus,
@@ -639,7 +657,7 @@ impl PlayerImpl {
             current_abr_handle: Mutex::new(None),
             muted: AtomicBool::new(false),
             pcm_pool: resolved_pool,
-            playback_rate_shared: Arc::new(AtomicF32::new(config.default_rate)),
+            engine_load: Arc::new(EngineLoad::new()),
             pending_next: Mutex::new(None),
             auto_advance_enabled: AtomicBool::new(config.auto_advance_enabled),
             rate: AtomicF32::new(0.0),
@@ -663,7 +681,7 @@ impl PlayerImpl {
     pub fn play(&self) {
         let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
         self.rate.store(rate, Ordering::Relaxed);
-        self.playback_rate_shared.store(rate, Ordering::Relaxed);
+        self.config.timestretch.set_speed(rate);
 
         if let Err(e) = self.ensure_engine_started() {
             warn!(?e, "failed to start engine");
@@ -681,9 +699,16 @@ impl PlayerImpl {
         let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
 
         self.set_status(PlayerStatus::ReadyToPlay);
-        self.bus.publish(PlayerEvent::CurrentItemChanged);
+        // Resuming the same item is not a track change; announce gates on it.
+        self.announce_current_item(self.current_index.load(Ordering::Relaxed));
         self.bus.publish(PlayerEvent::RateChanged { rate });
         debug!(rate, "play");
+    }
+
+    /// Live cost snapshot of the audio engine (decode + effects).
+    #[must_use]
+    pub fn engine_load(&self) -> EngineLoadSnapshot {
+        self.engine_load.snapshot()
     }
 
     /// Current playback position in seconds.
@@ -719,12 +744,19 @@ impl PlayerImpl {
         // player's master when none was supplied.
         let parent = config.cancel.unwrap_or_else(|| self.cancel.clone());
         let cancel = Some(parent.child_token());
+        // Always engage tempo mode: with a stretch backend compiled in, the
+        // stretch slot is present regardless of key-lock (it bypasses cleanly
+        // when off), so key-lock and backend can be toggled live without
+        // reloading the track. Without one, the resampler follows the speed.
+        let stretch = Some(Arc::clone(&self.config.timestretch));
         super::config::ResourceConfig {
             bus,
             cancel,
             worker: Some(self.engine.worker().clone()),
             host_sample_rate: std::num::NonZeroU32::new(self.engine.master_sample_rate()),
             gapless_mode: self.config.gapless_mode,
+            stretch,
+            engine_load: Some(Arc::clone(&self.engine_load)),
             ..config
         }
     }
@@ -737,7 +769,7 @@ impl PlayerImpl {
             return;
         };
         let Some(state) = self.engine.slot_shared_state(slot_id) else {
-            tracing::warn!(?slot_id, "process_notifications: slot has no shared state");
+            warn!(?slot_id, "process_notifications: slot has no shared state");
             return;
         };
 
@@ -748,13 +780,13 @@ impl PlayerImpl {
         state.drain_trash();
 
         if !notifications.is_empty() {
-            tracing::debug!(
+            debug!(
                 count = notifications.len(),
                 "process_notifications draining"
             );
         }
         for notification in notifications {
-            tracing::debug!(?notification, "process_notifications: handle");
+            debug!(?notification, "process_notifications: handle");
             self.dispatch_notification(notification);
         }
     }
@@ -769,6 +801,9 @@ impl PlayerImpl {
         self.unarm_next();
         self.items.lock_sync().clear();
         self.current_index.store(0, Ordering::Relaxed);
+        // Whatever is inserted next is a new identity, so re-open announce.
+        self.last_announced_index
+            .store(usize::MAX, Ordering::Relaxed);
         self.set_status(PlayerStatus::Unknown);
         // Drop the actively playing track from the audio-thread arena and
         // reset the position/duration snapshot; otherwise the stale snapshot
@@ -794,6 +829,9 @@ impl PlayerImpl {
         } else if index == current && current >= items.len() && !items.is_empty() {
             self.current_index.store(items.len() - 1, Ordering::Relaxed);
         }
+        // A removal shifts indices, so re-open announce (index match is stale).
+        self.last_announced_index
+            .store(usize::MAX, Ordering::Relaxed);
         debug!(index, remaining = items.len(), "item removed");
         removed.map(|queued| queued.resource)
     }
@@ -812,6 +850,11 @@ impl PlayerImpl {
         if index < items.len() {
             items[index] = Some(QueuedResource { item_id, resource });
             drop(items);
+            // Replacing the announced item re-opens announce for the next play.
+            if index == self.last_announced_index.load(Ordering::Relaxed) {
+                self.last_announced_index
+                    .store(usize::MAX, Ordering::Relaxed);
+            }
             debug!(index, "item replaced");
         }
     }
@@ -913,23 +956,39 @@ impl PlayerImpl {
             )));
         }
 
+        let armed_for_index = self
+            .pending_next
+            .lock_sync()
+            .as_ref()
+            .is_some_and(|p| !p.activated && p.index == index);
+        // An armed item's resource already lives in the processor; otherwise
+        // the slot must still hold one — `enqueue_to_processor` takes it out,
+        // so an emptied slot means the caller's view of the item is stale.
+        // Fail before any bookkeeping so the UI cannot drift from the audio.
+        if !armed_for_index
+            && self
+                .items
+                .lock_sync()
+                .get(index)
+                .is_none_or(Option::is_none)
+        {
+            return Err(PlayError::Internal(format!(
+                "item {index} has no resource (already consumed)"
+            )));
+        }
+
         self.ensure_engine_started()?;
         self.ensure_slot()?;
 
         let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(crossfade_seconds));
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
 
-        let armed_for_index = self
-            .pending_next
-            .lock_sync()
-            .as_ref()
-            .is_some_and(|p| !p.activated && p.index == index);
         if armed_for_index {
             self.commit_next(index)?;
         } else {
             self.unarm_next_internal(Some(index));
             self.current_index.store(index, Ordering::Relaxed);
-            self.bus.publish(PlayerEvent::CurrentItemChanged);
+            self.announce_current_item(index);
             self.load_current_item();
         }
 
@@ -1007,12 +1066,13 @@ impl PlayerImpl {
 
     /// Set playback rate.
     ///
-    /// Updates the local rate and propagates to the audio pipeline resampler
-    /// via `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
+    /// Stores the speed in the shared time-stretch controls (the single source
+    /// of truth, read each chunk by the effect chain) and propagates it via
+    /// `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
     pub fn set_rate(&self, rate: f32) {
         let clamped = rate.max(Self::MIN_PLAYBACK_RATE);
         self.rate.store(clamped, Ordering::Relaxed);
-        self.playback_rate_shared.store(clamped, Ordering::Relaxed);
+        self.config.timestretch.set_speed(clamped);
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(clamped));
         self.bus.publish(PlayerEvent::RateChanged { rate: clamped });
     }
@@ -1330,6 +1390,7 @@ mod tests {
             auto_advance_enabled: true,
             session: None,
             cancel: None,
+            timestretch: StretchControls::new(1.0),
         };
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
@@ -1393,11 +1454,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn set_rate_updates_shared_atomic() {
+    fn set_rate_updates_shared_speed() {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_rate(2.0);
-        let shared = &player.playback_rate_shared;
-        assert!((shared.load(Ordering::Relaxed) - 2.0).abs() < f32::EPSILON);
+        assert!((player.config.timestretch.speed() - 2.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
@@ -1405,7 +1465,7 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_rate(0.0);
         assert!(player.rate() >= 0.01);
-        assert!(player.playback_rate_shared.load(Ordering::Relaxed) >= 0.01);
+        assert!(player.config.timestretch.speed() >= 0.01);
 
         player.set_rate(-1.0);
         assert!(player.rate() >= 0.01);
@@ -1416,6 +1476,23 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         let _w = player.worker();
         let _w2 = player.worker().clone();
+    }
+
+    /// `enqueue_to_processor` takes the resource out of the slot, so a
+    /// select against an emptied (consumed) slot has nothing to load: it
+    /// must fail loudly instead of moving `current_index` / announcing
+    /// `CurrentItemChanged` while the old audio keeps playing.
+    #[kithara::test]
+    fn select_item_on_consumed_slot_errors_without_bookkeeping() {
+        let player = PlayerImpl::new(PlayerConfig::default());
+        player.reserve_slots(2);
+        let result = player.select_item_with_crossfade(1, false, 0.0);
+        assert!(result.is_err(), "selecting an emptied slot must fail");
+        assert_eq!(
+            player.current_index(),
+            0,
+            "bookkeeping must not move on a failed select"
+        );
     }
 
     #[kithara::test]

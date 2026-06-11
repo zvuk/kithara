@@ -307,7 +307,7 @@ mod tests {
     /// window and the readers hammer it. Parameterized over both backends
     /// (`_mem` / `_mmap`) so the contract is proven for the in-memory
     /// (ephemeral) snapshot path AND the file-backed mmap path.
-    fn run_concurrent_generation_rewrite<D>(core: ResourceCore<D>)
+    fn run_concurrent_generation_rewrite<D>(core: &ResourceCore<D>)
     where
         D: DriverIo + Send + Sync + 'static,
     {
@@ -316,7 +316,7 @@ mod tests {
         const GENS: u8 = 250;
         const READERS: usize = 6;
 
-        write_generation(&core, 1, LEN, CHUNK);
+        write_generation(core, 1, LEN, CHUNK);
         core.commit_inner(Some(LEN as u64))
             .expect("baseline commit must succeed");
 
@@ -331,9 +331,8 @@ mod tests {
                         if !reader.contains_range_inner(0..LEN as u64) {
                             continue;
                         }
-                        let n = match reader.read_at_inner(0, &mut buf) {
-                            Ok(n) => n,
-                            Err(_) => continue,
+                        let Ok(n) = reader.read_at_inner(0, &mut buf) else {
+                            continue;
                         };
                         if n == 0 {
                             continue;
@@ -357,7 +356,7 @@ mod tests {
                 break;
             }
             core.reactivate_inner().expect("reactivate must succeed");
-            write_generation(&core, value, LEN, CHUNK);
+            write_generation(core, value, LEN, CHUNK);
             core.commit_inner(Some(LEN as u64))
                 .expect("commit must succeed");
         }
@@ -373,10 +372,10 @@ mod tests {
     #[case::mmap(Backend::Mmap)]
     fn concurrent_generation_rewrite_never_tears_a_read(#[case] backend: Backend) {
         match backend {
-            Backend::Mem => run_concurrent_generation_rewrite(open_mem()),
+            Backend::Mem => run_concurrent_generation_rewrite(&open_mem()),
             Backend::Mmap => {
                 let dir = tempfile::tempdir().expect("tempdir must be creatable");
-                run_concurrent_generation_rewrite(open_mmap(dir.path().join("gen.bin")));
+                run_concurrent_generation_rewrite(&open_mmap(dir.path().join("gen.bin")));
             }
         }
     }
@@ -390,7 +389,7 @@ mod tests {
     /// reactivate→rewrite→commit boundary). If this tears, the residual flake is
     /// still in storage; if it stays green, the storage layer is consistent and
     /// the residual lives one layer up (decoder recreation).
-    fn run_concurrent_varying_length_rewrite<D>(core: ResourceCore<D>)
+    fn run_concurrent_varying_length_rewrite<D>(core: &ResourceCore<D>)
     where
         D: DriverIo + Send + Sync + 'static,
     {
@@ -400,7 +399,7 @@ mod tests {
         const GENS: u8 = 250;
         const READERS: usize = 6;
 
-        write_generation(&core, 1, LONG, CHUNK);
+        write_generation(core, 1, LONG, CHUNK);
         core.commit_inner(Some(LONG as u64))
             .expect("baseline commit must succeed");
 
@@ -415,7 +414,7 @@ mod tests {
                         let Some(target) = reader.len_inner() else {
                             continue;
                         };
-                        let target = target as usize;
+                        let target = usize::try_from(target).expect("test lengths fit usize");
                         if target == 0 {
                             continue;
                         }
@@ -423,9 +422,8 @@ mod tests {
                             Ok(WaitOutcome::Ready) => {}
                             _ => continue,
                         }
-                        let n = match reader.read_at_inner(0, &mut buf[..target]) {
-                            Ok(n) => n,
-                            Err(_) => continue,
+                        let Ok(n) = reader.read_at_inner(0, &mut buf[..target]) else {
+                            continue;
                         };
                         if n == 0 {
                             continue;
@@ -450,7 +448,7 @@ mod tests {
             }
             let len = if value % 2 == 0 { LONG } else { SHORT };
             core.reactivate_inner().expect("reactivate must succeed");
-            write_generation(&core, value, len, CHUNK);
+            write_generation(core, value, len, CHUNK);
             core.commit_inner(Some(len as u64))
                 .expect("commit must succeed");
         }
@@ -466,10 +464,10 @@ mod tests {
     #[case::mmap(Backend::Mmap)]
     fn concurrent_varying_length_rewrite_via_wait_range_stays_consistent(#[case] backend: Backend) {
         match backend {
-            Backend::Mem => run_concurrent_varying_length_rewrite(open_mem()),
+            Backend::Mem => run_concurrent_varying_length_rewrite(&open_mem()),
             Backend::Mmap => {
                 let dir = tempfile::tempdir().expect("tempdir must be creatable");
-                run_concurrent_varying_length_rewrite(open_mmap(dir.path().join("gen.bin")));
+                run_concurrent_varying_length_rewrite(&open_mmap(dir.path().join("gen.bin")));
             }
         }
     }

@@ -139,7 +139,8 @@ impl Queue {
                 .ok_or(QueueError::UnknownTrackId(id))?
         };
 
-        if self.player.current_index() == index && self.player.rate() > 0.0 {
+        if self.player.current_index() == index && self.player.is_playing() {
+            self.cancel_stale_pending(id);
             return Ok(());
         }
 

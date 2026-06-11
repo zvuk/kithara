@@ -1,14 +1,12 @@
 use delegate::delegate;
 use kithara_events::EventBus;
-use kithara_play::{PlayError, PlayerStatus};
+use kithara_play::{EngineLoadSnapshot, PlayError, PlayerStatus};
 
 use super::Queue;
 
 impl Queue {
     delegate! {
         to self.player {
-            /// Start playback.
-            pub fn play(&self);
             /// Pause playback.
             pub fn pause(&self);
             /// Whether playback is active.
@@ -27,6 +25,9 @@ impl Queue {
             pub fn default_rate(&self) -> f32;
             /// Set the default playback rate.
             pub fn set_default_rate(&self, rate: f32);
+            /// Set the live playback rate (mirrors into the tempo-mode sibling
+            /// so a running key-locked stretch tracks the move).
+            pub fn set_rate(&self, rate: f32);
             /// Current volume (0.0..=1.0).
             #[must_use]
             pub fn volume(&self) -> f32;
@@ -40,6 +41,9 @@ impl Queue {
             /// Live engine playback status.
             #[must_use]
             pub fn status(&self) -> PlayerStatus;
+            /// Live audio-engine cost (realtime factor / load / ms).
+            #[must_use]
+            pub fn engine_load(&self) -> EngineLoadSnapshot;
             /// Number of EQ bands.
             #[must_use]
             pub fn eq_band_count(&self) -> usize;

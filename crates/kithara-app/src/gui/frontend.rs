@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use iced::{Size, window};
+use kithara::play::StretchControls;
 use kithara_queue::Queue;
 
 use super::{app::Kithara, fonts, update, view};
@@ -19,9 +20,9 @@ mod consts {
 
     /// DJ Studio window size in logical pixels.
     pub(super) const STUDIO_WIDTH: f32 = 980.0;
-    pub(super) const STUDIO_HEIGHT: f32 = 600.0;
+    pub(super) const STUDIO_HEIGHT: f32 = 700.0;
     pub(super) const STUDIO_MIN_WIDTH: f32 = 820.0;
-    pub(super) const STUDIO_MIN_HEIGHT: f32 = 520.0;
+    pub(super) const STUDIO_MIN_HEIGHT: f32 = 620.0;
 }
 use consts::*;
 
@@ -62,7 +63,11 @@ impl Frontend for GuiFrontend {
         })
     }
 
-    fn run_loop(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError> {
+    fn run_loop(
+        &mut self,
+        queue: Arc<Queue>,
+        timestretch: Arc<StretchControls>,
+    ) -> Result<(), FrontendError> {
         let palette = self.palette;
         let config = self.config.clone();
 
@@ -73,6 +78,7 @@ impl Frontend for GuiFrontend {
         queue.set_tracks(crate::sources::build_sources(&config));
         let controller = Arc::new(crate::state::StateController::new(
             Arc::clone(&queue),
+            timestretch,
             config.clone(),
             config.shutdown.child_token(),
         ));

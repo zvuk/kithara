@@ -1,23 +1,16 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use kithara::{
     abr::AbrHandle,
-    audio::Envelope,
     events::{AbrMode, AppEvent, EngineEvent, Event, PlayerEvent, VariantInfo},
-    prelude::ResourceConfig,
+    play::StretchControls,
+    prelude::EngineLoadSnapshot,
     stream::AudioCodec,
 };
 use kithara_platform::{CancellationToken, sync::Mutex};
-use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry, TrackSource};
-use tokio::sync::{Notify, broadcast::error::RecvError};
+use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry};
 
-use crate::{config::AppConfig, sources::build_resource_config, waveform::analyze};
-
-/// Analysis resolution for the per-track waveform envelope.
-const WAVEFORM_BUCKETS: usize = 1500;
+use crate::{config::AppConfig, waveform::TrackAnalysis};
 
 /// Snapshot of player state shared between the queue, the listener task,
 /// and the UI thread. The struct is cloned cheaply each frame so the UI
@@ -34,8 +27,8 @@ pub struct UiState {
     pub abr_variants: Vec<(usize, String)>,
     pub eq_bands: Vec<f32>,
     pub tracks: Vec<TrackEntry>,
-    /// Peak envelope of the current track; `None` until analysed.
-    pub waveform: Option<Envelope>,
+    /// Source analysis of the current track; `None` until analysed.
+    pub analysis: Option<TrackAnalysis>,
     pub repeat_mode: RepeatMode,
     pub abr_mode_is_auto: bool,
     pub shuffle_enabled: bool,
@@ -47,6 +40,7 @@ pub struct UiState {
     pub duration: f64,
     pub position: f64,
     pub seek_position: f64,
+    pub engine_load: EngineLoadSnapshot,
 }
 
 impl UiState {
@@ -72,11 +66,12 @@ impl UiState {
             crossfade: queue.crossfade_duration(),
             crossfade_progress: None,
             eq_bands: vec![0.0; queue.eq_band_count()],
-            waveform: None,
+            analysis: None,
             status_note: None,
             is_seeking: false,
             seek_position: 0.0,
             selected_rate: 1.0,
+            engine_load: EngineLoadSnapshot::default(),
         }
     }
 }
@@ -95,54 +90,41 @@ impl UiState {
 /// would panic; this one avoids `await`s while the lock is held.
 pub struct StateController {
     queue: Arc<Queue>,
+    /// Per-deck time-stretch handle.
+    timestretch: Arc<StretchControls>,
     state: Arc<Mutex<UiState>>,
     cancel: CancellationToken,
-    /// Gate for per-track waveform analysis. `false` keeps the listener
-    /// from decoding whole tracks while the DJ Studio is closed; the
-    /// studio flips it on entry and off on exit.
-    waveform_enabled: Arc<AtomicBool>,
-    /// Wakes the listener when [`Self::waveform_enabled`] changes so it
-    /// can start (or cancel) analysis without waiting for a queue event.
-    waveform_wake: Arc<Notify>,
 }
 
 impl StateController {
     /// Build a controller and start the listener task that mirrors
     /// queue events into [`UiState`].
     ///
-    /// `cancel` must be a child of the app master so the listener task
-    /// stops when the app shuts down; the controller's `Drop` also
-    /// cancels it to stop the listener when the UI tears down first.
-    /// `config` supplies the shared stores for per-track waveform analysis.
-    pub fn new(queue: Arc<Queue>, config: AppConfig, cancel: CancellationToken) -> Self {
+    /// `cancel` must be a child of the app master, so the listener task
+    /// stops when the app shuts down.
+    /// `config` supplies the shared stores for per-track source analysis.
+    /// `timestretch` is the per-deck handle shared with the player.
+    pub fn new(
+        queue: Arc<Queue>,
+        timestretch: Arc<StretchControls>,
+        config: AppConfig,
+        cancel: CancellationToken,
+    ) -> Self {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
-        let waveform_enabled = Arc::new(AtomicBool::new(false));
-        let waveform_wake = Arc::new(Notify::new());
 
         spawn_listener(
             Arc::clone(&queue),
             Arc::clone(&state),
             config,
             cancel.clone(),
-            Arc::clone(&waveform_enabled),
-            Arc::clone(&waveform_wake),
         );
 
         Self {
             queue,
+            timestretch,
             state,
             cancel,
-            waveform_enabled,
-            waveform_wake,
         }
-    }
-
-    /// Enable or disable per-track waveform analysis. The DJ Studio turns
-    /// this on while open so analysis only runs on demand; turning it off
-    /// cancels any in-flight analysis and clears the current envelope.
-    pub fn set_waveform_enabled(&self, enabled: bool) {
-        self.waveform_enabled.store(enabled, Ordering::SeqCst);
-        self.waveform_wake.notify_one();
     }
 
     /// Apply a closure under the lock. Returns the closure's result.
@@ -159,6 +141,12 @@ impl StateController {
     #[must_use]
     pub fn queue(&self) -> &Arc<Queue> {
         &self.queue
+    }
+
+    /// The per-deck time-stretch handle.
+    #[must_use]
+    pub fn deck(&self) -> &Arc<StretchControls> {
+        &self.timestretch
     }
 
     /// Pull the continuous values (position, duration, volume, tracks,
@@ -178,6 +166,7 @@ impl StateController {
         st.volume = self.queue.volume();
         st.position = position;
         st.duration = duration;
+        st.engine_load = self.queue.engine_load();
         if let Some(idx) = self.queue.current_index() {
             st.current_track_index = Some(idx);
         }
@@ -214,108 +203,9 @@ fn spawn_listener(
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
     cancel: CancellationToken,
-    waveform_enabled: Arc<AtomicBool>,
-    waveform_wake: Arc<Notify>,
 ) {
-    let mut rx = queue.subscribe();
-
-    tokio::spawn(async move {
-        let mut current_analyze: Option<CancellationToken> = None;
-
-        loop {
-            tokio::select! {
-                biased;
-                () = cancel.cancelled() => break,
-                () = waveform_wake.notified() => {
-                    if waveform_enabled.load(Ordering::SeqCst) {
-                        spawn_analyze(&queue, &state, &config, &cancel, &mut current_analyze);
-                    } else {
-                        if let Some(prev) = current_analyze.take() {
-                            prev.cancel();
-                        }
-                        state.lock_sync().waveform = None;
-                    }
-                }
-                event = rx.recv() => match event {
-                    Ok(event) => {
-                        let track_changed =
-                            matches!(event, Event::Queue(QueueEvent::CurrentTrackChanged { .. }));
-                        apply_event(event, &queue, &state);
-                        if track_changed && waveform_enabled.load(Ordering::SeqCst) {
-                            spawn_analyze(&queue, &state, &config, &cancel, &mut current_analyze);
-                        }
-                    }
-                    Err(RecvError::Lagged(_)) => continue,
-                    Err(RecvError::Closed) => break,
-                },
-            }
-        }
-    });
-}
-
-/// Analyse the current track, cancelling any in-flight prior analysis.
-/// `cancel` is the listener cancel; each run uses `cancel.child_token()`.
-fn spawn_analyze(
-    queue: &Arc<Queue>,
-    state: &Arc<Mutex<UiState>>,
-    config: &AppConfig,
-    cancel: &CancellationToken,
-    current_analyze: &mut Option<CancellationToken>,
-) {
-    if let Some(prev) = current_analyze.take() {
-        prev.cancel();
-    }
-
-    let track_id = {
-        let st = state.lock_sync();
-        let Some(idx) = st.current_track_index else {
-            return;
-        };
-        let Some(entry) = st.tracks.get(idx) else {
-            return;
-        };
-        let id = entry.id;
-        drop(st);
-        id
-    };
-
-    state.lock_sync().waveform = None;
-
-    let Some(source) = queue.track_source(track_id) else {
-        return;
-    };
-    let Some(resource_cfg) = resource_config_from_source(source, config) else {
-        return;
-    };
-
-    let analyze_cancel = cancel.child_token();
-    *current_analyze = Some(analyze_cancel.clone());
-    let state = Arc::clone(state);
-
-    tokio::spawn(async move {
-        let Some(envelope) = analyze(resource_cfg, WAVEFORM_BUCKETS, analyze_cancel).await else {
-            return;
-        };
-        let mut st = state.lock_sync();
-        // Commit only if the analysed track is still current.
-        let current_id = st
-            .current_track_index
-            .and_then(|i| st.tracks.get(i))
-            .map(|entry| entry.id);
-        if current_id == Some(track_id) {
-            st.waveform = Some(envelope);
-        }
-    });
-}
-
-/// Build an analysis resource from a track's source, reusing the shared
-/// stores so the analysis and the player share one download.
-fn resource_config_from_source(source: TrackSource, config: &AppConfig) -> Option<ResourceConfig> {
-    match source {
-        TrackSource::Config(cfg) => Some(*cfg),
-        TrackSource::Uri(url) => build_resource_config(&url, config),
-        _ => None,
-    }
+    let rx = queue.subscribe();
+    tokio::spawn(crate::analysis::listen(queue, state, config, cancel, rx));
 }
 
 /// Push the desired EQ gains down to the engine. Calls for bands with no
@@ -326,7 +216,7 @@ fn reapply_eq(queue: &Queue, eq_bands: &[f32]) {
     }
 }
 
-fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
+pub(crate) fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
     match event {
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();

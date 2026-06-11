@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
 use kithara_decode::PcmChunk;
+use kithara_platform::time::{Duration, Instant};
 use tracing::trace;
 
-use super::{AudioWorkerSource, PreloadGate, handle::TrackRegistration, types::ServiceClass};
+use super::{
+    AudioWorkerSource, EngineLoad, PreloadGate, handle::TrackRegistration, types::ServiceClass,
+};
 use crate::{
     pipeline::{fetch::Fetch, track_fsm::TrackStep},
     runtime::{AtomicServiceClass, Inlet, Node, Outlet, TickResult},
@@ -43,6 +46,9 @@ pub(crate) struct DecoderNode {
     trash_inlet: Inlet<PcmChunk>,
     outlet: Outlet<Fetch<PcmChunk>>,
     preload_chunks: usize,
+    /// Live engine cost meter. When present, each produced chunk records the
+    /// tick's decode+effects wall time against the audio it yielded.
+    engine_load: Option<Arc<EngineLoad>>,
 }
 
 impl DecoderNode {
@@ -93,6 +99,14 @@ impl DecoderNode {
             ..Default::default()
         };
     }
+
+    /// Record one produced chunk's decode+effects cost into the shared engine
+    /// meter.
+    fn record_load(&self, busy: Duration, fetch: &Fetch<PcmChunk>) {
+        if let Some(load) = self.engine_load.as_ref() {
+            load.record(busy, fetch.data.frames(), fetch.data.spec().sample_rate);
+        }
+    }
 }
 
 impl From<TrackRegistration> for DecoderNode {
@@ -105,6 +119,7 @@ impl From<TrackRegistration> for DecoderNode {
             service_class: reg.service_class,
             preload_gate: reg.preload_gate,
             preload_chunks: reg.preload_chunks,
+            engine_load: reg.engine_load,
             runtime: DecoderRuntime {
                 seek_epoch,
                 ..Default::default()
@@ -142,8 +157,10 @@ impl Node for DecoderNode {
             self.complete_preload();
         }
 
+        let start = Instant::now();
         match self.source.step_track() {
             TrackStep::Produced(fetch) => {
+                self.record_load(start.elapsed(), &fetch);
                 self.runtime.eof_sent = false;
                 let _ = self.outlet.try_push(fetch);
                 self.mark_preload_progress();
@@ -227,6 +244,7 @@ mod tests {
             preload_gate,
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
             preload_chunks: 1,
+            engine_load: None,
             runtime: DecoderRuntime::default(),
         }
     }
@@ -264,6 +282,56 @@ mod tests {
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(node.runtime.eof_sent);
         assert!(node.outlet.has_pending());
+    }
+
+    #[kithara::test]
+    fn decoder_node_records_engine_load_on_produced() {
+        use kithara_bufpool::PcmPool;
+        use kithara_decode::{PcmMeta, PcmSpec};
+
+        let meter = Arc::new(EngineLoad::new());
+        assert!(!meter.snapshot().is_active(), "idle before any tick");
+
+        let (outlet, _inlet) = connect::<Fetch<PcmChunk>>(4, None);
+        let timeline = Timeline::new();
+        let chunk = PcmChunk::new(
+            PcmMeta {
+                spec: PcmSpec {
+                    channels: 2,
+                    sample_rate: 44_100,
+                },
+                frames: 4_410,
+                ..Default::default()
+            },
+            PcmPool::default().attach(vec![0.0f32; 4_410 * 2]),
+        );
+        let source = Box::new(Unimock::new((
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Produced(Fetch::data(chunk, 0))),
+            MockAudioWorkerSource::timeline.stub(|each| {
+                each.call(matching!()).returns(timeline.clone());
+            }),
+        )));
+
+        let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(4, None);
+        let mut node = DecoderNode {
+            source,
+            outlet,
+            trash_inlet,
+            preload_gate: Arc::new(PreloadGate::default()),
+            service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
+            preload_chunks: 1,
+            engine_load: Some(Arc::clone(&meter)),
+            runtime: DecoderRuntime::default(),
+        };
+
+        assert_eq!(node.tick(), TickResult::Progress);
+        assert!(
+            meter.snapshot().is_active(),
+            "engine meter records on a Produced tick: {:?}",
+            meter.snapshot()
+        );
     }
 
     #[kithara::test]

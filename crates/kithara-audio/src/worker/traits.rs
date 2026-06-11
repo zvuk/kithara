@@ -87,6 +87,7 @@ mod tests {
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmMeta, PcmSpec};
     use kithara_test_utils::kithara;
+    use num_traits::cast::AsPrimitive;
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
@@ -98,7 +99,7 @@ mod tests {
     };
 
     fn chunk(range: std::ops::Range<u32>) -> PcmChunk {
-        let samples: Vec<f32> = range.map(|i| i as f32).collect();
+        let samples: Vec<f32> = range.map(AsPrimitive::as_).collect();
         PcmChunk::new(
             PcmMeta {
                 spec: SPEC,
@@ -152,7 +153,7 @@ mod tests {
             "tail spans multiple flush pulls (got {})",
             out.len()
         );
-        let expected: Vec<f32> = (0..600).map(|i| i as f32).collect();
+        let expected: Vec<f32> = (0..600).map(|i: u32| i.as_()).collect();
         assert_eq!(total, expected, "no tail truncation across the chain");
     }
 
