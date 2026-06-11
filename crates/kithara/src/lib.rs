@@ -83,7 +83,7 @@ pub mod storage {
 
 pub use kithara_test_macros::mock;
 #[cfg(feature = "probe")]
-pub use kithara_test_macros::{fixture, test};
+pub use kithara_test_macros::{fixture, flash, test};
 
 #[cfg(feature = "mock")]
 pub mod mock {
