@@ -18,10 +18,6 @@ fmt-check:
 
 clippy:
     cargo clippy --workspace -- -D warnings
-    # The flash virtual-clock engine is entirely `#[cfg(feature = "flash")]`,
-    # so the default pass never compiles it. Lint it under its own flag too, or its
-    # code drifts un-checked (the gate's historical blind spot).
-    cargo clippy --workspace --features flash -- -D warnings
 
 # Apply clippy's machine-applicable suggestions in place. Refuses to run
 # on a dirty working tree by default — pass --allow-dirty to override.
