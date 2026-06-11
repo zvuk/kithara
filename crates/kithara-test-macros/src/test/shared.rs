@@ -230,7 +230,7 @@ pub(crate) fn make_env_setup(env_vars: &[(String, String)]) -> TokenStream2 {
                 }
             }
 
-            let __lock = kithara_platform::env_mutation_lock()
+            let __lock = kithara_platform::env::mutation_lock()
                 .lock()
                 .unwrap_or_else(|err| err.into_inner());
 

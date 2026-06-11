@@ -5,8 +5,7 @@
 //! bounds. See the crate `README.md` for per-target backends.
 
 mod cancel_group;
-#[cfg(not(target_arch = "wasm32"))]
-mod env;
+pub mod env;
 pub mod flash;
 mod logging;
 mod maybe_send;
@@ -31,7 +30,7 @@ mod wasm;
 
 pub use cancel_group::CancelGroup;
 #[cfg(not(target_arch = "wasm32"))]
-pub use env::env_mutation_lock;
+pub use env::mutation_lock as env_mutation_lock;
 pub use logging::log_error;
 pub use maybe_send::{BoxFuture, MaybeSend, MaybeSendFuture, MaybeSync, WasmSend};
 pub use rt_cancel::CancellationToken;
