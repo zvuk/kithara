@@ -47,7 +47,18 @@ const WARMUP_BLOCKS: usize = 40;
 /// synchronously (no sleep). A buggy run flips `current_index` within a few
 /// blocks; a healthy run holds on track 0 (or stalls — the 1s hang budget
 /// catches a stall first).
-const OBSERVE_BLOCKS: usize = 600;
+///
+/// MUST stay strictly below the genuine post-seek remainder. The packaged
+/// track is 537600 frames (12.19s); seeking to 5.5s leaves ~576 blocks of
+/// real audio. In the size-withheld/body-open mode the gated segment is
+/// still *delivered* (only its HEAD lies), delivery legitimately completes
+/// `sizes_complete`, and a producer that keeps pace lets the track reach its
+/// genuine end — a correct `ItemDidPlayToEnd` + advance that must not be
+/// misread as the premature-terminal cascade. 500 blocks (5.8s, max position
+/// 11.3s) keeps the genuine end unreachable in-window under any scheduling
+/// while still being orders of magnitude above the few blocks a premature
+/// byte-EOF needs to surface.
+const OBSERVE_BLOCKS: usize = 500;
 
 #[derive(Clone, Copy, Debug)]
 struct GateMode {
