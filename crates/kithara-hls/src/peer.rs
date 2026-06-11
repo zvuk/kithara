@@ -35,6 +35,14 @@ struct HlsTrackState {
     /// freshly resolved segment in `poll_next` to detect a boundary
     /// crossing. The initial value is set in [`HlsPeer::activate`].
     reader_segment: Arc<AtomicUsize>,
+    /// Variant the stored `reader_segment` was resolved against. A
+    /// variant switch re-keys the byte space under an unmoved cursor:
+    /// the same segment index now points at a different variant's bytes,
+    /// so `prev == resolved` no longer proves the reader stayed inside
+    /// the planned window. [`HlsTrackState::apply_boundary_crossing`]
+    /// treats a variant flip as a discontinuity and re-aims the fetch
+    /// plan at the reader's actual segment.
+    reader_variant: usize,
     /// Mirrors `HlsConfig::look_ahead_bytes` — capped idle prefetch
     /// budget threaded into every `PlanCtx` constructed for `dispatch`.
     look_ahead_bytes: Option<u64>,
@@ -127,6 +135,7 @@ impl HlsPeer {
         {
             let mut guard = self.state.lock_sync();
             *guard = Some(HlsTrackState {
+                reader_variant: coord.variant_index(),
                 coord,
                 seek_obs: Arc::clone(&self.seek_obs),
                 eviction_rx,
@@ -347,9 +356,11 @@ impl HlsTrackState {
     fn apply_boundary_crossing(&mut self, coord: &HlsCoord, ctx: &PlanCtx) -> u32 {
         let pos = coord.position();
         let prev = self.reader_segment.load(Ordering::Acquire);
-        let resolved = coord
-            .find_at_offset(pos)
-            .map_or_else(|| u32::try_from(prev).unwrap_or(0), |(idx, _, _)| idx);
+        let variant_now = coord.variant_index();
+        let variant_changed = self.reader_variant != variant_now;
+        self.reader_variant = variant_now;
+        let found = coord.find_at_offset(pos);
+        let resolved = found.map_or_else(|| u32::try_from(prev).unwrap_or(0), |(idx, _, _)| idx);
         let resolved_us = resolved as usize;
         let boundary_crossed = prev != resolved_us;
         if boundary_crossed {
@@ -365,7 +376,29 @@ impl HlsTrackState {
         };
         let prev_u32 = u32::try_from(prev).unwrap_or(0);
         let discontinuous_advance = boundary_crossed && resolved != prev_u32.saturating_add(1);
-        if discontinuous_advance
+        // A switch committed since the last poll re-keys the byte space
+        // under the cursor: the commit planned from its time-derived
+        // target segment, while the decoder's recreate seek backs off by
+        // the codec warmup and can land one segment earlier — a segment
+        // the plan excludes and that no seek-epoch reseed owns (a
+        // FormatBoundary recreate never bumps the epoch). Re-aim the
+        // plan at the reader's actual segment; the probe variant keeps
+        // the init/header seeds a mid-flight recreate still needs, and
+        // slot dedup makes a redundant reseed free. Two gates: never
+        // reseed from the `prev` fallback (an old-variant-space index),
+        // and skip the shifted byte-continuity path (`served_from != 0`
+        // cannot host a FormatBoundary recreate — `header_byte_range`
+        // is not applicable there — and the reader still reads the
+        // pre-switch range from `v_old`).
+        let aligned_rescue = variant_changed
+            && !switch_landed
+            && found.is_some()
+            && coord.active().is_some_and(|a| a.served_from() == 0);
+        if aligned_rescue {
+            if let Some(active) = coord.active() {
+                active.rebuild_with_decoder_probe(ctx, resolved);
+            }
+        } else if discontinuous_advance
             && !switch_landed
             && let Some(active) = coord.active()
         {
@@ -431,6 +464,7 @@ impl HlsTrackState {
             && let Some(seg) = active.rebuild_at_time(ctx, target)
         {
             self.reader_segment.store(seg as usize, Ordering::Release);
+            self.reader_variant = coord.variant_index();
         }
     }
 }
