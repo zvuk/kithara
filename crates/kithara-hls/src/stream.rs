@@ -136,6 +136,7 @@ impl StreamType for Hls {
 
         let estimation = crate::loading::size_estimation::SizeEstimator::new(
             peer_handle.clone(),
+            scope.clone(),
             Arc::clone(&playlist_state),
             media_playlists,
             config.headers.clone(),
