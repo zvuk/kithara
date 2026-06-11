@@ -29,7 +29,6 @@ async fn open_test_mp3(
     let mut config = AudioConfig::<File>::for_stream(file_config)
         .hint(String::from("mp3"))
         .decoder_backend(backend)
-        .block_on_underrun(true)
         .build();
     if let Some(bus) = events {
         config.bus = Some(bus);
@@ -37,10 +36,12 @@ async fn open_test_mp3(
     Audio::<Stream<File>>::new(config).await.unwrap()
 }
 
-/// Reads parked on underrun (`block_on_underrun`); the re-poll below only
-/// covers seek-in-progress `Pending`. A genuine stall is caught by the
-/// per-test timeout, not a hand-rolled deadline. `flash(true)` keeps the
-/// re-poll sleep on the virtual clock when called from a flash test.
+/// Nonblocking re-poll loop: these tests are browser-portable (async body,
+/// shared current-thread runtime), so the consumer must never park the
+/// runtime thread — `block_on_underrun` is deliberately NOT used here.
+/// A genuine stall is caught by the per-test timeout, not a hand-rolled
+/// deadline. `flash(true)` keeps the re-poll sleep on the virtual clock
+/// when called from a flash test.
 #[kithara::flash(true)]
 async fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) {
     loop {
