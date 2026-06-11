@@ -124,6 +124,17 @@ test *ARGS:
     done
     cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release $flash_feat $passthru
 
+# Dual-run wave gate for the platform refactor: flash ON, then flash OFF.
+# OFF lane builds in its own target dir so the feature flip does not
+# invalidate the ON cache (and vice versa).
+gate *ARGS:
+    #!/usr/bin/env bash
+    set -eo pipefail
+    echo "=== gate: flash ON ==="
+    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features flash-time {{ARGS}}
+    echo "=== gate: flash OFF ==="
+    CARGO_TARGET_DIR=target-flash-off cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
+
 # The L2 fixture cache is ON BY DEFAULT (build-fingerprinted temp dir, see
 # tests/src/fixture_cache.rs). This variant instead uses the nextest `cache`
 # profile, whose setup script wipes + recreates a shared cache dir and exports
