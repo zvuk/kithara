@@ -13,7 +13,7 @@ use std::{
 
 pub use super::participant::{Participating, participate};
 use super::{pace, sched};
-use crate::time::{FlashTimeout, TimeoutError};
+use crate::flash::time::{FlashTimeout, TimeoutError};
 
 /// RAII bracket for ONE real I/O operation in flight (a socket send / response
 /// or body-chunk await in `kithara-net`). While at least one scope is live the

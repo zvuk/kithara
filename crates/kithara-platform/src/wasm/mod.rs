@@ -2,3 +2,4 @@
 //! re-imported from `native`.
 
 pub(crate) mod sync;
+pub(crate) mod time;

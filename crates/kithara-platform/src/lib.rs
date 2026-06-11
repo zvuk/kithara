@@ -12,11 +12,12 @@ mod logging;
 mod maybe_send;
 // Flash-ON wraps (not re-exports) some native items: `unreachable_pub` is
 // structurally false-positive there; `dead_code` covers W1-interim unconsumed
-// arms and dies with the W2 wrappers. OFF lane keeps full coverage. See
-// AGENTS.md "Non-Negotiables" legalized exceptions.
+// arms and dies with the W2 wrappers; `unused_imports` covers pub-use items in
+// native backends that are shadowed by the flash facade arm. OFF lane keeps
+// full coverage. See AGENTS.md "Non-Negotiables" legalized exceptions.
 #[cfg_attr(
     all(not(target_arch = "wasm32"), feature = "flash"),
-    expect(unreachable_pub, dead_code)
+    expect(unreachable_pub, dead_code, unused_imports)
 )]
 mod native;
 mod rt_cancel;

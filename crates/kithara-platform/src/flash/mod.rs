@@ -33,6 +33,8 @@ mod participant;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub(crate) mod sync;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
+pub(crate) mod time;
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 mod wake;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]

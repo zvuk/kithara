@@ -5,3 +5,4 @@
 // platform-dependent submodule carries the one legal backend cfg.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod sync;
+pub(crate) mod time;
