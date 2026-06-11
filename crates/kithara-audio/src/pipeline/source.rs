@@ -23,7 +23,7 @@ use kithara_stream::{
     SourcePhase, SourceSeekAnchor, Stream, StreamType,
 };
 use kithara_test_utils::kithara;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::{
     pipeline::{
@@ -90,6 +90,7 @@ impl<T: StreamType> SharedStream<T> {
             fn format_change_segment_range(&self) -> kithara_stream::StreamResult<Range<u64>>;
             pub(crate) fn clear_variant_fence(&self);
             pub(crate) fn has_variant_change_pending(&self) -> bool;
+            fn variant_change_target(&self) -> Option<usize>;
             fn seek_time_anchor(&self, position: Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
             /// Build a fresh reader-side event-sink instance from the inner source.
             pub(crate) fn take_reader_event_sink(&self) -> Option<kithara_stream::BoxedEventSink>;
@@ -1443,6 +1444,22 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// (`variant_generation`) BEFORE `abr.apply_decision` publishes the
     /// new variant metadata, so the FSM can legally observe the signal in
     /// the synchronous window between the two stores.
+    ///
+    /// One `NoChange` shape never resolves on its own: the fence targets
+    /// the variant the session already labels itself with (a seek
+    /// recreate landed on the switch target before the commit raised the
+    /// fence — the switch-back-to-current race). No format diff will
+    /// ever appear, and the seek/recreate paths that clear fences will
+    /// not fire again because the fence itself blocks reads. The session
+    /// label can lie about the demuxer's actual bitstream (a stale seek
+    /// anchor stamps the pre-commit variant), so the fence is NOT
+    /// bare-acked: the `FormatBoundary` recreate re-primes the demuxer on
+    /// the active variant's real bytes, clears the fence inside
+    /// `apply_format_change`, and resumes from the decode head. The
+    /// fence target is published before the generation bump and the arm
+    /// additionally requires the published `media_info` to agree, so a
+    /// transient pre-publish observation falls through to the retry
+    /// path.
     #[cold]
     fn handle_variant_change(&mut self, no_change_err: &DecodeError) -> DecodeAction {
         let FormatChangeDetection::Applicable {
@@ -1450,6 +1467,37 @@ impl<T: StreamType> StreamAudioSource<T> {
             target_offset,
         } = self.detect_format_change()
         else {
+            if !self.seek_obs.is_pending()
+                && let Some(target) = self.shared_stream.variant_change_target()
+                && let Some(session_info) = self.session.media_info.clone()
+                && let Some(session_variant) = session_info.variant_index
+                && usize::try_from(session_variant) == Ok(target)
+                && let Some(current) = self.shared_stream.media_info()
+                && current.variant_index == Some(session_variant)
+                && let Ok(range) = self.shared_stream.format_change_segment_range()
+            {
+                info!(
+                    target,
+                    chunks = self.chunks_decoded,
+                    samples = self.total_samples,
+                    "variant fence targets the already-aligned session — forcing boundary recreate"
+                );
+                let mut target_info = session_info;
+                if target_info.codec.is_none() {
+                    target_info.codec = current.codec;
+                }
+                if target_info.container.is_none() {
+                    target_info.container = current.container;
+                }
+                self.start_recreating_decoder(
+                    RecreateCause::FormatBoundary,
+                    target_info,
+                    RecreateNext::Decode,
+                    range.start,
+                    0,
+                );
+                return DecodeAction::Yield;
+            }
             // Two benign orderings report `NoChange` here: a seek raced in
             // after `decode_next_chunk`'s loop-top `is_seek_pending` check
             // (seek-epoch suppression), or the commit fence closed before

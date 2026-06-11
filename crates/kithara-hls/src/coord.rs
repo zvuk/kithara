@@ -4,7 +4,7 @@ use std::{
     ops::Range,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -73,13 +73,23 @@ pub(crate) struct HlsCoord {
     /// generation here.
     fence_at: AtomicU64,
     /// Monotonic counter bumped by [`Self::commit_variant_switch`] on
-    /// cross-codec switches. `read_at` / `wait_range` compare against
+    /// every structured-container switch (same-codec included — the
+    /// target variant is reset and repositioned, so the decoder must
+    /// re-align). `read_at` / `wait_range` compare against
     /// [`Self::fence_at`] and short-circuit with `Pending(VariantChange)`
     /// / `Interrupted` until the audio FSM acks via
-    /// [`Self::clear_variant_fence`]. Same-codec switches do not bump
-    /// it — smooth ABR (FLAC@hi → FLAC@lo) keeps reading without a
-    /// fence.
+    /// [`Self::clear_variant_fence`]. Only the WAV byte-continuity
+    /// branch switches without a fence.
     variant_generation: AtomicU64,
+    /// Target variant index of the in-flight fence. Stored (`Release`)
+    /// BEFORE [`Self::variant_generation`] is bumped, so an observer of
+    /// a pending fence always sees the variant that fence demands
+    /// ([`Self::variant_change_target`]). The decoder needs it to ack a
+    /// fence whose target it is already aligned with (a seek recreate
+    /// landed on the switch target before the commit raised the fence):
+    /// no format diff is observable there, so without the target the
+    /// fence would never clear.
+    fence_target: AtomicUsize,
 }
 
 impl HlsCoord {
@@ -114,6 +124,7 @@ impl HlsCoord {
             headers: env.headers,
             variant_generation: AtomicU64::new(0),
             fence_at: AtomicU64::new(0),
+            fence_target: AtomicUsize::new(0),
         }
     }
 
@@ -249,6 +260,7 @@ impl HlsCoord {
                 .unwrap_or(0);
             let target_byte = v_new.segment_byte_offset_natural(target_seg).unwrap_or(0);
             v_new.set_position(target_byte);
+            self.fence_target.store(new_v, Ordering::Release);
             self.variant_generation.fetch_add(1, Ordering::Release);
             self.abr.apply_decision(&decision, Instant::now());
             v_new.rebuild_with_decoder_probe(ctx, target_seg);
@@ -430,6 +442,16 @@ impl HlsCoord {
         self.variant_generation.load(Ordering::Acquire) > self.fence_at.load(Ordering::Acquire)
     }
 
+    /// Target variant of the pending fence; `None` when no fence is up.
+    /// The target store happens-before the generation bump, so a caller
+    /// that observed the fence reads the variant that fence (or a newer
+    /// one — latest wins, matching `clear_variant_fence` absorbing all
+    /// outstanding generations) demands.
+    pub(crate) fn variant_change_target(&self) -> Option<usize> {
+        self.variant_change_pending()
+            .then(|| self.fence_target.load(Ordering::Acquire))
+    }
+
     /// Single source of truth: the variant index lives in
     /// [`AbrState::current_variant`]. The previous duplicate
     /// `HlsCoord::active_variant` was removed — `apply_decision`
@@ -520,6 +542,10 @@ impl VariantControl for HlsCoord {
 
     fn has_variant_change_pending(&self) -> bool {
         Self::has_variant_change_pending(self)
+    }
+
+    fn variant_change_target(&self) -> Option<usize> {
+        Self::variant_change_target(self)
     }
 
     fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {

@@ -356,6 +356,13 @@ pub trait VariantControl: Send + Sync + 'static {
     /// short-circuited until the decoder acks via `clear_variant_fence`).
     fn has_variant_change_pending(&self) -> bool;
 
+    /// Target variant index of the in-flight transition, `None` when no
+    /// fence is pending. Published before the fence is raised, so any
+    /// observer of a pending fence also sees the variant that fence
+    /// demands. Lets the decoder ack a fence whose target it is already
+    /// aligned with — no format diff will ever become observable there.
+    fn variant_change_target(&self) -> Option<usize>;
+
     /// Byte range of the header the decoder must re-read after a format
     /// change (HLS ABR cross-codec switch).
     ///

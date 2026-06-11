@@ -327,6 +327,15 @@ impl<T: StreamType> Stream<T> {
             .is_some_and(|vc| vc.has_variant_change_pending())
     }
 
+    /// Target variant index of the pending fence, `None` when no fence
+    /// is up (or the source is non-adaptive).
+    #[must_use]
+    pub fn variant_change_target(&self) -> Option<usize> {
+        self.source
+            .variant_control()
+            .and_then(|vc| vc.variant_change_target())
+    }
+
     /// Header byte range for decoder recreate after a format change.
     ///
     /// # Errors
