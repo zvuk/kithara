@@ -14,11 +14,7 @@ use kithara_integration_tests::{
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use kithara_platform::{
-    CancellationToken, thread,
-    time::{Duration, Instant},
-    tokio::task::spawn_blocking,
-};
+use kithara_platform::{CancellationToken, task::spawn_blocking, thread, time::Duration};
 use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;
@@ -65,7 +61,6 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
 /// Aggressive lifecycle stress test with 3 ABR variants, 2000 seeks,
 /// and full-track integrity verification after seek-to-zero.
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -187,6 +182,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .media_info(wav_info)
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -208,9 +204,8 @@ async fn stress_seek_lifecycle_with_zero_reset(
         info!("Phase 1: warmup - reading until ABR switch");
         let mut initial_direction = Direction::Unknown;
         let mut switch_detected = false;
-        let warmup_deadline = Instant::now() + Duration::from_secs(10);
 
-        while Instant::now() < warmup_deadline {
+        loop {
             let (n, _, _) = read_with_retry(&mut audio, &mut buf);
             if n == 0 {
                 break;

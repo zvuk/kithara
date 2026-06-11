@@ -14,17 +14,12 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, Xorshift64, temp_dir};
-use kithara_platform::{
-    time::{Duration, Instant, sleep},
-    tokio::task::spawn,
-};
+use kithara_platform::{task::spawn_blocking, thread, time::Duration, tokio::task::spawn};
 use tracing::info;
 
 struct Consts;
 impl Consts {
-    const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
-    const WARMUP_TIMEOUT_SECS: u64 = 2;
-    const RANDOM_PHASE_BUDGET_SECS: u64 = 8;
+    const WARMUP_CHUNKS: usize = 4;
     const RANDOM_SEEK_OPS_MAX: usize = 256;
     const MIN_RANDOM_CHUNKS: usize = 384;
     const CHUNKS_PER_RANDOM_SEEK: usize = 2;
@@ -89,12 +84,7 @@ fn snapshot(stats: &Arc<Mutex<LiveStats>>) -> LiveSnapshot {
     stats.lock().expect("stats lock poisoned").snapshot()
 }
 
-async fn next_chunk_with_timeout(
-    audio: &mut Audio<Stream<File>>,
-    timeout: Duration,
-    stage: &str,
-) -> Option<PcmChunk> {
-    let deadline = Instant::now() + timeout;
+fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) -> Option<PcmChunk> {
     loop {
         match PcmReader::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
@@ -102,16 +92,11 @@ async fn next_chunk_with_timeout(
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
         }
-        assert!(
-            Instant::now() <= deadline,
-            "next_chunk timeout at stage='{stage}'"
-        );
-        sleep(Duration::from_micros(500)).await;
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     serial,
@@ -139,6 +124,7 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
     let mut audio = Audio::<Stream<File>>::new(
         AudioConfig::<File>::for_stream(file_config)
             .hint(("mp3").to_string())
+            .block_on_underrun(true)
             .build(),
     )
     .await
@@ -170,140 +156,124 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
             }
         }
     });
-    audio.preload().expect("preload must succeed");
-
-    info!(ephemeral, "Phase 1: warmup");
-    let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
-    while Instant::now() < warmup_deadline {
-        let _ = next_chunk_with_timeout(
-            &mut audio,
-            Duration::from_millis(Consts::NEXT_CHUNK_TIMEOUT_MS),
-            "warmup",
-        )
-        .await;
-    }
-
-    let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-    let max_seek_secs = (duration_secs - 2.0).max(20.0);
-    let mut rng = Xorshift64::new(0xA11C_5EED_0000_0101);
-    let mut seek_positions = Vec::with_capacity(Consts::RANDOM_SEEK_OPS_MAX);
-    for _ in 0..Consts::RANDOM_SEEK_OPS_MAX {
-        seek_positions.push(rng.range_f64(1.0, max_seek_secs));
-    }
-
-    info!(
-        operations_max = Consts::RANDOM_SEEK_OPS_MAX,
-        phase_budget_secs = Consts::RANDOM_PHASE_BUDGET_SECS,
-        chunks_per_seek = Consts::CHUNKS_PER_RANDOM_SEEK,
-        "Phase 2: random seek/read stress"
-    );
-    let random_deadline = Instant::now() + Duration::from_secs(Consts::RANDOM_PHASE_BUDGET_SECS);
-    let mut random_ops_done = 0usize;
-    let mut chunks_read = 0usize;
-    for (idx, pos_secs) in seek_positions.iter().copied().enumerate() {
-        if Instant::now() > random_deadline {
-            break;
-        }
-        audio
-            .seek(Duration::from_secs_f64(pos_secs))
-            .expect("seek must not fail");
+    // The blocking read phases must NOT run on the test runtime thread: with
+    // block_on_underrun the read parks the thread, and on the current-thread
+    // runtime that starves the drive/fetch tasks that feed it. preload()
+    // primes through the same parking recv, so it belongs here too.
+    let audio = spawn_blocking(move || {
         audio.preload().expect("preload must succeed");
-        random_ops_done = random_ops_done.saturating_add(1);
-
-        for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
-            let stage = format!("random_seek_{idx}_chunk_{read_idx}");
-            let Some(_chunk) = next_chunk_with_timeout(
-                &mut audio,
-                Duration::from_millis(Consts::NEXT_CHUNK_TIMEOUT_MS),
-                &stage,
-            )
-            .await
-            else {
+        info!(ephemeral, "Phase 1: warmup");
+        for _ in 0..Consts::WARMUP_CHUNKS {
+            if next_chunk(&mut audio, "warmup").is_none() {
                 break;
-            };
-            chunks_read = chunks_read.saturating_add(1);
+            }
         }
-    }
-    assert!(
-        chunks_read >= Consts::MIN_RANDOM_CHUNKS,
-        "stress read underflow: expected at least {} chunks, got {} (random_ops_done={})",
-        Consts::MIN_RANDOM_CHUNKS,
-        chunks_read,
-        random_ops_done
-    );
 
-    info!(seeks = Consts::FAST_SEEK_BURST, "Phase 3: fast seek burst");
-    for _ in 0..Consts::FAST_SEEK_BURST {
-        let pos_secs = rng.range_f64(1.0, max_seek_secs);
-        audio
-            .seek(Duration::from_secs_f64(pos_secs))
-            .expect("fast seek must not fail");
-    }
-    audio.preload().expect("preload must succeed");
-
-    let sequential_seek_max = (max_seek_secs - 20.0).max(5.0);
-    let final_seek = rng.range_f64(1.0, sequential_seek_max);
-    audio
-        .seek(Duration::from_secs_f64(final_seek))
-        .expect("final seek before sequential read must not fail");
-    audio.preload().expect("preload must succeed");
-
-    info!(
-        sequential_chunks = Consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
-        "Phase 4: sequential read after fast seeks"
-    );
-    let mut seq_epoch = None;
-    let mut seq_end_frame = None;
-    for idx in 0..Consts::SEQUENTIAL_CHUNKS_AFTER_BURST {
-        let stage = format!("sequential_after_burst_{idx}");
-        let chunk = next_chunk_with_timeout(
-            &mut audio,
-            Duration::from_millis(Consts::NEXT_CHUNK_TIMEOUT_MS),
-            &stage,
-        )
-        .await
-        .unwrap_or_else(|| panic!("sequential read stopped early at chunk {idx}"));
-        if let Some(epoch) = seq_epoch {
-            assert_eq!(
-                chunk.meta.epoch, epoch,
-                "sequential read changed epoch unexpectedly after final seek"
-            );
-        } else {
-            seq_epoch = Some(chunk.meta.epoch);
+        let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
+        let max_seek_secs = (duration_secs - 2.0).max(20.0);
+        let mut rng = Xorshift64::new(0xA11C_5EED_0000_0101);
+        let mut seek_positions = Vec::with_capacity(Consts::RANDOM_SEEK_OPS_MAX);
+        for _ in 0..Consts::RANDOM_SEEK_OPS_MAX {
+            seek_positions.push(rng.range_f64(1.0, max_seek_secs));
         }
-        if let Some(prev_end) = seq_end_frame {
-            assert!(
-                chunk.meta.frame_offset >= prev_end,
-                "frame_offset regressed after burst seek (prev_end={}, current={})",
-                prev_end,
-                chunk.meta.frame_offset
-            );
-        }
-        seq_end_frame = Some(chunk.meta.frame_offset + chunk.frames() as u64);
-    }
 
-    info!(
-        seeks = Consts::REVISIT_SEEKS,
-        "Phase 5: revisit same positions"
-    );
-    let revisit_limit = Consts::REVISIT_SEEKS.min(random_ops_done);
-    assert!(
-        revisit_limit > 0,
-        "random phase completed without seek operations"
-    );
-    for (idx, pos_secs) in seek_positions.iter().take(revisit_limit).enumerate() {
-        audio
-            .seek(Duration::from_secs_f64(*pos_secs))
-            .expect("revisit seek must not fail");
+        info!(
+            operations_max = Consts::RANDOM_SEEK_OPS_MAX,
+            chunks_per_seek = Consts::CHUNKS_PER_RANDOM_SEEK,
+            "Phase 2: random seek/read stress"
+        );
+        let mut random_ops_done = 0usize;
+        let mut chunks_read = 0usize;
+        for (idx, pos_secs) in seek_positions.iter().copied().enumerate() {
+            audio
+                .seek(Duration::from_secs_f64(pos_secs))
+                .expect("seek must not fail");
+            audio.preload().expect("preload must succeed");
+            random_ops_done = random_ops_done.saturating_add(1);
+
+            for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
+                let stage = format!("random_seek_{idx}_chunk_{read_idx}");
+                let Some(_chunk) = next_chunk(&mut audio, &stage) else {
+                    break;
+                };
+                chunks_read = chunks_read.saturating_add(1);
+            }
+        }
+        assert!(
+            chunks_read >= Consts::MIN_RANDOM_CHUNKS,
+            "stress read underflow: expected at least {} chunks, got {} (random_ops_done={})",
+            Consts::MIN_RANDOM_CHUNKS,
+            chunks_read,
+            random_ops_done
+        );
+
+        info!(seeks = Consts::FAST_SEEK_BURST, "Phase 3: fast seek burst");
+        for _ in 0..Consts::FAST_SEEK_BURST {
+            let pos_secs = rng.range_f64(1.0, max_seek_secs);
+            audio
+                .seek(Duration::from_secs_f64(pos_secs))
+                .expect("fast seek must not fail");
+        }
         audio.preload().expect("preload must succeed");
-        let stage = format!("revisit_{idx}");
-        let _ = next_chunk_with_timeout(
-            &mut audio,
-            Duration::from_millis(Consts::NEXT_CHUNK_TIMEOUT_MS),
-            &stage,
-        )
-        .await;
-    }
+
+        let sequential_seek_max = (max_seek_secs - 20.0).max(5.0);
+        let final_seek = rng.range_f64(1.0, sequential_seek_max);
+        audio
+            .seek(Duration::from_secs_f64(final_seek))
+            .expect("final seek before sequential read must not fail");
+        audio.preload().expect("preload must succeed");
+
+        info!(
+            sequential_chunks = Consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
+            "Phase 4: sequential read after fast seeks"
+        );
+        let mut seq_epoch = None;
+        let mut seq_end_frame = None;
+        for idx in 0..Consts::SEQUENTIAL_CHUNKS_AFTER_BURST {
+            let stage = format!("sequential_after_burst_{idx}");
+            let chunk = next_chunk(&mut audio, &stage)
+                .unwrap_or_else(|| panic!("sequential read stopped early at chunk {idx}"));
+            if let Some(epoch) = seq_epoch {
+                assert_eq!(
+                    chunk.meta.epoch, epoch,
+                    "sequential read changed epoch unexpectedly after final seek"
+                );
+            } else {
+                seq_epoch = Some(chunk.meta.epoch);
+            }
+            if let Some(prev_end) = seq_end_frame {
+                assert!(
+                    chunk.meta.frame_offset >= prev_end,
+                    "frame_offset regressed after burst seek (prev_end={}, current={})",
+                    prev_end,
+                    chunk.meta.frame_offset
+                );
+            }
+            seq_end_frame = Some(chunk.meta.frame_offset + chunk.frames() as u64);
+        }
+
+        info!(
+            seeks = Consts::REVISIT_SEEKS,
+            "Phase 5: revisit same positions"
+        );
+        let revisit_limit = Consts::REVISIT_SEEKS.min(random_ops_done);
+        assert!(
+            revisit_limit > 0,
+            "random phase completed without seek operations"
+        );
+        for (idx, pos_secs) in seek_positions.iter().take(revisit_limit).enumerate() {
+            audio
+                .seek(Duration::from_secs_f64(*pos_secs))
+                .expect("revisit seek must not fail");
+            audio.preload().expect("preload must succeed");
+            let stage = format!("revisit_{idx}");
+            let _ = next_chunk(&mut audio, &stage);
+        }
+
+        audio
+    })
+    .await
+    .expect("read phase join");
 
     let final_stats = snapshot(&stats);
     assert_eq!(

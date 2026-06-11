@@ -7,7 +7,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
-use kithara_platform::time::{self, Duration, Instant};
+use kithara_platform::time::{self, Duration};
 
 #[kithara::fixture]
 async fn server() -> TestServerHelper {
@@ -29,6 +29,7 @@ async fn open_test_mp3(
     let mut config = AudioConfig::<File>::for_stream(file_config)
         .hint(String::from("mp3"))
         .decoder_backend(backend)
+        .block_on_underrun(true)
         .build();
     if let Some(bus) = events {
         config.bus = Some(bus);
@@ -36,9 +37,12 @@ async fn open_test_mp3(
     Audio::<Stream<File>>::new(config).await.unwrap()
 }
 
+/// Reads parked on underrun (`block_on_underrun`); the re-poll below only
+/// covers seek-in-progress `Pending`. A genuine stall is caught by the
+/// per-test timeout, not a hand-rolled deadline. `flash(true)` keeps the
+/// re-poll sleep on the virtual clock when called from a flash test.
+#[kithara::flash(true)]
 async fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-
     loop {
         match PcmReader::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(_)) => return,
@@ -48,10 +52,6 @@ async fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) {
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("decode error at {stage}: {e}"),
         }
-        assert!(
-            Instant::now() <= deadline,
-            "timed out waiting for decoded PCM at stage={stage}",
-        );
 
         audio.preload().expect("preload must succeed");
         time::sleep(Duration::from_millis(10)).await;
@@ -79,7 +79,6 @@ async fn decoder_file_creates_successfully(
 
 /// Decoder<Stream<File>> reads MP3 samples (no seek, just read).
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -98,7 +97,6 @@ async fn decoder_file_reads_samples(#[future] server: TestServerHelper, temp_dir
 /// to 0 again. The backward-seek case (which needs a warmup prelude) is a
 /// separate test.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -130,7 +128,6 @@ async fn decoder_file_single_seek(
 
 /// Decoder<Stream<File>> can seek backward to the beginning after a warmup.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -153,7 +150,6 @@ async fn decoder_file_seek_backward(#[future] server: TestServerHelper, temp_dir
 
 /// Decoder<Stream<File>> multiple seeks in sequence.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -185,7 +181,6 @@ async fn decoder_file_seek_multiple(
 
 /// Decoder<Stream<File>> events are emitted on seek.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -205,7 +200,6 @@ async fn decoder_file_seek_emits_events(#[future] server: TestServerHelper, temp
     let mut got_seek = false;
     let mut buf = [0.0_f32; 1024];
 
-    let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         while let Ok(ev) = events_rx.try_recv() {
             match ev {
@@ -222,11 +216,6 @@ async fn decoder_file_seek_emits_events(#[future] server: TestServerHelper, temp
         if got_format && got_seek {
             break;
         }
-
-        assert!(
-            Instant::now() <= deadline,
-            "timed out waiting for FormatDetected/SeekComplete events",
-        );
 
         use kithara::audio::ReadOutcome;
         match decoder.read(&mut buf) {

@@ -10,7 +10,7 @@ use kithara_integration_tests::{
     TestTempDir, auto,
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
-use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancellationToken, task::spawn_blocking, time::Duration};
 use tracing::info;
 
 use crate::common::{
@@ -56,8 +56,11 @@ async fn create_hls_audio(
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    // Park on ring underrun instead of surfacing Pending, so the blocking
+    // readers never spin against the virtual clock.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .media_info(wav_info)
+        .block_on_underrun(true)
         .build();
 
     Audio::<Stream<Hls>>::new(config)
@@ -100,7 +103,6 @@ async fn run_concurrent_hls(n: usize, abr: AbrMode, variants: usize) {
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     serial,

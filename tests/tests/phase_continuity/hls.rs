@@ -170,8 +170,10 @@ async fn run_case_paced(
         .cancel(cancel)
         .initial_abr_mode(initial_mode)
         .build();
+    // Park on ring underrun: the offline scan needs no wall-clock pacing.
     let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
         .decoder_backend(backend)
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(audio_config)
         .await
@@ -240,7 +242,6 @@ async fn run_case_paced(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,

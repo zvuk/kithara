@@ -63,9 +63,11 @@ async fn run_case(
     };
 
     let file_config = FileConfig::for_src(url.into()).store(store).build();
+    // Park on ring underrun: the offline scan needs no wall-clock pacing.
     let audio_config = AudioConfig::<File>::for_stream(file_config)
         .decoder_backend(backend)
         .maybe_hint(format_ext(format).map(str::to_owned))
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<File>>::new(audio_config)
         .await
@@ -268,9 +270,11 @@ async fn decode_pcm_seconds(
         .is_ephemeral(true)
         .build();
     let file_config = FileConfig::for_src(url.into()).store(store).build();
+    // Park on ring underrun instead of spinning on Pending.
     let audio_config = AudioConfig::<File>::for_stream(file_config)
         .decoder_backend(backend)
         .maybe_hint(format_ext(format).map(str::to_owned))
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<File>>::new(audio_config)
         .await
@@ -640,7 +644,6 @@ async fn run_codec_compare(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -748,7 +751,6 @@ async fn codec_distortion_profile(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -845,9 +847,11 @@ async fn build_aac_sine_audio(backend: DecoderBackend) -> Audio<Stream<File>> {
         .build();
     std::mem::forget(temp_dir);
     let file_config = FileConfig::for_src(url.into()).store(store).build();
+    // Park on ring underrun: covers both the cold and seeked handles.
     let audio_config = AudioConfig::<File>::for_stream(file_config)
         .decoder_backend(backend)
         .maybe_hint(Some("aac".to_owned()))
+        .block_on_underrun(true)
         .build();
     Audio::<Stream<File>>::new(audio_config)
         .await
@@ -914,7 +918,6 @@ fn first_signal_window_phase(
 /// they diverged by ~2 access units; the assertion compares against the
 /// production [`TOLERANCE_SAMPLES`] — the same contract `hls.rs:211` enforces.
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,

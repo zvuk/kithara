@@ -15,6 +15,8 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancellationToken,
+    task::spawn_blocking,
+    thread,
     time::{Duration, Instant, sleep, timeout},
 };
 use tracing::info;
@@ -115,7 +117,6 @@ async fn read_audio_some(audio: &mut Audio<Stream<Hls>>, stage: &str) -> usize {
 /// `kithara-app` plays track.mp3 + hls/master.m3u8 + drm/master.m3u8.
 /// ABR switches variant on HLS track → worker hangs → all tracks die.
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -133,39 +134,46 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .block_on_underrun(true)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    let _ = audio.preload();
+    spawn_blocking(move || {
+        let _ = audio.preload();
+        let mut buf = vec![0f32; 4096];
+        let mut total_samples = 0u64;
 
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let mut buf = vec![0f32; 4096];
-    let mut total_samples = 0u64;
-
-    let mut saw_eof = false;
-    while Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(10)).await;
+        let mut saw_eof = false;
+        loop {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    total_samples += count.get() as u64;
+                    if total_samples >= 100_000 {
+                        break;
+                    }
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_eof = true;
+                    break;
+                }
+                Err(e) => panic!("decode error: {e}"),
             }
-            Ok(ReadOutcome::Frames { count, .. }) => {
-                total_samples += count.get() as u64;
-            }
-            Ok(ReadOutcome::Eof { .. }) => {
-                saw_eof = true;
-                break;
-            }
-            Err(e) => panic!("decode error: {e}"),
         }
-    }
 
-    let _ = saw_eof;
-    info!(total_samples, "playback completed without hang");
-    assert!(
-        total_samples > 1000,
-        "expected sustained playback, got only {total_samples} samples"
-    );
+        let _ = saw_eof;
+        info!(total_samples, "playback completed without hang");
+        assert!(
+            total_samples > 1000,
+            "expected sustained playback, got only {total_samples} samples"
+        );
+    })
+    .await
+    .expect("read phase join");
 }
 
 /// Packaged ABR HLS must switch variants without losing continuity.
@@ -315,7 +323,6 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
 ///
 /// Parameterized: path × ABR mode to isolate DRM vs HLS vs no-ABR.
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -368,69 +375,78 @@ async fn stream_continues_after_seek(
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .decoder_backend(backend)
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    let _ = audio.preload();
+    // The blocking read phase must NOT run on the test runtime thread: with
+    // block_on_underrun the read parks the thread, and on the current-thread
+    // runtime that starves the HLS drive/fetch tasks that feed it. preload()
+    // primes through the same parking recv, so it belongs here too.
+    spawn_blocking(move || {
+        let _ = audio.preload();
+        let mut buf = vec![0f32; 4096];
 
-    let mut buf = vec![0f32; 4096];
+        let mut warmup_samples = 0u64;
+        while warmup_samples < 17_640 {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
+                Ok(ReadOutcome::Pending { .. }) => thread::sleep(Duration::from_millis(5)),
+                Ok(ReadOutcome::Eof { .. }) => panic!("[{path}] unexpected EOF during warmup"),
+                Err(e) => panic!("decode error during warmup: {e}"),
+            }
+        }
 
-    let warmup = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < warmup {
-        let _ = audio.read(&mut buf);
-        sleep(Duration::from_millis(5)).await;
-    }
+        let samples_per_seek: u64 = 48000 * 2;
+        for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
+            audio
+                .seek(Duration::from_secs_f64(target_secs))
+                .expect("seek");
 
-    let samples_per_seek: u64 = 48000 * 2;
-    for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
-        audio
-            .seek(Duration::from_secs_f64(target_secs))
-            .expect("seek");
+            let mut samples = 0u64;
+            while samples < samples_per_seek {
+                match audio.read(&mut buf) {
+                    Ok(ReadOutcome::Pending { .. }) => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Ok(ReadOutcome::Frames { count, .. }) => {
+                        samples += count.get() as u64;
+                    }
+                    Ok(ReadOutcome::Eof { .. }) => break,
+                    Err(e) => panic!("decode error: {e}"),
+                }
+            }
+            assert!(
+                samples > 0,
+                "[{path}] seek to {target_secs}s must produce samples, got 0"
+            );
+        }
 
-        let mut samples = 0u64;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while samples < samples_per_seek && Instant::now() < deadline {
+        let mut post_seek_samples = 0u64;
+        while post_seek_samples < samples_per_seek {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => {
-                    sleep(Duration::from_millis(10)).await;
+                    thread::sleep(Duration::from_millis(10));
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
-                    samples += count.get() as u64;
+                    post_seek_samples += count.get() as u64;
                 }
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("decode error: {e}"),
             }
         }
         assert!(
-            samples > 0,
-            "[{path}] seek to {target_secs}s must produce samples, got 0"
+            post_seek_samples > 0,
+            "[{path}] playback after seeks must continue, got 0 samples"
         );
-    }
-
-    let mut post_seek_samples = 0u64;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while post_seek_samples < samples_per_seek && Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(10)).await;
-            }
-            Ok(ReadOutcome::Frames { count, .. }) => {
-                post_seek_samples += count.get() as u64;
-            }
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error: {e}"),
-        }
-    }
-    assert!(
-        post_seek_samples > 0,
-        "[{path}] playback after seeks must continue, got 0 samples"
-    );
+    })
+    .await
+    .expect("read phase join");
 }
 
 /// Same test but without ABR (fixed variant 0) — baseline.
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -448,33 +464,40 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .block_on_underrun(true)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    let _ = audio.preload();
+    spawn_blocking(move || {
+        let _ = audio.preload();
+        let mut buf = vec![0f32; 4096];
+        let mut total_samples = 0u64;
 
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut buf = vec![0f32; 4096];
-    let mut total_samples = 0u64;
-
-    while Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(10)).await;
+        loop {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    total_samples += count.get() as u64;
+                    if total_samples >= 100_000 {
+                        break;
+                    }
+                }
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("decode error: {e}"),
             }
-            Ok(ReadOutcome::Frames { count, .. }) => {
-                total_samples += count.get() as u64;
-            }
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error: {e}"),
         }
-    }
 
-    assert!(
-        total_samples > 1000,
-        "baseline: expected sustained playback, got only {total_samples} samples"
-    );
+        assert!(
+            total_samples > 1000,
+            "baseline: expected sustained playback, got only {total_samples} samples"
+        );
+    })
+    .await
+    .expect("read phase join");
 }
 
 /// Seek after decode-to-EOF in mmap (non-ephemeral) DRM mode must produce samples.
@@ -483,7 +506,6 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
 /// segments whose byte offsets are no longer visible in the `StreamIndex` layout,
 /// causing `read_at` to return Retry forever.
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -506,49 +528,56 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .decoder_backend(DecoderBackend::Symphonia)
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    let _ = audio.preload();
+    spawn_blocking(move || {
+        let _ = audio.preload();
+        let mut buf = vec![0f32; 4096];
 
-    let mut buf = vec![0f32; 4096];
-
-    let warmup = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < warmup {
-        let _ = audio.read(&mut buf);
-        sleep(Duration::from_millis(5)).await;
-    }
-
-    let seek_targets = [
-        50.0, 120.0, 5.0, 80.0, 150.0, 30.0, 100.0, 60.0, 140.0, 20.0, 90.0, 10.0, 70.0, 130.0,
-        40.0, 110.0,
-    ];
-    let samples_per_seek: u64 = 48000 * 2;
-    for (idx, &target_secs) in seek_targets.iter().enumerate() {
-        audio
-            .seek(Duration::from_secs_f64(target_secs))
-            .unwrap_or_else(|e| panic!("[{path}] seek #{idx} to {target_secs}s failed: {e}"));
-
-        let mut samples = 0u64;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while samples < samples_per_seek && Instant::now() < deadline {
+        let mut warmup_samples = 0u64;
+        while warmup_samples < 17_640 {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => {
-                    sleep(Duration::from_millis(10)).await;
-                }
-                Ok(ReadOutcome::Frames { count, .. }) => {
-                    samples += count.get() as u64;
-                }
-                Ok(ReadOutcome::Eof { .. }) => break,
-                Err(e) => panic!("decode error: {e}"),
+                Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
+                Ok(ReadOutcome::Pending { .. }) => thread::sleep(Duration::from_millis(5)),
+                Ok(ReadOutcome::Eof { .. }) => panic!("[{path}] unexpected EOF during warmup"),
+                Err(e) => panic!("decode error during warmup: {e}"),
             }
         }
-        assert!(
-            samples > 0,
-            "[{path}] seek #{idx} to {target_secs}s must produce samples, got 0"
-        );
-    }
+
+        let seek_targets = [
+            50.0, 120.0, 5.0, 80.0, 150.0, 30.0, 100.0, 60.0, 140.0, 20.0, 90.0, 10.0, 70.0, 130.0,
+            40.0, 110.0,
+        ];
+        let samples_per_seek: u64 = 48000 * 2;
+        for (idx, &target_secs) in seek_targets.iter().enumerate() {
+            audio
+                .seek(Duration::from_secs_f64(target_secs))
+                .unwrap_or_else(|e| panic!("[{path}] seek #{idx} to {target_secs}s failed: {e}"));
+
+            let mut samples = 0u64;
+            while samples < samples_per_seek {
+                match audio.read(&mut buf) {
+                    Ok(ReadOutcome::Pending { .. }) => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Ok(ReadOutcome::Frames { count, .. }) => {
+                        samples += count.get() as u64;
+                    }
+                    Ok(ReadOutcome::Eof { .. }) => break,
+                    Err(e) => panic!("decode error: {e}"),
+                }
+            }
+            assert!(
+                samples > 0,
+                "[{path}] seek #{idx} to {target_secs}s must produce samples, got 0"
+            );
+        }
+    })
+    .await
+    .expect("read phase join");
 }
 
 /// MP3 progressive file must continue producing chunks after seek sequence.
@@ -556,7 +585,6 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
 /// Same seek pattern as HLS/DRM tests but with `Audio<Stream<File>>`.
 /// Baseline: no ABR, no segments, no variant switching.
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -572,64 +600,70 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
         .hint(("mp3").to_string())
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<File>>::new(config)
         .await
         .expect("create audio");
-    let _ = audio.preload();
+    spawn_blocking(move || {
+        let _ = audio.preload();
+        let mut buf = vec![0f32; 4096];
 
-    let mut buf = vec![0f32; 4096];
+        let mut warmup_samples = 0u64;
+        while warmup_samples < 17_640 {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
+                Ok(ReadOutcome::Pending { .. }) => thread::sleep(Duration::from_millis(5)),
+                Ok(ReadOutcome::Eof { .. }) => panic!("[mp3] unexpected EOF during warmup"),
+                Err(e) => panic!("decode error during warmup: {e}"),
+            }
+        }
 
-    let warmup = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < warmup {
-        let _ = audio.read(&mut buf);
-        sleep(Duration::from_millis(5)).await;
-    }
+        let samples_per_seek: u64 = 48000 * 2;
+        for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
+            audio
+                .seek(Duration::from_secs_f64(target_secs))
+                .expect("seek");
 
-    let samples_per_seek: u64 = 48000 * 2;
-    for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
-        audio
-            .seek(Duration::from_secs_f64(target_secs))
-            .expect("seek");
+            let mut samples = 0u64;
+            while samples < samples_per_seek {
+                match audio.read(&mut buf) {
+                    Ok(ReadOutcome::Pending { .. }) => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Ok(ReadOutcome::Frames { count, .. }) => {
+                        samples += count.get() as u64;
+                    }
+                    Ok(ReadOutcome::Eof { .. }) => break,
+                    Err(e) => panic!("decode error: {e}"),
+                }
+            }
+            assert!(
+                samples > 0,
+                "[mp3] seek to {target_secs}s must produce samples, got 0"
+            );
+        }
 
-        let mut samples = 0u64;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while samples < samples_per_seek && Instant::now() < deadline {
+        let mut post_seek_samples = 0u64;
+        while post_seek_samples < samples_per_seek {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => {
-                    sleep(Duration::from_millis(10)).await;
+                    thread::sleep(Duration::from_millis(10));
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
-                    samples += count.get() as u64;
+                    post_seek_samples += count.get() as u64;
                 }
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("decode error: {e}"),
             }
         }
         assert!(
-            samples > 0,
-            "[mp3] seek to {target_secs}s must produce samples, got 0"
+            post_seek_samples > 0,
+            "[mp3] playback after seeks must continue, got 0 samples"
         );
-    }
-
-    let mut post_seek_samples = 0u64;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while post_seek_samples < samples_per_seek && Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(10)).await;
-            }
-            Ok(ReadOutcome::Frames { count, .. }) => {
-                post_seek_samples += count.get() as u64;
-            }
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error: {e}"),
-        }
-    }
-    assert!(
-        post_seek_samples > 0,
-        "[mp3] playback after seeks must continue, got 0 samples"
-    );
+    })
+    .await
+    .expect("read phase join");
 }
 
 /// ABR must be frozen during seek and resume afterwards.

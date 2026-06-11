@@ -13,7 +13,7 @@ use kithara_integration_tests::{
     phase_distance, phase_from_f32,
     signal_pcm::signal,
 };
-use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancellationToken, task::spawn_blocking, time::Duration};
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -47,14 +47,7 @@ impl Consts {
 ///    - Level 2: continuity (consecutive frames follow a pattern)
 ///    - Level 3: position (decoded phase ≈ expected phase)
 /// 6. Final seek near the end → read to EOF
-#[kithara::test(
-    flash(false),
-    tokio,
-    native,
-    serial,
-    timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(30)))]
 #[case::symphonia_ephemeral(true, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -116,6 +109,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool, #[case] backend: Dec
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .media_info(wav_info)
         .decoder_backend(backend)
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -315,7 +309,9 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool, #[case] backend: Dec
         let mut saw_eof = false;
         loop {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => break,
+                Ok(ReadOutcome::Pending { .. }) => {
+                    panic!("final tail read returned Pending with block_on_underrun");
+                }
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     remaining_samples += count.get() as u64;
                     for &sample in &buf[..count.get()] {

@@ -159,6 +159,10 @@ fn resource_config_no_hint(
     resource_config(url, store, backend, None, None)
 }
 
+// Park on ring underrun instead of spinning on Pending, so the warmup loops
+// need no wall-clock deadline (a genuine stall trips the harness timeout).
+// `flash(true)`: the residual poll cadence rides the virtual clock under flash.
+#[kithara::flash(true)]
 async fn warm_hls_worker(
     url: &url::Url,
     store: StoreOptions,
@@ -171,12 +175,12 @@ async fn warm_hls_worker(
         .media_info(wav_info)
         .worker(worker)
         .decoder_backend(backend)
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
 
-    let deadline = Instant::now() + Consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
     loop {
         audio.preload().expect("preload must succeed");
@@ -188,10 +192,6 @@ async fn warm_hls_worker(
             }
             Err(e) => panic!("decode error while warming HLS worker for {url}: {e}"),
         }
-        assert!(
-            Instant::now() <= deadline,
-            "timed out waiting for HLS warmup data at {url}"
-        );
         sleep(Duration::from_millis(10)).await;
     }
 
@@ -211,14 +211,12 @@ async fn warm_hls_worker(
             }
             Err(e) => panic!("decode error after HLS warmup seek for {url}: {e}"),
         }
-        assert!(
-            Instant::now() <= deadline,
-            "timed out waiting for HLS post-seek data at {url}"
-        );
         sleep(Duration::from_millis(10)).await;
     }
 }
 
+// Same parked-read contract as `warm_hls_worker` (no wall-clock deadline).
+#[kithara::flash(true)]
 async fn warm_hls_worker_without_seek(
     url: &url::Url,
     store: StoreOptions,
@@ -231,12 +229,12 @@ async fn warm_hls_worker_without_seek(
         .media_info(wav_info)
         .worker(worker)
         .decoder_backend(backend)
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
 
-    let deadline = Instant::now() + Consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
     loop {
         audio.preload().expect("preload must succeed");
@@ -250,10 +248,6 @@ async fn warm_hls_worker_without_seek(
             }
             Err(e) => panic!("decode error while warming HLS worker for {url}: {e}"),
         }
-        assert!(
-            Instant::now() <= deadline,
-            "timed out waiting for HLS warmup data without seek at {url}"
-        );
         sleep(Duration::from_millis(10)).await;
     }
 }
@@ -662,7 +656,6 @@ enum WarmupTeardown {
 /// Sequential HLS warmups from two isolated sessions must not poison each
 /// other. Covers three teardown modes for the first session.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
