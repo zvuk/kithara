@@ -28,6 +28,10 @@ pub(crate) mod credit;
 mod pace;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 mod participant;
+/// Flash-side mirror of the `sync` facade tree: re-import stubs where flash
+/// adds no semantics, flash-aware primitives where it does.
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
+pub(crate) mod sync;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 mod wake;
 
