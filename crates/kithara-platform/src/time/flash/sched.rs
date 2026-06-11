@@ -19,7 +19,7 @@ use super::{
 };
 
 /// What kind of waiter an [`Entry`] is, so a signal targets the right group.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WaitKind {
     /// A timed waiter with no early-wake channel: woken solely by the engine
     /// crossing its deadline. Used by the test harness `park_for` and by the
@@ -888,4 +888,48 @@ pub(crate) fn indef_count() -> usize {
 #[cfg(test)]
 pub(crate) fn diag_yield_count() -> usize {
     SCHED.lock().yield_waiters.len()
+}
+
+/// Diagnostic snapshot of the engine for hang dumps: counters plus every
+/// parked waiter with its kind and deadline relative to the virtual clock.
+/// Uses `try_lock` so a dump from a panic/abort path can never itself hang
+/// on a held `SCHED` lock.
+pub(crate) fn dump() -> String {
+    use std::fmt::Write as _;
+    let now = SIM_NANOS.load(Ordering::Acquire);
+    let Some(s) = SCHED.try_lock() else {
+        return format!("virtual_now_ns={now}; SCHED lock held — engine mid-operation");
+    };
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "virtual_now_ns={now} active={} active_async={} real_io={} pace_anchor={} yield_waiters={}",
+        s.active,
+        s.active_async,
+        s.real_io,
+        if s.pace_anchor.is_some() {
+            "set"
+        } else {
+            "none"
+        },
+        s.yield_waiters.len(),
+    );
+    for ((deadline, id), entry) in &s.parked_timed {
+        let _ = writeln!(
+            out,
+            "  timed id={id} kind={:?} deadline_in_ns={}",
+            entry.kind,
+            deadline.saturating_sub(now),
+        );
+    }
+    for (id, entry) in &s.parked_indef {
+        let _ = writeln!(out, "  indef id={id} kind={:?}", entry.kind);
+    }
+    if !s.unpark_pending.is_empty() {
+        let _ = writeln!(out, "  unpark_pending={:?}", s.unpark_pending);
+    }
+    if !s.notify_permit.is_empty() {
+        let _ = writeln!(out, "  notify_permit={:?}", s.notify_permit);
+    }
+    out
 }

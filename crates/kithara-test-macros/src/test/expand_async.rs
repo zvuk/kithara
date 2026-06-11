@@ -183,6 +183,7 @@ pub(crate) fn emit_async_timeout_test(
                              (runtime shutdown blocked). Aborting process.\n",
                             __fn, __timeout_dur,
                         );
+                        ::kithara_test_utils::flash_dump_to_stderr("hard-timeout");
                         ::std::process::abort();
                     }
                 });
@@ -229,10 +230,15 @@ pub(crate) fn emit_async_timeout_test(
                                         }),
                                     )
                                     .await
-                                    .unwrap_or_else(|_| panic!(
-                                        "test `{}` timed out after {:?}",
-                                        #fn_name_str, __timeout_dur,
-                                    ))
+                                    .unwrap_or_else(|_| {
+                                        ::kithara_test_utils::flash_dump_to_stderr(
+                                            "virtual-timeout",
+                                        );
+                                        panic!(
+                                            "test `{}` timed out after {:?}",
+                                            #fn_name_str, __timeout_dur,
+                                        )
+                                    })
                                 },
                             ),
                         ),

@@ -230,6 +230,14 @@ pub(crate) fn now_nanos() -> u64 {
     SIM_NANOS.load(Ordering::Acquire)
 }
 
+/// Diagnostic snapshot of the quiescence engine for hang dumps. The test
+/// harness (`kithara-test-utils`) prints it on a test timeout so a wedged
+/// run self-reports every parked participant, deadline and pending signal.
+#[must_use]
+pub fn flash_dump_state() -> String {
+    sched::dump()
+}
+
 fn duration_to_nanos(d: Duration) -> u64 {
     // Fold via `u64` seconds + `u32` subsec — no `u128` intermediate, no cast.
     const NANOS_PER_SEC: u64 = 1_000_000_000;

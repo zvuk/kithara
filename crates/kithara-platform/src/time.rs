@@ -34,6 +34,11 @@ pub async fn sleep(duration: Duration) {
     }
 }
 
+/// Render the flash quiescence-engine state (parked participants, deadlines,
+/// pending signals). `kithara-test-utils` prints this on a test hang so a
+/// wedged run self-reports. Exists only with the engine itself.
+#[cfg(all(not(target_arch = "wasm32"), feature = "flash-time"))]
+pub use flash::flash_dump_state;
 /// Per-thread real-time scope. Under `flash-time` (native) this is the engine's
 /// [`flash::FlashScope`]: while held, [`Instant::now`] reads the real monotonic
 /// clock and the synchronous wait primitives use their real implementations, so

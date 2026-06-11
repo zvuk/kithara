@@ -170,7 +170,7 @@ selenium = []
 # waits collapse to virtual time. Off by default; enabling it compiles every
 # path-dep against the virtual `kithara_platform::time::Instant`. Used by the
 # phase-continuity equivalence proof.
-flash-time = ["kithara-platform/flash-time"]
+flash-time = ["kithara-platform/flash-time", "kithara-test-utils/flash-time"]
 
 [[bin]]
 name = "test_server"
