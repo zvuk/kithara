@@ -12,7 +12,7 @@ use std::{
     task::Waker,
 };
 
-use crate::native::sync::{Condvar, Mutex};
+use crate::native::sync::{Condvar, Mutex, MutexGuard};
 
 /// One waiter's wake handle: a flag + condvar so the parked OS thread blocks
 /// off-lock and wakes when the engine (clock jump), an `unpark`, or a
@@ -38,17 +38,26 @@ impl Token {
         self.cv.notify_all();
     }
     pub(crate) fn wait(&self) {
-        let mut g = self.woken.lock_sync();
-        while !*g {
-            g = self.cv.wait_sync(g);
-        }
+        wait_set(&self.cv, self.woken.lock_sync());
+    }
+}
+
+/// [`Token::wait`]'s loop body: `woken` is checked under the lock before every
+/// block and re-checked after every wake (spurious-wake safe). The guard
+/// enters as a parameter and drops on return — the same hold window as an
+/// in-line loop (parameter form keeps clippy's `significant_drop_tightening`
+/// from mis-suggesting an early drop inside the loop).
+fn wait_set(cv: &Condvar, mut woken: MutexGuard<'_, bool>) {
+    while !*woken {
+        woken = cv.wait_sync(woken);
     }
 }
 
 /// How a parked waiter is woken once the engine (or a signal) selects it.
-/// Sync OS-thread waits store a `Token` (a `parking_lot` flag+condvar the blocked
+/// Sync OS-thread waits store a `Token` (a `native::sync` flag+condvar the blocked
 /// thread sits on); async-task waits store the task's `Waker`. `try_advance` /
-/// `signal_condvar` collect these and fire them AFTER releasing `SCHED`.
+/// `signal_condvar` collect these and fire them AFTER releasing the engine
+/// `core` lock.
 pub(crate) enum Wake {
     /// A blocked OS thread (`park_timeout`, `Condvar`): wake via the `Token`.
     Sync(Arc<Token>),
@@ -70,7 +79,7 @@ impl Wake {
     }
 
     /// Mark an async-task wake as granted an `active` slot. MUST run under the
-    /// `SCHED` lock at the same moment the firer does `active += 1`, so a
+    /// engine `core` lock at the same moment the firer does `active += 1`, so a
     /// concurrent `cancel_async_wait` (which also takes the lock) sees a
     /// consistent "entry removed ⇒ granted set" and never leaks the slot.
     pub(crate) fn mark_granted_under_lock(&self) {

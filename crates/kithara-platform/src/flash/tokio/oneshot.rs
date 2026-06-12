@@ -6,13 +6,16 @@
 //! `active` and the virtual clock cannot race past the send. Off the sim path
 //! this module is not compiled and callers get the real `tokio` oneshot.
 //!
-//! Each wait/wake branches on [`flash_ambient`]: when the test is flash-eligible
-//! the handoff uses the engine waiter; otherwise the receiver stores its real
+//! The park/wake mechanism is latched ONCE at channel creation (see
+//! `Backend`): a channel created under a flash-ambient context routes the
+//! handoff through the engine waiter; otherwise the receiver stores its real
 //! [`Waker`] in the shared state (under the SAME `inner` mutex that guards the
 //! value) and the sender wakes it directly — a true reactor-free wake that does
-//! not touch the engine's participant accounting. The queue/value/alive state is
-//! UNIFIED; only the park/wake mechanism branches. This default-real path is the
-//! only one taken until `#[kithara::flash]` annotations land.
+//! not touch the engine's participant accounting. The queue/value/alive state
+//! is UNIFIED; only the latched mechanism differs, and it is fixed for the
+//! channel's life so wait and wake always agree even across threads of
+//! different ambient. Outside a flash-ambient test every channel latches
+//! `Backend::Native`, so production behavior is unchanged.
 
 use std::{
     future::Future,

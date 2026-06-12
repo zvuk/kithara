@@ -64,27 +64,28 @@ On native these delegate to `tokio` runtime primitives, on wasm they use `setTim
 
 #### Annotation model (REAL by default, virtual only where turned on)
 
-Flash is **opt-in per region**, not a global mode flip. Two per-thread gates decide whether a primitive sees virtual or real time; **both default to false ⇒ REAL by default**, virtual only where a region turns it on.
+Flash is **opt-in per region**, not a global mode flip. The two flags of the per-thread `Mode` (the `ambient` / `active` fields of the single `ThreadCtx` thread-local in `flash/ctx.rs`) decide whether a primitive sees virtual or real time; **both default to false ⇒ REAL by default**, virtual only where a region turns it on.
 
-- `FLASH_AMBIENT` (the per-test gate) is set by `#[kithara::test(flash(bool))]` and **propagated across `spawn` / `spawn_named` / `spawn_blocking`** so every thread/task of a flash test shares one ambient mode. `flash_ambient()` reads it.
-- `FLASH_ACTIVE` (the dynamic gate) is pushed by a production `#[kithara::flash(bool)]` region as it runs, and is itself **gated by ambient** (a dynamic flash takes effect only inside an ambient flash test). `flash_enabled()` reads it.
+- The `ambient` flag (the per-test gate) is set by `#[kithara::test(flash(bool))]` and **propagated across `spawn` / `spawn_named` / `spawn_blocking`** so every thread/task of a flash test shares one ambient mode. `flash_ambient()` reads it.
+- The `active` flag (the dynamic gate) is pushed by a production `#[kithara::flash(bool)]` region as it runs, and is itself **gated by ambient** (a dynamic flash takes effect only inside an ambient flash test). `flash_enabled()` reads it.
 
-The two gates govern disjoint primitive classes, because their correctness requirements differ:
+The two flags govern disjoint primitive classes, because their correctness requirements differ:
 
-- `flash_enabled()` (FLASH_ACTIVE) governs the **stateless** time primitives — `time::sleep` / `time::timeout`, `Instant::now`, `thread::park_timeout` / `thread::sleep`. These read or wait on the clock with no cross-thread handshake, so a per-callstack gate is safe.
-- `flash_ambient()` (FLASH_AMBIENT) governs the **stateful** sync primitives — `Condvar` / `Notify` / `mpsc` / `oneshot` — and `task::yield_now`. A stateful primitive's *wait* and its *signal* run on different threads; if those two sides disagreed on virtual-vs-real (which a per-callstack gate would allow) the wait and the wake would target different engines and the test would hang. The ambient gate is uniform per test, so wait+signal always agree.
+- `flash_enabled()` (the `active` flag) governs the **stateless** time primitives — `time::sleep` / `time::timeout`, `Instant::now`, `thread::park_timeout` / `thread::sleep`. These read or wait on the clock with no cross-thread handshake, so a per-callstack gate is safe.
+- `flash_ambient()` (the `ambient` flag) governs the **stateful** sync primitives — `Condvar` / `Notify` / `mpsc` / `oneshot`, each of which latches the gate ONCE at construction (see `Backend` in `flash/ids.rs`) — and `task::yield_now`. A stateful primitive's *wait* and its *signal* run on different threads; if those two sides disagreed on virtual-vs-real (which a per-callstack gate would allow) the wait and the wake would target different engines and the test would hang. The ambient gate is uniform per test and the latch fixes it per primitive, so wait+signal always agree.
 
 The two annotations differ in scope:
 
-- **Production `#[kithara::flash(true|false)]` is DYNAMIC**: it pushes `FLASH_ACTIVE` through the annotated region's call stack and across its spawns (e.g. the audio worker `run_loop`, downloader yield loops, the preload gate), so the prod code's own stateless time reads go virtual while the region runs. It is gated by ambient, so off a flash test it is inert.
+- **Production `#[kithara::flash(true|false)]` is DYNAMIC**: it pushes the `active` flag through the annotated region's call stack and across its spawns (e.g. the audio worker `run_loop`, downloader yield loops, the preload gate), so the prod code's own stateless time reads go virtual while the region runs. It is gated by ambient, so off a flash test it is inert.
 - **Test `#[kithara::test(flash(true|false))]` is LEXICAL**: it rewrites the test BODY's *direct* `time::*` / `Instant::now` / `thread::park_timeout` calls to their virtual variants (body-only — a prod fn the body calls keeps its stateless time real unless that fn is itself `#[flash]`), and sets the ambient gate for the whole test graph. Default is `flash(true)` under the feature; real-socket suites are `flash(false)` (the whole graph stays real, identical to production).
 
 The lexical rewriter keys on the **last two path segments** of a call, so a flash test body MUST use a QUALIFIED time path (`time::sleep`, not a bare-imported `sleep`); a bare single-segment import is intentionally not rewritten and would stay real (a mixed-clock hazard) — see the rewriter doc comment in `kithara-test-macros`.
 
 #### Quiescence engine
 
-The clock is **quiescence-driven**, not additive: a single global `SIM_NANOS`
-(read lock-free by `Instant::now`) advances only when every participating root is
+The clock is **quiescence-driven**, not additive: an engine's `Clock` (one per
+`FlashInner`; the process-wide `FLASH` instance backs the wrapped primitives,
+read lock-free by `Instant::now`) advances only when every participating root is
 parked, and only ever jumps to the **earliest** registered deadline. Because the
 clock moves to a deterministic minimum over the multiset of pending deadlines,
 the sequence of clock values is a pure function of those deadlines — independent
@@ -93,7 +94,7 @@ wait to zero real time.
 
 Contract:
 
-- `time::Instant` becomes a drop-in struct backed by `SIM_NANOS`. Same surface
+- `time::Instant` becomes a drop-in struct backed by the engine `Clock`. Same surface
   (`now`, `elapsed`, `duration_since`, `saturating_duration_since`, `+`/`-`,
   ordering); all arithmetic saturates.
 - Participant accounting is **intrinsic to the platform-wrapped primitives** —
@@ -140,8 +141,10 @@ Contract:
     they branch on `flash_enabled()` — virtual inside an active flash region,
     real otherwise — like the other stateless time primitives.
   - `tokio::task::yield_now()` is a cooperative async yield. Like the stateful
-    sync primitives it branches on `flash_ambient` (the per-test ambient gate),
-    NOT `flash_enabled`: engine-backed (a quiescence yield-waiter) only inside an
+    sync primitives it keys on `flash_ambient` (the per-test ambient gate),
+    consulted per call — a yield has no cross-thread signal partner, so no
+    construction latch is needed — and NOT on `flash_enabled`: engine-backed (a
+    quiescence yield-waiter) only inside an
     ambient flash test, and a plain scheduler yield otherwise. A yield's grant
     comes from an engine clock advance, which requires `active_async == 0`; in a
     non-ambient (`flash(false)` / production) task the surrounding work keeps its
@@ -171,8 +174,10 @@ The engine cannot observe real-world transit: a task awaiting a real socket
 parks and releases its quiescence slot, so without correction the clock would
 jump to the next virtual deadline while bytes are still on the wire — firing
 virtual watchdogs (hang detector budgets, net idle timers) spuriously ahead of
-an in-flight loopback fetch. The corrective invariant extends the BlockingPacer
-one: **virtual time must never outrun real time while real I/O is in flight.**
+an in-flight loopback fetch. The corrective invariant extends the pooled-participant
+one (`PoolParticipant` in `flash/system/credit.rs`: an ambient `spawn_blocking`
+closure is real work the clock must not advance past): **virtual time must never
+outrun real time while real I/O is in flight.**
 
 - `time::real_io()` returns a `RealIoScope` RAII bracket for ONE real I/O
   operation. `kithara-net` holds it across its socket awaits (request

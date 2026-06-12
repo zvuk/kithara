@@ -15,8 +15,9 @@ use std::future::Future;
 // Under `flash` (native) [`spawn`] wraps the future in the quiescence
 // poll-wrapper and `yield_now` participates in quiescence UNDER AMBIENT (a
 // flash(true) test's busy-poll `loop { yield_now().await }` must let the virtual
-// clock advance). Like the stateful sync primitives it branches on
-// `flash_ambient`: in a flash(false) test / production it is a plain scheduler
+// clock advance). Like the stateful sync primitives it keys on
+// `flash_ambient` (consulted per call — a yield has no cross-thread signal
+// partner): in a flash(false) test / production it is a plain scheduler
 // yield, so the flash build stays behavior-transparent (an engine-backed
 // yield could never be granted there — the surrounding task keeps its
 // `active_async` slot across the yield while its other primitives are real).

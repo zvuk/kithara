@@ -1,4 +1,4 @@
-//! `FLASH_AMBIENT` spawn propagation (B5): the platform spawn wrappers carry the
+//! Ambient-mode spawn propagation (B5): the platform spawn wrappers carry the
 //! per-test ambient gate into spawned children (threads and async tasks), since
 //! thread-locals do not cross `spawn`. Gated on `flash` (native only).
 #![cfg(all(not(target_arch = "wasm32"), feature = "flash"))]

@@ -102,7 +102,7 @@ impl Wake for NoopWake {
 #[test]
 fn flash_active_defaults_real_and_nests() {
     let _g = guard();
-    assert!(!flash_enabled(), "default must be real (FLASH_ACTIVE off)");
+    assert!(!flash_enabled(), "default must be real (`active` flag off)");
     {
         let _a = ambient_scope(true); // ambient must be on for dynamic to take
         let _g2 = enter_dynamic(true);
@@ -442,7 +442,7 @@ fn xs(state: &mut u64) -> u64 {
 
 /// Adversarial multi-threaded stress over EVERY engine wait path with racing
 /// wakers AND the lazy-credit edge cases, run for many rounds. Proves the
-/// all-under-`SCHED` protocol never underflows `active` (a `debug_assert` would
+/// all-under-the-`core`-lock protocol never underflows `active` (a `debug_assert` would
 /// panic) and never loses a wakeup (a lost wake hangs → the join never completes
 /// → the generous `assert_fast` bound surfaces it as a stalled test rather than
 /// a silent pass), and that lazy credit always nets to zero.

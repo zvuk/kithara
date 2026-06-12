@@ -55,13 +55,13 @@ where
         // A DEDICATED pacer must run its WHOLE callstack in the test's flash mode,
         // not just propagate ambient. It loops on stateful waits (`Condvar`,
         // `park_timeout`) keyed on AMBIENT (virtual under a flash test) while
-        // computing their deadlines from `Instant::now()`, which keys on FLASH_ACTIVE
-        // (stateless). If only ambient were set, `Instant::now()` would stay REAL
+        // computing their deadlines from `Instant::now()`, which keys on the
+        // `active` mode flag (stateless). If only ambient were set, `Instant::now()` would stay REAL
         // while the wait registers a VIRTUAL deadline — the pacer feeds a real-clock
         // deadline into the virtual scheduler, which the virtual clock instantly
         // overshoots, so the wait never blocks and the pacer spins, pinning the
         // engine's `active` count and freezing the big clock jump every flash test
-        // needs. Setting FLASH_ACTIVE = ambient here (the audio worker already does
+        // needs. Setting `active` = ambient here (the audio worker already does
         // this via its `#[kithara::flash(true)]` run loop; this generalizes it to
         // EVERY `spawn_named` pacer — flush hub, offline render, …) keeps the
         // pacer's `Instant::now()` in the same clock domain as its waits.
@@ -129,7 +129,8 @@ pub fn park_timeout(duration: Duration) {
 /// Park onto the quiescence engine UNCONDITIONALLY (no `flash_enabled()`
 /// consult), mirroring [`park_timeout`]'s flash arm. The lexical test rewriter
 /// (`flash::virtual_park_timeout`) targets this so a flash test body's
-/// `park_timeout` collapses onto virtual time without setting `FLASH_ACTIVE`.
+/// `park_timeout` collapses onto virtual time without setting the `active`
+/// mode flag.
 #[inline]
 pub(crate) fn park_timeout_virtual(duration: Duration) {
     crate::flash::system::park_timed_unparkable(duration, ThreadKey::of(current().id()));

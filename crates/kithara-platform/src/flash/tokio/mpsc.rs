@@ -14,13 +14,16 @@
 //! holding the queue mutex, so a concurrent producer/consumer either observes the
 //! parked waiter (and signals/wakes it) or has not yet taken the mutex.
 //!
-//! Each wait/wake branches on [`flash_ambient`]: a flash-eligible test uses the
-//! engine channel waiter; otherwise the parked half stores its real [`Waker`]
-//! under `inner` (the single receiver's `data_waker`, each blocked sender's
-//! `space_wakers`) and the peer wakes it directly — reactor-free, untouched by
-//! engine accounting. The
-//! queue/live-count state is UNIFIED; only the park/wake mechanism branches. The
-//! real path is the only one taken until `#[kithara::flash]` annotations land.
+//! The park/wake mechanism is latched ONCE at channel creation (see
+//! `Backend`): a channel created under a flash-ambient context parks/wakes
+//! through the engine channel waiters; otherwise the parked half stores its
+//! real [`Waker`] under `inner` (the single receiver's `data_waker`, each
+//! blocked sender's `space_wakers`) and the peer wakes it directly —
+//! reactor-free, untouched by engine accounting. The queue/live-count state is
+//! UNIFIED; only the latched mechanism differs, and it is fixed for the
+//! channel's life so wait and wake always agree even across threads of
+//! different ambient. Outside a flash-ambient test every channel latches
+//! `Backend::Native`, so production behavior is unchanged.
 
 use std::{
     collections::VecDeque,
@@ -527,8 +530,8 @@ mod tests {
     /// Bounded channel under a multi-thread runtime: many producers fan into a
     /// single consumer across worker threads, with a capacity small enough to
     /// exercise backpressure (parked senders woken on each receive). A lost
-    /// wakeup on `data_cvid` (consumer never woken) or `space_cvid` (sender
-    /// never woken) would deadlock — all tasks park on untimed channel waiters,
+    /// wakeup on the `data` cvid (consumer never woken) or the `space` cvid
+    /// (sender never woken) would deadlock — all tasks park on untimed channel waiters,
     /// the engine has no timed waiter to advance to, and the test hangs in real
     /// time (caught by the harness timeout). Passing proves the register-under-
     /// lock handshake is lost-wakeup free both ways.
@@ -558,7 +561,7 @@ mod tests {
         assert_eq!(sum, n * (n - 1) / 2);
     }
 
-    /// Unbounded variant: senders never block, so this isolates the `data_cvid`
+    /// Unbounded variant: senders never block, so this isolates the `data`-cvid
     /// wakeup of a consumer that races each non-blocking send.
     #[kithara::test(tokio, multi_thread)]
     async fn unbounded_fan_in_no_lost_wakeup() {

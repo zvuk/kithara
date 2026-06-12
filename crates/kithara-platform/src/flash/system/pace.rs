@@ -13,7 +13,7 @@ use super::{FLASH, FlashInner};
 use crate::{
     common::time::Instant as RealInstant,
     flash::Duration,
-    native::sync::{Condvar, Mutex},
+    native::sync::{Condvar, Mutex, MutexGuard},
 };
 
 /// Per-instance pacer arming flag + wakeup + the lazily-spawned pacer thread.
@@ -51,16 +51,11 @@ impl Pacer {
 
 impl FlashInner {
     /// Eternal pacer loop, run on the raw pacer thread holding a strong `Arc`
-    /// to this instance. The wait-while-`!armed` park is UNTIMED on purpose: a
-    /// disarmed pacer consumes zero CPU until the next arm.
+    /// to this instance. The disarmed park ([`wait_armed`]) is UNTIMED on
+    /// purpose: a disarmed pacer consumes zero CPU until the next arm.
     fn pace_run(&self) {
         loop {
-            {
-                let mut armed = self.pacer.armed.lock_sync();
-                while !*armed {
-                    armed = self.pacer.cv.wait_sync(armed);
-                }
-            }
+            wait_armed(&self.pacer.cv, self.pacer.armed.lock_sync());
             // REAL sleep: the pacer exists precisely to feed real time into
             // the engine while real I/O is in flight.
             crate::native::thread::sleep(Pacer::TICK);
@@ -122,6 +117,19 @@ impl FlashInner {
         drop(s);
         drop(armed);
         adv.fire();
+    }
+}
+
+/// The disarmed park of [`FlashInner::pace_run`]: `armed` is checked under the
+/// lock before every block and re-checked after every wake; UNTIMED on purpose
+/// (a disarmed pacer consumes zero CPU until the next arm). The guard enters
+/// as a parameter and drops on return — released before the caller's real-time
+/// tick, preserving the strict `armed -> core` lock order (parameter form
+/// keeps clippy's `significant_drop_tightening` from mis-suggesting an early
+/// drop inside the loop).
+fn wait_armed(cv: &Condvar, mut armed: MutexGuard<'_, bool>) {
+    while !*armed {
+        armed = cv.wait_sync(armed);
     }
 }
 

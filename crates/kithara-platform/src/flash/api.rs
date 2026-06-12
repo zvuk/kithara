@@ -74,8 +74,8 @@ impl Future for FlashSleep {
         if let Some(handle) = self.handle.as_ref() {
             if handle.granted() {
                 // The engine crossed our deadline and granted this waiter.
-                // Resolve is GRANT-driven, never a bare `SIM_NANOS >= deadline`
-                // clock check: only the engine firing THIS waiter sets `granted`,
+                // Resolve is GRANT-driven, never a bare `Clock` read
+                // (`now >= deadline`): only the engine firing THIS waiter sets `granted`,
                 // so a clock that jumps past our deadline via some OTHER advance
                 // cannot resolve us early. The task's `active_async` count is
                 // owned by the spawn poll-wrapper, so resolve touches no counter.
@@ -147,7 +147,9 @@ impl Drop for FlashYield {
 }
 
 /// Cooperative async yield. Like the stateful sync primitives (Condvar/Notify/
-/// mpsc/oneshot), this branches on [`flash_ambient`], NOT [`flash_enabled`]:
+/// mpsc/oneshot, which latch the ambient gate at construction), this keys on
+/// [`flash_ambient`], NOT [`flash_enabled`] — consulted per call, since a yield
+/// has no cross-thread signal partner to disagree with:
 /// engine-backed ([`FlashYield`]) only inside a flash-eligible (ambient) test,
 /// and a real `tokio::task::yield_now` otherwise. A `yield_now`'s resolution
 /// comes from an engine clock advance, whose grant requires `active_async == 0`;
@@ -282,7 +284,7 @@ pub fn reset() {
 /// RAII guard for a prod `#[kithara::flash(bool)]` region. `on=true` activates
 /// flash for the dynamic extent IFF the test is flash-eligible (ambient);
 /// `on=false` carves REAL inside a flash region. Saves/restores the previous
-/// whole [`Mode`] so regions nest bidirectionally (LIFO premise — see
+/// whole `Mode` so regions nest bidirectionally (LIFO premise — see
 /// `flash/ctx.rs`). `!Send`: it restores THIS thread's mode, so moving it to
 /// another thread would restore the wrong thread's state.
 #[must_use]
@@ -308,7 +310,7 @@ pub fn flash_real() -> FlashScope {
 }
 
 /// RAII guard setting the per-test ambient gate (test macro + spawn
-/// propagation). Saves/restores the previous whole [`Mode`] on drop (LIFO
+/// propagation). Saves/restores the previous whole `Mode` on drop (LIFO
 /// premise — see `flash/ctx.rs`). `!Send`: it restores THIS thread's mode.
 /// Sanctioned exception to "never hold a scope across `.await`": the test
 /// macro's WASM body may hold one (single-threaded driver, sole ambient
