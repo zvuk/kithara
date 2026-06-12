@@ -1,77 +1,45 @@
 //! Participant credit accounting for the flash engine: which OS threads count
 //! as virtual-time pacers, and how a wrapped wait moves them in and out of the
-//! engine's `active` count. The per-thread cells live here until the single
-//! `ThreadCtx` lands (Task 2.6); the engine-state halves are `FlashInner`
+//! engine's `active` count. The per-thread state lives in the single
+//! `ThreadCtx` (`flash/ctx.rs`); the engine-state halves are `FlashInner`
 //! methods with thin process-engine forwards for the wrappers.
 
-use std::cell::Cell;
-
 use super::{Core, FLASH, FlashInner};
+use crate::flash::ctx::{self, Credit};
 
-/// Per-thread quiescence credit. Participants are NOT registered explicitly:
-/// a thread is invisible to the engine until its FIRST wrapped wait, at which
-/// point it credits itself lazily. This keeps accounting intrinsic to the
-/// platform-wrapped primitives — no consumer ever calls a registration API.
-///
-/// - `None`: the thread has never entered a wrapped wait. It is uncounted: it
-///   cannot stall the engine (it owns no deadline and is not in `active`).
-/// - `Running`: the thread is currently counted in the engine's `active` (it
-///   woke from a wait, or its first wait already bootstrapped it). The engine
-///   will not advance the clock while any thread is `Running`.
-/// - `Parked`: the thread is inside a wrapped wait, not counted in `active`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Credit {
-    None,
-    Running,
-    Parked,
-}
-
-thread_local! {
-    static CREDIT: Cell<Credit> = const { Cell::new(Credit::None) };
-    /// Nesting depth of an async-task poll on THIS OS thread. Non-zero means a
-    /// runtime worker is currently inside [`Participating::poll`](crate::flash::Participating)
-    /// — driving a task that occupies an `active_async` slot. A wrapped sync wait
-    /// taken while this is non-zero is a BRIDGED wait: the worker is not a
-    /// dedicated pacer (it returns to the runtime when the poll yields, parking on
-    /// the runtime, never on the engine), and the task it drives is parked for the
-    /// duration of the block. Such a wait releases the `active_async` slot on enter
-    /// and re-acquires it on wake (so the clock can advance while the worker blocks
-    /// on the engine), and NEVER enters the sync `active` count (which would leak —
-    /// the worker has no matching `enter_wait`/exit to balance it).
-    static ASYNC_POLL_DEPTH: Cell<u32> = const { Cell::new(0) };
-}
-
-/// True when the calling OS thread is inside an async-task poll (a runtime worker
-/// driving a [`Participating`](crate::flash::Participating) future). See [`ASYNC_POLL_DEPTH`].
+/// True when the calling OS thread is inside an async-task poll (a runtime
+/// worker driving a [`Participating`](crate::flash::Participating) future) —
+/// non-zero poll depth. A wrapped sync wait taken while this holds is a
+/// BRIDGED wait: the worker is not a dedicated pacer (it returns to the
+/// runtime when the poll yields, parking on the runtime, never on the
+/// engine), and the task it drives is parked for the duration of the block.
+/// Such a wait releases the `active_async` slot on enter and re-acquires it
+/// on wake (so the clock can advance while the worker blocks on the engine),
+/// and NEVER enters the sync `active` count (which would leak — the worker
+/// has no matching `enter_wait`/exit to balance it).
 fn in_async_poll() -> bool {
-    ASYNC_POLL_DEPTH.with(|c| c.get() > 0)
+    ctx::poll_depth() > 0
 }
 
-thread_local! {
-    /// True iff this OS thread is a DEDICATED participant: a `spawn_named` thread
-    /// (audio worker, offline render thread, flush hub) that loops on wrapped waits
-    /// and does real work between them. ONLY dedicated threads are counted in the
-    /// sync `active` pacer count — the clock must not advance while one is mid-work,
-    /// so its inter-wait running time pins the clock. Every OTHER thread (a tokio
-    /// runtime worker, the main/test thread, a raw `thread::spawn`) is NOT a pacer:
-    /// its wrapped waits register a wakeup but stay OUT of `active` (entering it
-    /// leaks — such a thread parks on the runtime or exits without the counted
-    /// bracket, so nothing balances the credit). Set by the `spawn_named` bracket
-    /// via [`mark_dedicated`]; default false.
-    static DEDICATED: Cell<bool> = const { Cell::new(false) };
-}
-
-/// Mark the current OS thread a DEDICATED virtual-time pacer. Called once by the
-/// `spawn_named` bracket so only those threads are counted in `active`. See [`DEDICATED`].
+/// Mark the current OS thread a DEDICATED virtual-time pacer: a `spawn_named`
+/// thread (audio worker, offline render thread, flush hub) that loops on
+/// wrapped waits and does real work between them. ONLY dedicated threads are
+/// counted in the sync `active` pacer count — the clock must not advance
+/// while one is mid-work, so its inter-wait running time pins the clock.
+/// Every OTHER thread (a tokio runtime worker, the main/test thread, a raw
+/// `thread::spawn`) is NOT a pacer: its wrapped waits register a wakeup but
+/// stay OUT of `active` (entering it leaks — such a thread parks on the
+/// runtime or exits without the counted bracket, so nothing balances the
+/// credit). Called once by the `spawn_named` bracket.
 pub(crate) fn mark_dedicated() {
-    DEDICATED.with(|c| c.set(true));
+    ctx::set_dedicated(true);
     // The pacer's `active` slot is taken EAGERLY by [`pre_count_dedicated`] on the
     // PARENT thread at spawn time (closing the spawn→run gap). Here, on the child,
     // we only claim the credit as `Running` to match that slot — no `active += 1`,
     // or the slot would be double-counted. The first wrapped wait drops it
     // (`Running -> Parked`, `active -= 1`); `on_participant_exit` settles it if the
     // thread returns while `Running`.
-    CREDIT.with(|c| c.set(Credit::Running));
+    ctx::set_credit(Credit::Running);
 }
 
 /// Reserve a DEDICATED pacer's `active` slot on the PARENT thread, BEFORE the
@@ -86,9 +54,9 @@ pub(crate) fn pre_count_dedicated() {
     FLASH.pre_count_dedicated();
 }
 
-/// True iff the current OS thread is a dedicated pacer (see [`DEDICATED`]).
+/// True iff the current OS thread is a dedicated pacer (see [`mark_dedicated`]).
 fn is_dedicated() -> bool {
-    DEDICATED.with(Cell::get)
+    ctx::dedicated()
 }
 
 /// RAII making a POOLED blocking thread a dedicated pacer for ONE closure: an
@@ -105,7 +73,7 @@ pub(crate) struct BlockingPacer {
 
 impl BlockingPacer {
     pub(crate) fn enter() -> Self {
-        let prev = DEDICATED.with(Cell::get);
+        let prev = ctx::dedicated();
         mark_dedicated();
         Self {
             prev_dedicated: prev,
@@ -116,28 +84,28 @@ impl BlockingPacer {
 impl Drop for BlockingPacer {
     fn drop(&mut self) {
         on_participant_exit();
-        DEDICATED.with(|c| c.set(self.prev_dedicated));
+        ctx::set_dedicated(self.prev_dedicated);
     }
 }
 
 /// RAII bracket marking the current OS thread as inside an async-task poll for the
 /// guard's lifetime. Held by [`Participating::poll`](crate::flash::Participating) around
 /// the inner future's poll, so a wrapped sync wait taken inside that poll is
-/// recognised as bridged (see [`ASYNC_POLL_DEPTH`]). Drop-safe across an unwind.
+/// recognised as bridged (see [`in_async_poll`]). Drop-safe across an unwind.
 pub(in crate::flash) struct AsyncPollGuard {
     _priv: (),
 }
 
 impl AsyncPollGuard {
     pub(in crate::flash) fn enter() -> Self {
-        ASYNC_POLL_DEPTH.with(|c| c.set(c.get().saturating_add(1)));
+        ctx::set_poll_depth(ctx::poll_depth().saturating_add(1));
         Self { _priv: () }
     }
 }
 
 impl Drop for AsyncPollGuard {
     fn drop(&mut self) {
-        ASYNC_POLL_DEPTH.with(|c| c.set(c.get().saturating_sub(1)));
+        ctx::set_poll_depth(ctx::poll_depth().saturating_sub(1));
     }
 }
 
@@ -173,25 +141,25 @@ pub(super) fn enter_wait_locked(s: &mut Core) {
         // undoes). The clock is free to advance while such a thread blocks.
         return;
     }
-    CREDIT.with(|c| match c.get() {
-        Credit::None => c.set(Credit::Parked),
+    match ctx::credit() {
+        Credit::None => ctx::set_credit(Credit::Parked),
         Credit::Running => {
             debug_assert!(
                 s.registry.active > 0,
                 "running participant must be counted in active"
             );
             s.registry.active -= 1;
-            c.set(Credit::Parked);
+            ctx::set_credit(Credit::Parked);
         }
         Credit::Parked => debug_assert!(false, "a thread cannot enter two wrapped waits at once"),
-    });
+    }
 }
 
 /// Mark this thread RUNNING after its wrapped wait returned. The firer already
 /// did `active += 1` for the woken entry; the woken thread only updates its own
 /// credit here.
 pub(super) fn mark_running() {
-    CREDIT.with(|c| c.set(Credit::Running));
+    ctx::set_credit(Credit::Running);
 }
 
 /// Mark the calling thread RUNNING after a condvar wait's `token.wait()` has
@@ -212,7 +180,7 @@ pub(crate) fn on_participant_exit() {
 /// thread's body (spawn bracket) so a reused OS thread does not inherit a stale
 /// credit from a previous task.
 pub(crate) fn reset_credit() {
-    CREDIT.with(|c| c.set(Credit::None));
+    ctx::set_credit(Credit::None);
 }
 
 impl FlashInner {
@@ -263,11 +231,8 @@ impl FlashInner {
     /// thread's body returns. Reads + clears the credit; if it was `Running`, drops
     /// it from `active` and fires any advance the drop unblocks.
     pub(in crate::flash) fn on_participant_exit(&self) {
-        let was = CREDIT.with(|c| {
-            let v = c.get();
-            c.set(Credit::None);
-            v
-        });
+        let was = ctx::credit();
+        ctx::set_credit(Credit::None);
         if was != Credit::Running {
             return;
         }

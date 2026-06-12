@@ -1,6 +1,5 @@
 pub use std::time::Duration;
 use std::{
-    cell::Cell,
     future::Future,
     ops::{Add, Sub},
     pin::Pin,
@@ -13,6 +12,7 @@ use std::{
 
 pub use super::participant::{Participating, participate};
 use super::{
+    ctx::{self, Mode, flash_ambient, flash_enabled},
     ids::WaiterId,
     system::{self, FLASH},
 };
@@ -224,8 +224,8 @@ pub fn dump_to_stderr(context: &str) {
 /// Virtual `sleep` that hits the quiescence engine UNCONDITIONALLY (no
 /// `flash_enabled()` consult). The lexical test rewriter ([`#[kithara::test(flash(true))]`])
 /// retargets a test body's direct `time::sleep` calls here, so the BODY's own
-/// waits collapse onto virtual time without setting `FLASH_ACTIVE` — a prod fn
-/// the body calls keeps its stateless time reads on REAL (`FLASH_ACTIVE` false).
+/// waits collapse onto virtual time without setting the active mode flag — a
+/// prod fn the body calls keeps its stateless time reads on REAL.
 pub fn virtual_sleep(duration: Duration) -> impl Future<Output = ()> {
     FlashSleep::new(duration)
 }
@@ -286,59 +286,24 @@ pub fn reset() {
     FLASH.reset();
 }
 
-thread_local! {
-    /// Per-test gate: "is this test flash-eligible?" Set by the test macro,
-    /// propagated across spawn. Default false = not a flash test. A gate —
-    /// consumers never read it directly; only [`enter_dynamic`] consults it to
-    /// decide whether a prod flash region may take effect.
-    static FLASH_AMBIENT: Cell<bool> = const { Cell::new(false) };
-    /// Dynamic: "is flash propagating on this callstack right now?" Pushed by a
-    /// prod `#[kithara::flash(true)]` guard (only when ambient). Read by the time
-    /// primitives via [`flash_enabled`]. Default false = REAL.
-    static FLASH_ACTIVE: Cell<bool> = const { Cell::new(false) };
-}
-
-/// True when flash (virtual clock) governs this callstack. Default false (REAL).
-/// The per-thread switch the STATELESS time primitives consult: `Instant::now`,
-/// `thread::park_timeout`, `thread::sleep`/`yield_now`/`unpark`, `sleep`/`timeout`
-/// branch on it.
-#[inline]
-#[must_use]
-pub(crate) fn flash_enabled() -> bool {
-    FLASH_ACTIVE.with(Cell::get)
-}
-
-/// True when the current test is flash-eligible (the per-test ambient gate,
-/// propagated across spawn). The STATEFUL sync primitives (Condvar/Notify/mpsc/
-/// oneshot) branch on THIS — not `flash_enabled()` — so a primitive's wait and
-/// its cross-thread signal always agree on real-vs-engine (ambient is uniform
-/// per test; `FLASH_ACTIVE` is per-callstack and would mismatch across threads).
-#[inline]
-#[must_use]
-pub(crate) fn flash_ambient() -> bool {
-    FLASH_AMBIENT.with(Cell::get)
-}
-
 /// RAII guard for a prod `#[kithara::flash(bool)]` region. `on=true` activates
 /// flash for the dynamic extent IFF the test is flash-eligible (ambient);
 /// `on=false` carves REAL inside a flash region. Saves/restores the previous
-/// `FLASH_ACTIVE` so regions nest bidirectionally.
+/// whole [`Mode`] so regions nest bidirectionally (LIFO premise — see
+/// `flash/ctx.rs`).
 #[must_use]
-pub struct FlashScope(bool);
+pub struct FlashScope(Mode);
 
 impl Drop for FlashScope {
     fn drop(&mut self) {
-        FLASH_ACTIVE.with(|c| c.set(self.0));
+        ctx::restore_mode(self.0);
     }
 }
 
 /// Push a dynamic flash mode. `on=true` takes only under ambient; `on=false`
 /// always carves real. Returns a guard that restores the previous mode on drop.
 pub fn enter_dynamic(on: bool) -> FlashScope {
-    let prev = FLASH_ACTIVE.with(Cell::get);
-    let next = on && FLASH_AMBIENT.with(Cell::get);
-    FLASH_ACTIVE.with(|c| c.set(next));
-    FlashScope(prev)
+    FlashScope(ctx::push_active(on))
 }
 
 /// Enter a REAL-time carve on this thread (flash off for the guard's lifetime).
@@ -349,23 +314,22 @@ pub fn flash_real() -> FlashScope {
 }
 
 /// RAII guard setting the per-test ambient gate (test macro + spawn
-/// propagation). Saves/restores the previous `FLASH_AMBIENT` on drop.
+/// propagation). Saves/restores the previous whole [`Mode`] on drop (LIFO
+/// premise — see `flash/ctx.rs`).
 #[must_use]
-pub struct AmbientScope(bool);
+pub struct AmbientScope(Mode);
 
 impl Drop for AmbientScope {
     fn drop(&mut self) {
-        FLASH_AMBIENT.with(|c| c.set(self.0));
+        ctx::restore_mode(self.0);
     }
 }
 
-/// Set the per-test ambient gate; restores the previous value on drop. The test
+/// Set the per-test ambient gate; restores the previous mode on drop. The test
 /// macro sets it for the test body; the platform spawn wrappers re-establish it
 /// on each spawned child via [`set_ambient_for_spawn`].
 pub fn ambient_scope(on: bool) -> AmbientScope {
-    let prev = FLASH_AMBIENT.with(Cell::get);
-    FLASH_AMBIENT.with(|c| c.set(on));
-    AmbientScope(prev)
+    AmbientScope(ctx::push_ambient(on))
 }
 
 /// Snapshot the per-test ambient gate (for spawn propagation into a child).
@@ -419,8 +383,8 @@ pub fn with_ambient<F: Future>(on: bool, fut: F) -> WithAmbient<F> {
 /// fn can be polled across `.await` on different worker threads, so a one-time
 /// `enter_dynamic` on the first poll would not survive a yield. This re-asserts
 /// the mode for the duration of EACH poll (the guard drops when the poll returns,
-/// restoring the thread's previous `FLASH_ACTIVE` — no leak across tasks). Same
-/// shape as [`WithAmbient`], with `enter_dynamic` in place of the ambient set.
+/// restoring the thread's previous mode — no leak across tasks). Same shape as
+/// [`WithAmbient`], with `enter_dynamic` in place of the ambient set.
 pub struct FlashDynamic<F> {
     on: bool,
     fut: F,
@@ -433,8 +397,7 @@ impl<F: Future> Future for FlashDynamic<F> {
         // SAFETY: `fut` is structurally pinned and never moved out of
         // `FlashDynamic`; it is re-pinned in place for its own poll. `on` is a
         // `Copy` scalar touched only by value. The `_g` guard is a named binding,
-        // so it drops AFTER `fut.poll(cx)` returns, restoring the previous
-        // `FLASH_ACTIVE`.
+        // so it drops AFTER `fut.poll(cx)` returns, restoring the previous mode.
         let this = unsafe { self.get_unchecked_mut() };
         let _g = enter_dynamic(this.on);
         // SAFETY: `fut` is structurally pinned, never moved out of `FlashDynamic`.
@@ -479,7 +442,7 @@ impl Instant {
     /// The virtual `now`, read UNCONDITIONALLY from the engine clock (no
     /// `flash_enabled()` consult). The lexical test rewriter (`virtual_now`)
     /// targets this directly so a flash test body's `Instant::now` collapses
-    /// onto virtual time without setting `FLASH_ACTIVE`.
+    /// onto virtual time without setting the active mode flag.
     #[inline]
     #[must_use]
     pub fn now_virtual() -> Self {

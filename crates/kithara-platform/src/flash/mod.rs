@@ -4,6 +4,9 @@
 //! `crate::common::flash_inert`. See README "Flash layering".
 
 mod api;
+/// The single flash thread-local (`ThreadCtx`: mode + credit + poll depth +
+/// dedicated flag) and its accessors.
+mod ctx;
 /// Typed engine ids (`CvId` / `WaiterId` / `ThreadKey`).
 mod ids;
 mod participant;
@@ -18,6 +21,7 @@ pub mod time;
 pub mod tokio;
 
 pub use api::*;
+pub(crate) use ctx::{flash_ambient, flash_enabled};
 
 pub use crate::native::{env, logging, maybe_send};
 
