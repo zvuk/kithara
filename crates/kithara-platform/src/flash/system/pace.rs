@@ -44,7 +44,7 @@ impl Pacer {
             let mut s = SCHED.lock();
             let adv = sched::try_advance_locked(&mut s);
             drop(s);
-            sched::fire_advance(adv);
+            adv.fire();
         }
     }
 }
@@ -106,5 +106,5 @@ pub(in crate::flash) fn real_io_exit() {
     let adv = sched::try_advance_locked(&mut s);
     drop(s);
     drop(armed);
-    sched::fire_advance(adv);
+    adv.fire();
 }

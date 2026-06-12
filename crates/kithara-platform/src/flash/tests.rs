@@ -491,7 +491,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                             }
                             sched::signal_condvar(cvid, true);
                         });
-                        sched::fire_advance(adv);
+                        adv.fire();
                         token.wait();
                         credit::mark_running_after_condvar();
                         racer.join().expect("builder signal racer panicked");
@@ -551,7 +551,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                             // Timed condvar raced by a sibling signal.
                             let deadline = now_nanos() + (1 + (idx % 4)) * NANOS_PER_SEC;
                             let (token, adv) = sched::register_condvar_timed(deadline, cvid);
-                            sched::fire_advance(adv);
+                            adv.fire();
                             let racer = thread::spawn(move || {
                                 if xs(&mut seed) & 1 == 0 {
                                     thread::yield_now();
@@ -565,7 +565,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                         _ => {
                             // Untimed condvar: released by the main thread only.
                             let (token, adv) = sched::register_condvar_untimed(cvid);
-                            sched::fire_advance(adv);
+                            adv.fire();
                             token.wait();
                             credit::mark_running_after_condvar();
                             left.fetch_sub(1, Ordering::Relaxed);
@@ -654,7 +654,7 @@ fn stress_advance_log_is_deterministic_across_runs() {
                         let cvid = sched::next_condvar_id();
                         let deadline = now_nanos() + s * NANOS_PER_SEC;
                         let (token, adv) = sched::register_condvar_timed(deadline, cvid);
-                        sched::fire_advance(adv);
+                        adv.fire();
                         token.wait();
                         credit::mark_running_after_condvar();
                     });

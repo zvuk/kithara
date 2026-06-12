@@ -125,6 +125,19 @@ impl SimSched {
         }
     }
 
+    /// Firer-side accounting for a batch of woken waiters, under `SCHED`: bump
+    /// `active` ONLY for SYNC (OS-thread) wakes — the bump covers their real OS
+    /// wake latency, and a woken thread does NOT re-increment on return; async
+    /// (Task) wakes are counted in `active_async` by the spawn poll-wrapper
+    /// when next polled, not by the firer. Every wake is marked granted under
+    /// the lock so a racing cancel stays consistent.
+    fn account_woken(&mut self, woken: &[Wake]) {
+        self.active += woken.iter().filter(|w| !w.is_task()).count();
+        for w in woken {
+            w.mark_granted_under_lock();
+        }
+    }
+
     fn fresh_id(&mut self) -> WaiterId {
         let id = self.next_id;
         self.next_id += 1;
@@ -134,23 +147,32 @@ impl SimSched {
 
 pub(super) static SCHED: Mutex<SimSched> = Mutex::new(SimSched::new());
 
-/// Result of an advance attempt: the wakes to fire after releasing `SCHED`.
-/// Firing is always immediate (pure-virtual collapse at full speed).
-pub(crate) struct Advance {
-    wakes: Vec<Wake>,
+/// Result of an advance attempt: the wakes to fire after releasing `SCHED`
+/// via [`WakeBatch::fire`]. `#[must_use]`: a dropped batch is a lost wakeup.
+#[must_use]
+pub(crate) struct WakeBatch(Vec<Wake>);
+
+impl WakeBatch {
+    /// Fire the wakes after `SCHED` is released. Firing is immediate: the
+    /// advance chain runs at full virtual speed.
+    pub(crate) fn fire(self) {
+        for w in self.0 {
+            w.fire();
+        }
+    }
 }
 
-/// Evaluate the advance rule while holding `SCHED`. Returns the [`Advance`] whose
+/// Evaluate the advance rule while holding `SCHED`. Returns the [`WakeBatch`] whose
 /// `wakes` the caller fires AFTER releasing the lock (firing under the lock would
-/// make the woken thread immediately contend on SCHED) via [`fire_advance`].
+/// make the woken thread immediately contend on SCHED) via [`WakeBatch::fire`].
 /// Operates only on `parked_timed` — it never fires `parked_indef`, which has no
 /// deadline. Fires nothing unless every participant is parked (`active == 0`) and
 /// at least one timed waiter exists.
-pub(super) fn try_advance_locked(s: &mut SimSched) -> Advance {
+pub(super) fn try_advance_locked(s: &mut SimSched) -> WakeBatch {
     if s.active != 0 || s.active_async != 0 {
         // A running participant (sync OS thread OR async task mid-poll): do not
         // jump. Both counters must be zero for genuine quiescence.
-        return Advance { wakes: Vec::new() };
+        return WakeBatch(Vec::new());
     }
     // Cooperative yielders re-poll at the CURRENT instant before the clock can
     // advance to a `Thread` (`park_timeout`) deadline. Such a park is
@@ -169,18 +191,15 @@ pub(super) fn try_advance_locked(s: &mut SimSched) -> Advance {
             .all(|e| matches!(e.kind, WaitKind::Thread(_)))
     {
         let woken: Vec<Wake> = std::mem::take(&mut s.yield_waiters).into_values().collect();
-        s.active += woken.iter().filter(|w| !w.is_task()).count();
-        for w in &woken {
-            w.mark_granted_under_lock();
-        }
-        return Advance { wakes: woken };
+        s.account_woken(&woken);
+        return WakeBatch(woken);
     }
     let Some((&(min, _), _)) = s.parked_timed.iter().next() else {
         // Quiescent with NO timed waiter to advance to. Any parked yield-waiter
         // was already drained above (when `parked_timed` is empty the all-`Thread`
         // guard is vacuously true), so reaching here means there is nothing
         // runnable at all: stay put.
-        return Advance { wakes: Vec::new() };
+        return WakeBatch(Vec::new());
     };
     if s.real_io != 0
         && let Some((anchor_real, anchor_virtual)) = s.pace_anchor
@@ -191,7 +210,7 @@ pub(super) fn try_advance_locked(s: &mut SimSched) -> Advance {
         // Deferred advances are re-attempted by the pace tick (`pace.rs`).
         let elapsed = u64::try_from(anchor_real.elapsed().as_nanos()).unwrap_or(u64::MAX);
         if min > anchor_virtual.saturating_add(elapsed) {
-            return Advance { wakes: Vec::new() };
+            return WakeBatch(Vec::new());
         }
     }
     debug_assert!(
@@ -218,24 +237,8 @@ pub(super) fn try_advance_locked(s: &mut SimSched) -> Advance {
     for (_, wake) in std::mem::take(&mut s.yield_waiters) {
         woken.push(wake);
     }
-    // Pre-increment `active` ONLY for sync OS-thread wakes, so a woken thread
-    // does NOT re-increment on return — it just resumes running (the bump covers
-    // its real OS wake latency). Async-task wakes are NOT bumped here: the spawn
-    // poll-wrapper counts them in `active_async` when they are next polled. All
-    // wakes are marked granted under the lock so a racing cancel is consistent.
-    s.active += woken.iter().filter(|w| !w.is_task()).count();
-    for w in &woken {
-        w.mark_granted_under_lock();
-    }
-    Advance { wakes: woken }
-}
-
-/// Fire an [`Advance`]'s wakes after `SCHED` is released. Firing is immediate:
-/// the advance chain runs at full virtual speed.
-pub(crate) fn fire_advance(adv: Advance) {
-    for w in adv.wakes {
-        w.fire();
-    }
+    s.account_woken(&woken);
+    WakeBatch(woken)
 }
 
 /// Allocate a fresh condvar id (one per [`crate::sync::Condvar`] under sim).
@@ -267,7 +270,7 @@ pub(crate) fn park_for(d: crate::flash::Duration) {
     enter_wait_locked(&mut s);
     let adv = try_advance_locked(&mut s);
     drop(s);
-    fire_advance(adv);
+    adv.fire();
     token.wait();
     mark_running();
 }
@@ -299,7 +302,7 @@ pub(crate) fn park_timed_unparkable(d: crate::flash::Duration, thread_id: Thread
     enter_wait_locked(&mut s);
     let adv = try_advance_locked(&mut s);
     drop(s);
-    fire_advance(adv);
+    adv.fire();
     token.wait();
     resume_after_wait();
 }
@@ -327,7 +330,7 @@ pub(crate) fn sleep_timed(d: crate::flash::Duration) {
     enter_wait_locked(&mut s);
     let adv = try_advance_locked(&mut s);
     drop(s);
-    fire_advance(adv);
+    adv.fire();
     token.wait();
     resume_after_wait();
 }
@@ -346,7 +349,10 @@ pub(crate) fn unpark(thread_id: ThreadKey) {
     if let Some(key) = key
         && let Some(entry) = s.parked_timed.remove(&key)
     {
-        s.active += 1;
+        // A Thread-park entry is always `Sync` (see `park_timed_unparkable`),
+        // so this bumps `active` by exactly one; `mark_granted` is a Task-only
+        // no-op. Fired directly — an unpark never runs the advance rule.
+        s.account_woken(std::slice::from_ref(&entry.wake));
         drop(s);
         entry.wake.fire();
         return;
@@ -378,14 +384,14 @@ pub(crate) fn yield_until_advance() {
     enter_wait_locked(&mut s);
     let adv = try_advance_locked(&mut s);
     drop(s);
-    fire_advance(adv);
+    adv.fire();
     token.wait();
     resume_after_wait();
 }
 
 /// Register an ASYNC cooperative-yield waiter (sim `tokio::task::yield_now`).
 /// Parks the task as a yield-waiter (woken on the next clock advance), then runs
-/// the advance rule and returns its id + granted flag + the [`Advance`] the caller
+/// the advance rule and returns its id + granted flag + the [`WakeBatch`] the caller
 /// fires (mirroring the sibling `register_*_async` registers). This is the sim
 /// analogue of a real `yield_now`: real time passes while a task yields, so here
 /// the task releases its `active_async` slot (the spawn gate does so when the
@@ -397,7 +403,7 @@ pub(crate) fn yield_until_advance() {
 /// as before. The grant (here, the lone-yield rescue, or a later clock advance)
 /// sets `granted` and the waker re-polls. The fired advance unwedges a
 /// genuinely-quiescent non-participated `block_on` whose only `.await` is a yield.
-pub(crate) fn register_yield_async(waker: Waker) -> (u64, Arc<AtomicBool>, Advance) {
+pub(crate) fn register_yield_async(waker: Waker) -> (u64, Arc<AtomicBool>, WakeBatch) {
     let granted = Arc::new(AtomicBool::new(false));
     let mut s = SCHED.lock();
     let WaiterId(id) = s.fresh_id();
@@ -425,7 +431,7 @@ pub(crate) fn cancel_yield(id: u64) {
 /// the caller must fire AFTER releasing the domain guard. The caller calls
 /// [`mark_running_after_condvar`](super::credit::mark_running_after_condvar)
 /// once `token.wait()` returns.
-pub(crate) fn register_condvar_timed(deadline_nanos: u64, cvid: CvId) -> (Arc<Token>, Advance) {
+pub(crate) fn register_condvar_timed(deadline_nanos: u64, cvid: CvId) -> (Arc<Token>, WakeBatch) {
     let token = Token::new();
     let mut s = SCHED.lock();
     // The caller computed `deadline_nanos` from `Instant::now()` OUTSIDE this
@@ -452,7 +458,7 @@ pub(crate) fn register_condvar_timed(deadline_nanos: u64, cvid: CvId) -> (Arc<To
 
 /// Register an UNTIMED condvar waiter (no deadline; woken only by a signal for
 /// `cvid`). Same return shape and accounting as [`register_condvar_timed`].
-pub(crate) fn register_condvar_untimed(cvid: CvId) -> (Arc<Token>, Advance) {
+pub(crate) fn register_condvar_untimed(cvid: CvId) -> (Arc<Token>, WakeBatch) {
     let token = Token::new();
     let mut s = SCHED.lock();
     let id = s.fresh_id();
@@ -505,10 +511,10 @@ pub(crate) fn signal_condvar(cvid: CvId, all: bool) {
             woken.push(entry.wake);
         }
     }
-    s.active += woken.len();
-    for w in &woken {
-        w.mark_granted_under_lock();
-    }
+    // Condvar waiters never share a cvid with Task waiters (one cvid per
+    // primitive from the single allocator), so every wake here is `Sync` and
+    // the per-Sync bump equals the old `+= woken.len()`.
+    s.account_woken(&woken);
     drop(s);
     for t in woken {
         t.fire();
@@ -544,7 +550,7 @@ impl AsyncHandle {
 /// already counted in `active_async` by its poll-wrapper for the current poll,
 /// and the waiter is removed by [`cancel_async_wait`] if the future is dropped
 /// before it fires.
-pub(crate) fn register_sleep_async(delta_nanos: u64, waker: Waker) -> (AsyncHandle, Advance) {
+pub(crate) fn register_sleep_async(delta_nanos: u64, waker: Waker) -> (AsyncHandle, WakeBatch) {
     let granted = Arc::new(AtomicBool::new(false));
     let mut s = SCHED.lock();
     let deadline_nanos = SIM_NANOS
@@ -577,11 +583,11 @@ pub(crate) fn register_sleep_async(delta_nanos: u64, waker: Waker) -> (AsyncHand
 /// Register an UNTIMED async `Notify` waiter for `cvid`, OR consume a stored
 /// permit. Returns `(handle, to_wake)`; `handle` is `None` when a permit was
 /// waiting (the caller resolves at once without parking).
-pub(crate) fn register_notify_async(cvid: CvId, waker: Waker) -> (Option<AsyncHandle>, Advance) {
+pub(crate) fn register_notify_async(cvid: CvId, waker: Waker) -> (Option<AsyncHandle>, WakeBatch) {
     let granted = Arc::new(AtomicBool::new(false));
     let mut s = SCHED.lock();
     if s.notify_permit.remove(&cvid) {
-        return (None, Advance { wakes: Vec::new() });
+        return (None, WakeBatch(Vec::new()));
     }
     let id = s.fresh_id();
     s.parked_indef.insert(
@@ -617,7 +623,7 @@ pub(crate) fn async_acquire() {
 
 /// Decrement the async slot count under a held `SCHED` and return the advance the
 /// quiescent edge may unblock. The caller fires it after releasing the lock.
-fn release_async_locked(s: &mut SimSched) -> Advance {
+fn release_async_locked(s: &mut SimSched) -> WakeBatch {
     debug_assert!(
         s.active_async > 0,
         "async release without a matching acquire"
@@ -641,7 +647,7 @@ pub(crate) fn gate_park(state: &AtomicU8, running: u8, parked: u8, runnable: u8)
     {
         let adv = release_async_locked(&mut s);
         drop(s);
-        fire_advance(adv);
+        adv.fire();
     } else {
         state.store(runnable, Ordering::Release);
     }
@@ -654,7 +660,7 @@ pub(crate) fn gate_complete(state: &AtomicU8, done: u8) {
     state.store(done, Ordering::Release);
     let adv = release_async_locked(&mut s);
     drop(s);
-    fire_advance(adv);
+    adv.fire();
 }
 
 /// Gate drop under the `SCHED` lock: swap to `done`; release the slot iff the task
@@ -671,7 +677,7 @@ pub(crate) fn gate_drop_release(
     if prev == runnable || prev == running || prev == notified {
         let adv = release_async_locked(&mut s);
         drop(s);
-        fire_advance(adv);
+        adv.fire();
     }
 }
 
@@ -732,11 +738,7 @@ pub(crate) fn signal_notify(cvid: CvId) {
         // immediately.
         s.notify_permit.insert(cvid);
     } else {
-        // Async (Task) wakes are counted by the spawn poll-wrapper, not here.
-        s.active += woken.iter().filter(|w| !w.is_task()).count();
-        for w in &woken {
-            w.mark_granted_under_lock();
-        }
+        s.account_woken(&woken);
     }
     drop(s);
     for t in woken {
@@ -752,7 +754,7 @@ pub(crate) fn signal_notify(cvid: CvId) {
 /// cannot signal-with-no-waiter between the empty-check and the park (no lost
 /// wakeup). Returns `(handle, advance)`; fire the advance after dropping the
 /// queue lock.
-pub(crate) fn register_channel_async(cvid: CvId, waker: Waker) -> (AsyncHandle, Advance) {
+pub(crate) fn register_channel_async(cvid: CvId, waker: Waker) -> (AsyncHandle, WakeBatch) {
     let granted = Arc::new(AtomicBool::new(false));
     let mut s = SCHED.lock();
     let id = s.fresh_id();
@@ -805,11 +807,7 @@ pub(crate) fn signal_channel(cvid: CvId, all: bool) {
     if woken.is_empty() {
         return;
     }
-    // Async (Task) wakes are counted by the spawn poll-wrapper, not here.
-    s.active += woken.iter().filter(|w| !w.is_task()).count();
-    for w in &woken {
-        w.mark_granted_under_lock();
-    }
+    s.account_woken(&woken);
     drop(s);
     for w in woken {
         w.fire();
@@ -852,7 +850,7 @@ impl Drop for TestHold {
         s.active -= 1;
         let adv = try_advance_locked(&mut s);
         drop(s);
-        fire_advance(adv);
+        adv.fire();
     }
 }
 

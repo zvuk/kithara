@@ -139,7 +139,7 @@ impl Future for Notified<'_> {
                 }
                 Some(handle) => {
                     self.state = NotifiedState::Engine(handle);
-                    system::fire_advance(adv);
+                    adv.fire();
                     Poll::Pending
                 }
             }

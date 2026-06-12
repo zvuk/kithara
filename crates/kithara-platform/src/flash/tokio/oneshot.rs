@@ -179,7 +179,7 @@ impl<T> Future for Receiver<T> {
                 system::register_channel_async(this.shared.cvid, cx.waker().clone());
             this.pending = Some(Parked::Engine(handle));
             drop(inner);
-            system::fire_advance(adv);
+            adv.fire();
         } else {
             // Store the real waker UNDER the lock, after re-checking value/alive,
             // so a `send`/sender-drop that takes this lock either observes our

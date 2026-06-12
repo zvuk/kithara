@@ -73,7 +73,7 @@ impl Condvar {
         if self.engine {
             let (token, adv) = system::register_condvar_untimed(self.cvid);
             RawMutexGuard::unlocked(&mut guard.0, move || {
-                system::fire_advance(adv);
+                adv.fire();
                 token.wait();
                 credit::mark_running_after_condvar();
             });
@@ -104,7 +104,7 @@ impl Condvar {
             let (token, adv) =
                 system::register_condvar_timed(deadline.as_virtual_nanos(), self.cvid);
             RawMutexGuard::unlocked(&mut guard.0, move || {
-                system::fire_advance(adv);
+                adv.fire();
                 token.wait();
                 credit::mark_running_after_condvar();
             });

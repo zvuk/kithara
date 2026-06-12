@@ -220,7 +220,7 @@ fn poll_recv_inner<T>(
         let (handle, adv) = system::register_channel_async(shared.data_cvid, cx.waker().clone());
         *pending = Some(Parked::Engine(handle));
         drop(inner);
-        system::fire_advance(adv);
+        adv.fire();
     } else {
         let waker = cx.waker().clone();
         inner.data_waker = Some(waker.clone());
@@ -363,7 +363,7 @@ impl<T> Future for Send<'_, T> {
                 system::register_channel_async(this.shared.space_cvid, cx.waker().clone());
             this.pending = Some(Parked::Engine(handle));
             drop(inner);
-            system::fire_advance(adv);
+            adv.fire();
         } else {
             let waker = cx.waker().clone();
             inner.space_wakers.push(waker.clone());

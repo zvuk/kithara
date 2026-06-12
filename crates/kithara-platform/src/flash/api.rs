@@ -83,7 +83,7 @@ impl Future for FlashSleep {
         // deadline is computed under the engine lock (no backward-clock race).
         let (handle, adv) = system::register_sleep_async(self.delta_nanos, cx.waker().clone());
         self.handle = Some(handle);
-        system::fire_advance(adv);
+        adv.fire();
         Poll::Pending
     }
 }
@@ -127,7 +127,7 @@ impl Future for FlashYield {
         }
         let (id, granted, adv) = system::register_yield_async(cx.waker().clone());
         self.handle = Some((id, granted));
-        system::fire_advance(adv);
+        adv.fire();
         Poll::Pending
     }
 }

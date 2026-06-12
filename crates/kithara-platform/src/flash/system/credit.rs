@@ -208,7 +208,7 @@ pub(super) fn resume_after_wait() {
         s.active -= 1;
         let adv = sched::try_advance_locked(&mut s);
         drop(s);
-        sched::fire_advance(adv);
+        adv.fire();
         return;
     }
     mark_running();
@@ -248,7 +248,7 @@ pub(crate) fn on_participant_exit() {
     s.active -= 1;
     let adv = sched::try_advance_locked(&mut s);
     drop(s);
-    sched::fire_advance(adv);
+    adv.fire();
 }
 
 /// Reset this thread's credit to `None`. Called at the start of a pooled
