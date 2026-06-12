@@ -23,7 +23,7 @@ use std::{
 
 use parking_lot::Mutex;
 
-use crate::flash::{flash_ambient, sched};
+use crate::flash::{flash_ambient, system};
 
 /// Error observed when the sender drops without sending.
 ///
@@ -69,7 +69,7 @@ struct Shared<T> {
 /// How the [`Receiver`] future parked, so re-poll and `Drop` use the matching
 /// teardown — engine cancel vs. clearing the stored real waker.
 enum Parked {
-    Engine(sched::AsyncHandle),
+    Engine(system::AsyncHandle),
     Real,
 }
 
@@ -83,7 +83,7 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
             receiver_alive: true,
             real_waker: None,
         }),
-        cvid: sched::next_condvar_id(),
+        cvid: system::next_condvar_id(),
         engine: flash_ambient(),
     });
     (
@@ -121,7 +121,7 @@ impl<T> Sender<T> {
         let waker = inner.real_waker.take();
         drop(inner);
         if shared.engine {
-            sched::signal_channel(shared.cvid, false);
+            system::signal_channel(shared.cvid, false);
         } else if let Some(waker) = waker {
             waker.wake();
         }
@@ -138,7 +138,7 @@ impl<T> Drop for Sender<T> {
             drop(inner);
             // Wake the receiver so its next poll observes the closed sender.
             if shared.engine {
-                sched::signal_channel(shared.cvid, false);
+                system::signal_channel(shared.cvid, false);
             } else if let Some(waker) = waker {
                 waker.wake();
             }
@@ -175,10 +175,11 @@ impl<T> Future for Receiver<T> {
             return Poll::Ready(Err(RecvError));
         }
         if this.shared.engine {
-            let (handle, adv) = sched::register_channel_async(this.shared.cvid, cx.waker().clone());
+            let (handle, adv) =
+                system::register_channel_async(this.shared.cvid, cx.waker().clone());
             this.pending = Some(Parked::Engine(handle));
             drop(inner);
-            sched::fire_advance(adv);
+            system::fire_advance(adv);
         } else {
             // Store the real waker UNDER the lock, after re-checking value/alive,
             // so a `send`/sender-drop that takes this lock either observes our
@@ -202,7 +203,7 @@ impl<T> Drop for Receiver<T> {
         }
         drop(inner);
         if let Some(Parked::Engine(handle)) = self.pending.take() {
-            sched::cancel_async_wait(&handle);
+            system::cancel_async_wait(&handle);
         }
     }
 }

@@ -5,17 +5,15 @@
 //! ahead of bytes that are still on the wire. Pacing (not pinning) keeps a
 //! virtually-delayed peer live: its deadline still fires once the equivalent
 //! REAL time has passed. See the crate README ("Real I/O pacing") and
-//! [`super::RealIoScope`].
+//! [`crate::flash::RealIoScope`].
 
 use std::sync::{Once, OnceLock, atomic::Ordering};
 
 use parking_lot::{Condvar, Mutex};
 use web_time::Instant as RealInstant;
 
-use super::{
-    Duration, SIM_NANOS,
-    sched::{self, SCHED},
-};
+use super::sched::{self, SCHED};
+use crate::flash::{Duration, SIM_NANOS};
 
 /// Pacer arming flag + wakeup. `armed` is locked BEFORE `SCHED` (strict
 /// `armed -> SCHED` order shared by [`real_io_enter`], [`real_io_exit`] and
@@ -73,7 +71,7 @@ fn handle() -> &'static Pacer {
 
 /// Mark ONE real I/O operation in flight. The first op anchors the pace to
 /// the current (real, virtual) instant and arms the pacer thread.
-pub(super) fn real_io_enter() {
+pub(in crate::flash) fn real_io_enter() {
     let h = handle();
     let mut armed = h.armed.lock();
     let mut s = SCHED.lock();
@@ -94,7 +92,7 @@ pub(super) fn real_io_enter() {
 /// Complete ONE real I/O operation. The last completion clears the anchor,
 /// disarms the pacer and immediately re-runs the advance rule: full-speed
 /// collapse resumes.
-pub(super) fn real_io_exit() {
+pub(in crate::flash) fn real_io_exit() {
     let h = handle();
     let mut armed = h.armed.lock();
     let mut s = SCHED.lock();

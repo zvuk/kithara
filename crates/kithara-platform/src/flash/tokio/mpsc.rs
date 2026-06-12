@@ -4,7 +4,7 @@
 //! is invisible to the quiescence engine — so the virtual clock would advance
 //! across a channel handoff and race the download chain. This wrapper keeps the
 //! queue under a plain mutex and uses the engine's untimed channel waiters
-//! ([`sched::register_channel_async`] / [`sched::signal_channel`]) as the wake
+//! ([`system::register_channel_async`] / [`system::signal_channel`]) as the wake
 //! mechanism, so every send→recv handoff keeps a participant `active` and the
 //! clock only advances at genuine quiescence. Off the sim path the module is not
 //! compiled; callers get the real `tokio` mpsc through the glob re-export.
@@ -35,7 +35,7 @@ use parking_lot::Mutex;
 pub use tokio_with_wasm::alias::sync::mpsc::error;
 
 pub use super::unbounded::UnboundedSender;
-use crate::flash::{flash_ambient, sched};
+use crate::flash::{flash_ambient, system};
 
 pub(super) struct Inner<T> {
     queue: VecDeque<T>,
@@ -77,8 +77,8 @@ impl<T> Shared<T> {
                 data_waker: None,
                 space_wakers: Vec::new(),
             }),
-            data_cvid: sched::next_condvar_id(),
-            space_cvid: sched::next_condvar_id(),
+            data_cvid: system::next_condvar_id(),
+            space_cvid: system::next_condvar_id(),
             capacity,
             engine: flash_ambient(),
         })
@@ -94,7 +94,7 @@ impl<T> Shared<T> {
     /// lock by the caller (already dropped); pass `None` on the flash path.
     fn wake_data(&self, waker: Option<Waker>) {
         if self.engine {
-            sched::signal_channel(self.data_cvid, false);
+            system::signal_channel(self.data_cvid, false);
         } else if let Some(waker) = waker {
             waker.wake();
         }
@@ -105,7 +105,7 @@ impl<T> Shared<T> {
     /// lock. `wakers` is empty on the flash path.
     fn wake_space(&self, all: bool, wakers: Vec<Waker>) {
         if self.engine {
-            sched::signal_channel(self.space_cvid, all);
+            system::signal_channel(self.space_cvid, all);
         } else {
             for w in wakers {
                 w.wake();
@@ -120,7 +120,7 @@ impl<T> Shared<T> {
 /// the shared `space_wakers` list (leaving a stale waker there would steal a
 /// freed-slot wake from a still-blocked sender — a lost wakeup).
 enum Parked {
-    Engine(sched::AsyncHandle),
+    Engine(system::AsyncHandle),
     Real(Waker),
 }
 
@@ -217,10 +217,10 @@ fn poll_recv_inner<T>(
     // Register the wakeup WHILE holding the queue lock so a concurrent send
     // cannot slip its signal between this empty-check and the park.
     if shared.engine {
-        let (handle, adv) = sched::register_channel_async(shared.data_cvid, cx.waker().clone());
+        let (handle, adv) = system::register_channel_async(shared.data_cvid, cx.waker().clone());
         *pending = Some(Parked::Engine(handle));
         drop(inner);
-        sched::fire_advance(adv);
+        system::fire_advance(adv);
     } else {
         let waker = cx.waker().clone();
         inner.data_waker = Some(waker.clone());
@@ -264,7 +264,7 @@ fn close_receiver<T>(shared: &Shared<T>, pending: &mut Option<Parked>) {
     drop(inner);
     shared.wake_space(true, wakers);
     if let Some(Parked::Engine(handle)) = pending.take() {
-        sched::cancel_async_wait(&handle);
+        system::cancel_async_wait(&handle);
     }
 }
 
@@ -360,10 +360,10 @@ impl<T> Future for Send<'_, T> {
         // cannot slip its wake between this capacity-check and the park.
         if this.shared.engine {
             let (handle, adv) =
-                sched::register_channel_async(this.shared.space_cvid, cx.waker().clone());
+                system::register_channel_async(this.shared.space_cvid, cx.waker().clone());
             this.pending = Some(Parked::Engine(handle));
             drop(inner);
-            sched::fire_advance(adv);
+            system::fire_advance(adv);
         } else {
             let waker = cx.waker().clone();
             inner.space_wakers.push(waker.clone());
@@ -384,7 +384,7 @@ impl<T> Drop for Send<'_, T> {
                 let mut inner = self.shared.inner.lock();
                 inner.space_wakers.retain(|w| !w.will_wake(&waker));
             }
-            Some(Parked::Engine(handle)) => sched::cancel_async_wait(&handle),
+            Some(Parked::Engine(handle)) => system::cancel_async_wait(&handle),
             None => {}
         }
     }

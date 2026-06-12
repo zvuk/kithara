@@ -27,7 +27,7 @@ enum Credit {
 thread_local! {
     static CREDIT: Cell<Credit> = const { Cell::new(Credit::None) };
     /// Nesting depth of an async-task poll on THIS OS thread. Non-zero means a
-    /// runtime worker is currently inside [`Participating::poll`](super::Participating)
+    /// runtime worker is currently inside [`Participating::poll`](crate::flash::Participating)
     /// — driving a task that occupies an `active_async` slot. A wrapped sync wait
     /// taken while this is non-zero is a BRIDGED wait: the worker is not a
     /// dedicated pacer (it returns to the runtime when the poll yields, parking on
@@ -40,7 +40,7 @@ thread_local! {
 }
 
 /// True when the calling OS thread is inside an async-task poll (a runtime worker
-/// driving a [`Participating`](super::Participating) future). See [`ASYNC_POLL_DEPTH`].
+/// driving a [`Participating`](crate::flash::Participating) future). See [`ASYNC_POLL_DEPTH`].
 fn in_async_poll() -> bool {
     ASYNC_POLL_DEPTH.with(|c| c.get() > 0)
 }
@@ -119,15 +119,15 @@ impl Drop for BlockingPacer {
 }
 
 /// RAII bracket marking the current OS thread as inside an async-task poll for the
-/// guard's lifetime. Held by [`Participating::poll`](super::Participating) around
+/// guard's lifetime. Held by [`Participating::poll`](crate::flash::Participating) around
 /// the inner future's poll, so a wrapped sync wait taken inside that poll is
 /// recognised as bridged (see [`ASYNC_POLL_DEPTH`]). Drop-safe across an unwind.
-pub(super) struct AsyncPollGuard {
+pub(in crate::flash) struct AsyncPollGuard {
     _priv: (),
 }
 
 impl AsyncPollGuard {
-    pub(super) fn enter() -> Self {
+    pub(in crate::flash) fn enter() -> Self {
         ASYNC_POLL_DEPTH.with(|c| c.set(c.get().saturating_add(1)));
         Self { _priv: () }
     }

@@ -11,8 +11,10 @@ use std::{
 };
 
 use super::{
-    Duration, Instant, advance, ambient_scope, credit, enter_dynamic, flash_enabled, now_nanos,
-    pace, participate, real_io, reset, sched, yield_now,
+    Duration, Instant, advance, ambient_scope, enter_dynamic, flash_enabled, now_nanos,
+    participate, real_io, reset,
+    system::{credit, pace, sched},
+    yield_now,
 };
 use crate::sync::Notify;
 

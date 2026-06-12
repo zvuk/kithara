@@ -11,7 +11,7 @@ use std::{
 
 use parking_lot::Mutex;
 
-use crate::flash::{flash_ambient, sched};
+use crate::flash::{flash_ambient, system};
 
 /// Real-wake state for the off-flash path: FIFO queue of parked waiters (each a
 /// grant flag + waker, mirroring the engine's `granted`) plus a pending
@@ -36,7 +36,7 @@ pub struct Notify {
 impl Default for Notify {
     fn default() -> Self {
         Self {
-            cvid: sched::next_condvar_id(),
+            cvid: system::next_condvar_id(),
             real: Mutex::new(RealNotify::default()),
             engine: flash_ambient(),
         }
@@ -46,7 +46,7 @@ impl Default for Notify {
 impl Notify {
     pub fn notify_one(&self) {
         if self.engine {
-            sched::signal_notify(self.cvid);
+            system::signal_notify(self.cvid);
         } else {
             // Grant + wake one parked waiter; if none, store a permit (tokio
             // semantics). The grant is set UNDER the lock, atomically with the
@@ -86,7 +86,7 @@ impl Notify {
 /// `notify_one` from a still-parked waiter — a lost wakeup).
 enum NotifiedState {
     Init,
-    Engine(sched::AsyncHandle),
+    Engine(system::AsyncHandle),
     Real(Arc<AtomicBool>),
     Done,
 }
@@ -129,7 +129,7 @@ impl Future for Notified<'_> {
             NotifiedState::Init => {}
         }
         if self.notify.engine {
-            let (handle, adv) = sched::register_notify_async(self.cvid, cx.waker().clone());
+            let (handle, adv) = system::register_notify_async(self.cvid, cx.waker().clone());
             match handle {
                 None => {
                     // A notify_one had landed with no waiter: consume the permit
@@ -139,7 +139,7 @@ impl Future for Notified<'_> {
                 }
                 Some(handle) => {
                     self.state = NotifiedState::Engine(handle);
-                    sched::fire_advance(adv);
+                    system::fire_advance(adv);
                     Poll::Pending
                 }
             }
@@ -167,7 +167,7 @@ impl Future for Notified<'_> {
 impl Drop for Notified<'_> {
     fn drop(&mut self) {
         match std::mem::replace(&mut self.state, NotifiedState::Done) {
-            NotifiedState::Engine(handle) => sched::cancel_async_wait(&handle),
+            NotifiedState::Engine(handle) => system::cancel_async_wait(&handle),
             NotifiedState::Real(granted) => {
                 // Remove EXACTLY our own entry (by grant-flag identity) so a
                 // notify_one does not select a dropped future (which would steal

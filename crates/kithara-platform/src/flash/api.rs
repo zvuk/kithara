@@ -12,7 +12,7 @@ use std::{
 };
 
 pub use super::participant::{Participating, participate};
-use super::{pace, sched};
+use super::system;
 use crate::flash::time::{FlashTimeout, TimeoutError};
 
 /// RAII bracket for ONE real I/O operation in flight (a socket send / response
@@ -31,13 +31,13 @@ pub struct RealIoScope {
 
 /// Open a [`RealIoScope`] (see its contract).
 pub fn real_io() -> RealIoScope {
-    pace::real_io_enter();
+    system::real_io_enter();
     RealIoScope { _priv: () }
 }
 
 impl Drop for RealIoScope {
     fn drop(&mut self) {
-        pace::real_io_exit();
+        system::real_io_exit();
     }
 }
 
@@ -49,7 +49,7 @@ impl Drop for RealIoScope {
 /// poll-wrapper gate ([`Participating`]), so this future touches no counter.
 pub(crate) struct FlashSleep {
     delta_nanos: u64,
-    handle: Option<sched::AsyncHandle>,
+    handle: Option<system::AsyncHandle>,
 }
 
 impl FlashSleep {
@@ -81,9 +81,9 @@ impl Future for FlashSleep {
         }
         // First poll: register `delta` from the current virtual instant; the
         // deadline is computed under the engine lock (no backward-clock race).
-        let (handle, adv) = sched::register_sleep_async(self.delta_nanos, cx.waker().clone());
+        let (handle, adv) = system::register_sleep_async(self.delta_nanos, cx.waker().clone());
         self.handle = Some(handle);
-        sched::fire_advance(adv);
+        system::fire_advance(adv);
         Poll::Pending
     }
 }
@@ -91,7 +91,7 @@ impl Future for FlashSleep {
 impl Drop for FlashSleep {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
-            sched::cancel_async_wait(&handle);
+            system::cancel_async_wait(&handle);
         }
     }
 }
@@ -125,9 +125,9 @@ impl Future for FlashYield {
             }
             return Poll::Pending;
         }
-        let (id, granted, adv) = sched::register_yield_async(cx.waker().clone());
+        let (id, granted, adv) = system::register_yield_async(cx.waker().clone());
         self.handle = Some((id, granted));
-        sched::fire_advance(adv);
+        system::fire_advance(adv);
         Poll::Pending
     }
 }
@@ -135,7 +135,7 @@ impl Future for FlashYield {
 impl Drop for FlashYield {
     fn drop(&mut self) {
         if let Some((id, _)) = self.handle.take() {
-            sched::cancel_yield(id);
+            system::cancel_yield(id);
         }
     }
 }
@@ -220,7 +220,7 @@ pub(crate) fn now_nanos() -> u64 {
 /// HARD TIMEOUT abort thread) so a wedged run self-reports every parked
 /// participant, deadline and pending signal instead of dying opaque.
 pub fn dump_to_stderr(context: &str) {
-    eprintln!("[flash-dump] {context}:\n{}", sched::dump());
+    eprintln!("[flash-dump] {context}:\n{}", system::dump());
 }
 
 /// Virtual `sleep` that hits the quiescence engine UNCONDITIONALLY (no
@@ -288,7 +288,7 @@ pub(crate) fn advance(delta: Duration) {
 #[inline]
 pub fn reset() {
     SIM_NANOS.store(Instant::BASE_NANOS, Ordering::Release);
-    sched::reset();
+    system::reset();
 }
 
 thread_local! {

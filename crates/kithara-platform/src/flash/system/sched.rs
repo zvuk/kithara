@@ -13,10 +13,10 @@ use web_time::Instant as RealInstant;
 #[cfg(test)]
 use super::credit::mark_running;
 use super::{
-    SIM_NANOS,
     credit::{enter_wait_locked, resume_after_wait},
     wake::{Token, Wake},
 };
+use crate::flash::SIM_NANOS;
 
 /// What kind of waiter an [`Entry`] is, so a signal targets the right group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,7 +82,7 @@ pub(super) struct SimSched {
     /// releases while it waits. Keyed by id.
     yield_waiters: BTreeMap<u64, Wake>,
     /// REAL I/O operations currently in flight (socket sends / body-chunk
-    /// awaits bracketed by [`super::RealIoScope`]). While non-zero the clock
+    /// awaits bracketed by [`crate::flash::RealIoScope`]). While non-zero the clock
     /// is PACED, not pinned: [`try_advance_locked`] refuses any jump beyond
     /// `pace_anchor`'s virtual base plus the REAL time elapsed since it was
     /// set — virtual time may not outrun real time while real-world transit
@@ -248,8 +248,8 @@ pub(crate) fn next_condvar_id() -> u64 {
 /// critical section, so no advance can slip between read and insert. Production
 /// parks use [`park_timed_unparkable`]; condvar waits use the `register_*` API.
 #[cfg(test)]
-pub(crate) fn park_for(d: super::Duration) {
-    let delta = super::duration_to_nanos(d);
+pub(crate) fn park_for(d: crate::flash::Duration) {
+    let delta = crate::flash::duration_to_nanos(d);
     let token = Token::new();
     let mut s = SCHED.lock();
     let deadline = SIM_NANOS.load(Ordering::Acquire).saturating_add(delta);
@@ -275,8 +275,8 @@ pub(crate) fn park_for(d: super::Duration) {
 /// reading the clock and inserting. A pending `unpark` (one that arrived while
 /// this thread was running) is consumed here and returns immediately without
 /// parking or touching `active`.
-pub(crate) fn park_timed_unparkable(d: super::Duration, thread_id: u64) {
-    let delta = super::duration_to_nanos(d);
+pub(crate) fn park_timed_unparkable(d: crate::flash::Duration, thread_id: u64) {
+    let delta = crate::flash::duration_to_nanos(d);
     let token = Token::new();
     let mut s = SCHED.lock();
     if s.unpark_pending.remove(&thread_id) {
@@ -308,8 +308,8 @@ pub(crate) fn park_timed_unparkable(d: super::Duration, thread_id: u64) {
 /// entry + accounts the wait in ONE `SCHED` hold, so no advance can slip between
 /// reading the clock and inserting. Same accounting as [`park_for`] — the firer
 /// `active += 1`'s the woken entry, [`resume_after_wait`] settles it.
-pub(crate) fn sleep_timed(d: super::Duration) {
-    let delta = super::duration_to_nanos(d);
+pub(crate) fn sleep_timed(d: crate::flash::Duration) {
+    let delta = crate::flash::duration_to_nanos(d);
     let token = Token::new();
     let mut s = SCHED.lock();
     let deadline = SIM_NANOS.load(Ordering::Acquire).saturating_add(delta);
@@ -605,7 +605,7 @@ pub(crate) fn register_notify_async(cvid: u64, waker: Waker) -> (Option<AsyncHan
 
 /// Acquire an `active_async` slot for a RUNNABLE async task queued to be polled
 /// (just spawned). Adding a participant can never enable an advance, so this does
-/// NOT run the advance rule. Called once by [`participate`](super::participate) at
+/// NOT run the advance rule. Called once by [`participate`](crate::flash::participate) at
 /// construction; the PARKED→RUNNABLE wake re-acquire goes through
 /// [`gate_wake_parked`], which couples the acquire to the state CAS under the lock.
 pub(crate) fn async_acquire() {

@@ -17,11 +17,11 @@ pub use crate::{
 /// prevents). The sim path parks the thread as a yield-waiter so the clock can
 /// advance, then wakes it on the next advance to re-check. Off the sim path
 /// (real-time scope) it stays a plain OS yield, so the real-time / RT worker
-/// behaviour is unchanged. See `crate::flash::sched::yield_until_advance`.
+/// behaviour is unchanged. See `crate::flash::system::yield_until_advance`.
 #[inline]
 pub fn yield_now() {
     if crate::flash::flash_enabled() {
-        crate::flash::sched::yield_until_advance();
+        crate::flash::system::yield_until_advance();
     } else {
         std::thread::yield_now();
     }
@@ -52,7 +52,7 @@ where
     // pacer counted and the virtual clock cannot jump past its warm-up. The child
     // claims this slot as `Running` in `mark_dedicated`; the first wait / exit
     // releases it. See `credit::pre_count_dedicated`.
-    crate::flash::credit::pre_count_dedicated();
+    crate::flash::system::credit::pre_count_dedicated();
     move || {
         // Held for the closure's lifetime: restores the previous ambient on the
         // child thread when the closure returns (it must outlive `f()`).
@@ -72,15 +72,15 @@ where
         // pacer's `Instant::now()` in the same clock domain as its waits.
         let _flash = crate::flash::enter_dynamic(true);
         {
-            crate::flash::credit::reset_credit();
+            crate::flash::system::credit::reset_credit();
             // A `spawn_named` thread is a DEDICATED virtual-time pacer: it is the
             // only kind of thread counted in the engine's sync `active` set (tokio
             // workers and the main thread are driven by the runtime, not by wrapped
             // waits, so counting them leaks). See `credit::DEDICATED`.
-            crate::flash::credit::mark_dedicated();
+            crate::flash::system::credit::mark_dedicated();
         }
         let result = f();
-        crate::flash::credit::on_participant_exit();
+        crate::flash::system::credit::on_participant_exit();
         ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
         result
     }
@@ -113,11 +113,11 @@ where
 /// virtual wait, so a thread that sleeps to delay a state change cannot be raced
 /// by a peer's virtual wait advancing the clock past it. Real-time scopes keep a
 /// true wall-clock sleep. Unlike [`park_timeout`] a sleep has no early wake. See
-/// `crate::flash::sched::sleep_timed`.
+/// `crate::flash::system::sleep_timed`.
 #[inline]
 pub fn sleep(duration: Duration) {
     if crate::flash::flash_enabled() {
-        crate::flash::sched::sleep_timed(duration);
+        crate::flash::system::sleep_timed(duration);
     } else {
         std::thread::sleep(duration);
     }
@@ -132,7 +132,7 @@ pub fn sleep(duration: Duration) {
 #[inline]
 pub fn park_timeout(duration: Duration) {
     if crate::flash::flash_enabled() {
-        crate::flash::sched::park_timed_unparkable(duration, current_thread_id());
+        crate::flash::system::park_timed_unparkable(duration, current_thread_id());
     } else {
         // Real-time scope: a true wall-clock park, invisible to the engine.
         std::thread::park_timeout(duration);
@@ -145,7 +145,7 @@ pub fn park_timeout(duration: Duration) {
 /// `park_timeout` collapses onto virtual time without setting `FLASH_ACTIVE`.
 #[inline]
 pub(crate) fn park_timeout_virtual(duration: Duration) {
-    crate::flash::sched::park_timed_unparkable(duration, current_thread_id());
+    crate::flash::system::park_timed_unparkable(duration, current_thread_id());
 }
 
 /// Unpark a thread parked in [`park_timeout`].
@@ -161,7 +161,7 @@ pub(crate) fn park_timeout_virtual(duration: Duration) {
 #[inline]
 pub fn unpark(t: &Thread) {
     if crate::flash::flash_enabled() {
-        crate::flash::sched::unpark(thread_id_hash(t.id()));
+        crate::flash::system::unpark(thread_id_hash(t.id()));
     }
     t.unpark();
 }

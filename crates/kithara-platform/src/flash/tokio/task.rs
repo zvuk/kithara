@@ -15,7 +15,7 @@ use std::future::Future;
 use tokio_with_wasm::alias as tokio_alias;
 pub use tokio_with_wasm::alias::task::*;
 
-use crate::flash::credit;
+use crate::flash::system::credit;
 // Under `flash` (native) [`spawn`] wraps the future in the quiescence
 // poll-wrapper and `yield_now` participates in quiescence UNDER AMBIENT (a
 // flash(true) test's busy-poll `loop { yield_now().await }` must let the virtual

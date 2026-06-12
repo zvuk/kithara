@@ -1,7 +1,10 @@
 use parking_lot::{Condvar as ParkingLotCondvar, lock_api::MutexGuard as RawMutexGuard};
 
 use super::mutex::MutexGuard;
-use crate::flash::{Instant, credit, flash_ambient, sched};
+use crate::flash::{
+    Instant, flash_ambient,
+    system::{self, credit},
+};
 
 /// Native condvar under `flash`. Each operation branches on
 /// [`flash_ambient`]: when the test is flash-eligible, waits register on the
@@ -32,7 +35,7 @@ impl Condvar {
     // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self {
-            cvid: sched::next_condvar_id(),
+            cvid: system::next_condvar_id(),
             real: ParkingLotCondvar::new(),
             engine: flash_ambient(),
         }
@@ -41,7 +44,7 @@ impl Condvar {
     #[inline]
     pub fn notify_all(&self) {
         if self.engine {
-            sched::signal_condvar(self.cvid, true);
+            system::signal_condvar(self.cvid, true);
         } else {
             self.real.notify_all();
         }
@@ -50,7 +53,7 @@ impl Condvar {
     #[inline]
     pub fn notify_one(&self) {
         if self.engine {
-            sched::signal_condvar(self.cvid, false);
+            system::signal_condvar(self.cvid, false);
         } else {
             self.real.notify_one();
         }
@@ -67,9 +70,9 @@ impl Condvar {
     #[must_use]
     pub fn wait_sync<'a, T>(&self, mut guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
         if self.engine {
-            let (token, adv) = sched::register_condvar_untimed(self.cvid);
+            let (token, adv) = system::register_condvar_untimed(self.cvid);
             RawMutexGuard::unlocked(&mut guard.0, move || {
-                sched::fire_advance(adv);
+                system::fire_advance(adv);
                 token.wait();
                 credit::mark_running_after_condvar();
             });
@@ -98,9 +101,9 @@ impl Condvar {
     ) -> MutexGuard<'a, T> {
         if self.engine {
             let (token, adv) =
-                sched::register_condvar_timed(deadline.as_virtual_nanos(), self.cvid);
+                system::register_condvar_timed(deadline.as_virtual_nanos(), self.cvid);
             RawMutexGuard::unlocked(&mut guard.0, move || {
-                sched::fire_advance(adv);
+                system::fire_advance(adv);
                 token.wait();
                 credit::mark_running_after_condvar();
             });
