@@ -44,27 +44,39 @@ pub(super) struct Inner<T> {
     /// Whether the single receiver is alive; senders observe close at `false`.
     receiver_alive: bool,
     /// Real-wake slot for the single receiver (off the flash path), mirroring
-    /// `data_cvid`. Stored under this mutex after the empty/close re-check.
+    /// the engine `data` cvid. Stored under this mutex after the empty/close
+    /// re-check.
     data_waker: Option<Waker>,
     /// Real-wake slots for senders blocked on capacity (off the flash path),
-    /// mirroring `space_cvid`. Many producers can park, so this is a list; each
-    /// is woken (and the slot drained) per freed slot / on receiver close.
+    /// mirroring the engine `space` cvid. Many producers can park, so this is a
+    /// list; each is woken (and the slot drained) per freed slot / on receiver
+    /// close.
     space_wakers: Vec<Waker>,
+}
+
+/// Pair-carrying local form of the construction latch
+/// [`crate::flash::ids::Backend`] (see its contract — same latch expression,
+/// same fixed-for-life semantics): an engine channel keys TWO waiter groups.
+#[derive(Clone, Copy)]
+enum Backend {
+    Engine {
+        /// Signaled when an item is enqueued (wakes the parked receiver).
+        data: CvId,
+        /// Signaled when a dequeue frees a slot of a full bounded queue (wakes
+        /// a parked sender). Unused for unbounded channels.
+        space: CvId,
+    },
+    Native,
 }
 
 pub(super) struct Shared<T> {
     inner: Mutex<Inner<T>>,
-    /// Signaled when an item is enqueued (wakes the parked receiver).
-    data_cvid: CvId,
-    /// Signaled when a dequeue frees a slot of a full bounded queue (wakes a
-    /// parked sender). Unused for unbounded channels.
-    space_cvid: CvId,
     /// `Some(cap)` bounded, `None` unbounded.
     capacity: Option<usize>,
-    /// Mechanism captured ONCE at channel creation (see [`crate::sync::Condvar`]):
+    /// Park/wake mechanism latched ONCE at channel creation (see [`Backend`]):
     /// every wake/park on both halves uses it, so a sender/receiver on a thread
     /// that did not inherit the test's ambient still reaches an engine-parked peer.
-    engine: bool,
+    backend: Backend,
 }
 
 impl<T> Shared<T> {
@@ -77,10 +89,15 @@ impl<T> Shared<T> {
                 data_waker: None,
                 space_wakers: Vec::new(),
             }),
-            data_cvid: system::next_condvar_id(),
-            space_cvid: system::next_condvar_id(),
             capacity,
-            engine: flash_ambient(),
+            backend: if flash_ambient() {
+                Backend::Engine {
+                    data: system::next_condvar_id(),
+                    space: system::next_condvar_id(),
+                }
+            } else {
+                Backend::Native
+            },
         })
     }
 
@@ -89,26 +106,30 @@ impl<T> Shared<T> {
         self.inner.lock().senders += 1;
     }
 
-    /// Wake one parked receiver: engine `data_cvid` on the flash path, else the
-    /// stored real waker. `waker` is the receiver's real waker taken under the
-    /// lock by the caller (already dropped); pass `None` on the flash path.
+    /// Wake one parked receiver: the engine `data` cvid on the flash path, else
+    /// the stored real waker. `waker` is the receiver's real waker taken under
+    /// the lock by the caller (already dropped); pass `None` on the flash path.
     fn wake_data(&self, waker: Option<Waker>) {
-        if self.engine {
-            system::signal_channel(self.data_cvid, false);
-        } else if let Some(waker) = waker {
-            waker.wake();
+        match self.backend {
+            Backend::Engine { data, .. } => system::signal_channel(data, false),
+            Backend::Native => {
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            }
         }
     }
 
-    /// Wake parked senders: engine `space_cvid` on the flash path (one if
+    /// Wake parked senders: the engine `space` cvid on the flash path (one if
     /// `!all`, every if `all`), else the real wakers the caller drained under the
     /// lock. `wakers` is empty on the flash path.
     fn wake_space(&self, all: bool, wakers: Vec<Waker>) {
-        if self.engine {
-            system::signal_channel(self.space_cvid, all);
-        } else {
-            for w in wakers {
-                w.wake();
+        match self.backend {
+            Backend::Engine { space, .. } => system::signal_channel(space, all),
+            Backend::Native => {
+                for w in wakers {
+                    w.wake();
+                }
             }
         }
     }
@@ -171,8 +192,8 @@ pub(super) fn push_unbounded<T>(shared: &Shared<T>, value: T) -> Result<(), Send
 
 /// Drain at most one parked sender's real waker (one freed slot wakes one
 /// sender). Returns the empty list on the flash path.
-fn take_one_space_waker<T>(engine: bool, inner: &mut Inner<T>) -> Vec<Waker> {
-    if engine || inner.space_wakers.is_empty() {
+fn take_one_space_waker<T>(backend: Backend, inner: &mut Inner<T>) -> Vec<Waker> {
+    if matches!(backend, Backend::Engine { .. }) || inner.space_wakers.is_empty() {
         Vec::new()
     } else {
         vec![inner.space_wakers.remove(0)]
@@ -201,7 +222,7 @@ fn poll_recv_inner<T>(
         // other senders when the consumer drains several slots before a woken
         // sender re-pushes — a lost wakeup that deadlocks under load.
         let wakers = if bounded {
-            take_one_space_waker(shared.engine, &mut inner)
+            take_one_space_waker(shared.backend, &mut inner)
         } else {
             Vec::new()
         };
@@ -216,16 +237,19 @@ fn poll_recv_inner<T>(
     }
     // Register the wakeup WHILE holding the queue lock so a concurrent send
     // cannot slip its signal between this empty-check and the park.
-    if shared.engine {
-        let (handle, adv) = system::register_channel_async(shared.data_cvid, cx.waker().clone());
-        *pending = Some(Parked::Engine(handle));
-        drop(inner);
-        adv.fire();
-    } else {
-        let waker = cx.waker().clone();
-        inner.data_waker = Some(waker.clone());
-        *pending = Some(Parked::Real(waker));
-        drop(inner);
+    match shared.backend {
+        Backend::Engine { data, .. } => {
+            let (handle, adv) = system::register_channel_async(data, cx.waker().clone());
+            *pending = Some(Parked::Engine(handle));
+            drop(inner);
+            adv.fire();
+        }
+        Backend::Native => {
+            let waker = cx.waker().clone();
+            inner.data_waker = Some(waker.clone());
+            *pending = Some(Parked::Real(waker));
+            drop(inner);
+        }
     }
     Poll::Pending
 }
@@ -237,7 +261,7 @@ fn try_recv_inner<T>(shared: &Shared<T>) -> Result<T, TryRecvError> {
         Some(value) => {
             // Wake one parked sender per freed slot (see `poll_recv_inner`).
             let wakers = if bounded {
-                take_one_space_waker(shared.engine, &mut inner)
+                take_one_space_waker(shared.backend, &mut inner)
             } else {
                 Vec::new()
             };
@@ -358,17 +382,19 @@ impl<T> Future for Send<'_, T> {
         // Full: park on space. Register the waiter WHILE holding the lock so a
         // concurrent recv (which frees a slot under the same lock, then wakes)
         // cannot slip its wake between this capacity-check and the park.
-        if this.shared.engine {
-            let (handle, adv) =
-                system::register_channel_async(this.shared.space_cvid, cx.waker().clone());
-            this.pending = Some(Parked::Engine(handle));
-            drop(inner);
-            adv.fire();
-        } else {
-            let waker = cx.waker().clone();
-            inner.space_wakers.push(waker.clone());
-            this.pending = Some(Parked::Real(waker));
-            drop(inner);
+        match this.shared.backend {
+            Backend::Engine { space, .. } => {
+                let (handle, adv) = system::register_channel_async(space, cx.waker().clone());
+                this.pending = Some(Parked::Engine(handle));
+                drop(inner);
+                adv.fire();
+            }
+            Backend::Native => {
+                let waker = cx.waker().clone();
+                inner.space_wakers.push(waker.clone());
+                this.pending = Some(Parked::Real(waker));
+                drop(inner);
+            }
         }
         Poll::Pending
     }

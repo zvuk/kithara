@@ -11,7 +11,7 @@ use std::{
 
 use parking_lot::Mutex;
 
-use crate::flash::{flash_ambient, ids::CvId, system};
+use crate::flash::{flash_ambient, ids::Backend, system};
 
 /// Real-wake state for the off-flash path: FIFO queue of parked waiters (each a
 /// grant flag + waker, mirroring the engine's `granted`) plus a pending
@@ -22,57 +22,57 @@ struct RealNotify {
     permit: bool,
 }
 
-/// `Notify` under `flash`. Each op branches on [`flash_ambient`]: engine
-/// `cvid` group when the test is flash-eligible, else a real waker list + permit.
+/// `Notify` under `flash`. Each op matches on the construction-latched
+/// [`Backend`] (see its contract): engine cvid group when the test is
+/// flash-eligible, else a real waker list + permit.
 pub struct Notify {
-    cvid: CvId,
+    backend: Backend,
     real: Mutex<RealNotify>,
-    /// Mechanism captured ONCE at construction (see [`super::Condvar`]): every
-    /// `notify_one` AND `notified()` poll uses it, so a notifier on a thread that
-    /// did not inherit the test's ambient still reaches an engine-parked waiter.
-    engine: bool,
 }
 
 impl Default for Notify {
     fn default() -> Self {
         Self {
-            cvid: system::next_condvar_id(),
+            backend: if flash_ambient() {
+                Backend::Engine(system::next_condvar_id())
+            } else {
+                Backend::Native
+            },
             real: Mutex::new(RealNotify::default()),
-            engine: flash_ambient(),
         }
     }
 }
 
 impl Notify {
     pub fn notify_one(&self) {
-        if self.engine {
-            system::signal_notify(self.cvid);
-        } else {
-            // Grant + wake one parked waiter; if none, store a permit (tokio
-            // semantics). The grant is set UNDER the lock, atomically with the
-            // pop (mirroring the engine's `mark_granted_under_lock`): a
-            // concurrent `Notified::drop` then either still sees us queued, or
-            // sees `granted == true` under the same lock and re-issues — it can
-            // never observe a popped-but-ungranted waiter and silently drop the
-            // notify. Wake after the unlock; the woken future observes its grant
-            // on the next poll and resolves (never re-parks), so the notify is
-            // also not lost to a spurious re-poll.
-            let mut real = self.real.lock();
-            let waiter = real.waiters.pop_front();
-            match &waiter {
-                Some((granted, _)) => granted.store(true, Ordering::Release),
-                None => real.permit = true,
-            }
-            drop(real);
-            if let Some((_, waker)) = waiter {
-                waker.wake();
+        match self.backend {
+            Backend::Engine(cvid) => system::signal_notify(cvid),
+            Backend::Native => {
+                // Grant + wake one parked waiter; if none, store a permit (tokio
+                // semantics). The grant is set UNDER the lock, atomically with the
+                // pop (mirroring the engine's `mark_granted_under_lock`): a
+                // concurrent `Notified::drop` then either still sees us queued, or
+                // sees `granted == true` under the same lock and re-issues — it can
+                // never observe a popped-but-ungranted waiter and silently drop the
+                // notify. Wake after the unlock; the woken future observes its grant
+                // on the next poll and resolves (never re-parks), so the notify is
+                // also not lost to a spurious re-poll.
+                let mut real = self.real.lock();
+                let waiter = real.waiters.pop_front();
+                match &waiter {
+                    Some((granted, _)) => granted.store(true, Ordering::Release),
+                    None => real.permit = true,
+                }
+                drop(real);
+                if let Some((_, waker)) = waiter {
+                    waker.wake();
+                }
             }
         }
     }
 
     pub fn notified(&self) -> Notified<'_> {
         Notified {
-            cvid: self.cvid,
             state: NotifiedState::Init,
             notify: self,
         }
@@ -93,7 +93,6 @@ enum NotifiedState {
 
 /// Future returned by [`Notify::notified`] under `flash`.
 pub struct Notified<'a> {
-    cvid: CvId,
     state: NotifiedState,
     notify: &'a Notify,
 }
@@ -128,38 +127,41 @@ impl Future for Notified<'_> {
             }
             NotifiedState::Init => {}
         }
-        if self.notify.engine {
-            let (handle, adv) = system::register_notify_async(self.cvid, cx.waker().clone());
-            match handle {
-                None => {
-                    // A notify_one had landed with no waiter: consume the permit
-                    // and resolve at once, without parking (no slot was granted).
+        match self.notify.backend {
+            Backend::Engine(cvid) => {
+                let (handle, adv) = system::register_notify_async(cvid, cx.waker().clone());
+                match handle {
+                    None => {
+                        // A notify_one had landed with no waiter: consume the permit
+                        // and resolve at once, without parking (no slot was granted).
+                        self.state = NotifiedState::Done;
+                        Poll::Ready(())
+                    }
+                    Some(handle) => {
+                        self.state = NotifiedState::Engine(handle);
+                        adv.fire();
+                        Poll::Pending
+                    }
+                }
+            }
+            Backend::Native => {
+                // Consume a permit, else enqueue our (grant, waker) UNDER the lock so
+                // a concurrent notify_one (same lock, then grant+wake) cannot slip
+                // between this permit-check and our park.
+                let mut real = self.notify.real.lock();
+                if real.permit {
+                    real.permit = false;
+                    drop(real);
                     self.state = NotifiedState::Done;
-                    Poll::Ready(())
+                    return Poll::Ready(());
                 }
-                Some(handle) => {
-                    self.state = NotifiedState::Engine(handle);
-                    adv.fire();
-                    Poll::Pending
-                }
-            }
-        } else {
-            // Consume a permit, else enqueue our (grant, waker) UNDER the lock so
-            // a concurrent notify_one (same lock, then grant+wake) cannot slip
-            // between this permit-check and our park.
-            let mut real = self.notify.real.lock();
-            if real.permit {
-                real.permit = false;
+                let granted = Arc::new(AtomicBool::new(false));
+                real.waiters
+                    .push_back((Arc::clone(&granted), cx.waker().clone()));
                 drop(real);
-                self.state = NotifiedState::Done;
-                return Poll::Ready(());
+                self.state = NotifiedState::Real(granted);
+                Poll::Pending
             }
-            let granted = Arc::new(AtomicBool::new(false));
-            real.waiters
-                .push_back((Arc::clone(&granted), cx.waker().clone()));
-            drop(real);
-            self.state = NotifiedState::Real(granted);
-            Poll::Pending
         }
     }
 }

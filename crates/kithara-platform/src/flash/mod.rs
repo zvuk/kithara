@@ -7,7 +7,8 @@ mod api;
 /// The single flash thread-local (`ThreadCtx`: mode + credit + poll depth +
 /// dedicated flag) and its accessors.
 mod ctx;
-/// Typed engine ids (`CvId` / `WaiterId` / `ThreadKey`).
+/// Typed engine ids (`CvId` / `WaiterId` / `ThreadKey`) plus the
+/// stateful-primitive `Backend` construction latch.
 mod ids;
 mod participant;
 /// Flash-side mirror of the platform tree: re-import stubs where flash

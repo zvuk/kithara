@@ -23,7 +23,7 @@ use std::{
 
 use parking_lot::Mutex;
 
-use crate::flash::{flash_ambient, ids::CvId, system};
+use crate::flash::{flash_ambient, ids::Backend, system};
 
 /// Error observed when the sender drops without sending.
 ///
@@ -58,12 +58,11 @@ struct Inner<T> {
 
 struct Shared<T> {
     inner: Mutex<Inner<T>>,
-    cvid: CvId,
-    /// Mechanism captured ONCE at `channel()` (see [`crate::sync::Condvar`]): both
-    /// halves use it regardless of the calling thread's ambient, so a sender on a
-    /// thread that did not inherit the test's ambient still reaches an
-    /// engine-parked receiver.
-    engine: bool,
+    /// Park/wake mechanism latched ONCE at `channel()` (see
+    /// [`crate::flash::ids::Backend`]): both halves use it regardless of the
+    /// calling thread's ambient, so a sender on a thread that did not inherit
+    /// the test's ambient still reaches an engine-parked receiver.
+    backend: Backend,
 }
 
 /// How the [`Receiver`] future parked, so re-poll and `Drop` use the matching
@@ -83,8 +82,11 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
             receiver_alive: true,
             real_waker: None,
         }),
-        cvid: system::next_condvar_id(),
-        engine: flash_ambient(),
+        backend: if flash_ambient() {
+            Backend::Engine(system::next_condvar_id())
+        } else {
+            Backend::Native
+        },
     });
     (
         Sender {
@@ -120,10 +122,13 @@ impl<T> Sender<T> {
         // the value store and the wake are atomic w.r.t. a receiver poll.
         let waker = inner.real_waker.take();
         drop(inner);
-        if shared.engine {
-            system::signal_channel(shared.cvid, false);
-        } else if let Some(waker) = waker {
-            waker.wake();
+        match shared.backend {
+            Backend::Engine(cvid) => system::signal_channel(cvid, false),
+            Backend::Native => {
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            }
         }
         Ok(())
     }
@@ -137,10 +142,13 @@ impl<T> Drop for Sender<T> {
             let waker = inner.real_waker.take();
             drop(inner);
             // Wake the receiver so its next poll observes the closed sender.
-            if shared.engine {
-                system::signal_channel(shared.cvid, false);
-            } else if let Some(waker) = waker {
-                waker.wake();
+            match shared.backend {
+                Backend::Engine(cvid) => system::signal_channel(cvid, false),
+                Backend::Native => {
+                    if let Some(waker) = waker {
+                        waker.wake();
+                    }
+                }
             }
         }
     }
@@ -174,19 +182,21 @@ impl<T> Future for Receiver<T> {
         if !inner.sender_alive {
             return Poll::Ready(Err(RecvError));
         }
-        if this.shared.engine {
-            let (handle, adv) =
-                system::register_channel_async(this.shared.cvid, cx.waker().clone());
-            this.pending = Some(Parked::Engine(handle));
-            drop(inner);
-            adv.fire();
-        } else {
-            // Store the real waker UNDER the lock, after re-checking value/alive,
-            // so a `send`/sender-drop that takes this lock either observes our
-            // waker (and wakes it) or has not yet stored the value we just missed.
-            inner.real_waker = Some(cx.waker().clone());
-            this.pending = Some(Parked::Real);
-            drop(inner);
+        match this.shared.backend {
+            Backend::Engine(cvid) => {
+                let (handle, adv) = system::register_channel_async(cvid, cx.waker().clone());
+                this.pending = Some(Parked::Engine(handle));
+                drop(inner);
+                adv.fire();
+            }
+            Backend::Native => {
+                // Store the real waker UNDER the lock, after re-checking value/alive,
+                // so a `send`/sender-drop that takes this lock either observes our
+                // waker (and wakes it) or has not yet stored the value we just missed.
+                inner.real_waker = Some(cx.waker().clone());
+                this.pending = Some(Parked::Real);
+                drop(inner);
+            }
         }
         Poll::Pending
     }
