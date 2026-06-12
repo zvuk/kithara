@@ -11,6 +11,8 @@ use std::{
     task::{Context, Poll},
 };
 
+use pin_project_lite::pin_project;
+
 pub use super::participant::{Participating, participate};
 use super::{
     ctx::{self, ModeSnapshot, flash_ambient, flash_enabled},
@@ -184,14 +186,13 @@ impl Future for Yield {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        // SAFETY: the `Flash` inner future is structurally pinned and re-pinned in
-        // place via `Pin::new_unchecked`; the `Real` variant holds only a `Copy`
-        // scalar touched by value.
-        let this = unsafe { self.get_unchecked_mut() };
-        match this {
-            // SAFETY: `f` is a field of the pinned `Self`, never moved out; it is
-            // re-pinned in place for its own poll.
-            Self::Flash(f) => unsafe { Pin::new_unchecked(f) }.poll(cx),
+        // `Yield` is `Unpin` (every field of both variants is), so the safe
+        // `get_mut`/`Pin::new` projection is available — and the compiler
+        // enforces the premise: this stops building if a variant ever gains a
+        // `!Unpin` field. Same shape as the inert mirror in
+        // `common/flash_inert.rs`.
+        match self.get_mut() {
+            Self::Flash(f) => Pin::new(f).poll(cx),
             Self::Real { yielded } => {
                 if *yielded {
                     Poll::Ready(())
@@ -350,29 +351,29 @@ pub fn set_ambient_for_spawn(on: bool) -> AmbientScope {
     ambient_scope(on)
 }
 
-/// Per-poll ambient assertion for a spawned async task. A tokio task can be
-/// polled on different worker threads across its lifetime, so a one-time ambient
-/// set on the spawning thread would not stick; this re-asserts the snapshotted
-/// ambient for the duration of each poll (the guard drops when the poll returns,
-/// restoring the worker thread's previous ambient). Installed at the async spawn
-/// chokepoint composed around [`participate`].
-pub struct WithAmbient<F> {
-    on: bool,
-    fut: F,
+pin_project! {
+    /// Per-poll ambient assertion for a spawned async task. A tokio task can be
+    /// polled on different worker threads across its lifetime, so a one-time ambient
+    /// set on the spawning thread would not stick; this re-asserts the snapshotted
+    /// ambient for the duration of each poll (the guard drops when the poll returns,
+    /// restoring the worker thread's previous ambient). Installed at the async spawn
+    /// chokepoint composed around [`participate`].
+    pub struct WithAmbient<F> {
+        on: bool,
+        #[pin]
+        fut: F,
+    }
 }
 
 impl<F: Future> Future for WithAmbient<F> {
     type Output = F::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
-        // SAFETY: `fut` is structurally pinned and never moved out of
-        // `WithAmbient`; it is re-pinned in place for its own poll. `on` is a
-        // `Copy` scalar touched only by value.
-        let this = unsafe { self.get_unchecked_mut() };
-        let _a = set_ambient_for_spawn(this.on);
-        // SAFETY: `fut` is structurally pinned, never moved out of `WithAmbient`.
-        let fut = unsafe { Pin::new_unchecked(&mut this.fut) };
-        fut.poll(cx)
+        let this = self.project();
+        // The guard is a named binding, so it drops AFTER `fut.poll(cx)`
+        // returns, restoring the worker thread's previous ambient.
+        let _a = set_ambient_for_spawn(*this.on);
+        this.fut.poll(cx)
     }
 }
 
@@ -382,31 +383,30 @@ pub fn with_ambient<F: Future>(on: bool, fut: F) -> WithAmbient<F> {
     WithAmbient { on, fut }
 }
 
-/// Per-poll dynamic-flash assertion for an async PROD `#[kithara::flash(bool)]`
-/// region. The async analogue of the sync [`enter_dynamic`] RAII guard: an async
-/// fn can be polled across `.await` on different worker threads, so a one-time
-/// `enter_dynamic` on the first poll would not survive a yield. This re-asserts
-/// the mode for the duration of EACH poll (the guard drops when the poll returns,
-/// restoring the thread's previous mode — no leak across tasks). Same shape as
-/// [`WithAmbient`], with `enter_dynamic` in place of the ambient set.
-pub struct FlashDynamic<F> {
-    on: bool,
-    fut: F,
+pin_project! {
+    /// Per-poll dynamic-flash assertion for an async PROD `#[kithara::flash(bool)]`
+    /// region. The async analogue of the sync [`enter_dynamic`] RAII guard: an async
+    /// fn can be polled across `.await` on different worker threads, so a one-time
+    /// `enter_dynamic` on the first poll would not survive a yield. This re-asserts
+    /// the mode for the duration of EACH poll (the guard drops when the poll returns,
+    /// restoring the thread's previous mode — no leak across tasks). Same shape as
+    /// [`WithAmbient`], with `enter_dynamic` in place of the ambient set.
+    pub struct FlashDynamic<F> {
+        on: bool,
+        #[pin]
+        fut: F,
+    }
 }
 
 impl<F: Future> Future for FlashDynamic<F> {
     type Output = F::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
-        // SAFETY: `fut` is structurally pinned and never moved out of
-        // `FlashDynamic`; it is re-pinned in place for its own poll. `on` is a
-        // `Copy` scalar touched only by value. The `_g` guard is a named binding,
-        // so it drops AFTER `fut.poll(cx)` returns, restoring the previous mode.
-        let this = unsafe { self.get_unchecked_mut() };
-        let _g = enter_dynamic(this.on);
-        // SAFETY: `fut` is structurally pinned, never moved out of `FlashDynamic`.
-        let fut = unsafe { Pin::new_unchecked(&mut this.fut) };
-        fut.poll(cx)
+        let this = self.project();
+        // The `_g` guard is a named binding, so it drops AFTER `fut.poll(cx)`
+        // returns, restoring the previous mode.
+        let _g = enter_dynamic(*this.on);
+        this.fut.poll(cx)
     }
 }
 

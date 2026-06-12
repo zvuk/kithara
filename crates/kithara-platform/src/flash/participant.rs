@@ -14,30 +14,37 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+use pin_project_lite::pin_project;
+
 use super::system::{self, credit, gate::TaskGate};
 
-/// Spawn poll-wrapper: keeps the wrapped task counted in the engine's
-/// `active_async` for as long as it is non-quiescent — from becoming runnable
-/// (spawned, or woken) until it next parks, completes, or drops — via its
-/// [`TaskGate`]. The gate (not the per-poll bracket) is what closes the wake→poll
-/// window: a task whose waker has fired but which has not yet been re-polled
-/// stays counted, so the virtual clock cannot advance past a runnable task.
-/// Installed at the spawn chokepoint ([`crate::tokio::task::spawn`]) and on the
-/// test root task, so every async task on the sim path participates.
-pub struct Participating<F> {
-    fut: F,
-    gate: Arc<TaskGate>,
+pin_project! {
+    /// Spawn poll-wrapper: keeps the wrapped task counted in the engine's
+    /// `active_async` for as long as it is non-quiescent — from becoming runnable
+    /// (spawned, or woken) until it next parks, completes, or drops — via its
+    /// [`TaskGate`]. The gate (not the per-poll bracket) is what closes the wake→poll
+    /// window: a task whose waker has fired but which has not yet been re-polled
+    /// stays counted, so the virtual clock cannot advance past a runnable task.
+    /// Installed at the spawn chokepoint ([`crate::tokio::task::spawn`]) and on the
+    /// test root task, so every async task on the sim path participates.
+    pub struct Participating<F> {
+        #[pin]
+        fut: F,
+        gate: Arc<TaskGate>,
+    }
+
+    impl<F> PinnedDrop for Participating<F> {
+        fn drop(this: Pin<&mut Self>) {
+            this.gate.on_drop();
+        }
+    }
 }
 
 impl<F: Future> Future for Participating<F> {
     type Output = F::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
-        // SAFETY: `fut` is structurally pinned and never moved out; `gate`
-        // (`Arc`) is `Unpin` and only touched through shared refs. We re-pin
-        // `fut` in place via `Pin::new_unchecked`, so projecting the outer pin
-        // with `get_unchecked_mut` is sound.
-        let this = unsafe { self.get_unchecked_mut() };
+        let this = self.project();
         this.gate.store_runtime_waker(cx.waker());
         if !this.gate.try_enter_poll() {
             // Duplicate/stale schedule: the task is parked (or done), holding no
@@ -45,11 +52,8 @@ impl<F: Future> Future for Participating<F> {
             // wake will re-arm it.
             return Poll::Pending;
         }
-        let gate_waker = Waker::from(Arc::clone(&this.gate));
+        let gate_waker = Waker::from(Arc::clone(this.gate));
         let mut gate_cx = Context::from_waker(&gate_waker);
-        // SAFETY: `fut` is structurally pinned, never moved out of the participant
-        // wrapper; it is re-pinned in place for its own poll.
-        let fut = unsafe { Pin::new_unchecked(&mut this.fut) };
         // Mark this OS thread as inside an async poll for the duration of the
         // inner poll, so a synchronous wrapped wait taken from within it (e.g. a
         // blocking `recv_sync` reaching the engine) is treated as a BRIDGED wait —
@@ -57,7 +61,7 @@ impl<F: Future> Future for Participating<F> {
         // pinning the clock. Drops (restoring the depth) even if the poll unwinds.
         let outcome = {
             let _poll_guard = credit::AsyncPollGuard::enter();
-            fut.poll(&mut gate_cx)
+            this.fut.poll(&mut gate_cx)
         };
         match outcome {
             Poll::Ready(out) => {
@@ -69,12 +73,6 @@ impl<F: Future> Future for Participating<F> {
                 Poll::Pending
             }
         }
-    }
-}
-
-impl<F> Drop for Participating<F> {
-    fn drop(&mut self) {
-        self.gate.on_drop();
     }
 }
 

@@ -3,6 +3,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use pin_project_lite::pin_project;
 use tokio_alias::time as tokio_time;
 use tokio_with_wasm::alias as tokio_alias;
 
@@ -50,30 +51,30 @@ where
     }
 }
 
-/// Races `future` against an engine-backed [`crate::flash::FlashSleep`] deadline
-/// (see the `flash` [`timeout`]). The future is polled first, so a ready result
-/// wins a tie with the deadline. `pub(crate)`: also constructed by the flash
-/// control surface's `virtual_timeout`.
-pub(crate) struct FlashTimeout<F> {
-    pub(crate) future: F,
-    pub(crate) sleep: crate::flash::FlashSleep,
+pin_project! {
+    /// Races `future` against an engine-backed [`crate::flash::FlashSleep`] deadline
+    /// (see the `flash` [`timeout`]). The future is polled first, so a ready result
+    /// wins a tie with the deadline. `pub(crate)`: also constructed by the flash
+    /// control surface's `virtual_timeout`.
+    pub(crate) struct FlashTimeout<F> {
+        #[pin]
+        pub(crate) future: F,
+        #[pin]
+        pub(crate) sleep: crate::flash::FlashSleep,
+    }
 }
 
 impl<F: Future> Future for FlashTimeout<F> {
     type Output = Result<F::Output, TimeoutError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // SAFETY: `future` and `sleep` are structurally pinned and never moved
-        // out of `FlashTimeout`; each is re-pinned in place for its own poll.
-        let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: `future` is structurally pinned, never moved out of `FlashTimeout`.
-        let fut = unsafe { Pin::new_unchecked(&mut this.future) };
-        if let Poll::Ready(out) = fut.poll(cx) {
+        let this = self.project();
+        // The future is polled FIRST, so a ready result wins a tie with the
+        // deadline.
+        if let Poll::Ready(out) = this.future.poll(cx) {
             return Poll::Ready(Ok(out));
         }
-        // SAFETY: `sleep` is structurally pinned, never moved out of `FlashTimeout`.
-        let sleep = unsafe { Pin::new_unchecked(&mut this.sleep) };
-        match sleep.poll(cx) {
+        match this.sleep.poll(cx) {
             Poll::Ready(()) => Poll::Ready(Err(TimeoutError)),
             Poll::Pending => Poll::Pending,
         }
