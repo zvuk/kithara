@@ -7,21 +7,29 @@
 //! REAL time has passed. See the crate README ("Real I/O pacing") and
 //! [`crate::flash::RealIoScope`].
 
-use std::sync::{Once, OnceLock, atomic::Ordering};
+use std::sync::{Once, Weak};
 
 use parking_lot::{Condvar, Mutex};
 use web_time::Instant as RealInstant;
 
-use super::sched::{self, SCHED};
-use crate::flash::{Duration, SIM_NANOS};
+use super::{FLASH, FlashInner};
+use crate::flash::Duration;
 
-/// Pacer arming flag + wakeup. `armed` is locked BEFORE `SCHED` (strict
-/// `armed -> SCHED` order shared by [`real_io_enter`], [`real_io_exit`] and
-/// the pacer loop), so a disarm racing a fresh enter can never leave the
-/// pacer asleep while `real_io > 0`.
-struct Pacer {
+/// Per-instance pacer arming flag + wakeup + the lazily-spawned pacer thread.
+/// `armed` is locked BEFORE `core` (strict `armed -> core` order shared by
+/// [`FlashInner::real_io_enter`], [`FlashInner::real_io_exit`] and the pacer
+/// loop), so a disarm racing a fresh enter can never leave the pacer asleep
+/// while `real_io > 0`.
+pub(super) struct Pacer {
     armed: Mutex<bool>,
     cv: Condvar,
+    /// One-shot lazy spawn of the pacer thread, on the first arm
+    /// ([`FlashInner::real_io_enter`]).
+    spawn: Once,
+    /// Weak self-reference installed by `Arc::new_cyclic` at construction; the
+    /// spawn site upgrades it ONCE to hand the eternal pacer thread a strong
+    /// `Arc` to its OWN instance (a `&self` method cannot mint an `Arc`).
+    owner: Weak<FlashInner>,
 }
 
 impl Pacer {
@@ -30,81 +38,98 @@ impl Pacer {
     /// time having passed.
     const TICK: Duration = Duration::from_millis(1);
 
-    fn run(&self) {
-        loop {
-            {
-                let mut armed = self.armed.lock();
-                while !*armed {
-                    self.cv.wait(&mut armed);
-                }
-            }
-            // REAL sleep: the pacer exists precisely to feed real time into
-            // the engine while real I/O is in flight.
-            std::thread::sleep(Self::TICK);
-            let mut s = SCHED.lock();
-            let adv = sched::try_advance_locked(&mut s);
-            drop(s);
-            adv.fire();
+    pub(super) fn new(owner: Weak<FlashInner>) -> Self {
+        Self {
+            armed: Mutex::new(false),
+            cv: Condvar::new(),
+            spawn: Once::new(),
+            owner,
         }
     }
 }
 
-static PACER: OnceLock<Pacer> = OnceLock::new();
-
-fn handle() -> &'static Pacer {
-    static SPAWN: Once = Once::new();
-    let p = PACER.get_or_init(|| Pacer {
-        armed: Mutex::new(false),
-        cv: Condvar::new(),
-    });
-    SPAWN.call_once(|| {
-        // Raw std thread: the pacer must stay INVISIBLE to the engine (a
-        // platform `spawn_named` would count it as a dedicated pacer and pin
-        // the very clock it exists to advance).
-        std::thread::Builder::new()
-            .name("kithara-flash-io-pacer".into())
-            .spawn(|| handle().run())
-            .expect("BUG: spawning the flash io-pacer thread cannot fail");
-    });
-    p
-}
-
-/// Mark ONE real I/O operation in flight. The first op anchors the pace to
-/// the current (real, virtual) instant and arms the pacer thread.
-pub(in crate::flash) fn real_io_enter() {
-    let h = handle();
-    let mut armed = h.armed.lock();
-    let mut s = SCHED.lock();
-    s.real_io += 1;
-    if s.real_io == 1 {
-        s.pace_anchor = Some((RealInstant::now(), SIM_NANOS.load(Ordering::Acquire)));
+impl FlashInner {
+    /// Eternal pacer loop, run on the raw pacer thread holding a strong `Arc`
+    /// to this instance. The wait-while-`!armed` park is UNTIMED on purpose: a
+    /// disarmed pacer consumes zero CPU until the next arm.
+    fn pace_run(&self) {
+        loop {
+            {
+                let mut armed = self.pacer.armed.lock();
+                while !*armed {
+                    self.pacer.cv.wait(&mut armed);
+                }
+            }
+            // REAL sleep: the pacer exists precisely to feed real time into
+            // the engine while real I/O is in flight.
+            std::thread::sleep(Pacer::TICK);
+            let mut s = self.core.lock();
+            let adv = s.try_advance(&self.clock);
+            drop(s);
+            adv.fire();
+        }
     }
-    drop(s);
-    if !*armed {
-        // Set under the lock, notify after release: the pacer re-checks
-        // `*armed` under the same lock, so the wakeup cannot be lost.
-        *armed = true;
+
+    /// Mark ONE real I/O operation in flight. The first op anchors the pace to
+    /// the current (real, virtual) instant and arms the pacer thread (spawned
+    /// lazily on the first arm).
+    pub(in crate::flash) fn real_io_enter(&self) {
+        self.pacer.spawn.call_once(|| {
+            let owner = self
+                .pacer
+                .owner
+                .upgrade()
+                .expect("BUG: real_io_enter is reachable only through a live Arc<FlashInner>");
+            // Raw std thread: the pacer must stay INVISIBLE to the engine (a
+            // platform `spawn_named` would count it as a dedicated pacer and pin
+            // the very clock it exists to advance).
+            std::thread::Builder::new()
+                .name("kithara-flash-io-pacer".into())
+                .spawn(move || owner.pace_run())
+                .expect("BUG: spawning the flash io-pacer thread cannot fail");
+        });
+        let mut armed = self.pacer.armed.lock();
+        let mut s = self.core.lock();
+        s.sched.real_io += 1;
+        if s.sched.real_io == 1 {
+            s.sched.pace_anchor = Some((RealInstant::now(), self.clock.now_nanos()));
+        }
+        drop(s);
+        if !*armed {
+            // Set under the lock, notify after release: the pacer re-checks
+            // `*armed` under the same lock, so the wakeup cannot be lost.
+            *armed = true;
+            drop(armed);
+            self.pacer.cv.notify_one();
+        }
+    }
+
+    /// Complete ONE real I/O operation. The last completion clears the anchor,
+    /// disarms the pacer and immediately re-runs the advance rule: full-speed
+    /// collapse resumes.
+    pub(in crate::flash) fn real_io_exit(&self) {
+        let mut armed = self.pacer.armed.lock();
+        let mut s = self.core.lock();
+        debug_assert!(s.sched.real_io > 0, "real_io exit without a matching enter");
+        s.sched.real_io = s.sched.real_io.saturating_sub(1);
+        if s.sched.real_io != 0 {
+            return;
+        }
+        s.sched.pace_anchor = None;
+        *armed = false;
+        let adv = s.try_advance(&self.clock);
+        drop(s);
         drop(armed);
-        h.cv.notify_one();
+        adv.fire();
     }
 }
 
-/// Complete ONE real I/O operation. The last completion clears the anchor,
-/// disarms the pacer and immediately re-runs the advance rule: full-speed
-/// collapse resumes.
+/// Process-engine forward of [`FlashInner::real_io_enter`].
+pub(in crate::flash) fn real_io_enter() {
+    FLASH.real_io_enter();
+}
+
+/// Process-engine forward of [`FlashInner::real_io_exit`].
 pub(in crate::flash) fn real_io_exit() {
-    let h = handle();
-    let mut armed = h.armed.lock();
-    let mut s = SCHED.lock();
-    debug_assert!(s.real_io > 0, "real_io exit without a matching enter");
-    s.real_io = s.real_io.saturating_sub(1);
-    if s.real_io != 0 {
-        return;
-    }
-    s.pace_anchor = None;
-    *armed = false;
-    let adv = sched::try_advance_locked(&mut s);
-    drop(s);
-    drop(armed);
-    adv.fire();
+    FLASH.real_io_exit();
 }

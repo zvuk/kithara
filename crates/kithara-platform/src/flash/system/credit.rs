@@ -1,10 +1,12 @@
 //! Participant credit accounting for the flash engine: which OS threads count
 //! as virtual-time pacers, and how a wrapped wait moves them in and out of the
-//! scheduler's `active` count.
+//! engine's `active` count. The per-thread cells live here until the single
+//! `ThreadCtx` lands (Task 2.6); the engine-state halves are `FlashInner`
+//! methods with thin process-engine forwards for the wrappers.
 
 use std::cell::Cell;
 
-use super::sched::{self, SimSched};
+use super::{Core, FLASH, FlashInner};
 
 /// Per-thread quiescence credit. Participants are NOT registered explicitly:
 /// a thread is invisible to the engine until its FIRST wrapped wait, at which
@@ -13,9 +15,9 @@ use super::sched::{self, SimSched};
 ///
 /// - `None`: the thread has never entered a wrapped wait. It is uncounted: it
 ///   cannot stall the engine (it owns no deadline and is not in `active`).
-/// - `Running`: the thread is currently counted in `s.active` (it woke from a
-///   wait, or its first wait already bootstrapped it). The engine will not
-///   advance the clock while any thread is `Running`.
+/// - `Running`: the thread is currently counted in the engine's `active` (it
+///   woke from a wait, or its first wait already bootstrapped it). The engine
+///   will not advance the clock while any thread is `Running`.
 /// - `Parked`: the thread is inside a wrapped wait, not counted in `active`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Credit {
@@ -81,7 +83,7 @@ pub(crate) fn mark_dedicated() {
 /// produced anything. Reserving the slot synchronously at spawn closes that
 /// window; the child's [`mark_dedicated`] then only marks its credit `Running`.
 pub(crate) fn pre_count_dedicated() {
-    sched::SCHED.lock().active += 1;
+    FLASH.pre_count_dedicated();
 }
 
 /// True iff the current OS thread is a dedicated pacer (see [`DEDICATED`]).
@@ -139,8 +141,8 @@ impl Drop for AsyncPollGuard {
     }
 }
 
-/// Account this thread as it ENTERS a wrapped wait, under the `SCHED` lock.
-/// Called at the start of EACH wrapped wait (park/condvar) right where the
+/// Account this thread as it ENTERS a wrapped wait, under the engine's `core`
+/// lock. Called at the start of EACH wrapped wait (park/condvar) right where the
 /// entry is inserted, replacing the old explicit `active -= 1`.
 ///
 /// - `None` (first ever wait): the thread was running uncounted. Bootstrap it
@@ -150,17 +152,17 @@ impl Drop for AsyncPollGuard {
 /// - `Running` (woke from a prior wait, now parking again): it IS counted, so
 ///   `active -= 1` and move to `Parked`.
 /// - `Parked`: unreachable — a thread waits on one thing at a time.
-pub(super) fn enter_wait_locked(s: &mut SimSched) {
+pub(super) fn enter_wait_locked(s: &mut Core) {
     if in_async_poll() {
         // Bridged wait: a runtime worker is blocking on the engine mid async-poll.
         // The task it drives is parked for the block, so release its `active_async`
         // slot (re-acquired by `resume_after_wait` on wake) — otherwise the slot
         // pins the clock and the event that would unblock the wait can never fire.
         debug_assert!(
-            s.active_async > 0,
+            s.registry.active_async > 0,
             "bridged wait must be inside a counted async poll"
         );
-        s.active_async -= 1;
+        s.registry.active_async -= 1;
         return;
     }
     if !is_dedicated() {
@@ -175,43 +177,14 @@ pub(super) fn enter_wait_locked(s: &mut SimSched) {
         Credit::None => c.set(Credit::Parked),
         Credit::Running => {
             debug_assert!(
-                s.active > 0,
+                s.registry.active > 0,
                 "running participant must be counted in active"
             );
-            s.active -= 1;
+            s.registry.active -= 1;
             c.set(Credit::Parked);
         }
         Credit::Parked => debug_assert!(false, "a thread cannot enter two wrapped waits at once"),
     });
-}
-
-/// Resume accounting after a wrapped sync wait's `token.wait()` returned. The firer
-/// always `active += 1`'d the woken Sync entry to cover wake latency; how that is
-/// settled depends on the thread:
-/// - BRIDGED (runtime worker mid async-poll): undo the `active` bump and re-acquire
-///   the `active_async` slot released on enter.
-/// - NON-DEDICATED, non-async: undo the `active` bump (the thread is not a pacer and
-///   never entered `active` on the wait side).
-/// - DEDICATED pacer: keep the bump and mark the thread `Running`.
-pub(super) fn resume_after_wait() {
-    if in_async_poll() {
-        let mut s = sched::SCHED.lock();
-        debug_assert!(s.active > 0, "bridged resume without a firer active bump");
-        s.active -= 1;
-        s.active_async += 1;
-        drop(s);
-        return;
-    }
-    if !is_dedicated() {
-        let mut s = sched::SCHED.lock();
-        debug_assert!(s.active > 0, "non-pacer resume without a firer active bump");
-        s.active -= 1;
-        let adv = sched::try_advance_locked(&mut s);
-        drop(s);
-        adv.fire();
-        return;
-    }
-    mark_running();
 }
 
 /// Mark this thread RUNNING after its wrapped wait returned. The firer already
@@ -226,29 +199,13 @@ pub(super) fn mark_running() {
 /// so it cannot call the private `mark_running`; this is the crate-internal
 /// hook it uses instead. The firer already `active += 1`'d the woken entry.
 pub(crate) fn mark_running_after_condvar() {
-    resume_after_wait();
+    FLASH.resume_after_wait();
 }
 
-/// Decrement `active` for a thread that EXITS while `Running` — the balancing
-/// half of the bootstrap (`None -> Parked` left `active` untouched; the first
-/// wake then `active += 1`'d it). Called from the spawn bracket after the
-/// thread's body returns. Reads + clears the credit; if it was `Running`, drops
-/// it from `active` and fires any advance the drop unblocks.
+/// Process-engine forward of [`FlashInner::on_participant_exit`]. Called from
+/// the spawn bracket after the thread's body returns.
 pub(crate) fn on_participant_exit() {
-    let was = CREDIT.with(|c| {
-        let v = c.get();
-        c.set(Credit::None);
-        v
-    });
-    if was != Credit::Running {
-        return;
-    }
-    let mut s = sched::SCHED.lock();
-    debug_assert!(s.active > 0, "exiting running participant must be counted");
-    s.active -= 1;
-    let adv = sched::try_advance_locked(&mut s);
-    drop(s);
-    adv.fire();
+    FLASH.on_participant_exit();
 }
 
 /// Reset this thread's credit to `None`. Called at the start of a pooled
@@ -256,4 +213,72 @@ pub(crate) fn on_participant_exit() {
 /// credit from a previous task.
 pub(crate) fn reset_credit() {
     CREDIT.with(|c| c.set(Credit::None));
+}
+
+impl FlashInner {
+    /// Instance form of [`pre_count_dedicated`]: raw `active += 1` on the
+    /// parent, before the child is scheduled.
+    pub(in crate::flash) fn pre_count_dedicated(&self) {
+        self.core.lock().registry.active += 1;
+    }
+
+    /// Resume accounting after a wrapped sync wait's `token.wait()` returned. The firer
+    /// always `active += 1`'d the woken Sync entry to cover wake latency; how that is
+    /// settled depends on the thread:
+    /// - BRIDGED (runtime worker mid async-poll): undo the `active` bump and re-acquire
+    ///   the `active_async` slot released on enter.
+    /// - NON-DEDICATED, non-async: undo the `active` bump (the thread is not a pacer and
+    ///   never entered `active` on the wait side).
+    /// - DEDICATED pacer: keep the bump and mark the thread `Running`.
+    pub(in crate::flash) fn resume_after_wait(&self) {
+        if in_async_poll() {
+            let mut s = self.core.lock();
+            debug_assert!(
+                s.registry.active > 0,
+                "bridged resume without a firer active bump"
+            );
+            s.registry.active -= 1;
+            s.registry.active_async += 1;
+            drop(s);
+            return;
+        }
+        if !is_dedicated() {
+            let mut s = self.core.lock();
+            debug_assert!(
+                s.registry.active > 0,
+                "non-pacer resume without a firer active bump"
+            );
+            s.registry.active -= 1;
+            let adv = s.try_advance(&self.clock);
+            drop(s);
+            adv.fire();
+            return;
+        }
+        mark_running();
+    }
+
+    /// Decrement `active` for a thread that EXITS while `Running` — the balancing
+    /// half of the bootstrap (`None -> Parked` left `active` untouched; the first
+    /// wake then `active += 1`'d it). Called from the spawn bracket after the
+    /// thread's body returns. Reads + clears the credit; if it was `Running`, drops
+    /// it from `active` and fires any advance the drop unblocks.
+    pub(in crate::flash) fn on_participant_exit(&self) {
+        let was = CREDIT.with(|c| {
+            let v = c.get();
+            c.set(Credit::None);
+            v
+        });
+        if was != Credit::Running {
+            return;
+        }
+        let mut s = self.core.lock();
+        debug_assert!(
+            s.registry.active > 0,
+            "exiting running participant must be counted"
+        );
+        s.registry.active -= 1;
+        let adv = s.try_advance(&self.clock);
+        drop(s);
+        adv.fire();
+    }
 }

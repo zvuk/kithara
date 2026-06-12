@@ -12,7 +12,7 @@ use std::{
 
 use parking_lot::Mutex;
 
-use super::sched;
+use super::FLASH;
 
 /// Per-task quiescence states. The task occupies one `active_async` slot
 /// while it is in any non-quiescent state ([`Runnable`](TaskState::Runnable),
@@ -76,7 +76,7 @@ impl AtomicTaskState {
     }
 }
 
-/// Outcome of a gate park attempt ([`sched::gate_park`]).
+/// Outcome of a gate park attempt ([`super::FlashInner::gate_park`]).
 pub(super) enum ParkOutcome {
     /// `Running -> Parked`: the slot was released (a quiescent edge).
     Parked,
@@ -85,7 +85,7 @@ pub(super) enum ParkOutcome {
     WokenMidPoll,
 }
 
-/// Outcome of waking a parked gate ([`sched::gate_wake_parked`]).
+/// Outcome of waking a parked gate ([`super::FlashInner::gate_wake_parked`]).
 pub(super) enum WakeOutcome {
     /// `Parked -> Runnable`: the slot was re-acquired; forward the runtime waker.
     Resumed,
@@ -148,25 +148,26 @@ impl TaskGate {
     }
 
     /// Poll returned `Ready`: the task is done — release its slot. The `DONE`
-    /// store and the counter decrement happen together under the `SCHED` lock.
+    /// store and the counter decrement happen together under the engine lock.
     pub(in crate::flash) fn complete(&self) {
-        sched::gate_complete(&self.state);
+        FLASH.gate_complete(&self.state);
     }
 
     /// Poll returned `Pending`: `RUNNING`→`PARKED` releases the slot (a quiescent
     /// edge); a wake that landed mid-poll left `RUNNING_NOTIFIED`, so the CAS fails
     /// and the gate stays `RUNNABLE`, keeping the slot for the re-poll that wake
     /// already scheduled. The state transition and the counter move atomically
-    /// under the `SCHED` lock so a concurrent wake cannot interleave — see
-    /// [`sched::gate_park`].
+    /// under the engine lock so a concurrent wake cannot interleave — see
+    /// [`super::FlashInner::gate_park`]. Both [`ParkOutcome`] arms are fully
+    /// handled under that lock, so the returned outcome needs no action here.
     pub(in crate::flash) fn park(&self) {
-        sched::gate_park(&self.state);
+        let _: ParkOutcome = FLASH.gate_park(&self.state);
     }
 
     /// Drop: release the slot iff the task still occupies one (`RUNNABLE`/`RUNNING`/
     /// `RUNNING_NOTIFIED`). `PARKED` and `DONE` hold none.
     pub(in crate::flash) fn on_drop(&self) {
-        sched::gate_drop_release(&self.state);
+        FLASH.gate_drop_release(&self.state);
     }
 }
 
@@ -182,11 +183,11 @@ impl Wake for TaskGate {
                     // Re-acquire the slot the park released BEFORE the real poll
                     // runs: this wake→poll window must stay counted so the clock
                     // cannot jump past this task. The CAS and the acquire happen
-                    // together under the `SCHED` lock so a concurrent `park`'s
+                    // together under the engine lock so a concurrent `park`'s
                     // release cannot cancel this acquire — see
-                    // [`sched::gate_wake_parked`]. `NotParked` means the state
-                    // left `Parked` between the load and the CAS; loop to re-read.
-                    match sched::gate_wake_parked(&self.state) {
+                    // [`super::FlashInner::gate_wake_parked`]. `NotParked` means the
+                    // state left `Parked` between the load and the CAS; loop to re-read.
+                    match FLASH.gate_wake_parked(&self.state) {
                         WakeOutcome::Resumed => {
                             self.forward();
                             return;

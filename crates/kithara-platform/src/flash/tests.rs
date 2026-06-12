@@ -18,7 +18,7 @@ use super::{
 };
 use crate::sync::Notify;
 
-/// Serialize cases that share the process-global `SIM_NANOS` and `SCHED`.
+/// Serialize cases that share the process-global `FLASH` engine instance.
 /// nextest gives each test its own process, but a thread-based runner would race
 /// without this. Poison-tolerant: a panicking case must surface its own real
 /// assertion, not a `PoisonError` cascade across every later case.

@@ -1,28 +1,47 @@
-//! Flash engine internals. Everything outside `system/` consumes the narrow
-//! forward surface re-exported below; the credit surface additionally stays
-//! reachable as `system::credit::*` until the W2 RAII forms land.
+//! Flash engine internals. [`FlashInner`] (`inner.rs`) is the SINGLE owner of
+//! all engine state: the virtual clock ([`inner::Clock`]), the one
+//! lock-protected scheduler core ([`inner::Core`], split into
+//! [`inner::Registry`] + [`inner::Scheduler`] data) and the real-I/O pacer
+//! (`pace::Pacer`, with its lazily-spawned eternal thread holding a strong
+//! `Arc` to its OWN instance). The process engine is the lazily created
+//! [`FLASH`] instance.
+//!
+//! Engine methods are instance-addressed (`&self` on `FlashInner`); nothing
+//! below `FlashInner` reaches for the [`FLASH`] global, so local instances
+//! behave identically. Everything outside `system/` consumes thin free-fn
+//! forwards (each one `FLASH.method(...)`) re-exported below.
+//!
+//! Transition state within W2: the credit surface stays reachable as
+//! `system::credit::*` (with its per-thread cells) until the RAII forms
+//! (Task 2.7) and the single `ThreadCtx` (Task 2.6) land; `flash/tests.rs`
+//! drives the global [`FLASH`] through the forwards until the pure-scheduler
+//! tests move onto local instances (Task 2.11).
 
 /// Participant credit accounting (dedicated pacers, bridged waits, blocking
-/// pacer bracket) split out of `sched` — see `credit.rs`.
+/// pacer bracket) split out of the scheduler — see `credit.rs`.
 pub(super) mod credit;
 /// Per-task gate FSM ([`gate::TaskGate`]) — the waker-interception state
 /// machine behind [`crate::flash::Participating`].
 pub(super) mod gate;
+/// The engine-state owner: `FlashInner` + `Clock` + `Core{Registry, Scheduler}`
+/// + the `FLASH` process instance.
+pub(super) mod inner;
 /// Real-I/O pacing (the `real_io` count, pace anchor maintenance and the
-/// pacer thread) — see `pace.rs` and [`crate::flash::RealIoScope`].
+/// per-instance pacer thread) — see `pace.rs` and [`crate::flash::RealIoScope`].
 pub(super) mod pace;
-/// Quiescence-driven virtual-clock engine. The engine drives `SIM_NANOS`
-/// forward at quiescent points. Its consumers are the platform wait primitives
-/// (`thread::park_timeout`, `sync::Condvar`, async `FlashSleep`/`Notify`) plus
-/// the harness.
+/// Quiescence-driven virtual-clock mechanics: the advance rule plus the
+/// `register_*`/`signal_*`/park surface, as `FlashInner` methods. Consumers
+/// are the platform wait primitives (`thread::park_timeout`, `sync::Condvar`,
+/// async `FlashSleep`/`Notify`) plus the harness.
 pub(super) mod sched;
 /// Waiter wake handles ([`wake::Token`] / [`wake::Wake`]).
 pub(super) mod wake;
 
+pub(in crate::flash) use inner::{Clock, Core, CvId, FLASH, FlashInner, Registry, WaiterId};
 pub(in crate::flash) use pace::{real_io_enter, real_io_exit};
 pub(in crate::flash) use sched::{
     AsyncHandle, async_acquire, cancel_async_wait, cancel_yield, dump, next_condvar_id,
     park_timed_unparkable, register_channel_async, register_condvar_timed,
     register_condvar_untimed, register_notify_async, register_sleep_async, register_yield_async,
-    reset, signal_channel, signal_condvar, signal_notify, sleep_timed, unpark, yield_until_advance,
+    signal_channel, signal_condvar, signal_notify, sleep_timed, unpark, yield_until_advance,
 };

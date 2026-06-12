@@ -5,14 +5,17 @@ use std::{
     ops::{Add, Sub},
     pin::Pin,
     sync::{
-        Arc, OnceLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+        atomic::{AtomicBool, Ordering},
     },
     task::{Context, Poll},
 };
 
 pub use super::participant::{Participating, participate};
-use super::system;
+use super::{
+    ids::WaiterId,
+    system::{self, FLASH},
+};
 use crate::flash::time::{FlashTimeout, TimeoutError};
 
 /// RAII bracket for ONE real I/O operation in flight (a socket send / response
@@ -106,7 +109,7 @@ impl Drop for FlashSleep {
 /// that pins `active_async` and freezes the clock (the bug a naive `yield_now`
 /// causes under quiescence).
 pub struct FlashYield {
-    handle: Option<(u64, Arc<AtomicBool>)>,
+    handle: Option<(WaiterId, Arc<AtomicBool>)>,
     done: bool,
 }
 
@@ -201,18 +204,13 @@ impl Future for Yield {
     }
 }
 
-/// Process-global virtual timeline, in nanoseconds. Only moves forward, via the
-/// `sched` quiescence engine (and the test-only additive [`advance`]); starts
-/// at [`Instant::BASE_NANOS`].
-pub(super) static SIM_NANOS: AtomicU64 = AtomicU64::new(Instant::BASE_NANOS);
-
 /// Current virtual instant in nanoseconds since the timeline origin. Read by the
-/// engine harness tests; production reads `SIM_NANOS` directly under `SCHED` or
+/// engine harness tests; production reads the engine clock under the core lock or
 /// via `Instant::as_virtual_nanos`.
 #[cfg(test)]
 #[inline]
 pub(crate) fn now_nanos() -> u64 {
-    SIM_NANOS.load(Ordering::Acquire)
+    FLASH.clock.now_nanos()
 }
 
 /// Dump the flash quiescence-engine state to stderr. The `#[kithara::test]`
@@ -271,24 +269,21 @@ pub(super) fn duration_to_nanos(d: Duration) -> u64 {
 }
 
 /// Manually advance the virtual clock by `delta`. Additive and test-only: the
-/// production clock is driven solely by the quiescence engine (`sched`), so the
-/// engine is the single clock writer. The 4 arithmetic clock tests use this as
-/// a manual bump to exercise `Instant` arithmetic without the engine.
+/// production clock is driven solely by the quiescence engine, so the engine
+/// is the single clock writer. The 4 arithmetic clock tests use this as a
+/// manual bump to exercise `Instant` arithmetic without the engine.
 #[cfg(test)]
 #[inline]
 pub(crate) fn advance(delta: Duration) {
-    SIM_NANOS.fetch_add(duration_to_nanos(delta), Ordering::Release);
+    FLASH.clock.advance(duration_to_nanos(delta));
 }
 
 /// Reset the timeline to its base and clear the quiescence engine. For unit
 /// tests that share one process; production tests get per-test process
-/// isolation from nextest. Order matters: store the base first, then drop the
-/// engine state, so afterwards the clock reads `Instant::BASE_NANOS` and the
-/// engine is empty.
+/// isolation from nextest. See `FlashInner::reset` for the ordering contract.
 #[inline]
 pub fn reset() {
-    SIM_NANOS.store(Instant::BASE_NANOS, Ordering::Release);
-    system::reset();
+    FLASH.reset();
 }
 
 thread_local! {
@@ -454,18 +449,6 @@ pub fn dynamic<F: Future>(on: bool, fut: F) -> FlashDynamic<F> {
     FlashDynamic { on, fut }
 }
 
-/// Process anchor for the real monotonic clock, sampled once on first use. Real
-/// instants are reported as `BASE_NANOS + elapsed-since-anchor`, so a thread in
-/// a [`FlashScope`] sees a forward-moving clock in the same nanos space as
-/// the virtual one (the two are never compared across the boundary — a watchdog
-/// samples both its start and its checks in the same mode).
-fn real_now_nanos() -> u64 {
-    static REAL_EPOCH: OnceLock<web_time::Instant> = OnceLock::new();
-    let epoch = REAL_EPOCH.get_or_init(web_time::Instant::now);
-    let elapsed = u64::try_from(epoch.elapsed().as_nanos()).unwrap_or(u64::MAX);
-    Instant::BASE_NANOS.saturating_add(elapsed)
-}
-
 /// Drop-in for `web_time::Instant` backed by the virtual clock. Exposes exactly
 /// the API surface the workspace uses on instants (`now`, `elapsed`,
 /// `duration_since`, `saturating_duration_since`, `+`/`-`, ordering); all
@@ -476,7 +459,12 @@ pub struct Instant(u64);
 impl Instant {
     /// Timeline origin: one day in, so realistic backward offsets from `now()`
     /// (e.g. crossfade start instants) stay positive; arithmetic saturates anyway.
-    const BASE_NANOS: u64 = 86_400_000_000_000;
+    /// Real instants are reported in the same nanos space (`BASE_NANOS + elapsed`
+    /// since the engine clock's real anchor, see `Clock::real_now_nanos`), so a
+    /// thread in a [`FlashScope`] sees a forward-moving clock either way (the two
+    /// arms are never compared across the boundary — a watchdog samples both its
+    /// start and its checks in the same mode).
+    pub(in crate::flash) const BASE_NANOS: u64 = 86_400_000_000_000;
 
     #[inline]
     #[must_use]
@@ -484,7 +472,7 @@ impl Instant {
         if flash_enabled() {
             Self::now_virtual()
         } else {
-            Self(real_now_nanos())
+            Self(FLASH.clock.real_now_nanos())
         }
     }
 
@@ -495,7 +483,7 @@ impl Instant {
     #[inline]
     #[must_use]
     pub fn now_virtual() -> Self {
-        Self(SIM_NANOS.load(Ordering::Acquire))
+        Self(FLASH.clock.now_nanos())
     }
 
     /// Absolute virtual nanoseconds this instant represents. Used by the
