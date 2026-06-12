@@ -11,17 +11,18 @@ use std::{
 };
 
 use super::{
-    Duration, Instant, advance, ambient_scope, enter_dynamic, flash_enabled, now_nanos,
-    participate, real_io, reset,
-    system::{credit, pace, sched},
+    Duration, Instant, advance, ambient_scope, enter_dynamic, flash_enabled, participate, reset,
+    system::{FlashInner, credit, sched},
     yield_now,
 };
 use crate::sync::Notify;
 
-/// Serialize cases that share the process-global `FLASH` engine instance.
-/// nextest gives each test its own process, but a thread-based runner would race
-/// without this. Poison-tolerant: a panicking case must surface its own real
-/// assertion, not a `PoisonError` cascade across every later case.
+/// Serialize the cases that drive the process-global `FLASH` engine (the
+/// primitive/TLS-path tests). The pure-scheduler tests run on LOCAL
+/// [`FlashInner`] instances and do not take it. nextest gives each test its
+/// own process, but a thread-based runner would race without this.
+/// Poison-tolerant: a panicking case must surface its own real assertion, not
+/// a `PoisonError` cascade across every later case.
 static GUARD: Mutex<()> = Mutex::new(());
 
 fn guard() -> MutexGuard<'static, ()> {
@@ -41,39 +42,47 @@ fn assert_fast(start: RealInstant) {
     );
 }
 
-/// Run `body` as a quiescence participant the way the production spawn bracket
-/// does: `reset_credit()` at entry (a pooled OS thread must not inherit a stale
-/// credit) and `on_participant_exit()` at exit (a thread that woke to `Running`
-/// and exits drops its `active` slot). The harness uses this everywhere a real
-/// spawn would, since `std::thread::spawn` in tests has no platform bracket.
-fn bracketed<F: FnOnce()>(body: F) {
+/// Run `body` as a quiescence participant of `flash` the way the production
+/// spawn bracket does: `reset_credit()` at entry (a pooled OS thread must not
+/// inherit a stale credit) and `on_participant_exit()` at exit (a thread that
+/// woke to `Running` and exits drops its `active` slot). The harness uses this
+/// everywhere a real spawn would, since `std::thread::spawn` in tests has no
+/// platform bracket. The credit halves (`reset_credit`/`mark_dedicated`) are
+/// thread-local — one per thread, instance-agnostic — while the `active`
+/// bookkeeping lands on `flash`, the SAME instance every engine call of the
+/// body must use (splitting them across two engines underflows one of them).
+fn bracketed_on<F: FnOnce()>(flash: &FlashInner, body: F) {
     credit::reset_credit();
     // The harness threads stand in for dedicated `spawn_named` pacers, so they must
     // be counted in `active` exactly as production worker threads are. Production
     // splits this across the spawn: `pre_count_dedicated()` reserves the `active`
     // slot on the parent BEFORE the child runs, and `mark_dedicated()` claims it
     // `Running` on the child. The test has no spawn bracket, so it does both here.
-    credit::pre_count_dedicated();
+    flash.pre_count_dedicated();
     credit::mark_dedicated();
     body();
-    credit::on_participant_exit();
+    flash.on_participant_exit();
 }
 
-/// Spawn one parked waiter per duration. Under lazy-credit a thread is invisible
-/// until its first wrapped wait, so to batch the multiset deterministically a
-/// test-only coordinator holds one RUNNING slot until EVERY worker has parked;
-/// dropping it is the single `active -> 0` edge and the advance sees all the
-/// deadlines at once. Each worker is `bracketed` so its wake-to-`Running`-then-
-/// exit drops its slot (no `active` leak). Joins all workers.
-fn run_parked_waiters(secs: &[u64]) {
-    let coordinator = sched::test_hold();
+/// Spawn one parked waiter per duration on `flash`. Under lazy-credit a thread
+/// is invisible until its first wrapped wait, so to batch the multiset
+/// deterministically a test-only coordinator holds one RUNNING slot until EVERY
+/// worker has parked; dropping it is the single `active -> 0` edge and the
+/// advance sees all the deadlines at once. Each worker is `bracketed_on` so its
+/// wake-to-`Running`-then-exit drops its slot (no `active` leak). Joins all
+/// workers.
+fn run_parked_waiters_on(flash: &Arc<FlashInner>, secs: &[u64]) {
+    let coordinator = flash.test_hold();
     let handles: Vec<_> = secs
         .iter()
         .copied()
-        .map(|s| thread::spawn(move || bracketed(|| sched::park_for(Duration::from_secs(s)))))
+        .map(|s| {
+            let flash = Arc::clone(flash);
+            thread::spawn(move || bracketed_on(&flash, || flash.park_for(Duration::from_secs(s))))
+        })
         .collect();
 
-    while sched::timed_count() != secs.len() {
+    while flash.timed_count() != secs.len() {
         thread::yield_now();
     }
     drop(coordinator);
@@ -186,10 +195,12 @@ fn elapsed_tracks_virtual_clock() {
     assert_eq!(start.elapsed(), Duration::from_secs(5));
 }
 
+// The two arithmetic tests below are pure `Instant` math: no ambient, so
+// `Instant::now()` is the REAL arm (a lock-free monotonic read off the
+// process clock anchor) and no engine state — global or local — is touched.
+// Instance-agnostic, hence no GUARD, no reset, no local engine.
 #[test]
 fn arithmetic_saturates_and_orders() {
-    let _g = guard();
-    reset();
     let now = Instant::now();
     let later = now + Duration::from_secs(1);
     let earlier = now - Duration::from_secs(1);
@@ -201,8 +212,6 @@ fn arithmetic_saturates_and_orders() {
 
 #[test]
 fn base_keeps_backward_offset_positive() {
-    let _g = guard();
-    reset();
     let now = Instant::now();
     let earlier = now - Duration::from_secs(3600);
     assert_eq!(now.duration_since(earlier), Duration::from_secs(3600));
@@ -210,21 +219,20 @@ fn base_keeps_backward_offset_positive() {
 
 #[test]
 fn quiescence_advances_to_max_deadline_fast() {
-    let _g = guard();
-    reset();
-    let base = now_nanos();
+    let flash = FlashInner::new_arc();
+    let base = flash.clock.now_nanos();
     let real_start = RealInstant::now();
 
-    run_parked_waiters(&[10, 3]);
+    run_parked_waiters_on(&flash, &[10, 3]);
 
     assert_fast(real_start);
     assert_eq!(
-        now_nanos(),
+        flash.clock.now_nanos(),
         base + 10 * NANOS_PER_SEC,
         "clock lands on the max registered deadline"
     );
     assert_eq!(
-        sched::advance_log(),
+        flash.advance_log(),
         vec![base + 3 * NANOS_PER_SEC, base + 10 * NANOS_PER_SEC],
         "advance jumps to the min deadline first, then the next, regardless of start order"
     );
@@ -232,30 +240,29 @@ fn quiescence_advances_to_max_deadline_fast() {
 
 #[test]
 fn equal_deadlines_wake_in_one_step() {
-    let _g = guard();
-    reset();
-    let base = now_nanos();
+    let flash = FlashInner::new_arc();
+    let base = flash.clock.now_nanos();
     let real_start = RealInstant::now();
 
-    run_parked_waiters(&[5, 5, 8]);
+    run_parked_waiters_on(&flash, &[5, 5, 8]);
 
     assert_fast(real_start);
     assert_eq!(
-        sched::advance_log(),
+        flash.advance_log(),
         vec![base + 5 * NANOS_PER_SEC, base + 8 * NANOS_PER_SEC],
         "three waiters, two advance steps: the two equal deadlines wake in one batch"
     );
-    assert_eq!(now_nanos(), base + 8 * NANOS_PER_SEC);
+    assert_eq!(flash.clock.now_nanos(), base + 8 * NANOS_PER_SEC);
 }
 
 #[test]
 fn sequence_is_deterministic_across_runs() {
-    let _g = guard();
+    let flash = FlashInner::new_arc();
     let run = || {
-        reset();
-        let base = now_nanos();
-        run_parked_waiters(&[7, 2, 11, 4]);
-        (base, sched::advance_log())
+        flash.reset();
+        let base = flash.clock.now_nanos();
+        run_parked_waiters_on(&flash, &[7, 2, 11, 4]);
+        (base, flash.advance_log())
     };
 
     let real_start = RealInstant::now();
@@ -282,9 +289,8 @@ fn sequence_is_deterministic_across_runs() {
 
 #[test]
 fn first_park_bootstraps_and_self_advances() {
-    let _g = guard();
-    reset();
-    let base = now_nanos();
+    let flash = FlashInner::new_arc();
+    let base = flash.clock.now_nanos();
     let real_start = RealInstant::now();
 
     // No coordinator: a lone thread is uncounted (Credit::None) until its first
@@ -292,29 +298,34 @@ fn first_park_bootstraps_and_self_advances() {
     // `active`, so `active` is already 0 — the engine advances immediately to the
     // waiter's deadline. This is the lazy-credit bootstrap edge, the replacement
     // for the old explicit-register/drop transition.
-    let waiter = thread::spawn(move || bracketed(|| sched::park_for(Duration::from_secs(4))));
+    let waiter = {
+        let flash = Arc::clone(&flash);
+        thread::spawn(move || bracketed_on(&flash, || flash.park_for(Duration::from_secs(4))))
+    };
 
     waiter.join().expect("waiter thread panicked");
 
     assert_fast(real_start);
     assert_eq!(
-        now_nanos(),
+        flash.clock.now_nanos(),
         base + 4 * NANOS_PER_SEC,
         "first-park bootstrap self-advanced the lone waiter"
     );
-    assert_eq!(sched::advance_log(), vec![base + 4 * NANOS_PER_SEC]);
-    assert_eq!(sched::active_count(), 0, "bootstrap balanced on exit");
+    assert_eq!(flash.advance_log(), vec![base + 4 * NANOS_PER_SEC]);
+    assert_eq!(flash.active_count(), 0, "bootstrap balanced on exit");
 }
 
 #[test]
 fn real_io_defers_advance_past_real_pace() {
-    let _g = guard();
-    reset();
-    let t0 = now_nanos();
+    let flash = FlashInner::new_arc();
+    let t0 = flash.clock.now_nanos();
 
-    let io = real_io();
-    let waiter = thread::spawn(move || bracketed(|| sched::park_for(Duration::from_secs(10))));
-    while sched::timed_count() != 1 {
+    flash.real_io_enter();
+    let waiter = {
+        let flash = Arc::clone(&flash);
+        thread::spawn(move || bracketed_on(&flash, || flash.park_for(Duration::from_secs(10))))
+    };
+    while flash.timed_count() != 1 {
         thread::yield_now();
     }
 
@@ -322,22 +333,22 @@ fn real_io_defers_advance_past_real_pace() {
     // deadline is far beyond the real pace, so the clock must not move.
     thread::sleep(Duration::from_millis(50));
     assert_eq!(
-        sched::timed_count(),
+        flash.timed_count(),
         1,
         "a virtual deadline beyond the real pace must stay parked while real I/O is in flight"
     );
     assert_eq!(
-        now_nanos(),
+        flash.clock.now_nanos(),
         t0,
         "the clock must not advance past the real pace while real I/O is in flight"
     );
 
     let real_start = RealInstant::now();
-    drop(io);
+    flash.real_io_exit();
     waiter.join().expect("waiter thread panicked");
     assert_fast(real_start);
     assert_eq!(
-        now_nanos(),
+        flash.clock.now_nanos(),
         t0 + 10 * NANOS_PER_SEC,
         "full-speed collapse resumes the instant the last real I/O op completes"
     );
@@ -345,13 +356,15 @@ fn real_io_defers_advance_past_real_pace() {
 
 #[test]
 fn real_io_paces_deadline_to_real_time_not_pin() {
-    let _g = guard();
-    reset();
-    let t0 = now_nanos();
+    let flash = FlashInner::new_arc();
+    let t0 = flash.clock.now_nanos();
 
-    let io = real_io();
+    flash.real_io_enter();
     let real_start = RealInstant::now();
-    let waiter = thread::spawn(move || bracketed(|| sched::park_for(Duration::from_millis(20))));
+    let waiter = {
+        let flash = Arc::clone(&flash);
+        thread::spawn(move || bracketed_on(&flash, || flash.park_for(Duration::from_millis(20))))
+    };
 
     // The deadline must fire WHILE the op is still in flight, once enough REAL
     // time has passed (pace, not pin): a virtually-delayed peer (the fixture
@@ -359,7 +372,7 @@ fn real_io_paces_deadline_to_real_time_not_pin() {
     // real-I/O scope across the whole request await — a pin would deadlock it.
     waiter.join().expect("waiter thread panicked");
     let waited = real_start.elapsed();
-    drop(io);
+    flash.real_io_exit();
 
     assert!(
         waited >= Duration::from_millis(15),
@@ -369,31 +382,33 @@ fn real_io_paces_deadline_to_real_time_not_pin() {
         waited < Duration::from_secs(2),
         "pace must release the deadline at ~20ms real, not pin it: {waited:?}"
     );
-    assert_eq!(now_nanos(), t0 + 20_000_000);
+    assert_eq!(flash.clock.now_nanos(), t0 + 20_000_000);
 }
 
 #[test]
 fn real_io_nests_overlapping_ops() {
-    let _g = guard();
-    reset();
+    let flash = FlashInner::new_arc();
 
-    pace::real_io_enter();
-    pace::real_io_enter();
-    let waiter = thread::spawn(move || bracketed(|| sched::park_for(Duration::from_secs(10))));
-    while sched::timed_count() != 1 {
+    flash.real_io_enter();
+    flash.real_io_enter();
+    let waiter = {
+        let flash = Arc::clone(&flash);
+        thread::spawn(move || bracketed_on(&flash, || flash.park_for(Duration::from_secs(10))))
+    };
+    while flash.timed_count() != 1 {
         thread::yield_now();
     }
 
-    pace::real_io_exit();
+    flash.real_io_exit();
     thread::sleep(Duration::from_millis(30));
     assert_eq!(
-        sched::timed_count(),
+        flash.timed_count(),
         1,
         "the deadline must stay deferred while ANY real I/O op is still in flight"
     );
 
     let real_start = RealInstant::now();
-    pace::real_io_exit();
+    flash.real_io_exit();
     waiter.join().expect("waiter thread panicked");
     assert_fast(real_start);
 }
@@ -423,7 +438,7 @@ fn xs(state: &mut u64) -> u64 {
 ///     engine; it must NOT stall the clock and must NOT touch `active`.
 ///   - **decoder-build-like**: does N condvar waits with racing signals, then
 ///     EXITS while last-woken (`Running`), wrapped by the spawn-bracket
-///     (`bracketed`) so the exit drops its `active` slot — proving no leak from
+///     (`bracketed_on`) so the exit drops its `active` slot — proving no leak from
 ///     the bootstrap-then-run-then-exit path the production `spawn_blocking`
 ///     bracket covers.
 ///   - **scheduler-like**: a park/wake loop (`park_timed_unparkable` raced by
@@ -438,20 +453,20 @@ fn xs(state: &mut u64) -> u64 {
 ///
 /// A test-only coordinator (`test_hold`) holds one RUNNING slot until the spin
 /// settles, so a round exercises a realistic mix of running and parked threads.
-/// Every spawned body is `bracketed` (reset credit on entry, drop on exit) the
-/// way the production spawn bracket does.
+/// Every spawned body is `bracketed_on` (reset credit on entry, drop on exit)
+/// the way the production spawn bracket does.
 #[test]
 fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
     const ROUNDS: u64 = 16;
     const K: u64 = 5;
     const SPIN_WAITS: u64 = 3;
 
-    let _g = guard();
+    let flash = FlashInner::new_arc();
     let real_start = RealInstant::now();
 
     for round in 0..ROUNDS {
-        reset();
-        let coordinator = sched::test_hold();
+        flash.reset();
+        let coordinator = flash.test_hold();
 
         // Untimed waiters are released by the main thread after they register.
         // Collect their cvids to re-signal, and track how many have not yet woken
@@ -465,32 +480,39 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
         let untimed_left = Arc::new(AtomicUsize::new(0));
 
         // Busy-spin worker: NEVER waits. Must stay uncounted and never stall the
-        // engine (no deadline, not in `active`). `bracketed` confirms exit is a
-        // no-op when credit stayed `None`.
-        let spin = thread::spawn(|| {
-            bracketed(|| {
-                for _ in 0..64 {
-                    thread::yield_now();
-                }
-            });
-        });
+        // engine (no deadline, not in `active`). `bracketed_on` confirms exit is
+        // a no-op when credit stayed `None`.
+        let spin = {
+            let flash = Arc::clone(&flash);
+            thread::spawn(move || {
+                bracketed_on(&flash, || {
+                    for _ in 0..64 {
+                        thread::yield_now();
+                    }
+                });
+            })
+        };
 
         // Decoder-build-like worker: N condvar waits with racing signals, exits
         // while `Running`. The bracket's `on_participant_exit` drops the slot.
         let builder = {
             let mut seed = round.wrapping_mul(2_654_435_761).wrapping_add(7);
+            let flash = Arc::clone(&flash);
             thread::spawn(move || {
-                bracketed(|| {
+                bracketed_on(&flash, || {
                     for _ in 0..SPIN_WAITS {
-                        let cvid = sched::next_condvar_id();
-                        let deadline = now_nanos() + NANOS_PER_SEC;
-                        let (token, adv, wait) = sched::register_condvar_timed(deadline, cvid);
-                        let racer = thread::spawn(move || {
-                            if xs(&mut seed) & 1 == 0 {
-                                thread::yield_now();
-                            }
-                            sched::signal_condvar(cvid, true);
-                        });
+                        let cvid = flash.next_condvar_id();
+                        let deadline = flash.clock.now_nanos() + NANOS_PER_SEC;
+                        let (token, adv, wait) = flash.register_condvar_timed(deadline, cvid);
+                        let racer = {
+                            let flash = Arc::clone(&flash);
+                            thread::spawn(move || {
+                                if xs(&mut seed) & 1 == 0 {
+                                    thread::yield_now();
+                                }
+                                flash.signal_condvar(cvid, true);
+                            })
+                        };
                         adv.fire();
                         token.wait();
                         wait.resume();
@@ -504,17 +526,21 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
         // Scheduler-like worker: park/wake loop raced by `unpark`, then exits.
         let scheduler = {
             let mut seed = round.wrapping_mul(40_503).wrapping_add(13);
+            let flash = Arc::clone(&flash);
             thread::spawn(move || {
-                bracketed(|| {
+                bracketed_on(&flash, || {
                     let me = super::ids::ThreadKey::of(thread::current().id());
                     for _ in 0..SPIN_WAITS {
-                        let racer = thread::spawn(move || {
-                            if xs(&mut seed) & 1 == 0 {
-                                thread::yield_now();
-                            }
-                            sched::unpark(me);
-                        });
-                        sched::park_timed_unparkable(Duration::from_secs(2), me);
+                        let racer = {
+                            let flash = Arc::clone(&flash);
+                            thread::spawn(move || {
+                                if xs(&mut seed) & 1 == 0 {
+                                    thread::yield_now();
+                                }
+                                flash.unpark(me);
+                            })
+                        };
+                        flash.park_timed_unparkable(Duration::from_secs(2), me);
                         racer.join().expect("scheduler unpark racer panicked");
                     }
                 });
@@ -524,47 +550,55 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
         let handles: Vec<_> = (0..K)
             .map(|idx| {
                 let kind = (round.wrapping_mul(31).wrapping_add(idx)) % 3;
-                let cvid = sched::next_condvar_id();
+                let cvid = flash.next_condvar_id();
                 if kind == 2 {
                     untimed_cvids.push(cvid);
                     untimed_left.fetch_add(1, Ordering::Relaxed);
                 }
                 let mut seed = round.wrapping_mul(1_000_003).wrapping_add(idx + 1);
                 let left = Arc::clone(&untimed_left);
+                let flash = Arc::clone(&flash);
                 thread::spawn(move || {
-                    bracketed(|| match kind {
+                    bracketed_on(&flash, || match kind {
                         0 => {
                             // Thread park; a sibling racing unpark targets the
                             // SAME engine thread key. Either ordering is safe;
                             // the deadline guarantees return regardless.
                             let me = super::ids::ThreadKey::of(thread::current().id());
-                            let racer = thread::spawn(move || {
-                                if xs(&mut seed) & 1 == 0 {
-                                    thread::yield_now();
-                                }
-                                sched::unpark(me);
-                            });
-                            sched::park_timed_unparkable(Duration::from_secs(1 + (idx % 4)), me);
+                            let racer = {
+                                let flash = Arc::clone(&flash);
+                                thread::spawn(move || {
+                                    if xs(&mut seed) & 1 == 0 {
+                                        thread::yield_now();
+                                    }
+                                    flash.unpark(me);
+                                })
+                            };
+                            flash.park_timed_unparkable(Duration::from_secs(1 + (idx % 4)), me);
                             racer.join().expect("unpark racer panicked");
                         }
                         1 => {
                             // Timed condvar raced by a sibling signal.
-                            let deadline = now_nanos() + (1 + (idx % 4)) * NANOS_PER_SEC;
-                            let (token, adv, wait) = sched::register_condvar_timed(deadline, cvid);
+                            let deadline =
+                                flash.clock.now_nanos() + (1 + (idx % 4)) * NANOS_PER_SEC;
+                            let (token, adv, wait) = flash.register_condvar_timed(deadline, cvid);
                             adv.fire();
-                            let racer = thread::spawn(move || {
-                                if xs(&mut seed) & 1 == 0 {
-                                    thread::yield_now();
-                                }
-                                sched::signal_condvar(cvid, true);
-                            });
+                            let racer = {
+                                let flash = Arc::clone(&flash);
+                                thread::spawn(move || {
+                                    if xs(&mut seed) & 1 == 0 {
+                                        thread::yield_now();
+                                    }
+                                    flash.signal_condvar(cvid, true);
+                                })
+                            };
                             token.wait();
                             wait.resume();
                             racer.join().expect("signal racer panicked");
                         }
                         _ => {
                             // Untimed condvar: released by the main thread only.
-                            let (token, adv, wait) = sched::register_condvar_untimed(cvid);
+                            let (token, adv, wait) = flash.register_condvar_untimed(cvid);
                             adv.fire();
                             token.wait();
                             wait.resume();
@@ -586,7 +620,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
         drop(coordinator);
         while untimed_left.load(Ordering::Relaxed) != 0 {
             for cvid in &untimed_cvids {
-                sched::signal_condvar(*cvid, true);
+                flash.signal_condvar(*cvid, true);
             }
             thread::yield_now();
         }
@@ -600,17 +634,9 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
 
         // Engine fully drained at the end of every round: no leaked waiters, no
         // residual running participant.
-        assert_eq!(sched::active_count(), 0, "round {round}: active leaked");
-        assert_eq!(
-            sched::timed_count(),
-            0,
-            "round {round}: timed waiter leaked"
-        );
-        assert_eq!(
-            sched::indef_count(),
-            0,
-            "round {round}: indef waiter leaked"
-        );
+        assert_eq!(flash.active_count(), 0, "round {round}: active leaked");
+        assert_eq!(flash.timed_count(), 0, "round {round}: timed waiter leaked");
+        assert_eq!(flash.indef_count(), 0, "round {round}: indef waiter leaked");
     }
 
     // This test spawns hundreds of OS threads (per round: the mixed waiters, the
@@ -633,27 +659,28 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
 /// of clock motion is the engine's min-jump rule.
 #[test]
 fn stress_advance_log_is_deterministic_across_runs() {
-    let _g = guard();
+    let flash = FlashInner::new_arc();
     let secs = [6_u64, 2, 9, 2, 4, 9, 1];
     let real_start = RealInstant::now();
 
     let run = || {
-        reset();
-        let base = now_nanos();
+        flash.reset();
+        let base = flash.clock.now_nanos();
         // The coordinator holds the clock at `base` until every worker has parked,
         // so each worker reads the same `base` for its absolute deadline (the
-        // multiset is `base + s` for each `s`). Workers are `bracketed` so wake-to-
-        // `Running`-then-exit balances `active` and the engine drains to zero.
-        let coordinator = sched::test_hold();
+        // multiset is `base + s` for each `s`). Workers are `bracketed_on` so wake-
+        // to-`Running`-then-exit balances `active` and the engine drains to zero.
+        let coordinator = flash.test_hold();
         let handles: Vec<_> = secs
             .iter()
             .copied()
             .map(|s| {
+                let flash = Arc::clone(&flash);
                 thread::spawn(move || {
-                    bracketed(|| {
-                        let cvid = sched::next_condvar_id();
-                        let deadline = now_nanos() + s * NANOS_PER_SEC;
-                        let (token, adv, wait) = sched::register_condvar_timed(deadline, cvid);
+                    bracketed_on(&flash, || {
+                        let cvid = flash.next_condvar_id();
+                        let deadline = flash.clock.now_nanos() + s * NANOS_PER_SEC;
+                        let (token, adv, wait) = flash.register_condvar_timed(deadline, cvid);
                         adv.fire();
                         token.wait();
                         wait.resume();
@@ -661,14 +688,14 @@ fn stress_advance_log_is_deterministic_across_runs() {
                 })
             })
             .collect();
-        while sched::timed_count() != secs.len() {
+        while flash.timed_count() != secs.len() {
             thread::yield_now();
         }
         drop(coordinator);
         for h in handles {
             h.join().expect("waiter panicked");
         }
-        (base, now_nanos(), sched::advance_log())
+        (base, flash.clock.now_nanos(), flash.advance_log())
     };
 
     let (base_a, end_a, log_a) = run();
@@ -836,12 +863,11 @@ fn unpark_from_flash_callstack_reaches_real_parked_thread() {
 /// `park_for` to `resume()` turns this red deterministically.
 #[test]
 fn park_for_keeps_firer_bump_unsettled() {
-    let _g = guard();
-    reset();
+    let flash = FlashInner::new_arc();
     credit::reset_credit();
-    sched::park_for(Duration::from_millis(3));
+    flash.park_for(Duration::from_millis(3));
     assert_eq!(
-        sched::active_count(),
+        flash.active_count(),
         1,
         "park_for must resume via bare mark_running; a resume() conversion settles the bump to 0"
     );

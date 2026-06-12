@@ -997,40 +997,10 @@ impl Drop for TestHold<'_> {
     }
 }
 
-/// Process-engine forward of [`FlashInner::test_hold`].
-#[cfg(test)]
-pub(crate) fn test_hold() -> TestHold<'static> {
-    FLASH.test_hold()
-}
-
-/// Process-engine forward of [`FlashInner::advance_log`].
-#[cfg(test)]
-pub(crate) fn advance_log() -> Vec<u64> {
-    FLASH.advance_log()
-}
-
-/// Process-engine forward of [`FlashInner::active_count`].
-#[cfg(test)]
-pub(crate) fn active_count() -> usize {
-    FLASH.active_count()
-}
-
 /// Process-engine forward of [`FlashInner::async_active_count`].
 #[cfg(test)]
 pub(crate) fn async_active_count() -> usize {
     FLASH.async_active_count()
-}
-
-/// Process-engine forward of [`FlashInner::timed_count`].
-#[cfg(test)]
-pub(crate) fn timed_count() -> usize {
-    FLASH.timed_count()
-}
-
-/// Process-engine forward of [`FlashInner::indef_count`].
-#[cfg(test)]
-pub(crate) fn indef_count() -> usize {
-    FLASH.indef_count()
 }
 
 /// Process-engine forward of [`FlashInner::diag_yield_count`].

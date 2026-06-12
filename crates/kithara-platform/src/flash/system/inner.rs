@@ -209,12 +209,21 @@ pub(in crate::flash) struct FlashInner {
 }
 
 impl FlashInner {
-    fn new_arc() -> Arc<Self> {
+    fn new() -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
             clock: Clock::new(),
             core: Mutex::new(Core::new()),
             pacer: Pacer::new(Weak::clone(weak)),
         })
+    }
+
+    /// Test-only: a fresh LOCAL engine instance. A complete engine — clock,
+    /// `core`, per-instance pacer — fully isolated from the process [`FLASH`],
+    /// so the pure-scheduler harness tests need no serialization and cannot
+    /// split bookkeeping with primitive-path tests that drive the global.
+    #[cfg(test)]
+    pub(in crate::flash) fn new_arc() -> Arc<Self> {
+        Self::new()
     }
 
     /// Reset the timeline to its base and clear the engine state (for the
@@ -233,4 +242,4 @@ impl FlashInner {
 /// The process-wide engine instance, created lazily on first touch. Only the
 /// free-fn forwards (and the control surface in `api.rs`) bind to this global;
 /// every engine method below it is instance-addressed.
-pub(in crate::flash) static FLASH: LazyLock<Arc<FlashInner>> = LazyLock::new(FlashInner::new_arc);
+pub(in crate::flash) static FLASH: LazyLock<Arc<FlashInner>> = LazyLock::new(FlashInner::new);

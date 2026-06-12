@@ -206,15 +206,6 @@ impl Future for Yield {
     }
 }
 
-/// Current virtual instant in nanoseconds since the timeline origin. Read by the
-/// engine harness tests; production reads the engine clock under the core lock or
-/// via `Instant::as_virtual_nanos`.
-#[cfg(test)]
-#[inline]
-pub(crate) fn now_nanos() -> u64 {
-    FLASH.clock.now_nanos()
-}
-
 /// Dump the flash quiescence-engine state to stderr. The `#[kithara::test]`
 /// harness calls this from both hang exits (virtual-timeout panic and the
 /// HARD TIMEOUT abort thread) so a wedged run self-reports every parked

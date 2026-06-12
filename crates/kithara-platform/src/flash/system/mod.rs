@@ -11,11 +11,9 @@
 //! behave identically. Everything outside `system/` consumes thin free-fn
 //! forwards (each one `FLASH.method(...)`) re-exported below.
 //!
-//! Transition state within W2: the credit surface stays reachable as
-//! `system::credit::*` (with its per-thread cells) until the RAII forms
-//! (Task 2.7) and the single `ThreadCtx` (Task 2.6) land; `flash/tests.rs`
-//! drives the global [`FLASH`] through the forwards until the pure-scheduler
-//! tests move onto local instances (Task 2.11).
+//! The pure-scheduler tests in `flash/tests.rs` run on LOCAL instances
+//! (`FlashInner::new_arc`, cfg(test)) — only the primitive-path tests (and
+//! production) drive the global [`FLASH`] through the forwards.
 
 /// Participant credit accounting (dedicated pacers, bridged waits, blocking
 /// pacer bracket) split out of the scheduler — see `credit.rs`.

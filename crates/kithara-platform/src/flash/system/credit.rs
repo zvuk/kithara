@@ -274,22 +274,6 @@ fn mark_running() {
     ctx::set_credit(Credit::Running);
 }
 
-/// Test-transitional forward of [`FlashInner::pre_count_dedicated`] for the
-/// harness `bracketed()` mirror of the spawn bracket (production reserves via
-/// [`DedicatedSlot`]); dies with the instance-local tests (Task 2.11).
-#[cfg(test)]
-pub(crate) fn pre_count_dedicated() {
-    FLASH.pre_count_dedicated();
-}
-
-/// Test-transitional forward of [`FlashInner::on_participant_exit`] for the
-/// harness `bracketed()` mirror of the spawn bracket (production settles via
-/// [`Participant`]/[`PoolParticipant`]); dies with Task 2.11.
-#[cfg(test)]
-pub(crate) fn on_participant_exit() {
-    FLASH.on_participant_exit();
-}
-
 /// Reset this thread's credit to `None`. Called at the start of a pooled
 /// thread's body (spawn bracket) so a reused OS thread does not inherit a stale
 /// credit from a previous task.
