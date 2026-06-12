@@ -10,14 +10,11 @@ extern crate self as kithara_test_utils;
 /// flash wrapping.
 pub use kithara_platform;
 
-mod flash_dump;
 pub mod hang;
 pub mod mock;
 pub mod probe;
 pub mod rtsan;
 pub mod test;
-
-pub use flash_dump::flash_dump_to_stderr;
 
 pub mod kithara {
     pub use kithara_test_macros::{

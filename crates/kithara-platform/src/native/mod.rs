@@ -1,6 +1,7 @@
-//! Pure native backend. Zero flash knowledge; cross-platform code lives
-//! in `crate::common` and is re-imported here. Compiled only off wasm32
-//! (gated in `lib.rs`), so the tree itself carries no cfg.
+//! Pure native backend. Knows nothing about the other backends;
+//! cross-platform code lives in `crate::common` and is re-imported here.
+//! Compiled only off wasm32 (gated in `lib.rs`), so the tree itself
+//! carries no cfg.
 
 pub mod env;
 pub mod logging;

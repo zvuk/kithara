@@ -6,11 +6,9 @@ use tokio_with_wasm::alias as tokio_alias;
 
 pub use crate::common::time::{Instant, SystemTime, TimeoutError};
 
-/// Await `future` with a deadline that lives on the SAME clock as the awaited
-/// work — under `flash` a virtual deadline (collapses with the engine), off
-/// it a real `tokio` timer. This is the deadline a PROGRAM imposes on its own
-/// async work (e.g. a fetch total-timeout): under sim it must NOT pin the
-/// runtime's real timer wheel, or the virtual clock cannot collapse past it.
+/// Await `future` with a real `tokio` timer deadline. This is the deadline a
+/// PROGRAM imposes on its own async work (e.g. a fetch total-timeout); every
+/// backend keeps it on the same clock as the awaited work.
 ///
 /// # Errors
 ///

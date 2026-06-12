@@ -479,7 +479,7 @@ mod tests {
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy), cancel.clone());
 
         let url = test_url();
-        let handle = tokio::spawn(async move { retry_net.get_bytes(url, None).await });
+        let handle = tokio::task::spawn(async move { retry_net.get_bytes(url, None).await });
 
         sleep(Duration::from_millis(50)).await;
         cancel.cancel();

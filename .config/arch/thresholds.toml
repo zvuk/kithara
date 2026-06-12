@@ -373,11 +373,6 @@ export_attrs = ["no_mangle", "export_name", "wasm_bindgen", "uniffi"]
 #   notifications for *_internal ordering assertions; the public PlayerEvent bus
 #   path consumes-and-converts, losing the raw-notification granularity these
 #   tests assert.
-#   flash_dump_state: flash quiescence-engine snapshot for hang dumps; printed
-#   by kithara-test-utils::flash_dump_to_stderr from the #[kithara::test]
-#   timeout exits (virtual-timeout panic, HARD TIMEOUT abort). A test-harness
-#   diagnostic of a test-only engine — no production reader by design, same
-#   category as env_mutation_lock above.
 exempt = [
     "advance_to_next_item",
     "ensure_thread_pool",
@@ -386,7 +381,6 @@ exempt = [
     "track_mut",
     "try_pop_notification",
     "drain_notifications",
-    "flash_dump_state",
 ]
 # Path fragments whose defs `--fix` must never auto-delete: platform-gated
 # module dirs whose callers live in cfg-disabled or non-Rust (JNI) code the

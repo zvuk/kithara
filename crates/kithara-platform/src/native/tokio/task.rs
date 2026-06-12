@@ -1,21 +1,16 @@
-//! Platform-aware async task spawning (native, off the sim path).
+//! Platform-aware async task spawning (native backend).
 //!
 //! Baseline re-exported from `tokio_with_wasm::alias::task` (provides `spawn`,
-//! `yield_now`, `JoinHandle`, `JoinError`, etc.). The `flash` build replaces
-//! this module with `crate::flash::tokio::task` behind the `crate::tokio::task`
-//! facade.
+//! `yield_now`, `JoinHandle`, `JoinError`, etc.). Backend selection happens in
+//! `lib.rs` behind the `crate::tokio::task` facade.
 
 use tokio::runtime::Handle;
 pub use tokio_with_wasm::alias::task::*;
 
-/// Spawn `future` on a specific runtime [`Handle`] (off-sim: a direct
-/// `handle.spawn`).
+/// Spawn `future` on a specific runtime [`Handle`]: a direct `handle.spawn`.
 ///
-/// Without `flash` there is no quiescence engine, so spawning onto a
-/// specific runtime [`Handle`] needs no wrapping. The `flash` build uses the
-/// flash `spawn_on` instead, which additionally wraps the future in the engine
-/// poll-wrapper + ambient snapshot so the orchestrator's event waits stay
-/// counted by the virtual clock.
+/// The native backend has no orchestration around task polls, so spawning
+/// onto a specific runtime [`Handle`] needs no wrapping.
 pub fn spawn_on<F>(handle: &Handle, future: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
@@ -24,7 +19,7 @@ where
     handle.spawn(future)
 }
 
-/// Spawn a blocking computation on the runtime's blocking pool (non-sim native).
+/// Spawn a blocking computation on the runtime's blocking pool.
 pub fn spawn_blocking<F, R>(f: F) -> JoinHandle<R>
 where
     F: FnOnce() -> R + Send + 'static,

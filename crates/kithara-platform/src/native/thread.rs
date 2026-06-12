@@ -76,7 +76,7 @@ where
         )
 }
 
-/// Block the current thread for at least `duration` (native, non-sim).
+/// Block the current thread for at least `duration` (real OS sleep).
 #[inline]
 pub fn sleep(duration: Duration) {
     std::thread::sleep(duration);
@@ -94,7 +94,7 @@ pub fn park_timeout(duration: Duration) {
     std::thread::park_timeout(duration);
 }
 
-/// Unpark a thread parked in [`park_timeout`] (non-sim / OS park slot).
+/// Unpark a thread parked in [`park_timeout`] (the OS park slot).
 #[inline]
 pub fn unpark(t: &Thread) {
     t.unpark();
