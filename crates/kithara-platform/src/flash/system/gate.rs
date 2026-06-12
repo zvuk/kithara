@@ -14,6 +14,86 @@ use parking_lot::Mutex;
 
 use super::sched;
 
+/// Per-task quiescence states. The task occupies one `active_async` slot
+/// while it is in any non-quiescent state ([`Runnable`](TaskState::Runnable),
+/// [`Running`](TaskState::Running), [`RunningNotified`](TaskState::RunningNotified));
+/// it releases the slot only on the transition to [`Parked`](TaskState::Parked),
+/// on completion, or on drop.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TaskState {
+    Parked = 0,
+    Runnable = 1,
+    Running = 2,
+    RunningNotified = 3,
+    Done = 4,
+}
+
+/// Typed atomic over [`TaskState`]: the gate FSM cell. The orderings are fixed
+/// per operation (CAS `AcqRel`/`Acquire`, swap `AcqRel`, store `Release`, load
+/// `Acquire`) — exactly the orderings the untyped `AtomicU8` sites used.
+pub(super) struct AtomicTaskState(AtomicU8);
+
+impl AtomicTaskState {
+    fn new(initial: TaskState) -> Self {
+        Self(AtomicU8::new(initial as u8))
+    }
+
+    fn unpack(v: u8) -> TaskState {
+        match v {
+            0 => TaskState::Parked,
+            1 => TaskState::Runnable,
+            2 => TaskState::Running,
+            3 => TaskState::RunningNotified,
+            4 => TaskState::Done,
+            // Only `TaskState` discriminants are ever stored in the cell.
+            _ => unreachable!("BUG: invalid TaskState discriminant {v}"),
+        }
+    }
+
+    pub(super) fn load(&self) -> TaskState {
+        Self::unpack(self.0.load(Ordering::Acquire))
+    }
+
+    pub(super) fn store(&self, new: TaskState) {
+        self.0.store(new as u8, Ordering::Release);
+    }
+
+    pub(super) fn swap(&self, new: TaskState) -> TaskState {
+        Self::unpack(self.0.swap(new as u8, Ordering::AcqRel))
+    }
+
+    /// CAS `current -> new`; `true` iff it transitioned.
+    pub(super) fn compare_exchange(&self, current: TaskState, new: TaskState) -> bool {
+        self.0
+            .compare_exchange(
+                current as u8,
+                new as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+}
+
+/// Outcome of a gate park attempt ([`sched::gate_park`]).
+pub(super) enum ParkOutcome {
+    /// `Running -> Parked`: the slot was released (a quiescent edge).
+    Parked,
+    /// A wake landed mid-poll (`RunningNotified`), so the CAS failed: the gate
+    /// stays runnable, keeping the slot for the re-poll that wake scheduled.
+    WokenMidPoll,
+}
+
+/// Outcome of waking a parked gate ([`sched::gate_wake_parked`]).
+pub(super) enum WakeOutcome {
+    /// `Parked -> Runnable`: the slot was re-acquired; forward the runtime waker.
+    Resumed,
+    /// The state left `Parked` between the load and the CAS; the caller's wake
+    /// loop re-reads and handles the current state lock-free.
+    NotParked,
+}
+
 /// Per-task gate for quiescence accounting. It tracks whether the task currently
 /// occupies an `active_async` slot and INTERCEPTS every wake (it is handed to the
 /// inner future as its `Waker`), so a task that has been woken — its waker fired
@@ -23,29 +103,19 @@ use super::sched;
 /// past it). Because the gate IS the inner future's waker, EVERY wake routes
 /// through it: engine wakes, the real-I/O reactor, `JoinHandle`, raw channels.
 pub(in crate::flash) struct TaskGate {
-    state: AtomicU8,
+    state: AtomicTaskState,
     /// The runtime's waker for this task, refreshed each poll. The gate forwards
     /// to it on wake so the real poll is re-scheduled.
     runtime_waker: Mutex<Option<Waker>>,
 }
 
 impl TaskGate {
-    /// Per-task quiescence states. The task occupies one `active_async` slot
-    /// while it is in any non-quiescent state (`RUNNABLE`, `RUNNING`,
-    /// `RUNNING_NOTIFIED`); it releases the slot only on the transition to
-    /// `PARKED`, on completion, or on drop.
-    const PARKED: u8 = 0;
-    const RUNNABLE: u8 = 1;
-    const RUNNING: u8 = 2;
-    const RUNNING_NOTIFIED: u8 = 3;
-    const DONE: u8 = 4;
-
-    /// A fresh gate starts `RUNNABLE`: a constructed/spawned task is queued to be
+    /// A fresh gate starts `Runnable`: a constructed/spawned task is queued to be
     /// polled, so it occupies a slot at once (acquired by
     /// [`crate::flash::participate`]).
     pub(in crate::flash) fn new() -> Arc<Self> {
         Arc::new(Self {
-            state: AtomicU8::new(Self::RUNNABLE),
+            state: AtomicTaskState::new(TaskState::Runnable),
             runtime_waker: Mutex::new(None),
         })
     }
@@ -74,19 +144,13 @@ impl TaskGate {
     /// spawn or the waking transition, so a successful claim changes no counter.
     pub(in crate::flash) fn try_enter_poll(&self) -> bool {
         self.state
-            .compare_exchange(
-                Self::RUNNABLE,
-                Self::RUNNING,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
+            .compare_exchange(TaskState::Runnable, TaskState::Running)
     }
 
     /// Poll returned `Ready`: the task is done — release its slot. The `DONE`
     /// store and the counter decrement happen together under the `SCHED` lock.
     pub(in crate::flash) fn complete(&self) {
-        sched::gate_complete(&self.state, Self::DONE);
+        sched::gate_complete(&self.state);
     }
 
     /// Poll returned `Pending`: `RUNNING`→`PARKED` releases the slot (a quiescent
@@ -96,19 +160,13 @@ impl TaskGate {
     /// under the `SCHED` lock so a concurrent wake cannot interleave — see
     /// [`sched::gate_park`].
     pub(in crate::flash) fn park(&self) {
-        sched::gate_park(&self.state, Self::RUNNING, Self::PARKED, Self::RUNNABLE);
+        sched::gate_park(&self.state);
     }
 
     /// Drop: release the slot iff the task still occupies one (`RUNNABLE`/`RUNNING`/
     /// `RUNNING_NOTIFIED`). `PARKED` and `DONE` hold none.
     pub(in crate::flash) fn on_drop(&self) {
-        sched::gate_drop_release(
-            &self.state,
-            Self::DONE,
-            Self::RUNNABLE,
-            Self::RUNNING,
-            Self::RUNNING_NOTIFIED,
-        );
+        sched::gate_drop_release(&self.state);
     }
 }
 
@@ -119,30 +177,27 @@ impl Wake for TaskGate {
 
     fn wake_by_ref(self: &Arc<Self>) {
         loop {
-            match self.state.load(Ordering::Acquire) {
-                Self::PARKED => {
+            match self.state.load() {
+                TaskState::Parked => {
                     // Re-acquire the slot the park released BEFORE the real poll
                     // runs: this wake→poll window must stay counted so the clock
                     // cannot jump past this task. The CAS and the acquire happen
                     // together under the `SCHED` lock so a concurrent `park`'s
                     // release cannot cancel this acquire — see
-                    // [`sched::gate_wake_parked`]. A `false` return means the state
-                    // left `PARKED` between the load and the CAS; loop to re-read.
-                    if sched::gate_wake_parked(&self.state, Self::PARKED, Self::RUNNABLE) {
-                        self.forward();
-                        return;
+                    // [`sched::gate_wake_parked`]. `NotParked` means the state
+                    // left `Parked` between the load and the CAS; loop to re-read.
+                    match sched::gate_wake_parked(&self.state) {
+                        WakeOutcome::Resumed => {
+                            self.forward();
+                            return;
+                        }
+                        WakeOutcome::NotParked => {}
                     }
                 }
-                Self::RUNNING => {
+                TaskState::Running => {
                     if self
                         .state
-                        .compare_exchange(
-                            Self::RUNNING,
-                            Self::RUNNING_NOTIFIED,
-                            Ordering::AcqRel,
-                            Ordering::Acquire,
-                        )
-                        .is_ok()
+                        .compare_exchange(TaskState::Running, TaskState::RunningNotified)
                     {
                         // Woken during its own poll; slot already held. Forward so
                         // the runtime re-polls after the current poll returns.
@@ -150,13 +205,13 @@ impl Wake for TaskGate {
                         return;
                     }
                 }
-                // RUNNABLE / RUNNING_NOTIFIED: already pending a poll, slot held —
-                // idempotent. DONE: nothing to wake.
-                Self::RUNNABLE | Self::RUNNING_NOTIFIED => {
+                // Runnable / RunningNotified: already pending a poll, slot held —
+                // idempotent. Done: nothing to wake.
+                TaskState::Runnable | TaskState::RunningNotified => {
                     self.forward();
                     return;
                 }
-                _ => return,
+                TaskState::Done => return,
             }
         }
     }

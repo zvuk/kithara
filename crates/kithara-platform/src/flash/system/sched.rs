@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     task::Waker,
 };
@@ -14,6 +14,7 @@ use web_time::Instant as RealInstant;
 use super::credit::mark_running;
 use super::{
     credit::{enter_wait_locked, resume_after_wait},
+    gate::{AtomicTaskState, ParkOutcome, TaskState, WakeOutcome},
     wake::{Token, Wake},
 };
 use crate::flash::{
@@ -632,70 +633,68 @@ fn release_async_locked(s: &mut SimSched) -> WakeBatch {
     try_advance_locked(s)
 }
 
-/// Gate park under the `SCHED` lock: atomically CAS `running`→`parked` and release
-/// the async slot, or — a wake landed mid-poll, so the state is `RUNNING_NOTIFIED`
-/// and the CAS fails — store `runnable`, keeping the slot for the re-poll the wake
-/// already scheduled. Holding the lock across the CAS and the counter update is
-/// what closes the wake→poll race: a concurrent [`gate_wake_parked`] acquire can no
-/// longer interleave between a lock-free CAS and a separately-locked release, which
-/// would leave a re-runnable task uncounted and over-release on its next park.
-pub(crate) fn gate_park(state: &AtomicU8, running: u8, parked: u8, runnable: u8) {
+/// Gate park under the `SCHED` lock: atomically CAS `Running`→`Parked` and release
+/// the async slot, or — a wake landed mid-poll, so the state is `RunningNotified`
+/// and the CAS fails ([`ParkOutcome::WokenMidPoll`]) — store `Runnable`, keeping
+/// the slot for the re-poll the wake already scheduled. Holding the lock across
+/// the CAS and the counter update is what closes the wake→poll race: a concurrent
+/// [`gate_wake_parked`] acquire can no longer interleave between a lock-free CAS
+/// and a separately-locked release, which would leave a re-runnable task
+/// uncounted and over-release on its next park.
+pub(super) fn gate_park(state: &AtomicTaskState) {
     let mut s = SCHED.lock();
-    if state
-        .compare_exchange(running, parked, Ordering::AcqRel, Ordering::Acquire)
-        .is_ok()
-    {
-        let adv = release_async_locked(&mut s);
-        drop(s);
-        adv.fire();
+    let outcome = if state.compare_exchange(TaskState::Running, TaskState::Parked) {
+        ParkOutcome::Parked
     } else {
-        state.store(runnable, Ordering::Release);
+        ParkOutcome::WokenMidPoll
+    };
+    match outcome {
+        ParkOutcome::Parked => {
+            let adv = release_async_locked(&mut s);
+            drop(s);
+            adv.fire();
+        }
+        ParkOutcome::WokenMidPoll => state.store(TaskState::Runnable),
     }
 }
 
-/// Gate completion under the `SCHED` lock: mark `done` and release the slot
+/// Gate completion under the `SCHED` lock: mark `Done` and release the slot
 /// atomically (mirrors [`gate_park`]'s release arm for a poll that returned Ready).
-pub(crate) fn gate_complete(state: &AtomicU8, done: u8) {
+pub(super) fn gate_complete(state: &AtomicTaskState) {
     let mut s = SCHED.lock();
-    state.store(done, Ordering::Release);
+    state.store(TaskState::Done);
     let adv = release_async_locked(&mut s);
     drop(s);
     adv.fire();
 }
 
-/// Gate drop under the `SCHED` lock: swap to `done`; release the slot iff the task
-/// still held one (its prior state was counted — `RUNNABLE`/`RUNNING`/`RUNNING_NOTIFIED`).
-pub(crate) fn gate_drop_release(
-    state: &AtomicU8,
-    done: u8,
-    runnable: u8,
-    running: u8,
-    notified: u8,
-) {
+/// Gate drop under the `SCHED` lock: swap to `Done`; release the slot iff the task
+/// still held one (its prior state was counted — `Runnable`/`Running`/`RunningNotified`).
+pub(super) fn gate_drop_release(state: &AtomicTaskState) {
     let mut s = SCHED.lock();
-    let prev = state.swap(done, Ordering::AcqRel);
-    if prev == runnable || prev == running || prev == notified {
-        let adv = release_async_locked(&mut s);
-        drop(s);
-        adv.fire();
+    match state.swap(TaskState::Done) {
+        TaskState::Runnable | TaskState::Running | TaskState::RunningNotified => {
+            let adv = release_async_locked(&mut s);
+            drop(s);
+            adv.fire();
+        }
+        TaskState::Parked | TaskState::Done => {}
     }
 }
 
-/// Wake a PARKED gate under the `SCHED` lock: CAS `parked`→`runnable` and acquire
-/// the slot atomically. Returns `true` when it transitioned (the caller then
-/// forwards the runtime waker), `false` if the state was not PARKED (the caller's
-/// wake loop re-reads and handles the current state lock-free). Coupling the
-/// acquire to the CAS under the lock is the counterpart to [`gate_park`]'s release.
-pub(crate) fn gate_wake_parked(state: &AtomicU8, parked: u8, runnable: u8) -> bool {
+/// Wake a PARKED gate under the `SCHED` lock: CAS `Parked`→`Runnable` and acquire
+/// the slot atomically. Returns [`WakeOutcome::Resumed`] when it transitioned
+/// (the caller then forwards the runtime waker), [`WakeOutcome::NotParked`] if
+/// the state was not `Parked` (the caller's wake loop re-reads and handles the
+/// current state lock-free). Coupling the acquire to the CAS under the lock is
+/// the counterpart to [`gate_park`]'s release.
+pub(super) fn gate_wake_parked(state: &AtomicTaskState) -> WakeOutcome {
     let mut s = SCHED.lock();
-    if state
-        .compare_exchange(parked, runnable, Ordering::AcqRel, Ordering::Acquire)
-        .is_ok()
-    {
+    if state.compare_exchange(TaskState::Parked, TaskState::Runnable) {
         s.active_async += 1;
-        true
+        WakeOutcome::Resumed
     } else {
-        false
+        WakeOutcome::NotParked
     }
 }
 
