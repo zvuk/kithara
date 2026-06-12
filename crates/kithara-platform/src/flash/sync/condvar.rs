@@ -3,7 +3,11 @@ use web_time::Instant as RealInstant;
 
 use super::mutex::MutexGuard;
 use crate::{
-    flash::{Instant, flash_ambient, ids::Backend, system},
+    flash::{
+        Instant, flash_ambient,
+        ids::{Backend, trace_native_from_ambient},
+        system,
+    },
     native::sync::Condvar as NativeCondvar,
 };
 
@@ -40,7 +44,10 @@ impl Condvar {
     pub fn notify_all(&self) {
         match self.backend {
             Backend::Engine(cvid) => system::signal_condvar(cvid, true),
-            Backend::Native => self.native.notify_all(),
+            Backend::Native => {
+                trace_native_from_ambient("condvar", "notify_all");
+                self.native.notify_all();
+            }
         }
     }
 
@@ -48,7 +55,10 @@ impl Condvar {
     pub fn notify_one(&self) {
         match self.backend {
             Backend::Engine(cvid) => system::signal_condvar(cvid, false),
-            Backend::Native => self.native.notify_one(),
+            Backend::Native => {
+                trace_native_from_ambient("condvar", "notify_one");
+                self.native.notify_one();
+            }
         }
     }
 
@@ -72,7 +82,10 @@ impl Condvar {
                 });
                 guard
             }
-            Backend::Native => self.native.wait_sync(guard),
+            Backend::Native => {
+                trace_native_from_ambient("condvar", "wait_sync");
+                self.native.wait_sync(guard)
+            }
         }
     }
 
@@ -107,6 +120,7 @@ impl Condvar {
                 guard
             }
             Backend::Native => {
+                trace_native_from_ambient("condvar", "wait_sync_timeout");
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 self.native
                     .wait_sync_timeout(guard, RealInstant::now() + remaining)

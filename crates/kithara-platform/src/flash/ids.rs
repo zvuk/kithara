@@ -32,6 +32,27 @@ pub(in crate::flash) enum Backend {
     Native,
 }
 
+/// Diagnostic for the [`Backend::Native`] arms: a wait/signal reaching a
+/// NATIVE-latched primitive from a flash-ambient thread means the primitive
+/// was created BEFORE `ambient_scope` took effect, so it is invisible to the
+/// quiescence engine — a class of stalls that is otherwise undiagnosable
+/// (the test wedges on a real wait the virtual clock knows nothing about).
+/// The reverse direction (Engine-latched primitive signaled from a
+/// non-ambient thread) is by design (see [`Backend`]) and stays silent.
+/// `debug`, not `warn`: legitimate real carve-outs in `flash(false)` tests
+/// land here too and must not scream.
+#[inline]
+pub(in crate::flash) fn trace_native_from_ambient(primitive: &'static str, op: &'static str) {
+    if crate::flash::flash_ambient() {
+        tracing::debug!(
+            primitive,
+            op,
+            "native-latched primitive used from a flash-ambient thread \
+             (created before ambient_scope; invisible to the engine)"
+        );
+    }
+}
+
 /// Hashed [`ThreadId`] key targeting a parked thread. [`ThreadKey::of`] is the
 /// ONLY constructor, so the park side and the unpark side always derive the key
 /// through the SAME hasher (parity contract of

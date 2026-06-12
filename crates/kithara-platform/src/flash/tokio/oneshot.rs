@@ -23,7 +23,11 @@ use std::{
 
 use parking_lot::Mutex;
 
-use crate::flash::{flash_ambient, ids::Backend, system};
+use crate::flash::{
+    flash_ambient,
+    ids::{Backend, trace_native_from_ambient},
+    system,
+};
 
 /// Error observed when the sender drops without sending.
 ///
@@ -125,6 +129,7 @@ impl<T> Sender<T> {
         match shared.backend {
             Backend::Engine(cvid) => system::signal_channel(cvid, false),
             Backend::Native => {
+                trace_native_from_ambient("oneshot", "send");
                 if let Some(waker) = waker {
                     waker.wake();
                 }
@@ -145,6 +150,7 @@ impl<T> Drop for Sender<T> {
             match shared.backend {
                 Backend::Engine(cvid) => system::signal_channel(cvid, false),
                 Backend::Native => {
+                    trace_native_from_ambient("oneshot", "sender_drop");
                     if let Some(waker) = waker {
                         waker.wake();
                     }
@@ -190,6 +196,7 @@ impl<T> Future for Receiver<T> {
                 adv.fire();
             }
             Backend::Native => {
+                trace_native_from_ambient("oneshot", "recv_park");
                 // Store the real waker UNDER the lock, after re-checking value/alive,
                 // so a `send`/sender-drop that takes this lock either observes our
                 // waker (and wakes it) or has not yet stored the value we just missed.

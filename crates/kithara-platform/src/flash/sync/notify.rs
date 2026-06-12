@@ -11,7 +11,11 @@ use std::{
 
 use parking_lot::Mutex;
 
-use crate::flash::{flash_ambient, ids::Backend, system};
+use crate::flash::{
+    flash_ambient,
+    ids::{Backend, trace_native_from_ambient},
+    system,
+};
 
 /// Real-wake state for the off-flash path: FIFO queue of parked waiters (each a
 /// grant flag + waker, mirroring the engine's `granted`) plus a pending
@@ -48,6 +52,7 @@ impl Notify {
         match self.backend {
             Backend::Engine(cvid) => system::signal_notify(cvid),
             Backend::Native => {
+                trace_native_from_ambient("notify", "notify_one");
                 // Grant + wake one parked waiter; if none, store a permit (tokio
                 // semantics). The grant is set UNDER the lock, atomically with the
                 // pop (mirroring the engine's `mark_granted_under_lock`): a
@@ -145,6 +150,7 @@ impl Future for Notified<'_> {
                 }
             }
             Backend::Native => {
+                trace_native_from_ambient("notify", "notified");
                 // Consume a permit, else enqueue our (grant, waker) UNDER the lock so
                 // a concurrent notify_one (same lock, then grant+wake) cannot slip
                 // between this permit-check and our park.

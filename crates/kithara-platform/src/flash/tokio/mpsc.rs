@@ -35,7 +35,11 @@ use parking_lot::Mutex;
 pub use tokio_with_wasm::alias::sync::mpsc::error;
 
 pub use super::unbounded::UnboundedSender;
-use crate::flash::{flash_ambient, ids::CvId, system};
+use crate::flash::{
+    flash_ambient,
+    ids::{CvId, trace_native_from_ambient},
+    system,
+};
 
 pub(super) struct Inner<T> {
     queue: VecDeque<T>,
@@ -113,6 +117,7 @@ impl<T> Shared<T> {
         match self.backend {
             Backend::Engine { data, .. } => system::signal_channel(data, false),
             Backend::Native => {
+                trace_native_from_ambient("mpsc", "wake_data");
                 if let Some(waker) = waker {
                     waker.wake();
                 }
@@ -127,6 +132,7 @@ impl<T> Shared<T> {
         match self.backend {
             Backend::Engine { space, .. } => system::signal_channel(space, all),
             Backend::Native => {
+                trace_native_from_ambient("mpsc", "wake_space");
                 for w in wakers {
                     w.wake();
                 }
@@ -245,6 +251,7 @@ fn poll_recv_inner<T>(
             adv.fire();
         }
         Backend::Native => {
+            trace_native_from_ambient("mpsc", "recv_park");
             let waker = cx.waker().clone();
             inner.data_waker = Some(waker.clone());
             *pending = Some(Parked::Real(waker));
@@ -390,6 +397,7 @@ impl<T> Future for Send<'_, T> {
                 adv.fire();
             }
             Backend::Native => {
+                trace_native_from_ambient("mpsc", "send_park");
                 let waker = cx.waker().clone();
                 inner.space_wakers.push(waker.clone());
                 this.pending = Some(Parked::Real(waker));
