@@ -71,7 +71,11 @@ mod tests {
         assert!(!gate.is_ready());
 
         let signaller = Arc::clone(&gate);
-        let join = kithara_platform::thread::spawn(move || {
+        // spawn_named: the signaller must be engine-visible under flash — a bare
+        // spawn sleeps in REAL time while the waiter's poll loop and the timeout
+        // run on the virtual clock, so the virtual 1s can elapse before the real
+        // 5ms signal lands (mixed-clock race).
+        let join = kithara_platform::thread::spawn_named("preload-signal", move || {
             kithara_platform::thread::sleep(Duration::from_millis(5));
             signaller.signal();
         });
@@ -93,7 +97,8 @@ mod tests {
         assert!(!gate.is_ready());
 
         let re_signaller = Arc::clone(&gate);
-        let join = kithara_platform::thread::spawn(move || {
+        // spawn_named for the same mixed-clock reason as wait_resolves_after_signal.
+        let join = kithara_platform::thread::spawn_named("preload-resignal", move || {
             kithara_platform::thread::sleep(Duration::from_millis(5));
             re_signaller.signal();
         });
