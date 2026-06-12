@@ -61,7 +61,7 @@ fn wait_set(cv: &Condvar, mut woken: MutexGuard<'_, bool>) {
 pub(crate) enum Wake {
     /// A blocked OS thread (`park_timeout`, `Condvar`): wake via the `Token`.
     Sync(Arc<Token>),
-    /// A parked async task (`sleep_sim`, async `Notify`): the `granted` flag is
+    /// A parked async task (`FlashSleep`, async `Notify`): the `granted` flag is
     /// set just before waking so the future's Drop can tell "I was granted an
     /// `active` slot" from "I was still parked".
     Task {
