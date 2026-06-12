@@ -18,7 +18,15 @@
 //! `#[kithara::flash]` guard and the test macro's ambient scope. A non-LIFO
 //! holder (a scope outliving a sibling created after it) would silently
 //! restore a stale flag — e.g. drag `ambient = true` into foreign code,
-//! re-latching stateful primitives constructed there. Do not add one.
+//! re-latching stateful primitives constructed there.
+//!
+//! ENFORCED, not assumed: [`push_active`]/[`push_ambient`] return a
+//! [`ModeSnapshot`] carrying both the previous and the just-set [`Mode`];
+//! [`restore_mode`] `debug_assert`s the current mode still equals the set one.
+//! Since the only mode writers are the RAII scopes, a mismatch on drop means
+//! an inner scope created later is still alive — a non-LIFO drop — and the
+//! check fires on the first test that does it (debug assertions are on in
+//! the gate's test-release profile).
 
 use std::cell::Cell;
 
@@ -27,7 +35,7 @@ use std::cell::Cell;
 /// `sleep`/`timeout`) consult `active` via [`flash_enabled`]; the STATEFUL
 /// sync primitives (Condvar/Notify/mpsc/oneshot) latch `ambient` via
 /// [`flash_ambient`] once at construction. Default = REAL (both false).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::flash) struct Mode {
     /// Per-test gate: "is this test flash-eligible?" Set by the test macro,
     /// propagated across spawn. A gate — only [`push_active`] consults it to
@@ -109,38 +117,59 @@ pub(crate) fn flash_ambient() -> bool {
     CTX.with(|c| c.mode.get().ambient)
 }
 
+/// A mode scope's saved state: the [`Mode`] to restore on drop plus the one
+/// the scope itself set — the latter is what makes the LIFO premise checkable
+/// (see the module doc).
+#[derive(Clone, Copy)]
+pub(in crate::flash) struct ModeSnapshot {
+    prev: Mode,
+    set: Mode,
+}
+
 /// Push a dynamic flash mode: `active = on && ambient` (a prod flash region
 /// takes effect only under the ambient gate; `on = false` always carves
-/// REAL). Returns the previous whole [`Mode`] for the scope's drop. Writer:
-/// the `FlashScope` RAII scope only.
-pub(in crate::flash) fn push_active(on: bool) -> Mode {
+/// REAL). Returns the scope's [`ModeSnapshot`] for its drop. Writer: the
+/// `FlashScope` RAII scope only.
+pub(in crate::flash) fn push_active(on: bool) -> ModeSnapshot {
     CTX.with(|c| {
         let prev = c.mode.get();
-        c.mode.set(Mode {
+        let set = Mode {
             active: on && prev.ambient,
             ..prev
-        });
-        prev
+        };
+        c.mode.set(set);
+        ModeSnapshot { prev, set }
     })
 }
 
-/// Push the per-test ambient gate. Returns the previous whole [`Mode`] for
-/// the scope's drop. Writer: the `AmbientScope` RAII scope only.
-pub(in crate::flash) fn push_ambient(on: bool) -> Mode {
+/// Push the per-test ambient gate. Returns the scope's [`ModeSnapshot`] for
+/// its drop. Writer: the `AmbientScope` RAII scope only.
+pub(in crate::flash) fn push_ambient(on: bool) -> ModeSnapshot {
     CTX.with(|c| {
         let prev = c.mode.get();
-        c.mode.set(Mode {
+        let set = Mode {
             ambient: on,
             ..prev
-        });
-        prev
+        };
+        c.mode.set(set);
+        ModeSnapshot { prev, set }
     })
 }
 
-/// Restore a scope's saved whole [`Mode`] (see the LIFO premise in the
-/// module doc). Writer: the mode RAII scopes' `Drop` only.
-pub(in crate::flash) fn restore_mode(prev: Mode) {
-    CTX.with(|c| c.mode.set(prev));
+/// Restore a scope's saved [`Mode`], asserting the LIFO premise (module doc):
+/// the current mode must still be the one this scope set — a mismatch means a
+/// later-created scope is still alive (non-LIFO drop) and its restore would
+/// silently resurrect a stale flag. Skipped mid-unwind (a panicking scope
+/// stack tears down out of order by design). Writer: the mode RAII scopes'
+/// `Drop` only.
+pub(in crate::flash) fn restore_mode(snap: ModeSnapshot) {
+    CTX.with(|c| {
+        debug_assert!(
+            c.mode.get() == snap.set || std::thread::panicking(),
+            "BUG: non-LIFO mode-scope drop — an inner scope created after this one is still alive"
+        );
+        c.mode.set(snap.prev);
+    });
 }
 
 /// Read this thread's quiescence credit.

@@ -256,8 +256,12 @@ impl WaitGuard<'_> {
 
 impl Drop for WaitGuard<'_> {
     fn drop(&mut self) {
+        // Mid-unwind the guard legitimately drops unconsumed (a panic between
+        // mint and settle — e.g. inside `WakeBatch::fire` or `Token::wait`);
+        // asserting there would double-panic into an abort and mask the root
+        // panic. The assert only polices the non-panicking path.
         debug_assert!(
-            false,
+            std::thread::panicking(),
             "WaitGuard dropped without resume()/mark_running() — wrapped wait left unsettled"
         );
     }

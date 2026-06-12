@@ -13,7 +13,7 @@ use std::{
 
 pub use super::participant::{Participating, participate};
 use super::{
-    ctx::{self, Mode, flash_ambient, flash_enabled},
+    ctx::{self, ModeSnapshot, flash_ambient, flash_enabled},
     ids::WaiterId,
     system::{self, FLASH},
 };
@@ -294,7 +294,7 @@ pub fn reset() {
 /// `flash/ctx.rs`). `!Send`: it restores THIS thread's mode, so moving it to
 /// another thread would restore the wrong thread's state.
 #[must_use]
-pub struct FlashScope(Mode, PhantomData<*mut ()>);
+pub struct FlashScope(ModeSnapshot, PhantomData<*mut ()>);
 
 impl Drop for FlashScope {
     fn drop(&mut self) {
@@ -321,7 +321,7 @@ pub fn flash_real() -> FlashScope {
 /// Sanctioned exception to "never hold a scope across `.await`": the test
 /// macro's `block_on` ROOT may hold one (single-threaded driver, no hop).
 #[must_use]
-pub struct AmbientScope(Mode, PhantomData<*mut ()>);
+pub struct AmbientScope(ModeSnapshot, PhantomData<*mut ()>);
 
 impl Drop for AmbientScope {
     fn drop(&mut self) {

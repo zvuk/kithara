@@ -827,3 +827,23 @@ fn unpark_from_flash_callstack_reaches_real_parked_thread() {
     target.join().expect("real-parked target panicked");
     assert_fast(start);
 }
+
+/// PIN — `park_for` resumes via the bare TLS `mark_running`, NOT
+/// `WaitGuard::resume`. The harness `park_for` site is un-bracketed (no spawn
+/// bracket balances its credit), so the non-dedicated `resume` arm would
+/// wrongly settle the firer's wake bump (`active -= 1` + advance). The bump
+/// must therefore still be visible after `park_for` returns; converting
+/// `park_for` to `resume()` turns this red deterministically.
+#[test]
+fn park_for_keeps_firer_bump_unsettled() {
+    let _g = guard();
+    reset();
+    credit::reset_credit();
+    sched::park_for(Duration::from_millis(3));
+    assert_eq!(
+        sched::active_count(),
+        1,
+        "park_for must resume via bare mark_running; a resume() conversion settles the bump to 0"
+    );
+    credit::reset_credit();
+}
