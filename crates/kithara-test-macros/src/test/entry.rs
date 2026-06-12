@@ -16,8 +16,8 @@ use super::{
     parse::TestArgs,
     rewrite::FlashRewrite,
     shared::{
-        finalize_body, make_dedicated_worker_config, make_serial_attr, make_sync_test_attrs,
-        make_tracing_init, wrap_with_timeout,
+        finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_serial_attr,
+        make_sync_test_attrs, make_tracing_init, wrap_with_timeout,
     },
 };
 
@@ -46,12 +46,14 @@ fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
     // the BODY's direct time-primitive calls onto the unconditional
     // `virtual_*` variants (so the body collapses without setting
     // `FLASH_ACTIVE`, leaving callee prod fns on REAL); under `flash(false)`
-    // leave the body untouched. Either way the body opens with an ambient guard
-    // (`#flash_bool`), set uniformly per test and propagated to spawned threads
-    // (B5). Off the `flash` feature both `virtual_*` and
-    // `ambient_scope` are real-aliases / no-ops, so the emitted body is
-    // behaviour-identical to the original. Injected ONCE here so every emit path
-    // (sync/async/native/wasm/browser) inherits it via `body_stmts`.
+    // leave the body untouched. The ambient holder is NOT injected here:
+    // each emit path adds its own (see `shared::make_ambient_stmt`) —
+    // sync/wasm bodies hold a body-head `ambient_scope` for their whole
+    // extent, while async-native bodies carry ONLY the per-poll
+    // `with_ambient` wrapper (a body-held scope inside the cancellable
+    // timeout would tear down non-LIFO on Elapsed). Off the `flash` feature
+    // both `virtual_*` and `ambient_scope` are real-aliases / no-ops, so the
+    // emitted body is behaviour-identical to the original.
     let flash = args.flash.unwrap_or(true);
     if flash {
         let mut rewrite = FlashRewrite::default();
@@ -69,10 +71,6 @@ fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
             ));
         }
     }
-    let ambient_stmt: syn::Stmt = syn::parse_quote! {
-        let __flash_ambient = ::kithara_test_utils::kithara_platform::flash::ambient_scope(#flash);
-    };
-    func.block.stmts.insert(0, ambient_stmt);
 
     let ctx = GenCtx {
         args: &args,
@@ -122,8 +120,11 @@ fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
     let emit = |name: &Ident, case_values: Option<&[Expr]>| -> TokenStream2 {
         let preamble = make_preamble(ctx.params, case_values);
         let tracing_init = make_tracing_init(ctx.args);
+        // wasm emission: no per-poll `with_ambient`, the body-held scope is
+        // the sole ambient writer — KEEP it.
+        let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
-        let full = quote! { { #tracing_init #preamble #(#body_stmts)* } };
+        let full = quote! { { #tracing_init #preamble #ambient #(#body_stmts)* } };
         let with_timeout = wrap_with_timeout(&full, &ctx.args.timeout, true, name);
         let wrapped = finalize_body(&with_timeout, ctx.args, name, true);
         let remaining_attrs = ctx.remaining_attrs;
@@ -157,12 +158,17 @@ fn generate_native_only(ctx: &GenCtx<'_>) -> TokenStream2 {
     let mut emit_one = |name: &Ident, case_values: Option<&[Expr]>| {
         let preamble = make_preamble(ctx.params, case_values);
         let tracing_init = make_tracing_init(ctx.args);
+        let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
-        let full = quote! { #tracing_init #preamble #(#body_stmts)* };
+        // Plain body for the async-native branches (sole ambient holder there
+        // is the per-poll `with_ambient`); held body for the sync branch.
+        let full_plain = quote! { #tracing_init #preamble #(#body_stmts)* };
+        let full_held = quote! { #tracing_init #preamble #ambient #(#body_stmts)* };
         tests.extend(emit_native_only_one(
             ctx,
             name,
-            &full,
+            &full_plain,
+            &full_held,
             &serial_attr,
             native_is_async,
         ));

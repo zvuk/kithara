@@ -47,6 +47,13 @@ A bare `#[kithara::test]` is a sync test on native + wasm; flags can be combined
 
 Supports `#[case]` / `#[case::name]` parameterization and fixture injection.
 
+### Flash ambient holder per emit path
+
+Every emitted test body is made flash-eligible by exactly ONE ambient holder:
+
+- **async-native** emissions (manual tokio runtime, with or without `timeout`) wrap the body in `kithara_platform::flash::with_ambient`, which re-asserts `FLASH_AMBIENT` around every poll. They must NOT also hold a body scope: a body-held `ambient_scope` lives in the future's state inside the cancellable timeout and tears down non-LIFO on `Elapsed` — a stale ambient resurrect, caught by the platform's `restore_mode` guard.
+- **native sync** and **wasm** emissions open the body with a single body-held `ambient_scope` (`shared::make_ambient_stmt`) — the sole ambient writer there.
+
 ## `#[kithara::probe(...)]` arguments
 
 - `#[kithara::probe]` (no parens) — marker probe: emits only the cheap auto-fields (`seq`, `caller_file`, `caller_line`) and zero wire args. Use for very-frequent production functions whose parameters are not `IntoProbeArg` (e.g. `Future::poll_next(&self, cx: &mut Context)`).

@@ -126,6 +126,22 @@ fn dynamic_is_noop_without_ambient() {
     assert!(!flash_enabled(), "dynamic flash without ambient stays real");
 }
 
+/// The `restore_mode` LIFO guard must catch a non-LIFO mode-scope drop (a
+/// scope restored while a later-created scope is still alive) instead of
+/// silently resurrecting a stale mode. The interleave must be value-visible:
+/// a same-value interleave is invisible to the value-compare assert by
+/// construction, hence `true` vs `false`. Mode is pure TLS (no engine state),
+/// so no GUARD; `feature = "flash"` is structural (the whole module is gated
+/// in `lib.rs`), only the assert needs `debug_assertions`.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "non-LIFO mode-scope drop")]
+fn non_lifo_mode_scope_drop_is_caught() {
+    let outer = ambient_scope(true);
+    let _inner = ambient_scope(false);
+    drop(outer);
+}
+
 /// A parked async task that gets signalled must stay counted as non-quiescent
 /// until it is actually RE-POLLED — not merely until its current poll returns.
 /// Between `waker.wake()` (task queued/runnable) and the next `poll`, the engine

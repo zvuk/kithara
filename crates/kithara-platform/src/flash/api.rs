@@ -311,7 +311,9 @@ pub fn flash_real() -> FlashScope {
 /// propagation). Saves/restores the previous whole [`Mode`] on drop (LIFO
 /// premise — see `flash/ctx.rs`). `!Send`: it restores THIS thread's mode.
 /// Sanctioned exception to "never hold a scope across `.await`": the test
-/// macro's `block_on` ROOT may hold one (single-threaded driver, no hop).
+/// macro's WASM body may hold one (single-threaded driver, sole ambient
+/// writer there). Async-native emissions hold NONE: a body-held scope inside
+/// the cancellable timeout would tear down non-LIFO on `Elapsed`.
 #[must_use]
 pub struct AmbientScope(ModeSnapshot, PhantomData<*mut ()>);
 

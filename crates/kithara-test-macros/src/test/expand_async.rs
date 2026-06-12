@@ -5,9 +5,9 @@ use syn::{Attribute, Ident};
 use super::{
     parse::TestArgs,
     shared::{
-        finalize_body, make_dedicated_worker_config, make_env_setup, make_runtime_builder,
-        make_selenium_attrs, make_serial_attr, make_tracing_init, wrap_with_soft_fail,
-        wrap_with_timeout,
+        finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_env_setup,
+        make_runtime_builder, make_selenium_attrs, make_serial_attr, make_tracing_init,
+        wrap_with_soft_fail, wrap_with_timeout,
     },
 };
 
@@ -64,14 +64,15 @@ pub(crate) fn emit_async_runtime_test(
                 kithara_platform::flash::participate(
                     ::kithara_test_utils::probe::OWNED_INSTALL_ID
                         .scope(__probe_install_id,
-                            // Re-assert FLASH_AMBIENT around every poll of the
-                            // body: the one-shot ambient guard set at the body's
-                            // head is lost once it resumes on a worker thread
-                            // after an `.await`, so a later `spawn_blocking` from
-                            // the body would capture the wrong ambient and run
-                            // REAL while the engine runs virtual (lost wake).
-                            // `with_ambient` keeps the body flash-eligible across
-                            // `.await`. Identity off the feature.
+                            // `with_ambient` is the SOLE ambient holder of the
+                            // async-native body: it re-asserts FLASH_AMBIENT
+                            // around every poll, so a worker-thread resume
+                            // after `.await` keeps the right ambient and a
+                            // `spawn_blocking` from the body cannot capture the
+                            // wrong one (lost wake). A body-held scope is
+                            // forbidden here: its cancel-drop on a timeout
+                            // `Elapsed` is a non-LIFO mode restore (stale
+                            // ambient resurrect). Identity off the feature.
                             kithara_platform::flash::with_ambient(#flash, async {
                                 #inner_body
                             })),
@@ -216,15 +217,17 @@ pub(crate) fn emit_async_timeout_test(
                                     // hangs real time too).
                                     kithara_platform::time::timeout(
                                         __timeout_dur,
-                                        // Re-assert FLASH_AMBIENT around every poll
-                                        // of the body so it stays flash-eligible
-                                        // across `.await` (the one-shot ambient
-                                        // guard is lost on a worker-thread resume; a
-                                        // later `spawn_blocking` would then capture
-                                        // the wrong ambient and run REAL against a
-                                        // virtual engine — lost wake). `timeout`
-                                        // itself stays REAL (gates on FLASH_ACTIVE,
-                                        // untouched here).
+                                        // `with_ambient` is the SOLE ambient holder
+                                        // of the async-native body: it re-asserts
+                                        // FLASH_AMBIENT around every poll, so a
+                                        // worker-thread resume after `.await` keeps
+                                        // the right ambient (a `spawn_blocking`
+                                        // cannot capture the wrong one — lost wake).
+                                        // A body-held scope is forbidden here: its
+                                        // cancel-drop on `Elapsed` is a non-LIFO
+                                        // mode restore (stale ambient resurrect).
+                                        // `timeout` itself stays REAL (gates on
+                                        // FLASH_ACTIVE, untouched here).
                                         kithara_platform::flash::with_ambient(#flash, async {
                                             #inner_body
                                         }),
@@ -276,10 +279,14 @@ pub(crate) fn emit_browser_test(
 
     output.extend(make_dedicated_worker_config());
 
+    // wasm emission: no per-poll `with_ambient`, the body-held scope is the
+    // sole ambient writer — KEEP it (same for the native sync branch below).
+    let ambient = make_ambient_stmt(args);
     let wasm_body = quote! {
         #tracing_init
         kithara_platform::tokio::ensure_thread_pool().await;
         #preamble
+        #ambient
         #(#body_stmts)*
     };
     let wasm_with_timeout = wrap_with_timeout(&wasm_body, &args.timeout, true, fn_name);
@@ -293,6 +300,8 @@ pub(crate) fn emit_browser_test(
 
     if !browser_only {
         let native_is_async = is_async || args.is_tokio;
+        // Plain body for the async-native branches: their sole ambient holder
+        // is the per-poll `with_ambient` inside the emitted runtime wrapper.
         let native_body = quote! { #tracing_init #preamble #(#body_stmts)* };
 
         if native_is_async && args.timeout.is_some() {
@@ -316,8 +325,9 @@ pub(crate) fn emit_browser_test(
                 &serial_attr,
             ));
         } else {
+            let native_body_held = quote! { #tracing_init #preamble #ambient #(#body_stmts)* };
             let native_with_timeout =
-                wrap_with_timeout(&native_body, &args.timeout, false, fn_name);
+                wrap_with_timeout(&native_body_held, &args.timeout, false, fn_name);
             let native_wrapped = finalize_body(&native_with_timeout, args, fn_name, false);
             output.extend(quote! {
                 #(#remaining_attrs)*

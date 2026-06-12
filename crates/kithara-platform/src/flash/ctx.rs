@@ -15,10 +15,11 @@
 //! under strictly LIFO nesting of mode scopes on a thread — which every
 //! current holder satisfies: the per-poll wrapper guards
 //! (`WithAmbient`/`FlashDynamic`), the spawn-bracket scopes, the prod
-//! `#[kithara::flash]` guard and the test macro's ambient scope. A non-LIFO
-//! holder (a scope outliving a sibling created after it) would silently
-//! restore a stale flag — e.g. drag `ambient = true` into foreign code,
-//! re-latching stateful primitives constructed there.
+//! `#[kithara::flash]` guard and the test macro's body-held ambient scope
+//! (sync/wasm emissions only; async-native bodies carry `with_ambient`
+//! per-poll instead). A non-LIFO holder (a scope outliving a sibling created
+//! after it) would silently restore a stale flag — e.g. drag `ambient = true`
+//! into foreign code, re-latching stateful primitives constructed there.
 //!
 //! ENFORCED, not assumed: [`push_active`]/[`push_ambient`] return a
 //! [`ModeSnapshot`] carrying both the previous and the just-set [`Mode`];
@@ -158,15 +159,16 @@ pub(in crate::flash) fn push_ambient(on: bool) -> ModeSnapshot {
 
 /// Restore a scope's saved [`Mode`], asserting the LIFO premise (module doc):
 /// the current mode must still be the one this scope set — a mismatch means a
-/// later-created scope is still alive (non-LIFO drop) and its restore would
-/// silently resurrect a stale flag. Skipped mid-unwind (a panicking scope
-/// stack tears down out of order by design). Writer: the mode RAII scopes'
-/// `Drop` only.
+/// non-LIFO drop (an interleaved later-created scope is still alive, or was
+/// already restored over this one) and the restore would silently resurrect a
+/// stale flag. Skipped mid-unwind (a panicking scope stack tears down out of
+/// order by design). Writer: the mode RAII scopes' `Drop` only.
 pub(in crate::flash) fn restore_mode(snap: ModeSnapshot) {
     CTX.with(|c| {
         debug_assert!(
             c.mode.get() == snap.set || std::thread::panicking(),
-            "BUG: non-LIFO mode-scope drop — an inner scope created after this one is still alive"
+            "BUG: non-LIFO mode-scope drop — mode is not the one this scope set (an \
+             interleaved later scope is still alive, or was already restored over this one)"
         );
         c.mode.set(snap.prev);
     });
