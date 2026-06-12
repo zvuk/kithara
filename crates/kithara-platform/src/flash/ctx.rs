@@ -25,9 +25,12 @@
 //! [`ModeSnapshot`] carrying both the previous and the just-set [`Mode`];
 //! [`restore_mode`] `debug_assert`s the current mode still equals the set one.
 //! Since the only mode writers are the RAII scopes, a mismatch on drop means
-//! an inner scope created later is still alive — a non-LIFO drop — and the
-//! check fires on the first test that does it (debug assertions are on in
-//! the gate's test-release profile).
+//! a non-LIFO drop: an interleaved later scope is still alive, or one already
+//! restored over this scope's mode. The check fires at the first
+//! VALUE-VISIBLE violation (debug assertions are on in the gate's
+//! test-release profile); a non-LIFO drop that restores the very same `Mode`
+//! value is masked by equality and surfaces only at the later scope whose
+//! state it corrupted.
 
 use std::cell::Cell;
 

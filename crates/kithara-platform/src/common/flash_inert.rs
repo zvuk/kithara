@@ -208,8 +208,9 @@ pub fn real_io() -> RealIoScope {
 }
 
 /// No-op per-test ambient gate off the sim path (time is already real). The
-/// `#[kithara::test]` macro emits `ambient_scope(..)` into every test body, so
-/// the guard must exist (as a ZST) in the off-feature + wasm configs. Under
+/// `#[kithara::test]` macro emits `ambient_scope(..)` into sync and wasm test
+/// bodies (async-native bodies carry `with_ambient` per-poll instead), so the
+/// guard must exist (as a ZST) in the off-feature + wasm configs. Under
 /// `flash` this is the engine's `AmbientScope` / `ambient_scope`. `!Send` for
 /// auto-trait parity with the engine guard (see [`FlashScope`]).
 #[derive(Debug)]
