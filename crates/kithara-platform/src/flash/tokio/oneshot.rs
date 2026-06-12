@@ -23,7 +23,7 @@ use std::{
 
 use parking_lot::Mutex;
 
-use crate::flash::{flash_ambient, system};
+use crate::flash::{flash_ambient, ids::CvId, system};
 
 /// Error observed when the sender drops without sending.
 ///
@@ -58,7 +58,7 @@ struct Inner<T> {
 
 struct Shared<T> {
     inner: Mutex<Inner<T>>,
-    cvid: u64,
+    cvid: CvId,
     /// Mechanism captured ONCE at `channel()` (see [`crate::sync::Condvar`]): both
     /// halves use it regardless of the calling thread's ambient, so a sender on a
     /// thread that did not inherit the test's ambient still reaches an

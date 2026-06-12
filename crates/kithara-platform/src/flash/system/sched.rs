@@ -16,7 +16,10 @@ use super::{
     credit::{enter_wait_locked, resume_after_wait},
     wake::{Token, Wake},
 };
-use crate::flash::SIM_NANOS;
+use crate::flash::{
+    SIM_NANOS,
+    ids::{CvId, ThreadKey, WaiterId},
+};
 
 /// What kind of waiter an [`Entry`] is, so a signal targets the right group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,10 +30,10 @@ enum WaitKind {
     Timed,
     /// An unparkable thread park (`park_timeout`): woken by the deadline OR by
     /// [`unpark`] targeting this thread id.
-    Thread(u64),
+    Thread(ThreadKey),
     /// A condvar waiter: woken by the deadline (when timed) OR by
     /// [`signal_condvar`] for this condvar id.
-    Condvar(u64),
+    Condvar(CvId),
 }
 
 /// A parked waiter's wake handle plus the group it belongs to.
@@ -61,18 +64,18 @@ pub(super) struct SimSched {
     /// Timed waiters keyed by (virtual deadline nanos, unique id) so the
     /// minimum deadline is `first_key_value`; ties share the same deadline and
     /// differ only by id. The map doubles as entry storage.
-    parked_timed: BTreeMap<(u64, u64), Entry>,
+    parked_timed: BTreeMap<(u64, WaiterId), Entry>,
     /// Untimed waiters (no deadline) keyed by unique id; woken only by a signal
     /// (`signal_condvar`), never by a clock jump.
-    parked_indef: BTreeMap<u64, Entry>,
+    parked_indef: BTreeMap<WaiterId, Entry>,
     /// Thread ids whose `unpark` arrived while not parked: the next
     /// `park_timed_unparkable` for that id consumes the flag and returns at once.
-    unpark_pending: BTreeSet<u64>,
+    unpark_pending: BTreeSet<ThreadKey>,
     /// Condvar ids whose `notify_one` arrived while no waiter
     /// was registered: the next `notified()` first-poll for that cvid consumes
     /// the permit and resolves immediately (mirrors `tokio::Notify`'s stored
     /// permit). Only set by the async [`Notify`](crate::sync::Notify) path.
-    notify_permit: BTreeSet<u64>,
+    notify_permit: BTreeSet<CvId>,
     /// Cooperative-yield waiters (sim `thread::yield_now` AND
     /// `tokio::task::yield_now`): a busy-poll loop that relinquishes the engine so
     /// the clock can advance. They carry NO deadline — woken on the NEXT clock
@@ -122,10 +125,10 @@ impl SimSched {
         }
     }
 
-    fn fresh_id(&mut self) -> u64 {
+    fn fresh_id(&mut self) -> WaiterId {
         let id = self.next_id;
         self.next_id += 1;
-        id
+        WaiterId(id)
     }
 }
 
@@ -236,11 +239,11 @@ pub(crate) fn fire_advance(adv: Advance) {
 }
 
 /// Allocate a fresh condvar id (one per [`crate::sync::Condvar`] under sim).
-pub(crate) fn next_condvar_id() -> u64 {
+pub(crate) fn next_condvar_id() -> CvId {
     let mut s = SCHED.lock();
     let id = s.next_cvid;
     s.next_cvid += 1;
-    id
+    CvId(id)
 }
 
 /// Test-harness convenience: park for `Duration` from the current virtual
@@ -275,7 +278,7 @@ pub(crate) fn park_for(d: crate::flash::Duration) {
 /// reading the clock and inserting. A pending `unpark` (one that arrived while
 /// this thread was running) is consumed here and returns immediately without
 /// parking or touching `active`.
-pub(crate) fn park_timed_unparkable(d: crate::flash::Duration, thread_id: u64) {
+pub(crate) fn park_timed_unparkable(d: crate::flash::Duration, thread_id: ThreadKey) {
     let delta = crate::flash::duration_to_nanos(d);
     let token = Token::new();
     let mut s = SCHED.lock();
@@ -333,7 +336,7 @@ pub(crate) fn sleep_timed(d: crate::flash::Duration) {
 /// remove its timed entry, `active += 1`, and fire its token after releasing
 /// `SCHED`. If it is not parked, set `unpark_pending` so its next park returns
 /// at once (mirrors std `unpark`'s one-token semantics).
-pub(crate) fn unpark(thread_id: u64) {
+pub(crate) fn unpark(thread_id: ThreadKey) {
     let mut s = SCHED.lock();
     let key = s
         .parked_timed
@@ -370,7 +373,7 @@ pub(crate) fn yield_until_advance() {
         std::thread::yield_now();
         return;
     }
-    let id = s.fresh_id();
+    let WaiterId(id) = s.fresh_id();
     s.yield_waiters.insert(id, Wake::Sync(Arc::clone(&token)));
     enter_wait_locked(&mut s);
     let adv = try_advance_locked(&mut s);
@@ -397,7 +400,7 @@ pub(crate) fn yield_until_advance() {
 pub(crate) fn register_yield_async(waker: Waker) -> (u64, Arc<AtomicBool>, Advance) {
     let granted = Arc::new(AtomicBool::new(false));
     let mut s = SCHED.lock();
-    let id = s.fresh_id();
+    let WaiterId(id) = s.fresh_id();
     s.yield_waiters.insert(
         id,
         Wake::Task {
@@ -422,7 +425,7 @@ pub(crate) fn cancel_yield(id: u64) {
 /// the caller must fire AFTER releasing the domain guard. The caller calls
 /// [`mark_running_after_condvar`](super::credit::mark_running_after_condvar)
 /// once `token.wait()` returns.
-pub(crate) fn register_condvar_timed(deadline_nanos: u64, cvid: u64) -> (Arc<Token>, Advance) {
+pub(crate) fn register_condvar_timed(deadline_nanos: u64, cvid: CvId) -> (Arc<Token>, Advance) {
     let token = Token::new();
     let mut s = SCHED.lock();
     // The caller computed `deadline_nanos` from `Instant::now()` OUTSIDE this
@@ -449,7 +452,7 @@ pub(crate) fn register_condvar_timed(deadline_nanos: u64, cvid: u64) -> (Arc<Tok
 
 /// Register an UNTIMED condvar waiter (no deadline; woken only by a signal for
 /// `cvid`). Same return shape and accounting as [`register_condvar_timed`].
-pub(crate) fn register_condvar_untimed(cvid: u64) -> (Arc<Token>, Advance) {
+pub(crate) fn register_condvar_untimed(cvid: CvId) -> (Arc<Token>, Advance) {
     let token = Token::new();
     let mut s = SCHED.lock();
     let id = s.fresh_id();
@@ -470,15 +473,15 @@ pub(crate) fn register_condvar_untimed(cvid: u64) -> (Arc<Token>, Advance) {
 /// (`notify_all`), `all == false` wakes at most one (`notify_one`). Scans BOTH
 /// `parked_timed` and `parked_indef`, removes each woken entry, `active += 1`
 /// per woken entry, and fires their tokens after releasing `SCHED`.
-pub(crate) fn signal_condvar(cvid: u64, all: bool) {
+pub(crate) fn signal_condvar(cvid: CvId, all: bool) {
     let mut s = SCHED.lock();
-    let timed_keys: Vec<(u64, u64)> = s
+    let timed_keys: Vec<(u64, WaiterId)> = s
         .parked_timed
         .iter()
         .filter(|(_, e)| e.kind == WaitKind::Condvar(cvid))
         .map(|(&k, _)| k)
         .collect();
-    let indef_keys: Vec<u64> = s
+    let indef_keys: Vec<WaiterId> = s
         .parked_indef
         .iter()
         .filter(|(_, e)| e.kind == WaitKind::Condvar(cvid))
@@ -517,8 +520,8 @@ pub(crate) fn signal_condvar(cvid: u64, all: bool) {
 /// still-parked entry, and the `granted` flag the firer sets so the future can
 /// tell a real wake from a cancel and balance `active` exactly.
 pub(crate) struct AsyncHandle {
-    timed_key: Option<(u64, u64)>,
-    indef_key: Option<u64>,
+    timed_key: Option<(u64, WaiterId)>,
+    indef_key: Option<WaiterId>,
     granted: Arc<AtomicBool>,
 }
 
@@ -574,7 +577,7 @@ pub(crate) fn register_sleep_async(delta_nanos: u64, waker: Waker) -> (AsyncHand
 /// Register an UNTIMED async `Notify` waiter for `cvid`, OR consume a stored
 /// permit. Returns `(handle, to_wake)`; `handle` is `None` when a permit was
 /// waiting (the caller resolves at once without parking).
-pub(crate) fn register_notify_async(cvid: u64, waker: Waker) -> (Option<AsyncHandle>, Advance) {
+pub(crate) fn register_notify_async(cvid: CvId, waker: Waker) -> (Option<AsyncHandle>, Advance) {
     let granted = Arc::new(AtomicBool::new(false));
     let mut s = SCHED.lock();
     if s.notify_permit.remove(&cvid) {
@@ -711,7 +714,7 @@ pub(crate) fn cancel_async_wait(handle: &AsyncHandle) {
 /// Signal an async `Notify` for `cvid`: wake at most one waiter; if none are
 /// parked, store a permit so the next `notified()` resolves at once (tokio
 /// `notify_one` semantics).
-pub(crate) fn signal_notify(cvid: u64) {
+pub(crate) fn signal_notify(cvid: CvId) {
     let mut s = SCHED.lock();
     let woken_key = s
         .parked_indef
@@ -749,7 +752,7 @@ pub(crate) fn signal_notify(cvid: u64) {
 /// cannot signal-with-no-waiter between the empty-check and the park (no lost
 /// wakeup). Returns `(handle, advance)`; fire the advance after dropping the
 /// queue lock.
-pub(crate) fn register_channel_async(cvid: u64, waker: Waker) -> (AsyncHandle, Advance) {
+pub(crate) fn register_channel_async(cvid: CvId, waker: Waker) -> (AsyncHandle, Advance) {
     let granted = Arc::new(AtomicBool::new(false));
     let mut s = SCHED.lock();
     let id = s.fresh_id();
@@ -782,9 +785,9 @@ pub(crate) fn register_channel_async(cvid: u64, waker: Waker) -> (AsyncHandle, A
 /// the live-count) directly, so a missed signal is harmless. `all` is for the
 /// close edges (a dropped receiver wakes every blocked sender; a dropped last
 /// sender wakes the receiver).
-pub(crate) fn signal_channel(cvid: u64, all: bool) {
+pub(crate) fn signal_channel(cvid: CvId, all: bool) {
     let mut s = SCHED.lock();
-    let keys: Vec<u64> = s
+    let keys: Vec<WaiterId> = s
         .parked_indef
         .iter()
         .filter(|(_, e)| e.kind == WaitKind::Condvar(cvid))
@@ -917,13 +920,13 @@ pub(crate) fn dump() -> String {
     for ((deadline, id), entry) in &s.parked_timed {
         let _ = writeln!(
             out,
-            "  timed id={id} kind={:?} deadline_in_ns={}",
+            "  timed id={id:?} kind={:?} deadline_in_ns={}",
             entry.kind,
             deadline.saturating_sub(now),
         );
     }
     for (id, entry) in &s.parked_indef {
-        let _ = writeln!(out, "  indef id={id} kind={:?}", entry.kind);
+        let _ = writeln!(out, "  indef id={id:?} kind={:?}", entry.kind);
     }
     if !s.unpark_pending.is_empty() {
         let _ = writeln!(out, "  unpark_pending={:?}", s.unpark_pending);

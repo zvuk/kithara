@@ -461,7 +461,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
         // first observes an empty map, so it would exit before that worker parks
         // and then the worker would wait forever. The counter closes that window —
         // it starts non-zero and only the worker itself decrements it post-wake.
-        let mut untimed_cvids: Vec<u64> = Vec::new();
+        let mut untimed_cvids: Vec<super::ids::CvId> = Vec::new();
         let untimed_left = Arc::new(AtomicUsize::new(0));
 
         // Busy-spin worker: NEVER waits. Must stay uncounted and never stall the
@@ -506,7 +506,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
             let mut seed = round.wrapping_mul(40_503).wrapping_add(13);
             thread::spawn(move || {
                 bracketed(|| {
-                    let me = crate::thread::current_thread_id();
+                    let me = super::ids::ThreadKey::of(thread::current().id());
                     for _ in 0..SPIN_WAITS {
                         let racer = thread::spawn(move || {
                             if xs(&mut seed) & 1 == 0 {
@@ -537,7 +537,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                             // Thread park; a sibling racing unpark targets the
                             // SAME engine thread key. Either ordering is safe;
                             // the deadline guarantees return regardless.
-                            let me = crate::thread::current_thread_id();
+                            let me = super::ids::ThreadKey::of(thread::current().id());
                             let racer = thread::spawn(move || {
                                 if xs(&mut seed) & 1 == 0 {
                                     thread::yield_now();

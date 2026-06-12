@@ -11,7 +11,7 @@ use std::{
 
 use parking_lot::Mutex;
 
-use crate::flash::{flash_ambient, system};
+use crate::flash::{flash_ambient, ids::CvId, system};
 
 /// Real-wake state for the off-flash path: FIFO queue of parked waiters (each a
 /// grant flag + waker, mirroring the engine's `granted`) plus a pending
@@ -25,7 +25,7 @@ struct RealNotify {
 /// `Notify` under `flash`. Each op branches on [`flash_ambient`]: engine
 /// `cvid` group when the test is flash-eligible, else a real waker list + permit.
 pub struct Notify {
-    cvid: u64,
+    cvid: CvId,
     real: Mutex<RealNotify>,
     /// Mechanism captured ONCE at construction (see [`super::Condvar`]): every
     /// `notify_one` AND `notified()` poll uses it, so a notifier on a thread that
@@ -93,7 +93,7 @@ enum NotifiedState {
 
 /// Future returned by [`Notify::notified`] under `flash`.
 pub struct Notified<'a> {
-    cvid: u64,
+    cvid: CvId,
     state: NotifiedState,
     notify: &'a Notify,
 }

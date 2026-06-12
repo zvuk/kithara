@@ -4,6 +4,8 @@
 //! `crate::common::flash_inert`. See README "Flash layering".
 
 mod api;
+/// Typed engine ids (`CvId` / `WaiterId` / `ThreadKey`).
+mod ids;
 mod participant;
 /// Flash-side mirror of the platform tree: re-import stubs where flash
 /// adds no semantics, flash-aware primitives where it does.

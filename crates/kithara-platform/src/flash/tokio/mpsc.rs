@@ -35,7 +35,7 @@ use parking_lot::Mutex;
 pub use tokio_with_wasm::alias::sync::mpsc::error;
 
 pub use super::unbounded::UnboundedSender;
-use crate::flash::{flash_ambient, system};
+use crate::flash::{flash_ambient, ids::CvId, system};
 
 pub(super) struct Inner<T> {
     queue: VecDeque<T>,
@@ -55,10 +55,10 @@ pub(super) struct Inner<T> {
 pub(super) struct Shared<T> {
     inner: Mutex<Inner<T>>,
     /// Signaled when an item is enqueued (wakes the parked receiver).
-    data_cvid: u64,
+    data_cvid: CvId,
     /// Signaled when a dequeue frees a slot of a full bounded queue (wakes a
     /// parked sender). Unused for unbounded channels.
-    space_cvid: u64,
+    space_cvid: CvId,
     /// `Some(cap)` bounded, `None` unbounded.
     capacity: Option<usize>,
     /// Mechanism captured ONCE at channel creation (see [`crate::sync::Condvar`]):

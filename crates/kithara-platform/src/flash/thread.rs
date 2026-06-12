@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use crate::common::thread_id::{ACTIVE_NAMED_THREADS, thread_id_hash};
+use crate::{common::thread_id::ACTIVE_NAMED_THREADS, flash::ids::ThreadKey};
 pub use crate::{
     common::thread_id::active_named_thread_count,
     native::thread::{
@@ -132,7 +132,7 @@ pub fn sleep(duration: Duration) {
 #[inline]
 pub fn park_timeout(duration: Duration) {
     if crate::flash::flash_enabled() {
-        crate::flash::system::park_timed_unparkable(duration, current_thread_id());
+        crate::flash::system::park_timed_unparkable(duration, ThreadKey::of(current().id()));
     } else {
         // Real-time scope: a true wall-clock park, invisible to the engine.
         std::thread::park_timeout(duration);
@@ -145,7 +145,7 @@ pub fn park_timeout(duration: Duration) {
 /// `park_timeout` collapses onto virtual time without setting `FLASH_ACTIVE`.
 #[inline]
 pub(crate) fn park_timeout_virtual(duration: Duration) {
-    crate::flash::system::park_timed_unparkable(duration, current_thread_id());
+    crate::flash::system::park_timed_unparkable(duration, ThreadKey::of(current().id()));
 }
 
 /// Unpark a thread parked in [`park_timeout`].
@@ -161,7 +161,7 @@ pub(crate) fn park_timeout_virtual(duration: Duration) {
 #[inline]
 pub fn unpark(t: &Thread) {
     if crate::flash::flash_enabled() {
-        crate::flash::system::unpark(thread_id_hash(t.id()));
+        crate::flash::system::unpark(ThreadKey::of(t.id()));
     }
     t.unpark();
 }

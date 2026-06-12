@@ -3,6 +3,7 @@ use parking_lot::{Condvar as ParkingLotCondvar, lock_api::MutexGuard as RawMutex
 use super::mutex::MutexGuard;
 use crate::flash::{
     Instant, flash_ambient,
+    ids::CvId,
     system::{self, credit},
 };
 
@@ -15,7 +16,7 @@ use crate::flash::{
 /// engine `cvid` and the real condvar share the SAME domain mutex, so the
 /// unified predicate state is consistent across both park/wake mechanisms.
 pub struct Condvar {
-    cvid: u64,
+    cvid: CvId,
     real: ParkingLotCondvar,
     /// Mechanism captured ONCE at construction: `true` ⇒ engine-backed (the
     /// creating context was flash-eligible), `false` ⇒ real `parking_lot`. Fixed
