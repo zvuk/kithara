@@ -92,21 +92,25 @@ where
     R: Send + 'static,
 {
     let ambient = crate::flash::ambient_snapshot();
-    if ambient {
-        credit::pre_count_dedicated();
-    }
+    // Reserve the `active` slot BEFORE the pool queues the closure (covering
+    // the queue wait). The slot's Drop returns the reservation if the pool
+    // never runs the closure. Deliberately NOT unified with the `spawn_named`
+    // bracket: a pool closure owns no named-thread count and must restore the
+    // reused thread's previous dedicated flag.
+    let slot = ambient.then(credit::DedicatedSlot::reserve);
     tokio::task::spawn_blocking(move || {
         // Held for the closure's lifetime (must outlive `f()`); restores the
         // pool thread's previous ambient on exit.
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
         credit::reset_credit();
-        if ambient {
-            let _pacer = credit::BlockingPacer::enter();
+        if let Some(slot) = slot {
+            let _pacer = slot.claim_pooled();
             f()
         } else {
-            let result = f();
-            credit::on_participant_exit();
-            result
+            // Non-ambient: invisible to the engine; the RAII settle only keeps
+            // the exit unwind-safe and consistent with the ambient arm.
+            let _exit = credit::Participant::unreserved();
+            f()
         }
     })
 }

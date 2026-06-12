@@ -6,11 +6,9 @@ use std::{
     task::Waker,
 };
 
-#[cfg(test)]
-use super::credit::mark_running;
 use super::{
     Clock, Core, CvId, FLASH, FlashInner, Registry, WaiterId,
-    credit::enter_wait_locked,
+    credit::WaitGuard,
     gate::{AtomicTaskState, ParkOutcome, TaskState, WakeOutcome},
     wake::{Token, Wake},
 };
@@ -204,12 +202,12 @@ impl FlashInner {
                 kind: WaitKind::Timed,
             },
         );
-        enter_wait_locked(&mut s);
+        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         adv.fire();
         token.wait();
-        mark_running();
+        wait.mark_running();
     }
 
     /// Unparkable thread park: block until the virtual clock reaches `now + d` OR
@@ -240,12 +238,12 @@ impl FlashInner {
                 kind: WaitKind::Thread(thread_id),
             },
         );
-        enter_wait_locked(&mut s);
+        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         adv.fire();
         token.wait();
-        self.resume_after_wait();
+        wait.resume();
     }
 
     /// Virtual `thread::sleep`: block until the virtual clock reaches `now + d`. A
@@ -269,12 +267,12 @@ impl FlashInner {
                 kind: WaitKind::Timed,
             },
         );
-        enter_wait_locked(&mut s);
+        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         adv.fire();
         token.wait();
-        self.resume_after_wait();
+        wait.resume();
     }
 
     /// Wake a thread parked in [`FlashInner::park_timed_unparkable`]. If it is
@@ -325,12 +323,12 @@ impl FlashInner {
         }
         let id = s.registry.fresh_id();
         s.sched.yielders.insert(id, Wake::Sync(Arc::clone(&token)));
-        enter_wait_locked(&mut s);
+        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
         adv.fire();
         token.wait();
-        self.resume_after_wait();
+        wait.resume();
     }
 }
 
@@ -377,16 +375,18 @@ impl FlashInner {
 
     /// Register a TIMED condvar waiter (woken by the deadline OR a signal for
     /// `cvid`). The caller holds the DOMAIN guard when calling this (lock order
-    /// domain -> core). Accounts the wait via [`enter_wait_locked`], evaluates the
-    /// advance rule, and returns the token to block on plus the advance-due tokens
-    /// the caller must fire AFTER releasing the domain guard. The caller calls
-    /// [`mark_running_after_condvar`](super::credit::mark_running_after_condvar)
-    /// once `token.wait()` returns.
+    /// domain -> core). Accounts the wait via
+    /// [`enter_wait_locked`](FlashInner::enter_wait_locked), evaluates the
+    /// advance rule, and returns the token to block on plus the advance-due
+    /// tokens the caller must fire AFTER releasing the domain guard, plus the
+    /// [`WaitGuard`] the caller consumes (`resume()`) once `token.wait()`
+    /// returns — the condvar bracket spans modules, so the obligation travels
+    /// in the return tuple into the wrapper's off-lock closure.
     pub(in crate::flash) fn register_condvar_timed(
         &self,
         deadline_nanos: u64,
         cvid: CvId,
-    ) -> (Arc<Token>, WakeBatch) {
+    ) -> (Arc<Token>, WakeBatch, WaitGuard<'_>) {
         let token = Token::new();
         let mut s = self.core.lock();
         // The caller computed `deadline_nanos` from `Instant::now()` OUTSIDE this
@@ -405,15 +405,18 @@ impl FlashInner {
                 kind: WaitKind::Condvar(cvid),
             },
         );
-        enter_wait_locked(&mut s);
+        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
-        (token, adv)
+        (token, adv, wait)
     }
 
     /// Register an UNTIMED condvar waiter (no deadline; woken only by a signal for
     /// `cvid`). Same return shape and accounting as [`FlashInner::register_condvar_timed`].
-    pub(in crate::flash) fn register_condvar_untimed(&self, cvid: CvId) -> (Arc<Token>, WakeBatch) {
+    pub(in crate::flash) fn register_condvar_untimed(
+        &self,
+        cvid: CvId,
+    ) -> (Arc<Token>, WakeBatch, WaitGuard<'_>) {
         let token = Token::new();
         let mut s = self.core.lock();
         let id = s.registry.fresh_id();
@@ -424,10 +427,10 @@ impl FlashInner {
                 kind: WaitKind::Condvar(cvid),
             },
         );
-        enter_wait_locked(&mut s);
+        let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
         drop(s);
-        (token, adv)
+        (token, adv, wait)
     }
 
     /// Wake condvar waiters for `cvid`: `all == true` wakes every matching waiter
@@ -869,12 +872,15 @@ pub(crate) fn cancel_yield(id: WaiterId) {
 }
 
 /// Process-engine forward of [`FlashInner::register_condvar_timed`].
-pub(crate) fn register_condvar_timed(deadline_nanos: u64, cvid: CvId) -> (Arc<Token>, WakeBatch) {
+pub(crate) fn register_condvar_timed(
+    deadline_nanos: u64,
+    cvid: CvId,
+) -> (Arc<Token>, WakeBatch, WaitGuard<'static>) {
     FLASH.register_condvar_timed(deadline_nanos, cvid)
 }
 
 /// Process-engine forward of [`FlashInner::register_condvar_untimed`].
-pub(crate) fn register_condvar_untimed(cvid: CvId) -> (Arc<Token>, WakeBatch) {
+pub(crate) fn register_condvar_untimed(cvid: CvId) -> (Arc<Token>, WakeBatch, WaitGuard<'static>) {
     FLASH.register_condvar_untimed(cvid)
 }
 

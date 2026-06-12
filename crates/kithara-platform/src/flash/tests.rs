@@ -484,7 +484,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                     for _ in 0..SPIN_WAITS {
                         let cvid = sched::next_condvar_id();
                         let deadline = now_nanos() + NANOS_PER_SEC;
-                        let (token, adv) = sched::register_condvar_timed(deadline, cvid);
+                        let (token, adv, wait) = sched::register_condvar_timed(deadline, cvid);
                         let racer = thread::spawn(move || {
                             if xs(&mut seed) & 1 == 0 {
                                 thread::yield_now();
@@ -493,7 +493,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                         });
                         adv.fire();
                         token.wait();
-                        credit::mark_running_after_condvar();
+                        wait.resume();
                         racer.join().expect("builder signal racer panicked");
                     }
                     // Exit here while `Running`: the bracket must decrement.
@@ -550,7 +550,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                         1 => {
                             // Timed condvar raced by a sibling signal.
                             let deadline = now_nanos() + (1 + (idx % 4)) * NANOS_PER_SEC;
-                            let (token, adv) = sched::register_condvar_timed(deadline, cvid);
+                            let (token, adv, wait) = sched::register_condvar_timed(deadline, cvid);
                             adv.fire();
                             let racer = thread::spawn(move || {
                                 if xs(&mut seed) & 1 == 0 {
@@ -559,15 +559,15 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                                 sched::signal_condvar(cvid, true);
                             });
                             token.wait();
-                            credit::mark_running_after_condvar();
+                            wait.resume();
                             racer.join().expect("signal racer panicked");
                         }
                         _ => {
                             // Untimed condvar: released by the main thread only.
-                            let (token, adv) = sched::register_condvar_untimed(cvid);
+                            let (token, adv, wait) = sched::register_condvar_untimed(cvid);
                             adv.fire();
                             token.wait();
-                            credit::mark_running_after_condvar();
+                            wait.resume();
                             left.fetch_sub(1, Ordering::Relaxed);
                         }
                     });
@@ -653,10 +653,10 @@ fn stress_advance_log_is_deterministic_across_runs() {
                     bracketed(|| {
                         let cvid = sched::next_condvar_id();
                         let deadline = now_nanos() + s * NANOS_PER_SEC;
-                        let (token, adv) = sched::register_condvar_timed(deadline, cvid);
+                        let (token, adv, wait) = sched::register_condvar_timed(deadline, cvid);
                         adv.fire();
                         token.wait();
-                        credit::mark_running_after_condvar();
+                        wait.resume();
                     });
                 })
             })

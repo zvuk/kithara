@@ -5,13 +5,22 @@
 //! `#[kithara::flash]` attributes resolve these paths in every configuration —
 //! with "flash disabled" semantics: ZSTs, no-ops and transparent passthroughs.
 
+pub use std::time::Duration;
 use std::{
+    marker::PhantomData,
     pin::Pin,
     task::{Context, Poll},
 };
 
-pub use crate::time::{Duration, Instant};
-use crate::time::{TimeoutError, sleep, timeout};
+pub use crate::common::time::Instant;
+use crate::common::time::TimeoutError;
+// Functional references (`sleep`/`timeout` below, `crate::thread::park_timeout`
+// in `virtual_park_timeout`) deliberately stay on the lane-gated root glob:
+// the inert `virtual_*` aliases ARE whichever backend owns the lane (native or
+// wasm), so they must resolve through it. Typed imports above come from
+// `common::time` directly (the backends re-export the same types). The glob
+// dependency is a known wart; it dies with the W3/W5 layering work.
+use crate::time::{sleep, timeout};
 
 /// Off the sim path a spawned task needs no quiescence accounting, so the
 /// participant wrapper is the future itself. Under `flash` this is the
@@ -42,16 +51,23 @@ pub fn with_ambient<F: Future>(_on: bool, fut: F) -> WithAmbient<F> {
     fut
 }
 
-/// No-op real-time scope off the sim path (time is already real).
+/// No-op real-time scope off the sim path (time is already real). `!Send`
+/// (`PhantomData<*mut ()>`) for auto-trait PARITY with the engine guard: a
+/// consumer compiling against the inert form must not become Send-legal code
+/// that fails to compile under `flash`.
 #[derive(Debug)]
-pub struct FlashScope;
+pub struct FlashScope {
+    _not_send: PhantomData<*mut ()>,
+}
 
 /// Enter a real-time scope. Off the sim path this is a ZST no-op; under
 /// `flash` it puts the current thread on real time for the guard's lifetime.
 #[inline]
 #[must_use]
 pub fn flash_real() -> FlashScope {
-    FlashScope
+    FlashScope {
+        _not_send: PhantomData,
+    }
 }
 
 /// Off the sim path: a prod `#[kithara::flash(bool)]` sync region's RAII guard is
@@ -60,7 +76,9 @@ pub fn flash_real() -> FlashScope {
 #[inline]
 #[must_use]
 pub fn enter_dynamic(_on: bool) -> FlashScope {
-    FlashScope
+    FlashScope {
+        _not_send: PhantomData,
+    }
 }
 
 /// Off the sim path a prod async `#[kithara::flash(bool)]` region needs no
@@ -192,16 +210,21 @@ pub fn real_io() -> RealIoScope {
 /// No-op per-test ambient gate off the sim path (time is already real). The
 /// `#[kithara::test]` macro emits `ambient_scope(..)` into every test body, so
 /// the guard must exist (as a ZST) in the off-feature + wasm configs. Under
-/// `flash` this is the engine's `AmbientScope` / `ambient_scope`.
+/// `flash` this is the engine's `AmbientScope` / `ambient_scope`. `!Send` for
+/// auto-trait parity with the engine guard (see [`FlashScope`]).
 #[derive(Debug)]
-pub struct AmbientScope;
+pub struct AmbientScope {
+    _not_send: PhantomData<*mut ()>,
+}
 
 /// Set the per-test ambient gate. Off the sim path this is a ZST no-op (time is
 /// already real); under `flash` it is the engine's `ambient_scope`.
 #[inline]
 #[must_use]
 pub fn ambient_scope(_on: bool) -> AmbientScope {
-    AmbientScope
+    AmbientScope {
+        _not_send: PhantomData,
+    }
 }
 
 /// Snapshot the per-test ambient gate for spawn propagation. Off the sim path
@@ -219,7 +242,9 @@ pub fn ambient_snapshot() -> bool {
 #[inline]
 #[must_use]
 pub fn set_ambient_for_spawn(_on: bool) -> AmbientScope {
-    AmbientScope
+    AmbientScope {
+        _not_send: PhantomData,
+    }
 }
 
 /// No engine to report without the `flash` feature (or on wasm).

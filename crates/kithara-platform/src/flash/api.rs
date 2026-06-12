@@ -1,6 +1,7 @@
 pub use std::time::Duration;
 use std::{
     future::Future,
+    marker::PhantomData,
     ops::{Add, Sub},
     pin::Pin,
     sync::{
@@ -290,9 +291,10 @@ pub fn reset() {
 /// flash for the dynamic extent IFF the test is flash-eligible (ambient);
 /// `on=false` carves REAL inside a flash region. Saves/restores the previous
 /// whole [`Mode`] so regions nest bidirectionally (LIFO premise — see
-/// `flash/ctx.rs`).
+/// `flash/ctx.rs`). `!Send`: it restores THIS thread's mode, so moving it to
+/// another thread would restore the wrong thread's state.
 #[must_use]
-pub struct FlashScope(Mode);
+pub struct FlashScope(Mode, PhantomData<*mut ()>);
 
 impl Drop for FlashScope {
     fn drop(&mut self) {
@@ -303,7 +305,7 @@ impl Drop for FlashScope {
 /// Push a dynamic flash mode. `on=true` takes only under ambient; `on=false`
 /// always carves real. Returns a guard that restores the previous mode on drop.
 pub fn enter_dynamic(on: bool) -> FlashScope {
-    FlashScope(ctx::push_active(on))
+    FlashScope(ctx::push_active(on), PhantomData)
 }
 
 /// Enter a REAL-time carve on this thread (flash off for the guard's lifetime).
@@ -315,9 +317,11 @@ pub fn flash_real() -> FlashScope {
 
 /// RAII guard setting the per-test ambient gate (test macro + spawn
 /// propagation). Saves/restores the previous whole [`Mode`] on drop (LIFO
-/// premise — see `flash/ctx.rs`).
+/// premise — see `flash/ctx.rs`). `!Send`: it restores THIS thread's mode.
+/// Sanctioned exception to "never hold a scope across `.await`": the test
+/// macro's `block_on` ROOT may hold one (single-threaded driver, no hop).
 #[must_use]
-pub struct AmbientScope(Mode);
+pub struct AmbientScope(Mode, PhantomData<*mut ()>);
 
 impl Drop for AmbientScope {
     fn drop(&mut self) {
@@ -329,7 +333,7 @@ impl Drop for AmbientScope {
 /// macro sets it for the test body; the platform spawn wrappers re-establish it
 /// on each spawned child via [`set_ambient_for_spawn`].
 pub fn ambient_scope(on: bool) -> AmbientScope {
-    AmbientScope(ctx::push_ambient(on))
+    AmbientScope(ctx::push_ambient(on), PhantomData)
 }
 
 /// Snapshot the per-test ambient gate (for spawn propagation into a child).

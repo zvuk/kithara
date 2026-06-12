@@ -1,6 +1,4 @@
-use std::sync::atomic::Ordering;
-
-use crate::{common::thread_id::ACTIVE_NAMED_THREADS, flash::ids::ThreadKey};
+use crate::flash::ids::ThreadKey;
 pub use crate::{
     common::thread_id::active_named_thread_count,
     native::thread::{
@@ -27,32 +25,29 @@ pub fn yield_now() {
     }
 }
 
-/// Wrap `f` to bracket its execution with the named-thread counter —
-/// increments on entry (at call site, before spawn), decrements after the
-/// closure returns. Used by all [`spawn_named`] variants.
-///
-/// Under `flash` (native) the bracket also owns the quiescence credit: it
-/// resets this thread's credit on entry (a freshly-spawned thread must start
-/// `None`) and drops it on exit (a thread that woke to `Running` and returns
-/// must release its `active` slot). This makes participant accounting intrinsic
-/// to the platform spawn — no consumer registers anything. Off the sim path the
-/// reset/exit calls do not exist.
+/// Wrap `f` to bracket its execution with the named-thread counter and the
+/// quiescence credit, both owned by a [`credit::DedicatedSlot`] reserved at
+/// the call site (before spawn) and claimed by the child. The claim's
+/// [`credit::Participant`] settles the exit on Drop — including an unwind
+/// through a panicking `f()`, which previously leaked both the counter and a
+/// `Running` pacer's `active` slot (wedging the engine). This makes
+/// participant accounting intrinsic to the platform spawn — no consumer
+/// registers anything. Off the sim path the credit half does not exist.
 fn counted<F, T>(f: F) -> impl FnOnce() -> T + Send + 'static
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
     // Snapshot the per-test ambient gate on the PARENT: thread-locals do not
     // cross `spawn`, so a flash test's spawned graph would otherwise see the
     // default `false`. The child re-establishes it for its whole lifetime.
     let ambient = crate::flash::ambient_snapshot();
     // Reserve this pacer's `active` slot NOW, on the parent, before the child is
     // scheduled — so a sibling that parks in the spawn→run gap still sees the
-    // pacer counted and the virtual clock cannot jump past its warm-up. The child
-    // claims this slot as `Running` in `mark_dedicated`; the first wait / exit
-    // releases it. See `credit::pre_count_dedicated`.
-    crate::flash::system::credit::pre_count_dedicated();
+    // pacer counted and the virtual clock cannot jump past its warm-up. The
+    // slot also owns the named-thread count; a spawn that never runs the child
+    // returns both via the slot's Drop.
+    let slot = crate::flash::system::credit::DedicatedSlot::reserve_named();
     move || {
         // Held for the closure's lifetime: restores the previous ambient on the
         // child thread when the closure returns (it must outlive `f()`).
@@ -71,18 +66,15 @@ where
         // EVERY `spawn_named` pacer — flush hub, offline render, …) keeps the
         // pacer's `Instant::now()` in the same clock domain as its waits.
         let _flash = crate::flash::enter_dynamic(true);
-        {
-            crate::flash::system::credit::reset_credit();
-            // A `spawn_named` thread is a DEDICATED virtual-time pacer: it is the
-            // only kind of thread counted in the engine's sync `active` set (tokio
-            // workers and the main thread are driven by the runtime, not by wrapped
-            // waits, so counting them leaks). See `credit::DEDICATED`.
-            crate::flash::system::credit::mark_dedicated();
-        }
-        let result = f();
-        crate::flash::system::credit::on_participant_exit();
-        ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
-        result
+        crate::flash::system::credit::reset_credit();
+        // A `spawn_named` thread is a DEDICATED virtual-time pacer: it is the
+        // only kind of thread counted in the engine's sync `active` set (tokio
+        // workers and the main thread are driven by the runtime, not by wrapped
+        // waits, so counting them leaks). The claim marks this thread dedicated;
+        // the participant's Drop (after `f()` returns or unwinds) settles the
+        // credit and the named-thread count.
+        let _participant = slot.claim_dedicated();
+        f()
     }
 }
 

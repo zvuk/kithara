@@ -1,11 +1,7 @@
 use parking_lot::{Condvar as ParkingLotCondvar, lock_api::MutexGuard as RawMutexGuard};
 
 use super::mutex::MutexGuard;
-use crate::flash::{
-    Instant, flash_ambient,
-    ids::CvId,
-    system::{self, credit},
-};
+use crate::flash::{Instant, flash_ambient, ids::CvId, system};
 
 /// Native condvar under `flash`. Each operation branches on
 /// [`flash_ambient`]: when the test is flash-eligible, waits register on the
@@ -71,11 +67,11 @@ impl Condvar {
     #[must_use]
     pub fn wait_sync<'a, T>(&self, mut guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
         if self.engine {
-            let (token, adv) = system::register_condvar_untimed(self.cvid);
+            let (token, adv, wait) = system::register_condvar_untimed(self.cvid);
             RawMutexGuard::unlocked(&mut guard.0, move || {
                 adv.fire();
                 token.wait();
-                credit::mark_running_after_condvar();
+                wait.resume();
             });
         } else {
             self.real.wait(&mut guard.0);
@@ -101,12 +97,12 @@ impl Condvar {
         deadline: Instant,
     ) -> MutexGuard<'a, T> {
         if self.engine {
-            let (token, adv) =
+            let (token, adv, wait) =
                 system::register_condvar_timed(deadline.as_virtual_nanos(), self.cvid);
             RawMutexGuard::unlocked(&mut guard.0, move || {
                 adv.fire();
                 token.wait();
-                credit::mark_running_after_condvar();
+                wait.resume();
             });
         } else {
             let remaining = deadline.saturating_duration_since(Instant::now());
