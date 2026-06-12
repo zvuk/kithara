@@ -1,7 +1,7 @@
 use parking_lot::Condvar as ParkingLotCondvar;
-use web_time::Instant;
 
 use super::mutex::MutexGuard;
+use crate::common::time::Instant;
 
 /// Native condvar backed by `parking_lot`.
 pub struct Condvar(ParkingLotCondvar);

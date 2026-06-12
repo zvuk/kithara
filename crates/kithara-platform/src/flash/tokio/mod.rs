@@ -5,7 +5,7 @@
 //! `ensure_thread_pool` add no flash semantics and are re-imported from
 //! `native`; the channels and `task` are flash-aware.
 
-pub use tokio_with_wasm::alias::{join, net, pin, select, try_join};
+pub use crate::native::tokio::{join, net, pin, select, try_join};
 
 pub mod mpsc;
 pub mod oneshot;

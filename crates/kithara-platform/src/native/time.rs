@@ -1,10 +1,8 @@
-pub use std::time::Duration;
-
 use tokio_alias::time as tokio_time;
 pub use tokio_time::sleep;
 use tokio_with_wasm::alias as tokio_alias;
 
-pub use crate::common::time::{Instant, SystemTime, TimeoutError};
+pub use crate::common::time::{Duration, Instant, SystemTime, TimeoutError};
 
 /// Await `future` with a real `tokio` timer deadline. This is the deadline a
 /// PROGRAM imposes on its own async work (e.g. a fetch total-timeout); every

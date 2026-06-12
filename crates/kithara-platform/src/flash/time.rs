@@ -4,8 +4,6 @@ use std::{
 };
 
 use pin_project_lite::pin_project;
-use tokio_alias::time as tokio_time;
-use tokio_with_wasm::alias as tokio_alias;
 
 pub use crate::{
     flash::Instant,
@@ -23,7 +21,7 @@ pub async fn sleep(duration: Duration) {
     if crate::flash::flash_enabled() {
         crate::flash::FlashSleep::new(duration).await;
     } else {
-        tokio_time::sleep(duration).await;
+        crate::native::time::sleep(duration).await;
     }
 }
 
@@ -45,9 +43,7 @@ where
         }
         .await
     } else {
-        tokio_time::timeout(duration, future)
-            .await
-            .map_err(|_| TimeoutError)
+        crate::native::time::timeout(duration, future).await
     }
 }
 

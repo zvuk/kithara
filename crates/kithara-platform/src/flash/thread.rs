@@ -21,7 +21,7 @@ pub fn yield_now() {
     if crate::flash::flash_enabled() {
         crate::flash::system::yield_until_advance();
     } else {
-        std::thread::yield_now();
+        crate::native::thread::yield_now();
     }
 }
 
@@ -91,12 +91,7 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    std::thread::Builder::new()
-        .name(name.into())
-        .spawn(counted(f))
-        .expect(
-            "BUG: spawn_named must succeed; thread::Builder only fails on OS resource exhaustion",
-        )
+    crate::native::thread::spawn_named_uncounted(name, counted(f))
 }
 
 /// Under `flash`, a sleep registers a pure timed waiter on the quiescence
@@ -111,7 +106,7 @@ pub fn sleep(duration: Duration) {
     if crate::flash::flash_enabled() {
         crate::flash::system::sleep_timed(duration);
     } else {
-        std::thread::sleep(duration);
+        crate::native::thread::sleep(duration);
     }
 }
 
@@ -127,7 +122,7 @@ pub fn park_timeout(duration: Duration) {
         crate::flash::system::park_timed_unparkable(duration, ThreadKey::of(current().id()));
     } else {
         // Real-time scope: a true wall-clock park, invisible to the engine.
-        std::thread::park_timeout(duration);
+        crate::native::thread::park_timeout(duration);
     }
 }
 
@@ -155,5 +150,5 @@ pub fn unpark(t: &Thread) {
     if crate::flash::flash_enabled() {
         crate::flash::system::unpark(ThreadKey::of(t.id()));
     }
-    t.unpark();
+    crate::native::thread::unpark(t);
 }

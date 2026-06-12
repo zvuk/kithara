@@ -1,3 +1,5 @@
+pub use core::time::Duration;
+
 pub use web_time::{Instant, SystemTime};
 
 /// Error returned when an async operation exceeds its deadline.

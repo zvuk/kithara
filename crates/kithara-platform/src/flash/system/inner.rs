@@ -12,11 +12,8 @@ use std::{
     },
 };
 
-use parking_lot::Mutex;
-use web_time::Instant as RealInstant;
-
 use super::{pace::Pacer, sched::Entry, wake::Wake};
-use crate::flash::ids::ThreadKey;
+use crate::{common::time::Instant as RealInstant, flash::ids::ThreadKey, native::sync::Mutex};
 
 /// Engine condvar id: one per stateful-primitive latch (Condvar/Notify/channel
 /// halves). The inner field is private to `system/` — only the engine's
@@ -229,7 +226,7 @@ impl FlashInner {
     /// anchor, and the per-thread credit cells (separate `reset_credit()`).
     pub(in crate::flash) fn reset(&self) {
         self.clock.reset();
-        *self.core.lock() = Core::new();
+        *self.core.lock_sync() = Core::new();
     }
 }
 

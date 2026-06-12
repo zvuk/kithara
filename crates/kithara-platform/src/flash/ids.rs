@@ -5,10 +5,8 @@
 //! `Registry` mints them — and re-exported here for the wrappers that store
 //! keys and pass them back.
 
-use std::thread::ThreadId;
-
 pub(in crate::flash) use super::system::{CvId, WaiterId};
-use crate::common::thread_id::thread_id_hash;
+use crate::{common::thread_id::thread_id_hash, native::thread::ThreadId};
 
 /// Park/wake mechanism of a stateful flash primitive ([`crate::sync::Condvar`],
 /// [`crate::sync::Notify`], `tokio::oneshot`; the bounded channel carries a

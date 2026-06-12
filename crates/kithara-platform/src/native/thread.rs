@@ -55,6 +55,27 @@ where
     std::thread::spawn(f)
 }
 
+/// Spawn a new named thread WITHOUT the named-thread counter bracket: the
+/// single `thread::Builder` site shared by [`spawn_named`] (which wraps `f`
+/// in `counted`) and the flash layer (whose counting is owned by its
+/// `DedicatedSlot` bracket — delegating to [`spawn_named`] would double-count).
+///
+/// # Panics
+///
+/// Panics if the OS refuses to create the thread.
+pub(crate) fn spawn_named_uncounted<F, T, N: Into<String>>(name: N, f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(f)
+        .expect(
+            "BUG: spawn_named must succeed; thread::Builder only fails on OS resource exhaustion",
+        )
+}
+
 /// Spawn a new named thread.
 ///
 /// Sets the OS thread name and tracks the thread in [`active_named_thread_count`].
@@ -68,12 +89,7 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    std::thread::Builder::new()
-        .name(name.into())
-        .spawn(counted(f))
-        .expect(
-            "BUG: spawn_named must succeed; thread::Builder only fails on OS resource exhaustion",
-        )
+    spawn_named_uncounted(name, counted(f))
 }
 
 /// Block the current thread for at least `duration` (real OS sleep).

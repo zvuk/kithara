@@ -1,8 +1,6 @@
-use parking_lot::lock_api::MutexGuard as RawMutexGuard;
-use web_time::Instant as RealInstant;
-
 use super::mutex::MutexGuard;
 use crate::{
+    common::time::Instant as RealInstant,
     flash::{
         Instant, flash_ambient,
         ids::{Backend, trace_native_from_ambient},
@@ -75,7 +73,7 @@ impl Condvar {
         match self.backend {
             Backend::Engine(cvid) => {
                 let (token, adv, wait) = system::register_condvar_untimed(cvid);
-                RawMutexGuard::unlocked(&mut guard.0, move || {
+                guard.unlocked(move || {
                     adv.fire();
                     token.wait();
                     wait.resume();
@@ -112,7 +110,7 @@ impl Condvar {
             Backend::Engine(cvid) => {
                 let (token, adv, wait) =
                     system::register_condvar_timed(deadline.as_virtual_nanos(), cvid);
-                RawMutexGuard::unlocked(&mut guard.0, move || {
+                guard.unlocked(move || {
                     adv.fire();
                     token.wait();
                     wait.resume();

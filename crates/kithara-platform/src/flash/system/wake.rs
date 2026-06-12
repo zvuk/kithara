@@ -12,7 +12,7 @@ use std::{
     task::Waker,
 };
 
-use parking_lot::{Condvar, Mutex};
+use crate::native::sync::{Condvar, Mutex};
 
 /// One waiter's wake handle: a flag + condvar so the parked OS thread blocks
 /// off-lock and wakes when the engine (clock jump), an `unpark`, or a
@@ -32,15 +32,15 @@ impl Token {
     }
     pub(crate) fn fire(&self) {
         {
-            let mut g = self.woken.lock();
+            let mut g = self.woken.lock_sync();
             *g = true;
         }
         self.cv.notify_all();
     }
     pub(crate) fn wait(&self) {
-        let mut g = self.woken.lock();
+        let mut g = self.woken.lock_sync();
         while !*g {
-            self.cv.wait(&mut g);
+            g = self.cv.wait_sync(g);
         }
     }
 }

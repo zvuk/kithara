@@ -1,12 +1,11 @@
 use std::pin::pin;
-pub use std::time::Duration;
 
 use futures::future::{self as future_util, Either};
 use js_sys::{Function, Promise, Reflect, global};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
-pub use crate::common::time::{Instant, SystemTime, TimeoutError};
+pub use crate::common::time::{Duration, Instant, SystemTime, TimeoutError};
 
 pub async fn sleep(duration: Duration) {
     let ms = i32::try_from(duration.as_millis()).unwrap_or(i32::MAX);

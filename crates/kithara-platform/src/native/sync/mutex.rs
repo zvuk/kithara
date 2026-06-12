@@ -37,6 +37,17 @@ impl<T: Default> Default for Mutex<T> {
 // crate-internal: condvar needs the raw guard
 pub struct MutexGuard<'a, T>(pub(crate) parking_lot::MutexGuard<'a, T>);
 
+impl<T> MutexGuard<'_, T> {
+    /// Temporarily unlock the mutex, run `f`, then relock before returning.
+    ///
+    /// The data may change while unlocked: re-validate any predicate after
+    /// the call (classic condvar-style usage).
+    #[inline]
+    pub fn unlocked<F: FnOnce()>(&mut self, f: F) {
+        parking_lot::lock_api::MutexGuard::unlocked(&mut self.0, f);
+    }
+}
+
 impl<T> Deref for MutexGuard<'_, T> {
     type Target = T;
 
@@ -50,5 +61,24 @@ impl<T> DerefMut for MutexGuard<'_, T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut T {
         &mut self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Mutex;
+
+    #[test]
+    fn unlocked_releases_and_relocks() {
+        let m = Mutex::new(1);
+        let mut g = m.lock_sync();
+        g.unlocked(|| {
+            // The mutex is released inside `f`: an independent lock succeeds.
+            *m.lock_sync() += 1;
+        });
+        // Relocked: the guard observes the mutation made while unlocked.
+        assert_eq!(*g, 2);
+        drop(g);
+        assert!(m.try_lock().is_ok());
     }
 }

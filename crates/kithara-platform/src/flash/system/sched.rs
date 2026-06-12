@@ -180,7 +180,7 @@ impl Core {
 impl FlashInner {
     /// Allocate a fresh condvar id (one per [`crate::sync::Condvar`] under sim).
     pub(in crate::flash) fn next_condvar_id(&self) -> CvId {
-        self.core.lock().registry.fresh_cv()
+        self.core.lock_sync().registry.fresh_cv()
     }
 
     /// Test-harness convenience: park for `Duration` from the current virtual
@@ -192,7 +192,7 @@ impl FlashInner {
     pub(in crate::flash) fn park_for(&self, d: crate::flash::Duration) {
         let delta = crate::flash::duration_to_nanos(d);
         let token = Token::new();
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         let deadline = self.clock.now_nanos().saturating_add(delta);
         let id = s.registry.fresh_id();
         s.sched.timed.insert(
@@ -223,7 +223,7 @@ impl FlashInner {
     ) {
         let delta = crate::flash::duration_to_nanos(d);
         let token = Token::new();
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         if s.sched.unpark_pending.remove(&thread_id) {
             // A wake already landed: do not park (and do not touch credit — we
             // never entered a wait, so the thread stays as it was).
@@ -257,7 +257,7 @@ impl FlashInner {
     pub(in crate::flash) fn sleep_timed(&self, d: crate::flash::Duration) {
         let delta = crate::flash::duration_to_nanos(d);
         let token = Token::new();
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         let deadline = self.clock.now_nanos().saturating_add(delta);
         let id = s.registry.fresh_id();
         s.sched.timed.insert(
@@ -281,7 +281,7 @@ impl FlashInner {
     /// `unpark_pending` so its next park returns at once (mirrors std `unpark`'s
     /// one-token semantics).
     pub(in crate::flash) fn unpark(&self, thread_id: ThreadKey) {
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         let key = s
             .sched
             .timed
@@ -315,7 +315,7 @@ impl FlashInner {
     /// woken thread `mark_running`s.
     pub(in crate::flash) fn yield_until_advance(&self) {
         let token = Token::new();
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         if s.sched.timed.is_empty() {
             drop(s);
             std::thread::yield_now();
@@ -353,7 +353,7 @@ impl FlashInner {
         waker: Waker,
     ) -> (WaiterId, Arc<AtomicBool>, WakeBatch) {
         let granted = Arc::new(AtomicBool::new(false));
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         let id = s.registry.fresh_id();
         s.sched.yielders.insert(
             id,
@@ -370,7 +370,7 @@ impl FlashInner {
     /// Drop path for a [`FlashInner::register_yield_async`] waiter cancelled
     /// before it resolved.
     pub(in crate::flash) fn cancel_yield(&self, id: WaiterId) {
-        self.core.lock().sched.yielders.remove(&id);
+        self.core.lock_sync().sched.yielders.remove(&id);
     }
 
     /// Register a TIMED condvar waiter (woken by the deadline OR a signal for
@@ -388,7 +388,7 @@ impl FlashInner {
         cvid: CvId,
     ) -> (Arc<Token>, WakeBatch, WaitGuard<'_>) {
         let token = Token::new();
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         // The caller computed `deadline_nanos` from `Instant::now()` OUTSIDE this
         // lock; an async sleep could have jumped the clock since, leaving the
         // deadline below the current virtual instant. Clamp to "now" under the lock
@@ -418,7 +418,7 @@ impl FlashInner {
         cvid: CvId,
     ) -> (Arc<Token>, WakeBatch, WaitGuard<'_>) {
         let token = Token::new();
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         let id = s.registry.fresh_id();
         s.sched.indef.insert(
             id,
@@ -438,7 +438,7 @@ impl FlashInner {
     /// `timed` and `indef`, removes each woken entry, `active += 1` per woken
     /// entry, and fires their tokens after releasing the `core` lock.
     pub(in crate::flash) fn signal_condvar(&self, cvid: CvId, all: bool) {
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         let timed_keys: Vec<(u64, WaiterId)> = s
             .sched
             .timed
@@ -498,7 +498,7 @@ impl FlashInner {
         waker: Waker,
     ) -> (AsyncHandle, WakeBatch) {
         let granted = Arc::new(AtomicBool::new(false));
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         let deadline_nanos = self.clock.now_nanos().saturating_add(delta_nanos);
         let id = s.registry.fresh_id();
         let key = (deadline_nanos, id);
@@ -533,7 +533,7 @@ impl FlashInner {
         waker: Waker,
     ) -> (Option<AsyncHandle>, WakeBatch) {
         let granted = Arc::new(AtomicBool::new(false));
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         if s.sched.notify_permits.remove(&cvid) {
             return (None, WakeBatch(Vec::new()));
         }
@@ -571,7 +571,7 @@ impl FlashInner {
     /// [`FlashInner::gate_wake_parked`], which couples the acquire to the state CAS
     /// under the lock.
     pub(in crate::flash) fn async_acquire(&self) {
-        self.core.lock().registry.active_async += 1;
+        self.core.lock_sync().registry.active_async += 1;
     }
 
     /// Gate park under the `core` lock: atomically CAS `Running`→`Parked` and release
@@ -584,7 +584,7 @@ impl FlashInner {
     /// task uncounted and over-release on its next park. Returns the fully-handled
     /// outcome (callers need no further action on either arm).
     pub(super) fn gate_park(&self, state: &AtomicTaskState) -> ParkOutcome {
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         if state.compare_exchange(TaskState::Running, TaskState::Parked) {
             let adv = s.release_async(&self.clock);
             drop(s);
@@ -600,7 +600,7 @@ impl FlashInner {
     /// atomically (mirrors [`FlashInner::gate_park`]'s release arm for a poll that
     /// returned Ready).
     pub(super) fn gate_complete(&self, state: &AtomicTaskState) {
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         state.store(TaskState::Done);
         let adv = s.release_async(&self.clock);
         drop(s);
@@ -610,7 +610,7 @@ impl FlashInner {
     /// Gate drop under the `core` lock: swap to `Done`; release the slot iff the task
     /// still held one (its prior state was counted — `Runnable`/`Running`/`RunningNotified`).
     pub(super) fn gate_drop_release(&self, state: &AtomicTaskState) {
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         match state.swap(TaskState::Done) {
             TaskState::Runnable | TaskState::Running | TaskState::RunningNotified => {
                 let adv = s.release_async(&self.clock);
@@ -628,7 +628,7 @@ impl FlashInner {
     /// current state lock-free). Coupling the acquire to the CAS under the lock is
     /// the counterpart to [`FlashInner::gate_park`]'s release.
     pub(super) fn gate_wake_parked(&self, state: &AtomicTaskState) -> WakeOutcome {
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         if state.compare_exchange(TaskState::Parked, TaskState::Runnable) {
             s.registry.active_async += 1;
             WakeOutcome::Resumed
@@ -646,7 +646,7 @@ impl FlashInner {
     /// the poll-wrapper owns that count per-poll), so there is nothing to release:
     /// the surrounding task stays counted by its poll-wrapper either way.
     pub(in crate::flash) fn cancel_async_wait(&self, handle: &AsyncHandle) {
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         match (handle.timed_key, handle.indef_key) {
             (Some(key), _) => {
                 s.sched.timed.remove(&key);
@@ -662,7 +662,7 @@ impl FlashInner {
     /// parked, store a permit so the next `notified()` resolves at once (tokio
     /// `notify_one` semantics).
     pub(in crate::flash) fn signal_notify(&self, cvid: CvId) {
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         let woken_key = s
             .sched
             .indef
@@ -702,7 +702,7 @@ impl FlashInner {
         waker: Waker,
     ) -> (AsyncHandle, WakeBatch) {
         let granted = Arc::new(AtomicBool::new(false));
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         let id = s.registry.fresh_id();
         s.sched.indef.insert(
             id,
@@ -734,7 +734,7 @@ impl FlashInner {
     /// harmless. `all` is for the close edges (a dropped receiver wakes every
     /// blocked sender; a dropped last sender wakes the receiver).
     pub(in crate::flash) fn signal_channel(&self, cvid: CvId, all: bool) {
-        let mut s = self.core.lock();
+        let mut s = self.core.lock_sync();
         let keys: Vec<WaiterId> = s
             .sched
             .indef
@@ -771,7 +771,7 @@ impl FlashInner {
     pub(super) fn dump(&self) -> String {
         use std::fmt::Write as _;
         let now = self.clock.now_nanos();
-        let Some(s) = self.core.try_lock() else {
+        let Ok(s) = self.core.try_lock() else {
             return format!("virtual_now_ns={now}; engine core lock held — engine mid-operation");
         };
         let mut out = String::new();
@@ -949,46 +949,46 @@ pub(crate) struct TestHold<'a> {
 #[cfg(test)]
 impl FlashInner {
     pub(in crate::flash) fn test_hold(&self) -> TestHold<'_> {
-        self.core.lock().registry.active += 1;
+        self.core.lock_sync().registry.active += 1;
         TestHold { flash: self }
     }
 
     pub(in crate::flash) fn advance_log(&self) -> Vec<u64> {
-        self.core.lock().sched.advance_log.clone()
+        self.core.lock_sync().sched.advance_log.clone()
     }
 
     /// Test-only: number of currently RUNNING participants.
     pub(in crate::flash) fn active_count(&self) -> usize {
-        self.core.lock().registry.active
+        self.core.lock_sync().registry.active
     }
 
     /// Test-only: number of async tasks the engine currently counts as
     /// non-quiescent (runnable or running). A task woken but not yet re-polled MUST
     /// be counted here, or the clock can advance past it.
     pub(in crate::flash) fn async_active_count(&self) -> usize {
-        self.core.lock().registry.active_async
+        self.core.lock_sync().registry.active_async
     }
 
     /// Test-only: number of currently parked timed waiters.
     pub(in crate::flash) fn timed_count(&self) -> usize {
-        self.core.lock().sched.timed.len()
+        self.core.lock_sync().sched.timed.len()
     }
 
     /// Test-only: number of currently parked untimed waiters.
     pub(in crate::flash) fn indef_count(&self) -> usize {
-        self.core.lock().sched.indef.len()
+        self.core.lock_sync().sched.indef.len()
     }
 
     /// Test-only: number of currently parked cooperative-yield waiters.
     pub(in crate::flash) fn diag_yield_count(&self) -> usize {
-        self.core.lock().sched.yielders.len()
+        self.core.lock_sync().sched.yielders.len()
     }
 }
 
 #[cfg(test)]
 impl Drop for TestHold<'_> {
     fn drop(&mut self) {
-        let mut s = self.flash.core.lock();
+        let mut s = self.flash.core.lock_sync();
         debug_assert!(s.registry.active > 0, "TestHold drop without matching hold");
         s.registry.active -= 1;
         let adv = s.try_advance(&self.flash.clock);

@@ -9,11 +9,12 @@
 
 use std::sync::{Once, Weak};
 
-use parking_lot::{Condvar, Mutex};
-use web_time::Instant as RealInstant;
-
 use super::{FLASH, FlashInner};
-use crate::flash::Duration;
+use crate::{
+    common::time::Instant as RealInstant,
+    flash::Duration,
+    native::sync::{Condvar, Mutex},
+};
 
 /// Per-instance pacer arming flag + wakeup + the lazily-spawned pacer thread.
 /// `armed` is locked BEFORE `core` (strict `armed -> core` order shared by
@@ -55,15 +56,15 @@ impl FlashInner {
     fn pace_run(&self) {
         loop {
             {
-                let mut armed = self.pacer.armed.lock();
+                let mut armed = self.pacer.armed.lock_sync();
                 while !*armed {
-                    self.pacer.cv.wait(&mut armed);
+                    armed = self.pacer.cv.wait_sync(armed);
                 }
             }
             // REAL sleep: the pacer exists precisely to feed real time into
             // the engine while real I/O is in flight.
-            std::thread::sleep(Pacer::TICK);
-            let mut s = self.core.lock();
+            crate::native::thread::sleep(Pacer::TICK);
+            let mut s = self.core.lock_sync();
             let adv = s.try_advance(&self.clock);
             drop(s);
             adv.fire();
@@ -88,8 +89,8 @@ impl FlashInner {
                 .spawn(move || owner.pace_run())
                 .expect("BUG: spawning the flash io-pacer thread cannot fail");
         });
-        let mut armed = self.pacer.armed.lock();
-        let mut s = self.core.lock();
+        let mut armed = self.pacer.armed.lock_sync();
+        let mut s = self.core.lock_sync();
         s.sched.real_io += 1;
         if s.sched.real_io == 1 {
             s.sched.pace_anchor = Some((RealInstant::now(), self.clock.now_nanos()));
@@ -108,8 +109,8 @@ impl FlashInner {
     /// disarms the pacer and immediately re-runs the advance rule: full-speed
     /// collapse resumes.
     pub(in crate::flash) fn real_io_exit(&self) {
-        let mut armed = self.pacer.armed.lock();
-        let mut s = self.core.lock();
+        let mut armed = self.pacer.armed.lock_sync();
+        let mut s = self.core.lock_sync();
         debug_assert!(s.sched.real_io > 0, "real_io exit without a matching enter");
         s.sched.real_io = s.sched.real_io.saturating_sub(1);
         if s.sched.real_io != 0 {

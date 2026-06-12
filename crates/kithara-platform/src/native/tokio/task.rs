@@ -4,8 +4,9 @@
 //! `yield_now`, `JoinHandle`, `JoinError`, etc.). Backend selection happens in
 //! `lib.rs` behind the `crate::tokio::task` facade.
 
-use tokio::runtime::Handle;
 pub use tokio_with_wasm::alias::task::*;
+
+use super::runtime::Handle;
 
 /// Spawn `future` on a specific runtime [`Handle`]: a direct `handle.spawn`.
 ///

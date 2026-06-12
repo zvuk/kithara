@@ -1,4 +1,3 @@
-pub use std::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError};
 use std::{
     collections::VecDeque,
     sync::{
@@ -7,6 +6,7 @@ use std::{
     },
 };
 
+pub use crate::native::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError};
 use crate::{Mutex, sync::Condvar, time::Instant};
 
 struct Chan<T> {

@@ -1,4 +1,3 @@
-pub use std::time::Duration;
 use std::{
     future::Future,
     marker::PhantomData,
@@ -19,6 +18,7 @@ use super::{
     ids::WaiterId,
     system::{self, FLASH},
 };
+pub use crate::common::time::Duration;
 use crate::flash::time::{FlashTimeout, TimeoutError};
 
 /// RAII bracket for ONE real I/O operation in flight (a socket send / response
