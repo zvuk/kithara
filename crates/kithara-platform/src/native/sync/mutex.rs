@@ -76,7 +76,9 @@ mod tests {
             // The mutex is released inside `f`: an independent lock succeeds.
             *m.lock_sync() += 1;
         });
-        // Relocked: the guard observes the mutation made while unlocked.
+        // Relocked: while the guard is alive again the mutex must be held.
+        assert!(m.try_lock().is_err());
+        // And the guard observes the mutation made while unlocked.
         assert_eq!(*g, 2);
         drop(g);
         assert!(m.try_lock().is_ok());

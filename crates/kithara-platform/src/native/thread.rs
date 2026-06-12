@@ -57,8 +57,8 @@ where
 
 /// Spawn a new named thread WITHOUT the named-thread counter bracket: the
 /// single `thread::Builder` site shared by [`spawn_named`] (which wraps `f`
-/// in `counted`) and the flash layer (whose counting is owned by its
-/// `DedicatedSlot` bracket — delegating to [`spawn_named`] would double-count).
+/// in `counted`) and callers that own their own counting bracket — for those,
+/// delegating to [`spawn_named`] would double-count.
 ///
 /// # Panics
 ///
