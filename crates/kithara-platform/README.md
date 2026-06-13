@@ -205,41 +205,62 @@ virtualization distorted something. The FILE phase-continuity cluster is the
 first equivalence oracle: its sub-0.5-sample phase assertions fail on any
 divergence.
 
-## CancellationToken
+## CancelToken
 
-`CancellationToken` is the **single** cancellation token type across the workspace —
-crates never depend on `tokio_util` directly; they use this one. It is a real-time-safe
-token: a `tokio_util::CancellationToken` (async `cancelled()` side + the wider
-propagation tree) paired with a **chain of per-node cancel flags**. `tokio_util`'s own
-`is_cancelled()` takes the `TreeNode` `Mutex<Inner>` (no atomic fast path), which traps
-under RealtimeSanitizer on the audio produce-core. `CancellationToken::is_cancelled()`
-walks `self → root` loading each node's flag (`Acquire`) — lock-free, wait-free, bounded
-by tree depth (master → consumer is 2–3 nodes), RT-safe.
+`CancelToken` is the **single** cancellation token type across the workspace — no
+crate depends on an async-runtime cancel crate (`tokio_util`); they use this one. It
+is a real-time-safe token built on a private **propagate-down `Node` tree**
+(`common/cancel/node.rs`): each node holds one `AtomicBool` flag plus a cold list of
+`Weak` children (and a held-only `_parent` `Arc` that keeps the ancestor chain alive
+for a descendant). The hot read path — `is_cancelled()` — is a single `Acquire` load,
+lock-free and wait-free, so it is RT-safe on the audio produce-core (a `tokio_util`
+token takes a `Mutex<Inner>` on `is_cancelled()`, which traps under RealtimeSanitizer).
 
-- `cancel()` `Release`-stores **this node's** flag **then** calls `inner.cancel()`, so a
-  thread observing the inner async cancellation (or any later `Acquire` walk) is
-  guaranteed to see the flag set; the flag can never lag the inner token.
-- `child_token()` creates a **new** flag node linked to the parent's chain. A
-  parent/master `cancel()` is observed by every descendant's lock-free `is_cancelled()`
-  (the descendant's walk reaches the parent's flag), while cancelling a child or sibling
-  never marks the parent cancelled — the correct hierarchy. `Clone` keeps the **same**
-  node (same identity), like `tokio_util`'s clone.
-- `cancelled()` / `cancelled_owned()` delegate to the inner token (async side unchanged),
-  so the token drops into `tokio::select!` exactly like a `tokio_util` token.
+- `cancel()` swaps the node's flag to `true` (`AcqRel`, so a repeat cancel is
+  idempotent — neither re-drains nor re-recurses), drains the node's own wakers, then
+  recurses **down** through live `Weak` children. A master cancel reaches every
+  descendant by *writing* their flags; the `Release` store happens before any waker
+  fires (paired with the `Acquire` load in `is_cancelled`), so a thread observing a
+  wake is guaranteed to see the flag.
+- `child()` derives a **new** node linked under the parent (born cancelled if the
+  parent is already cancelled, so a future/waker on it never parks). Cancelling a child
+  or sibling never marks the parent — the correct hierarchy. `Clone` keeps the **same**
+  node (same identity): cancelling a clone is observed by the original.
+- `cancelled()` returns a borrowed `Cancelled<'_>` future that resolves on cancel and
+  is cancel-safe in `tokio::select!` (dropping it unregisters its slot). `on_cancel()`
+  registers a synchronous waker — the counterpart for a thread parked on a flash-aware
+  `Condvar`/`Notify` — and returns a guard that unregisters on drop.
 
-Consumer-crate masters (`Queue`, `App`, FFI, `PlayerImpl` fallback) mint a root
-`CancellationToken` (via `new()` / `default()`) and thread `child_token()`s down the
-player → audio-worker and player → HLS-coord chains so a master `cancel()` is seen by the
-worker's lock-free read. `new()` / `default()` root a fresh hierarchy and belong only at
-marked owner sites (see the `AGENTS.md` cancel-hierarchy contract, enforced by
-`cargo xtask lint arch`).
+### Roots, scopes, and the `cancel_root_sites` guard
+
+Two constructors mint a **fresh subtree root** instead of deriving from a parent:
+
+- `CancelToken::root()` — the owning master a consumer-crate top (`App`, FFI player,
+  `PlayerImpl` fallback) holds and `cancel()`s on teardown. `Drop` is passive: dropping
+  the root does **not** cancel its subtree.
+- `CancelToken::never()` — a sentinel for where a token is structurally required but no
+  cancellation source exists.
+
+Both root a fresh hierarchy, so they are restricted to owner/sentinel sites, enforced by
+`cargo xtask lint arch` (`cancel_root_sites`) via a per-file allowlist in
+`.config/arch/thresholds.toml`. Everywhere else, derive a child with `.child()` or take a
+`CancelToken` from your caller.
+
+`CancelScope::new(Option<CancelToken>)` is the canonical replacement for the legacy
+`cancel.unwrap_or_default()` fallback and the seam between composed and standalone
+subsystems: `Some(parent)` makes the scope's token a child (a master cancel reaches it),
+`None` mints a fresh root. `token()` vends children from that one node, `cancel()` cancels
+exactly that subtree, and `Drop` is passive (a composed scope never cancels a token handed
+from above).
 
 ## Trait Bridges
 
-- `CancellationToken` → `CancelGroup` (`From`) — single-token group
-- `Vec<CancellationToken>` → `CancelGroup` (`From`) — multi-token group
+- `CancelToken` → `CancelGroup` (`From`) — single-token group
+- `Vec<CancelToken>` → `CancelGroup` (`From`) — multi-token group. `CancelGroup` is a
+  read-only OR-combinator (`|` composes): `is_cancelled()` is true once **any** source is
+  cancelled; equality is source-array identity.
 - `NotAvailable` / `TimeoutError` / `JoinError` / `TryCurrentError` (`Display`) — human-readable error rendering
 
 ## Integration
 
-Foundation crate used across the workspace (`kithara-storage`, `kithara-assets`, `kithara-stream`, `kithara-play`, `kithara-wasm`, and test infrastructure) to keep platform-specific branching isolated in one place.
+Foundation crate used across the workspace (`kithara-storage`, `kithara-assets`, `kithara-stream`, `kithara-play`, `kithara-ffi`, and test infrastructure) to keep platform-specific branching isolated in one place.

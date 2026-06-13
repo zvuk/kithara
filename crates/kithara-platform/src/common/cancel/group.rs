@@ -66,7 +66,7 @@ impl fmt::Debug for CancelGroup {
 }
 
 /// Identity comparison: two groups are equal iff they share the same underlying
-/// source array (replaces the legacy `equals_ptr`).
+/// source array.
 impl PartialEq for CancelGroup {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.sources, &other.sources)
@@ -335,8 +335,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn ptr_eq_via_partial_eq() {
-        // Replaces the legacy `equals_ptr`: a clone shares the source array, a
-        // rebuilt group does not.
+        // A clone shares the source array, a rebuilt group does not.
         let tok = CancelToken::never();
         let group = CancelGroup::from(tok.clone());
         let cloned = group.clone();

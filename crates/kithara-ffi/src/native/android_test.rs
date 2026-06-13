@@ -16,7 +16,10 @@ use kithara::{
     file::{File as FileSource, FileConfig, FileSrc},
     stream::Stream,
 };
-use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, Instant, sleep},
+};
 use tokio::runtime::Builder;
 use tracing::{error, info};
 

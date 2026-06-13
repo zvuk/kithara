@@ -98,7 +98,7 @@ Stale temp left from a prior crashed run is not auto-wiped: liveness is signalle
 
 ## Synchronization
 
-Range tracking uses `RangeSet<u64>` (from `rangemap`) to record which byte ranges have been written. `wait_range` blocks via `parking_lot::Condvar` with a 50 ms timeout loop until the requested range is fully covered, returns `Eof` when the resource is committed and the range starts beyond the final length, and returns `Interrupted` when a seek/flush wakes the waiter. `CancellationToken` is checked at operation entry and during wait loops.
+Range tracking uses `RangeSet<u64>` (from `rangemap`) to record which byte ranges have been written. `wait_range` blocks via `parking_lot::Condvar` with a 50 ms timeout loop until the requested range is fully covered, returns `Eof` when the resource is committed and the range starts beyond the final length, and returns `Interrupted` when a seek/flush wakes the waiter. `CancelToken` is checked at operation entry and during wait loops.
 
 ## Integration
 
