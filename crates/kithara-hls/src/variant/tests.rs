@@ -12,8 +12,8 @@ use kithara_test_utils::kithara;
 use url::Url;
 
 use super::{
-    HlsVariant, InitEntry, PlanCtx, PlannedFetch, SegmentContent, SegmentEntry, SegmentSlotState,
-    VariantInit, VariantParts,
+    HlsVariant, InitEntry, PlanCtx, PlannedFetch, SegmentActivateParams, SegmentContent,
+    SegmentEntry, SegmentSlotState, VariantInit, VariantParts,
 };
 use crate::playlist::PlaylistState;
 
@@ -165,7 +165,14 @@ fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
     let from_seg: u32 = 2;
     let seg_boundary: u64 = 1_500;
     let reader_pos: u64 = 1_600;
-    v.activate_at_segment_with_shift(&ctx, from_seg, seg_boundary, reader_pos);
+    v.activate_at_segment_with_shift(
+        &ctx,
+        SegmentActivateParams {
+            from_seg,
+            seg_boundary,
+            reader_pos,
+        },
+    );
 
     assert_eq!(
         v.served_from(),
@@ -215,7 +222,14 @@ fn concurrent_switch_keeps_coordinate_reads_coherent() {
         v.find_at_offset(2000).is_some(),
         "full frame must serve byte 2000"
     );
-    v.activate_at_segment_with_shift(&ctx, 4, 0, 0);
+    v.activate_at_segment_with_shift(
+        &ctx,
+        SegmentActivateParams {
+            from_seg: 4,
+            seg_boundary: 0,
+            reader_pos: 0,
+        },
+    );
     assert!(
         v.find_at_offset(2000).is_some(),
         "activated frame must serve byte 2000"
@@ -232,7 +246,14 @@ fn concurrent_switch_keeps_coordinate_reads_coherent() {
                 if i % 2 == 0 {
                     v.reset_to_full_range();
                 } else {
-                    v.activate_at_segment_with_shift(&ctx, 4, 0, 0);
+                    v.activate_at_segment_with_shift(
+                        &ctx,
+                        SegmentActivateParams {
+                            from_seg: 4,
+                            seg_boundary: 0,
+                            reader_pos: 0,
+                        },
+                    );
                 }
             }
         });

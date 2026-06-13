@@ -187,6 +187,15 @@ impl Frame {
 /// (`wait_range` / `range_ready` / `read_at`) loads it without taking the
 /// lock — closing the contended `RwLock` spin the `rtsan` lane flagged on the
 /// decode core.
+/// Inputs to [`Layout::activate_with_shift`]: pin `from_seg` at
+/// `seg_boundary` in virtual space, using `init_size` for offset recompute.
+#[derive(Clone, Copy)]
+pub(super) struct ActivateParams {
+    pub(super) from_seg: u32,
+    pub(super) seg_boundary: u64,
+    pub(super) init_size: u64,
+}
+
 pub(super) struct Layout {
     frame: RwLock<Frame>,
     total: AtomicU64,
@@ -300,13 +309,12 @@ impl Layout {
     /// `[from_seg, num_segments)`. The seed, offset recompute, shift and
     /// served bounds are published under one write-lock so no reader sees a
     /// half-built frame.
-    pub(super) fn activate_with_shift(
-        &self,
-        from_seg: u32,
-        seg_boundary: u64,
-        init_size: u64,
-        segments: &[SegmentEntry],
-    ) {
+    pub(super) fn activate_with_shift(&self, params: ActivateParams, segments: &[SegmentEntry]) {
+        let ActivateParams {
+            from_seg,
+            seg_boundary,
+            init_size,
+        } = params;
         let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
         let mut frame = self.frame.lock_sync_write();
         frame.init_seed = init_size.max(1);

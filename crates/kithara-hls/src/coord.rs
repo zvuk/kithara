@@ -28,7 +28,7 @@ use tracing::info;
 
 use crate::{
     playlist::{PlaylistAccess, PlaylistState},
-    variant::{HlsVariant, PlanCtx},
+    variant::{HlsVariant, PlanCtx, SegmentActivateParams},
 };
 
 /// Infrastructure handles shared with every [`HlsCoord`]:
@@ -233,7 +233,14 @@ impl HlsCoord {
                 v_old.cancel();
                 v_old.set_served_until(switch_at);
             }
-            v_new.activate_at_segment_with_shift(ctx, switch_at, seg_boundary, reader_pos);
+            v_new.activate_at_segment_with_shift(
+                ctx,
+                SegmentActivateParams {
+                    from_seg: switch_at,
+                    seg_boundary,
+                    reader_pos,
+                },
+            );
             self.abr.apply_decision(&decision, Instant::now());
         } else {
             let old_codec = v_old.and_then(|_| self.playlist_state.variant_codec(current_before));
