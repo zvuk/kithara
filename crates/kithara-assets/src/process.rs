@@ -507,11 +507,6 @@ where
         }
     }
 
-    #[must_use]
-    pub fn inner(&self) -> &A {
-        &self.inner
-    }
-
     fn wrap_ready(
         &self,
         inner: A::ReadyRes,

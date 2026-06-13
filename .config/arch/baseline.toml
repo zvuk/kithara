@@ -444,12 +444,7 @@ schema_version = 1
 "crates/kithara-stream/src/timeline.rs::ChunkPosition" = 1
 
 [redundant_accessors]
-"crates/kithara-assets/src/cache.rs::CachedAssets::inner" = 1
-"crates/kithara-assets/src/process.rs::ProcessingAssets::inner" = 1
-"crates/kithara-audio/src/pipeline/fetch.rs::Fetch::epoch" = 1
 "crates/kithara-audio/src/pipeline/fetch.rs::Fetch::into_inner" = 1
-"crates/kithara-decode/src/types.rs::PcmChunk::samples" = 1
-"crates/kithara-play/src/impls/player/core.rs::PlayerImpl::abr" = 1
 "crates/kithara-stream/src/stream.rs::Stream::source" = 1
 "crates/kithara-stream/src/timeline.rs::Timeline::seek_epoch_handle" = 1
 

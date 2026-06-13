@@ -606,7 +606,7 @@ fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
 
     for chunk in tail_buffer.iter().rev() {
         let chunk_total_frames = chunk_frames(chunk);
-        let samples = chunk.samples();
+        let samples = &chunk.pcm[..];
         let channels = usize::from(chunk.spec().channels.max(1));
         let channels_f64: f64 = channels.max(1).as_();
         for frame in (0..chunk_total_frames).rev() {
@@ -669,7 +669,7 @@ fn find_leading_trim_frames(
 
     for chunk in buffer {
         let chunk_frames = chunk_frames(chunk);
-        let samples = chunk.samples();
+        let samples = &chunk.pcm[..];
         let channels = usize::from(chunk.spec().channels.max(1));
         for frame in 0..chunk_frames {
             if scanned_frames >= params.scan_window_frames {

@@ -315,11 +315,6 @@ where
         committed
     }
 
-    #[must_use]
-    pub fn inner(&self) -> &A {
-        &self.inner
-    }
-
     fn is_active(&self) -> bool {
         self.inner.capabilities().contains(Capabilities::CACHE)
     }
