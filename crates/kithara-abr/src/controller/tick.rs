@@ -8,7 +8,7 @@ use tracing::{debug, trace};
 use super::{
     core::{AbrController, AbrPeerId},
     peer::PeerEntry,
-    throttle::bytes_per_second,
+    throttle::{ThrottleSample, bytes_per_second},
 };
 use crate::state::{AbrDecision, AbrView};
 
@@ -94,7 +94,15 @@ impl AbrController {
                 .store(true, Ordering::Release);
         }
 
-        self.emit_throttled(&ctx.entry, &bus, now, estimate_bps, buffer_ahead);
+        self.emit_throttled(
+            &ctx.entry,
+            &bus,
+            ThrottleSample {
+                now,
+                estimate_bps,
+                buffer_ahead,
+            },
+        );
 
         let Some(state) = ctx.entry.state.as_ref() else {
             return;

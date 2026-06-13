@@ -174,16 +174,24 @@ impl canvas::Program<Message> for VFader {
     }
 }
 
-/// Build a vertical EQ fader of pixel `height` for `band`, with `value` in
-/// `min..=max` dB.
-pub(crate) fn vfader<'a>(
-    band: usize,
-    value: f32,
-    min: f32,
-    max: f32,
-    height: f32,
-    p: GuiPalette,
-) -> Element<'a, Message> {
+/// Range, current value, and pixel height for a single [`vfader`].
+#[derive(Clone, Copy)]
+pub(crate) struct VFaderParams {
+    pub(crate) value: f32,
+    pub(crate) min: f32,
+    pub(crate) max: f32,
+    pub(crate) height: f32,
+}
+
+/// Build a vertical EQ fader of pixel `params.height` for `band`, with
+/// `params.value` in `params.min..=params.max` dB.
+pub(crate) fn vfader<'a>(band: usize, params: VFaderParams, p: GuiPalette) -> Element<'a, Message> {
+    let VFaderParams {
+        value,
+        min,
+        max,
+        height,
+    } = params;
     Canvas::new(VFader {
         band,
         value,

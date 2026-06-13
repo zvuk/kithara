@@ -267,11 +267,10 @@ impl PlayerNodeProcessor {
                     self.apply_prefetch_duration(duration);
                 }
                 PlayerCmd::SetPlaybackRate(rate) => {
-                    for (_, track) in self.tracks.iter() {
-                        if let Ok(resource) = track.resource().try_lock() {
-                            resource.set_playback_rate(rate);
-                        }
-                    }
+                    self.tracks
+                        .iter()
+                        .filter_map(|(_, track)| track.resource().try_lock().ok())
+                        .for_each(|resource| resource.set_playback_rate(rate));
                 }
             }
         }
@@ -600,8 +599,8 @@ impl PlayerNodeProcessor {
             for (out_ch, mix_ch) in buffers.outputs.iter_mut().zip(mix_bufs.iter()) {
                 out_ch
                     .iter_mut()
-                    .zip(mix_ch.iter())
                     .take(frames)
+                    .zip(mix_ch.iter())
                     .for_each(|(out_sample, &mix_sample)| *out_sample += mix_sample);
             }
         }
@@ -741,11 +740,10 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
             }
         }
 
-        for (_, track) in self.tracks.iter() {
-            if let Ok(resource) = track.resource().try_lock() {
-                resource.set_host_sample_rate(new_sr);
-            }
-        }
+        self.tracks
+            .iter()
+            .filter_map(|(_, track)| track.resource().try_lock().ok())
+            .for_each(|resource| resource.set_host_sample_rate(new_sr));
     }
 
     #[kithara::rtsan_forbid_blocking]

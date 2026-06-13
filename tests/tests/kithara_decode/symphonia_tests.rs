@@ -40,7 +40,7 @@ fn test_next_chunk_returns_data() {
     let chunk = PcmChunk::try_from(outcome).unwrap();
     assert_eq!(chunk.spec().sample_rate.get(), 44100);
     assert_eq!(chunk.spec().channels, 2);
-    assert!(!chunk.pcm.is_empty());
+    assert!(!chunk.samples.is_empty());
 }
 
 #[kithara::test]

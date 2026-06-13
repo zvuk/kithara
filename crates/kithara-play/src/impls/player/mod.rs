@@ -7,3 +7,5 @@ mod queue;
 mod transitions;
 
 pub use core::{PlayerConfig, PlayerImpl};
+
+pub use transitions::SelectTransition;

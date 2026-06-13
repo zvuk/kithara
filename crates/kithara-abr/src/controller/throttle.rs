@@ -12,15 +12,27 @@ pub(super) struct EventThrottleCache {
     pub(super) last_throughput_sample_at: Option<Instant>,
 }
 
+/// The throttled-emit sample for one ABR tick: the `now` timestamp, the
+/// optional bandwidth `estimate_bps`, and the `buffer_ahead` duration.
+#[derive(Clone, Copy)]
+pub(super) struct ThrottleSample {
+    pub(super) now: Instant,
+    pub(super) estimate_bps: Option<u64>,
+    pub(super) buffer_ahead: Option<Duration>,
+}
+
 impl AbrController {
     pub(super) fn emit_throttled(
         &self,
         entry: &PeerEntry,
         bus: &Option<EventBus>,
-        now: Instant,
-        estimate_bps: Option<u64>,
-        buffer_ahead: Option<Duration>,
+        sample: ThrottleSample,
     ) {
+        let ThrottleSample {
+            now,
+            estimate_bps,
+            buffer_ahead,
+        } = sample;
         let Some(bus) = bus else {
             return;
         };

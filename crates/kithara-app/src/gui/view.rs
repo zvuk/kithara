@@ -328,36 +328,44 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
 
     let transport_row = row![
         transport_square_button(
-            Icon::Shuffle,
-            Consts::TRANSPORT_TOGGLE_ICON,
-            Consts::TRANSPORT_BTN_BASE,
-            p,
-            shuffle_active,
+            TransportButton {
+                icon: Icon::Shuffle,
+                icon_size: Consts::TRANSPORT_TOGGLE_ICON,
+                box_size: Consts::TRANSPORT_BTN_BASE,
+                p,
+                active: shuffle_active,
+            },
             Message::ToggleShuffle,
         ),
         transport_square_button(
-            Icon::SkipPrev,
-            Consts::TRANSPORT_PRIMARY_ICON,
-            Consts::TRANSPORT_BTN_LG,
-            p,
-            false,
+            TransportButton {
+                icon: Icon::SkipPrev,
+                icon_size: Consts::TRANSPORT_PRIMARY_ICON,
+                box_size: Consts::TRANSPORT_BTN_LG,
+                p,
+                active: false,
+            },
             Message::Prev,
         ),
         widgets::play_button(state.ui_state.playing, p, Message::TogglePlayPause),
         transport_square_button(
-            Icon::SkipNext,
-            Consts::TRANSPORT_PRIMARY_ICON,
-            Consts::TRANSPORT_BTN_LG,
-            p,
-            false,
+            TransportButton {
+                icon: Icon::SkipNext,
+                icon_size: Consts::TRANSPORT_PRIMARY_ICON,
+                box_size: Consts::TRANSPORT_BTN_LG,
+                p,
+                active: false,
+            },
             Message::Next,
         ),
         transport_square_button(
-            repeat_icon,
-            Consts::TRANSPORT_TOGGLE_ICON,
-            Consts::TRANSPORT_BTN_BASE,
-            p,
-            repeat_active,
+            TransportButton {
+                icon: repeat_icon,
+                icon_size: Consts::TRANSPORT_TOGGLE_ICON,
+                box_size: Consts::TRANSPORT_BTN_BASE,
+                p,
+                active: repeat_active,
+            },
             Message::ToggleRepeat,
         ),
     ]
@@ -439,14 +447,16 @@ fn view_volume(state: &Kithara) -> Element<'_, Message> {
     container(
         row![
             icon_button(
-                volume_icon,
-                Consts::VOLUME_ICON_SIZE,
-                if state.ui_state.volume <= Consts::VOLUME_MUTE_THRESHOLD {
-                    p.muted
-                } else {
-                    p.accent
+                IconButtonStyle {
+                    icon: volume_icon,
+                    size: Consts::VOLUME_ICON_SIZE,
+                    color: if state.ui_state.volume <= Consts::VOLUME_MUTE_THRESHOLD {
+                        p.muted
+                    } else {
+                        p.accent
+                    },
+                    padding: Consts::TOGGLE_ICON_PADDING,
                 },
-                Consts::TOGGLE_ICON_PADDING,
                 Message::ToggleMute
             ),
             slider,
@@ -753,13 +763,22 @@ fn truncate_name(name: &str, max_chars: usize) -> String {
     }
 }
 
-fn icon_button(
+/// Glyph, size, tint, and padding for a ghost [`icon_button`].
+#[derive(Clone, Copy)]
+struct IconButtonStyle {
     icon: Icon,
     size: f32,
     color: Color,
     padding: f32,
-    message: Message,
-) -> Element<'static, Message> {
+}
+
+fn icon_button(style: IconButtonStyle, message: Message) -> Element<'static, Message> {
+    let IconButtonStyle {
+        icon,
+        size,
+        color,
+        padding,
+    } = style;
     let p = GuiPalette::from(crate::theme::Palette::default());
     button(icon.view(size, color))
         .padding(padding)
@@ -768,17 +787,27 @@ fn icon_button(
         .into()
 }
 
-/// Secondary / toggle transport button: a fixed-size rounded square. `active`
-/// drives the toggle highlight (accent fill) for shuffle and repeat; prev/next
-/// pass `false`. Hover paints a faint panel fill so the target reads as live.
-fn transport_square_button(
+/// Glyph, sizing, palette, and toggle state for a [`transport_square_button`].
+#[derive(Clone, Copy)]
+struct TransportButton {
     icon: Icon,
     icon_size: f32,
     box_size: f32,
     p: GuiPalette,
     active: bool,
-    message: Message,
-) -> Element<'static, Message> {
+}
+
+/// Secondary / toggle transport button: a fixed-size rounded square. `active`
+/// drives the toggle highlight (accent fill) for shuffle and repeat; prev/next
+/// pass `false`. Hover paints a faint panel fill so the target reads as live.
+fn transport_square_button(cfg: TransportButton, message: Message) -> Element<'static, Message> {
+    let TransportButton {
+        icon,
+        icon_size,
+        box_size,
+        p,
+        active,
+    } = cfg;
     let icon_color = if active { p.accent } else { p.text_dim };
     button(
         container(icon.view(icon_size, icon_color))

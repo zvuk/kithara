@@ -14,7 +14,7 @@ use kithara_decode::{DecodeError, DecoderBackend};
 use kithara_events::EventBus;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::{HlsConfig, HlsStore, KeyOptions, SizeProbeMethod};
-use kithara_net::Headers;
+use kithara_net::{Headers, HttpClient};
 use kithara_platform::{CancelScope, CancelToken};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use portable_atomic::AtomicF32;
@@ -187,8 +187,7 @@ impl ResourceConfig {
             .build();
         let downloader = self.downloader.clone().unwrap_or_else(|| {
             let dl_cancel = CancelScope::new(self.cancel.clone()).token();
-            let client =
-                kithara_net::HttpClient::new(kithara_net::NetOptions::default(), dl_cancel.child());
+            let client = HttpClient::new(kithara_net::NetOptions::default(), dl_cancel.child());
             Downloader::new(
                 DownloaderConfig::for_client(client)
                     .cancel(dl_cancel)

@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, OnceLock, atomic::Ordering},
 };
 
+use dashmap::DashMap;
 use kithara_platform::{CancelToken, Mutex};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
 
@@ -83,7 +84,7 @@ impl AvailabilityIndex {
 
         for (root, asset_record) in archived.assets.iter() {
             let root_str = root.as_str().to_string();
-            let asset_map = Arc::new(dashmap::DashMap::new());
+            let asset_map = Arc::new(DashMap::new());
 
             for (path, res_record) in asset_record.resources.iter() {
                 let mut avail = Availability::default();

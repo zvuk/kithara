@@ -76,11 +76,7 @@ pub(crate) fn drain_effects(effects: &mut [Box<dyn AudioEffect>]) -> Vec<PcmChun
     let mut carry: Vec<PcmChunk> = Vec::new();
     for effect in &mut *effects {
         let mut produced: Vec<PcmChunk> = Vec::new();
-        for chunk in carry.drain(..) {
-            if let Some(out) = effect.process(chunk) {
-                produced.push(out);
-            }
-        }
+        produced.extend(carry.drain(..).filter_map(|chunk| effect.process(chunk)));
         while let Some(out) = effect.flush() {
             produced.push(out);
         }
@@ -164,7 +160,7 @@ mod tests {
 
         let mut chain: Vec<Box<dyn AudioEffect>> = vec![stage0, stage1];
         let out = drain_effects(&mut chain);
-        let total: Vec<f32> = out.iter().flat_map(|c| c.pcm.iter().copied()).collect();
+        let total: Vec<f32> = out.iter().flat_map(|c| c.samples.iter().copied()).collect();
 
         assert!(
             out.len() > 1,

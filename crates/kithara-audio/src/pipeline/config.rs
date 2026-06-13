@@ -119,18 +119,34 @@ pub(crate) fn expected_output_spec(
     }
 }
 
+/// Inputs to [`create_effects`] that configure the resampler slot: the
+/// `initial_spec`, the shared `host_sample_rate` / `playback_rate`
+/// atomics, the optional `tempo_ratio` (tempo mode), the resampler
+/// `quality`, and the PCM `pool`.
+pub(crate) struct EffectsConfig {
+    pub(crate) initial_spec: PcmSpec,
+    pub(crate) host_sample_rate: Arc<AtomicU32>,
+    pub(crate) playback_rate: Arc<AtomicF32>,
+    pub(crate) tempo_ratio: Option<Arc<AtomicF32>>,
+    pub(crate) quality: ResamplerQuality,
+    pub(crate) pool: Option<PcmPool>,
+}
+
 /// Build `[..pre, Resampler, ..custom]`. Tempo mode (`tempo_ratio`
 /// `Some`) adds a `TimeStretchProcessor` pre-slot and pins the
 /// resampler to `1.0`; else resampler-first with `playback_rate`.
 pub(crate) fn create_effects(
-    initial_spec: PcmSpec,
-    host_sample_rate: &Arc<AtomicU32>,
-    playback_rate: &Arc<AtomicF32>,
-    tempo_ratio: Option<&Arc<AtomicF32>>,
-    quality: ResamplerQuality,
-    pool: Option<PcmPool>,
+    config: EffectsConfig,
     custom_effects: Vec<Box<dyn AudioEffect>>,
 ) -> Vec<Box<dyn AudioEffect>> {
+    let EffectsConfig {
+        initial_spec,
+        host_sample_rate,
+        playback_rate,
+        tempo_ratio,
+        quality,
+        pool,
+    } = config;
     let mut chain: Vec<Box<dyn AudioEffect>> = Vec::new();
 
     let resampler_rate = match tempo_ratio {
@@ -138,11 +154,11 @@ pub(crate) fn create_effects(
             chain.push(Box::new(TimeStretchProcessor));
             Arc::new(AtomicF32::new(1.0))
         }
-        None => Arc::clone(playback_rate),
+        None => playback_rate,
     };
 
     let params = ResamplerParams::builder()
-        .host_sample_rate(Arc::clone(host_sample_rate))
+        .host_sample_rate(host_sample_rate)
         .source_sample_rate(initial_spec.sample_rate.get())
         .channels(initial_spec.channels as usize)
         .playback_rate(resampler_rate)
@@ -197,12 +213,14 @@ mod tests {
         let host_sr = Arc::new(AtomicU32::new(44100));
         let playback_rate = Arc::new(AtomicF32::new(1.0));
         let effects = create_effects(
-            spec(),
-            &host_sr,
-            &playback_rate,
-            None,
-            ResamplerQuality::default(),
-            None,
+            EffectsConfig {
+                initial_spec: spec(),
+                host_sample_rate: host_sr,
+                playback_rate,
+                tempo_ratio: None,
+                quality: ResamplerQuality::default(),
+                pool: None,
+            },
             vec![Box::new(PassthroughEffect)],
         );
         // [Resampler, custom] -- resampler-first, no pre slot.
@@ -215,12 +233,14 @@ mod tests {
         let playback_rate = Arc::new(AtomicF32::new(1.0));
         let tempo_ratio = Arc::new(AtomicF32::new(1.0));
         let effects = create_effects(
-            spec(),
-            &host_sr,
-            &playback_rate,
-            Some(&tempo_ratio),
-            ResamplerQuality::default(),
-            None,
+            EffectsConfig {
+                initial_spec: spec(),
+                host_sample_rate: host_sr,
+                playback_rate,
+                tempo_ratio: Some(tempo_ratio),
+                quality: ResamplerQuality::default(),
+                pool: None,
+            },
             vec![Box::new(PassthroughEffect)],
         );
         // [TimeStretch, Resampler, custom] -- pre-resampler slot present.

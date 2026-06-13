@@ -14,7 +14,7 @@ use kithara_test_utils::kithara;
 
 use crate::{
     codec::{CodecPriming, FrameCodec},
-    composed::ComposedDecoder,
+    composed::{ComposedDecoder, DecoderRuntime},
     demuxer::{Demuxer, TrackInfo},
     fmp4::{
         Fmp4SegmentDemuxer,
@@ -160,7 +160,7 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
         Fmp4SegmentDemuxer::open(source, layout, BytePool::default()).expect("BUG: build demuxer");
     let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
         .expect("BUG: open codec");
-    let decoder = ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
+    let decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
     (decoder, reads, record)
 }
 

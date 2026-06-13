@@ -184,11 +184,11 @@ impl SizeEstimator {
         if let Some(ref url) = init_url {
             cmds.push(self.probe_cmd(url.clone()));
         }
-        for i in 0..num_segments {
-            if let Some(url) = self.playlist.segment_url(variant, i) {
-                cmds.push(self.probe_cmd(url));
-            }
-        }
+        cmds.extend(
+            (0..num_segments)
+                .filter_map(|i| self.playlist.segment_url(variant, i))
+                .map(|url| self.probe_cmd(url)),
+        );
         if cmds.is_empty() {
             return None;
         }

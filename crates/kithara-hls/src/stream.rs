@@ -9,6 +9,7 @@ use kithara_assets::{
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::EventBus;
+use kithara_net::HttpClient;
 use kithara_platform::{CancelScope, CancelToken, tokio::sync::mpsc};
 use kithara_stream::{
     Activity, PlayheadState, PlayheadWrite, SeekObserve, SeekState, SourceError, StreamType,
@@ -59,8 +60,7 @@ impl StreamType for Hls {
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
             let dl_cancel = cancel.child();
-            let client =
-                kithara_net::HttpClient::new(config.net_options.clone(), dl_cancel.child());
+            let client = HttpClient::new(config.net_options.clone(), dl_cancel.child());
             let dl_config = DownloaderConfig::for_client(client)
                 .cancel(dl_cancel)
                 .build();
@@ -149,11 +149,12 @@ impl StreamType for Hls {
         .estimate()
         .await;
         let media_playlists = estimation.media_playlists;
-        for (variant, map) in estimation.size_maps.into_iter().enumerate() {
-            if !map.is_empty() {
-                playlist_state.set_size_map(variant, map);
-            }
-        }
+        estimation
+            .size_maps
+            .into_iter()
+            .enumerate()
+            .filter(|(_, map)| !map.is_empty())
+            .for_each(|(variant, map)| playlist_state.set_size_map(variant, map));
 
         playhead.set_duration(playlist_state.track_duration());
 

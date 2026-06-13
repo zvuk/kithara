@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use ffmpeg::{
-    ChannelLayout, Error as FfmpegError,
+    ChannelLayout, Error as FfmpegError, Rational,
     codec::{capabilities::Capabilities, encoder::Audio as AudioEncoder},
     filter::{self, Graph as FilterGraph},
     format as av_format,
@@ -14,6 +14,14 @@ use crate::{
     BytesEncodeRequest, EncodeError, EncodeResult, EncodedBytes, EncodedTrack, InnerEncoder,
     PackagedEncodeRequest, fdk::aac_he_v2::AacHeV2Encoder,
 };
+
+/// Source/target time bases for rescaling encoded packets, shared by the
+/// AAC and FLAC `collect_encoded_packets` helpers.
+#[derive(Clone, Copy)]
+pub(crate) struct RebaseRates {
+    pub(crate) encoder: Rational,
+    pub(crate) target: Rational,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FfmpegEncoder;

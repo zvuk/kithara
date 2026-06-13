@@ -68,7 +68,7 @@ fn silence_params(threshold_db: f32, min_trim_frames: u64) -> SilenceTrimParams 
 }
 
 fn collect_pcm(out: &[PcmChunk]) -> Vec<f32> {
-    out.iter().flat_map(|c| c.samples().to_vec()).collect()
+    out.iter().flat_map(|c| c.samples.to_vec()).collect()
 }
 
 #[kithara::test]
@@ -85,7 +85,7 @@ fn leading_trim_updates_offset_and_timestamp() {
     assert_eq!(out.frames(), 448);
     assert_eq!(out.meta.frame_offset, 576);
     assert_eq!(out.meta.timestamp, Duration::from_millis(12));
-    assert_eq!(out.samples()[0], 576.0);
+    assert_eq!(out.samples[0], 576.0);
 }
 
 #[kithara::test]
@@ -104,7 +104,7 @@ fn leading_trim_can_consume_multiple_chunks() {
     let out = ready.remove(0);
     assert_eq!(out.frames(), 672);
     assert_eq!(out.meta.frame_offset, 2400);
-    assert_eq!(out.samples()[0], 352.0);
+    assert_eq!(out.samples[0], 352.0);
 }
 
 #[kithara::test]
@@ -481,7 +481,7 @@ fn silence_trim_seek_disables_leading_only() {
     assert_eq!(flushed.len(), 1);
     let out = flushed.remove(0);
     assert_eq!(out.meta.frame_offset, 128);
-    assert_eq!(out.samples(), &[0.0, 0.0, 3.0, 4.0]);
+    assert_eq!(&out.samples[..], &[0.0, 0.0, 3.0, 4.0]);
 }
 
 #[kithara::test]
@@ -495,7 +495,7 @@ fn silence_trim_preserves_all_silence_track() {
     assert_eq!(flushed.len(), 1);
     let out = flushed.remove(0);
     assert_eq!(out.frames(), 128);
-    assert!(out.samples().iter().all(|sample| *sample == 0.0));
+    assert!(out.samples.iter().all(|sample| *sample == 0.0));
 }
 
 #[kithara::test]
@@ -523,7 +523,7 @@ fn silence_trim_respects_multi_channel_threshold() {
     let out = flushed.remove(0);
     assert_eq!(out.meta.frame_offset, 32);
     assert_eq!(out.frames(), 1);
-    assert!(out.samples()[1].abs() < 2.0e-3);
+    assert!(out.samples[1].abs() < 2.0e-3);
 }
 
 #[kithara::test]

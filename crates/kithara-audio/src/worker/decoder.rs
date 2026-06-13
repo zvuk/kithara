@@ -386,8 +386,7 @@ mod tests {
         let marker = inlet.try_pop().expect("producer pushed an EOF marker");
         assert_eq!(marker.kind, FetchKind::NaturalEof);
         assert_eq!(
-            marker.epoch(),
-            0,
+            marker.epoch, 0,
             "EOF marker must carry the producer's decode epoch (0), not the live \
              seek epoch (1) the consumer already advanced"
         );

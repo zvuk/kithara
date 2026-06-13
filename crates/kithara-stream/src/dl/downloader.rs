@@ -1,11 +1,17 @@
-use std::sync::{Arc, atomic::AtomicUsize};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+};
 
 use futures::task::AtomicWaker;
 use kithara_abr::{Abr, AbrController, AbrPeerId};
-use kithara_events::EventBus;
+use kithara_events::{EventBus, RequestId};
 use kithara_net::HttpClient;
 use kithara_platform::{
-    CancelScope, CancelToken, Mutex, RwLock, time::Duration, tokio, tokio::sync::mpsc,
+    CancelScope, CancelToken, Mutex, RwLock,
+    time::Duration,
+    tokio,
+    tokio::{sync::mpsc, task},
 };
 use kithara_test_utils::kithara;
 
@@ -79,18 +85,16 @@ pub(super) struct DownloaderInner {
     /// Monotonic source of [`kithara_events::RequestId`]s assigned to
     /// every command this Downloader accepts. Starts at 1 (`NonZero`
     /// invariant); never wraps in practice (`u64`).
-    next_request_id: std::sync::atomic::AtomicU64,
+    next_request_id: AtomicU64,
 }
 
 impl DownloaderInner {
     /// Allocate a fresh [`kithara_events::RequestId`].
-    pub(super) fn next_request_id(&self) -> kithara_events::RequestId {
-        let raw = self
-            .next_request_id
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    pub(super) fn next_request_id(&self) -> RequestId {
+        let raw = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let nz = std::num::NonZeroU64::new(raw.max(1))
             .expect("BUG: next_request_id starts at 1; fetch_add never yields 0");
-        kithara_events::RequestId::new(nz)
+        RequestId::new(nz)
     }
 }
 
@@ -128,7 +132,7 @@ impl Downloader {
                 fetch_waker: Arc::new(AtomicWaker::new()),
                 register_tx: tx,
                 register_rx: Mutex::new(Some(rx)),
-                next_request_id: std::sync::atomic::AtomicU64::new(1),
+                next_request_id: AtomicU64::new(1),
             }),
         }
     }
@@ -229,7 +233,7 @@ impl Downloader {
         else {
             return;
         };
-        tokio::task::spawn_on(&handle, async move { this.run(rx).await });
+        task::spawn_on(&handle, async move { this.run(rx).await });
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -249,7 +253,7 @@ impl Downloader {
         // the worker's event loop pumping for the page's lifetime.
         kithara_platform::thread::spawn(move || {
             kithara_platform::thread::keep_worker_alive();
-            drop(tokio::task::spawn(async move {
+            drop(task::spawn(async move {
                 this.run(rx).await;
             }));
         });

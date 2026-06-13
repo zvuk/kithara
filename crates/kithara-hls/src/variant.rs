@@ -39,7 +39,7 @@ mod layout;
 mod reader_runtime;
 mod segment_store;
 use cancel_epoch::CancelEpoch;
-use layout::Layout;
+use layout::{ActivateParams, Layout};
 use reader_runtime::ReaderRuntime;
 use segment_store::SegmentStore;
 
@@ -444,6 +444,16 @@ pub(crate) struct PlanCtx {
     pub(crate) prefetch_budget: usize,
 }
 
+/// Inputs to [`HlsVariant::activate_at_segment_with_shift`]: pin `from_seg`
+/// at `seg_boundary` in virtual byte space and move the reader to
+/// `reader_pos`.
+#[derive(Clone, Copy)]
+pub(crate) struct SegmentActivateParams {
+    pub(crate) from_seg: u32,
+    pub(crate) seg_boundary: u64,
+    pub(crate) reader_pos: u64,
+}
+
 pub(crate) struct HlsVariant {
     /// Segment/init content domain: the asset scope plus the init and
     /// media entry tables. Owns every resource read (`read_resource`,
@@ -566,16 +576,21 @@ impl HlsVariant {
     pub(crate) fn activate_at_segment_with_shift(
         &self,
         ctx: &PlanCtx,
-        from_seg: u32,
-        seg_boundary: u64,
-        reader_pos: u64,
+        params: SegmentActivateParams,
     ) {
+        let SegmentActivateParams {
+            from_seg,
+            seg_boundary,
+            reader_pos,
+        } = params;
         self.rearm_cancel();
         let from_seg = from_seg.min(self.num_segments());
         self.layout.activate_with_shift(
-            from_seg,
-            seg_boundary,
-            self.init_size(),
+            ActivateParams {
+                from_seg,
+                seg_boundary,
+                init_size: self.init_size(),
+            },
             self.store.segments(),
         );
         self.set_position(reader_pos);

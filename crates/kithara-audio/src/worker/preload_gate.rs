@@ -60,7 +60,7 @@ impl PreloadGate {
 mod tests {
     use std::sync::Arc;
 
-    use kithara_platform::time::Duration;
+    use kithara_platform::{thread, time::Duration};
     use kithara_test_utils::kithara;
 
     use super::PreloadGate;
@@ -75,8 +75,8 @@ mod tests {
         // spawn sleeps in REAL time while the waiter's poll loop and the timeout
         // run on the virtual clock, so the virtual 1s can elapse before the real
         // 5ms signal lands (mixed-clock race).
-        let join = kithara_platform::thread::spawn_named("preload-signal", move || {
-            kithara_platform::thread::sleep(Duration::from_millis(5));
+        let join = thread::spawn_named("preload-signal", move || {
+            thread::sleep(Duration::from_millis(5));
             signaller.signal();
         });
 
@@ -98,8 +98,8 @@ mod tests {
 
         let re_signaller = Arc::clone(&gate);
         // spawn_named for the same mixed-clock reason as wait_resolves_after_signal.
-        let join = kithara_platform::thread::spawn_named("preload-resignal", move || {
-            kithara_platform::thread::sleep(Duration::from_millis(5));
+        let join = thread::spawn_named("preload-resignal", move || {
+            thread::sleep(Duration::from_millis(5));
             re_signaller.signal();
         });
 

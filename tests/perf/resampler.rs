@@ -133,7 +133,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
                     for (ch, buf) in planar.iter_mut().enumerate() {
                         buf.resize(2048, 0.0);
                         for frame in 0..2048 {
-                            buf[frame] = chunk.pcm[frame * 2 + ch];
+                            buf[frame] = chunk.samples[frame * 2 + ch];
                         }
                     }
                 });

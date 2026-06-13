@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{BarChart, Block, Borders, Clear, Paragraph},
+    widgets::{Bar, BarChart, BarGroup, Block, Borders, Clear, Paragraph},
 };
 
 use crate::{state::UiState, theme::tui::TuiPalette, track::TrackRow};
@@ -213,7 +213,7 @@ impl Dashboard {
             } else {
                 Style::default().fg(self.colors.text)
             };
-            let bar = ratatui::widgets::Bar::default()
+            let bar = Bar::default()
                 .value(val)
                 .text_value(format!("{gain:+.1}"))
                 .style(style);
@@ -221,7 +221,7 @@ impl Dashboard {
         }
 
         let chart = BarChart::default()
-            .data(ratatui::widgets::BarGroup::default().bars(&bars))
+            .data(BarGroup::default().bars(&bars))
             .bar_width(5)
             .bar_gap(1)
             .block(Block::default().borders(Borders::ALL).title("Equalizer"));

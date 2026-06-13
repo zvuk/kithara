@@ -5,7 +5,10 @@ use std::{
     fs,
     num::NonZeroU32,
     path::PathBuf,
-    sync::{Arc, OnceLock, atomic::Ordering},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use dashmap::DashMap;
@@ -48,7 +51,7 @@ impl PinsIndex {
                     }),
                 }),
                 hub: OnceLock::new(),
-                dirty: std::sync::atomic::AtomicBool::new(false),
+                dirty: AtomicBool::new(false),
             }),
         }
     }

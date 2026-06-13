@@ -3,6 +3,7 @@ use kithara_platform::{
     time::{Duration, Instant, sleep},
     tokio,
 };
+use tokio::task;
 
 use super::{
     core::{AbrController, AbrPeerId},
@@ -74,7 +75,7 @@ impl AbrController {
 
         let deadline = self.settings.incoherence_deadline;
         let controller_weak = self.self_weak.clone();
-        tokio::task::spawn(async move {
+        task::spawn(async move {
             tokio::select! {
                 () = sleep(deadline) => {}
                 () = token.cancelled() => return,

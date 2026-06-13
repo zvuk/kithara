@@ -224,16 +224,27 @@ impl canvas::Program<Message> for Waveform {
     }
 }
 
+/// Playhead progress, track duration, and pixel height for a [`waveform`].
+#[derive(Clone, Copy)]
+pub(crate) struct WaveformParams {
+    pub(crate) progress: f32,
+    pub(crate) duration: f64,
+    pub(crate) height: f32,
+}
+
 /// Build the deck waveform element from a precomputed peak envelope.
-/// `duration` (track length in seconds) enables click/drag seeking; pass
-/// `0.0` when it is unknown to keep the widget display-only.
+/// `params.duration` (track length in seconds) enables click/drag seeking;
+/// pass `0.0` when it is unknown to keep the widget display-only.
 pub(crate) fn waveform<'a>(
     peaks: Envelope,
-    progress: f32,
-    duration: f64,
-    height: f32,
+    params: WaveformParams,
     p: GuiPalette,
 ) -> Element<'a, Message> {
+    let WaveformParams {
+        progress,
+        duration,
+        height,
+    } = params;
     Canvas::new(Waveform {
         samples: peaks,
         progress,

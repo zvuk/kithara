@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use kithara::play::PlayerEvent;
-use kithara_events::{Event, EventReceiver, QueueEvent, TrackStatus};
+use kithara::play::{PlayerEvent, TimeControlStatus};
+use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_platform::{
     CancelToken, Duration, JoinHandle, Mutex, sleep, spawn, tokio, tokio::sync::broadcast,
 };
@@ -29,7 +29,7 @@ impl EventBridge {
         observer: &Arc<dyn PlayerObserver>,
         queue: &Arc<Queue>,
         items: &Arc<Mutex<ItemRegistry>>,
-        last_current: &Mutex<Option<kithara_events::TrackId>>,
+        last_current: &Mutex<Option<TrackId>>,
         event: &Event,
     ) {
         match event {
@@ -128,7 +128,7 @@ impl EventBridge {
                 item_id: item_id
                     .as_ref()
                     .and_then(|s| s.parse::<u64>().ok())
-                    .map(kithara_events::TrackId::from),
+                    .map(TrackId::from),
             },
             _ => return None,
         })
@@ -142,7 +142,7 @@ impl EventBridge {
     fn route_player_event_to_item(
         items: &Arc<Mutex<ItemRegistry>>,
         queue: &Arc<Queue>,
-        last_current: &Mutex<Option<kithara_events::TrackId>>,
+        last_current: &Mutex<Option<TrackId>>,
         event: &PlayerEvent,
     ) {
         let target = match event {
@@ -150,7 +150,7 @@ impl EventBridge {
                 *last_current.lock_sync()
             }
             PlayerEvent::TimeControlStatusChanged {
-                status: kithara::play::TimeControlStatus::WaitingToPlay,
+                status: TimeControlStatus::WaitingToPlay,
                 ..
             } => queue.current().map(|entry| entry.id),
             _ => return,
@@ -225,7 +225,7 @@ impl EventBridge {
         observer: Arc<dyn PlayerObserver>,
         queue: Arc<Queue>,
         items: Arc<Mutex<ItemRegistry>>,
-        last_current: Arc<Mutex<Option<kithara_events::TrackId>>>,
+        last_current: Arc<Mutex<Option<TrackId>>>,
         cancel: CancelToken,
     ) {
         crate::FFI_RUNTIME.spawn(async move {

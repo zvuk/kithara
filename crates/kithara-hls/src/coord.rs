@@ -21,14 +21,14 @@ use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, ByteMap, ContainerFormat, MediaInfo, PendingReason, PlayheadRead, PlayheadState,
     PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState, SegmentDescriptor,
-    SourcePhase, SourceSeekAnchor, StreamResult, VariantControl,
+    SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantControl,
 };
 use kithara_test_utils::kithara;
 use tracing::info;
 
 use crate::{
     playlist::{PlaylistAccess, PlaylistState},
-    variant::{HlsVariant, PlanCtx},
+    variant::{HlsVariant, PlanCtx, SegmentActivateParams},
 };
 
 /// Infrastructure handles shared with every [`HlsCoord`]:
@@ -233,7 +233,14 @@ impl HlsCoord {
                 v_old.cancel();
                 v_old.set_served_until(switch_at);
             }
-            v_new.activate_at_segment_with_shift(ctx, switch_at, seg_boundary, reader_pos);
+            v_new.activate_at_segment_with_shift(
+                ctx,
+                SegmentActivateParams {
+                    from_seg: switch_at,
+                    seg_boundary,
+                    reader_pos,
+                },
+            );
             self.abr.apply_decision(&decision, Instant::now());
         } else {
             let old_codec = v_old.and_then(|_| self.playlist_state.variant_codec(current_before));
@@ -375,9 +382,7 @@ impl HlsCoord {
 
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         if self.cancel.is_cancelled() {
-            return Err(kithara_stream::StreamError::Source(
-                crate::HlsError::Cancelled.into(),
-            ));
+            return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
         }
         if self.variant_change_pending() {
             return Ok(ReadOutcome::Pending(PendingReason::VariantChange));
@@ -504,9 +509,7 @@ impl HlsCoord {
         timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
         if self.cancel.is_cancelled() {
-            return Err(kithara_stream::StreamError::Source(
-                crate::HlsError::Cancelled.into(),
-            ));
+            return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
         }
         if self.variant_change_pending() {
             return Ok(WaitOutcome::Interrupted);

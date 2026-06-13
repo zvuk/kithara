@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{Read, SeekFrom};
 
 use kithara_stream::AudioCodec;
 
@@ -20,7 +20,6 @@ pub(crate) fn scoped_probe(
     source: &mut dyn DecoderInput,
     codec: AudioCodec,
 ) -> crate::error::DecodeResult<Option<GaplessInfo>> {
-    use std::io::SeekFrom;
     source.seek(SeekFrom::Start(0))?;
     let info = probe_codec_gapless(codec, source);
     source.seek(SeekFrom::Start(0))?;

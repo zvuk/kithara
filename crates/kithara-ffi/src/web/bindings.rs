@@ -1,3 +1,4 @@
+use kithara_platform::thread::set_wasm_shim_name;
 use tracing_log::LogTracer;
 use tracing_wasm::WASMLayerConfigBuilder;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -10,7 +11,7 @@ pub fn setup() {
     // Worker threads import `<shim>.js` for `initSync`; register our
     // wasm-bindgen output name so the engine worker loads the right shim
     // (auto-detection mis-picks a co-loaded `.js` like coi-serviceworker).
-    kithara_platform::thread::set_wasm_shim_name(env!("CARGO_PKG_NAME"));
+    set_wasm_shim_name(env!("CARGO_PKG_NAME"));
 
     if web_sys::window().is_none() {
         return;

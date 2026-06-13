@@ -214,12 +214,6 @@ impl PlayerImpl {
         }
     }
 
-    /// Get the shared ABR controller (if configured).
-    #[must_use]
-    pub fn abr(&self) -> Option<&Arc<AbrController>> {
-        self.core.config.abr.as_ref()
-    }
-
     /// Advance to the next item in the queue.
     ///
     /// Does nothing if the current item is already the last one.

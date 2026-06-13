@@ -1,6 +1,8 @@
 use std::sync::{Arc, PoisonError};
 
 use kithara_events::{QueueEvent, TrackId, TrackStatus};
+use kithara_platform::tokio::task;
+use kithara_play::SelectTransition;
 use tracing::{debug, warn};
 
 use super::{
@@ -159,8 +161,13 @@ impl Queue {
                         duration_seconds: crossfade,
                     });
                 }
-                self.player
-                    .select_item_with_crossfade(index, true, crossfade)?;
+                self.player.select_item_with_crossfade(
+                    index,
+                    SelectTransition {
+                        autoplay: true,
+                        crossfade_seconds: crossfade,
+                    },
+                )?;
                 self.lock_navigation_mut().select(index);
                 self.set_status(id, TrackStatus::Consumed);
                 Ok(())
@@ -197,7 +204,7 @@ impl Queue {
         let navigation = Arc::clone(&self.navigation);
         let select_apply = Arc::clone(&self.select_apply);
         let bus = self.bus.clone();
-        drop(kithara_platform::tokio::task::spawn(async move {
+        drop(task::spawn(async move {
             let resource = match handle.await {
                 Ok(Ok(resource)) => resource,
                 Ok(Err(_)) => return,
@@ -268,7 +275,13 @@ impl Queue {
                         duration_seconds: crossfade,
                     });
                 }
-                if let Err(e) = player.select_item_with_crossfade(index, true, crossfade) {
+                if let Err(e) = player.select_item_with_crossfade(
+                    index,
+                    SelectTransition {
+                        autoplay: true,
+                        crossfade_seconds: crossfade,
+                    },
+                ) {
                     warn!(id = id.as_u64(), error = %e, "pending select failed");
                 } else {
                     navigation
@@ -308,10 +321,13 @@ impl Queue {
                 duration_seconds: crossfade,
             });
         }
-        if let Err(err) = self
-            .player
-            .select_item_with_crossfade(index, true, crossfade)
-        {
+        if let Err(err) = self.player.select_item_with_crossfade(
+            index,
+            SelectTransition {
+                autoplay: true,
+                crossfade_seconds: crossfade,
+            },
+        ) {
             return Some(Err(err.into()));
         }
         self.lock_navigation_mut().select(index);

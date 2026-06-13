@@ -12,7 +12,7 @@ use kithara::{
 };
 use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_platform::{CancelToken, Mutex};
-use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource};
+use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource, Transition};
 use rand::{distr::Alphanumeric, prelude::*};
 
 use crate::{
@@ -237,7 +237,7 @@ impl NativeInner {
         let Some(next) = tracks.get(next_idx) else {
             return;
         };
-        let _ = self.queue.select(next.id, kithara_queue::Transition::None);
+        let _ = self.queue.select(next.id, Transition::None);
     }
 
     pub(crate) fn append(&self, item: &Arc<AudioPlayerItem>) -> Result<(), FfiError> {

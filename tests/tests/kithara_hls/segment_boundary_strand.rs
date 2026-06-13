@@ -191,7 +191,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
         while chunks.len() < 64 {
             match decoder.next_chunk() {
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {
-                    chunks.push((chunk.meta.frame_offset, chunk.pcm.clone()));
+                    chunks.push((chunk.meta.frame_offset, chunk.samples.clone()));
                 }
                 Ok(DecoderChunkOutcome::Pending(_)) => {
                     // Not expected under the wait-then-resume contract (the

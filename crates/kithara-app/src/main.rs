@@ -20,7 +20,7 @@ use kithara_app::gui;
 use kithara_app::gui::GuiFrontend;
 #[cfg(feature = "tui")]
 use kithara_app::tui::TuiFrontend;
-use kithara_app::{config::AppConfig, frontend::Frontend, tracing_init::init_tracing};
+use kithara_app::{baked, config::AppConfig, frontend::Frontend, tracing_init::init_tracing};
 use kithara_platform::CancelToken;
 use kithara_queue::{Queue, QueueConfig};
 
@@ -105,8 +105,8 @@ fn main() -> AppResult {
     // them.
     let shutdown = CancelToken::root();
     let net = NetOptions::builder()
-        .is_insecure(args.insecure || kithara_app::baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)
-        .compression(kithara_app::baked::BAKED_COMPRESSION)
+        .is_insecure(args.insecure || baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)
+        .compression(baked::BAKED_COMPRESSION)
         .build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, shutdown.child())).build(),

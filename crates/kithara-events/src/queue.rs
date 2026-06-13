@@ -1,3 +1,5 @@
+use core::sync::atomic::{AtomicU64, Ordering};
+
 /// Monotonic identifier for a track across the entire process.
 ///
 /// Allocated from a single global counter so [`Queue`](crate::queue) and
@@ -35,7 +37,6 @@ impl TrackId {
     /// re-allocating. The counter starts at `0` and is never reset.
     #[must_use]
     pub fn allocate() -> Self {
-        use core::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }

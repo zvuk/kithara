@@ -137,9 +137,6 @@ pub(crate) fn parse_init(bytes: &[u8]) -> DecodeResult<Fmp4InitInfo> {
 fn extract_aac_asc_raw(bytes: &[u8]) -> DecodeResult<Vec<u8>> {
     const FOURCC_MP4A: u32 = 0x6d70_3461;
     const FOURCC_ESDS: u32 = 0x6573_6473;
-    const TAG_ES_DESCRIPTOR: u8 = 0x03;
-    const TAG_DECODER_CONFIG: u8 = 0x04;
-    const TAG_DECODER_SPECIFIC: u8 = 0x05;
 
     let mut cursor = Cursor::new(bytes);
     let total = bytes.len() as u64;
@@ -184,13 +181,7 @@ fn extract_aac_asc_raw(bytes: &[u8]) -> DecodeResult<Vec<u8>> {
             cursor
                 .seek(SeekFrom::Current(4))
                 .map_err(|e| DecodeError::InvalidData(format!("seek past esds header: {e}")))?;
-            return read_esds_decoder_specific_info(
-                &mut cursor,
-                child_start + child_size,
-                TAG_ES_DESCRIPTOR,
-                TAG_DECODER_CONFIG,
-                TAG_DECODER_SPECIFIC,
-            );
+            return read_esds_decoder_specific_info(&mut cursor, child_start + child_size);
         }
         cursor
             .seek(SeekFrom::Start(child_start + child_size))
@@ -207,12 +198,13 @@ fn extract_aac_asc_raw(bytes: &[u8]) -> DecodeResult<Vec<u8>> {
 fn read_esds_decoder_specific_info(
     cursor: &mut Cursor<&[u8]>,
     esds_end: u64,
-    tag_es: u8,
-    tag_dec_config: u8,
-    tag_dsi: u8,
 ) -> DecodeResult<Vec<u8>> {
+    const TAG_ES_DESCRIPTOR: u8 = 0x03;
+    const TAG_DECODER_CONFIG: u8 = 0x04;
+    const TAG_DECODER_SPECIFIC: u8 = 0x05;
+
     let (es_tag, es_size) = read_descriptor_header(cursor)?;
-    if es_tag != tag_es {
+    if es_tag != TAG_ES_DESCRIPTOR {
         return Err(DecodeError::InvalidData(format!(
             "expected ES_Descriptor (0x03), got 0x{es_tag:02x}"
         )));
@@ -245,7 +237,7 @@ fn read_esds_decoder_specific_info(
 
     let _ = es_body_end;
     let (dc_tag, dc_size) = read_descriptor_header(cursor)?;
-    if dc_tag != tag_dec_config {
+    if dc_tag != TAG_DECODER_CONFIG {
         return Err(DecodeError::InvalidData(format!(
             "expected DecoderConfigDescriptor (0x04), got 0x{dc_tag:02x}"
         )));
@@ -256,7 +248,7 @@ fn read_esds_decoder_specific_info(
         .map_err(|e| DecodeError::InvalidData(format!("skip DCD body: {e}")))?;
 
     let (dsi_tag, dsi_size) = read_descriptor_header(cursor)?;
-    if dsi_tag != tag_dsi {
+    if dsi_tag != TAG_DECODER_SPECIFIC {
         return Err(DecodeError::InvalidData(format!(
             "expected DecoderSpecificInfo (0x05), got 0x{dsi_tag:02x}"
         )));
@@ -432,17 +424,17 @@ pub(crate) fn parse_segment_frames(
                     "expected mdat after moof, got {mdat_type:?}"
                 )));
             }
-            let mdat_payload_start = cursor.position();
             cursor
                 .seek(SeekFrom::Start(mdat_start + mdat_size))
                 .map_err(|e| DecodeError::InvalidData(format!("seek past mdat: {e}")))?;
 
             collect_frames(
-                init,
-                &moof,
-                box_start,
-                mdat_payload_start,
-                segment_bytes,
+                &SegmentParse {
+                    init,
+                    moof: &moof,
+                    moof_start: box_start,
+                    segment_bytes,
+                },
                 &mut frames,
             )?;
             continue;
@@ -456,14 +448,24 @@ pub(crate) fn parse_segment_frames(
     Ok(frames)
 }
 
-fn collect_frames(
-    init: &Fmp4InitInfo,
-    moof: &MoofBox,
+/// Inputs for parsing one fMP4 segment's frames: the track `init`, the
+/// parsed `moof` box with its byte offset `moof_start` inside the segment,
+/// and the raw `segment_bytes`.
+#[derive(Clone, Copy)]
+struct SegmentParse<'a> {
+    init: &'a Fmp4InitInfo,
+    moof: &'a MoofBox,
     moof_start: u64,
-    mdat_payload_start: u64,
-    segment_bytes: &[u8],
-    out: &mut Vec<Fmp4Frame>,
-) -> DecodeResult<()> {
+    segment_bytes: &'a [u8],
+}
+
+fn collect_frames(parse: &SegmentParse, out: &mut Vec<Fmp4Frame>) -> DecodeResult<()> {
+    let SegmentParse {
+        init,
+        moof,
+        moof_start,
+        segment_bytes,
+    } = *parse;
     let traf = moof
         .trafs
         .iter()
@@ -494,7 +496,6 @@ fn collect_frames(
         } else {
             base.saturating_add(u64::try_from(data_offset_i32).unwrap_or(0))
         };
-        let _ = mdat_payload_start;
 
         for sample_idx in 0..trun.sample_count as usize {
             let size = sample_size_for(trun, tfhd, sample_idx)?;

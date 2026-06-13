@@ -241,6 +241,18 @@ pub struct ResamplerProcessor {
     chunk_size: usize,
 }
 
+/// Construction parameters for one rubato resampler instance, bundled so
+/// [`ResamplerProcessor::create_resampler`] takes a single argument.
+#[derive(Clone, Copy)]
+struct ResamplerBuild {
+    quality: ResamplerQuality,
+    ratio: f64,
+    chunk_size: usize,
+    channels: usize,
+    source_rate: u32,
+    target_rate: u32,
+}
+
 impl ResamplerProcessor {
     /// Default resampler chunk size in frames.
     const DEFAULT_CHUNK_SIZE: usize = 4096;
@@ -370,13 +382,16 @@ impl ResamplerProcessor {
     }
 
     fn create_resampler(
-        quality: ResamplerQuality,
-        ratio: f64,
-        chunk_size: usize,
-        channels: usize,
-        source_rate: u32,
-        target_rate: u32,
+        build: ResamplerBuild,
     ) -> Result<ResamplerKind, rubato::ResamplerConstructionError> {
+        let ResamplerBuild {
+            quality,
+            ratio,
+            chunk_size,
+            channels,
+            source_rate,
+            target_rate,
+        } = build;
         match quality {
             ResamplerQuality::Fast => {
                 let poly = Async::new_poly(
@@ -590,14 +605,14 @@ impl ResamplerProcessor {
     }
 
     fn recreate_resampler(&mut self, target_rate: u32, new_ratio: f64) {
-        match Self::create_resampler(
-            self.quality,
-            new_ratio,
-            self.chunk_size,
-            self.channels,
-            self.source_rate,
+        match Self::create_resampler(ResamplerBuild {
+            quality: self.quality,
+            ratio: new_ratio,
+            chunk_size: self.chunk_size,
+            channels: self.channels,
+            source_rate: self.source_rate,
             target_rate,
-        ) {
+        }) {
             Ok(resampler) => {
                 self.resampler = Some(resampler);
                 self.current_ratio = new_ratio;
@@ -651,7 +666,7 @@ impl ResamplerProcessor {
         self.resampler.as_ref()?;
 
         self.last_input_meta = Some(chunk.meta);
-        self.append_to_buffer(&chunk.pcm);
+        self.append_to_buffer(&chunk.samples);
 
         let input_frames = self.resampler.as_ref()?.input_frames_next();
         let channels = self.channels;
@@ -785,11 +800,10 @@ fn reserve_channel_scratch(bufs: &mut SmallVec<[Vec<f32>; 8]>, channels: usize, 
     if bufs.len() < channels {
         bufs.resize_with(channels, Vec::new);
     }
-    for buf in bufs.iter_mut().take(channels) {
-        if buf.capacity() < cap {
-            buf.reserve(cap.saturating_sub(buf.len()));
-        }
-    }
+    bufs.iter_mut()
+        .take(channels)
+        .filter(|buf| buf.capacity() < cap)
+        .for_each(|buf| buf.reserve(cap.saturating_sub(buf.len())));
 }
 
 impl ResamplerProcessor {
@@ -936,7 +950,7 @@ mod tests {
         let result = processor.process(chunk.clone());
         assert!(result.is_some());
         let out = result.unwrap();
-        assert_eq!(out.pcm, chunk.pcm);
+        assert_eq!(out.samples, chunk.samples);
         assert_eq!(out.spec().sample_rate.get(), 44100);
     }
 
@@ -972,7 +986,7 @@ mod tests {
         let result = processor.process(chunk);
         if produces_output {
             assert!(result.is_some());
-            assert!(!result.unwrap().pcm.is_empty());
+            assert!(!result.unwrap().samples.is_empty());
         } else {
             assert!(result.is_none());
             assert_eq!(processor.input_buffer[0].len(), interleaved_len / 2);

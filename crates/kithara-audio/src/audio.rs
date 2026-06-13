@@ -10,24 +10,26 @@ use std::{
 
 use delegate::delegate;
 use fast_interleave::deinterleave_variable;
-use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
+use kithara_bufpool::{BytePool, PcmBuf, PcmPool};
+use kithara_decode::{DecoderConfig, DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, DeferredBus, EventBus, SeekLifecycleStage, SegmentLocation};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
 use kithara_platform::{
     CancelScope, CancelToken, thread::park_timeout, time::Duration, tokio::task::spawn_blocking,
 };
-use kithara_stream::{MediaInfo, PlayheadWrite, SeekControl, SeekObserve, Stream, StreamType};
+use kithara_stream::{
+    ChunkPosition, MediaInfo, PlayheadWrite, SeekControl, SeekObserve, Stream, StreamType,
+};
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
 use tracing::{debug, info, trace, warn};
 
 use crate::{
     pipeline::{
-        config::{AudioConfig, create_effects, expected_output_spec},
+        config::{AudioConfig, EffectsConfig, create_effects, expected_output_spec},
         fetch::{EpochValidator, Fetch, FetchKind},
-        source::{OffsetReader, SharedStream, StreamAudioSource},
+        source::{DecodeInit, OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
     runtime::AtomicServiceClass,
@@ -471,7 +473,7 @@ impl<S> Audio<S> {
                 let start_sample = frames_to_samples(consumed_frames_in_chunk, channels)?;
                 let take_samples = frames_to_samples(take_frames, channels)?;
                 buf[written..written + take_samples]
-                    .copy_from_slice(&chunk.pcm[start_sample..start_sample + take_samples]);
+                    .copy_from_slice(&chunk.samples[start_sample..start_sample + take_samples]);
                 last_output_meta = Some(chunk.meta);
                 written += take_samples;
 
@@ -480,8 +482,7 @@ impl<S> Audio<S> {
                 self.current_chunk_consumed_frames = consumed_total;
 
                 if final_segment {
-                    self.playhead
-                        .advance(&kithara_stream::ChunkPosition::from(&chunk.meta));
+                    self.playhead.advance(&ChunkPosition::from(&chunk.meta));
                     self.recycle_current_chunk();
                 } else {
                     let total_frames = chunk_total_frames.max(1);
@@ -751,7 +752,17 @@ impl<S> Audio<S> {
 }
 
 /// Specialized impl for Stream-based audio pipelines.
-///
+/// Host-threaded decoder construction deps shared by
+/// [`Audio::create_initial_decoder`] and [`Audio::create_decoder_factory`]:
+/// the decoder `backend` plus the host's `pcm_pool` / `byte_pool`. All
+/// required — the host's configured pools must reach the decoder, never a
+/// silent process-global fallback.
+struct DecoderDeps {
+    backend: kithara_decode::DecoderBackend,
+    pcm_pool: PcmPool,
+    byte_pool: BytePool,
+}
+
 /// Provides async constructor that creates Stream internally.
 /// Uses `StreamAudioSource` for automatic format change detection on ABR switch.
 impl<T> Audio<Stream<T>>
@@ -799,7 +810,7 @@ where
         let cancel = CancelScope::new(config_cancel).token();
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
-        let byte_pool = byte_pool.unwrap_or_else(|| kithara_bufpool::BytePool::default().clone());
+        let byte_pool = byte_pool.unwrap_or_else(|| BytePool::default().clone());
         let stream = Self::create_stream_with_probe(stream_config, byte_pool.clone()).await?;
 
         let initial_byte_len = stream.len().unwrap_or(0);
@@ -824,13 +835,16 @@ where
         // bounded), then we disarm before the RT worker is registered so the
         // decode loop the worker drives reads non-blocking via `probe_read`.
         shared_stream.set_blocking(true);
+        let decoder_deps = DecoderDeps {
+            backend: decoder_backend,
+            pcm_pool: pool.clone(),
+            byte_pool: byte_pool.clone(),
+        };
         let decoder = Self::create_initial_decoder(
             shared_stream.clone(),
             initial_media_info.clone(),
             hint.clone(),
-            pool.clone(),
-            byte_pool.clone(),
-            decoder_backend,
+            &decoder_deps,
         )
         .await;
         shared_stream.set_blocking(false);
@@ -847,12 +861,14 @@ where
 
         let output_spec = expected_output_spec(initial_spec, &host_sample_rate);
         let effects = create_effects(
-            initial_spec,
-            &host_sample_rate,
-            &playback_rate,
-            config_tempo_ratio.as_ref(),
-            resampler_quality,
-            Some(pool.clone()),
+            EffectsConfig {
+                initial_spec,
+                host_sample_rate: Arc::clone(&host_sample_rate),
+                playback_rate: Arc::clone(&playback_rate),
+                tempo_ratio: config_tempo_ratio.clone(),
+                quality: resampler_quality,
+                pool: Some(pool.clone()),
+            },
             custom_effects,
         );
 
@@ -861,23 +877,19 @@ where
         let interleaved = Self::alloc_interleaved_scratch(pool, output_spec);
 
         let emit = Self::create_emit(&bus);
-        let decoder_factory = Self::create_decoder_factory(
-            decoder_backend,
-            &epoch,
-            &byte_len_handle,
-            pool,
-            &byte_pool,
-        );
+        let decoder_factory = Self::create_decoder_factory(&decoder_deps, &epoch, &byte_len_handle);
         let initial_variant = initial_media_info.as_ref().and_then(|i| i.variant_index);
         let abr_handle = shared_stream.abr_handle();
         let audio_source = StreamAudioSource::new(
             shared_stream,
-            decoder,
-            decoder_factory,
-            initial_media_info,
+            DecodeInit {
+                decoder,
+                decoder_factory,
+                media_info: initial_media_info,
+                gapless_mode: config_gapless_mode,
+            },
             Arc::clone(&epoch),
             effects,
-            config_gapless_mode,
         )
         .with_emit(emit);
 
@@ -951,22 +963,21 @@ where
     }
 
     fn create_decoder_factory(
-        decoder_backend: kithara_decode::DecoderBackend,
+        deps: &DecoderDeps,
         epoch: &Arc<AtomicU64>,
         byte_len_handle: &Arc<AtomicU64>,
-        pool: &PcmPool,
-        byte_pool: &kithara_bufpool::BytePool,
     ) -> crate::pipeline::source::DecoderFactory<T> {
+        let decoder_backend = deps.backend;
         let factory_epoch = Arc::clone(epoch);
         let factory_byte_len = Arc::clone(byte_len_handle);
-        let factory_pool = pool.clone();
-        let factory_byte_pool = byte_pool.clone();
+        let factory_pool = deps.pcm_pool.clone();
+        let factory_byte_pool = deps.byte_pool.clone();
         Box::new(move |stream, info, base_offset| {
             let byte_len = stream
                 .len()
                 .map_or(0, |len| len.saturating_sub(base_offset));
             factory_byte_len.store(byte_len, Ordering::Release);
-            let config = kithara_decode::DecoderConfig::builder()
+            let config = DecoderConfig::builder()
                 .backend(decoder_backend)
                 .byte_len_handle(Arc::clone(&factory_byte_len))
                 .pcm_pool(factory_pool.clone())
@@ -1017,17 +1028,15 @@ where
         shared_stream: SharedStream<T>,
         initial_media_info: Option<MediaInfo>,
         hint: Option<String>,
-        pcm_pool: PcmPool,
-        byte_pool: kithara_bufpool::BytePool,
-        decoder_backend: kithara_decode::DecoderBackend,
+        deps: &DecoderDeps,
     ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
-        let decoder_config = kithara_decode::DecoderConfig::builder()
-            .backend(decoder_backend)
+        let decoder_config = DecoderConfig::builder()
+            .backend(deps.backend)
             .byte_len_handle(byte_len_handle)
-            .pcm_pool(pcm_pool)
-            .byte_pool(byte_pool)
+            .pcm_pool(deps.pcm_pool.clone())
+            .byte_pool(deps.byte_pool.clone())
             .maybe_byte_map(shared_stream.byte_map())
             .maybe_hooks(shared_stream.take_reader_event_sink())
             .maybe_hint(hint.clone())
@@ -1055,7 +1064,7 @@ where
 
     async fn create_stream_with_probe(
         stream_config: T::Config,
-        byte_pool: kithara_bufpool::BytePool,
+        byte_pool: BytePool,
     ) -> Result<Stream<T>, DecodeError> {
         let stream = Self::open_stream(stream_config).await?;
         Self::spawn_probe(stream, byte_pool).await
@@ -1116,7 +1125,7 @@ where
 
     fn probe_stream_blocking(
         mut stream: Stream<T>,
-        _byte_pool: &kithara_bufpool::BytePool,
+        _byte_pool: &BytePool,
     ) -> Result<Stream<T>, DecodeError> {
         // No up-front warm read here: the single decoder build reads through
         // the blocking off-RT `Stream::read` adapter (`SharedStream` in
@@ -1134,10 +1143,7 @@ where
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    async fn spawn_probe(
-        stream: Stream<T>,
-        byte_pool: kithara_bufpool::BytePool,
-    ) -> Result<Stream<T>, DecodeError> {
+    async fn spawn_probe(stream: Stream<T>, byte_pool: BytePool) -> Result<Stream<T>, DecodeError> {
         debug!("Audio::new — spawning probe task...");
         let result = spawn_blocking(move || Self::probe_stream_blocking(stream, &byte_pool))
             .await
@@ -1151,10 +1157,7 @@ where
     /// `!Send` because it holds JS-backed network streams. Probe runs
     /// inline on the calling task.
     #[cfg(target_arch = "wasm32")]
-    async fn spawn_probe(
-        stream: Stream<T>,
-        byte_pool: kithara_bufpool::BytePool,
-    ) -> Result<Stream<T>, DecodeError> {
+    async fn spawn_probe(stream: Stream<T>, byte_pool: BytePool) -> Result<Stream<T>, DecodeError> {
         debug!("Audio::new — running probe inline (wasm)...");
         let result = Self::probe_stream_blocking(stream, &byte_pool)?;
         debug!("Audio::new — probe done");
@@ -1268,8 +1271,7 @@ impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
             self.consumer_phase = ConsumerPhase::Playing;
         }
 
-        self.playhead
-            .advance(&kithara_stream::ChunkPosition::from(&chunk.meta));
+        self.playhead.advance(&ChunkPosition::from(&chunk.meta));
         Ok(ChunkOutcome::Chunk(chunk))
     }
 
@@ -1388,6 +1390,7 @@ mod tests {
         },
     };
 
+    use kithara_stream::{PlayheadState, SeekState};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -1395,8 +1398,8 @@ mod tests {
     fn empty_audio() -> Audio<()> {
         let (_data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(1, None);
         let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
-        let playhead = Arc::new(kithara_stream::PlayheadState::new());
-        let seek = Arc::new(kithara_stream::SeekState::new());
+        let playhead = Arc::new(PlayheadState::new());
+        let seek = Arc::new(SeekState::new());
 
         Audio {
             pcm_rx,
@@ -1461,8 +1464,8 @@ mod tests {
     fn audio_with_channel() -> (Audio<()>, crate::runtime::Outlet<Fetch<PcmChunk>>) {
         let (data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(4, None);
         let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
-        let playhead = Arc::new(kithara_stream::PlayheadState::new());
-        let seek = Arc::new(kithara_stream::SeekState::new());
+        let playhead = Arc::new(PlayheadState::new());
+        let seek = Arc::new(SeekState::new());
 
         let audio = Audio {
             pcm_rx,
@@ -1500,8 +1503,8 @@ mod tests {
 
     fn make_chunk(samples: &[f32]) -> PcmChunk {
         let mut chunk = PcmChunk::default();
-        chunk.pcm.clear();
-        chunk.pcm.extend_from_slice(samples);
+        chunk.samples.clear();
+        chunk.samples.extend_from_slice(samples);
         chunk
     }
 

@@ -5,6 +5,7 @@ use kithara_assets::{
     ReadSide, ResourceKey, StoreOptions, WriteSide, asset_root_for_url,
 };
 use kithara_events::EventBus;
+use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelScope, CancelToken, Mutex,
     time::{Duration, sleep},
@@ -115,10 +116,7 @@ impl File {
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
             let cancel_for_dl = cancel.child();
-            let client = kithara_net::HttpClient::new(
-                kithara_net::NetOptions::default(),
-                cancel_for_dl.child(),
-            );
+            let client = HttpClient::new(NetOptions::default(), cancel_for_dl.child());
             Downloader::new(
                 DownloaderConfig::for_client(client)
                     .cancel(cancel_for_dl)

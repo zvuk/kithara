@@ -35,7 +35,7 @@ fn decoder_chunk_process(decoder: &mut Box<dyn Decoder>) -> Option<usize> {
         .next_chunk()
         .ok()
         .and_then(|o| PcmChunk::try_from(o).ok())
-        .map(|chunk| chunk.pcm.len())
+        .map(|chunk| chunk.samples.len())
 }
 
 #[derive(Clone, Copy)]
@@ -99,7 +99,7 @@ fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfSce
                     let Ok(chunk) = PcmChunk::try_from(outcome) else {
                         break;
                     };
-                    total_samples += chunk.pcm.len();
+                    total_samples += chunk.samples.len();
                 }
             });
 

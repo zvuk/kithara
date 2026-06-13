@@ -65,7 +65,7 @@ fn decode_envelope(
         match resource.next_chunk() {
             Ok(ChunkOutcome::Chunk(chunk)) => {
                 let channels = usize::from(chunk.meta.spec.channels);
-                acc.push_interleaved(&chunk.pcm[..], channels);
+                acc.push_interleaved(&chunk.samples[..], channels);
             }
             Ok(ChunkOutcome::Pending { .. }) => sleep(PENDING_BACKOFF),
             Ok(ChunkOutcome::Eof { .. }) => return Some(acc.finalize(buckets)),

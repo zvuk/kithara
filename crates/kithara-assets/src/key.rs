@@ -112,16 +112,6 @@ impl ResourceKey {
     pub fn is_absolute(&self) -> bool {
         matches!(self, Self::Absolute(_))
     }
-
-    /// Whether this relative key names the same resource as `url` would
-    /// under its asset root. An absolute key never matches a URL.
-    #[must_use]
-    pub fn matches_url(&self, url: &Url) -> bool {
-        match self {
-            Self::Relative { rel_path, .. } => **rel_path == Self::rel_path_from_url(url),
-            Self::Absolute(_) => false,
-        }
-    }
 }
 
 /// Generates an asset root identifier from a URL and an optional name.

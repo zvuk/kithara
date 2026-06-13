@@ -103,6 +103,17 @@ impl AssetDeleter for MemAssetDeleter {
     }
 }
 
+/// Setup for [`MemAssetStore::with_availability_and_deleter`]: the `cancel`
+/// token, optional `mem_resource_capacity`, the shared `availability` index,
+/// the `active_resources` map, and the canonical `deleter`.
+pub(crate) struct MemStoreSetup {
+    pub(crate) cancel: CancelToken,
+    pub(crate) mem_resource_capacity: Option<usize>,
+    pub(crate) availability: AvailabilityIndex,
+    pub(crate) active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
+    pub(crate) deleter: Arc<dyn AssetDeleter>,
+}
+
 impl MemAssetStore {
     /// Create a new in-memory asset store with its own unshared
     /// [`AvailabilityIndex`].
@@ -142,25 +153,26 @@ impl MemAssetStore {
             lru,
             Arc::clone(&active_resources),
         ));
-        Self::with_availability_and_deleter(
+        Self::with_availability_and_deleter(MemStoreSetup {
             cancel,
             mem_resource_capacity,
             availability,
             active_resources,
             deleter,
-        )
+        })
     }
 
     /// Like [`Self::with_availability`] but accepts a pre-built
     /// [`AssetDeleter`] so the production builder can share the same
     /// deleter instance with the LRU evictor (`EvictAssets`).
-    pub(crate) fn with_availability_and_deleter(
-        cancel: CancelToken,
-        mem_resource_capacity: Option<usize>,
-        availability: AvailabilityIndex,
-        active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
-        deleter: Arc<dyn AssetDeleter>,
-    ) -> Self {
+    pub(crate) fn with_availability_and_deleter(setup: MemStoreSetup) -> Self {
+        let MemStoreSetup {
+            cancel,
+            mem_resource_capacity,
+            availability,
+            active_resources,
+            deleter,
+        } = setup;
         Self {
             active_resources,
             deleter,
