@@ -14,7 +14,7 @@ use kithara_assets::{AssetScope, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::AbrReason;
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant},
 };
 use kithara_storage::WaitOutcome;
@@ -37,7 +37,7 @@ use crate::{
 /// variant's `dispatch` closures.
 pub(crate) struct HlsCoordEnv {
     pub(crate) scope: AssetScope<DecryptContext>,
-    pub(crate) cancel: CancellationToken,
+    pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
 }
 
@@ -52,7 +52,7 @@ pub(crate) struct HlsCoord {
     pub(crate) abr: AbrHandle,
     pub(crate) scope: AssetScope<DecryptContext>,
     pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
-    pub(crate) cancel: CancellationToken,
+    pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
     /// Backing playhead state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.

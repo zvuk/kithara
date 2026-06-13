@@ -3,7 +3,7 @@ use std::future::Future;
 use async_trait::async_trait;
 use bytes::Bytes;
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, sleep},
     tokio,
 };
@@ -44,13 +44,13 @@ impl DefaultRetryPolicy {
 
 /// Retry decorator for Net implementations
 pub struct RetryNet<N, P> {
-    cancel: CancellationToken,
+    cancel: CancelToken,
     inner: N,
     retry_policy: P,
 }
 
 impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
-    pub fn new(inner: N, retry_policy: P, cancel: CancellationToken) -> Self {
+    pub fn new(inner: N, retry_policy: P, cancel: CancelToken) -> Self {
         Self {
             cancel,
             inner,
@@ -199,11 +199,7 @@ mod tests {
     }
 
     fn retry_net(mock: Unimock, policy: RetryPolicy) -> RetryNet<Unimock, DefaultRetryPolicy> {
-        RetryNet::new(
-            mock,
-            DefaultRetryPolicy::new(policy),
-            CancellationToken::default(),
-        )
+        RetryNet::new(mock, DefaultRetryPolicy::new(policy), CancelToken::never())
     }
 
     fn retry_net_default(mock: Unimock) -> RetryNet<Unimock, DefaultRetryPolicy> {
@@ -475,7 +471,7 @@ mod tests {
             max_delay: Duration::from_secs(10),
             max_retries: 3,
         };
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy), cancel.clone());
 
         let url = test_url();

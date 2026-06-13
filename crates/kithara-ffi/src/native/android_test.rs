@@ -122,7 +122,7 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
     );
 
     let file_cfg = FileConfig::new(FileSrc::Local(input));
-    let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
+    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
     let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
         .hint("mp3".to_string())
         .worker(worker)

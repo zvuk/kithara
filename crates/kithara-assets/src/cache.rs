@@ -623,7 +623,7 @@ where
 mod tests {
     use std::{fs, path::Path, sync::Arc};
 
-    use kithara_platform::{CancellationToken, thread, time::Duration};
+    use kithara_platform::{CancelToken, thread, time::Duration};
     use kithara_storage::StorageResource;
     use kithara_test_utils::kithara;
 
@@ -661,11 +661,7 @@ mod tests {
     impl Default for ContextMemStore {
         fn default() -> Self {
             Self {
-                inner: MemAssetStore::new(
-                    CancellationToken::default(),
-                    None,
-                    &crate::BytePool::default(),
-                ),
+                inner: MemAssetStore::new(CancelToken::never(), None, &crate::BytePool::default()),
             }
         }
     }
@@ -722,7 +718,7 @@ mod tests {
     fn make_cached(dir: &Path, capacity: NonZeroUsize) -> CachedAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(
             dir,
-            CancellationToken::default(),
+            CancelToken::never(),
             &crate::BytePool::default(),
         ));
         CachedAssets::new(disk, capacity, None, false)
@@ -765,7 +761,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let disk = Arc::new(DiskAssetStore::new(
             dir.path(),
-            CancellationToken::default(),
+            CancelToken::never(),
             &crate::BytePool::default(),
         ));
         let (log, cb) = record_invalidations();
@@ -798,7 +794,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn volatile_displacement_invalidates() {
         let mem = Arc::new(MemAssetStore::new(
-            CancellationToken::default(),
+            CancelToken::never(),
             None,
             &crate::BytePool::default(),
         ));

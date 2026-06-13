@@ -12,7 +12,7 @@ use kithara_integration_tests::{
     fixture_protocol::{HlsRouteKind, HttpErrorRule},
     temp_dir,
 };
-use kithara_platform::{CancellationToken, time::Duration};
+use kithara_platform::{CancelToken, time::Duration};
 
 #[kithara::test(
     flash(false),
@@ -35,7 +35,7 @@ async fn prefetch_403_returns_err_quickly(
     let url = server.url("/master-encrypted.m3u8");
     let config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         .build();
 
     let started = kithara_platform::time::Instant::now();

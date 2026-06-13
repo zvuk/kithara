@@ -15,7 +15,7 @@ use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
 };
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     thread::sleep,
     time::{Duration, Instant},
 };
@@ -93,7 +93,7 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
         delivery: Delivery::Normal,
     });
 
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let store = StoreOptions::new(temp_dir.path());
     let config = HlsConfig::for_url(master.url())
         .store(store)

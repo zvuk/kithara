@@ -7,7 +7,7 @@ use std::{
 };
 
 use dashmap::DashMap;
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 use kithara_storage::{
     AvailabilityObserver, MemOptions, MemResource, Resource, ResourceStatus, StorageResource,
 };
@@ -58,7 +58,7 @@ pub struct MemAssetStore {
     /// See [`crate::deleter`].
     deleter: Arc<dyn AssetDeleter>,
     availability: AvailabilityIndex,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     mem_resource_capacity: Option<usize>,
 }
 
@@ -108,7 +108,7 @@ impl MemAssetStore {
     /// [`AvailabilityIndex`].
     #[must_use]
     pub fn new(
-        cancel: CancellationToken,
+        cancel: CancelToken,
         mem_resource_capacity: Option<usize>,
         pool: &kithara_bufpool::BytePool,
     ) -> Self {
@@ -127,7 +127,7 @@ impl MemAssetStore {
     /// Like [`MemAssetStore::new`] but shares the given aggregate
     /// availability handle.
     pub(crate) fn with_availability(
-        cancel: CancellationToken,
+        cancel: CancelToken,
         mem_resource_capacity: Option<usize>,
         availability: AvailabilityIndex,
         pool: &kithara_bufpool::BytePool,
@@ -155,7 +155,7 @@ impl MemAssetStore {
     /// [`AssetDeleter`] so the production builder can share the same
     /// deleter instance with the LRU evictor (`EvictAssets`).
     pub(crate) fn with_availability_and_deleter(
-        cancel: CancellationToken,
+        cancel: CancelToken,
         mem_resource_capacity: Option<usize>,
         availability: AvailabilityIndex,
         active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
@@ -282,11 +282,7 @@ mod tests {
     use crate::acquisition::{AcquisitionResult, ReadSide, WriteSide};
 
     fn make_mem_store() -> MemAssetStore {
-        MemAssetStore::new(
-            CancellationToken::default(),
-            None,
-            &crate::BytePool::default(),
-        )
+        MemAssetStore::new(CancelToken::never(), None, &crate::BytePool::default())
     }
 
     fn pending(acq: AcquisitionResult<BaseWriter, BaseReader>) -> BaseWriter {

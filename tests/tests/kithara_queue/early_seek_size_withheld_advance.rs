@@ -25,7 +25,7 @@ use kithara_integration_tests::{
     PackagedTestServer, SegmentGateHandle, TestTempDir, kithara, offline::OfflineSession,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{CancellationToken, time::Duration};
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDispatcher};
 use kithara_queue::{Queue, QueueConfig, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
@@ -174,11 +174,8 @@ async fn run_case(mode: GateMode) {
     let temp = TestTempDir::new();
     let store = StoreOptions::new(temp.path());
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
 
     let harness = Harness::new();

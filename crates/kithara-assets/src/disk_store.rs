@@ -8,7 +8,7 @@ use std::{
     sync::Arc,
 };
 
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 use kithara_storage::{
     AtomicChunked, AvailabilityObserver, MmapDriver, MmapOptions, MmapResource, OpenIntent,
     OpenMode, Resource, ResourceRead, ResourceStatus, StorageError, StorageResource,
@@ -35,7 +35,7 @@ pub struct DiskAssetStore {
     /// the [`AvailabilityIndex`]. See [`crate::deleter`] module docs.
     deleter: Arc<dyn AssetDeleter>,
     availability: AvailabilityIndex,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     root_dir: PathBuf,
 }
 
@@ -113,7 +113,7 @@ impl DiskAssetStore {
     /// [`DiskAssetStore::with_availability_and_deleter`].
     pub fn new<P: Into<PathBuf>>(
         root_dir: P,
-        cancel: CancellationToken,
+        cancel: CancelToken,
         _pool: &kithara_bufpool::BytePool,
     ) -> Self {
         let root_dir = root_dir.into();
@@ -255,7 +255,7 @@ impl DiskAssetStore {
     /// [`Self::new`].
     pub(crate) fn with_availability_and_deleter<P: Into<PathBuf>>(
         root_dir: P,
-        cancel: CancellationToken,
+        cancel: CancelToken,
         availability: AvailabilityIndex,
         deleter: Arc<dyn AssetDeleter>,
     ) -> Self {
@@ -376,7 +376,7 @@ pub(crate) fn sanitize_rel(input: &str) -> Result<String, ()> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::CancellationToken;
+    use kithara_platform::CancelToken;
     use kithara_storage::ResourceStatus;
     use kithara_test_utils::kithara;
 
@@ -425,7 +425,7 @@ mod tests {
 
         let store = DiskAssetStore::new(
             dir.path().join("cache"),
-            CancellationToken::default(),
+            CancelToken::never(),
             &crate::BytePool::default(),
         );
 

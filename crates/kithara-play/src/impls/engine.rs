@@ -12,7 +12,7 @@ use bon::Builder;
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
-use kithara_platform::{CancellationToken, Mutex, tokio::runtime::Handle as RuntimeHandle};
+use kithara_platform::{CancelScope, CancelToken, Mutex, tokio::runtime::Handle as RuntimeHandle};
 use portable_atomic::AtomicF32;
 use ringbuf::{HeapProd, traits::Producer};
 use tracing::{debug, info, warn};
@@ -40,9 +40,9 @@ use crate::{
 #[non_exhaustive]
 pub struct EngineConfig {
     /// Master cancel token for the engine. The worker scheduler derives a
-    /// `child_token()` so its produce-core's lock-free `is_cancelled()` read
+    /// `child()` so its produce-core's lock-free `is_cancelled()` read
     /// observes a master cancel.
-    pub cancel: Option<CancellationToken>,
+    pub cancel: Option<CancelToken>,
     /// PCM buffer pool for audio-thread scratch buffers.
     pub pcm_pool: Option<PcmPool>,
     /// Pre-built audio session dispatcher.
@@ -250,7 +250,7 @@ impl EngineImpl {
             .pcm_pool
             .clone()
             .unwrap_or_else(|| PcmPool::default().clone());
-        let worker_cancel = config.cancel.clone().unwrap_or_default().child_token();
+        let worker_cancel = CancelScope::new(config.cancel.clone()).token();
 
         Self {
             config,

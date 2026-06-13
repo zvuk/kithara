@@ -12,7 +12,7 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::Duration,
     tokio::task::{JoinHandle, spawn_blocking},
 };
@@ -84,7 +84,7 @@ async fn spawn_hls_instance(
     .await;
 
     let url = server.url("/master.m3u8");
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_path))

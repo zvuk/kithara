@@ -7,7 +7,7 @@ use kithara::{
     stream::dl::Downloader,
 };
 use kithara_drm::KeyProcessorRegistry;
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 
 use crate::{baked, theme::Palette};
 
@@ -30,8 +30,8 @@ pub struct AppConfig {
     /// queue, player, stores, and UI listener all derive children from
     /// it (see `main.rs`). The chain flag reaches the audio worker and HLS
     /// coord lock-free `is_cancelled()` reads; every subsystem derives its
-    /// own [`CancellationToken::child_token`] from this consumer-top master.
-    pub shutdown: CancellationToken,
+    /// own [`CancelToken::child`] from this consumer-top master.
+    pub shutdown: CancelToken,
     /// App-wide shared file store: concurrent consumers of one URL
     /// (player + waveform) share a single download and cache surface.
     pub file_asset_store: Arc<AssetStore>,
@@ -98,18 +98,14 @@ impl AppConfig {
     /// `app.toml` baked value; override via the generated `with_*`
     /// setters.
     #[must_use]
-    pub fn new(
-        downloader: Downloader,
-        flush_hub: Arc<FlushHub>,
-        cancel: CancellationToken,
-    ) -> Self {
+    pub fn new(downloader: Downloader, flush_hub: Arc<FlushHub>, cancel: CancelToken) -> Self {
         let store_options = StoreOptions::default_builder()
             .flush_hub(Arc::clone(&flush_hub))
             .build();
         let file_asset_store =
-            kithara::file::build_shared_asset_store(&store_options, cancel.child_token());
+            kithara::file::build_shared_asset_store(&store_options, cancel.child());
         let hls_asset_store =
-            kithara::hls::build_shared_asset_store(&store_options, None, cancel.child_token());
+            kithara::hls::build_shared_asset_store(&store_options, None, cancel.child());
         Self::builder()
             .downloader(downloader)
             .flush_hub(flush_hub)

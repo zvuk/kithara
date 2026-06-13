@@ -13,7 +13,7 @@ use kithara::{
 };
 use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, sleep},
     tokio::task::spawn_blocking,
 };
@@ -30,7 +30,7 @@ impl Consts {
 async fn build_small_cache_stream(
     server: &TestServer,
     temp_path: &std::path::Path,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) -> Stream<Hls> {
     let url = server.url("/master.m3u8");
     let store = StoreOptions::builder()
@@ -78,7 +78,7 @@ async fn red_small_cache_seek_stress_does_not_leak_threads(
     let server = TestServer::new().await;
 
     {
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         let stream = build_small_cache_stream(&server, temp_dir.path(), cancel.clone()).await;
         spawn_blocking(move || exercise_stream_blocking(stream))
             .await
@@ -90,7 +90,7 @@ async fn red_small_cache_seek_stress_does_not_leak_threads(
     let threads_baseline = live_thread_count();
 
     for i in 0..Consts::STREAM_ITERATIONS {
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         let stream = build_small_cache_stream(&server, temp_dir.path(), cancel.clone()).await;
         spawn_blocking(move || exercise_stream_blocking(stream))
             .await

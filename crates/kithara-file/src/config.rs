@@ -4,7 +4,7 @@ use bon::Builder;
 use kithara_assets::{AssetStore, StoreOptions};
 use kithara_events::EventBus;
 use kithara_net::Headers;
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 use kithara_stream::dl::Downloader;
 use url::Url;
 
@@ -42,7 +42,7 @@ pub struct FileConfig {
     #[builder(name = events)]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown.
-    pub cancel: Option<CancellationToken>,
+    pub cancel: Option<CancelToken>,
     /// Shared downloader (created lazily if not provided).
     pub downloader: Option<Downloader>,
     /// Additional HTTP headers to include in all requests.
@@ -140,7 +140,7 @@ mod tests {
     }
 
     fn apply_cancel(mut config: FileConfig) -> FileConfig {
-        config.cancel = Some(CancellationToken::default());
+        config.cancel = Some(CancelToken::never());
         config
     }
 
@@ -183,7 +183,7 @@ mod tests {
     #[kithara::test]
     fn test_builder_chain() {
         let store = StoreOptions::default();
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         let bus = EventBus::new(32);
 
         let config = FileConfig::for_src(test_src())

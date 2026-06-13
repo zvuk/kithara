@@ -22,7 +22,7 @@ use kithara_integration_tests::{
     wav::create_wav_header,
 };
 use kithara_platform::{
-    CancellationToken, Mutex,
+    CancelToken, Mutex,
     time::{Duration, Instant},
     tokio::task::{spawn, spawn_blocking},
 };
@@ -258,7 +258,7 @@ async fn vod_manual_switch_affects_future_segments() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -384,7 +384,7 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -494,7 +494,7 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls1 = HlsConfig::for_url(url1.clone())
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         .events(bus1.clone())
         .initial_abr_mode(auto(0))
         .build();
@@ -530,7 +530,7 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls2 = HlsConfig::for_url(url2)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         .events(bus2.clone())
         .initial_abr_mode(AbrMode::manual(1))
         .build();
@@ -565,7 +565,7 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls3 = HlsConfig::for_url(url1)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         .events(bus3.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -651,7 +651,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -741,7 +741,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -833,7 +833,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     // is FLAC (fLaC). Manual(3) forces the cross-codec path.
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     // EventCollector's segment URL parser is HlsTestServer-specific; for
     // real-asset URLs we capture VariantApplied targets directly.
@@ -959,7 +959,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -1104,7 +1104,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -1263,7 +1263,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -1357,7 +1357,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     // AAC sibling of v=0) before v=3's decoder recreate fires.
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
 
     let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1509,7 +1509,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     // can downswitch to slq (v=0) for the same-codec scenario.
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
 
     let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1750,7 +1750,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     // (fLaC, fmp4). Track ≈ 220 s, 37 segments each (~6 s).
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
 
     let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));

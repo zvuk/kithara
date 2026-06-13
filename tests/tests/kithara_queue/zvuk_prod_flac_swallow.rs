@@ -9,7 +9,7 @@ use kithara_integration_tests::{
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant, sleep},
 };
 use kithara_play::Resource;
@@ -79,10 +79,10 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
 
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::default())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
-    let flush_hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, CancellationToken::default());
+    let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
+    let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
     let temp = TestTempDir::new();
 
     let TrackSource::Config(mut cfg) = build_source(PROD_TRACK, &config) else {

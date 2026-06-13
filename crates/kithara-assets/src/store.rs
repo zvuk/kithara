@@ -7,7 +7,7 @@ use std::{fmt, hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use bon::Builder;
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
-use kithara_platform::CancellationToken;
+use kithara_platform::{CancelScope, CancelToken};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::disk_store::DiskAssetStore;
@@ -195,7 +195,7 @@ pub(crate) type MemStore<Ctx = ()> =
 /// - `ProcessingAssets` (if configured) wraps resources for transformation
 pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()> {
     cache_capacity: Option<NonZeroUsize>,
-    cancel: Option<CancellationToken>,
+    cancel: Option<CancelToken>,
     evict_config: Option<EvictConfig>,
     flush_hub: Option<Arc<FlushHub>>,
     mem_resource_capacity: Option<usize>,
@@ -259,7 +259,7 @@ where
         // The demand index is a consumer-driven sibling of `availability`:
         // no observer / decorator threading, just a shared field. Each
         // slot's `producer_cancel` is a child of this store cancel.
-        let demand = DemandIndex::new(self.cancel.clone().unwrap_or_default());
+        let demand = DemandIndex::new(CancelScope::new(self.cancel.clone()).token());
         #[cfg(target_arch = "wasm32")]
         {
             let store = self.build_ephemeral_with_availability(&availability);
@@ -309,7 +309,7 @@ where
                 .keep()
         });
         let evict_cfg = self.evict_config.unwrap_or_default();
-        let cancel = self.cancel.unwrap_or_default();
+        let cancel = CancelScope::new(self.cancel).token();
 
         let process_fn = self
             .process_fn
@@ -320,7 +320,7 @@ where
         let hub = self
             .flush_hub
             .clone()
-            .unwrap_or_else(|| FlushHub::new(cancel.child_token(), FlushPolicy::default()));
+            .unwrap_or_else(|| FlushHub::new(cancel.child(), FlushPolicy::default()));
 
         let pins = open_disk_pins_index(&root_dir, &cancel, &pool);
         let lru = open_disk_lru_index(&root_dir, &cancel, &pool);
@@ -384,7 +384,7 @@ where
     }
 
     fn build_ephemeral_with_availability(self, availability: &AvailabilityIndex) -> MemStore<Ctx> {
-        let cancel = self.cancel.unwrap_or_default();
+        let cancel = CancelScope::new(self.cancel).token();
         let evict_cfg = self.evict_config.unwrap_or_default();
         let process_fn = self
             .process_fn
@@ -394,7 +394,7 @@ where
         let hub = self
             .flush_hub
             .clone()
-            .unwrap_or_else(|| FlushHub::new(cancel.child_token(), FlushPolicy::default()));
+            .unwrap_or_else(|| FlushHub::new(cancel.child(), FlushPolicy::default()));
         let pins = crate::index::PinsIndex::ephemeral();
         let lru = crate::index::LruIndex::ephemeral();
         pins.attach_to(&hub);
@@ -455,7 +455,7 @@ where
     }
 
     #[must_use]
-    pub fn cancel(mut self, cancel: CancellationToken) -> Self {
+    pub fn cancel(mut self, cancel: CancelToken) -> Self {
         self.cancel = Some(cancel);
         self
     }
@@ -523,7 +523,7 @@ where
 #[cfg(not(target_arch = "wasm32"))]
 fn open_disk_pins_index(
     root_dir: &std::path::Path,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
     pool: &BytePool,
 ) -> crate::index::PinsIndex {
     let Some(path) = lazy_index_path(root_dir, "pins.bin") else {
@@ -538,7 +538,7 @@ fn open_disk_pins_index(
 #[cfg(not(target_arch = "wasm32"))]
 fn open_disk_lru_index(
     root_dir: &std::path::Path,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
     pool: &BytePool,
 ) -> crate::index::LruIndex {
     let Some(path) = lazy_index_path(root_dir, "lru.bin") else {

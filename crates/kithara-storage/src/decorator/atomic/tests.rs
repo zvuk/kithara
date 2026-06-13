@@ -7,7 +7,7 @@ mod kithara {
     pub(crate) use kithara_test_macros::test;
 }
 
-use kithara_platform::{CancellationToken, time::Duration};
+use kithara_platform::{CancelToken, time::Duration};
 #[cfg(not(target_arch = "wasm32"))]
 use tempfile::TempDir;
 
@@ -20,7 +20,7 @@ use crate::{MmapOptions, MmapResource, OpenMode};
 fn create_mmap_resource(dir: &TempDir, name: &str) -> MmapResource {
     let path = dir.path().join(name);
     Resource::open(
-        CancellationToken::default(),
+        CancelToken::never(),
         MmapOptions {
             path,
             mode: OpenMode::ReadWrite,
@@ -31,7 +31,7 @@ fn create_mmap_resource(dir: &TempDir, name: &str) -> MmapResource {
 }
 
 fn create_mem_resource() -> MemResource {
-    Resource::open(CancellationToken::default(), MemOptions::default()).unwrap()
+    Resource::open(CancelToken::never(), MemOptions::default()).unwrap()
 }
 
 #[cfg(not(target_arch = "wasm32"))]

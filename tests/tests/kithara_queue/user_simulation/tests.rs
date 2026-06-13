@@ -13,7 +13,7 @@ use kithara_integration_tests::{
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, sleep},
 };
 use kithara_play::{PlayerConfig, PlayerImpl};
@@ -400,11 +400,8 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     .await;
     let temp = temp_dir();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
     let store = StoreOptions::new(temp.path());
     let cfg = kithara_play::ResourceConfig::for_src(spec.url.as_str())
@@ -664,10 +661,10 @@ struct ProdCtx {
 fn build_prod_ctx() -> ProdCtx {
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::default())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
-    let flush_hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, CancellationToken::default());
+    let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
+    let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
     ProdCtx {
         config,
         cache: TestTempDir::new(),

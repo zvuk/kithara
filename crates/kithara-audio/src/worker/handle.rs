@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use kithara_decode::PcmChunk;
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 
 use super::{
     AudioWorkerSource, PreloadGate,
@@ -82,13 +82,13 @@ impl AudioWorkerHandle {
         self.inner.wake();
     }
 
-    /// Spawn a new shared worker thread bound to the given [`CancellationToken`] and
+    /// Spawn a new shared worker thread bound to the given [`CancelToken`] and
     /// return a handle. Production callers (e.g. `EngineImpl`) pass a
-    /// `child_token()` of the player master so worker shutdown participates in
+    /// `child()` of the player master so worker shutdown participates in
     /// the unified cancel hierarchy and the produce-core's lock-free
     /// `is_cancelled()` read observes a master cancel.
     #[must_use]
-    pub fn with_cancel(cancel: CancellationToken) -> Self {
+    pub fn with_cancel(cancel: CancelToken) -> Self {
         let id = AUDIO_WORKER_ID.fetch_add(1, Ordering::Relaxed);
         let inner = Scheduler::<Box<dyn crate::runtime::Node>, HangWatchdogObserver>::start(
             format!("kithara-audio-worker-{id}"),
@@ -263,7 +263,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_creates_and_drops_cleanly() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
         thread_sleep(Duration::from_millis(10));
         handle.shutdown();
         thread_sleep(Duration::from_millis(50));
@@ -271,7 +271,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_delivers_chunks() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
         let (reg, mut data_rx, _preload_gate) = make_registration(MockSource::new(10), 32, 3);
 
         let _id = handle.register_track(reg);
@@ -284,7 +284,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_multi_track_round_robin() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(10), 32, 1);
         let (reg_b, mut rx_b, _) = make_registration(MockSource::new(10), 32, 1);
@@ -302,7 +302,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_skips_not_ready_tracks() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(10), 32, 1);
         let (reg_b, mut rx_b, _) = make_registration(MockSource::not_ready(10), 32, 1);
@@ -322,7 +322,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_overflow_on_full_ringbuf() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg, mut rx, _) = make_registration(MockSource::new(5), 1, 1);
 
@@ -343,7 +343,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_panic_isolation() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg_a, _, _) = make_registration(MockSource::panicking(), 32, 1);
         let (reg_b, mut rx_b, _) = make_registration(MockSource::new(10), 32, 1);
@@ -362,7 +362,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_seek_enters_pending_reset() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let source = MockSource::new(100);
         let seek = Arc::clone(&source.seek);
@@ -386,7 +386,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_fires_on_progress() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg, _rx, preload_gate) = make_registration(MockSource::new(10), 32, 3);
 
@@ -402,7 +402,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_fires_on_eof() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg, _rx, preload_gate) = make_registration(MockSource::new(0), 32, 8);
 
@@ -418,7 +418,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_fires_on_failure() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg, _rx, preload_gate) = make_registration(FailingSource::default(), 32, 8);
 
@@ -434,7 +434,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_reopens_after_seek() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let source = MockSource::new(10);
         let seek = Arc::clone(&source.seek);
@@ -458,7 +458,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_unregister_removes_track() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg, mut rx, _) = make_registration(MockSource::new(100), 32, 1);
 
@@ -480,7 +480,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_service_class_prioritises_audible() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(100), 4, 0);
         let class_a = Arc::clone(&reg_a.service_class);
@@ -578,7 +578,7 @@ mod tests {
             }
         }
 
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(100), 32, 0);
         let _id_a = handle.register_track(reg_a);
@@ -637,7 +637,7 @@ mod tests {
             }
         }
 
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(1000), 32, 0);
         let _id_a = handle.register_track(reg_a);

@@ -17,7 +17,7 @@ use std::pin::Pin;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, sleep, timeout},
     tokio,
 };
@@ -74,7 +74,7 @@ struct State {
     policy: RetryPolicy,
     /// Resume re-fetches already performed, bounded by `policy.max_retries`.
     resumes: u32,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 }
 
 impl State {
@@ -143,7 +143,7 @@ pub(crate) fn resumable_body(
     refetch: Refetch,
     stall: Duration,
     policy: RetryPolicy,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) -> RawBody {
     let state = State {
         inner: first,
@@ -241,7 +241,7 @@ mod tests {
             refetch,
             STALL,
             policy(2),
-            CancellationToken::default(),
+            CancelToken::never(),
         ))
         .await;
         let elapsed = started.elapsed();
@@ -271,7 +271,7 @@ mod tests {
             refetch,
             STALL,
             policy(2),
-            CancellationToken::default(),
+            CancelToken::never(),
         ))
         .await
         .expect("live body must pass through");
@@ -307,7 +307,7 @@ mod tests {
             refetch,
             STALL,
             policy(2),
-            CancellationToken::default(),
+            CancelToken::never(),
         ))
         .await
         .expect("resume must complete the body");
@@ -346,7 +346,7 @@ mod tests {
             refetch,
             STALL,
             policy(2),
-            CancellationToken::default(),
+            CancelToken::never(),
         ))
         .await
         .expect("non-range resume must complete without duplication");

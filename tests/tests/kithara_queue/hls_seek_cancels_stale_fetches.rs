@@ -15,7 +15,7 @@ use kithara_integration_tests::{
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant, sleep, timeout},
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
@@ -112,12 +112,9 @@ fn build_queue_with_tick(
         }
     });
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .max_concurrent(Consts::MAX_CONCURRENT)
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .max_concurrent(Consts::MAX_CONCURRENT)
+            .build(),
     );
     let store = StoreOptions::new(temp_dir.path());
     (queue, player, downloader, store, tick_handle)

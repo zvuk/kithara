@@ -3,7 +3,7 @@
 use std::{collections::HashSet, fmt, path::Path, sync::Arc};
 
 use dashmap::DashSet;
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 
 use crate::{
     AssetResourceState,
@@ -52,7 +52,7 @@ where
     deleter: Arc<dyn AssetDeleter>,
     inner: Arc<A>,
     seen: Arc<DashSet<String>>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     cfg: EvictConfig,
     /// Shared LRU index — same instance held by `DiskAssetDeleter` so
     /// LRU bookkeeping and disk-side deletion stay in sync.
@@ -81,7 +81,7 @@ where
     pub(crate) fn new(
         inner: Arc<A>,
         cfg: EvictConfig,
-        cancel: CancellationToken,
+        cancel: CancelToken,
         lru: LruIndex,
         pins: PinsIndex,
         deleter: Arc<dyn AssetDeleter>,

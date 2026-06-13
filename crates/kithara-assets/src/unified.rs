@@ -11,7 +11,7 @@ use std::{
 };
 
 #[cfg(test)]
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 use rangemap::RangeSet;
 
 use crate::{
@@ -322,7 +322,7 @@ where
         Self::Disk {
             store,
             availability: AvailabilityIndex::new(),
-            demand: DemandIndex::new(CancellationToken::default()),
+            demand: DemandIndex::new(CancelToken::never()),
             base: None,
         }
     }
@@ -337,7 +337,7 @@ where
         Self::Mem {
             store,
             availability: AvailabilityIndex::new(),
-            demand: DemandIndex::new(CancellationToken::default()),
+            demand: DemandIndex::new(CancelToken::never()),
         }
     }
 }

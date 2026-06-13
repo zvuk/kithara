@@ -16,7 +16,7 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, sleep},
     tokio::task::spawn_blocking,
 };
@@ -56,7 +56,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
     let url = server.url("/master.m3u8");
     info!("Test server started at: {}", url);
 
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
@@ -169,7 +169,7 @@ async fn test_basic_multi_segment_reading(
     .await;
 
     let url = server.url("/master.m3u8");
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let config = HlsConfig::for_url(url)
         .cancel(cancel_token.clone())
@@ -237,7 +237,7 @@ async fn test_abr_variant_switch_with_seek_backward(
     .await;
 
     let url = server.url("/master.m3u8");
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();

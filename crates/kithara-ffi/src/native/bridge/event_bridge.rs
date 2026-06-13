@@ -3,7 +3,7 @@ use std::sync::Arc;
 use kithara::play::PlayerEvent;
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackStatus};
 use kithara_platform::{
-    CancellationToken, Duration, JoinHandle, Mutex, sleep, spawn, tokio, tokio::sync::broadcast,
+    CancelToken, Duration, JoinHandle, Mutex, sleep, spawn, tokio, tokio::sync::broadcast,
 };
 use kithara_queue::Queue;
 
@@ -14,7 +14,7 @@ use crate::{
 };
 
 pub(crate) struct EventBridge {
-    cancel: CancellationToken,
+    cancel: CancelToken,
     time_thread: Option<JoinHandle<()>>,
 }
 
@@ -201,7 +201,7 @@ impl EventBridge {
         observer: Arc<dyn PlayerObserver>,
         queue: Arc<Queue>,
         items: &Arc<Mutex<ItemRegistry>>,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> Self {
         let last_current = Arc::new(Mutex::new(None));
         Self::spawn_event_task(
@@ -226,7 +226,7 @@ impl EventBridge {
         queue: Arc<Queue>,
         items: Arc<Mutex<ItemRegistry>>,
         last_current: Arc<Mutex<Option<kithara_events::TrackId>>>,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) {
         crate::FFI_RUNTIME.spawn(async move {
             loop {
@@ -257,7 +257,7 @@ impl EventBridge {
     fn spawn_time_thread(
         queue: Arc<Queue>,
         observer: Arc<dyn PlayerObserver>,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> JoinHandle<()> {
         spawn(move || {
             let interval = Duration::from_millis(Self::TIME_POLL_INTERVAL_MS);

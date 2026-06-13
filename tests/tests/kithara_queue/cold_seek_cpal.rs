@@ -8,7 +8,7 @@ use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_integration_tests::{kithara, temp_dir};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant, sleep, timeout},
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
@@ -112,7 +112,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
         DownloaderConfig::builder()
-            .client(HttpClient::new(net, CancellationToken::default()))
+            .client(HttpClient::new(net, CancelToken::never()))
             .build(),
     );
 

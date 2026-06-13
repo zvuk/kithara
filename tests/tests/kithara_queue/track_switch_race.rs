@@ -31,7 +31,7 @@ use kithara_integration_tests::{
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, sleep, timeout},
     tokio::sync::broadcast::error::RecvError,
 };
@@ -128,11 +128,8 @@ fn build_queue_with_tick(
         }
     });
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
     let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
@@ -153,11 +150,8 @@ fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, Store
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
     let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store)

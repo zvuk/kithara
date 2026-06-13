@@ -15,7 +15,7 @@ use kithara_integration_tests::{
     wav::create_wav_header,
 };
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant},
     tokio::task::spawn_blocking,
 };
@@ -112,7 +112,7 @@ async fn stress_seek_abr_audio() {
     info!(%url, "HLS server ready with 2 variants");
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))

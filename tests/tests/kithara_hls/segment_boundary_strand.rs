@@ -46,7 +46,7 @@ use kithara_integration_tests::{
     wav::create_wav_header,
 };
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant},
     tokio::task::spawn_blocking,
 };
@@ -114,7 +114,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
     info!(%url, gated_segment = GATED_SEGMENT, "WAV-over-HLS fixture with one withheld segment body");
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))

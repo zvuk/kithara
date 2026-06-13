@@ -10,7 +10,7 @@ use kithara::{
     prelude::ResourceConfig,
     stream::AudioCodec,
 };
-use kithara_platform::{CancellationToken, sync::Mutex};
+use kithara_platform::{CancelToken, sync::Mutex};
 use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry, TrackSource};
 use tokio::sync::{Notify, broadcast::error::RecvError};
 
@@ -96,7 +96,7 @@ impl UiState {
 pub struct StateController {
     queue: Arc<Queue>,
     state: Arc<Mutex<UiState>>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     /// Gate for per-track waveform analysis. `false` keeps the listener
     /// from decoding whole tracks while the DJ Studio is closed; the
     /// studio flips it on entry and off on exit.
@@ -114,7 +114,7 @@ impl StateController {
     /// stops when the app shuts down; the controller's `Drop` also
     /// cancels it to stop the listener when the UI tears down first.
     /// `config` supplies the shared stores for per-track waveform analysis.
-    pub fn new(queue: Arc<Queue>, config: AppConfig, cancel: CancellationToken) -> Self {
+    pub fn new(queue: Arc<Queue>, config: AppConfig, cancel: CancelToken) -> Self {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
         let waveform_enabled = Arc::new(AtomicBool::new(false));
         let waveform_wake = Arc::new(Notify::default());
@@ -213,14 +213,14 @@ fn spawn_listener(
     queue: Arc<Queue>,
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     waveform_enabled: Arc<AtomicBool>,
     waveform_wake: Arc<Notify>,
 ) {
     let mut rx = queue.subscribe();
 
     tokio::spawn(async move {
-        let mut current_analyze: Option<CancellationToken> = None;
+        let mut current_analyze: Option<CancelToken> = None;
 
         loop {
             tokio::select! {
@@ -254,13 +254,13 @@ fn spawn_listener(
 }
 
 /// Analyse the current track, cancelling any in-flight prior analysis.
-/// `cancel` is the listener cancel; each run uses `cancel.child_token()`.
+/// `cancel` is the listener cancel; each run uses `cancel.child()`.
 fn spawn_analyze(
     queue: &Arc<Queue>,
     state: &Arc<Mutex<UiState>>,
     config: &AppConfig,
-    cancel: &CancellationToken,
-    current_analyze: &mut Option<CancellationToken>,
+    cancel: &CancelToken,
+    current_analyze: &mut Option<CancelToken>,
 ) {
     if let Some(prev) = current_analyze.take() {
         prev.cancel();
@@ -288,7 +288,7 @@ fn spawn_analyze(
         return;
     };
 
-    let analyze_cancel = cancel.child_token();
+    let analyze_cancel = cancel.child();
     *current_analyze = Some(analyze_cancel.clone());
     let state = Arc::clone(state);
 

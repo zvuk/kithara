@@ -47,7 +47,7 @@ pub(super) async fn run_tui(queue: Arc<Queue>, config: &crate::config::AppConfig
     let controller = Arc::new(StateController::new(
         Arc::clone(&queue),
         config.clone(),
-        config.shutdown.child_token(),
+        config.shutdown.child(),
     ));
 
     let mut ui_handle = task::spawn_blocking(move || run_ui_loop(&controller, &palette));

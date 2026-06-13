@@ -7,7 +7,7 @@ use std::{
 };
 
 use kithara_bufpool::BytePool;
-use kithara_platform::{CancellationToken, Mutex};
+use kithara_platform::{CancelToken, Mutex};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
 
 use super::core::{LruIndex, LruInner, LruState};
@@ -17,7 +17,7 @@ use crate::{
 };
 
 pub(super) struct LruPersist {
-    cancel: CancellationToken,
+    cancel: CancelToken,
     res: OnceLock<Atomic<MmapDriver>>,
     path: PathBuf,
 }
@@ -29,11 +29,7 @@ impl LruIndex {
     /// hydrated synchronously. Otherwise the disk file is **not**
     /// materialised — it appears on the first [`LruIndex::touch`]
     /// or [`LruIndex::remove`].
-    pub(crate) fn with_persist_at(
-        path: PathBuf,
-        cancel: CancellationToken,
-        pool: &BytePool,
-    ) -> Self {
+    pub(crate) fn with_persist_at(path: PathBuf, cancel: CancelToken, pool: &BytePool) -> Self {
         let (initial, opened) = hydrate_existing(&path, &cancel, pool);
         Self {
             inner: Arc::new(LruInner {
@@ -71,7 +67,7 @@ impl LruInner {
 
 fn hydrate_existing(
     path: &std::path::Path,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
     pool: &BytePool,
 ) -> (LruState, Option<Atomic<MmapDriver>>) {
     let nonempty = fs::metadata(path).is_ok_and(|m| m.len() > 0);

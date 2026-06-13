@@ -5,7 +5,7 @@ use std::sync::{
 
 use kithara_assets::{AssetScope, AssetStoreBuilder, ProcessChunkFn};
 use kithara_drm::DecryptContext;
-use kithara_platform::{CancellationToken, time::Duration};
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{SeekControl, SeekObserve, SeekState, SourceError, StreamError};
 use kithara_test_utils::kithara;
@@ -18,7 +18,7 @@ use super::{
 use crate::playlist::PlaylistState;
 
 fn test_ctx(prefetch_budget: usize) -> PlanCtx {
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let passthrough: ProcessChunkFn<DecryptContext> =
         Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
             output[..input.len()].copy_from_slice(input);

@@ -15,7 +15,7 @@ use kithara_abr::Abr;
 use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, sleep},
 };
 use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer};
@@ -55,14 +55,11 @@ impl Peer for ImmortalPeer {
 )]
 async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn StdError + Send + Sync>>
 {
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .cancel(cancel.clone())
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .cancel(cancel.clone())
+            .build(),
     );
 
     let peer: Arc<ImmortalPeer> = Arc::new(ImmortalPeer::new());
@@ -117,19 +114,16 @@ async fn red_hls_source_drop_leaks_peer(
     let url = server.url("/master.m3u8");
 
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .cancel(CancellationToken::default())
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .cancel(CancelToken::never())
+            .build(),
     );
 
     {
         let stream = Stream::<Hls>::new(
             HlsConfig::for_url(url.clone())
                 .store(StoreOptions::new(temp_dir.path()))
-                .cancel(CancellationToken::default())
+                .cancel(CancelToken::never())
                 .downloader(downloader.clone())
                 .build(),
         )
@@ -144,7 +138,7 @@ async fn red_hls_source_drop_leaks_peer(
         let stream = Stream::<Hls>::new(
             HlsConfig::for_url(url.clone())
                 .store(StoreOptions::new(temp_dir.path()))
-                .cancel(CancellationToken::default())
+                .cancel(CancelToken::never())
                 .downloader(downloader.clone())
                 .build(),
         )

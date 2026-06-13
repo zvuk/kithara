@@ -1,4 +1,4 @@
-use kithara_platform::{CancellationToken, RwLock};
+use kithara_platform::{CancelToken, RwLock};
 
 /// The variant's cancel epoch: the track-level parent token and the rotating
 /// per-activation child.
@@ -10,13 +10,13 @@ use kithara_platform::{CancellationToken, RwLock};
 /// back to `v_old`, and the second activation of `v_old` must dispatch fetches
 /// under a *live* cancel — hence the rearm-on-activation rotation.
 pub(super) struct CancelEpoch {
-    master: CancellationToken,
-    current: RwLock<CancellationToken>,
+    master: CancelToken,
+    current: RwLock<CancelToken>,
 }
 
 impl CancelEpoch {
-    pub(super) fn new(master: CancellationToken) -> Self {
-        let current = RwLock::new(master.child_token());
+    pub(super) fn new(master: CancelToken) -> Self {
+        let current = RwLock::new(master.child());
         Self { master, current }
     }
 
@@ -26,13 +26,13 @@ impl CancelEpoch {
     }
 
     /// Clone the current epoch token — attached to every emitted `FetchCmd`.
-    pub(super) fn handle(&self) -> CancellationToken {
+    pub(super) fn handle(&self) -> CancelToken {
         self.current.lock_sync_read().clone()
     }
 
     /// Rotate to a fresh child of `master` on re-activation.
     pub(super) fn rearm(&self) {
-        let fresh = self.master.child_token();
+        let fresh = self.master.child();
         *self.current.lock_sync_write() = fresh;
     }
 }

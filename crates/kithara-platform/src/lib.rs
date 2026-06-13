@@ -47,11 +47,12 @@ pub use flash::*;
 mod cancel_group;
 mod rt_cancel;
 
-pub use cancel_group::CancelGroup;
-// W3 propagate-down cancel (built alongside the legacy roots; the root
-// `CancelGroup` re-export switches off the legacy onto `common::cancel` in 3.3).
+// W3 propagate-down cancel. The root `CancelGroup` now resolves to
+// `common::cancel` (switched off the legacy `cancel_group` in 3.3, atomic with
+// the workspace token migration). Legacy `CancellationToken` stays exported
+// until 3.4 deletes the legacy roots; it has no remaining consumers.
 pub use common::cancel::{
-    CancelRoot, CancelScope, CancelToken, CancelWakerGuard, Cancelled, CancelledOwned,
+    CancelGroup, CancelRoot, CancelScope, CancelToken, CancelWakerGuard, Cancelled, CancelledOwned,
 };
 pub use rt_cancel::CancellationToken;
 

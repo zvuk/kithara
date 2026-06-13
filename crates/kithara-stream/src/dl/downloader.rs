@@ -5,7 +5,7 @@ use kithara_abr::{Abr, AbrController, AbrPeerId};
 use kithara_events::EventBus;
 use kithara_net::HttpClient;
 use kithara_platform::{
-    CancellationToken, Mutex, RwLock, time::Duration, tokio, tokio::sync::mpsc,
+    CancelScope, CancelToken, Mutex, RwLock, time::Duration, tokio, tokio::sync::mpsc,
 };
 use kithara_test_utils::kithara;
 
@@ -46,7 +46,7 @@ pub(super) struct RegisteredPeerEntry {
     /// Handle's cancel token. Fires from `PeerInner::Drop` when the last
     /// `PeerHandle` clone is released, letting the [`Registry`] drop the
     /// peer entry (and its `Arc<dyn Peer>`).
-    pub(super) cancel: CancellationToken,
+    pub(super) cancel: CancelToken,
     pub(super) cmd_rx: mpsc::Receiver<super::peer::InternalCmd>,
 }
 
@@ -65,7 +65,7 @@ pub(super) struct DownloaderInner {
     /// Global in-flight fetch counter. Limits total concurrent HTTP
     /// connections across all peers and command types.
     pub(super) inflight: Arc<AtomicUsize>,
-    pub(super) cancel: CancellationToken,
+    pub(super) cancel: CancelToken,
     pub(super) demand_throttle: Duration,
     pub(super) soft_timeout: Duration,
     pub(super) client: HttpClient,
@@ -110,7 +110,10 @@ impl Downloader {
         let soft_timeout = config.soft_timeout;
         #[cfg(not(target_arch = "wasm32"))]
         let runtime = config.runtime;
-        let abr = AbrController::new(config.abr_settings);
+        // Composed/standalone seam: `Some` parent → child of it; `None` → own
+        // root. The loop, peers, and ABR controller all derive from this token.
+        let cancel = CancelScope::new(config.cancel).token();
+        let abr = AbrController::new(config.abr_settings, cancel.child());
         Self {
             inner: Arc::new(DownloaderInner {
                 soft_timeout,
@@ -118,7 +121,7 @@ impl Downloader {
                 runtime,
                 abr,
                 client: config.client,
-                cancel: config.cancel,
+                cancel,
                 max_concurrent: config.max_concurrent,
                 demand_throttle: config.demand_throttle,
                 inflight: Arc::new(AtomicUsize::new(0)),
@@ -149,7 +152,7 @@ impl Downloader {
         /// Capacity of the per-peer bounded command channel.
         const PEER_CMD_CHANNEL_CAPACITY: usize = 32;
         self.ensure_spawned();
-        let cancel = self.inner.cancel.child_token();
+        let cancel = self.inner.cancel.child();
         let (cmd_tx, cmd_rx) = mpsc::channel(PEER_CMD_CHANNEL_CAPACITY);
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::new(None));
 

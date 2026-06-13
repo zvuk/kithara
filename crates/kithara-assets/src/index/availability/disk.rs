@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, OnceLock, atomic::Ordering},
 };
 
-use kithara_platform::{CancellationToken, Mutex};
+use kithara_platform::{CancelToken, Mutex};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
 
 use super::core::{Availability, AvailabilityIndex, InnerIndex};
@@ -19,7 +19,7 @@ use crate::{
 };
 
 pub(super) struct AvailabilityPersist {
-    cancel: CancellationToken,
+    cancel: CancelToken,
     res: OnceLock<Atomic<MmapDriver>>,
     path: PathBuf,
 }
@@ -33,7 +33,7 @@ impl AvailabilityIndex {
     /// Failures (open, load) collapse silently — the aggregate
     /// stays empty and the persist resource is materialised lazily
     /// on first flush.
-    pub(crate) fn enable_persistence(&self, path: PathBuf, cancel: CancellationToken) {
+    pub(crate) fn enable_persistence(&self, path: PathBuf, cancel: CancelToken) {
         let opened = if path.exists() {
             match persist::open_existing(&path, &cancel) {
                 Ok(res) => {

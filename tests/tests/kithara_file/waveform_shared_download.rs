@@ -20,9 +20,7 @@ use kithara::{
 };
 use kithara_app::waveform::analyze;
 use kithara_integration_tests::{TestHttpServer, create_test_wav};
-use kithara_platform::{
-    CancellationToken, thread::sleep, time::Duration, tokio::task::spawn_blocking,
-};
+use kithara_platform::{CancelToken, thread::sleep, time::Duration, tokio::task::spawn_blocking};
 
 const WAVEFORM_BUCKETS: usize = 100;
 
@@ -91,7 +89,7 @@ async fn waveform_and_player_share_one_get() {
     let analysis = tokio::spawn(analyze(
         waveform_cfg,
         WAVEFORM_BUCKETS,
-        CancellationToken::default(),
+        CancelToken::never(),
     ));
 
     let mut player = Resource::new(player_cfg)

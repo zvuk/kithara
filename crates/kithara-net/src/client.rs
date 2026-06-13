@@ -3,7 +3,7 @@ use std::{num::NonZeroU16, sync::Arc};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
-use kithara_platform::{CancellationToken, time::timeout};
+use kithara_platform::{CancelToken, time::timeout};
 use reqwest::Client;
 use url::Url;
 
@@ -141,7 +141,7 @@ struct RawHttp {
     options: NetOptions,
     /// Master-derived cancel, captured by the self-healing body so a re-fetch
     /// loop exits promptly on teardown. Same token the `RetryNet` layer uses.
-    cancel: CancellationToken,
+    cancel: CancelToken,
 }
 
 impl RawHttp {
@@ -298,7 +298,7 @@ impl HttpClient {
     /// `RetryNet` layer aborts pending retries when that token is
     /// cancelled. Callers MUST pass a token that lives in the
     /// consumer-crate's cancel tree — typically
-    /// `master_cancel.child_token()` derived at the consumer-crate top
+    /// `master_cancel.child()` derived at the consumer-crate top
     /// (`App`, `Queue`, FFI player). The workspace cancel hierarchy
     /// forbids orphan tokens in production code.
     ///
@@ -306,7 +306,7 @@ impl HttpClient {
     ///
     /// Panics if the `reqwest::Client` builder fails to build.
     #[must_use]
-    pub fn new(options: NetOptions, cancel: CancellationToken) -> Self {
+    pub fn new(options: NetOptions, cancel: CancelToken) -> Self {
         let inner = build_client(&options)
             .expect("BUG: reqwest::Client::builder().build() with our defaults cannot fail");
         let raw = RawHttp {
@@ -540,7 +540,7 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_retries_503_until_ok() {
         let (url, counter) = server_failing_first_n(2).await;
-        let client = HttpClient::new(fast_options(3), CancellationToken::default());
+        let client = HttpClient::new(fast_options(3), CancelToken::never());
         let bytes = client
             .get_bytes(url, None)
             .await
@@ -556,7 +556,7 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_no_retry_propagates_5xx() {
         let (url, counter) = server_failing_first_n(2).await;
-        let client = HttpClient::new(fast_options(0), CancellationToken::default());
+        let client = HttpClient::new(fast_options(0), CancelToken::never());
         let err = client
             .get_bytes(url, None)
             .await
@@ -575,7 +575,7 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_head_retries_503_until_ok() {
         let (url, counter) = server_failing_first_n(1).await;
-        let client = HttpClient::new(fast_options(2), CancellationToken::default());
+        let client = HttpClient::new(fast_options(2), CancelToken::never());
         client.head(url, None).await.expect("HEAD must retry");
         assert_eq!(counter.load(Ordering::SeqCst), 2);
     }

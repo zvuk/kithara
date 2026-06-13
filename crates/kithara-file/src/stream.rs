@@ -6,7 +6,7 @@ use kithara_assets::{
 };
 use kithara_events::EventBus;
 use kithara_platform::{
-    CancellationToken, Mutex,
+    CancelScope, CancelToken, Mutex,
     time::{Duration, sleep},
 };
 use kithara_storage::StorageError;
@@ -34,7 +34,7 @@ impl StreamType for File {
     type Source = FileSource;
 
     async fn create(config: Self::Config) -> Result<Self::Source, StreamSourceError> {
-        let cancel = config.cancel.clone().unwrap_or_default();
+        let cancel = CancelScope::new(config.cancel.clone()).token();
         let src = config.src.clone();
 
         match src {
@@ -55,7 +55,7 @@ impl File {
     fn create_local(
         path: PathBuf,
         config: FileConfig,
-        cancel: &CancellationToken,
+        cancel: &CancelToken,
     ) -> Result<FileSource, SourceError> {
         if !path.exists() {
             return Err(SourceError::InvalidPath(format!(
@@ -92,7 +92,7 @@ impl File {
             bus,
             store,
             key,
-            cancel.child_token(),
+            cancel.child(),
             cached_codec,
         ))
     }
@@ -106,7 +106,7 @@ impl File {
     fn create_remote(
         url: url::Url,
         config: FileConfig,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> Result<FileSource, SourceError> {
         let from_config = config.name.as_deref();
         let from_query = url.query();
@@ -114,10 +114,10 @@ impl File {
         let asset_root = asset_root_for_url(&url, name_or_query);
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
-            let cancel_for_dl = cancel.child_token();
+            let cancel_for_dl = cancel.child();
             let client = kithara_net::HttpClient::new(
                 kithara_net::NetOptions::default(),
-                cancel_for_dl.child_token(),
+                cancel_for_dl.child(),
             );
             Downloader::new(
                 DownloaderConfig::for_client(client)
@@ -165,7 +165,7 @@ impl File {
                     bus,
                     backend,
                     key,
-                    cancel.child_token(),
+                    cancel.child(),
                     cached_codec,
                 ));
             }
@@ -228,7 +228,7 @@ impl File {
     async fn create_remote_wait_for_claim(
         url: url::Url,
         config: FileConfig,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> Result<FileSource, StreamSourceError> {
         /// Bounded poll interval while a sibling `AssetStore` instance holds
         /// the atomic-chunked tmp for the same canonical path. Short enough
@@ -260,10 +260,7 @@ impl File {
 /// master so a shutdown cascades through the store. Also the standalone
 /// fallback when no store is injected (single consumer).
 #[must_use]
-pub fn build_shared_asset_store(
-    store: &StoreOptions,
-    cancel: CancellationToken,
-) -> Arc<AssetStore<()>> {
+pub fn build_shared_asset_store(store: &StoreOptions, cancel: CancelToken) -> Arc<AssetStore<()>> {
     let mut builder = AssetStoreBuilder::new()
         .cancel(cancel)
         .root_dir(&store.cache_dir)

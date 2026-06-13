@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_platform::{
-    CancellationToken, thread,
+    CancelToken, thread,
     time::{Duration, Instant, sleep, timeout},
     tokio::task::spawn_blocking,
 };
@@ -126,7 +126,7 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
@@ -360,7 +360,7 @@ async fn stream_continues_after_seek(
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
 
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let abr_mode = if abr_auto {
         auto(0)
     } else {
@@ -456,7 +456,7 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
@@ -518,7 +518,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
 
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
@@ -818,7 +818,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(256);
     let mut hls_rx = bus.subscribe();
 

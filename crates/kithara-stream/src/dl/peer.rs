@@ -9,7 +9,7 @@ use kithara_abr::{Abr, AbrHandle, AbrPeerId};
 use kithara_events::{EventBus, RequestPriority};
 use kithara_net::{Headers, NetError};
 use kithara_platform::{
-    CancelGroup, CancellationToken, RwLock,
+    CancelGroup, CancelToken, RwLock,
     tokio::sync::{mpsc, oneshot},
 };
 
@@ -83,7 +83,7 @@ pub(super) enum ResponseTarget {
 /// `CancelReason::PeerCancel` without holding a reference back into
 /// the Registry.
 pub(super) struct SlotEntry {
-    pub(super) peer_cancel: CancellationToken,
+    pub(super) peer_cancel: CancelToken,
     pub(super) cmd: InternalCmd,
 }
 
@@ -125,7 +125,7 @@ struct PeerInner {
     /// to both the handle's own imperative path and the Registry's
     /// proactive `poll_next` path.
     bus: Arc<RwLock<Option<EventBus>>>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     cmd_tx: mpsc::Sender<InternalCmd>,
 }
 
@@ -155,7 +155,7 @@ impl std::fmt::Debug for PeerHandle {
 impl PeerHandle {
     pub(super) fn new(
         pool: Arc<DownloaderInner>,
-        cancel: CancellationToken,
+        cancel: CancelToken,
         cmd_tx: mpsc::Sender<InternalCmd>,
         bus: Arc<RwLock<Option<EventBus>>>,
         abr: AbrHandle,
@@ -224,7 +224,7 @@ impl PeerHandle {
     /// peer. The cancel also fires automatically when the last clone
     /// of this handle is dropped.
     #[must_use]
-    pub fn cancel(&self) -> CancellationToken {
+    pub fn cancel(&self) -> CancelToken {
         self.inner.cancel.clone()
     }
 
@@ -260,7 +260,7 @@ impl PeerHandle {
         InternalCmd,
         oneshot::Receiver<Result<CollectedResponse, NetError>>,
     ) {
-        let cancel = CancelGroup::new(vec![self.inner.cancel.child_token()]);
+        let cancel = CancelGroup::new(vec![self.inner.cancel.child()]);
         let (resp_tx, resp_rx) = oneshot::channel();
         let request_id = self.inner._pool.next_request_id();
         let enqueued_at = kithara_platform::time::Instant::now();

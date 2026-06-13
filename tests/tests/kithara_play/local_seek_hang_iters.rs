@@ -13,7 +13,7 @@ use kithara_integration_tests::{
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancellationToken, thread,
+    CancelToken, thread,
     time::{Duration, Instant, timeout},
 };
 use url::Url;
@@ -177,7 +177,7 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::default(),
-                CancellationToken::default(),
+                CancelToken::never(),
             ))
             .build(),
         );

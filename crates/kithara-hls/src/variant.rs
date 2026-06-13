@@ -18,7 +18,7 @@ use kithara_assets::{
 };
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, NetError, Retryability};
-use kithara_platform::{CancellationToken, Mutex, time::Duration};
+use kithara_platform::{CancelToken, Mutex, time::Duration};
 use kithara_storage::{ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SeekObserve,
@@ -419,7 +419,7 @@ enum PlannedFetch {
 
 pub(crate) struct PlanCtx {
     pub(crate) scope: AssetScope<DecryptContext>,
-    pub(crate) master_cancel: CancellationToken,
+    pub(crate) master_cancel: CancelToken,
     /// Per-resource HTTP headers applied to every init/segment fetch.
     /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
     /// tokens carried by the playlist load also reach segment GETs.
@@ -758,7 +758,7 @@ impl HlsVariant {
         self.cancel_epoch.cancel();
     }
 
-    pub(crate) fn cancel_handle(&self) -> CancellationToken {
+    pub(crate) fn cancel_handle(&self) -> CancelToken {
         self.cancel_epoch.handle()
     }
 
@@ -1539,7 +1539,7 @@ struct FetchSlot {
     reader: AssetReader<DecryptContext>,
     /// Clone-able streaming-write handle for the fetch body closure.
     raw: RawWriteHandle,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 }
 
 impl From<FetchSlot> for OnCompleteFn {

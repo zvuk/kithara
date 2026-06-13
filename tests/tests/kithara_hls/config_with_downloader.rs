@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 
 #[kithara::test(
     tokio,
@@ -36,14 +36,11 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
     )
     .await;
 
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .cancel(cancel.child_token())
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .cancel(cancel.child())
+            .build(),
     );
 
     let temp_a = temp_dir.path().join("stream_a");

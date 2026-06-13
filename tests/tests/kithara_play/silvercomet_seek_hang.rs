@@ -13,7 +13,7 @@ use kithara::{
 use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{offline::OfflinePlayer, temp_dir};
 use kithara_platform::{
-    CancellationToken, thread,
+    CancelToken, thread,
     time::{Duration, Instant, timeout},
 };
 
@@ -108,7 +108,7 @@ fn fresh_downloader() -> Downloader {
     let net = NetOptions::builder().is_insecure(true).build();
     Downloader::new(
         DownloaderConfig::builder()
-            .client(HttpClient::new(net, CancellationToken::default()))
+            .client(HttpClient::new(net, CancelToken::never()))
             .build(),
     )
 }

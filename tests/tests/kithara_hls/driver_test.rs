@@ -18,7 +18,7 @@ use kithara_integration_tests::{
     rt_cancel, temp_dir,
 };
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, sleep},
     tokio::task::{spawn, spawn_blocking},
 };
@@ -39,10 +39,7 @@ use tracing::info;
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn test_driver_seek_after_playlist_finished(
-    temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
-) {
+async fn test_driver_seek_after_playlist_finished(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8");
 
@@ -103,7 +100,7 @@ async fn test_driver_seek_after_playlist_finished(
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: CancellationToken) {
+async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
         false,

@@ -5,7 +5,7 @@ use kithara_audio::{Audio, AudioConfig, AudioWorkerHandle};
 use kithara_hls::{AbrMode, Hls, HlsConfig};
 use kithara_integration_tests::{TestServerHelper, TestTempDir, kithara, temp_dir};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     thread::{active_named_thread_count, sleep},
     time::{Duration, Instant},
 };
@@ -41,7 +41,7 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
 #[kithara::test(serial)]
 fn thread_budget_audio_worker_is_one_thread() {
     let before = active_named_thread_count();
-    let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
+    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
     settle();
     let after = active_named_thread_count();
 
@@ -65,7 +65,7 @@ fn thread_budget_audio_worker_is_one_thread() {
 )]
 async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
 
     let before = active_named_thread_count();
 
@@ -107,9 +107,9 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
 )]
 async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let cancel = CancellationToken::default();
-    let shared_worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
-    let shared_hub = FlushHub::new(cancel.child_token(), FlushPolicy::default());
+    let cancel = CancelToken::never();
+    let shared_worker = AudioWorkerHandle::with_cancel(CancelToken::never());
+    let shared_hub = FlushHub::new(cancel.child(), FlushPolicy::default());
     let shared_store = || {
         let mut opts = StoreOptions::new(temp_dir.path());
         opts.flush_hub = Some(shared_hub.clone());

@@ -56,7 +56,7 @@ use kithara_integration_tests::{
     wav::create_wav_header,
 };
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant, sleep},
     tokio::task::spawn_blocking,
 };
@@ -136,7 +136,7 @@ async fn forward_into_withheld_segment_parks_without_busy_spin() {
         .build();
     let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(store)
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));

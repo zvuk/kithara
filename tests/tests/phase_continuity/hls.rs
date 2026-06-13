@@ -12,7 +12,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, auto,
     fixture_protocol::{EncryptionRequest, PackagedSignal},
 };
-use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use kithara_stream::AudioCodec;
 use tracing::{info, warn};
 
@@ -158,7 +158,7 @@ async fn run_case_paced(
         .expect("create sine HLS fixture");
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
         store.cache_capacity = Some(NonZeroUsize::new(SEGMENTS_PER_VARIANT + 10).expect("nonzero"));

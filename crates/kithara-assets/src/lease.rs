@@ -9,7 +9,7 @@ use std::{
 };
 
 use dashmap::DashMap;
-use kithara_platform::{CancellationToken, Mutex};
+use kithara_platform::{CancelToken, Mutex};
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 
 use crate::{
@@ -78,7 +78,7 @@ where
 {
     inner: Arc<A>,
     live: Arc<LiveRegistry>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
     /// Shared pins index — same instance held by `EvictAssets` and
     /// `DiskAssetDeleter`. Mutations (`add` / `remove`) flush
@@ -101,7 +101,7 @@ impl<A> LeaseAssets<A>
 where
     A: Assets,
 {
-    pub(crate) fn new(inner: Arc<A>, cancel: CancellationToken, pins: PinsIndex) -> Self {
+    pub(crate) fn new(inner: Arc<A>, cancel: CancelToken, pins: PinsIndex) -> Self {
         Self::with_byte_recorder(inner, cancel, None, pins)
     }
 
@@ -188,7 +188,7 @@ where
     /// Create with byte recorder for asset-size tracking.
     pub(crate) fn with_byte_recorder(
         inner: Arc<A>,
-        cancel: CancellationToken,
+        cancel: CancelToken,
         byte_recorder: Option<Arc<dyn ByteRecorder>>,
         pins: PinsIndex,
     ) -> Self {
@@ -607,21 +607,17 @@ mod tests {
     fn make_pins_disk(dir: &Path) -> PinsIndex {
         let path = dir.join("_index").join("pins.bin");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        PinsIndex::with_persist_at(
-            path,
-            CancellationToken::default(),
-            &crate::BytePool::default(),
-        )
+        PinsIndex::with_persist_at(path, CancelToken::never(), &crate::BytePool::default())
     }
 
     fn make_lease(dir: &Path) -> LeaseAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(
             dir,
-            CancellationToken::default(),
+            CancelToken::never(),
             &crate::BytePool::default(),
         ));
         let pins = make_pins_disk(dir);
-        LeaseAssets::new(disk, CancellationToken::default(), pins)
+        LeaseAssets::new(disk, CancelToken::never(), pins)
     }
 
     fn load_persisted_pins(dir: &Path) -> HashSet<String> {
@@ -629,11 +625,8 @@ mod tests {
         if !path.exists() {
             return HashSet::new();
         }
-        let idx = PinsIndex::with_persist_at(
-            path,
-            CancellationToken::default(),
-            &crate::BytePool::default(),
-        );
+        let idx =
+            PinsIndex::with_persist_at(path, CancelToken::never(), &crate::BytePool::default());
         idx.snapshot()
     }
 

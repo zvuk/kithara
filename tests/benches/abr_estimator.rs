@@ -4,12 +4,11 @@ use std::{hint::black_box, sync::Arc};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use kithara_abr::{
-    Abr, AbrController, AbrMode, AbrSettings, AbrState, BandwidthSource, Estimator,
-    ThroughputEstimator,
+    Abr, AbrController, AbrSettings, AbrState, BandwidthSource, Estimator, ThroughputEstimator,
 };
 use kithara_events::{VariantDuration, VariantIndex, VariantInfo};
 use kithara_integration_tests::auto;
-use kithara_platform::time::Duration;
+use kithara_platform::{CancelToken, time::Duration};
 
 fn settings() -> AbrSettings {
     AbrSettings::builder()
@@ -97,7 +96,7 @@ fn bench_controller_record_bandwidth(c: &mut Criterion) {
             &(bytes, duration_ms),
             |b, &(bytes, duration_ms)| {
                 b.iter(|| {
-                    let controller = AbrController::new(settings());
+                    let controller = AbrController::new(settings(), CancelToken::never());
                     let state = Arc::new(AbrState::new(auto(1)));
                     let peer: Arc<dyn Abr> = Arc::new(BenchPeer {
                         state: Arc::clone(&state),

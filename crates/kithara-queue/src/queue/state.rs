@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_events::{EventBus, EventReceiver, TrackId};
-use kithara_platform::CancellationToken;
+use kithara_platform::{CancelScope, CancelToken};
 use kithara_play::{PlayerConfig, PlayerImpl};
 
 use super::types::{
@@ -111,7 +111,7 @@ pub struct Queue {
     /// shutdown to the player's subsystems. When a caller supplies a
     /// pre-built player, this token is independent — the caller owns
     /// the player's master directly.
-    pub(super) shutdown: CancellationToken,
+    pub(super) shutdown: CancelToken,
 }
 
 impl Queue {
@@ -141,7 +141,7 @@ impl Queue {
         } = config;
         // App path threads a child of the app master; standalone / test
         // use falls back to a fresh root (the documented safety net).
-        let cancel = config_cancel.unwrap_or_default();
+        let cancel = CancelScope::new(config_cancel).token();
         let player = player.unwrap_or_else(|| {
             let config = PlayerConfig::builder().cancel(cancel.clone()).build();
             Arc::new(PlayerImpl::new(config))

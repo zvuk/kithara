@@ -16,7 +16,7 @@ use kithara_events::{AudioEvent, DeferredBus, EventBus, SeekLifecycleStage, Segm
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
 use kithara_platform::{
-    CancellationToken, thread::park_timeout, time::Duration, tokio::task::spawn_blocking,
+    CancelScope, CancelToken, thread::park_timeout, time::Duration, tokio::task::spawn_blocking,
 };
 use kithara_stream::{MediaInfo, PlayheadWrite, SeekControl, SeekObserve, Stream, StreamType};
 use kithara_test_utils::kithara;
@@ -135,7 +135,7 @@ pub struct Audio<S> {
     abr_handle: Option<kithara_abr::AbrHandle>,
 
     /// Cancellation token for graceful shutdown.
-    cancel: Option<CancellationToken>,
+    cancel: Option<CancelToken>,
 
     /// Interleaved scratch for `read_planar`, drawn from `pcm_pool` once and
     /// pre-sized off the audio thread in `new` so the real-time path never
@@ -564,11 +564,7 @@ impl<S> Audio<S> {
                 self.wake_worker();
                 return RecvOutcome::Item(fetch);
             }
-            if self
-                .cancel
-                .as_ref()
-                .is_some_and(CancellationToken::is_cancelled)
-            {
+            if self.cancel.as_ref().is_some_and(CancelToken::is_cancelled) {
                 hang_reset!();
                 return RecvOutcome::Closed;
             }
@@ -579,11 +575,7 @@ impl<S> Audio<S> {
                 self.wake_worker();
                 return RecvOutcome::Item(fetch);
             }
-            if self
-                .cancel
-                .as_ref()
-                .is_some_and(CancellationToken::is_cancelled)
-            {
+            if self.cancel.as_ref().is_some_and(CancelToken::is_cancelled) {
                 hang_reset!();
                 return RecvOutcome::Closed;
             }
@@ -804,7 +796,7 @@ where
             gapless_mode: config_gapless_mode,
             cancel: config_cancel,
         } = config;
-        let cancel = config_cancel.unwrap_or_default();
+        let cancel = CancelScope::new(config_cancel).token();
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
         let byte_pool = byte_pool.unwrap_or_else(|| kithara_bufpool::BytePool::default().clone());
@@ -900,7 +892,7 @@ where
         let (trash_tx, trash_inlet) = Self::create_trash_channel(pcm_buffer_chunks);
 
         let (worker, is_standalone) = config_worker.map_or_else(
-            || (AudioWorkerHandle::with_cancel(cancel.child_token()), true),
+            || (AudioWorkerHandle::with_cancel(cancel.child()), true),
             |w| (w, false),
         );
 
@@ -1451,7 +1443,7 @@ mod tests {
     #[kithara::test]
     fn blocking_recv_returns_closed_after_cancel() {
         let mut audio = empty_audio();
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         cancel.cancel();
         audio.cancel = Some(cancel);
 
@@ -1572,7 +1564,7 @@ mod tests {
     #[kithara::test]
     fn consumer_phase_failed_on_channel_close() {
         let (mut audio, _tx) = audio_with_channel();
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         cancel.cancel();
         audio.cancel = Some(cancel);
         audio.preloaded = false;

@@ -9,7 +9,7 @@ use kithara_assets::{
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::EventBus;
-use kithara_platform::{CancellationToken, tokio::sync::mpsc};
+use kithara_platform::{CancelScope, CancelToken, tokio::sync::mpsc};
 use kithara_stream::{
     Activity, PlayheadState, PlayheadWrite, SeekObserve, SeekState, SourceError, StreamType,
     dl::{Downloader, DownloaderConfig, Peer},
@@ -50,7 +50,7 @@ impl StreamType for Hls {
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
         let asset_root = asset_root_for_url(&config.url, config.name.as_deref());
         let asset_root_arc: Arc<str> = Arc::from(asset_root.as_str());
-        let cancel = config.cancel.clone().unwrap_or_default();
+        let cancel = CancelScope::new(config.cancel.clone()).token();
 
         let bus = config
             .bus
@@ -58,9 +58,9 @@ impl StreamType for Hls {
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
-            let dl_cancel = cancel.child_token();
+            let dl_cancel = cancel.child();
             let client =
-                kithara_net::HttpClient::new(config.net_options.clone(), dl_cancel.child_token());
+                kithara_net::HttpClient::new(config.net_options.clone(), dl_cancel.child());
             let dl_config = DownloaderConfig::for_client(client)
                 .cancel(dl_cancel)
                 .build();
@@ -228,7 +228,7 @@ impl StreamType for Hls {
 
 fn build_asset_store(
     config: &HlsConfig,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     evict_tx: mpsc::UnboundedSender<ResourceKey>,
 ) -> AssetStore<DecryptContext> {
     let drm_process_fn: ProcessChunkFn<DecryptContext> =
@@ -266,7 +266,7 @@ fn build_asset_store(
 pub fn build_shared_asset_store(
     store: &StoreOptions,
     pool: Option<BytePool>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) -> HlsStore {
     let registry: HlsInvalidationRegistry = Arc::new(DashMap::new());
     let drm_process_fn: ProcessChunkFn<DecryptContext> =

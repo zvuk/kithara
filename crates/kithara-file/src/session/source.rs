@@ -2,7 +2,7 @@ use std::{num::NonZeroUsize, ops::Range, sync::Arc};
 
 use kithara_assets::{AssetReader, AssetStore, ReadSide, ResourceKey};
 use kithara_events::EventBus;
-use kithara_platform::{CancellationToken, Mutex, time::Duration};
+use kithara_platform::{CancelToken, Mutex, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, AudioCodec, MediaInfo, PlayheadRead, PlayheadWrite, ReadOutcome, SeekControl,
@@ -48,7 +48,7 @@ impl FileSource {
         bus: EventBus,
         backend: Arc<AssetStore>,
         key: ResourceKey,
-        cancel: CancellationToken,
+        cancel: CancelToken,
         cached_codec: Option<AudioCodec>,
     ) -> Self {
         let inner = Arc::new(FileInner::new(

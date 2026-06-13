@@ -2,7 +2,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara_assets::{AcquisitionResult, AssetReader, AssetStoreBuilder, WriteSide};
 use kithara_events::EventBus;
-use kithara_platform::{CancellationToken, time::Duration};
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{PlayheadState, ReadOutcome, SeekState, Source, SourcePhase};
 use kithara_test_utils::kithara;
@@ -24,19 +24,11 @@ fn make_coord() -> Arc<FileCoord> {
 fn make_source(reader: AssetReader, coord: Arc<FileCoord>, bus: EventBus) -> FileSource {
     let backend = Arc::new(
         AssetStoreBuilder::new()
-            .cancel(CancellationToken::default())
+            .cancel(CancelToken::never())
             .build(),
     );
     let key = backend.scope("test").key("test-source");
-    FileSource::local(
-        reader,
-        coord,
-        bus,
-        backend,
-        key,
-        CancellationToken::default(),
-        None,
-    )
+    FileSource::local(reader, coord, bus, backend, key, CancelToken::never(), None)
 }
 
 #[kithara::test]
@@ -76,7 +68,7 @@ fn file_coord_total_bytes_roundtrip() {
 fn create_committed_resource(data: &[u8]) -> AssetReader {
     let store = AssetStoreBuilder::new()
         .ephemeral(true)
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         .build();
 
     let key = store.scope("test").key("test.dat");

@@ -12,7 +12,7 @@ use kithara::{
 use kithara_file::{File as FileSource, FileConfig, FileSrc};
 use kithara_integration_tests::offline::resource_from_reader;
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant, sleep, timeout},
 };
 use tracing::info;
@@ -69,7 +69,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
     store.max_assets = Some(8);
     let hls_url = hls_server.url("/master.m3u8");
 
-    let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
+    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
     let mut player = OfflinePlayer::new(Consts::SR);
 
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");

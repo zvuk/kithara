@@ -12,7 +12,7 @@ use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::PcmPool;
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
-use kithara_platform::{CancellationToken, Mutex, tokio::runtime::Handle as RuntimeHandle};
+use kithara_platform::{CancelScope, CancelToken, Mutex, tokio::runtime::Handle as RuntimeHandle};
 use portable_atomic::AtomicF32;
 use tracing::debug;
 
@@ -42,7 +42,7 @@ pub struct PlayerConfig {
     /// Root event bus for this player.
     pub bus: Option<EventBus>,
     /// Master cancel token for this player.
-    pub cancel: Option<CancellationToken>,
+    pub cancel: Option<CancelToken>,
     /// PCM buffer pool for audio-thread scratch buffers.
     pub pcm_pool: Option<PcmPool>,
     /// Pre-built audio session dispatcher.
@@ -114,7 +114,7 @@ pub(crate) struct PlayerCore {
     /// Master cancel token. Drop fires `cancel.cancel()` so subsystems
     /// observe the pulse before structural Arc teardown unwinds. See
     /// `crates/kithara-play/README.md` "Cancel hierarchy" section.
-    pub(crate) cancel: CancellationToken,
+    pub(crate) cancel: CancelToken,
     pub(crate) bus: EventBus,
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
@@ -157,7 +157,10 @@ impl PlayerImpl {
 
         let bus = config.bus.clone().unwrap_or_default();
 
-        let cancel = config.cancel.clone().unwrap_or_default(); // kithara:cancel:owner
+        // Composed/standalone seam: `Some(parent)` → the player's master is a
+        // child of it (so a passed cancel reaches the player but the player's
+        // Drop never cancels the passed token); `None` → own root.
+        let cancel = CancelScope::new(config.cancel.clone()).token();
         config.cancel = Some(cancel.clone());
 
         let engine_config = EngineConfig {
@@ -171,7 +174,7 @@ impl PlayerImpl {
         };
         let engine = EngineImpl::new(engine_config, bus.clone());
         if config.abr.is_none() {
-            config.abr = Some(AbrController::new(AbrSettings::default()));
+            config.abr = Some(AbrController::new(AbrSettings::default(), cancel.child()));
         }
 
         Self::new_with_engine(config, resolved_pool, bus, engine)
@@ -360,7 +363,7 @@ impl PlayerImpl {
         // caller-provided parent (e.g. the app/queue master) or from this
         // player's master when none was supplied.
         let parent = config.cancel.unwrap_or_else(|| self.core.cancel.clone());
-        let cancel = Some(parent.child_token());
+        let cancel = Some(parent.child());
         crate::impls::config::ResourceConfig {
             bus,
             cancel,
@@ -603,7 +606,7 @@ mod tests {
         rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
-        let observer = track_cancel.child_token();
+        let observer = track_cancel.child();
         assert!(!observer.is_cancelled());
 
         drop(player);
@@ -615,7 +618,7 @@ mod tests {
 
     #[kithara::test]
     fn prepare_config_preserves_caller_supplied_master() {
-        let parent_master = CancellationToken::default();
+        let parent_master = CancelToken::never();
         let player = PlayerImpl::new(PlayerConfig {
             cancel: Some(parent_master.clone()),
             ..PlayerConfig::default()
@@ -625,7 +628,7 @@ mod tests {
         rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
-        let observer = track_cancel.child_token();
+        let observer = track_cancel.child();
         assert!(!observer.is_cancelled());
 
         parent_master.cancel();

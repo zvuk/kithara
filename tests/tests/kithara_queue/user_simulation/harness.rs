@@ -7,7 +7,7 @@ use kithara_events::{AbrMode, EventReceiver, TrackId, TrackStatus, VariantInfo};
 use kithara_integration_tests::offline::OfflineSession;
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, sleep},
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome};
@@ -106,7 +106,7 @@ impl SimHarness {
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::default(),
-                CancellationToken::default(),
+                CancelToken::never(),
             ))
             .build(),
         );

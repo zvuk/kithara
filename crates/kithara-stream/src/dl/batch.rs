@@ -6,7 +6,7 @@ use kithara_events::{
 };
 use kithara_net::{HttpClient, NetError, Retryability};
 use kithara_platform::{
-    CancelGroup, CancellationToken,
+    CancelGroup, CancelToken,
     flash::virtual_now,
     time::{Duration, Instant},
     tokio,
@@ -123,9 +123,7 @@ impl FromIterator<SlotEntry> for BatchGroup {
     fn from_iter<I: IntoIterator<Item = SlotEntry>>(entries: I) -> Self {
         let mut epochs: Vec<EpochGroup> = Vec::new();
         for entry in entries {
-            let found = epochs
-                .iter_mut()
-                .find(|g| g.cancel.equals_ptr(&entry.cmd.cancel));
+            let found = epochs.iter_mut().find(|g| g.cancel == entry.cmd.cancel);
             match found {
                 Some(group) => group.entries.push(entry),
                 None => epochs.push(EpochGroup {
@@ -176,7 +174,7 @@ impl BatchGroup {
 }
 
 /// Spawn an HTTP fetch task for one command.
-fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: CancellationToken) {
+fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: CancelToken) {
     let client = inner.client.clone();
     let soft_timeout = inner.soft_timeout;
     let inflight = inner.inflight.clone();
@@ -355,13 +353,13 @@ fn bandwidth_bps(bytes: u64, duration: Duration) -> u64 {
 /// downloader-shutdown is the global stop. `BeforeStart` catches the
 /// race where the cancel token was set before any fetch task ran.
 fn classify_cancel(
-    peer_cancel: &CancellationToken,
-    epoch_cancel: Option<&CancellationToken>,
-    downloader_cancel: &CancellationToken,
+    peer_cancel: &CancelToken,
+    epoch_cancel: Option<&CancelToken>,
+    downloader_cancel: &CancelToken,
 ) -> CancelReason {
     if peer_cancel.is_cancelled() {
         CancelReason::PeerCancel
-    } else if epoch_cancel.is_some_and(CancellationToken::is_cancelled) {
+    } else if epoch_cancel.is_some_and(CancelToken::is_cancelled) {
         CancelReason::EpochCancel
     } else if downloader_cancel.is_cancelled() {
         CancelReason::DownloaderShutdown
@@ -375,13 +373,13 @@ fn classify_cancel(
 /// completion callback), the `bus` for telemetry, and the three nested cancel
 /// tokens (peer, epoch, downloader) used to classify cancellation reasons.
 struct DeliveryContext<'a> {
-    downloader_cancel: &'a CancellationToken,
-    peer_cancel: &'a CancellationToken,
+    downloader_cancel: &'a CancelToken,
+    peer_cancel: &'a CancelToken,
     peer_id: AbrPeerId,
     abr: Arc<AbrController>,
     started: Instant,
     bus: Option<EventBus>,
-    epoch_cancel: Option<&'a CancellationToken>,
+    epoch_cancel: Option<&'a CancelToken>,
     on_complete_cb: Option<super::cmd::OnCompleteFn>,
     on_response_cb: Option<super::cmd::OnResponseFn>,
     writer: Option<super::cmd::WriterFn>,
@@ -480,9 +478,9 @@ fn publish_failure_or_cancel(
     request_id: RequestId,
     err: &NetError,
     bytes_transferred: u64,
-    peer_cancel: &CancellationToken,
-    epoch_cancel: Option<&CancellationToken>,
-    downloader_cancel: &CancellationToken,
+    peer_cancel: &CancelToken,
+    epoch_cancel: Option<&CancelToken>,
+    downloader_cancel: &CancelToken,
 ) {
     if matches!(err, NetError::Cancelled) {
         let reason = classify_cancel(peer_cancel, epoch_cancel, downloader_cancel);
@@ -500,11 +498,11 @@ fn publish_failure_or_cancel(
 ///
 /// Public to siblings (used by [`Registry::reschedule`] when a peer
 /// went away) and by [`BatchGroup::process`] for early-cancel paths.
-pub(super) fn deliver_cancelled_with_event(internal: InternalCmd, peer_cancel: &CancellationToken) {
+pub(super) fn deliver_cancelled_with_event(internal: InternalCmd, peer_cancel: &CancelToken) {
     let request_id = internal.request_id;
     let bus = internal.bus.clone();
     let epoch_cancel = internal.cmd.cancel.clone();
-    let placeholder_inner = CancellationToken::default(); // kithara:cancel:owner
+    let placeholder_inner = CancelToken::never();
     let reason = classify_cancel(peer_cancel, epoch_cancel.as_ref(), &placeholder_inner);
     abort_request(bus.as_ref(), request_id, reason, 0, false);
     deliver_cancelled(internal.response, internal.cmd);

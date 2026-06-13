@@ -54,7 +54,7 @@ use kithara_integration_tests::{
     wav::create_wav_header,
 };
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant},
 };
 use tracing::info;
@@ -112,7 +112,7 @@ fn audio_config(server: &HlsTestServer, temp_dir: &TestTempDir) -> AudioConfig<H
         .build();
     let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(store)
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         // auto(0) mirrors the F2 members (live_real_stream / hot_refetch).
         .initial_abr_mode(auto(0))
         .net_options(net)

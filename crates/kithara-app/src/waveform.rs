@@ -2,7 +2,7 @@ use kithara::{
     audio::{ChunkOutcome, Envelope, PeakAccumulator},
     prelude::{Resource, ResourceConfig},
 };
-use kithara_platform::{CancellationToken, thread::sleep, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, thread::sleep, tokio::task::spawn_blocking};
 use kithara_test_utils::kithara::flash;
 use tracing::{debug, warn};
 
@@ -24,7 +24,7 @@ use consts::*;
 pub async fn analyze(
     config: ResourceConfig,
     buckets: usize,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) -> Option<Envelope> {
     if buckets == 0 || cancel.is_cancelled() {
         return None;
@@ -54,7 +54,7 @@ fn decode_envelope(
     mut resource: Resource,
     buckets: usize,
     cap: usize,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
 ) -> Option<Envelope> {
     let mut acc = PeakAccumulator::new(cap);
     loop {

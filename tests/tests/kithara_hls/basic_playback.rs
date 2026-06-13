@@ -14,7 +14,7 @@ use kithara_integration_tests::{
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::tokio::task::spawn_blocking;
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, sleep},
     tokio::task::spawn,
 };
@@ -38,7 +38,7 @@ use url::Url;
 )]
 async fn test_basic_hls_playback(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8");
@@ -82,7 +82,7 @@ async fn test_basic_hls_playback(
 )]
 async fn test_hls_session_creation(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8");
@@ -112,7 +112,7 @@ async fn test_hls_session_creation(
 )]
 async fn test_hls_with_init_segments(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
     info!("Testing HLS with init segments");
@@ -140,7 +140,7 @@ async fn test_hls_with_different_options(
     info!("Testing HLS with custom options");
 
     let _stream = HlsStreamBuilder::new()
-        .build(&server, temp_dir.path(), CancellationToken::default())
+        .build(&server, temp_dir.path(), CancelToken::never())
         .await;
 
     info!("HLS source opened successfully with custom options");
@@ -160,7 +160,7 @@ async fn test_hls_with_different_options(
 async fn test_hls_invalid_url_handling(
     #[case] invalid_url: &str,
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let url_result = Url::parse(invalid_url);
 
@@ -193,7 +193,7 @@ async fn test_hls_invalid_url_handling(
 )]
 async fn test_init_segment_at_stream_start(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
     info!("Testing INIT segment at stream start");
@@ -248,7 +248,7 @@ async fn test_hls_without_cache(temp_dir: TestTempDir) -> Result<(), Box<dyn Err
     let _stream = HlsStreamBuilder::new()
         .max_assets(1)
         .max_bytes(1024)
-        .build(&server, temp_dir.path(), CancellationToken::default())
+        .build(&server, temp_dir.path(), CancelToken::never())
         .await;
 
     info!("HLS source opened successfully with limited cache");

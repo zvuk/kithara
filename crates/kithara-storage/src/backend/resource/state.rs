@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 
-use kithara_platform::{CancellationToken, Condvar, Mutex};
+use kithara_platform::{CancelToken, Condvar, Mutex};
 use rangemap::RangeSet;
 
 use crate::{
@@ -23,7 +23,7 @@ pub(super) struct CommonState {
 
 /// Shared inner storage.
 pub(super) struct Inner<D: DriverIo> {
-    pub(super) cancel: CancellationToken,
+    pub(super) cancel: CancelToken,
     pub(super) condvar: Condvar,
     pub(super) driver: D,
     pub(super) state: Mutex<CommonState>,
@@ -80,7 +80,7 @@ impl<D: Driver> ResourceCore<D> {
     /// # Errors
     ///
     /// Returns error if `D::open(opts)` fails (e.g. file I/O failure).
-    pub(crate) fn open(cancel: CancellationToken, opts: D::Options) -> StorageResult<Self> {
+    pub(crate) fn open(cancel: CancelToken, opts: D::Options) -> StorageResult<Self> {
         Self::open_with_observer(cancel, opts, None)
     }
 
@@ -93,7 +93,7 @@ impl<D: Driver> ResourceCore<D> {
     ///
     /// Returns error if `D::open(opts)` fails.
     pub(crate) fn open_with_observer(
-        cancel: CancellationToken,
+        cancel: CancelToken,
         opts: D::Options,
         observer: Option<Arc<dyn AvailabilityObserver>>,
     ) -> StorageResult<Self> {

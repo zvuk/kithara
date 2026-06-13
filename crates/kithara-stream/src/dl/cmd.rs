@@ -3,7 +3,7 @@ use std::io;
 use bon::Builder;
 use kithara_events::RequestMethod;
 use kithara_net::{Headers, NetError, NetResult, RangeSpec};
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 use url::Url;
 
 /// Per-command body writer. Downloader calls it for each chunk.
@@ -44,7 +44,7 @@ pub(super) type ResponseValidator = fn(&Headers) -> NetResult<()>;
 pub struct FetchCmd {
     /// Epoch cancel token from the Peer. When set, the Downloader
     /// combines it with the track-level cancel via [`CancelGroup`].
-    pub cancel: Option<CancellationToken>,
+    pub cancel: Option<CancelToken>,
     /// Additional HTTP headers for this request.
     pub headers: Option<Headers>,
     /// Streaming path completion handler. `None` for channel path (`execute`/`batch`).

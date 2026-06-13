@@ -3,7 +3,10 @@ use std::sync::Arc;
 use kithara_events::{
     AbrMode, AbrReason, BandwidthSource, VariantDuration, VariantIndex, VariantInfo,
 };
-use kithara_platform::time::{Duration, Duration as StdDuration, Instant};
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, Duration as StdDuration, Instant},
+};
 use kithara_test_utils::kithara;
 use proptest::prelude::*;
 
@@ -518,7 +521,7 @@ async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
         .min_switch_interval(Duration::ZERO)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
-    let controller = AbrController::new(settings);
+    let controller = AbrController::new(settings, CancelToken::never());
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         state: Arc::clone(&state),
@@ -546,7 +549,7 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
         min_buffer_for_up_switch: Duration::ZERO,
         ..AbrSettings::default()
     };
-    let controller = AbrController::new(settings);
+    let controller = AbrController::new(settings, CancelToken::never());
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         state: Arc::clone(&state),
@@ -566,7 +569,7 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
 /// choice.
 #[kithara::test(tokio)]
 async fn set_mode_back_to_current_kills_queued_switch() {
-    let controller = AbrController::new(settings_fast());
+    let controller = AbrController::new(settings_fast(), CancelToken::never());
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         state: Arc::clone(&state),
@@ -596,8 +599,11 @@ async fn set_mode_back_to_current_kills_queued_switch() {
 #[kithara::test(tokio)]
 async fn lock_refcount_holds_across_record_bandwidth() {
     let settings = settings_fast();
-    let controller =
-        AbrController::with_estimator(settings, Arc::new(ThroughputEstimator::new()) as Arc<_>);
+    let controller = AbrController::with_estimator(
+        settings,
+        Arc::new(ThroughputEstimator::new()) as Arc<_>,
+        CancelToken::never(),
+    );
 
     struct LockedPeer {
         state: Arc<AbrState>,

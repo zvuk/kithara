@@ -194,7 +194,7 @@ mod tests {
     use std::fs;
 
     use kithara_bufpool::BytePool;
-    use kithara_platform::{CancellationToken, time::Duration};
+    use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
 
@@ -204,11 +204,8 @@ mod tests {
     fn empty_index_has_no_pins() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx = PinsIndex::with_persist_at(
-            path.clone(),
-            CancellationToken::default(),
-            &BytePool::default(),
-        );
+        let idx =
+            PinsIndex::with_persist_at(path.clone(), CancelToken::never(), &BytePool::default());
         assert!(idx.snapshot().is_empty());
         assert!(
             !path.exists(),
@@ -220,11 +217,8 @@ mod tests {
     fn add_and_remove_persist_immediately() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx = PinsIndex::with_persist_at(
-            path.clone(),
-            CancellationToken::default(),
-            &BytePool::default(),
-        );
+        let idx =
+            PinsIndex::with_persist_at(path.clone(), CancelToken::never(), &BytePool::default());
 
         assert!(idx.add("asset_a").unwrap(), "first pin reports 0→1");
         assert!(path.exists(), "first add must materialise pins.bin");
@@ -254,11 +248,8 @@ mod tests {
     fn refcount_coalesces_repeated_pins() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx = PinsIndex::with_persist_at(
-            path.clone(),
-            CancellationToken::default(),
-            &BytePool::default(),
-        );
+        let idx =
+            PinsIndex::with_persist_at(path.clone(), CancelToken::never(), &BytePool::default());
 
         let transitions_in = (0..5).filter(|_| idx.add("hot_asset").unwrap()).count();
         assert_eq!(transitions_in, 1, "only the 0→1 transition counts");
@@ -276,8 +267,7 @@ mod tests {
     fn concurrent_leases_keep_pin_alive() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx =
-            PinsIndex::with_persist_at(path, CancellationToken::default(), &BytePool::default());
+        let idx = PinsIndex::with_persist_at(path, CancelToken::never(), &BytePool::default());
 
         idx.add("playlist").unwrap();
         idx.add("playlist").unwrap();
@@ -297,7 +287,7 @@ mod tests {
         {
             let idx = PinsIndex::with_persist_at(
                 path.clone(),
-                CancellationToken::default(),
+                CancelToken::never(),
                 &BytePool::default(),
             );
             idx.add("persistent_asset").unwrap();
@@ -306,7 +296,7 @@ mod tests {
         {
             let idx = PinsIndex::with_persist_at(
                 path.clone(),
-                CancellationToken::default(),
+                CancelToken::never(),
                 &BytePool::default(),
             );
             assert!(idx.contains("persistent_asset"));
@@ -320,8 +310,7 @@ mod tests {
         let path = temp_dir.path().join("invalid.bin");
         fs::write(&path, b"not valid rkyv data").unwrap();
 
-        let idx =
-            PinsIndex::with_persist_at(path, CancellationToken::default(), &BytePool::default());
+        let idx = PinsIndex::with_persist_at(path, CancelToken::never(), &BytePool::default());
         assert!(idx.snapshot().is_empty());
     }
 
@@ -336,8 +325,7 @@ mod tests {
     fn clone_shares_state() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx =
-            PinsIndex::with_persist_at(path, CancellationToken::default(), &BytePool::default());
+        let idx = PinsIndex::with_persist_at(path, CancelToken::never(), &BytePool::default());
         let idx2 = idx.clone();
 
         idx.add("from_first").unwrap();

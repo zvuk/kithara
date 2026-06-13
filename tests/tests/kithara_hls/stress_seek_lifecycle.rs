@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use kithara_platform::{CancellationToken, thread, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, thread, time::Duration, tokio::task::spawn_blocking};
 use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;
@@ -162,7 +162,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
     info!(%url, "HLS server ready");
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {

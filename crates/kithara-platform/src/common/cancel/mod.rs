@@ -35,10 +35,7 @@ mod scope;
 mod token;
 mod wait;
 
-// `CancelGroup` (group.rs) is built and tested here but NOT re-exported at the
-// crate root in 3.2: the root `CancelGroup` name still resolves to the legacy
-// `cancel_group::CancelGroup`, and the switch to this one is the atomic
-// construction-site migration in 3.3.
+pub use group::CancelGroup;
 pub use scope::CancelScope;
 pub use token::{CancelRoot, CancelToken, CancelWakerGuard};
 pub use wait::{Cancelled, CancelledOwned};

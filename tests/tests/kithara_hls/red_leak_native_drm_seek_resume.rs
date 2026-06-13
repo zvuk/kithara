@@ -11,7 +11,7 @@ use kithara::{
 use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     thread::active_named_thread_count,
     time::{Duration, sleep},
 };
@@ -108,15 +108,12 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServerHelper::new().await;
-    let shared_worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
+    let shared_worker = AudioWorkerHandle::with_cancel(CancelToken::never());
 
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .cancel(CancellationToken::default())
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .cancel(CancelToken::never())
+            .build(),
     );
 
     run_drm_seek_resume_cycle(&server, &temp_dir, &downloader, &shared_worker, 0).await;

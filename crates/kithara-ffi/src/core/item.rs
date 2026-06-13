@@ -297,7 +297,7 @@ impl AudioPlayerItem {
             observer,
             None,
             Arc::clone(&self.state),
-            kithara_platform::CancellationToken::default(), // kithara:cancel:bridge
+            kithara_platform::CancelToken::never(),
         );
         *self.event_bridge.lock_sync() = Some(bridge);
     }

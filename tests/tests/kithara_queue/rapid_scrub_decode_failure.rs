@@ -16,7 +16,7 @@ use kithara_integration_tests::{
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant, sleep, timeout},
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
@@ -197,7 +197,7 @@ impl Harness {
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::default(),
-                CancellationToken::default(),
+                CancelToken::never(),
             ))
             .build(),
         );

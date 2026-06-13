@@ -9,7 +9,7 @@ use kithara_assets::{
 };
 use kithara_events::EventBus;
 use kithara_net::Headers;
-use kithara_platform::{CancellationToken, Mutex};
+use kithara_platform::{CancelToken, Mutex};
 use kithara_stream::MediaInfo;
 use url::Url;
 
@@ -63,7 +63,7 @@ pub(crate) enum FilePhase {
 /// Control-plane handles shared between the source and the download driver.
 pub(crate) struct FileSourceCtx {
     pub(crate) coord: Arc<FileCoord>,
-    pub(crate) cancel: CancellationToken,
+    pub(crate) cancel: CancelToken,
     pub(crate) bus: EventBus,
 }
 

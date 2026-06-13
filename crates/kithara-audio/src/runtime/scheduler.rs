@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     sync::mpsc::{self, TryRecvError},
     thread::{spawn_named, yield_now},
     time::{Duration, Instant},
@@ -58,7 +58,7 @@ impl<N> Clone for SchedulerHandle<N> {
 
 struct SchedulerInner<N> {
     wake: Arc<SchedulerWake>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     cmd_tx: mpsc::Sender<SchedulerCmd<N>>,
 }
 
@@ -134,18 +134,14 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
 
     /// Spawn a new scheduler thread and return a handle.
     ///
-    /// `cancel` is the externally-owned [`CancellationToken`] that drives the run
+    /// `cancel` is the externally-owned [`CancelToken`] that drives the run
     /// loop's shutdown. Callers (e.g.
     /// [`AudioWorkerHandle`](super::super::worker::AudioWorkerHandle)) derive
-    /// it as a `child_token()` of the player master so worker shutdown
+    /// it as a `child()` of the player master so worker shutdown
     /// participates in the unified cancel hierarchy and the lock-free
     /// `is_cancelled()` read on the produce-core observes a master cancel.
     #[must_use]
-    pub(crate) fn start(
-        name: String,
-        observer: O,
-        cancel: CancellationToken,
-    ) -> SchedulerHandle<N> {
+    pub(crate) fn start(name: String, observer: O, cancel: CancelToken) -> SchedulerHandle<N> {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let wake = Arc::new(SchedulerWake::default());
 
@@ -187,7 +183,7 @@ const FAIRNESS_YIELD_EVERY: u32 = 16;
 fn run_loop<N: Node, O: SchedulerObserver>(
     cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
     wake: &SchedulerWake,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
     mut observer: O,
 ) {
     trace!("scheduler started");
@@ -236,7 +232,7 @@ fn recycle_all<N: Node>(slots: &mut [Slot<N>], slots_order: &[usize]) {
 }
 
 fn cancel_and_drain<N: Node>(
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
     cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
     slots: &mut Vec<Slot<N>>,
     needs_reorder: &mut bool,
@@ -562,7 +558,7 @@ mod tests {
         let handle = Scheduler::<DummyNode, TestObserver>::start(
             "test-worker".into(),
             TestObserver,
-            CancellationToken::default(),
+            CancelToken::never(),
         );
         thread::sleep(Duration::from_millis(10)); // M5: real pacing, replace with teardown signal
         handle.shutdown();
@@ -574,7 +570,7 @@ mod tests {
         let handle = Scheduler::<DummyNode, TestObserver>::start(
             "test-worker".into(),
             TestObserver,
-            CancellationToken::default(),
+            CancelToken::never(),
         );
 
         handle.register(
@@ -612,7 +608,7 @@ mod tests {
         let handle = Scheduler::<BackpressureNode, TestObserver>::start(
             "test-worker".into(),
             TestObserver,
-            CancellationToken::default(),
+            CancelToken::never(),
         );
 
         handle.register(1, BackpressureNode);

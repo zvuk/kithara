@@ -10,7 +10,7 @@ use kithara::{
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
 use kithara_platform::{
-    CancellationToken, thread,
+    CancelToken, thread,
     time::{Duration, Instant},
     tokio::task::spawn_blocking,
 };
@@ -150,7 +150,7 @@ async fn drm_stream_byte_integrity(
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {

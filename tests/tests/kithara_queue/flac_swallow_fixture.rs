@@ -18,7 +18,7 @@ use kithara_integration_tests::{
     swallow_detector::assert_no_committed_swallow,
 };
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant, sleep},
 };
 use kithara_test_utils::probe::capture as probe_capture;
@@ -113,11 +113,8 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
 
     let temp = TestTempDir::new();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
 
     let cfg = ResourceConfig::for_src(created.master_url().as_str())

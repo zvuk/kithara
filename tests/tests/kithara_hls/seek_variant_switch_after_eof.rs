@@ -13,7 +13,7 @@ use kithara_integration_tests::{
     hls_test_helpers::pin_abr_variant,
     rt_cancel, temp_dir,
 };
-use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 /// Seek after ABR variant switch at EOF must not deadlock.
@@ -31,7 +31,7 @@ use tracing::info;
 )]
 async fn seek_after_variant_switch_at_eof_must_not_deadlock(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) {
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 3,

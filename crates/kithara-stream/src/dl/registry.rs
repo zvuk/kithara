@@ -7,9 +7,7 @@ use std::{
 
 use kithara_abr::AbrPeerId;
 use kithara_events::{DownloaderEvent, EventBus, RequestId, RequestPriority};
-use kithara_platform::{
-    CancelGroup, CancellationToken, RwLock, sync::Notify, tokio, tokio::sync::mpsc,
-};
+use kithara_platform::{CancelGroup, CancelToken, RwLock, sync::Notify, tokio, tokio::sync::mpsc};
 use kithara_test_utils::kithara;
 use thunderdome::{Arena, Index};
 
@@ -113,7 +111,7 @@ struct PeerEntry {
     /// immediately.
     bus: Arc<RwLock<Option<EventBus>>>,
     peer: Arc<dyn Peer>,
-    peer_cancel: CancellationToken,
+    peer_cancel: CancelToken,
     cmd_rx: mpsc::Receiver<InternalCmd>,
     peer_done: bool,
 }
@@ -209,7 +207,7 @@ impl Registry {
                         let epoch_cancel = cmd.cancel.clone();
                         let cancel = match epoch_cancel {
                             Some(epoch) => CancelGroup::new(vec![entry.peer_cancel.clone(), epoch]),
-                            None => CancelGroup::new(vec![entry.peer_cancel.child_token()]),
+                            None => CancelGroup::new(vec![entry.peer_cancel.child()]),
                         };
                         let cmd_prio = RequestPriority::Low;
                         let slot = slot_index(peer_prio, cmd_prio);

@@ -10,7 +10,7 @@ use bon::Builder;
 use dashmap::DashMap;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
 use kithara_platform::{
-    Mutex, RwLock,
+    CancelToken, Mutex, RwLock,
     time::{Duration, Instant},
 };
 use kithara_test_utils::kithara;
@@ -99,6 +99,10 @@ pub struct AbrController {
     pub(super) settings: AbrSettings,
     pub(super) estimator: Arc<dyn Estimator>,
     pub(super) self_weak: Weak<Self>,
+    /// Parent cancel gating this controller's background watches. Per-watch
+    /// incoherence tokens derive from it (`parent_cancel.child()`), so a parent
+    /// cancel (player/downloader teardown) gates every in-flight watch.
+    pub(super) parent_cancel: CancelToken,
     next_peer_id: AtomicU64,
     peers: DashMap<AbrPeerId, Arc<PeerEntry>>,
 }
@@ -108,9 +112,12 @@ impl AbrController {
     pub(super) const MIN_THROUGHPUT_SAMPLE_INTERVAL: Duration = Duration::from_millis(200);
 
     /// Create a new controller with the default [`ThroughputEstimator`].
+    ///
+    /// `cancel` is the parent token whose subtree gates this controller's
+    /// background incoherence watches.
     #[must_use]
-    pub fn new(settings: AbrSettings) -> Arc<Self> {
-        Self::with_estimator(settings, Arc::new(ThroughputEstimator::new()))
+    pub fn new(settings: AbrSettings, cancel: CancelToken) -> Arc<Self> {
+        Self::with_estimator(settings, Arc::new(ThroughputEstimator::new()), cancel)
     }
 
     pub(super) fn allocate_peer_id(&self) -> AbrPeerId {
@@ -209,12 +216,17 @@ impl AbrController {
     /// Create a new controller with a custom estimator. Used in tests to
     /// inject a mock.
     #[must_use]
-    pub fn with_estimator(settings: AbrSettings, estimator: Arc<dyn Estimator>) -> Arc<Self> {
+    pub fn with_estimator(
+        settings: AbrSettings,
+        estimator: Arc<dyn Estimator>,
+        cancel: CancelToken,
+    ) -> Arc<Self> {
         Self::seed_estimator(&settings, &estimator);
         Arc::new_cyclic(|weak| Self {
             settings,
             estimator,
             self_weak: weak.clone(),
+            parent_cancel: cancel,
             next_peer_id: AtomicU64::new(0),
             peers: DashMap::new(),
         })

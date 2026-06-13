@@ -576,7 +576,7 @@ where
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use kithara_platform::{CancellationToken, thread};
+    use kithara_platform::{CancelToken, thread};
     use kithara_storage::{
         MemOptions, MemResource, MmapOptions, MmapResource, Resource, StorageResource,
     };
@@ -598,7 +598,7 @@ mod tests {
     fn mock_writer(content: &[u8]) -> (BaseWriter, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test.bin");
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
 
         let res: MmapResource = Resource::open(cancel, MmapOptions::new(path)).unwrap();
         res.write_at(0, content).unwrap();
@@ -607,7 +607,7 @@ mod tests {
 
     /// Mem-backed mock writer, mirroring [`mock_writer`] for the ephemeral path.
     fn mock_writer_mem(content: &[u8]) -> BaseWriter {
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         let res: MemResource = Resource::open(
             cancel,
             MemOptions {
@@ -745,7 +745,7 @@ mod tests {
 
         let dir = tempdir().unwrap();
         let path = dir.path().join("cancel.bin");
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         let resource: MmapResource =
             Resource::open(cancel.clone(), MmapOptions::new(path)).unwrap();
         resource.write_at(0, &[1u8; 16]).unwrap();
@@ -922,7 +922,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("reopen.bin");
         let res: MmapResource =
-            Resource::open(CancellationToken::default(), MmapOptions::new(path)).unwrap();
+            Resource::open(CancelToken::never(), MmapOptions::new(path)).unwrap();
         res.write_at(0, &already_processed).unwrap();
         let storage = StorageResource::from(res);
         storage

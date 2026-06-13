@@ -10,7 +10,7 @@ use kithara_integration_tests::{
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant, sleep},
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
@@ -94,11 +94,8 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     let temp = temp_dir();
     let store = StoreOptions::new(temp.path());
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
 
     let player = Arc::new(PlayerImpl::new(

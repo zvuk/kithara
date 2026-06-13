@@ -6,7 +6,7 @@ mod kithara {
 
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::thread;
-use kithara_platform::{CancellationToken, time::Duration};
+use kithara_platform::{CancelToken, time::Duration};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::StorageError;
@@ -17,10 +17,10 @@ use crate::{
 };
 
 fn create_resource() -> MemResource {
-    MemResource::new(CancellationToken::default())
+    MemResource::new(CancelToken::never())
 }
 
-fn with_bytes(data: &[u8], cancel: CancellationToken) -> MemResource {
+fn with_bytes(data: &[u8], cancel: CancelToken) -> MemResource {
     MemResource::open(
         cancel,
         MemOptions {
@@ -66,7 +66,7 @@ fn test_write_all_read_into() {
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
 fn test_from_bytes() {
-    let res = with_bytes(b"preloaded", CancellationToken::default());
+    let res = with_bytes(b"preloaded", CancelToken::never());
 
     assert_eq!(
         res.status(),
@@ -137,7 +137,7 @@ fn test_fail_wakes_waiters() {
 
 #[kithara::test(native)]
 fn test_cancel_wakes_waiters() {
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let res = MemResource::new(cancel.clone());
 
     let handle = thread::spawn({
@@ -230,7 +230,7 @@ fn test_sparse_write(#[case] offset: u64, #[case] payload: &[u8]) {
 #[kithara::test(timeout(Duration::from_secs(1)))]
 fn test_growable_write_beyond_initial_capacity() {
     let res = MemResource::open(
-        CancellationToken::default(),
+        CancelToken::never(),
         MemOptions {
             capacity: 64,
             ..Default::default()
@@ -264,7 +264,7 @@ fn test_growable_multiple_writes_extend() {
 #[kithara::test(timeout(Duration::from_secs(1)))]
 fn test_from_bytes_readable() {
     let data = b"hello growable buffer world";
-    let res = with_bytes(data, CancellationToken::default());
+    let res = with_bytes(data, CancelToken::never());
 
     let mut buf = vec![0u8; data.len()];
     let n = res.read_at(0, &mut buf).unwrap();

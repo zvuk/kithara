@@ -8,7 +8,10 @@ use kithara_events::{
     AbrEvent, AbrProgressSnapshot, BandwidthSource, DEFAULT_EVENT_BUS_CAPACITY, Event, EventBus,
     VariantDuration, VariantIndex, VariantInfo,
 };
-use kithara_platform::time::{Duration, Duration as StdDuration};
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, Duration as StdDuration},
+};
 use kithara_test_utils::kithara;
 
 fn fast_settings() -> AbrSettings {
@@ -80,6 +83,7 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
     let controller = AbrController::with_estimator(
         fast_settings(),
         Arc::new(ThroughputEstimator::new()) as Arc<_>,
+        CancelToken::never(),
     );
     let handle = controller.register(&peer).with_bus(bus);
 

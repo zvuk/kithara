@@ -9,7 +9,7 @@ use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackSt
 use kithara_integration_tests::{TestTempDir, Xorshift64, kithara, offline::OfflineSession};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, sleep, timeout},
 };
 use kithara_play::{PlayerConfig, PlayerImpl};
@@ -61,11 +61,11 @@ async fn shared_test_ctx() -> &'static TestCtx {
             let net = NetOptions::builder().is_insecure(true).build();
             let downloader = Downloader::new(
                 DownloaderConfig::builder()
-                    .client(HttpClient::new(net, CancellationToken::default()))
+                    .client(HttpClient::new(net, CancelToken::never()))
                     .build(),
             );
-            let flush_hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
-            let config = AppConfig::new(downloader, flush_hub, CancellationToken::default());
+            let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
+            let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
             let player = Arc::new(PlayerImpl::new(
                 PlayerConfig::builder()
                     .session(OfflineSession::arc_auto())

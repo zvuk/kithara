@@ -74,7 +74,7 @@ impl Frontend for GuiFrontend {
         let controller = Arc::new(crate::state::StateController::new(
             Arc::clone(&queue),
             config.clone(),
-            config.shutdown.child_token(),
+            config.shutdown.child(),
         ));
 
         let result = iced::daemon(

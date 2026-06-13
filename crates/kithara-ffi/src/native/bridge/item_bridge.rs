@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use kithara::abr::AbrMode;
 use kithara_events::{AbrEvent, AudioEvent, DownloaderEvent, Event, FileEvent, HlsEvent};
-use kithara_platform::{CancellationToken, Mutex, tokio, tokio::sync::broadcast};
+use kithara_platform::{CancelToken, Mutex, tokio, tokio::sync::broadcast};
 
 use crate::{
     item::ItemView,
@@ -11,7 +11,7 @@ use crate::{
 };
 
 pub(crate) struct ItemEventBridge {
-    cancel: CancellationToken,
+    cancel: CancelToken,
 }
 
 impl ItemEventBridge {
@@ -220,7 +220,7 @@ impl ItemEventBridge {
         observer: Arc<dyn ItemObserver>,
         duration_seconds: Option<f64>,
         state: Arc<Mutex<ItemView>>,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> Self {
         if let Some(duration) = duration_seconds {
             state.lock_sync().resolve_duration(duration);
@@ -235,7 +235,7 @@ impl ItemEventBridge {
         observer: Arc<dyn ItemObserver>,
         mut duration_seconds: Option<f64>,
         state: Arc<Mutex<ItemView>>,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) {
         crate::FFI_RUNTIME.spawn(async move {
             let mut last_buffered = None;

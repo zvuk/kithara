@@ -19,7 +19,7 @@ use kithara_integration_tests::{
     wav::create_wav_header,
 };
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant},
     tokio::task::{spawn, spawn_blocking},
 };
@@ -99,7 +99,7 @@ async fn abr_auto_switch_during_playback(
     let url = server.url("/master.m3u8");
     info!(%url, "HLS server ready with 2 variants");
 
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
 
     let bus = EventBus::new(32);
     let switches = Arc::new(AtomicUsize::new(0));

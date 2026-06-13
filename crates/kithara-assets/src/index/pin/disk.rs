@@ -10,7 +10,7 @@ use std::{
 
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 use kithara_storage::{Atomic, MmapDriver, StorageError};
 
 use super::core::{PinsIndex, PinsInner};
@@ -20,7 +20,7 @@ use crate::{
 };
 
 pub(super) struct PinsPersist {
-    cancel: CancellationToken,
+    cancel: CancelToken,
     res: OnceLock<Atomic<MmapDriver>>,
     path: PathBuf,
 }
@@ -32,7 +32,7 @@ impl PinsIndex {
     /// hydrated synchronously. Otherwise the disk file is **not**
     /// materialised — it appears the first time [`PinsIndex::add`]
     /// or [`PinsIndex::remove`] flush a real change.
-    pub fn with_persist_at(path: PathBuf, cancel: CancellationToken, pool: &BytePool) -> Self {
+    pub fn with_persist_at(path: PathBuf, cancel: CancelToken, pool: &BytePool) -> Self {
         let (initial, opened) = hydrate_existing(&path, &cancel, pool);
         Self {
             inner: Arc::new(PinsInner {
@@ -70,7 +70,7 @@ impl PinsInner {
 
 fn hydrate_existing(
     path: &std::path::Path,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
     pool: &BytePool,
 ) -> (DashMap<String, NonZeroU32>, Option<Atomic<MmapDriver>>) {
     let nonempty = fs::metadata(path).is_ok_and(|m| m.len() > 0);

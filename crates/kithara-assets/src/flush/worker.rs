@@ -3,7 +3,7 @@
 use std::sync::{Arc, OnceLock, Weak};
 
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     thread::{JoinHandle, spawn_named},
     time::Instant,
 };
@@ -61,7 +61,7 @@ impl WorkerSlot {
 /// `policy.debounce` (bypassed once `op_count` reaches
 /// `force_every_n_ops`) before draining dirty sources. Exits on cancel
 /// after a final flush, or when the hub has been dropped.
-fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancellationToken, policy: &FlushPolicy) {
+fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &FlushPolicy) {
     loop {
         let mut guard = wait.state.lock_sync();
         while !guard.pending {

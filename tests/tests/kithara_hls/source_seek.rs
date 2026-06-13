@@ -5,7 +5,7 @@ use std::io::{Read, Seek, SeekFrom};
 use kithara_integration_tests::{
     TestTempDir, hls_fixture::HlsStreamBuilder, hls_server::TestServer, rt_cancel, temp_dir,
 };
-use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 /// Segment size in bytes (test fixture pads to 200KB).
@@ -22,7 +22,7 @@ const SEGMENT_SIZE: u64 = 200_000;
 #[case(400_000, b"V0-SEG-2:")]
 async fn hls_stream_seek_to_segment_start(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
     #[case] seek_pos: u64,
     #[case] expected_prefix: &[u8],
 ) {
@@ -55,7 +55,7 @@ async fn hls_stream_seek_to_segment_start(
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn hls_stream_seek_current(temp_dir: TestTempDir, rt_cancel: CancellationToken) {
+async fn hls_stream_seek_current(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
         .build(&server, temp_dir.path(), rt_cancel)
@@ -84,7 +84,7 @@ async fn hls_stream_seek_current(temp_dir: TestTempDir, rt_cancel: CancellationT
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn hls_stream_multiple_seeks(temp_dir: TestTempDir, rt_cancel: CancellationToken) {
+async fn hls_stream_multiple_seeks(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
         .build(&server, temp_dir.path(), rt_cancel)
@@ -118,7 +118,7 @@ async fn hls_stream_multiple_seeks(temp_dir: TestTempDir, rt_cancel: Cancellatio
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn hls_stream_read_all_then_seek_back(temp_dir: TestTempDir, rt_cancel: CancellationToken) {
+async fn hls_stream_read_all_then_seek_back(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
         .build(&server, temp_dir.path(), rt_cancel)
@@ -165,10 +165,7 @@ async fn hls_stream_read_all_then_seek_back(temp_dir: TestTempDir, rt_cancel: Ca
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn hls_with_manual_abr_uses_fixed_variant(
-    temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
-) {
+async fn hls_with_manual_abr_uses_fixed_variant(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
         .variant(1)
@@ -194,7 +191,7 @@ async fn hls_with_manual_abr_uses_fixed_variant(
 )]
 async fn hls_seek_across_all_segments_with_fixed_abr(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) {
     let server = TestServer::new().await;
 
@@ -241,7 +238,7 @@ async fn hls_seek_across_all_segments_with_fixed_abr(
 )]
 async fn hls_seek_different_variants_return_different_data(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) {
     let server = TestServer::new().await;
 

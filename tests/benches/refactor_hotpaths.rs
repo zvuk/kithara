@@ -37,7 +37,7 @@ use kithara::{
 use kithara_audio::{ResamplerParams, ResamplerProcessor};
 use kithara_integration_tests::{TestHttpServer, auto};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::Duration,
     tokio::runtime::{Builder, Runtime},
 };
@@ -335,7 +335,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                     let net = NetOptions::builder().pool_max_idle_per_host(8).build();
                     let downloader = Downloader::new(
                         DownloaderConfig::builder()
-                            .client(HttpClient::new(net, CancellationToken::default()))
+                            .client(HttpClient::new(net, CancelToken::never()))
                             .build(),
                     );
                     let store = StoreOptions::builder()

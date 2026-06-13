@@ -10,7 +10,7 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
 };
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant, timeout},
 };
 
@@ -85,7 +85,7 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
 
     let bus = EventBus::new(64);
     let mut rx = bus.subscribe();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let config = FileConfig::for_src(handle.url().into())
         .events(bus.clone())
         .store(StoreOptions::new(temp_dir.path()))
@@ -130,7 +130,7 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
 
     let bus = EventBus::new(64);
     let mut rx = bus.subscribe();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let config = FileConfig::for_src(handle.url().into())
         .events(bus.clone())
         .store(StoreOptions::new(temp_dir.path()))

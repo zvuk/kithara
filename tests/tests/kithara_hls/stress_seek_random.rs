@@ -13,7 +13,7 @@ use kithara_integration_tests::{
     hls_server::{EncryptionConfig, HlsTestServer, HlsTestServerConfig},
 };
 use kithara_platform::{
-    CancellationToken, thread,
+    CancelToken, thread,
     time::{Duration, Instant},
     tokio::task::spawn_blocking,
 };
@@ -111,7 +111,7 @@ async fn stress_random_seek_read_hls(
     );
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
 
     let config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))

@@ -1,6 +1,5 @@
 use kithara_events::AbrEvent;
 use kithara_platform::{
-    CancellationToken,
     time::{Duration, Instant, sleep},
     tokio,
 };
@@ -61,7 +60,7 @@ impl AbrController {
         let Some(entry) = self.peer_entry(peer_id) else {
             return;
         };
-        let token = CancellationToken::default(); // kithara:cancel:owner
+        let token = self.parent_cancel.child();
         {
             let mut slot = entry.last_variant_switch.lock_sync();
             *slot = Some((now, reader_pt));
@@ -85,5 +84,54 @@ impl AbrController {
             };
             ctrl.check_incoherence(peer_id, reader_pt, now);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use kithara_platform::{
+        CancelToken,
+        time::{Duration, Instant},
+    };
+    use kithara_test_utils::kithara;
+
+    use crate::{Abr, AbrController, AbrSettings};
+
+    struct DummyPeer;
+    impl Abr for DummyPeer {}
+
+    /// Contract (W3 Task 3.3): the per-watch incoherence token derives from the
+    /// controller's parent cancel (`schedule_incoherence_watch` →
+    /// `self.parent_cancel.child()`), so cancelling the parent — player or
+    /// downloader teardown — gates the in-flight watch. This pins the public
+    /// `cancel` parameter added to `AbrController::new`.
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn parent_cancel_gates_incoherence_watch() {
+        let parent = CancelToken::never();
+        let controller = AbrController::new(AbrSettings::default(), parent.clone());
+        let peer: Arc<dyn Abr> = Arc::new(DummyPeer);
+        let handle = controller.register(&peer);
+        let peer_id = handle.peer_id();
+
+        controller.schedule_incoherence_watch(peer_id, Duration::ZERO, Instant::now());
+        let token = controller
+            .peer_entry(peer_id)
+            .expect("peer entry exists after register")
+            .incoherence_cancel
+            .lock_sync()
+            .clone()
+            .expect("schedule stores a watch token");
+
+        assert!(
+            !token.is_cancelled(),
+            "watch token must be live before the parent cancels"
+        );
+        parent.cancel();
+        assert!(
+            token.is_cancelled(),
+            "parent cancel must gate the incoherence watch token"
+        );
     }
 }

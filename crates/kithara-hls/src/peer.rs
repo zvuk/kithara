@@ -12,7 +12,7 @@ use kithara_abr::{Abr, AbrState};
 use kithara_assets::ResourceKey;
 use kithara_events::{AbrMode, AbrProgressSnapshot, VariantDuration, VariantInfo};
 use kithara_platform::{
-    CancellationToken, Mutex,
+    CancelToken, Mutex,
     time::Duration,
     tokio::{self, sync::mpsc},
 };
@@ -67,9 +67,10 @@ pub(crate) struct HlsPeer {
     reader_segment: Arc<AtomicUsize>,
     state: Arc<Mutex<Option<HlsTrackState>>>,
     /// Wake-up trigger for the waker-forwarding micro-task: not a
-    /// cancellation of work — fires from `teardown()` / `Drop`.
-    /// // kithara:cancel:owner
-    wake_signal: CancellationToken,
+    /// cancellation of work — fires from `teardown()` / `Drop`. A free
+    /// `CancelToken` used purely as a one-shot latch (cloned to the
+    /// forwarding task; `cancel()` is the fire, idempotent on repeat).
+    wake_signal: CancelToken,
     pending_waker: Mutex<Option<Waker>>,
     /// Single source of truth for variant metadata visible to ABR
     /// controller via [`Abr::variants()`] and to UI/FFI via
@@ -97,7 +98,7 @@ impl HlsPeer {
             activity,
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::new(None),
-            wake_signal: CancellationToken::default(), // kithara:cancel:owner
+            wake_signal: CancelToken::never(),
             abr: Arc::new(AbrState::new(initial_mode)),
             variants: Mutex::new(Vec::new()),
             reader_segment: Arc::new(AtomicUsize::new(0)),
