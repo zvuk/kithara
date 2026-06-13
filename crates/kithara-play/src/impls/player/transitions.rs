@@ -12,6 +12,15 @@ use crate::{
     types::PlayerStatus,
 };
 
+/// How a [`PlayerImpl::select_item_with_crossfade`] transition behaves:
+/// whether to `autoplay` the selected item and the `crossfade_seconds`
+/// fade applied for this one transition.
+#[derive(Debug, Clone, Copy)]
+pub struct SelectTransition {
+    pub autoplay: bool,
+    pub crossfade_seconds: f32,
+}
+
 impl PlayerImpl {
     /// Apply autoplay: resume at the default rate (and move to `Playing`) or
     /// hold at rate 0 (and move to `Paused`).
@@ -128,7 +137,13 @@ impl PlayerImpl {
     /// Select and load a queue item by index, using the configured
     /// crossfade duration for the transition.
     pub fn select_item(&self, index: usize, autoplay: bool) -> Result<(), PlayError> {
-        self.select_item_with_crossfade(index, autoplay, self.crossfade_duration())
+        self.select_item_with_crossfade(
+            index,
+            SelectTransition {
+                autoplay,
+                crossfade_seconds: self.crossfade_duration(),
+            },
+        )
     }
 
     /// Select and load a queue item by index, applying an explicit
@@ -142,9 +157,12 @@ impl PlayerImpl {
     pub fn select_item_with_crossfade(
         &self,
         index: usize,
-        autoplay: bool,
-        crossfade_seconds: f32,
+        transition: SelectTransition,
     ) -> Result<(), PlayError> {
+        let SelectTransition {
+            autoplay,
+            crossfade_seconds,
+        } = transition;
         let items_len = self.item_count();
         if index >= items_len {
             return Err(PlayError::Internal(format!(
@@ -199,7 +217,13 @@ mod tests {
     fn select_item_out_of_range_returns_internal() {
         let player = PlayerImpl::new(PlayerConfig::default());
         let err = player
-            .select_item_with_crossfade(5, false, 0.0)
+            .select_item_with_crossfade(
+                5,
+                SelectTransition {
+                    autoplay: false,
+                    crossfade_seconds: 0.0,
+                },
+            )
             .expect_err("must error");
         assert!(matches!(err, PlayError::Internal(_)));
     }
