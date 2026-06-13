@@ -454,7 +454,7 @@ async fn supersede_while_loading_cancels_slow_track() {
 /// Drain any backlog already buffered on `rx` so the completion-race watch
 /// observes only events that follow the selects under test.
 fn drain_event_backlog(rx: &mut EventReceiver) {
-    use tokio::sync::broadcast::error::TryRecvError;
+    use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
     loop {
         match rx.try_recv() {
             Ok(_) => {}

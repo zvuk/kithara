@@ -215,7 +215,9 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
                 pre_seek_enqueued.insert(request_id);
             }
             Ok(_) => {}
-            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(kithara_platform::tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                continue;
+            }
             Err(_) => break,
         }
     }
@@ -419,8 +421,10 @@ async fn observe_post_seek(
                 }
                 _ => {}
             },
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
+            Ok(Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+                continue;
+            }
+            Ok(Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed)) => break,
             Err(_) => continue,
         }
     }

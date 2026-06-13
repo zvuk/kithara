@@ -5,9 +5,9 @@ use kithara::{
     abr::AbrMode,
     events::{AppEvent, Event},
 };
-use kithara_platform::time::Duration;
+use kithara_platform::{time::Duration, tokio::sync::broadcast::error::TryRecvError};
 use kithara_queue::{Queue, QueueEvent, TrackId, Transition};
-use tokio::{sync::broadcast::error::TryRecvError, task};
+use tokio::task;
 
 use super::{
     dashboard::{Dashboard, Tab},

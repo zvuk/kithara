@@ -10,9 +10,12 @@ use kithara::{
     prelude::ResourceConfig,
     stream::AudioCodec,
 };
-use kithara_platform::{CancelToken, sync::Mutex};
+use kithara_platform::{
+    CancelToken,
+    sync::{Mutex, Notify},
+    tokio::sync::broadcast::error::RecvError,
+};
 use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry, TrackSource};
-use tokio::sync::{Notify, broadcast::error::RecvError};
 
 use crate::{config::AppConfig, sources::build_resource_config, waveform::analyze};
 

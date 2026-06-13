@@ -1,7 +1,7 @@
 use std::sync::PoisonError;
 
 use kithara_events::{Event, PlayerEvent, QueueEvent};
-use tokio::sync::broadcast::error::TryRecvError;
+use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
 use tracing::debug;
 
 use super::{

@@ -1,9 +1,11 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara_events::{DownloaderEvent, Event, EventBus, TrackId, TrackStatus};
-use kithara_platform::tokio::task::{JoinHandle, spawn};
+use kithara_platform::tokio::{
+    sync::Semaphore,
+    task::{JoinHandle, spawn},
+};
 use kithara_play::{PlayerImpl, Resource, ResourceConfig};
-use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
 use crate::{

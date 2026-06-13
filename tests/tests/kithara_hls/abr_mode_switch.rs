@@ -103,8 +103,12 @@ impl EventCollector {
             loop {
                 let ev = match rx.recv().await {
                     Ok(ev) => ev,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        continue;
+                    }
+                    Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
                 };
                 match &ev {
                     Event::Downloader(DownloaderEvent::RequestEnqueued {
@@ -844,8 +848,10 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         loop {
             let ev = match applied_rx.recv().await {
                 Ok(ev) => ev,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    continue;
+                }
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
                 applied_bg.lock_sync().push(to.get());
@@ -1367,8 +1373,10 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
         loop {
             let ev = match applied_rx.recv().await {
                 Ok(ev) => ev,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    continue;
+                }
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
                 applied_bg.lock_sync().push(to.get());
@@ -1519,8 +1527,10 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
         loop {
             let ev = match applied_rx.recv().await {
                 Ok(ev) => ev,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    continue;
+                }
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
                 applied_bg.lock_sync().push(to.get());
@@ -1763,8 +1773,10 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
                     applied_bg.lock_sync().push(to.get());
                 }
                 Ok(_) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    continue;
+                }
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
     });

@@ -68,7 +68,7 @@ impl PlaylistCache {
             downloader,
             byte_pool,
             config: Arc::new(RwLock::new(PlaylistConfig::default())),
-            master: Arc::new(OnceCell::new()),
+            master: Arc::new(OnceCell::default()),
             media: Arc::new(DashMap::new()),
         }
     }
@@ -127,7 +127,7 @@ impl PlaylistCache {
         let cell: Arc<OnceCell<MediaPlaylist>> = self
             .media
             .entry(variant_id)
-            .or_insert_with(|| Arc::new(OnceCell::new()))
+            .or_insert_with(|| Arc::new(OnceCell::default()))
             .clone();
 
         let playlist = cell

@@ -15,7 +15,7 @@ use std::sync::{
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
-use kithara_platform::{CancelToken, Mutex, tokio::sync::Notify};
+use kithara_platform::{CancelToken, Mutex, sync::Notify};
 
 use crate::key::ResourceKey;
 

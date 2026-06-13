@@ -7,8 +7,11 @@
 
 pub use crate::native::tokio::{join, net, pin, select, try_join};
 
+pub mod broadcast;
 pub mod mpsc;
+pub mod oncecell;
 pub mod oneshot;
+pub mod semaphore;
 pub mod sync;
 pub mod task;
 mod unbounded;

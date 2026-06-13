@@ -176,12 +176,13 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
             // A downloader event arrived inside the window: still active,
             // keep waiting. Lagged is also "events are flowing".
             Ok(Ok(Event::Downloader(_)))
-            | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+            | Ok(Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
             // Non-downloader event: ignore, keep waiting for quiescence.
             Ok(Ok(_)) => {}
             // Bus closed or the settle window elapsed with no event:
             // prefetch has gone quiescent.
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) | Err(_) => break,
+            Ok(Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed))
+            | Err(_) => break,
         }
     }
 
