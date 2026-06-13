@@ -232,9 +232,11 @@ impl Demuxer for Fmp4SegmentDemuxer {
         self.next_segment_index = segment_index.saturating_add(1);
         let variant_index = desc.variant_index;
         let preroll = match compute_preroll_byte(
-            target,
-            landed_at,
-            segment_index,
+            &PrerollProbe {
+                target,
+                landed_at,
+                segment_index,
+            },
             self.segments.as_ref(),
             &priming,
         ) {
@@ -278,20 +280,27 @@ fn warmup_backoff(codec: AudioCodec, sample_rate: u32, priming: &CodecPriming) -
     ))
 }
 
-fn compute_preroll_byte(
+/// Where a seek landed relative to its target: the requested `target`
+/// time, the `landed_at` time actually reached, and the `segment_index`
+/// it landed in. Inputs to [`compute_preroll_byte`].
+struct PrerollProbe {
     target: Duration,
     landed_at: Duration,
     segment_index: u32,
+}
+
+fn compute_preroll_byte(
+    probe: &PrerollProbe,
     layout: &dyn ByteMap,
     priming: &CodecPriming,
 ) -> Option<u64> {
     if priming.byte_margin == 0 {
         return None;
     }
-    if landed_at < target {
+    if probe.landed_at < probe.target {
         return None;
     }
-    let prev_index = segment_index.checked_sub(1)?;
+    let prev_index = probe.segment_index.checked_sub(1)?;
     let prev = layout.segment_at_index(prev_index)?;
     Some(prev.byte_range.start)
 }

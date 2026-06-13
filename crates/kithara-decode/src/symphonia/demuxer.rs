@@ -95,6 +95,17 @@ pub(crate) struct SymphoniaDemuxer {
     needs_resume: bool,
 }
 
+/// Inputs to [`SymphoniaDemuxer::open_file`] besides the reader: the
+/// format `hint` (file extension), an explicit `container` format that
+/// skips probing when known, the bootstrap `byte_len_handle`, and an
+/// optional `byte_map` over the underlying source.
+pub(crate) struct FileOpen {
+    pub(crate) hint: Option<String>,
+    pub(crate) container: Option<ContainerFormat>,
+    pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
+    pub(crate) byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
+}
+
 impl SymphoniaDemuxer {
     fn current_byte(&self) -> Option<u64> {
         self.byte_pos_handle
@@ -175,16 +186,16 @@ impl SymphoniaDemuxer {
     ///
     /// Surfaces probe-side errors verbatim ([`DecodeError::Backend`])
     /// and missing-track errors ([`DecodeError::ProbeFailed`]).
-    pub(crate) fn open_file<R>(
-        source: R,
-        hint: Option<String>,
-        container: Option<ContainerFormat>,
-        byte_len_handle: Option<Arc<AtomicU64>>,
-        byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
-    ) -> DecodeResult<(Self, Arc<AtomicU64>)>
+    pub(crate) fn open_file<R>(source: R, open: FileOpen) -> DecodeResult<(Self, Arc<AtomicU64>)>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
+        let FileOpen {
+            hint,
+            container,
+            byte_len_handle,
+            byte_map,
+        } = open;
         let config = SymphoniaConfig {
             byte_len_handle,
             hint,

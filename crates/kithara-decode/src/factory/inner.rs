@@ -305,7 +305,7 @@ fn build_apple_standalone_decoder(
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
         apple::{AppleAudioFileDemuxer, AppleCodec},
-        composed::ComposedDecoder,
+        composed::{ComposedDecoder, DecoderRuntime},
         demuxer::Demuxer,
         gapless::scoped_probe,
     };
@@ -326,10 +326,12 @@ fn build_apple_standalone_decoder(
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
-        pool,
-        config.epoch,
-        config.byte_len_handle.clone(),
-        config.hooks,
+        DecoderRuntime {
+            pool,
+            epoch: config.epoch,
+            byte_len_handle: config.byte_len_handle.clone(),
+            hooks: config.hooks,
+        },
     );
     Ok(Box::new(decoder))
 }
@@ -401,7 +403,7 @@ fn build_android_standalone_decoder(
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
         android::{AndroidCodec, AndroidMediaExtractorDemuxer},
-        composed::ComposedDecoder,
+        composed::{ComposedDecoder, DecoderRuntime},
         demuxer::Demuxer,
     };
     let demuxer = match (codec, container) {
@@ -424,10 +426,12 @@ fn build_android_standalone_decoder(
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
-        pool,
-        config.epoch,
-        config.byte_len_handle.clone(),
-        config.hooks,
+        DecoderRuntime {
+            pool,
+            epoch: config.epoch,
+            byte_len_handle: config.byte_len_handle.clone(),
+            hooks: config.hooks,
+        },
     );
     Ok(Box::new(decoder))
 }
@@ -455,10 +459,10 @@ fn create_file_symphonia_universal(
     config: DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
-        composed::ComposedDecoder,
+        composed::{ComposedDecoder, DecoderRuntime},
         demuxer::Demuxer,
         gapless::scoped_probe,
-        symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
+        symphonia::{FileOpen, SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
     };
 
     tracing::debug!(
@@ -475,10 +479,12 @@ fn create_file_symphonia_universal(
 
     let (mut demuxer, _byte_len) = SymphoniaDemuxer::open_file(
         source,
-        config.hint.clone(),
-        container,
-        config.byte_len_handle.clone(),
-        config.byte_map.clone(),
+        FileOpen {
+            hint: config.hint.clone(),
+            container,
+            byte_len_handle: config.byte_len_handle.clone(),
+            byte_map: config.byte_map.clone(),
+        },
     )?;
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
@@ -499,10 +505,12 @@ fn create_file_symphonia_universal(
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
-        pool,
-        config.epoch,
-        config.byte_len_handle.clone(),
-        config.hooks,
+        DecoderRuntime {
+            pool,
+            epoch: config.epoch,
+            byte_len_handle: config.byte_len_handle.clone(),
+            hooks: config.hooks,
+        },
     );
     Ok(Box::new(decoder))
 }
@@ -564,7 +572,11 @@ where
     C: crate::codec::FrameCodec + 'static,
     F: FnOnce(&crate::demuxer::TrackInfo) -> DecodeResult<C>,
 {
-    use crate::{composed::ComposedDecoder, demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer};
+    use crate::{
+        composed::{ComposedDecoder, DecoderRuntime},
+        demuxer::Demuxer,
+        fmp4::Fmp4SegmentDemuxer,
+    };
 
     let demuxer =
         Fmp4SegmentDemuxer::open(source, layout, config.byte_pool.clone().unwrap_or_default())?;
@@ -576,10 +588,12 @@ where
     let decoder = ComposedDecoder::new(
         demuxer,
         codec,
-        pool,
-        config.epoch,
-        config.byte_len_handle.clone(),
-        config.hooks,
+        DecoderRuntime {
+            pool,
+            epoch: config.epoch,
+            byte_len_handle: config.byte_len_handle.clone(),
+            hooks: config.hooks,
+        },
     );
     Ok(Box::new(decoder))
 }

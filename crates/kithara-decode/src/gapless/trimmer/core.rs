@@ -203,12 +203,12 @@ impl GaplessTrimmer {
                 );
                 drain_tail(&mut self.tail_buffer, &mut self.tail_buffered_frames)
             }
-            GaplessMode::Heuristic(state) => flush_heuristic(
+            GaplessMode::Heuristic(state) => flush_heuristic(&mut TrimCtx {
                 state,
-                &mut self.tail_buffer,
-                &mut self.tail_buffered_frames,
-                self.trailing_frames,
-            ),
+                tail_buffer: &mut self.tail_buffer,
+                tail_buffered_frames: &mut self.tail_buffered_frames,
+                trailing_frames: self.trailing_frames,
+            }),
         }
     }
 
@@ -257,10 +257,12 @@ impl GaplessTrimmer {
                 )
             }
             GaplessMode::Heuristic(state) => push_heuristic(
-                state,
-                &mut self.tail_buffer,
-                &mut self.tail_buffered_frames,
-                self.trailing_frames,
+                &mut TrimCtx {
+                    state,
+                    tail_buffer: &mut self.tail_buffer,
+                    tail_buffered_frames: &mut self.tail_buffered_frames,
+                    trailing_frames: self.trailing_frames,
+                },
                 chunk,
             ),
         }
@@ -299,109 +301,93 @@ impl From<GaplessInfo> for GaplessTrimmer {
     }
 }
 
-fn push_heuristic(
-    state: &mut HeuristicState,
-    tail_buffer: &mut TailBuffer,
-    tail_buffered_frames: &mut u64,
+/// Mutable trimming context shared by the heuristic-mode helpers. The
+/// `HeuristicState` lives inside the `GaplessMode` enum while
+/// `tail_buffer`/`tail_buffered_frames` are `GaplessTrimmer` fields, so the
+/// helpers borrow-split them; bundling here lets each take one
+/// `&mut TrimCtx` instead of four positional args.
+struct TrimCtx<'a> {
+    state: &'a mut HeuristicState,
+    tail_buffer: &'a mut TailBuffer,
+    tail_buffered_frames: &'a mut u64,
     trailing_frames: u64,
-    chunk: PcmChunk,
-) -> GaplessOutput {
-    if !state.leading_enabled {
-        return forward_post_leading(
-            state,
-            tail_buffer,
-            tail_buffered_frames,
-            trailing_frames,
-            chunk,
-        );
+}
+
+fn push_heuristic(ctx: &mut TrimCtx, chunk: PcmChunk) -> GaplessOutput {
+    if !ctx.state.leading_enabled {
+        return forward_post_leading(ctx, chunk);
     }
 
-    state.leading_buffered_frames = state
+    ctx.state.leading_buffered_frames = ctx
+        .state
         .leading_buffered_frames
         .saturating_add(chunk_frames(&chunk));
-    state.leading_buffer.push(chunk);
+    ctx.state.leading_buffer.push(chunk);
 
     if let Some(trim_frames) = find_leading_trim_frames(
-        &state.leading_buffer,
-        &state.params,
-        state.silence_threshold_amp,
+        &ctx.state.leading_buffer,
+        &ctx.state.params,
+        ctx.state.silence_threshold_amp,
     ) {
-        state.leading_enabled = false;
+        ctx.state.leading_enabled = false;
         if trim_frames > 0 {
-            arm_fade_in(state);
+            arm_fade_in(ctx.state);
         }
-        return drain_leading_buffer(
-            state,
-            tail_buffer,
-            tail_buffered_frames,
-            trailing_frames,
-            trim_frames,
-        );
+        return drain_leading_buffer(ctx, trim_frames);
     }
 
-    if state.leading_buffered_frames >= state.params.scan_window_frames {
-        state.leading_enabled = false;
-        return drain_leading_buffer(state, tail_buffer, tail_buffered_frames, trailing_frames, 0);
+    if ctx.state.leading_buffered_frames >= ctx.state.params.scan_window_frames {
+        ctx.state.leading_enabled = false;
+        return drain_leading_buffer(ctx, 0);
     }
 
     GaplessOutput::new()
 }
 
-fn forward_post_leading(
-    state: &mut HeuristicState,
-    tail_buffer: &mut TailBuffer,
-    tail_buffered_frames: &mut u64,
-    trailing_frames: u64,
-    mut chunk: PcmChunk,
-) -> GaplessOutput {
-    apply_fade_in(&mut state.fade_in, &mut chunk);
-    buffer_tail(tail_buffer, tail_buffered_frames, chunk);
-    release_ready_chunks(tail_buffer, tail_buffered_frames, trailing_frames)
+fn forward_post_leading(ctx: &mut TrimCtx, mut chunk: PcmChunk) -> GaplessOutput {
+    apply_fade_in(&mut ctx.state.fade_in, &mut chunk);
+    buffer_tail(ctx.tail_buffer, ctx.tail_buffered_frames, chunk);
+    release_ready_chunks(
+        ctx.tail_buffer,
+        ctx.tail_buffered_frames,
+        ctx.trailing_frames,
+    )
 }
 
-fn flush_heuristic(
-    state: &mut HeuristicState,
-    tail_buffer: &mut TailBuffer,
-    tail_buffered_frames: &mut u64,
-    trailing_frames: u64,
-) -> GaplessOutput {
+fn flush_heuristic(ctx: &mut TrimCtx) -> GaplessOutput {
     let mut ready = GaplessOutput::new();
 
-    if state.leading_enabled {
+    if ctx.state.leading_enabled {
         let trim_frames = find_leading_trim_frames(
-            &state.leading_buffer,
-            &state.params,
-            state.silence_threshold_amp,
+            &ctx.state.leading_buffer,
+            &ctx.state.params,
+            ctx.state.silence_threshold_amp,
         )
         .unwrap_or(0);
-        state.leading_enabled = false;
+        ctx.state.leading_enabled = false;
         if trim_frames > 0 {
-            arm_fade_in(state);
+            arm_fade_in(ctx.state);
         }
-        ready.extend(drain_leading_buffer(
-            state,
-            tail_buffer,
-            tail_buffered_frames,
-            trailing_frames,
-            trim_frames,
-        ));
+        ready.extend(drain_leading_buffer(ctx, trim_frames));
     }
 
-    if state.trim_trailing {
-        let silent_suffix = trailing_silent_frames(tail_buffer, state.silence_threshold_amp);
+    if ctx.state.trim_trailing {
+        let silent_suffix =
+            trailing_silent_frames(ctx.tail_buffer, ctx.state.silence_threshold_amp);
         if silent_suffix > 0
-            && silent_suffix < *tail_buffered_frames
-            && silent_suffix >= state.params.min_trim_frames
+            && silent_suffix < *ctx.tail_buffered_frames
+            && silent_suffix >= ctx.state.params.min_trim_frames
         {
-            trim_tail_frames(tail_buffer, tail_buffered_frames, silent_suffix);
-            let sample_rate = tail_buffer
+            trim_tail_frames(ctx.tail_buffer, ctx.tail_buffered_frames, silent_suffix);
+            let sample_rate = ctx
+                .tail_buffer
                 .last()
                 .map_or(0, |chunk| chunk.spec().sample_rate.get());
-            apply_trailing_fade_out(tail_buffer, sample_rate);
+            apply_trailing_fade_out(ctx.tail_buffer, sample_rate);
         }
     }
 
-    ready.extend(drain_tail(tail_buffer, tail_buffered_frames));
+    ready.extend(drain_tail(ctx.tail_buffer, ctx.tail_buffered_frames));
     ready
 }
 
@@ -484,15 +470,9 @@ fn trim_leading(mut chunk: PcmChunk, leading_remaining: &mut u64) -> Option<PcmC
     (chunk_frames(&chunk) > 0).then_some(chunk)
 }
 
-fn drain_leading_buffer(
-    state: &mut HeuristicState,
-    tail_buffer: &mut TailBuffer,
-    tail_buffered_frames: &mut u64,
-    trailing_frames: u64,
-    trim_frames: u64,
-) -> GaplessOutput {
-    let mut buffer = std::mem::take(&mut state.leading_buffer);
-    state.leading_buffered_frames = 0;
+fn drain_leading_buffer(ctx: &mut TrimCtx, trim_frames: u64) -> GaplessOutput {
+    let mut buffer = std::mem::take(&mut ctx.state.leading_buffer);
+    ctx.state.leading_buffered_frames = 0;
 
     let mut remaining_trim = trim_frames;
     for mut chunk in buffer.drain(..) {
@@ -508,11 +488,15 @@ fn drain_leading_buffer(
             trim_chunk_start(&mut chunk, trim);
         }
 
-        apply_fade_in(&mut state.fade_in, &mut chunk);
-        buffer_tail(tail_buffer, tail_buffered_frames, chunk);
+        apply_fade_in(&mut ctx.state.fade_in, &mut chunk);
+        buffer_tail(ctx.tail_buffer, ctx.tail_buffered_frames, chunk);
     }
 
-    release_ready_chunks(tail_buffer, tail_buffered_frames, trailing_frames)
+    release_ready_chunks(
+        ctx.tail_buffer,
+        ctx.tail_buffered_frames,
+        ctx.trailing_frames,
+    )
 }
 
 fn buffer_tail(tail_buffer: &mut TailBuffer, tail_buffered_frames: &mut u64, chunk: PcmChunk) {
