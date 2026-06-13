@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use kithara_platform::RwLock;
+use kithara_platform::sync::RwLock;
 
 use super::SegmentEntry;
 

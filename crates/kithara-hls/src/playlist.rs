@@ -1,4 +1,4 @@
-use kithara_platform::{RwLock, time::Duration};
+use kithara_platform::{sync::RwLock, time::Duration};
 use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;
 

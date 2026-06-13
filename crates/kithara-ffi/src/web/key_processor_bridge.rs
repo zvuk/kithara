@@ -3,8 +3,7 @@ use std::sync::{Arc, LazyLock};
 use bytes::Bytes;
 use kithara_drm::{DrmError, KeyProcessResult, KeyProcessor};
 use kithara_platform::{
-    Mutex,
-    sync::mpsc,
+    sync::{Mutex, mpsc},
     time::{Duration, Instant},
 };
 

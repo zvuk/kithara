@@ -8,7 +8,11 @@ use std::{
 use kithara_abr::AbrPeerId;
 use kithara_events::{DownloaderEvent, EventBus, RequestId, RequestPriority};
 use kithara_platform::{
-    CancelGroup, CancelToken, RwLock, sync::Notify, time::Instant, tokio, tokio::sync::mpsc,
+    CancelGroup, CancelToken,
+    sync::{Notify, RwLock},
+    time::Instant,
+    tokio,
+    tokio::sync::mpsc,
 };
 use kithara_test_utils::kithara;
 use thunderdome::{Arena, Index};

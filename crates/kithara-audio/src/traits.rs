@@ -135,7 +135,7 @@ pub enum ChunkOutcome {
 ///   or may not recover; callers that finalise tracks MUST NOT treat
 ///   this as EOF.
 #[kithara::mock(api = PcmReaderMock)]
-pub trait PcmReader: kithara_platform::MaybeSend {
+pub trait PcmReader: kithara_platform::maybe_send::MaybeSend {
     /// Runtime ABR handle for the underlying stream.
     ///
     /// Adaptive readers (HLS) return `Some(handle)` so the queue/FFI can

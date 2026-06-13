@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use kithara_events::{Event, EventReceiver, PlayerEvent};
 use kithara_integration_tests::offline::OfflineSession;
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use kithara_play::{PlayerConfig, PlayerImpl, SessionDispatcher};
 
 pub(crate) struct OfflinePlayerHarness {

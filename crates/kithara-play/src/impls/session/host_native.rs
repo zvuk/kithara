@@ -1,7 +1,10 @@
 use std::sync::{Arc, OnceLock};
 
 use firewheel::{FirewheelCtx, backend::AudioBackend};
-use kithara_platform::{Mutex, sync::mpsc, thread::spawn_named};
+use kithara_platform::{
+    sync::{Mutex, mpsc},
+    thread::spawn_named,
+};
 
 use super::{
     client::SessionDispatcher,

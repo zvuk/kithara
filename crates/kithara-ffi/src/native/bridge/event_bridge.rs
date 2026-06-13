@@ -3,7 +3,12 @@ use std::sync::Arc;
 use kithara::play::{PlayerEvent, TimeControlStatus};
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_platform::{
-    CancelToken, Duration, JoinHandle, Mutex, sleep, spawn, tokio, tokio::sync::broadcast,
+    CancelToken,
+    sync::Mutex,
+    thread::{JoinHandle, sleep, spawn},
+    time::Duration,
+    tokio,
+    tokio::sync::broadcast,
 };
 use kithara_queue::Queue;
 

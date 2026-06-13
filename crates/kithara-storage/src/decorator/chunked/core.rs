@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 
 use crate::{
     ResourceRead, ResourceReader, ResourceStatus, ResourceWriter, StorageError, StorageResult,

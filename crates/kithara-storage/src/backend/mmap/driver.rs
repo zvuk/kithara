@@ -5,7 +5,7 @@ use std::{fmt, fs, ops::Range, path::PathBuf, sync::Arc};
 use arc_swap::ArcSwapOption;
 use bon::Builder;
 use crossbeam_queue::SegQueue;
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use mmap_io::MemoryMappedFile;
 use rangemap::RangeSet;
 

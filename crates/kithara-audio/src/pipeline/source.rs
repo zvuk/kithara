@@ -17,7 +17,7 @@ use kithara_decode::{
     GaplessMode, PcmChunk, PcmSpec, duration_for_frames,
 };
 use kithara_events::{AudioEvent, AudioFormat, DeferredBus, SeekLifecycleStage, SegmentLocation};
-use kithara_platform::{Mutex, time::Duration};
+use kithara_platform::{sync::Mutex, time::Duration};
 use kithara_stream::{
     Activity, ContainerFormat, MediaInfo, PendingReason, PlayheadWrite, SeekControl, SeekObserve,
     SourcePhase, SourceSeekAnchor, Stream, StreamType,

@@ -46,14 +46,3 @@ pub use common::cancel::{CancelGroup, CancelScope, CancelToken, CancelWakerGuard
 pub use common::flash_inert as flash;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub use flash::*;
-
-// Root item re-exports: kept until the W5 mass name migration; they resolve
-// through the gated backend globs above.
-#[cfg(not(target_arch = "wasm32"))]
-pub use self::env::mutation_lock as env_mutation_lock;
-pub use self::{
-    logging::log_error,
-    maybe_send::{BoxFuture, MaybeSend, MaybeSendFuture, MaybeSync, WasmSend},
-    sync::{Condvar, Mutex, MutexGuard, NotAvailable, RwLock, RwLockReadGuard, RwLockWriteGuard},
-    thread::{Duration, JoinHandle, Thread, ThreadId, current, park, park_timeout, sleep, spawn},
-};

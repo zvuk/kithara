@@ -12,7 +12,9 @@ use bon::Builder;
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
-use kithara_platform::{CancelScope, CancelToken, Mutex, tokio::runtime::Handle as RuntimeHandle};
+use kithara_platform::{
+    CancelScope, CancelToken, sync::Mutex, tokio::runtime::Handle as RuntimeHandle,
+};
 use portable_atomic::AtomicF32;
 use ringbuf::{HeapProd, traits::Producer};
 use tracing::{debug, info, warn};

@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use portable_atomic::{AtomicF64, AtomicU32};
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,

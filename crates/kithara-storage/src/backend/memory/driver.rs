@@ -4,7 +4,7 @@ use std::{fmt, sync::Arc};
 
 use arc_swap::ArcSwapOption;
 use kithara_bufpool::{BytePool, PooledOwned};
-use kithara_platform::{CancelToken, Mutex};
+use kithara_platform::{CancelToken, sync::Mutex};
 use rangemap::RangeSet;
 
 use crate::{

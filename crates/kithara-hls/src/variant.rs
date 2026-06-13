@@ -18,7 +18,7 @@ use kithara_assets::{
 };
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, NetError, Retryability};
-use kithara_platform::{CancelToken, Mutex, time::Duration};
+use kithara_platform::{CancelToken, sync::Mutex, time::Duration};
 use kithara_storage::{ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SeekObserve,

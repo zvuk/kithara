@@ -3,7 +3,7 @@
 use std::{fmt, num::NonZeroUsize, ops::Range, path::Path, sync::Arc};
 
 use dashmap::DashSet;
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 use lru::LruCache;
 

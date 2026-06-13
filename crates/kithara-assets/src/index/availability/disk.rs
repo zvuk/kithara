@@ -7,7 +7,7 @@ use std::{
 };
 
 use dashmap::DashMap;
-use kithara_platform::{CancelToken, Mutex};
+use kithara_platform::{CancelToken, sync::Mutex};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
 
 use super::core::{Availability, AvailabilityIndex, InnerIndex};

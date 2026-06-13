@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, OnceLock, Weak, atomic::AtomicBool},
 };
 
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::index::schema::{LruEntryFile, LruIndexFile};

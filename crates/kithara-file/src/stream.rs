@@ -7,7 +7,8 @@ use kithara_assets::{
 use kithara_events::EventBus;
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancelScope, CancelToken, Mutex,
+    CancelScope, CancelToken,
+    sync::Mutex,
     time::{Duration, sleep},
 };
 use kithara_storage::StorageError;

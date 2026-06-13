@@ -1220,7 +1220,7 @@ impl<S> Drop for Audio<S> {
     }
 }
 
-impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
+impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
     fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.abr_handle.clone()
     }

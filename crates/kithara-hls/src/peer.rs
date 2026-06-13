@@ -12,7 +12,8 @@ use kithara_abr::{Abr, AbrState};
 use kithara_assets::ResourceKey;
 use kithara_events::{AbrMode, AbrProgressSnapshot, VariantDuration, VariantInfo};
 use kithara_platform::{
-    CancelToken, Mutex,
+    CancelToken,
+    sync::Mutex,
     time::Duration,
     tokio::{self, sync::mpsc, task::spawn},
 };

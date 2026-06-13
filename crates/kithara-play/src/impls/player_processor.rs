@@ -11,7 +11,7 @@ use firewheel::{
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use kithara_test_utils::kithara;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{
@@ -787,7 +787,7 @@ mod tests {
     use kithara_audio::PcmReader;
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
-    use kithara_platform::{Mutex as PlatformMutex, time::Duration};
+    use kithara_platform::{sync::Mutex as PlatformMutex, time::Duration};
     use kithara_test_utils::kithara;
     use ringbuf::{
         HeapProd, HeapRb,

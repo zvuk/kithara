@@ -14,7 +14,7 @@ use std::{
 
 use kithara_bufpool::BytePool;
 use kithara_platform::{
-    Condvar, Mutex,
+    sync::{Condvar, Mutex},
     time::{Duration, Instant},
 };
 use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};

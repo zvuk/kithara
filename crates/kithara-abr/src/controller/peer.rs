@@ -5,7 +5,8 @@ use std::sync::{
 
 use kithara_events::EventBus;
 use kithara_platform::{
-    CancelToken, Mutex, RwLock,
+    CancelToken,
+    sync::{Mutex, RwLock},
     time::{Duration, Instant},
 };
 

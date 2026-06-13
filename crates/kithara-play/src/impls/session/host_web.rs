@@ -5,7 +5,7 @@ use std::{
 };
 
 use firewheel::FirewheelCtx;
-use kithara_platform::{Mutex, sync::mpsc};
+use kithara_platform::sync::{Mutex, mpsc};
 use tracing::warn;
 
 use super::{

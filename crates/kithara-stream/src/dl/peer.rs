@@ -9,7 +9,8 @@ use kithara_abr::{Abr, AbrHandle, AbrPeerId};
 use kithara_events::{EventBus, RequestPriority};
 use kithara_net::{Headers, NetError};
 use kithara_platform::{
-    CancelGroup, CancelToken, RwLock,
+    CancelGroup, CancelToken,
+    sync::RwLock,
     time::Instant,
     tokio::sync::{mpsc, oneshot},
 };

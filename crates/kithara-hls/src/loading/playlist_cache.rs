@@ -6,7 +6,7 @@ use dashmap::DashMap;
 use kithara_assets::AssetScope;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
-use kithara_platform::{RwLock, tokio::sync::OnceCell};
+use kithara_platform::{sync::RwLock, tokio::sync::OnceCell};
 use kithara_stream::dl::PeerHandle;
 use url::Url;
 

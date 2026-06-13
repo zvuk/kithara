@@ -13,7 +13,7 @@ use firewheel::node::ProcBuffers;
 use kithara_bufpool::PcmPool;
 use kithara_decode::PcmSpec;
 use kithara_integration_tests::audio_mock::TestPcmReader;
-use kithara_platform::Mutex as PlatformMutex;
+use kithara_platform::sync::Mutex as PlatformMutex;
 use kithara_play::{
     Resource,
     impls::{

@@ -1,5 +1,5 @@
 use kithara_events::BandwidthSource;
-use kithara_platform::{Mutex, time::Duration};
+use kithara_platform::{sync::Mutex, time::Duration};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 

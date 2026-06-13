@@ -12,7 +12,7 @@ pub(crate) static FFI_RUNTIME: LazyLock<runtime::Handle> = LazyLock::new(|| {
         .build()
         .expect("BUG: tokio current-thread runtime build cannot fail in normal startup");
     let handle = rt.handle().clone();
-    kithara_platform::spawn(move || {
+    kithara_platform::thread::spawn(move || {
         rt.block_on(std::future::pending::<()>());
     });
     handle

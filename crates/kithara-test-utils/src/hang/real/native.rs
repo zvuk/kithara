@@ -58,7 +58,7 @@ pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>) 
         Ok(()) => format!("dump={}", file.display()),
         Err(err) => format!("dump-write-failed={err}"),
     };
-    kithara_platform::log_error(&format!(
+    kithara_platform::logging::log_error(&format!(
         "[kithara_hang_detector] hang detected: {label} ts_ms={ts} pid={pid} {dump} — {payload}"
     ));
 }

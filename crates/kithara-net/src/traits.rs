@@ -6,7 +6,11 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use kithara_platform::{CancelToken, MaybeSend, MaybeSync, time::Duration};
+use kithara_platform::{
+    CancelToken,
+    maybe_send::{MaybeSend, MaybeSync},
+    time::Duration,
+};
 use url::Url;
 
 mod kithara {

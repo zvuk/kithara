@@ -7,7 +7,10 @@ use std::{
 };
 
 pub use crate::native::sync::mpsc::{RecvError, RecvTimeoutError, SendError, TryRecvError};
-use crate::{Mutex, sync::Condvar, time::Instant};
+use crate::{
+    sync::{Condvar, Mutex},
+    time::Instant,
+};
 
 struct Chan<T> {
     queue: Mutex<VecDeque<T>>,

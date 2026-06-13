@@ -2,7 +2,10 @@
 
 use std::{ops::Range, path::Path, sync::Arc};
 
-use kithara_platform::{CancelToken, MaybeSend, MaybeSync};
+use kithara_platform::{
+    CancelToken,
+    maybe_send::{MaybeSend, MaybeSync},
+};
 use tracing::warn;
 
 use super::state::ResourceCore;

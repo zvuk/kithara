@@ -18,8 +18,8 @@ use kithara_abr::Abr;
 use kithara_events::{DownloaderEvent, Event, EventBus};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancelToken, Mutex,
-    sync::Notify,
+    CancelToken,
+    sync::{Mutex, Notify},
     time::{self, Duration},
     tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
 };

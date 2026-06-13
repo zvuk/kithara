@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use kithara_drm::UniqueBinaryCipher as RustCipher;
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 
 use crate::observer::FfiKeyProcessor;
 

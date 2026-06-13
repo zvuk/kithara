@@ -8,7 +8,8 @@ use kithara_abr::{Abr, AbrController, AbrPeerId};
 use kithara_events::{EventBus, RequestId};
 use kithara_net::HttpClient;
 use kithara_platform::{
-    CancelScope, CancelToken, Mutex, RwLock,
+    CancelScope, CancelToken,
+    sync::{Mutex, RwLock},
     time::Duration,
     tokio,
     tokio::{sync::mpsc, task},

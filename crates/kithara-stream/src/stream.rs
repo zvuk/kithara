@@ -11,7 +11,7 @@ use std::{
 };
 
 use kithara_platform::{
-    MaybeSend, MaybeSync,
+    maybe_send::{MaybeSend, MaybeSync},
     thread::park_timeout,
     time::{Duration, Instant},
     tokio::task,

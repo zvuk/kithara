@@ -5,7 +5,10 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 
-use kithara_platform::{CancelToken, Condvar, Mutex};
+use kithara_platform::{
+    CancelToken,
+    sync::{Condvar, Mutex},
+};
 use rangemap::RangeSet;
 
 use crate::{

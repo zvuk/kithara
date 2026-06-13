@@ -5,7 +5,7 @@ use std::sync::{
 
 use kithara_events::{AbrMode, AbrReason, VariantIndex};
 use kithara_platform::{
-    Mutex,
+    sync::Mutex,
     time::{Duration, Instant},
 };
 use num_traits::ToPrimitive;

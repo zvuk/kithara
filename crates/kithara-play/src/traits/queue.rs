@@ -1,4 +1,7 @@
-use kithara_platform::{MaybeSend, MaybeSync, tokio::sync::broadcast};
+use kithara_platform::{
+    maybe_send::{MaybeSend, MaybeSync},
+    tokio::sync::broadcast,
+};
 
 #[rustfmt::skip]
 use crate::traits::item::PlayerItem;

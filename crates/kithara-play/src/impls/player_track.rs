@@ -9,7 +9,7 @@ use firewheel::dsp::{
     mix::{Mix, MixDSP},
 };
 use kithara_audio::ServiceClass;
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 use ringbuf::{HeapProd, traits::Producer};
 

@@ -2,7 +2,10 @@
 
 use std::{error::Error as StdError, fmt, num::NonZeroUsize, ops::Range, sync::Arc};
 
-use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
+use kithara_platform::{
+    maybe_send::{MaybeSend, MaybeSync},
+    time::Duration,
+};
 use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
 

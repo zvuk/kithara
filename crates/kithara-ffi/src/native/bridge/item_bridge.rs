@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use kithara::abr::AbrMode;
 use kithara_events::{AbrEvent, AudioEvent, DownloaderEvent, Event, FileEvent, HlsEvent};
-use kithara_platform::{CancelToken, Mutex, tokio, tokio::sync::broadcast};
+use kithara_platform::{CancelToken, sync::Mutex, tokio, tokio::sync::broadcast};
 
 use crate::{
     item::ItemView,

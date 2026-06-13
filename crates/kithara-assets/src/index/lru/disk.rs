@@ -10,7 +10,7 @@ use std::{
 };
 
 use kithara_bufpool::BytePool;
-use kithara_platform::{CancelToken, Mutex};
+use kithara_platform::{CancelToken, sync::Mutex};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
 
 use super::core::{LruIndex, LruInner, LruState};

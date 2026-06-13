@@ -20,7 +20,7 @@ use kithara_integration_tests::hls_server::{HlsTestServer, HlsTestServerConfig};
 use kithara_integration_tests::signal_pcm::signal;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::tokio::task::spawn_blocking;
-use kithara_platform::{CancelToken, Duration};
+use kithara_platform::{CancelToken, time::Duration};
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;

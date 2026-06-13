@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use kithara_events::{AbrEvent, AbrMode, EventBus, VariantIndex, VariantInfo};
 use kithara_platform::{
-    RwLock,
+    sync::RwLock,
     time::{Duration, Instant},
 };
 use kithara_test_utils::kithara;

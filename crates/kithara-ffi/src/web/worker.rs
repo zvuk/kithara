@@ -34,7 +34,7 @@ macro_rules! clog {
     };
 }
 
-/// Entry called inside a Web Worker thread (via `kithara_platform::spawn`).
+/// Entry called inside a Web Worker thread (via `thread::spawn`).
 ///
 /// Creates and owns the [`Queue`] (mirroring
 /// [`NativeInner`](crate::native::inner::NativeInner)'s construction),

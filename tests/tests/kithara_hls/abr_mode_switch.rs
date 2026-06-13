@@ -22,7 +22,8 @@ use kithara_integration_tests::{
     wav::create_wav_header,
 };
 use kithara_platform::{
-    CancelToken, Mutex,
+    CancelToken,
+    sync::Mutex,
     time::{Duration, Instant},
     tokio::task::{spawn, spawn_blocking},
 };

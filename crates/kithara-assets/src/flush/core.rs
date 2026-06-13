@@ -11,7 +11,11 @@ use std::{
 use dashmap::DashSet;
 #[cfg(test)]
 use kithara_platform::thread;
-use kithara_platform::{CancelToken, Condvar, Mutex, time::Duration};
+use kithara_platform::{
+    CancelToken,
+    sync::{Condvar, Mutex},
+    time::Duration,
+};
 
 use super::worker::WorkerSlot;
 use crate::error::AssetsResult;

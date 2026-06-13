@@ -1,6 +1,6 @@
 use std::sync::{Arc, atomic::Ordering};
 
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use ringbuf::traits::Consumer;
 use tracing::debug;
 

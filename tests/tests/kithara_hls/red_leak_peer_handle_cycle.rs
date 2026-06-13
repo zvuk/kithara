@@ -8,7 +8,7 @@ use std::{
 
 use kithara_abr::Abr;
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{CancelToken, Mutex, time::Duration};
+use kithara_platform::{CancelToken, sync::Mutex, time::Duration};
 use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer, PeerHandle};
 
 /// Peer that stashes its own `PeerHandle` clone after registration —

@@ -1,4 +1,4 @@
-use kithara_platform::{CancelToken, RwLock};
+use kithara_platform::{CancelToken, sync::RwLock};
 
 /// The variant's cancel epoch: the track-level parent token and the rotating
 /// per-activation child.

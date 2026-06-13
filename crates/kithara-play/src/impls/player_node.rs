@@ -6,7 +6,7 @@ use firewheel::{
     node::{AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig},
 };
 use kithara_bufpool::PcmPool;
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use ringbuf::{HeapCons, HeapRb, traits::Split};
 
 use super::{

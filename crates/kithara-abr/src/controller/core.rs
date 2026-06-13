@@ -10,7 +10,8 @@ use bon::Builder;
 use dashmap::DashMap;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
 use kithara_platform::{
-    CancelToken, Mutex, RwLock,
+    CancelToken,
+    sync::{Mutex, RwLock},
     time::{Duration, Instant},
 };
 use kithara_test_utils::kithara;

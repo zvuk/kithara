@@ -11,7 +11,7 @@ use std::{
 };
 
 use dashmap::DashMap;
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use kithara_storage::AvailabilityObserver;
 use rangemap::RangeSet;
 

@@ -2,7 +2,7 @@ use std::{num::NonZeroUsize, ops::Range, sync::Arc};
 
 use kithara_assets::{AssetReader, AssetStore, ReadSide, ResourceKey};
 use kithara_events::EventBus;
-use kithara_platform::{CancelToken, Mutex, time::Duration};
+use kithara_platform::{CancelToken, sync::Mutex, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, AudioCodec, MediaInfo, PlayheadRead, PlayheadWrite, ReadOutcome, SeekControl,

@@ -11,7 +11,7 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_drm::{KeyRequest, KeyRequestFactory};
-use kithara_platform::{CancelToken, Mutex};
+use kithara_platform::{CancelToken, sync::Mutex};
 use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource, Transition};
 use rand::{distr::Alphanumeric, prelude::*};
 

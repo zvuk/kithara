@@ -100,7 +100,7 @@ impl WorkerBridge {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);
 
-        let worker = kithara_platform::spawn(move || {
+        let worker = kithara_platform::thread::spawn(move || {
             crate::web::worker::worker_main(cmd_rx);
         });
         std::mem::forget(worker);
