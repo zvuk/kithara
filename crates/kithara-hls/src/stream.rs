@@ -149,11 +149,12 @@ impl StreamType for Hls {
         .estimate()
         .await;
         let media_playlists = estimation.media_playlists;
-        for (variant, map) in estimation.size_maps.into_iter().enumerate() {
-            if !map.is_empty() {
-                playlist_state.set_size_map(variant, map);
-            }
-        }
+        estimation
+            .size_maps
+            .into_iter()
+            .enumerate()
+            .filter(|(_, map)| !map.is_empty())
+            .for_each(|(variant, map)| playlist_state.set_size_map(variant, map));
 
         playhead.set_duration(playlist_state.track_duration());
 

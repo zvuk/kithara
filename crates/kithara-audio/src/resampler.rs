@@ -785,11 +785,10 @@ fn reserve_channel_scratch(bufs: &mut SmallVec<[Vec<f32>; 8]>, channels: usize, 
     if bufs.len() < channels {
         bufs.resize_with(channels, Vec::new);
     }
-    for buf in bufs.iter_mut().take(channels) {
-        if buf.capacity() < cap {
-            buf.reserve(cap.saturating_sub(buf.len()));
-        }
-    }
+    bufs.iter_mut()
+        .take(channels)
+        .filter(|buf| buf.capacity() < cap)
+        .for_each(|buf| buf.reserve(cap.saturating_sub(buf.len())));
 }
 
 impl ResamplerProcessor {
