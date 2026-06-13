@@ -8,7 +8,7 @@ use kithara_platform::CancelToken;
 
 use super::{
     AudioWorkerSource, PreloadGate,
-    decoder_node::DecoderNode,
+    decoder::DecoderNode,
     hang_observer::HangWatchdogObserver,
     types::{TrackId, TrackIdGen},
 };
