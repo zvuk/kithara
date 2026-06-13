@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -762,21 +763,21 @@ impl FlashInner {
     }
 }
 
-/// Diagnostics.
-impl FlashInner {
-    /// Diagnostic snapshot of the engine for hang dumps: counters plus every
-    /// parked waiter with its kind and deadline relative to the virtual clock.
-    /// Uses `try_lock` so a dump from a panic/abort path can never itself hang
-    /// on a held `core` lock.
-    pub(super) fn dump(&self) -> String {
-        use std::fmt::Write as _;
+/// Diagnostic snapshot of the engine for hang dumps: counters plus every
+/// parked waiter with its kind and deadline relative to the virtual clock.
+/// Uses `try_lock` so a dump from a panic/abort path can never itself hang
+/// on a held `core` lock.
+impl fmt::Display for FlashInner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let now = self.clock.now_nanos();
         let Ok(s) = self.core.try_lock() else {
-            return format!("virtual_now_ns={now}; engine core lock held — engine mid-operation");
+            return write!(
+                f,
+                "virtual_now_ns={now}; engine core lock held — engine mid-operation"
+            );
         };
-        let mut out = String::new();
-        let _ = writeln!(
-            out,
+        writeln!(
+            f,
             "virtual_now_ns={now} active={} active_async={} real_io={} pace_anchor={} yielders={}",
             s.registry.active,
             s.registry.active_async,
@@ -787,25 +788,25 @@ impl FlashInner {
                 "none"
             },
             s.sched.yielders.len(),
-        );
+        )?;
         for ((deadline, id), entry) in &s.sched.timed {
-            let _ = writeln!(
-                out,
+            writeln!(
+                f,
                 "  timed id={id:?} kind={:?} deadline_in_ns={}",
                 entry.kind,
                 deadline.saturating_sub(now),
-            );
+            )?;
         }
         for (id, entry) in &s.sched.indef {
-            let _ = writeln!(out, "  indef id={id:?} kind={:?}", entry.kind);
+            writeln!(f, "  indef id={id:?} kind={:?}", entry.kind)?;
         }
         if !s.sched.unpark_pending.is_empty() {
-            let _ = writeln!(out, "  unpark_pending={:?}", s.sched.unpark_pending);
+            writeln!(f, "  unpark_pending={:?}", s.sched.unpark_pending)?;
         }
         if !s.sched.notify_permits.is_empty() {
-            let _ = writeln!(out, "  notify_permits={:?}", s.sched.notify_permits);
+            writeln!(f, "  notify_permits={:?}", s.sched.notify_permits)?;
         }
-        out
+        Ok(())
     }
 }
 
@@ -924,9 +925,9 @@ pub(crate) fn signal_channel(cvid: CvId, all: bool) {
     FLASH.signal_channel(cvid, all);
 }
 
-/// Process-engine forward of [`FlashInner::dump`].
+/// Process-engine diagnostic dump of [`FlashInner`] via its `Display` impl.
 pub(crate) fn dump() -> String {
-    FLASH.dump()
+    FLASH.to_string()
 }
 
 /// Test-only coordinator that holds a RUNNING slot in `active` for its lifetime,
