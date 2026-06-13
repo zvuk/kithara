@@ -119,14 +119,14 @@ impl StateController {
         let waveform_enabled = Arc::new(AtomicBool::new(false));
         let waveform_wake = Arc::new(Notify::default());
 
-        spawn_listener(
-            Arc::clone(&queue),
-            Arc::clone(&state),
+        spawn_listener(ListenerCtx {
+            queue: Arc::clone(&queue),
+            state: Arc::clone(&state),
             config,
-            cancel.clone(),
-            Arc::clone(&waveform_enabled),
-            Arc::clone(&waveform_wake),
-        );
+            cancel: cancel.clone(),
+            waveform_enabled: Arc::clone(&waveform_enabled),
+            waveform_wake: Arc::clone(&waveform_wake),
+        });
 
         Self {
             queue,
@@ -209,18 +209,46 @@ impl Drop for StateController {
     }
 }
 
-fn spawn_listener(
+/// Owned context for the background listener task: the queue, shared state,
+/// app config, listener cancel, and the waveform analysis gate / wake.
+struct ListenerCtx {
     queue: Arc<Queue>,
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
     cancel: CancelToken,
     waveform_enabled: Arc<AtomicBool>,
     waveform_wake: Arc<Notify>,
-) {
+}
+
+/// Borrowed context for one analysis run: the queue, shared state, app
+/// config, and listener cancel (each run spawns from `cancel.child()`).
+#[derive(Clone, Copy)]
+struct AnalyzeCtx<'a> {
+    queue: &'a Arc<Queue>,
+    state: &'a Arc<Mutex<UiState>>,
+    config: &'a AppConfig,
+    cancel: &'a CancelToken,
+}
+
+fn spawn_listener(ctx: ListenerCtx) {
+    let ListenerCtx {
+        queue,
+        state,
+        config,
+        cancel,
+        waveform_enabled,
+        waveform_wake,
+    } = ctx;
     let mut rx = queue.subscribe();
 
     tokio::spawn(async move {
         let mut current_analyze: Option<CancelToken> = None;
+        let analyze_ctx = AnalyzeCtx {
+            queue: &queue,
+            state: &state,
+            config: &config,
+            cancel: &cancel,
+        };
 
         loop {
             tokio::select! {
@@ -228,7 +256,7 @@ fn spawn_listener(
                 () = cancel.cancelled() => break,
                 () = waveform_wake.notified() => {
                     if waveform_enabled.load(Ordering::SeqCst) {
-                        spawn_analyze(&queue, &state, &config, &cancel, &mut current_analyze);
+                        spawn_analyze(analyze_ctx, &mut current_analyze);
                     } else {
                         if let Some(prev) = current_analyze.take() {
                             prev.cancel();
@@ -242,7 +270,7 @@ fn spawn_listener(
                             matches!(event, Event::Queue(QueueEvent::CurrentTrackChanged { .. }));
                         apply_event(event, &queue, &state);
                         if track_changed && waveform_enabled.load(Ordering::SeqCst) {
-                            spawn_analyze(&queue, &state, &config, &cancel, &mut current_analyze);
+                            spawn_analyze(analyze_ctx, &mut current_analyze);
                         }
                     }
                     Err(RecvError::Lagged(_)) => continue,
@@ -254,14 +282,14 @@ fn spawn_listener(
 }
 
 /// Analyse the current track, cancelling any in-flight prior analysis.
-/// `cancel` is the listener cancel; each run uses `cancel.child()`.
-fn spawn_analyze(
-    queue: &Arc<Queue>,
-    state: &Arc<Mutex<UiState>>,
-    config: &AppConfig,
-    cancel: &CancelToken,
-    current_analyze: &mut Option<CancelToken>,
-) {
+/// `ctx.cancel` is the listener cancel; each run uses `ctx.cancel.child()`.
+fn spawn_analyze(ctx: AnalyzeCtx<'_>, current_analyze: &mut Option<CancelToken>) {
+    let AnalyzeCtx {
+        queue,
+        state,
+        config,
+        cancel,
+    } = ctx;
     if let Some(prev) = current_analyze.take() {
         prev.cancel();
     }

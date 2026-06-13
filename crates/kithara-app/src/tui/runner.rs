@@ -170,12 +170,14 @@ fn run_ui_loop(controller: &Arc<StateController>, palette: &tui::TuiPalette) -> 
                         ControlOutcome::SwitchTrack(index) => {
                             if let Some(id) = controller.queue().tracks().get(index).map(|t| t.id) {
                                 switch_to_id(
-                                    controller,
-                                    id,
-                                    index,
+                                    SwitchCtx {
+                                        controller,
+                                        id,
+                                        index,
+                                        state: &state,
+                                    },
                                     &mut ui,
                                     &mut auto_advanced_index,
-                                    &state,
                                 )?;
                             }
                         }
@@ -459,14 +461,27 @@ fn apply_volume(controller: &StateController, delta: f32) {
     });
 }
 
-fn switch_to_id(
-    controller: &StateController,
+/// Read-only context for an immediate track switch: the controller, target
+/// track id and 0-based index, and the current UI snapshot for logging.
+#[derive(Clone, Copy)]
+struct SwitchCtx<'a> {
+    controller: &'a StateController,
     id: TrackId,
     index: usize,
+    state: &'a UiState,
+}
+
+fn switch_to_id(
+    ctx: SwitchCtx<'_>,
     ui: &mut UiSession,
     auto_advanced_index: &mut Option<usize>,
-    state: &UiState,
 ) -> RunnerResult {
+    let SwitchCtx {
+        controller,
+        id,
+        index,
+        state,
+    } = ctx;
     match controller.queue().select(id, Transition::None) {
         Ok(()) => {
             *auto_advanced_index = None;

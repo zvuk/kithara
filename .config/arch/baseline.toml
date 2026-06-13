@@ -153,17 +153,9 @@ schema_version = 1
 "crates/kithara-stream/src/dl" = 1
 
 [fn_arg_count]
-"crates/kithara-app/src/gui/studio/library.rs::library_row" = 1
-"crates/kithara-app/src/gui/view.rs::icon_button" = 1
-"crates/kithara-app/src/gui/view.rs::transport_square_button" = 1
 "crates/kithara-app/src/gui/widgets/speed_slider.rs::SpeedSlider::draw" = 1
 "crates/kithara-app/src/gui/widgets/vfader.rs::VFader::draw" = 1
-"crates/kithara-app/src/gui/widgets/vfader.rs::vfader" = 1
 "crates/kithara-app/src/gui/widgets/waveform.rs::Waveform::draw" = 1
-"crates/kithara-app/src/gui/widgets/waveform.rs::waveform" = 1
-"crates/kithara-app/src/state.rs::spawn_analyze" = 1
-"crates/kithara-app/src/state.rs::spawn_listener" = 1
-"crates/kithara-app/src/tui/runner.rs::switch_to_id" = 1
 "crates/kithara-decode/src/apple/audio_file.rs::read_callback" = 1
 "crates/kithara-decode/src/apple/converter.rs::converter_input_callback" = 1
 "crates/kithara-decode/src/gapless/mp4.rs::tests::track_with_elst" = 1

@@ -31,10 +31,12 @@ pub(super) fn view_library(state: &Kithara) -> Element<'_, Message> {
             let artist = row_artist(entry.url.as_deref());
             col.push(library_row(
                 index,
-                &entry.name,
-                &artist,
-                state.ui_state.current_track_index == Some(index),
-                state.selected_track_index == Some(index),
+                LibraryRow {
+                    title: &entry.name,
+                    artist: &artist,
+                    current: state.ui_state.current_track_index == Some(index),
+                    selected: state.selected_track_index == Some(index),
+                },
                 p,
             ))
         },
@@ -129,14 +131,23 @@ fn library_head_row(p: GuiPalette) -> Element<'static, Message> {
     .into()
 }
 
-fn library_row(
-    index: usize,
-    title: &str,
-    artist: &str,
+/// Track display state for a single [`library_row`]: name, derived artist,
+/// and whether the row is the current or the selected track.
+#[derive(Clone, Copy)]
+struct LibraryRow<'a> {
+    title: &'a str,
+    artist: &'a str,
     current: bool,
     selected: bool,
-    p: GuiPalette,
-) -> Element<'static, Message> {
+}
+
+fn library_row(index: usize, row: LibraryRow<'_>, p: GuiPalette) -> Element<'static, Message> {
+    let LibraryRow {
+        title,
+        artist,
+        current,
+        selected,
+    } = row;
     button(
         container(
             row![
