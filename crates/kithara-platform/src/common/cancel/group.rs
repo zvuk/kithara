@@ -187,7 +187,7 @@ mod tests {
                 Src::Fresh => sources.push(CancelToken::never()),
                 Src::ChildOf(idx) => {
                     while parents.len() <= *idx {
-                        parents.push(CancelRoot::new());
+                        parents.push(CancelRoot::default());
                     }
                     sources.push(parents[*idx].child());
                 }

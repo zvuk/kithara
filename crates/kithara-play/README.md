@@ -127,7 +127,7 @@ Cancel is a typed propagate-down tree (`kithara-platform` `common/cancel/`): a
 and `cancel()` on any node flags it and cascades down to every descendant.
 `is_cancelled()` is a single Acquire-load of the node's own flag.
 
-`PlayerImpl` takes its cancel through `CancelScope::from_config(config.cancel)`:
+`PlayerImpl` takes its cancel through `CancelScope::new(config.cancel)`:
 a passed `CancelToken` (consumer crates `Queue` / `App` / FFI build their own
 `CancelRoot` and pass `root.child()` through `PlayerConfig.cancel`) makes the
 scope a composed child of that token; `None` makes the player own a fresh
@@ -138,8 +138,8 @@ parent `cancel()` is observed by all of them.
 `CancelScope::Drop` is **passive**. Teardown is an explicit `scope.cancel()`
 that cancels the player's own subtree — it never implicitly cancels a
 potentially-foreign master passed in from above (the previous `Drop`-cancel of
-the passed token is gone). Hard-coded `CancelRoot::new()` / `CancelRoot::default()`
-and `CancelToken::never()` outside the allowlist are forbidden, enforced by
+the passed token is gone). Hard-coded `CancelRoot::default()` and
+`CancelToken::never()` outside the allowlist are forbidden, enforced by
 `cargo xtask lint arch` (`cancel_root_sites`).
 
 ## Real-Time Audio Thread

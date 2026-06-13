@@ -7,8 +7,8 @@
 //! own wakers, then recurses **down** through the `Weak` children; reads
 //! (`is_cancelled`) are a single `Acquire` load of one flag. The full contract —
 //! the parent-liveness invariant, the born-cancelled race, and the
-//! `Release`/`Acquire` ordering — lives in the crate `README.md` "Cancel
-//! Hierarchy" section and in `AGENTS.md`.
+//! `Release`/`Acquire` ordering — lives in `crates/kithara-play/README.md`
+//! "Cancel Hierarchy" section and in `AGENTS.md`.
 //!
 //! `std::sync::Mutex` poisoning: every guarded section is a linear structural
 //! edit (insert/remove a slot, snapshot the children). A panic can only escape

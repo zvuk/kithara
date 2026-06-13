@@ -46,6 +46,7 @@ struct WakerSlots {
 /// `Weak` child still needs to reach. The leading underscore marks it as held for
 /// its ownership effect alone (no read, no `allow`). `children` is the cold
 /// propagation path; dead `Weak`s are swept in `cancel()`/`child()`.
+#[derive(Default)]
 pub(super) struct Node {
     flag: AtomicBool,
     _parent: Option<Arc<Self>>,
@@ -55,12 +56,7 @@ pub(super) struct Node {
 
 impl Node {
     pub(super) fn root() -> Arc<Self> {
-        Arc::new(Self {
-            flag: AtomicBool::new(false),
-            _parent: None,
-            children: Mutex::new(Vec::new()),
-            wakers: Mutex::new(WakerSlots::default()),
-        })
+        Arc::new(Self::default())
     }
 
     /// Derive a child. Born under the parent's children-lock so a concurrent
@@ -154,4 +150,56 @@ impl Node {
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use kithara_test_utils::kithara;
+
+    use super::{Node, Slot, lock};
+
+    fn noop_sync() -> Slot {
+        Slot::Sync(Arc::new(|| {}))
+    }
+
+    /// Slot bound (plan Task 3.2 Step 5): register/unregister churn must leave
+    /// the registry empty. The integration `recreate_cancelled_in_loop_*` test
+    /// drives `Cancelled::drop` but cannot read `slots.len()`; this pins the
+    /// actual count so a no-op `unregister` is caught.
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn register_unregister_churn_leaves_no_slots() {
+        let node = Node::root();
+        for _ in 0..1000 {
+            let id = node
+                .register(noop_sync())
+                .expect("a fresh node parks the slot");
+            node.unregister(id);
+        }
+        assert_eq!(
+            lock(&node.wakers).slots.len(),
+            0,
+            "register/unregister churn must not leak slots"
+        );
+    }
+
+    /// Children bound (plan Task 3.2 Step 5): per-fetch/epoch churn derives and
+    /// drops many children; dead `Weak`s must be swept so the parent's vec stays
+    /// bounded. Observable only here (the field is module-private).
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn child_churn_sweeps_dead_weaks() {
+        let root = Node::root();
+        for _ in 0..1000 {
+            // Child dropped immediately — its `Weak` goes dead.
+            let _ = Node::child(&root);
+        }
+        // Deriving a live child sweeps the 1000 dead `Weak`s, then pushes one.
+        let _survivor = Node::child(&root);
+        assert_eq!(
+            lock(&root.children).len(),
+            1,
+            "dead-Weak sweep must keep the children vec bounded under churn"
+        );
+    }
 }
