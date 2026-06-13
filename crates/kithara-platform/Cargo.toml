@@ -48,3 +48,13 @@ kithara-platform = { path = ".", default-features = false }
 kithara-test-macros = { path = "../kithara-test-macros" }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
 wasm-bindgen-test = { workspace = true }
+
+# Native-only: the cancel benches link the legacy `tokio_util` token, never wasm.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { workspace = true }
+
+# Legacy `CancellationToken` vs the W3 `CancelRoot`/`CancelToken`. Runs while both
+# implementations coexist (deleted in W3 Task 3.4). `cargo bench -p kithara-platform`.
+[[bench]]
+name = "cancel"
+harness = false

@@ -4437,6 +4437,7 @@ name = "kithara-platform"
 version = "0.0.1-alpha2"
 dependencies = [
  "console_error_panic_hook",
+ "criterion",
  "delegate",
  "futures",
  "js-sys",
