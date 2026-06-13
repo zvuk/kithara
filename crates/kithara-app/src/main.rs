@@ -21,7 +21,7 @@ use kithara_app::gui::GuiFrontend;
 #[cfg(feature = "tui")]
 use kithara_app::tui::TuiFrontend;
 use kithara_app::{config::AppConfig, frontend::Frontend, tracing_init::init_tracing};
-use kithara_platform::CancelRoot;
+use kithara_platform::CancelToken;
 use kithara_queue::{Queue, QueueConfig};
 
 /// Kithara — audio player application.
@@ -99,12 +99,11 @@ fn main() -> AppResult {
 
     init_tracing_for_mode(mode)?;
 
-    // App master root: a liveness anchor held for the whole process. `shutdown`
-    // is its child and goes into `AppConfig`; every subsystem derives from
-    // `shutdown.child()`, so a frontend `config.shutdown.cancel()` propagates
-    // down through the shutdown subtree to all of them.
-    let app_root = CancelRoot::default();
-    let shutdown = app_root.child();
+    // App master root held for the whole process: it goes into `AppConfig` and
+    // every subsystem derives from `shutdown.child()`, so a frontend
+    // `config.shutdown.cancel()` propagates down the shutdown subtree to all of
+    // them.
+    let shutdown = CancelToken::root();
     let net = NetOptions::builder()
         .is_insecure(args.insecure || kithara_app::baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)
         .compression(kithara_app::baked::BAKED_COMPRESSION)

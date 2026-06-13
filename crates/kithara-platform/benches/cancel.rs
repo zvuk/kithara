@@ -1,5 +1,5 @@
 //! Micro-benchmarks for the propagate-down cancel primitives
-//! (`common::cancel`): `CancelRoot` / `CancelToken` and the `CancelGroup`
+//! (`common::cancel`): `CancelToken` and the `CancelGroup`
 //! OR-combinator. Runtime-free — `cancelled()` futures are polled by hand with
 //! a noop waker (uncancelled tokens stay `Pending`), so the numbers isolate the
 //! primitive, not a scheduler.
@@ -23,7 +23,7 @@ use std::{
 };
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
-use kithara_platform::{CancelGroup, CancelRoot, CancelToken};
+use kithara_platform::{CancelGroup, CancelToken};
 
 /// `is_cancelled()` walk lengths / `on_cancel` registration depths.
 const DEPTHS: [usize; 4] = [1, 4, 16, 64];
@@ -33,7 +33,7 @@ const WIDTHS: [usize; 3] = [1, 64, 512];
 /// A leaf `depth` `child()` derivations below a fresh root. The root handle is
 /// dropped here; the chain stays alive via the node parent-liveness `Arc`s.
 fn chain(depth: usize) -> CancelToken {
-    let root = CancelRoot::default();
+    let root = CancelToken::root();
     let mut tok = root.child();
     for _ in 1..depth {
         tok = tok.child();
@@ -42,8 +42,8 @@ fn chain(depth: usize) -> CancelToken {
 }
 
 /// A root with `n` direct children kept alive (master + fan-out).
-fn wide(n: usize) -> (CancelRoot, Vec<CancelToken>) {
-    let root = CancelRoot::default();
+fn wide(n: usize) -> (CancelToken, Vec<CancelToken>) {
+    let root = CancelToken::root();
     let kids = (0..n).map(|_| root.child()).collect();
     (root, kids)
 }
@@ -58,12 +58,12 @@ fn group(n: usize) -> (Vec<CancelToken>, CancelGroup) {
 
 fn bench_create_root(c: &mut Criterion) {
     c.bench_function("cancel/create_root", |b| {
-        b.iter(|| black_box(CancelRoot::default()));
+        b.iter(|| black_box(CancelToken::root()));
     });
 }
 
 fn bench_derive_child(c: &mut Criterion) {
-    let parent = CancelRoot::default();
+    let parent = CancelToken::root();
     c.bench_function("cancel/derive_child", |b| {
         b.iter(|| black_box(parent.child()));
     });

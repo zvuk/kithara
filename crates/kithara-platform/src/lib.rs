@@ -52,7 +52,7 @@ mod rt_cancel;
 // the workspace token migration). Legacy `CancellationToken` stays exported
 // until 3.4 deletes the legacy roots; it has no remaining consumers.
 pub use common::cancel::{
-    CancelGroup, CancelRoot, CancelScope, CancelToken, CancelWakerGuard, Cancelled, CancelledOwned,
+    CancelGroup, CancelScope, CancelToken, CancelWakerGuard, Cancelled, CancelledOwned,
 };
 pub use rt_cancel::CancellationToken;
 

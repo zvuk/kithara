@@ -156,7 +156,7 @@ mod tests {
     use tokio::{spawn, task, time as tokio_time};
 
     use super::CancelGroup;
-    use crate::common::cancel::{CancelRoot, CancelToken};
+    use crate::common::cancel::CancelToken;
 
     #[derive(Clone, Debug)]
     enum Src {
@@ -174,12 +174,12 @@ mod tests {
 
     struct Setup {
         group: CancelGroup,
-        parents: Vec<CancelRoot>,
+        parents: Vec<CancelToken>,
         sources: Vec<CancelToken>,
     }
 
     fn build(spec: &[Src]) -> Setup {
-        let mut parents: Vec<CancelRoot> = Vec::new();
+        let mut parents: Vec<CancelToken> = Vec::new();
         let mut sources: Vec<CancelToken> = Vec::new();
 
         for s in spec {
@@ -187,7 +187,7 @@ mod tests {
                 Src::Fresh => sources.push(CancelToken::never()),
                 Src::ChildOf(idx) => {
                     while parents.len() <= *idx {
-                        parents.push(CancelRoot::default());
+                        parents.push(CancelToken::root());
                     }
                     sources.push(parents[*idx].child());
                 }

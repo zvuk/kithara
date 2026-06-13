@@ -1,6 +1,6 @@
 //! Propagate-down cancellation: a `std`-only `Node` tree (`AtomicBool` flag +
-//! `Weak` children + waker slots) and the public `CancelRoot` / `CancelToken` /
-//! `CancelGroup` / `CancelScope` types built on it.
+//! `Weak` children + waker slots) and the public `CancelToken` / `CancelGroup` /
+//! `CancelScope` types built on it.
 //!
 //! Built entirely on `std::sync` (no `parking_lot`, no `tokio_util`), so it
 //! compiles unchanged on `wasm32`. `cancel()` flips this node's flag, drains its
@@ -37,5 +37,5 @@ mod wait;
 
 pub use group::CancelGroup;
 pub use scope::CancelScope;
-pub use token::{CancelRoot, CancelToken, CancelWakerGuard};
+pub use token::{CancelToken, CancelWakerGuard};
 pub use wait::{Cancelled, CancelledOwned};

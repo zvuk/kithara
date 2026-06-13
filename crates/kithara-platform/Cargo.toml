@@ -53,8 +53,8 @@ wasm-bindgen-test = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }
 
-# Micro-benchmarks for the propagate-down cancel primitives (`CancelRoot` /
-# `CancelToken` / `CancelGroup`). `cargo bench -p kithara-platform`.
+# Micro-benchmarks for the propagate-down cancel primitives (`CancelToken` /
+# `CancelGroup`). `cargo bench -p kithara-platform`.
 [[bench]]
 name = "cancel"
 harness = false

@@ -1,19 +1,19 @@
 //! Public-surface tests for the W3 propagate-down cancel types
-//! (`CancelRoot` / `CancelToken` / `CancelScope`). The OR-combinator
+//! (`CancelToken` / `CancelScope`). The OR-combinator
 //! `CancelGroup` is not yet exported from the crate root (its root re-export
 //! switches off the legacy in 3.3), so its tests live in `src/common/cancel/
 //! group.rs` `#[cfg(test)]`.
 
 use std::time::Duration;
 
-use kithara_platform::{CancelRoot, CancelToken};
+use kithara_platform::CancelToken;
 use kithara_test_utils::kithara;
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn select_cancel_branch_is_cancel_safe() {
     // The cancelled() branch losing the select! race must unregister its slot,
     // so a later poll of a fresh Cancelled does not leak or lose the wake.
-    let master = CancelRoot::default();
+    let master = CancelToken::root();
     let token = master.child();
 
     for _ in 0..3 {
@@ -37,7 +37,7 @@ async fn recreate_cancelled_in_loop_does_not_leak_slots() {
     // itself is pinned at the node layer
     // (`node::tests::register_unregister_churn_leaves_no_slots`), the only place
     // the private `slots` len is observable.
-    let master = CancelRoot::default();
+    let master = CancelToken::root();
     let token = master.child();
 
     for _ in 0..1000 {
@@ -89,7 +89,7 @@ async fn late_task_registration_after_fire_resolves() {
 async fn flag_visible_after_cancelled_resolves() {
     // Release/Acquire ordering: a task that observed the cancel wake must see
     // the flag set (the Node sets the flag before firing wakers).
-    let master = CancelRoot::default();
+    let master = CancelToken::root();
     let token = master.child();
     let t = token.clone();
     let handle = tokio::spawn(async move {
@@ -109,7 +109,7 @@ async fn flag_visible_after_cancelled_resolves() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn late_child_is_born_cancelled() {
-    let master = CancelRoot::default();
+    let master = CancelToken::root();
     master.cancel();
     let child = master.child();
     assert!(
@@ -130,7 +130,7 @@ fn repeat_cancel_is_idempotent() {
 fn drop_intermediate_token_root_cancel_reaches_grandchild() {
     // PARENT-LIVENESS PIN: drop the only handle to the intermediate token; the
     // grandchild must still observe a root cancel.
-    let master = CancelRoot::default();
+    let master = CancelToken::root();
     let leaf = {
         let mid = master.child();
         mid.child()

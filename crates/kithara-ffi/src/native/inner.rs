@@ -11,7 +11,7 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_drm::{KeyRequest, KeyRequestFactory};
-use kithara_platform::{CancelRoot, CancelToken, Mutex};
+use kithara_platform::{CancelToken, Mutex};
 use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource};
 use rand::{distr::Alphanumeric, prelude::*};
 
@@ -171,7 +171,7 @@ pub(crate) struct NativeInner {
     /// "Cancel Hierarchy". The chain flag reaches the audio worker and HLS
     /// coord lock-free `is_cancelled()` reads; every subsystem derives its
     /// own [`CancelToken::child`] from this consumer-top master.
-    shutdown: CancelRoot,
+    shutdown: CancelToken,
     /// Player-wide HTTP headers (e.g. `X-Encrypted-Key`,
     /// `X-Auth-Token`). Merged into per-item `headers` on insert.
     /// Item-supplied headers take precedence on key collision.
@@ -198,7 +198,7 @@ pub(crate) struct NativeInner {
 
 impl NativeInner {
     pub(crate) fn new(config: FfiPlayerConfig) -> Self {
-        let cancel = CancelRoot::default();
+        let cancel = CancelToken::root();
         let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(config.eq_band_count as usize))
             .cancel(cancel.child())
