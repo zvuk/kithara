@@ -663,9 +663,13 @@ wasm MODE="check":
     set -uo pipefail
     case "{{MODE}}" in
       check)
-        for c in kithara-storage kithara-net kithara-stream kithara-assets kithara-hls kithara-decode; do
+        for c in kithara-storage kithara-net kithara-stream kithara-assets kithara-hls; do
           cargo check -p "$c" --target wasm32-unknown-unknown
         done
+        # kithara-decode on wasm uses symphonia (pure Rust). Its default `fdk-aac`
+        # feature is libfdk-aac (C via fdk-aac-sys), which cannot target
+        # wasm32-unknown-unknown (no libc/sysroot), so check the realistic wasm set.
+        cargo check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia
         cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
       test)

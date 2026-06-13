@@ -78,6 +78,22 @@ impl<C: HangDump> HangDetector<C> {
         self.fired = false;
     }
 
+    /// Liveness budget left before the deadline on the coarse wasm clock; zero
+    /// once it has passed. Mirrors the native `remaining` so the `hang_park!`
+    /// event-driven wait parks bounded by it — woken early by its event on
+    /// progress, or released at the deadline so the next [`tick`](Self::tick)
+    /// reports a genuine stall. A park is not the per-tick hot path, so the
+    /// single clock read here is affordable; like [`tick`](Self::tick) the first
+    /// observation lazily anchors `started_ms` (one clock by construction).
+    #[must_use]
+    pub fn remaining(&mut self) -> Duration {
+        let now = coarse_now_ms();
+        let start = *self.started_ms.get_or_insert(now);
+        let timeout_ms = self.timeout.as_secs_f64() * Self::MS_PER_SECOND;
+        let left_ms = (start + timeout_ms - now).max(0.0);
+        Duration::from_secs_f64(left_ms / Self::MS_PER_SECOND)
+    }
+
     /// Progress check without updating the stored context. Keeps whatever was
     /// moved in by the last [`tick_with`](Self::tick_with). Reads the clock
     /// only once per [`CLOCK_SAMPLE_TICKS`] calls. On the deadline it reports
