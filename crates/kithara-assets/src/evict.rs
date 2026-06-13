@@ -71,6 +71,17 @@ impl<A: Assets> fmt::Debug for EvictAssets<A> {
     }
 }
 
+/// Eviction wiring for [`EvictAssets::new`], separate from the wrapped
+/// `inner` store: the `cfg`, the `cancel` token, the shared `lru` / `pins`
+/// indices, and the canonical `deleter`.
+pub(crate) struct EvictDeps {
+    pub(crate) cfg: EvictConfig,
+    pub(crate) cancel: CancelToken,
+    pub(crate) lru: LruIndex,
+    pub(crate) pins: PinsIndex,
+    pub(crate) deleter: Arc<dyn AssetDeleter>,
+}
+
 impl<A> EvictAssets<A>
 where
     A: Assets,
@@ -78,14 +89,14 @@ where
     /// Create a new eviction decorator.
     ///
     /// Activation is driven by [`crate::base::Capabilities::EVICT`] on the inner store.
-    pub(crate) fn new(
-        inner: Arc<A>,
-        cfg: EvictConfig,
-        cancel: CancelToken,
-        lru: LruIndex,
-        pins: PinsIndex,
-        deleter: Arc<dyn AssetDeleter>,
-    ) -> Self {
+    pub(crate) fn new(inner: Arc<A>, deps: EvictDeps) -> Self {
+        let EvictDeps {
+            cfg,
+            cancel,
+            lru,
+            pins,
+            deleter,
+        } = deps;
         Self {
             inner,
             cfg,

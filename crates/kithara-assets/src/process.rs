@@ -170,17 +170,29 @@ impl Drop for GateGuard {
 /// [`WriteSide::read_inflight_at`] — the writer's own in-flight working storage,
 /// never a committed snapshot kept published for concurrent readers during a
 /// re-download (which would feed the processor the prior generation's bytes).
-fn run_process<W, Ctx>(
-    inner: &W,
-    ctx: &Ctx,
-    process: &ProcessChunkFn<Ctx>,
-    pool: &BytePool,
+/// Borrowed inputs for [`run_process`]: the `inner` write side, the
+/// `ctx` to clone per call, the `process` chunk fn, the byte `pool`, and
+/// the `final_len` to process up to.
+struct ProcessArgs<'a, W, Ctx> {
+    inner: &'a W,
+    ctx: &'a Ctx,
+    process: &'a ProcessChunkFn<Ctx>,
+    pool: &'a BytePool,
     final_len: u64,
-) -> StorageResult<u64>
+}
+
+fn run_process<W, Ctx>(args: &ProcessArgs<'_, W, Ctx>) -> StorageResult<u64>
 where
     W: WriteSide,
     Ctx: Clone,
 {
+    let &ProcessArgs {
+        inner,
+        ctx,
+        process,
+        pool,
+        final_len,
+    } = args;
     let mut ctx = ctx.clone();
     let raw = inner.reader();
 
@@ -339,13 +351,13 @@ where
     fn commit(mut self, final_len: Option<u64>) -> StorageResult<ProcessedReader<W::Reader, Ctx>> {
         let needs_processing = self.ctx.is_some() && !self.guard.readiness.is_ready();
         let actual_len = match (needs_processing, final_len, self.ctx.as_ref()) {
-            (true, Some(len), Some(ctx)) if len > 0 => Some(run_process(
-                &self.inner,
+            (true, Some(len), Some(ctx)) if len > 0 => Some(run_process(&ProcessArgs {
+                inner: &self.inner,
                 ctx,
-                &self.process,
-                &self.pool,
-                len,
-            )?),
+                process: &self.process,
+                pool: &self.pool,
+                final_len: len,
+            })?),
             _ => final_len,
         };
 

@@ -15,12 +15,12 @@ use crate::{
     acquisition::AcquisitionResult,
     base::{BaseReader, BaseWriter},
     cache::{CachedAssets, CachedReader, CachedWriter},
-    evict::EvictAssets,
+    evict::{EvictAssets, EvictDeps},
     flush::{FlushHub, FlushPolicy},
     index::{AvailabilityIndex, DemandIndex, EvictConfig},
     key::ResourceKey,
     lease::{LeaseAssets, LeaseGuard, LeaseReader, LeaseWriter},
-    mem_store::MemAssetStore,
+    mem_store::{MemAssetStore, MemStoreSetup},
     process::{ProcessChunkFn, ProcessedReader, ProcessedWriter, ProcessingAssets},
     unified::AssetStore,
 };
@@ -349,11 +349,13 @@ where
         let base = Arc::clone(&disk);
         let evict = Arc::new(EvictAssets::new(
             disk,
-            evict_cfg,
-            cancel.clone(),
-            lru,
-            pins.clone(),
-            deleter,
+            EvictDeps {
+                cfg: evict_cfg,
+                cancel: cancel.clone(),
+                lru,
+                pins: pins.clone(),
+                deleter,
+            },
         ));
         let processing = Arc::new(ProcessingAssets::new(
             Arc::clone(&evict),
@@ -408,19 +410,23 @@ where
                 Arc::clone(&active_resources),
             ));
         let mem = Arc::new(MemAssetStore::with_availability_and_deleter(
-            cancel.clone(),
-            self.mem_resource_capacity,
-            availability.clone(),
-            active_resources,
-            Arc::clone(&deleter),
+            MemStoreSetup {
+                cancel: cancel.clone(),
+                mem_resource_capacity: self.mem_resource_capacity,
+                availability: availability.clone(),
+                active_resources,
+                deleter: Arc::clone(&deleter),
+            },
         ));
         let evict = Arc::new(EvictAssets::new(
             mem,
-            evict_cfg,
-            cancel.clone(),
-            lru,
-            pins.clone(),
-            deleter,
+            EvictDeps {
+                cfg: evict_cfg,
+                cancel: cancel.clone(),
+                lru,
+                pins: pins.clone(),
+                deleter,
+            },
         ));
         let capacity = self
             .cache_capacity
