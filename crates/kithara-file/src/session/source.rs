@@ -60,7 +60,7 @@ impl FileSource {
             FileAssetCtx {
                 backend,
                 reader,
-                writer: Mutex::new(None),
+                writer: Mutex::default(),
                 raw: None,
                 key,
                 headers: None,

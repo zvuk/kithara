@@ -158,7 +158,7 @@ impl Downloader {
         self.ensure_spawned();
         let cancel = self.inner.cancel.child();
         let (cmd_tx, cmd_rx) = mpsc::channel(PEER_CMD_CHANNEL_CAPACITY);
-        let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::new(None));
+        let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
 
         let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;
         let abr_handle = self.inner.abr.register(&abr_peer);

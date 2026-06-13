@@ -15,7 +15,7 @@ use kithara_platform::{
 };
 use kithara_test_utils::kithara;
 
-use super::{peer::PeerEntry, throttle::EventThrottleCache};
+use super::peer::PeerEntry;
 use crate::{
     abr::Abr,
     estimator::{Estimator, ThroughputEstimator},
@@ -177,15 +177,15 @@ impl AbrController {
         let id = self.allocate_peer_id();
         let state = peer.state();
         let peer_weak = Arc::downgrade(peer);
-        let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::new(None));
+        let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
         let entry = Arc::new(PeerEntry {
             peer_weak,
             bus: Arc::clone(&bus),
             variants_registered_published: AtomicBool::new(false),
             bytes_downloaded: AtomicU64::new(0),
-            incoherence_cancel: Mutex::new(None),
-            last_variant_switch: Mutex::new(None),
-            throttle: Mutex::new(EventThrottleCache::default()),
+            incoherence_cancel: Mutex::default(),
+            last_variant_switch: Mutex::default(),
+            throttle: Mutex::default(),
             state: state.clone(),
         });
         self.peers.insert(id, entry);

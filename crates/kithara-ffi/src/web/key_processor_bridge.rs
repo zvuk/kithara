@@ -68,7 +68,7 @@ pub(crate) fn pump() {
     let Some(rx) = rx_guard.as_ref() else {
         return;
     };
-    while let Ok(msg) = rx.try_recv() {
+    for msg in rx.try_iter() {
         let bytes = BRIDGE
             .processor
             .lock()

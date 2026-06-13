@@ -87,7 +87,7 @@ impl AbrState {
             lock_count: AtomicUsize::new(0),
             mode: AtomicUsize::new(mode.into()),
             reference_instant: Instant::now(),
-            pending: Mutex::new(None),
+            pending: Mutex::default(),
         }
     }
 

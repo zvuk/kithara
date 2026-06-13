@@ -129,7 +129,7 @@ pub(crate) fn tick_and_poll_remote() {
         let rx_guard = wasm_worker_bridge::RX.lock();
 
         if let Some(ref rx) = *rx_guard {
-            while let Ok(msg) = rx.try_recv() {
+            for msg in rx.try_iter() {
                 let reply = run_cmd(state, msg.cmd);
                 if let Reply::SlotAllocated(_, _, ref shared, _) = reply {
                     BRIDGE_PLAYER_STATE.with(|ps| {

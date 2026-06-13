@@ -988,7 +988,7 @@ impl HlsVariant {
             codec,
             container,
             prefetch_anchor: AtomicU64::new(0),
-            queue: Mutex::new(VecDeque::new()),
+            queue: Mutex::default(),
             cancel_epoch: CancelEpoch::new(ctx.master_cancel.clone()),
             headers: ctx.headers.clone(),
         })

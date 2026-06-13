@@ -26,7 +26,7 @@ pub struct Receiver<T>(Arc<Chan<T>>);
 #[must_use]
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     let chan = Arc::new(Chan {
-        queue: Mutex::new(VecDeque::new()),
+        queue: Mutex::default(),
         cv: Condvar::default(),
         senders: AtomicUsize::new(1),
         receiver_alive: AtomicBool::new(true),
@@ -129,6 +129,16 @@ impl<T> Receiver<T> {
             }
             q = self.0.cv.wait_timeout(q, deadline);
         }
+    }
+
+    /// Iterate over received values, blocking until all senders disconnect.
+    pub fn iter(&self) -> impl Iterator<Item = T> + '_ {
+        std::iter::from_fn(move || self.recv().ok())
+    }
+
+    /// Iterate over currently-available values without blocking.
+    pub fn try_iter(&self) -> impl Iterator<Item = T> + '_ {
+        std::iter::from_fn(move || self.try_recv().ok())
     }
 }
 

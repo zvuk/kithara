@@ -44,7 +44,7 @@ fn engine_thread<B: AudioBackend>(
     let mut state = SessionState::<B>::new(start_stream_fn);
     // Block on the command-arrival event. `recv` returns `Err` only once
     // every sender has been dropped, which is the worker's exit signal.
-    while let Ok(CmdMsg { cmd, reply_tx }) = cmd_rx.recv() {
+    for CmdMsg { cmd, reply_tx } in cmd_rx.iter() {
         let reply = run_cmd(&mut state, cmd);
         let _ = reply_tx.send(reply);
     }

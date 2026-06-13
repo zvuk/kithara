@@ -56,12 +56,12 @@ impl Default for WasmInner {
     fn default() -> Self {
         Self {
             bridge: WorkerBridge::default(),
-            queue_view: Arc::new(Mutex::new(Vec::new())),
-            observer: Mutex::new(None),
+            queue_view: Arc::new(Mutex::default()),
+            observer: Mutex::default(),
             volume: AtomicU32::new(Self::DEFAULT_VOLUME.to_bits()),
             crossfade_secs: AtomicU32::new(Self::DEFAULT_CROSSFADE_SECONDS.to_bits()),
             playing_rate: AtomicU32::new(Self::DEFAULT_PLAYING_RATE.to_bits()),
-            muted: Mutex::new(false),
+            muted: Mutex::default(),
             eq_gains: [const { AtomicU32::new(0) }; EQ_BANDS],
         }
     }

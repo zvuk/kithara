@@ -79,7 +79,7 @@ impl LruIndex {
     pub(crate) fn ephemeral() -> Self {
         Self {
             inner: Arc::new(LruInner {
-                state: Mutex::new(LruState::default()),
+                state: Mutex::default(),
                 #[cfg(not(target_arch = "wasm32"))]
                 persist: None,
                 hub: OnceLock::new(),

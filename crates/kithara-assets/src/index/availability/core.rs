@@ -181,7 +181,7 @@ impl AvailabilityIndex {
             || {
                 asset_map
                     .entry(path.to_string())
-                    .or_insert_with(|| Arc::new(Mutex::new(Availability::default())))
+                    .or_insert_with(|| Arc::new(Mutex::default()))
                     .clone()
             },
             |arc| arc.clone(),

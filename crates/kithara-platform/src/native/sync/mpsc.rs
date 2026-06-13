@@ -61,4 +61,14 @@ impl<T> Receiver<T> {
         let remaining = deadline.saturating_duration_since(now);
         self.0.recv_timeout(remaining)
     }
+
+    /// Iterate over received values, blocking until all senders disconnect.
+    pub fn iter(&self) -> impl Iterator<Item = T> + '_ {
+        self.0.iter()
+    }
+
+    /// Iterate over currently-available values without blocking.
+    pub fn try_iter(&self) -> impl Iterator<Item = T> + '_ {
+        self.0.try_iter()
+    }
 }

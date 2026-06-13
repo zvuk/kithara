@@ -26,7 +26,7 @@ pub(crate) struct Token {
 impl Token {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
-            woken: Mutex::new(false),
+            woken: Mutex::default(),
             cv: Condvar::default(),
         })
     }

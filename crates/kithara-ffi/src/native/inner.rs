@@ -218,12 +218,12 @@ impl NativeInner {
             shutdown: cancel,
             key_options: Mutex::new(key_options),
             player_headers: player_headers_map,
-            peak_bitrate: Mutex::new(PeakBitrate::default()),
+            peak_bitrate: Mutex::default(),
             queue: Arc::new(Queue::new(queue_config)),
             store: config.store,
-            observer: Mutex::new(None),
-            event_bridge: Mutex::new(None),
-            items: Arc::new(Mutex::new(HashMap::new())),
+            observer: Mutex::default(),
+            event_bridge: Mutex::default(),
+            items: Arc::new(Mutex::default()),
         }
     }
 

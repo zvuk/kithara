@@ -163,7 +163,7 @@ impl<D: DriverIo> AtomicChunked<D> {
         Self {
             canonical_path,
             inner: Mutex::new(inner),
-            tmp_path: Mutex::new(None),
+            tmp_path: Mutex::default(),
             factory: None,
         }
     }

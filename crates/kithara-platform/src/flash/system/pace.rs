@@ -41,7 +41,7 @@ impl Pacer {
 
     pub(super) fn new(owner: Weak<FlashInner>) -> Self {
         Self {
-            armed: Mutex::new(false),
+            armed: Mutex::default(),
             cv: Condvar::default(),
             spawn: Once::new(),
             owner,

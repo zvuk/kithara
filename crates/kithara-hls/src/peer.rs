@@ -97,10 +97,10 @@ impl HlsPeer {
             seek_obs,
             activity,
             state: Arc::new(Mutex::new(None)),
-            pending_waker: Mutex::new(None),
+            pending_waker: Mutex::default(),
             wake_signal: CancelToken::never(),
             abr: Arc::new(AbrState::new(initial_mode)),
-            variants: Mutex::new(Vec::new()),
+            variants: Mutex::default(),
             reader_segment: Arc::new(AtomicUsize::new(0)),
             reader_advanced: Arc::new(DeferredWake::default()),
         }

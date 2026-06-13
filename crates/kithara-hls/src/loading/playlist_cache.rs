@@ -67,7 +67,7 @@ impl PlaylistCache {
             scope,
             downloader,
             byte_pool,
-            config: Arc::new(RwLock::new(PlaylistConfig::default())),
+            config: Arc::new(RwLock::default()),
             master: Arc::new(OnceCell::default()),
             media: Arc::new(DashMap::new()),
         }

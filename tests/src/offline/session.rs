@@ -148,7 +148,7 @@ fn offline_session_thread(cmd_rx: &mpsc::Receiver<OfflineMsg>, auto_render: bool
 }
 
 fn run_manual(state: &mut SessionState<OfflineBackend>, cmd_rx: &mpsc::Receiver<OfflineMsg>) {
-    while let Ok(msg) = cmd_rx.recv() {
+    for msg in cmd_rx.iter() {
         match msg {
             OfflineMsg::Cmd { cmd, reply_tx } => {
                 let reply = run_cmd(state, cmd);

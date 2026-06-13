@@ -132,11 +132,11 @@ impl FlushHub {
             cancel,
             policy,
             flush_lock: Mutex::new(()),
-            sources: Mutex::new(Vec::new()),
+            sources: Mutex::default(),
             non_durable: DashSet::new(),
             wait: Arc::new(HubWait {
                 cv: Condvar::default(),
-                state: Mutex::new(HubState::default()),
+                state: Mutex::default(),
             }),
             worker: WorkerSlot::default(),
         })

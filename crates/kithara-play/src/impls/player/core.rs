@@ -202,10 +202,10 @@ impl PlayerImpl {
             current_index: AtomicUsize::new(0),
             cancel,
             bus,
-            status: Mutex::new(PlayerStatus::Unknown),
+            status: Mutex::default(),
             pcm_pool: resolved_pool,
             config,
-            items: Mutex::new(Vec::new()),
+            items: Mutex::default(),
             engine,
         };
         Self {

@@ -145,11 +145,11 @@ impl AudioPlayerItem {
             id,
             uuid,
             #[cfg(not(target_arch = "wasm32"))]
-            event_bridge: Mutex::new(None),
-            observer: Mutex::new(None),
+            event_bridge: Mutex::default(),
+            observer: Mutex::default(),
             #[cfg(not(target_arch = "wasm32"))]
-            bus: Mutex::new(None),
-            inserted: Mutex::new(false),
+            bus: Mutex::default(),
+            inserted: Mutex::default(),
             state: Arc::new(Mutex::new(ItemView::new(live))),
         })
     }

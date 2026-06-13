@@ -115,7 +115,7 @@ impl TaskGate {
     pub(in crate::flash) fn new() -> Arc<Self> {
         Arc::new(Self {
             state: AtomicTaskState::new(TaskState::Runnable),
-            runtime_waker: Mutex::new(None),
+            runtime_waker: Mutex::default(),
         })
     }
 

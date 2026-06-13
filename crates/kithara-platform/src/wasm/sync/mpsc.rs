@@ -72,4 +72,14 @@ impl<T> Receiver<T> {
     pub fn recv_timeout(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
         self.0.recv_sync_timeout(deadline)
     }
+
+    /// Iterate over received values, blocking until all senders disconnect.
+    pub fn iter(&self) -> impl Iterator<Item = T> + '_ {
+        std::iter::from_fn(move || self.recv().ok())
+    }
+
+    /// Iterate over currently-available values without blocking.
+    pub fn try_iter(&self) -> impl Iterator<Item = T> + '_ {
+        std::iter::from_fn(move || self.try_recv().ok())
+    }
 }
