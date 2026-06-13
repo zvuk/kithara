@@ -226,11 +226,11 @@ impl Layout {
     }
 
     pub(super) fn served_from(&self) -> u32 {
-        self.frame.lock_sync_read().served_from
+        self.frame.read().served_from
     }
 
     pub(super) fn set_served_until(&self, until: u32, segments: &[SegmentEntry], init_size: u64) {
-        let mut frame = self.frame.lock_sync_write();
+        let mut frame = self.frame.write();
         frame.served_until = until;
         let snapshot = frame.snapshot(segments, init_size);
         drop(frame);
@@ -253,20 +253,20 @@ impl Layout {
     /// `served_until` are read under one lock, closing the coord-level
     /// torn read between two separate accessor calls.
     pub(super) fn is_shrunk(&self, num_segments: u32) -> bool {
-        let frame = self.frame.lock_sync_read();
+        let frame = self.frame.read();
         frame.served_from > 0 || frame.served_until < num_segments
     }
 
     pub(super) fn natural_offset(&self, idx: usize) -> Option<u64> {
-        self.frame.lock_sync_read().offsets.get(idx).copied()
+        self.frame.read().offsets.get(idx).copied()
     }
 
     pub(super) fn segment_byte_offset(&self, idx: u32) -> Option<u64> {
-        self.frame.lock_sync_read().segment_byte_offset(idx)
+        self.frame.read().segment_byte_offset(idx)
     }
 
     pub(super) fn bisect_left(&self, byte: u64) -> usize {
-        self.frame.lock_sync_read().bisect_left(byte)
+        self.frame.read().bisect_left(byte)
     }
 
     pub(super) fn find_natural(
@@ -274,7 +274,7 @@ impl Layout {
         byte: u64,
         segments: &[SegmentEntry],
     ) -> Option<(u32, u64, u64)> {
-        self.frame.lock_sync_read().find_natural(byte, segments)
+        self.frame.read().find_natural(byte, segments)
     }
 
     pub(super) fn find_at_offset(
@@ -282,9 +282,7 @@ impl Layout {
         byte_virtual: u64,
         segments: &[SegmentEntry],
     ) -> Option<(u32, u64, u64)> {
-        self.frame
-            .lock_sync_read()
-            .find_virtual(byte_virtual, segments)
+        self.frame.read().find_virtual(byte_virtual, segments)
     }
 
     /// Lock-free `total_bytes` read for the produce-core. Returns the value
@@ -302,7 +300,7 @@ impl Layout {
     }
 
     pub(super) fn clear_init_seed(&self) {
-        self.frame.lock_sync_write().init_seed = 0;
+        self.frame.write().init_seed = 0;
     }
 
     /// Pin `from_seg` at `seg_boundary` in virtual space and serve
@@ -316,7 +314,7 @@ impl Layout {
             init_size,
         } = params;
         let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
-        let mut frame = self.frame.lock_sync_write();
+        let mut frame = self.frame.write();
         frame.init_seed = init_size.max(1);
         frame.recompute(init_size, segments);
         let natural = frame
@@ -342,7 +340,7 @@ impl Layout {
     /// seed.
     pub(super) fn reset(&self, init_size: u64, segments: &[SegmentEntry]) {
         let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
-        let mut frame = self.frame.lock_sync_write();
+        let mut frame = self.frame.write();
         frame.byte_shift = 0;
         frame.served_from = 0;
         frame.served_until = num;
@@ -357,7 +355,7 @@ impl Layout {
     /// and returns the post-store `init_size` to seed the recompute — so a
     /// reader never observes a new size against a stale offset table.
     pub(super) fn apply_commit(&self, segments: &[SegmentEntry], store: impl FnOnce() -> u64) {
-        let mut frame = self.frame.lock_sync_write();
+        let mut frame = self.frame.write();
         let init_size = store();
         frame.recompute(init_size, segments);
         let snapshot = frame.snapshot(segments, init_size);

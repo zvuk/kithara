@@ -72,13 +72,13 @@ impl ReadinessGate {
     fn new(initial: bool) -> Self {
         Self {
             processed: Mutex::new(initial),
-            cv: Condvar::new(),
+            cv: Condvar::default(),
             failed: AtomicBool::new(false),
         }
     }
 
     fn is_ready(&self) -> bool {
-        *self.processed.lock_sync()
+        *self.processed.lock()
     }
 
     fn is_failed(&self) -> bool {
@@ -97,7 +97,7 @@ impl ReadinessGate {
 
     /// Mark the gate ready and wake every waiter.
     fn mark_ready(&self) {
-        *self.processed.lock_sync() = true;
+        *self.processed.lock() = true;
         self.cv.notify_all();
     }
 
@@ -115,12 +115,12 @@ impl ReadinessGate {
                 return false;
             }
             let ready = {
-                let guard = self.processed.lock_sync();
+                let guard = self.processed.lock();
                 if *guard {
                     return !self.is_failed();
                 }
                 let deadline = Instant::now() + Duration::from_millis(COND_WAIT_MS);
-                let next = self.cv.wait_sync_timeout(guard, deadline);
+                let next = self.cv.wait_timeout(guard, deadline);
                 *next
             };
             if ready {

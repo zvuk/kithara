@@ -109,7 +109,7 @@ impl AvailabilityIndex {
         if let Some(asset) = self.inner.assets.get(root)
             && let Some(arc) = asset.get(path)
         {
-            return arc.lock_sync().ranges.clone();
+            return arc.lock().ranges.clone();
         }
         RangeSet::new()
     }
@@ -135,7 +135,7 @@ impl AvailabilityIndex {
         if let Some(asset) = self.inner.assets.get(root)
             && let Some(arc) = asset.get(path)
         {
-            return arc.lock_sync().contains(&range);
+            return arc.lock().contains(&range);
         }
         false
     }
@@ -145,7 +145,7 @@ impl AvailabilityIndex {
         if let Some(asset) = self.inner.assets.get(root)
             && let Some(arc) = asset.get(path)
         {
-            return arc.lock_sync().final_len;
+            return arc.lock().final_len;
         }
         None
     }
@@ -191,7 +191,7 @@ impl AvailabilityIndex {
     pub(crate) fn record_commit(&self, key: &ResourceKey, final_len: u64) {
         let (root, path) = Self::resolve_refs(key);
         let arc = self.insert_or_get_entry(root, path);
-        arc.lock_sync().mark_committed(final_len);
+        arc.lock().mark_committed(final_len);
         self.inner.dirty.store(true, Ordering::Release);
     }
 
@@ -201,7 +201,7 @@ impl AvailabilityIndex {
         }
         let (root, path) = Self::resolve_refs(key);
         let arc = self.insert_or_get_entry(root, path);
-        arc.lock_sync().insert(range);
+        arc.lock().insert(range);
         self.inner.dirty.store(true, Ordering::Release);
     }
 

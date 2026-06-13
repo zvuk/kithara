@@ -218,7 +218,7 @@ impl PlayerImpl {
     ///
     /// Does nothing if the current item is already the last one.
     pub fn advance_to_next_item(&self) {
-        let items = self.core.items.lock_sync();
+        let items = self.core.items.lock();
         let current = self.core.current_index.load(Ordering::Relaxed);
         if current + 1 < items.len() {
             self.core
@@ -253,7 +253,7 @@ impl PlayerImpl {
     /// `TrackRequested` notification near EOF would arm it for
     /// handover, surfacing as a barge-in.
     pub fn clear_item(&self, index: usize) {
-        let mut items = self.core.items.lock_sync();
+        let mut items = self.core.items.lock();
         if index < items.len() {
             items[index] = None;
             drop(items);
@@ -315,7 +315,7 @@ impl PlayerImpl {
         item_id: Option<Arc<str>>,
         at_position: Option<usize>,
     ) {
-        let mut items = self.core.items.lock_sync();
+        let mut items = self.core.items.lock();
         let pos = at_position.map_or(items.len(), |i| i.min(items.len()));
         items.insert(pos, Some(QueuedResource { item_id, resource }));
         debug!(count = items.len(), pos, "item inserted");
@@ -328,7 +328,7 @@ impl PlayerImpl {
 
     /// Get the number of items in the queue (including consumed items).
     pub fn item_count(&self) -> usize {
-        self.core.items.lock_sync().len()
+        self.core.items.lock().len()
     }
 
     /// Get prefetch lead time in seconds.
@@ -378,7 +378,7 @@ impl PlayerImpl {
     pub fn remove_at(&self, index: usize) -> Option<Resource> {
         self.unarm_next();
 
-        let mut items = self.core.items.lock_sync();
+        let mut items = self.core.items.lock();
         if index >= items.len() {
             return None;
         }
@@ -408,7 +408,7 @@ impl PlayerImpl {
     /// Replace a consumed (or existing) resource at the given index with item
     /// identity metadata.
     pub fn replace_item_tagged(&self, index: usize, resource: Resource, item_id: Option<Arc<str>>) {
-        let mut items = self.core.items.lock_sync();
+        let mut items = self.core.items.lock();
         if index < items.len() {
             items[index] = Some(QueuedResource { item_id, resource });
             drop(items);
@@ -418,7 +418,7 @@ impl PlayerImpl {
 
     /// Pre-allocate empty slots so `replace_item` can fill them by index.
     pub fn reserve_slots(&self, count: usize) {
-        self.core.items.lock_sync().resize_with(count, || None);
+        self.core.items.lock().resize_with(count, || None);
         debug!(count, "slots reserved");
     }
 
@@ -473,7 +473,7 @@ impl PlayerImpl {
 
     /// Internal: set status and emit event if changed.
     pub(crate) fn set_status(&self, new_status: PlayerStatus) {
-        let mut status = self.core.status.lock_sync();
+        let mut status = self.core.status.lock();
         if *status != new_status {
             *status = new_status;
             drop(status);
@@ -499,7 +499,7 @@ impl PlayerImpl {
 
     /// Get current player status.
     pub fn status(&self) -> PlayerStatus {
-        *self.core.status.lock_sync()
+        *self.core.status.lock()
     }
 
     /// Subscribe to player events.
@@ -687,7 +687,7 @@ mod tests {
 
     #[kithara::test]
     fn player_session_ducking_roundtrip() {
-        let _lock = crate::impls::engine::ducking_test_lock().lock_sync();
+        let _lock = crate::impls::engine::ducking_test_lock().lock();
         let player = PlayerImpl::new(PlayerConfig::default());
         player
             .set_session_ducking(SessionDuckingMode::Soft)
@@ -868,7 +868,7 @@ mod tests {
         // arming a phase, and dropping does not panic / UAF: `phase` and
         // `core.items` must drop before `core.engine`.
         let player = PlayerImpl::new(PlayerConfig::default());
-        *player.phase.lock_sync() = PlayerPhase::Playing {
+        *player.phase.lock() = PlayerPhase::Playing {
             slot: SlotId::new(0),
             abr_handle: None,
             pending: None,

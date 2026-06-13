@@ -203,7 +203,7 @@ impl Registry {
             match entry.peer.poll_next(cx) {
                 Poll::Ready(Some(batch)) => {
                     let peer_prio = entry.peer.priority();
-                    let bus = entry.bus.lock_sync_read().clone();
+                    let bus = entry.bus.read().clone();
                     let batch_had_cmds = !batch.is_empty();
                     for cmd in batch {
                         let epoch_cancel = cmd.cancel.clone();

@@ -50,11 +50,11 @@ impl LiveResource {
     }
 
     fn set(&self, state: AssetResourceState) {
-        *self.state.lock_sync() = state;
+        *self.state.lock() = state;
     }
 
     fn snapshot(&self) -> AssetResourceState {
-        self.state.lock_sync().clone()
+        self.state.lock().clone()
     }
 }
 

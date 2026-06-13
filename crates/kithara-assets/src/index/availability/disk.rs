@@ -145,7 +145,7 @@ fn write_aggregate(
                 .iter()
                 .filter_map(|res_entry| {
                     let record = {
-                        let avail = res_entry.value().lock_sync();
+                        let avail = res_entry.value().lock();
                         // The crash-recovery snapshot is a COMMITTED-only
                         // contract: an uncommitted partial write (whose `.tmp`
                         // was never renamed) must be invisible after a rebuild,

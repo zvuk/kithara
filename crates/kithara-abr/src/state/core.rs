@@ -107,7 +107,7 @@ impl AbrState {
             return;
         }
         let target = decision.target();
-        let mut slot = self.pending.lock_sync();
+        let mut slot = self.pending.lock();
         if slot.as_ref().is_some_and(|p| p.target == target) {
             *slot = None;
         }
@@ -165,7 +165,7 @@ impl AbrState {
     /// `peek_pending_decision_returns_none_during_seek`). Invalidating
     /// is destructive and happens only at semantic seek boundaries.
     pub fn invalidate_pending(&self) {
-        let mut slot = self.pending.lock_sync();
+        let mut slot = self.pending.lock();
         if slot
             .as_ref()
             .is_some_and(|p| is_throughput_driven(p.reason))
@@ -226,7 +226,7 @@ impl AbrState {
         if self.is_locked() {
             return None;
         }
-        let pending = *self.pending.lock_sync().as_ref()?;
+        let pending = *self.pending.lock().as_ref()?;
         if pending.target == current {
             return None;
         }
@@ -237,7 +237,7 @@ impl AbrState {
     /// Used by the Phase 3 scheduler boundary check and by tests.
     #[must_use]
     pub fn pending_target(&self) -> Option<VariantIndex> {
-        self.pending.lock_sync().as_ref().map(|p| p.target)
+        self.pending.lock().as_ref().map(|p| p.target)
     }
 
     fn record_switch(&self, now: Instant) {
@@ -273,7 +273,7 @@ impl AbrState {
     /// mode is read under the slot lock, pairing with the
     /// store-mode-then-clear-slot order in `set_mode`.
     pub fn request_target(&self, target: VariantIndex, reason: AbrReason) {
-        let mut slot = self.pending.lock_sync();
+        let mut slot = self.pending.lock();
         if let AbrMode::Manual(idx) = self.mode()
             && idx != target
         {
@@ -300,7 +300,7 @@ impl AbrState {
     /// lock afterwards observes the new mode in its consistency check.
     pub fn set_mode(&self, mode: AbrMode) {
         self.mode.store(mode.into(), Ordering::Release);
-        *self.pending.lock_sync() = None;
+        *self.pending.lock() = None;
     }
 
     pub fn unlock(&self) {

@@ -8,13 +8,6 @@ pub struct Condvar(WstCondvar);
 
 impl Condvar {
     #[inline]
-    #[must_use]
-    // ast-grep-ignore: style.prefer-default-derive
-    pub fn new() -> Self {
-        Self(WstCondvar::new())
-    }
-
-    #[inline]
     pub fn notify_all(&self) {
         self.0.notify_all();
     }
@@ -25,12 +18,12 @@ impl Condvar {
     }
 
     #[inline]
-    pub fn wait_sync<'a, T>(&self, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
+    pub fn wait<'a, T>(&self, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
         MutexGuard(self.0.wait_sync(guard.0))
     }
 
     #[inline]
-    pub fn wait_sync_timeout<'a, T>(
+    pub fn wait_timeout<'a, T>(
         &self,
         guard: MutexGuard<'a, T>,
         deadline: Instant,
@@ -42,6 +35,6 @@ impl Condvar {
 
 impl Default for Condvar {
     fn default() -> Self {
-        Self::new()
+        Self(WstCondvar::new())
     }
 }

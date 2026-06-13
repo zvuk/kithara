@@ -134,7 +134,7 @@ impl HlsPeer {
             .store(initial_seg as usize, Ordering::Release);
 
         {
-            let mut guard = self.state.lock_sync();
+            let mut guard = self.state.lock();
             *guard = Some(HlsTrackState {
                 reader_variant: coord.variant_index(),
                 coord,
@@ -148,7 +148,7 @@ impl HlsPeer {
             });
         }
 
-        if let Some(waker) = self.pending_waker.lock_sync().take() {
+        if let Some(waker) = self.pending_waker.lock().take() {
             waker.wake();
         }
 
@@ -162,7 +162,7 @@ impl HlsPeer {
                     () = wake_signal.cancelled() => return,
                     () = reader_advanced.notified() => {
                         let Some(peer) = peer_weak.upgrade() else { return; };
-                        let guard = peer.state.lock_sync();
+                        let guard = peer.state.lock();
                         if let Some(ref state) = *guard
                             && let Some(waker) = state.waker.as_ref()
                         {
@@ -182,14 +182,14 @@ impl HlsPeer {
     }
 
     pub(crate) fn set_abr_variants(&self, variants: Vec<VariantInfo>) {
-        *self.variants.lock_sync() = variants;
+        *self.variants.lock() = variants;
     }
 
     /// Release the stashed [`HlsTrackState`] and cancel the waker task so
     /// the peer drops its `Arc<HlsCoord>` (and the eviction receiver).
     pub(crate) fn teardown(&self) {
         self.wake_signal.cancel();
-        let mut guard = self.state.lock_sync();
+        let mut guard = self.state.lock();
         *guard = None;
     }
 }
@@ -205,7 +205,7 @@ impl Abr for HlsPeer {
         let current = self.abr.current_variant_index();
         let durations: Vec<Duration> = self
             .variants
-            .lock_sync()
+            .lock()
             .iter()
             .find(|v| v.variant_index == current)
             .and_then(|v| match &v.duration {
@@ -215,7 +215,7 @@ impl Abr for HlsPeer {
         let reader_idx = self.reader_segment.load(Ordering::Acquire);
         let download_head = self
             .state
-            .lock_sync()
+            .lock()
             .as_ref()
             .map_or(0, |s| s.coord.download_head() as usize);
         // `reader_idx`/`download_head` are prefix endpoints into `durations`:
@@ -235,7 +235,7 @@ impl Abr for HlsPeer {
     }
 
     fn variants(&self) -> Vec<VariantInfo> {
-        self.variants.lock_sync().clone()
+        self.variants.lock().clone()
     }
 
     fn wake(&self) {
@@ -305,9 +305,9 @@ impl HlsPeer {
     /// the end of the function so dispatch + broadcast run lock-free in
     /// the caller.
     fn poll_state_phase(&self, cx: &mut Context<'_>) -> PollPhase {
-        let mut guard = self.state.lock_sync();
+        let mut guard = self.state.lock();
         let Some(state) = guard.as_mut() else {
-            *self.pending_waker.lock_sync() = Some(cx.waker().clone());
+            *self.pending_waker.lock() = Some(cx.waker().clone());
             return PollPhase::NotActivated;
         };
         state.waker = Some(cx.waker().clone());

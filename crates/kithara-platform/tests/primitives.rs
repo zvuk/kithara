@@ -11,7 +11,7 @@ mod mpsc {
     use kithara_test_utils::kithara;
 
     // `flash(false)`: these tests build a `kithara_platform::time::Instant`
-    // deadline and pass it to the crate's own `recv_sync_timeout`. The lexical
+    // deadline and pass it to the crate's own `recv_timeout`. The lexical
     // flash rewrite would retarget `Instant::now()` onto
     // `::kithara_platform::flash::virtual_now`, whose `Instant` resolves through
     // the dev-dep copy of `kithara_platform` (`kithara-test-utils` pulls a
@@ -21,19 +21,16 @@ mod mpsc {
     #[kithara::test(flash(false))]
     fn recv_sync_timeout_returns_delivered_value_before_deadline() {
         let (tx, rx) = channel::<u32>();
-        tx.send_sync(7).expect("send to live receiver");
+        tx.send(7).expect("send to live receiver");
         let deadline = Instant::now() + Duration::from_secs(1);
-        assert_eq!(rx.recv_sync_timeout(deadline), Ok(7));
+        assert_eq!(rx.recv_timeout(deadline), Ok(7));
     }
 
     #[kithara::test(flash(false))]
     fn recv_sync_timeout_times_out_when_no_value_arrives() {
         let (_tx, rx) = channel::<u32>();
         let deadline = Instant::now() + Duration::from_millis(10);
-        assert_eq!(
-            rx.recv_sync_timeout(deadline),
-            Err(RecvTimeoutError::Timeout)
-        );
+        assert_eq!(rx.recv_timeout(deadline), Err(RecvTimeoutError::Timeout));
     }
 
     #[kithara::test(flash(false))]
@@ -42,7 +39,7 @@ mod mpsc {
         drop(tx);
         let deadline = Instant::now() + Duration::from_secs(1);
         assert_eq!(
-            rx.recv_sync_timeout(deadline),
+            rx.recv_timeout(deadline),
             Err(RecvTimeoutError::Disconnected)
         );
     }

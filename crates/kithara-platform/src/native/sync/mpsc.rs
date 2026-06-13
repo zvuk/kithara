@@ -17,7 +17,7 @@ impl<T> Sender<T> {
     /// # Errors
     ///
     /// Returns [`SendError`] if the receiver has been dropped.
-    pub fn send_sync(&self, value: T) -> Result<(), SendError<T>> {
+    pub fn send(&self, value: T) -> Result<(), SendError<T>> {
         self.0.send(value)
     }
 }
@@ -36,7 +36,7 @@ impl<T> Receiver<T> {
     /// # Errors
     ///
     /// Returns [`RecvError`] if all senders have been dropped.
-    pub fn recv_sync(&self) -> Result<T, RecvError> {
+    pub fn recv(&self) -> Result<T, RecvError> {
         self.0.recv()
     }
 
@@ -56,7 +56,7 @@ impl<T> Receiver<T> {
     /// Returns [`RecvTimeoutError::Timeout`] when no value arrives before
     /// `deadline`, or [`RecvTimeoutError::Disconnected`] if all senders are
     /// dropped.
-    pub fn recv_sync_timeout(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
+    pub fn recv_timeout(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
         let now = Instant::now();
         let remaining = deadline.saturating_duration_since(now);
         self.0.recv_timeout(remaining)

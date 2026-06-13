@@ -16,7 +16,7 @@ impl<D: DriverIo> ResourceCore<D> {
         self.inner.committed.store(true, Ordering::Release);
 
         {
-            let mut state = self.inner.state.lock_sync();
+            let mut state = self.inner.state.lock();
             state.committed = true;
             state.final_len = final_len;
             if let Some(len) = final_len
@@ -55,13 +55,13 @@ impl<D: DriverIo> ResourceCore<D> {
         if let Some(committed_len) = self.inner.driver.committed_len() {
             return range.end <= committed_len;
         }
-        let state = self.inner.state.lock_sync();
+        let state = self.inner.state.lock();
         range_covered_by(&state.available, &range)
     }
 
     pub(super) fn fail_inner(&self, reason: String) {
         {
-            let mut state = self.inner.state.lock_sync();
+            let mut state = self.inner.state.lock();
             state.failed = Some(reason);
         }
         self.inner.condvar.notify_all();
@@ -77,12 +77,12 @@ impl<D: DriverIo> ResourceCore<D> {
         {
             return Some(committed_len);
         }
-        let state = self.inner.state.lock_sync();
+        let state = self.inner.state.lock();
         state.final_len
     }
 
     pub(super) fn next_gap_inner(&self, from: u64, limit: u64) -> Option<Range<u64>> {
-        let state = self.inner.state.lock_sync();
+        let state = self.inner.state.lock();
         let total = state.final_len.unwrap_or(limit);
         let upper = limit.min(total);
         if from >= upper {
@@ -108,7 +108,7 @@ impl<D: DriverIo> ResourceCore<D> {
         self.inner.committed.store(false, Ordering::Release);
 
         {
-            let mut state = self.inner.state.lock_sync();
+            let mut state = self.inner.state.lock();
             state.committed = false;
             state.final_len = None;
             state.failed = None;
@@ -124,12 +124,12 @@ impl<D: DriverIo> ResourceCore<D> {
         if self.inner.cancel.is_cancelled() {
             return false;
         }
-        let state = self.inner.state.lock_sync();
+        let state = self.inner.state.lock();
         !state.committed && state.failed.is_none()
     }
 
     pub(super) fn status_inner(&self) -> ResourceStatus {
-        let state = self.inner.state.lock_sync();
+        let state = self.inner.state.lock();
         if let Some(ref reason) = state.failed {
             ResourceStatus::Failed(reason.clone())
         } else if state.committed {

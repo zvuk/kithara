@@ -245,8 +245,8 @@ impl NativeInner {
         let source = build_source_for_item(self, item)?;
         let id = item.track_id();
         self.queue.append_with_id(id, source);
-        *item.inserted.lock_sync() = true;
-        self.items.lock_sync().insert(id, Arc::clone(item));
+        *item.inserted.lock() = true;
+        self.items.lock().insert(id, Arc::clone(item));
         item.restart_bridge();
         Ok(())
     }
@@ -257,7 +257,7 @@ impl NativeInner {
 
     pub(crate) fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
         let entry = self.queue.current()?;
-        self.items.lock_sync().get(&entry.id).cloned()
+        self.items.lock().get(&entry.id).cloned()
     }
 
     pub(crate) fn current_time(&self) -> f64 {
@@ -292,8 +292,8 @@ impl NativeInner {
                 reason: e.to_string(),
             })?;
 
-        *item.inserted.lock_sync() = true;
-        self.items.lock_sync().insert(id, Arc::clone(item));
+        *item.inserted.lock() = true;
+        self.items.lock().insert(id, Arc::clone(item));
         item.restart_bridge();
         Ok(())
     }
@@ -312,7 +312,7 @@ impl NativeInner {
 
     pub(crate) fn items(&self) -> Vec<Arc<AudioPlayerItem>> {
         let tracks = self.queue.tracks();
-        let items = self.items.lock_sync();
+        let items = self.items.lock();
         tracks
             .iter()
             .filter_map(|t| items.get(&t.id).cloned())
@@ -336,7 +336,7 @@ impl NativeInner {
     }
 
     pub(crate) fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {
-        if !*item.inserted.lock_sync() {
+        if !*item.inserted.lock() {
             return Err(FfiError::InvalidArgument {
                 reason: format!("item {} not in queue", item.audio_id()),
             });
@@ -347,16 +347,16 @@ impl NativeInner {
             .map_err(|e| FfiError::InvalidArgument {
                 reason: e.to_string(),
             })?;
-        self.items.lock_sync().remove(&id);
-        *item.inserted.lock_sync() = false;
+        self.items.lock().remove(&id);
+        *item.inserted.lock() = false;
         Ok(())
     }
 
     pub(crate) fn remove_all_items(&self) {
         self.queue.clear();
-        let mut items = self.items.lock_sync();
+        let mut items = self.items.lock();
         for (_, item) in items.drain() {
-            *item.inserted.lock_sync() = false;
+            *item.inserted.lock() = false;
         }
     }
 
@@ -388,11 +388,11 @@ impl NativeInner {
         let _ = self.queue.remove(old_id);
 
         {
-            let mut items = self.items.lock_sync();
+            let mut items = self.items.lock();
             items.remove(&old_id);
             items.insert(new_id, Arc::clone(item));
         }
-        *item.inserted.lock_sync() = true;
+        *item.inserted.lock() = true;
         item.restart_bridge();
         Ok(())
     }
@@ -473,8 +473,8 @@ impl NativeInner {
             CancelToken::never(),
         );
 
-        let mut eb = self.event_bridge.lock_sync();
-        let mut obs = self.observer.lock_sync();
+        let mut eb = self.event_bridge.lock();
+        let mut obs = self.observer.lock();
         *eb = Some(bridge);
         *obs = Some(observer);
         drop(obs);
@@ -515,7 +515,7 @@ impl NativeInner {
         }
 
         let processor_rule = build_processor_rule(rule);
-        let mut opts = self.key_options.lock_sync();
+        let mut opts = self.key_options.lock();
         let mut registry = opts.key_registry.take().unwrap_or_default();
         registry.add(processor_rule);
         *opts = KeyOptions::builder().key_registry(registry).build();
@@ -552,7 +552,7 @@ impl NativeInner {
             cellular_bps,
             wifi_bps,
         };
-        *self.peak_bitrate.lock_sync() = updated;
+        *self.peak_bitrate.lock() = updated;
         if let Some(handle) = self.queue.current_abr_handle() {
             handle.set_max_bandwidth_bps(updated.effective_cap());
         }
@@ -584,12 +584,12 @@ fn build_source_for_item(
         .maybe_headers(merged_headers_for_item(inner, item).map(Into::into))
         .events(scoped.clone())
         .downloader(inner.downloader.clone())
-        .keys(inner.key_options.lock_sync().clone())
+        .keys(inner.key_options.lock().clone())
         .initial_abr_mode(abr_mode.unwrap_or_default())
         .build();
 
     native_config::configure_resource(&mut config, &inner.store);
-    *item.bus.lock_sync() = Some(scoped);
+    *item.bus.lock() = Some(scoped);
 
     Ok(TrackSource::Config(Box::new(config)))
 }
@@ -675,7 +675,7 @@ mod tests {
         assert_eq!(salt.len(), SALT_LEN);
         assert!(salt.chars().all(|c| c.is_ascii_alphanumeric()));
 
-        let key_options = inner.key_options.lock_sync().clone();
+        let key_options = inner.key_options.lock().clone();
         assert!(
             key_options.key_registry.is_some(),
             "registry must hold the wildcard rule"
@@ -686,7 +686,7 @@ mod tests {
     fn update_peak_bitrate_remembers_both_limits() {
         let inner = NativeInner::new(FfiPlayerConfig::default());
         inner.update_peak_bitrate(2_000_000.0, 500_000.0);
-        let snapshot = *inner.peak_bitrate.lock_sync();
+        let snapshot = *inner.peak_bitrate.lock();
         assert!((snapshot.wifi_bps - 2_000_000.0).abs() < f64::EPSILON);
         assert!((snapshot.cellular_bps - 500_000.0).abs() < f64::EPSILON);
     }

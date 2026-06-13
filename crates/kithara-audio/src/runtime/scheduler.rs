@@ -64,7 +64,7 @@ struct SchedulerInner<N> {
 
 impl<N> SchedulerInner<N> {
     fn shutdown(&self) {
-        let _ = self.cmd_tx.send_sync(SchedulerCmd::Shutdown);
+        let _ = self.cmd_tx.send(SchedulerCmd::Shutdown);
         self.cancel.cancel();
         self.wake.wake();
     }
@@ -82,7 +82,7 @@ impl<N: Node> SchedulerHandle<N> {
         if self
             .inner
             .cmd_tx
-            .send_sync(SchedulerCmd::Register(id, node))
+            .send(SchedulerCmd::Register(id, node))
             .is_err()
         {
             warn!(slot_id = id, "register: scheduler channel closed");
@@ -100,7 +100,7 @@ impl<N: Node> SchedulerHandle<N> {
         if self
             .inner
             .cmd_tx
-            .send_sync(SchedulerCmd::Unregister(id))
+            .send(SchedulerCmd::Unregister(id))
             .is_err()
         {
             warn!(slot_id = id, "unregister: scheduler channel closed");

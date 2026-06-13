@@ -116,12 +116,12 @@ fn make_var_with_seek_obs(
 }
 
 fn push_planned(v: &HlsVariant, seg: u32) {
-    v.queue.lock_sync().push_back(PlannedFetch::Segment(seg));
+    v.queue.lock().push_back(PlannedFetch::Segment(seg));
 }
 
 fn queue_seg_indices(v: &HlsVariant) -> Vec<u32> {
     v.queue
-        .lock_sync()
+        .lock()
         .iter()
         .filter_map(|p| match p {
             PlannedFetch::Segment(seg) => Some(*seg),
@@ -132,7 +132,7 @@ fn queue_seg_indices(v: &HlsVariant) -> Vec<u32> {
 
 fn queue_has_init(v: &HlsVariant) -> bool {
     v.queue
-        .lock_sync()
+        .lock()
         .iter()
         .any(|p| matches!(p, PlannedFetch::Init))
 }
@@ -577,7 +577,7 @@ fn dispatch_skips_non_missing_segments() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
     v.store.segments()[1].state.mark_loaded();
-    v.queue.lock_sync().clear();
+    v.queue.lock().clear();
     for seg in 0..3_u32 {
         push_planned(&v, seg);
     }

@@ -40,7 +40,7 @@ impl<D: DriverIo> ResourceCore<D> {
         self.check_health()?;
 
         let effective_len = {
-            let final_len = self.inner.state.lock_sync().final_len;
+            let final_len = self.inner.state.lock().final_len;
             let storage_len = self.inner.driver.storage_len();
             let data_len = final_len.unwrap_or(storage_len);
             data_len.min(storage_len)
@@ -75,7 +75,7 @@ impl<D: DriverIo> ResourceCore<D> {
         self.check_health()?;
 
         let effective_len = {
-            let final_len = self.inner.state.lock_sync().final_len;
+            let final_len = self.inner.state.lock().final_len;
             let storage_len = self.inner.driver.storage_len();
             final_len.unwrap_or(storage_len).min(storage_len)
         };
@@ -108,7 +108,7 @@ impl<D: DriverIo> ResourceCore<D> {
             })?;
 
         let committed = {
-            let state = self.inner.state.lock_sync();
+            let state = self.inner.state.lock();
             state.committed
         };
 
@@ -118,7 +118,7 @@ impl<D: DriverIo> ResourceCore<D> {
         self.inner.driver.notify_write(&range);
 
         {
-            let mut state = self.inner.state.lock_sync();
+            let mut state = self.inner.state.lock();
             state.available.insert(range.clone());
 
             if let Some(window) = self.inner.driver.valid_window() {
@@ -212,7 +212,7 @@ mod tests {
 
         assert_eq!(core.inner.driver.committed_len(), Some(11));
 
-        let guard = core.inner.state.lock_sync();
+        let guard = core.inner.state.lock();
 
         let (tx, rx) = mpsc::channel();
         let worker = core.clone();
@@ -251,7 +251,7 @@ mod tests {
 
         assert_eq!(core.inner.driver.committed_len(), Some(11));
 
-        let guard = core.inner.state.lock_sync();
+        let guard = core.inner.state.lock();
 
         let (tx, rx) = mpsc::channel();
         let worker = core.clone();

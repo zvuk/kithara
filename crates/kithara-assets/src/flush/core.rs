@@ -135,7 +135,7 @@ impl FlushHub {
             sources: Mutex::new(Vec::new()),
             non_durable: DashSet::new(),
             wait: Arc::new(HubWait {
-                cv: Condvar::new(),
+                cv: Condvar::default(),
                 state: Mutex::new(HubState::default()),
             }),
             worker: WorkerSlot::default(),
@@ -144,7 +144,7 @@ impl FlushHub {
 
     pub(super) fn flush_dirty(&self, durable: bool) -> AssetsResult<()> {
         let alive: Vec<Arc<dyn Flushable>> = {
-            let mut g = self.sources.lock_sync();
+            let mut g = self.sources.lock();
             g.retain(|w| w.strong_count() > 0);
             g.iter().filter_map(Weak::upgrade).collect()
         };
@@ -209,7 +209,7 @@ impl FlushHub {
     /// indexes whose `AssetStore` is still alive.
     #[must_use]
     pub fn live_source_count(&self) -> usize {
-        let mut g = self.sources.lock_sync();
+        let mut g = self.sources.lock();
         g.retain(|w| w.strong_count() > 0);
         g.len()
     }
@@ -219,9 +219,9 @@ impl FlushHub {
     /// # Errors
     /// Returns `AssetsError` if persisting any index resource fails.
     pub fn flush_now(&self) -> AssetsResult<()> {
-        let _g = self.flush_lock.lock_sync();
+        let _g = self.flush_lock.lock();
         {
-            let mut s = self.wait.state.lock_sync();
+            let mut s = self.wait.state.lock();
             s.pending = false;
             s.op_count = 0;
         }
@@ -239,7 +239,7 @@ impl FlushHub {
     /// a `Weak`: if the index is dropped, the slot is GC'd on the next
     /// `flush_dirty` pass.
     pub(crate) fn register(self: &Arc<Self>, source: Weak<dyn Flushable>) {
-        self.sources.lock_sync().push(source);
+        self.sources.lock().push(source);
         self.start_worker();
     }
 
@@ -251,7 +251,7 @@ impl FlushHub {
     /// flush eagerly via [`flush_sync`] for crash safety.
     pub(crate) fn signal(self: &Arc<Self>) {
         {
-            let mut s = self.wait.state.lock_sync();
+            let mut s = self.wait.state.lock();
             s.pending = true;
             s.op_count = s.op_count.saturating_add(1);
         }
@@ -271,7 +271,7 @@ impl Drop for FlushHub {
     fn drop(&mut self) {
         self.cancel.cancel();
         {
-            let _g = self.wait.state.lock_sync();
+            let _g = self.wait.state.lock();
             self.wait.cv.notify_all();
         }
         self.worker.shutdown_join();
@@ -502,7 +502,7 @@ mod tests {
 
         hub.flush_now().unwrap();
 
-        let remaining = hub.sources.lock_sync().len();
+        let remaining = hub.sources.lock().len();
         assert_eq!(remaining, 0, "dropped sources must be GC'd from registry");
     }
 

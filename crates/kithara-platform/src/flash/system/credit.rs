@@ -285,14 +285,14 @@ impl FlashInner {
     /// Reserve a dedicated pacer's slot: raw `active += 1` on the parent,
     /// before the child is scheduled (see [`DedicatedSlot`]).
     pub(in crate::flash) fn pre_count_dedicated(&self) {
-        self.core.lock_sync().registry.active += 1;
+        self.core.lock().registry.active += 1;
     }
 
     /// Return a reservation no thread ever claimed ([`DedicatedSlot`] Drop):
     /// undo the raw `active += 1` and fire any advance the release unblocks.
     /// No credit is touched — the slot never became any thread's `Running`.
     fn release_unclaimed_slot(&self) {
-        let mut s = self.core.lock_sync();
+        let mut s = self.core.lock();
         debug_assert!(
             s.registry.active > 0,
             "unclaimed slot release without a matching reserve"
@@ -367,7 +367,7 @@ impl FlashInner {
     /// - DEDICATED pacer: keep the bump and mark the thread `Running`.
     pub(in crate::flash) fn resume_after_wait(&self) {
         if in_async_poll() {
-            let mut s = self.core.lock_sync();
+            let mut s = self.core.lock();
             debug_assert!(
                 s.registry.active > 0,
                 "bridged resume without a firer active bump"
@@ -378,7 +378,7 @@ impl FlashInner {
             return;
         }
         if !is_dedicated() {
-            let mut s = self.core.lock_sync();
+            let mut s = self.core.lock();
             debug_assert!(
                 s.registry.active > 0,
                 "non-pacer resume without a firer active bump"
@@ -403,7 +403,7 @@ impl FlashInner {
         if was != Credit::Running {
             return;
         }
-        let mut s = self.core.lock_sync();
+        let mut s = self.core.lock();
         debug_assert!(
             s.registry.active > 0,
             "exiting running participant must be counted"

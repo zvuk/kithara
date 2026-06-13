@@ -28,7 +28,7 @@ impl PlayerImpl {
     /// emptied by the load handoff.
     #[must_use]
     pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.phase.lock_sync().abr_handle()
+        self.phase.lock().abr_handle()
     }
 
     /// Current media duration in seconds.

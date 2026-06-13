@@ -60,7 +60,7 @@ impl LruInner {
             self.dirty.store(false, Ordering::Release);
             return Ok(());
         };
-        let snapshot = self.state.lock_sync().clone();
+        let snapshot = self.state.lock().clone();
         let atomic = persist::init_atomic(&persist.res, &persist.path, &persist.cancel)?;
         write_state(atomic, &snapshot, durable)?;
         self.dirty.store(false, Ordering::Release);

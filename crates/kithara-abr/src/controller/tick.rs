@@ -40,7 +40,7 @@ impl AbrController {
         let now = Instant::now();
         let bus = entry.bus();
         if let Some(ref bus) = bus {
-            let mut throttle = entry.throttle.lock_sync();
+            let mut throttle = entry.throttle.lock();
             let emit = throttle
                 .last_throughput_sample_at
                 .is_none_or(|t| now.duration_since(t) >= Self::MIN_THROUGHPUT_SAMPLE_INTERVAL);

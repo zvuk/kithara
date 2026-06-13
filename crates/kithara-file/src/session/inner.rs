@@ -148,7 +148,7 @@ impl FileInner {
     /// Take the single commit-owning writer, if this is a download path and it
     /// has not been consumed yet.
     pub(crate) fn take_writer(&self) -> Option<AssetWriter> {
-        self.asset.writer.lock_sync().take()
+        self.asset.writer.lock().take()
     }
 
     /// Mark the resource failed and evict the pre-allocated cache file.

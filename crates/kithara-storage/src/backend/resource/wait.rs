@@ -43,7 +43,7 @@ impl<D: DriverIo> ResourceCore<D> {
         let _cancel_wake = {
             let inner = Arc::clone(&self.inner);
             self.inner.cancel.on_cancel(move || {
-                let _guard = inner.state.lock_sync();
+                let _guard = inner.state.lock();
                 inner.condvar.notify_all();
             })
         };
@@ -59,7 +59,7 @@ impl<D: DriverIo> ResourceCore<D> {
                 return Ok(WaitOutcome::Ready);
             }
 
-            let state = self.inner.state.lock_sync();
+            let state = self.inner.state.lock();
 
             if self.inner.cancel.is_cancelled() {
                 return Err(StorageError::Cancelled);
@@ -107,7 +107,7 @@ impl<D: DriverIo> ResourceCore<D> {
 
             // Park until a readiness transition notifies the condvar (bytes,
             // commit, fail, reactivate, or cancel) — event-driven, no timer.
-            let _state = self.inner.condvar.wait_sync(state);
+            let _state = self.inner.condvar.wait(state);
         }
     }
 }

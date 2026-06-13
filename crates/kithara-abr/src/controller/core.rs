@@ -207,7 +207,7 @@ impl AbrController {
     /// Called from [`AbrHandle::drop`].
     pub(crate) fn unregister(&self, id: AbrPeerId) {
         if let Some((_, entry)) = self.peers.remove(&id)
-            && let Some(token) = entry.incoherence_cancel.lock_sync().take()
+            && let Some(token) = entry.incoherence_cancel.lock().take()
         {
             token.cancel();
         }

@@ -443,7 +443,7 @@ async fn poll_next_respects_max_concurrent() {
 
         fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
             let (batch_size, more) = {
-                let mut rem = self.remaining.lock_sync();
+                let mut rem = self.remaining.lock();
                 if *rem == 0 {
                     return Poll::Ready(None);
                 }
@@ -738,7 +738,7 @@ impl Abr for TaggedPriorityPeer {}
 impl Peer for TaggedPriorityPeer {
     fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
         let (take, more) = {
-            let mut rem = self.remaining.lock_sync();
+            let mut rem = self.remaining.lock();
             if *rem == 0 {
                 return Poll::Pending;
             }
@@ -758,7 +758,7 @@ impl Peer for TaggedPriorityPeer {
                               _headers: Option<&kithara_net::Headers>,
                               _err: Option<&kithara_net::NetError>| {
                             let order = gate.complete();
-                            log.lock_sync().push((tag, order));
+                            log.lock().push((tag, order));
                         },
                     ))
                     .build()
@@ -849,7 +849,7 @@ async fn active_peer_completes_before_preload_under_contention() {
     drop(active_handle);
     drop(preload_handle);
 
-    let log = completion_log.lock_sync().clone();
+    let log = completion_log.lock().clone();
     assert_eq!(log.len(), total, "every cmd must complete exactly once");
 
     let mut active_orders: Vec<usize> = log
@@ -932,7 +932,7 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
     drop(handle_a);
     drop(handle_b);
 
-    let log = completion_log.lock_sync().clone();
+    let log = completion_log.lock().clone();
     assert_eq!(
         log.len(),
         total,

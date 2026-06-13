@@ -11,7 +11,7 @@ use crate::{
 
 impl DriverIo for MemDriver {
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        let mut state = self.state.lock_sync();
+        let mut state = self.state.lock();
         let end = final_len.unwrap_or(state.len).min(state.len);
         let end_usize = usize::try_from(end).map_err(|err| {
             StorageError::Failed(format!(
@@ -67,7 +67,7 @@ impl DriverIo for MemDriver {
         // flag (`ResourceCore::committed`) is what flips to active; the snapshot
         // is purely the read view.
         if let Some(snapshot) = self.committed.load_full() {
-            let mut state = self.state.lock_sync();
+            let mut state = self.state.lock();
             let snap_len = snapshot.len();
             state
                 .buf
@@ -86,7 +86,7 @@ impl DriverIo for MemDriver {
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
-        let state = self.state.lock_sync();
+        let state = self.state.lock();
 
         // Working-buffer first. While a generation is in flight (initial write,
         // or a re-download rewriting on top of a still-published prior snapshot)
@@ -128,7 +128,7 @@ impl DriverIo for MemDriver {
     }
 
     fn storage_len(&self) -> u64 {
-        let state = self.state.lock_sync();
+        let state = self.state.lock();
         state.len
     }
 
@@ -140,7 +140,7 @@ impl DriverIo for MemDriver {
             ));
         }
 
-        let mut state = self.state.lock_sync();
+        let mut state = self.state.lock();
         let end = offset + data.len() as u64;
 
         let end_usize = usize::try_from(end).map_err(|err| {
@@ -330,7 +330,7 @@ mod tests {
         driver
             .write_at(0, b"hello world", false)
             .expect("active write must succeed");
-        assert_eq!(driver.state.lock_sync().buf.len(), 11);
+        assert_eq!(driver.state.lock().buf.len(), 11);
 
         driver.commit(Some(11)).expect("commit must succeed");
 
@@ -339,7 +339,7 @@ mod tests {
         // so it no longer holds a second copy. (Asserting `len`, not `capacity`,
         // since the pool retains/recycles capacity for reuse — see `Reuse`.)
         assert_eq!(
-            driver.state.lock_sync().buf.len(),
+            driver.state.lock().buf.len(),
             0,
             "working buffer not released on commit"
         );
@@ -369,7 +369,7 @@ mod tests {
         // to active one layer up (`ResourceCore::committed`), not here.
         assert_eq!(driver.committed_len(), Some(11));
         assert!(
-            driver.state.lock_sync().buf.len() >= 11,
+            driver.state.lock().buf.len() >= 11,
             "working buffer not repopulated on reactivate"
         );
 

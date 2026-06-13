@@ -267,7 +267,7 @@ where
 
     fn cached_state(&self, key: &ResourceKey) -> Option<AssetResourceState> {
         let (committed, has_active) = {
-            let mut cache = self.cache.lock_sync();
+            let mut cache = self.cache.lock();
             let mut committed = None;
             let mut has_active = false;
             let mut promote_key = None;
@@ -347,7 +347,7 @@ where
             return load();
         }
 
-        let mut cache = self.cache.lock_sync();
+        let mut cache = self.cache.lock();
 
         if let Some(CacheEntry::Index(res)) = cache.peek(&cache_key) {
             return Ok(res.clone());
@@ -440,7 +440,7 @@ where
             identity: identity.cloned(),
             ctx: ctx.clone(),
         };
-        let mut cache = self.cache.lock_sync();
+        let mut cache = self.cache.lock();
 
         let hit = match cache.get(&cache_key) {
             Some(CacheEntry::Resource(reader)) => Some(reader.clone()),
@@ -484,7 +484,7 @@ where
 
     fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
         {
-            let mut cache = self.cache.lock_sync();
+            let mut cache = self.cache.lock();
 
             let keys_to_remove: Vec<CacheKey<A::Context>> = cache
                 .iter()
@@ -532,7 +532,7 @@ where
             ctx: ctx.clone(),
         };
 
-        let mut cache = self.cache.lock_sync();
+        let mut cache = self.cache.lock();
 
         if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
             return Ok(self.wrap_reader(key, res.clone()));
@@ -575,7 +575,7 @@ where
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
         {
-            let mut cache = self.cache.lock_sync();
+            let mut cache = self.cache.lock();
             let keys_to_remove: Vec<_> = cache
                 .iter()
                 .filter_map(|(cache_key, _)| match cache_key {
@@ -733,7 +733,7 @@ mod tests {
             commit_writer(cached.acquire_resource(key, None).unwrap(), b"data");
         }
 
-        assert_eq!(cached.cache.lock_sync().len(), 3);
+        assert_eq!(cached.cache.lock().len(), 3);
     }
 
     fn record_invalidations() -> (
@@ -771,7 +771,7 @@ mod tests {
 
         // The oldest handle was displaced from the 2-slot in-memory LRU,
         // but its bytes survive on disk, so no invalidation must fire.
-        assert_eq!(cached.cache.lock_sync().len(), 2);
+        assert_eq!(cached.cache.lock().len(), 2);
         assert!(
             log.lock().expect("log lock").is_empty(),
             "durable backend must treat LRU displacement as transparent, got {:?}",
@@ -805,7 +805,7 @@ mod tests {
 
         // Ephemeral backing frees bytes when the last handle drops, so
         // displacement is real data loss and must invalidate the key.
-        assert_eq!(cached.cache.lock_sync().len(), 2);
+        assert_eq!(cached.cache.lock().len(), 2);
         assert_eq!(
             log.lock().expect("log lock").as_slice(),
             &[keys[0].clone()],
@@ -831,7 +831,7 @@ mod tests {
             commit_writer(cached.acquire_resource(key, None).unwrap(), b"data");
         }
 
-        assert_eq!(cached.cache.lock_sync().len(), 4);
+        assert_eq!(cached.cache.lock().len(), 4);
         assert!(
             matches!(
                 cached.resource_state(&keys[0]),
@@ -858,14 +858,14 @@ mod tests {
         for key in &keys[1..4] {
             commit_writer(cached.acquire_resource(key, None).unwrap(), b"data");
         }
-        assert_eq!(cached.cache.lock_sync().len(), 4, "3 normal + 1 pinned");
+        assert_eq!(cached.cache.lock().len(), 4, "3 normal + 1 pinned");
 
         first.release();
 
         commit_writer(cached.acquire_resource(&keys[4], None).unwrap(), b"data");
 
         assert_eq!(
-            cached.cache.lock_sync().len(),
+            cached.cache.lock().len(),
             3,
             "released resource must be evicted, cache back to capacity"
         );
@@ -908,11 +908,11 @@ mod tests {
         let key = ResourceKey::relative(ROOT, "delete_me.mp3");
         let _res = pending(cached.acquire_resource(&key, None).unwrap());
 
-        assert!(!cached.cache.lock_sync().is_empty());
+        assert!(!cached.cache.lock().is_empty());
 
         cached.delete_asset(ROOT).unwrap();
 
-        assert_eq!(cached.cache.lock_sync().len(), 0);
+        assert_eq!(cached.cache.lock().len(), 0);
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -1035,6 +1035,6 @@ mod tests {
         let _res = cached.acquire_resource(&key, None).unwrap();
         h.join().unwrap();
 
-        assert_eq!(cached.cache.lock_sync().len(), 1);
+        assert_eq!(cached.cache.lock().len(), 1);
     }
 }

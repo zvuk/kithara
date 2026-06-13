@@ -13,7 +13,7 @@ impl<T> Mutex<T> {
     }
 
     #[inline]
-    pub fn lock_sync(&self) -> MutexGuard<'_, T> {
+    pub fn lock(&self) -> MutexGuard<'_, T> {
         MutexGuard(self.0.lock())
     }
 
@@ -71,10 +71,10 @@ mod tests {
     #[test]
     fn unlocked_releases_and_relocks() {
         let m = Mutex::new(1);
-        let mut g = m.lock_sync();
+        let mut g = m.lock();
         g.unlocked(|| {
             // The mutex is released inside `f`: an independent lock succeeds.
-            *m.lock_sync() += 1;
+            *m.lock() += 1;
         });
         // Relocked: while the guard is alive again the mutex must be held.
         assert!(m.try_lock().is_err());

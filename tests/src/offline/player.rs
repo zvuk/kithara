@@ -144,7 +144,7 @@ impl OfflinePlayer {
     pub fn take_notification_kinds(&self) -> Vec<NotificationKind> {
         use ringbuf::traits::Consumer;
 
-        let mut rx = self.shared_state.notification_rx.lock_sync();
+        let mut rx = self.shared_state.notification_rx.lock();
         let mut out = Vec::new();
         while let Some(n) = rx.try_pop() {
             use kithara_play::impls::player_notification::PlayerNotification as N;

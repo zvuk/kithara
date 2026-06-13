@@ -140,7 +140,7 @@ impl Downloader {
     /// Ensure the download loop is running (lazy spawn on first register
     /// in an async-capable context).
     fn ensure_spawned(&self) {
-        let Some(rx) = self.inner.register_rx.lock_sync().take() else {
+        let Some(rx) = self.inner.register_rx.lock().take() else {
             return;
         };
         let this = self.clone();

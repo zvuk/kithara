@@ -63,11 +63,11 @@ impl AbrController {
         };
         let token = self.parent_cancel.child();
         {
-            let mut slot = entry.last_variant_switch.lock_sync();
+            let mut slot = entry.last_variant_switch.lock();
             *slot = Some((now, reader_pt));
         }
         {
-            let mut slot = entry.incoherence_cancel.lock_sync();
+            let mut slot = entry.incoherence_cancel.lock();
             if let Some(prev) = slot.replace(token.clone()) {
                 prev.cancel();
             }
@@ -121,7 +121,7 @@ mod tests {
             .peer_entry(peer_id)
             .expect("peer entry exists after register")
             .incoherence_cancel
-            .lock_sync()
+            .lock()
             .clone()
             .expect("schedule stores a watch token");
 

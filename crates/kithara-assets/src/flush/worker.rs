@@ -63,7 +63,7 @@ impl WorkerSlot {
 /// after a final flush, or when the hub has been dropped.
 fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &FlushPolicy) {
     loop {
-        let mut guard = wait.state.lock_sync();
+        let mut guard = wait.state.lock();
         while !guard.pending {
             if cancel.is_cancelled() {
                 drop(guard);
@@ -73,19 +73,19 @@ fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &Flu
             // Event-driven idle wait (no bounded poll). `signal()` sets `pending`
             // and notifies; shutdown cancels and `notify_all`s — both wake this
             // wait, so a periodic re-check is unnecessary. The old
-            // `wait_sync_timeout(now + poll_interval)` re-registered a near-term
+            // `wait_timeout(now + poll_interval)` re-registered a near-term
             // deadline every iteration; on a DEDICATED virtual-time pacer that
             // pins the engine's `active` credit and forces the virtual clock to
             // crawl `poll_interval` at a time (never the big jump a flash test
             // needs) — and on the real clock it is just a redundant wakeup. An
             // indefinite wait parks until a real flush/shutdown event.
-            guard = wait.cv.wait_sync(guard);
+            guard = wait.cv.wait(guard);
         }
         drop(guard);
 
         let debounce_deadline = Instant::now() + policy.debounce;
         loop {
-            let guard = wait.state.lock_sync();
+            let guard = wait.state.lock();
             if guard.op_count >= policy.force_every_n_ops.get() {
                 break;
             }
@@ -97,18 +97,18 @@ fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &Flu
             if Instant::now() >= debounce_deadline {
                 break;
             }
-            let _ = wait.cv.wait_sync_timeout(guard, debounce_deadline);
+            let _ = wait.cv.wait_timeout(guard, debounce_deadline);
         }
 
         {
-            let mut guard = wait.state.lock_sync();
+            let mut guard = wait.state.lock();
             guard.pending = false;
             guard.op_count = 0;
         }
         let Some(hub) = weak.upgrade() else {
             return;
         };
-        let _g = hub.flush_lock.lock_sync();
+        let _g = hub.flush_lock.lock();
         let _ = hub.flush_dirty(false);
     }
 }
@@ -119,6 +119,6 @@ fn final_flush(weak: &Weak<FlushHub>) {
     let Some(hub) = weak.upgrade() else {
         return;
     };
-    let _g = hub.flush_lock.lock_sync();
+    let _g = hub.flush_lock.lock();
     let _ = hub.flush_dirty(false);
 }

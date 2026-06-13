@@ -235,7 +235,7 @@ impl FlashInner {
     /// anchor, and the per-thread credit cells (separate `reset_credit()`).
     pub(in crate::flash) fn reset(&self) {
         self.clock.reset();
-        *self.core.lock_sync() = Core::new();
+        *self.core.lock() = Core::new();
     }
 }
 

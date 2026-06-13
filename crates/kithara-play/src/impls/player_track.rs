@@ -255,7 +255,7 @@ impl PlayerTrack {
         }
 
         if notification_tx
-            .lock_sync()
+            .lock()
             .try_push(PlayerNotification::HandoverRequested)
             .is_ok()
         {
@@ -270,7 +270,7 @@ impl PlayerTrack {
         }
 
         if notification_tx
-            .lock_sync()
+            .lock()
             .try_push(PlayerNotification::Requested)
             .is_ok()
         {
@@ -305,7 +305,7 @@ impl PlayerTrack {
         }
         self.set_state(TrackState::Finished);
         notification_tx
-            .lock_sync()
+            .lock()
             .try_push(PlayerNotification::PlaybackStopped {
                 src: Arc::clone(&self.src),
                 item_id: self.item_id.clone(),
@@ -324,7 +324,7 @@ impl PlayerTrack {
         self.emit_handover_requested(notification_tx);
         self.set_state(TrackState::Finished);
         notification_tx
-            .lock_sync()
+            .lock()
             .try_push(PlayerNotification::PlaybackStopped {
                 src: Arc::clone(&self.src),
                 item_id: self.item_id.clone(),
@@ -353,7 +353,7 @@ impl PlayerTrack {
             },
         };
 
-        if notification_tx.lock_sync().try_push(notification).is_ok() {
+        if notification_tx.lock().try_push(notification).is_ok() {
             self.state_dirty = false;
         }
     }

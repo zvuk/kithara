@@ -63,7 +63,7 @@ impl FilePeer {
         let Some(lease) = self.inner.demand_lease.as_ref() else {
             return true;
         };
-        let mut producer = self.producer.lock_sync();
+        let mut producer = self.producer.lock();
         if producer.is_some() {
             return true;
         }

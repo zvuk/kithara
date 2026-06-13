@@ -56,7 +56,7 @@ impl<F: Future> Future for Participating<F> {
         let mut gate_cx = Context::from_waker(&gate_waker);
         // Mark this OS thread as inside an async poll for the duration of the
         // inner poll, so a synchronous wrapped wait taken from within it (e.g. a
-        // blocking `recv_sync` reaching the engine) is treated as a BRIDGED wait —
+        // blocking `recv` reaching the engine) is treated as a BRIDGED wait —
         // releasing this task's `active_async` slot while it blocks instead of
         // pinning the clock. Drops (restoring the depth) even if the poll unwinds.
         let outcome = {

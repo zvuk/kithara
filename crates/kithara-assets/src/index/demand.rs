@@ -77,7 +77,7 @@ impl DemandCell {
     /// Zero when no consumer is attached.
     fn max_watermark(&self) -> u64 {
         self.entries
-            .lock_sync()
+            .lock()
             .iter()
             .map(|e| e.watermark())
             .max()
@@ -176,9 +176,7 @@ impl Drop for DemandLease {
         // Serialize with attach through the per-key shard lock.
         if let Entry::Occupied(occupied) = self.inner.slots.entry(self.key.clone()) {
             let slot = occupied.get();
-            slot.entries
-                .lock_sync()
-                .retain(|e| !Arc::ptr_eq(e, &self.entry));
+            slot.entries.lock().retain(|e| !Arc::ptr_eq(e, &self.entry));
             let prev = slot.refcount.fetch_sub(1, Ordering::AcqRel);
             if prev <= 1 {
                 slot.producer_cancel.cancel();
@@ -233,13 +231,13 @@ impl DemandIndex {
         let slot = match self.inner.slots.entry(key.clone()) {
             Entry::Occupied(occupied) => {
                 let slot = Arc::clone(occupied.get());
-                slot.entries.lock_sync().push(Arc::clone(&entry));
+                slot.entries.lock().push(Arc::clone(&entry));
                 slot.refcount.fetch_add(1, Ordering::AcqRel);
                 slot
             }
             Entry::Vacant(vacant) => {
                 let slot = Arc::new(DemandCell::new(self.inner.cancel.child()));
-                slot.entries.lock_sync().push(Arc::clone(&entry));
+                slot.entries.lock().push(Arc::clone(&entry));
                 slot.refcount.store(1, Ordering::Release);
                 vacant.insert(Arc::clone(&slot));
                 slot

@@ -120,7 +120,7 @@ impl AbrHandle {
         reader_pt: Duration,
         now: Instant,
     ) {
-        let bus = self.inner.bus.lock_sync_read().clone();
+        let bus = self.inner.bus.read().clone();
         if let Some(bus) = bus {
             bus.publish(AbrEvent::VariantApplied {
                 from: VariantIndex::new(current_before),
@@ -212,7 +212,7 @@ impl AbrHandle {
     /// the controller reads it through the shared `Arc` when publishing.
     #[must_use]
     pub fn with_bus(self, bus: EventBus) -> Self {
-        *self.inner.bus.lock_sync_write() = Some(bus);
+        *self.inner.bus.write() = Some(bus);
         self
     }
 }

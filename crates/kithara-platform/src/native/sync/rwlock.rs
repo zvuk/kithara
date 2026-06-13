@@ -11,12 +11,12 @@ impl<T> RwLock<T> {
     }
 
     #[inline]
-    pub fn lock_sync_read(&self) -> RwLockReadGuard<'_, T> {
+    pub fn read(&self) -> RwLockReadGuard<'_, T> {
         RwLockReadGuard(self.0.read())
     }
 
     #[inline]
-    pub fn lock_sync_write(&self) -> RwLockWriteGuard<'_, T> {
+    pub fn write(&self) -> RwLockWriteGuard<'_, T> {
         RwLockWriteGuard(self.0.write())
     }
 }

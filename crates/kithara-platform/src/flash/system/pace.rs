@@ -42,7 +42,7 @@ impl Pacer {
     pub(super) fn new(owner: Weak<FlashInner>) -> Self {
         Self {
             armed: Mutex::new(false),
-            cv: Condvar::new(),
+            cv: Condvar::default(),
             spawn: Once::new(),
             owner,
         }
@@ -55,11 +55,11 @@ impl FlashInner {
     /// purpose: a disarmed pacer consumes zero CPU until the next arm.
     fn pace_run(&self) {
         loop {
-            wait_armed(&self.pacer.cv, self.pacer.armed.lock_sync());
+            wait_armed(&self.pacer.cv, self.pacer.armed.lock());
             // REAL sleep: the pacer exists precisely to feed real time into
             // the engine while real I/O is in flight.
             crate::native::thread::sleep(Pacer::TICK);
-            let mut s = self.core.lock_sync();
+            let mut s = self.core.lock();
             let adv = s.try_advance(&self.clock);
             drop(s);
             adv.fire();
@@ -84,8 +84,8 @@ impl FlashInner {
                 .spawn(move || owner.pace_run())
                 .expect("BUG: spawning the flash io-pacer thread cannot fail");
         });
-        let mut armed = self.pacer.armed.lock_sync();
-        let mut s = self.core.lock_sync();
+        let mut armed = self.pacer.armed.lock();
+        let mut s = self.core.lock();
         s.sched.real_io += 1;
         if s.sched.real_io == 1 {
             s.sched.pace_anchor = Some((RealInstant::now(), self.clock.now_nanos()));
@@ -104,8 +104,8 @@ impl FlashInner {
     /// disarms the pacer and immediately re-runs the advance rule: full-speed
     /// collapse resumes.
     pub(in crate::flash) fn real_io_exit(&self) {
-        let mut armed = self.pacer.armed.lock_sync();
-        let mut s = self.core.lock_sync();
+        let mut armed = self.pacer.armed.lock();
+        let mut s = self.core.lock();
         debug_assert!(s.sched.real_io > 0, "real_io exit without a matching enter");
         s.sched.real_io = s.sched.real_io.saturating_sub(1);
         if s.sched.real_io != 0 {
@@ -129,7 +129,7 @@ impl FlashInner {
 /// drop inside the loop).
 fn wait_armed(cv: &Condvar, mut armed: MutexGuard<'_, bool>) {
     while !*armed {
-        armed = cv.wait_sync(armed);
+        armed = cv.wait(armed);
     }
 }
 

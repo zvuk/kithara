@@ -95,7 +95,7 @@ impl PlaylistCache {
 
     #[must_use]
     pub fn headers(&self) -> Option<Headers> {
-        self.config.lock_sync_read().headers.clone()
+        self.config.read().headers.clone()
     }
 
     /// Load and parse the master playlist. First call fetches from the
@@ -147,7 +147,7 @@ impl PlaylistCache {
     /// # Errors
     /// Returns an error when URL joining fails.
     pub fn resolve_url(&self, base: &Url, target: &str) -> HlsResult<Url> {
-        let base_override = self.config.lock_sync_read().base_url.clone();
+        let base_override = self.config.read().base_url.clone();
         let resolved = if let Some(base_url) = base_override {
             base_url.join(target).map_err(|e| {
                 HlsError::InvalidUrl(format!("Failed to resolve URL with base override: {e}"))
@@ -160,14 +160,14 @@ impl PlaylistCache {
     }
 
     pub fn set_base_url(&self, url: Option<Url>) {
-        self.config.lock_sync_write().base_url = url;
+        self.config.write().base_url = url;
     }
 
     pub fn set_headers(&self, headers: Option<Headers>) {
-        self.config.lock_sync_write().headers = headers;
+        self.config.write().headers = headers;
     }
 
     pub fn set_master_url(&self, url: Url) {
-        self.config.lock_sync_write().master_url = Some(url);
+        self.config.write().master_url = Some(url);
     }
 }

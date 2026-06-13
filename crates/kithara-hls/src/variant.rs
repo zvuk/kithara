@@ -821,7 +821,7 @@ impl HlsVariant {
     #[kithara::probe(
         variant = self.variant as u64,
         budget = budget as u64,
-        queue_len = self.queue.lock_sync().len() as u64
+        queue_len = self.queue.lock().len() as u64
     )]
     #[kithara::hang_watchdog]
     pub(crate) fn dispatch(self: &Arc<Self>, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
@@ -834,7 +834,7 @@ impl HlsVariant {
         while remaining > 0 {
             hang_tick!();
             let planned = {
-                let mut queue = self.queue.lock_sync();
+                let mut queue = self.queue.lock();
                 match queue.front().copied() {
                     None => break,
                     Some(PlannedFetch::Init) => queue.pop_front(),
@@ -1318,7 +1318,7 @@ impl HlsVariant {
     #[kithara::probe(
         variant = self.variant as u64,
         from_seg,
-        old_queue_len = self.queue.lock_sync().len() as u64
+        old_queue_len = self.queue.lock().len() as u64
     )]
     pub(crate) fn rebuild(&self, _ctx: &PlanCtx, from_seg: u32) {
         let segs_len = self.num_segments();
@@ -1327,7 +1327,7 @@ impl HlsVariant {
             .then_some(PlannedFetch::Init)
             .into_iter();
         let tail = (from_seg..segs_len).map(PlannedFetch::Segment);
-        let mut queue = self.queue.lock_sync();
+        let mut queue = self.queue.lock();
         queue.clear();
         queue.extend(init.chain(tail));
     }
@@ -1348,7 +1348,7 @@ impl HlsVariant {
     #[kithara::probe(
         variant = self.variant as u64,
         from_seg,
-        old_queue_len = self.queue.lock_sync().len() as u64
+        old_queue_len = self.queue.lock().len() as u64
     )]
     pub(crate) fn rebuild_with_decoder_probe(&self, _ctx: &PlanCtx, from_seg: u32) {
         let segs_len = self.num_segments();
@@ -1360,7 +1360,7 @@ impl HlsVariant {
             .then_some(PlannedFetch::Segment(0))
             .into_iter();
         let tail = (from_seg..segs_len).map(PlannedFetch::Segment);
-        let mut queue = self.queue.lock_sync();
+        let mut queue = self.queue.lock();
         queue.clear();
         queue.extend(init.chain(probe_seg).chain(tail));
     }

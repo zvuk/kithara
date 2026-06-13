@@ -13,7 +13,7 @@ impl<T> Mutex<T> {
     }
 
     #[inline]
-    pub fn lock_sync(&self) -> MutexGuard<'_, T> {
+    pub fn lock(&self) -> MutexGuard<'_, T> {
         MutexGuard(self.0.lock_sync())
     }
 

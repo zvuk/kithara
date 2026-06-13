@@ -134,7 +134,7 @@ impl PlaylistState {
     #[must_use]
     pub fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         Some(state.segments.len())
     }
 
@@ -148,14 +148,14 @@ impl PlaylistState {
     #[must_use]
     pub fn segment_sizes(&self, variant: VariantIndex) -> Option<Vec<u64>> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.size_map.as_ref().map(|sm| sm.segment_sizes.clone())
     }
 
     /// Set the size map for a variant (after HEAD requests or first download).
     pub fn set_size_map(&self, variant: VariantIndex, size_map: VariantSizeMap) {
         if let Some(lock) = self.variants.get(variant) {
-            let mut state = lock.lock_sync_write();
+            let mut state = lock.write();
             state.size_map = Some(size_map);
         }
     }
@@ -169,7 +169,7 @@ impl PlaylistState {
         self.variants
             .iter()
             .map(|lock| {
-                let state = lock.lock_sync_read();
+                let state = lock.read();
                 state.segments.iter().fold(Duration::ZERO, |acc, segment| {
                     acc.saturating_add(segment.duration)
                 })
@@ -209,7 +209,7 @@ impl PlaylistAccess for PlaylistState {
         target: Duration,
     ) -> Option<(usize, Duration, Duration)> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         if state.segments.is_empty() {
             return None;
         }
@@ -241,7 +241,7 @@ impl PlaylistAccess for PlaylistState {
         let Some(lock) = self.variants.get(variant) else {
             return false;
         };
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.size_map.is_some()
     }
 
@@ -249,19 +249,19 @@ impl PlaylistAccess for PlaylistState {
         let Some(lock) = self.variants.get(variant) else {
             return 0;
         };
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.size_map.as_ref().map_or(0, |sm| sm.init_size)
     }
 
     fn init_url(&self, variant: VariantIndex) -> Option<Url> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.init_url.clone()
     }
 
     fn segment_byte_offset(&self, variant: VariantIndex, index: usize) -> Option<u64> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.size_map.as_ref()?.offsets.get(index).copied()
     }
 
@@ -271,7 +271,7 @@ impl PlaylistAccess for PlaylistState {
         index: usize,
     ) -> Option<(Duration, Duration)> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         if index >= state.segments.len() {
             return None;
         }
@@ -291,13 +291,13 @@ impl PlaylistAccess for PlaylistState {
 
     fn segment_url(&self, variant: VariantIndex, index: usize) -> Option<Url> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.segments.get(index).map(|s| s.url.clone())
     }
 
     fn total_variant_size(&self, variant: VariantIndex) -> Option<u64> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.size_map.as_ref().map(|sm| sm.total)
     }
 }
@@ -306,14 +306,14 @@ impl PlaylistState {
     /// Audio codec for a variant.
     pub(crate) fn variant_codec(&self, variant: VariantIndex) -> Option<AudioCodec> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.codec
     }
 
     /// Container format for a variant.
     pub(crate) fn variant_container(&self, variant: VariantIndex) -> Option<ContainerFormat> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.container
     }
 }
@@ -323,7 +323,7 @@ impl PlaylistState {
     /// Find which segment contains the given byte offset (binary search on offsets).
     fn find_segment_at_offset(&self, variant: VariantIndex, offset: u64) -> Option<usize> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         let result = state.size_map.as_ref().and_then(|size_map| {
             if size_map.offsets.is_empty() || offset >= size_map.total {
                 return None;

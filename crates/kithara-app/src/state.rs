@@ -155,7 +155,7 @@ impl StateController {
     where
         F: FnOnce(&mut UiState) -> R,
     {
-        let mut st = self.state.lock_sync();
+        let mut st = self.state.lock();
         f(&mut st)
     }
 
@@ -174,7 +174,7 @@ impl StateController {
         let current_variant = abr.as_ref().and_then(AbrHandle::current_variant);
         let variants = abr.as_ref().map(AbrHandle::variants).unwrap_or_default();
         let mode = abr.as_ref().and_then(AbrHandle::mode);
-        let mut st = self.state.lock_sync();
+        let mut st = self.state.lock();
         st.playing = self.queue.is_playing();
         st.shuffle_enabled = self.queue.is_shuffle_enabled();
         st.repeat_mode = self.queue.repeat_mode();
@@ -202,7 +202,7 @@ impl StateController {
     /// per frame and render off the snapshot.
     #[must_use]
     pub fn snapshot(&self) -> UiState {
-        self.state.lock_sync().clone()
+        self.state.lock().clone()
     }
 }
 
@@ -264,7 +264,7 @@ fn spawn_listener(ctx: ListenerCtx) {
                         if let Some(prev) = current_analyze.take() {
                             prev.cancel();
                         }
-                        state.lock_sync().waveform = None;
+                        state.lock().waveform = None;
                     }
                 }
                 event = rx.recv() => match event {
@@ -298,7 +298,7 @@ fn spawn_analyze(ctx: AnalyzeCtx<'_>, current_analyze: &mut Option<CancelToken>)
     }
 
     let track_id = {
-        let st = state.lock_sync();
+        let st = state.lock();
         let Some(idx) = st.current_track_index else {
             return;
         };
@@ -310,7 +310,7 @@ fn spawn_analyze(ctx: AnalyzeCtx<'_>, current_analyze: &mut Option<CancelToken>)
         id
     };
 
-    state.lock_sync().waveform = None;
+    state.lock().waveform = None;
 
     let Some(source) = queue.track_source(track_id) else {
         return;
@@ -327,7 +327,7 @@ fn spawn_analyze(ctx: AnalyzeCtx<'_>, current_analyze: &mut Option<CancelToken>)
         let Some(envelope) = analyze(resource_cfg, WAVEFORM_BUCKETS, analyze_cancel).await else {
             return;
         };
-        let mut st = state.lock_sync();
+        let mut st = state.lock();
         // Commit only if the analysed track is still current.
         let current_id = st
             .current_track_index
@@ -362,7 +362,7 @@ fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
             let eq_bands = {
-                let mut st = state.lock_sync();
+                let mut st = state.lock();
                 st.current_track_index = current_index;
                 st.track_name = current_index
                     .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
@@ -375,7 +375,7 @@ fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
         }
         Event::Player(PlayerEvent::RateChanged { rate }) => {
             let started = rate > 0.0;
-            let mut st = state.lock_sync();
+            let mut st = state.lock();
             st.playing = started;
             let eq_bands = started.then(|| st.eq_bands.clone());
             drop(st);
@@ -387,11 +387,11 @@ fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
         }
         Event::Player(PlayerEvent::VolumeChanged { volume })
         | Event::Engine(EngineEvent::MasterVolumeChanged { volume }) => {
-            let mut st = state.lock_sync();
+            let mut st = state.lock();
             st.volume = volume;
         }
         Event::App(AppEvent::Note(note)) => {
-            state.lock_sync().status_note = Some(note);
+            state.lock().status_note = Some(note);
         }
         Event::Queue(
             QueueEvent::TrackAdded { .. }
@@ -399,7 +399,7 @@ fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
             | QueueEvent::TrackStatusChanged { .. },
         ) => {
             let tracks = queue.tracks();
-            let mut st = state.lock_sync();
+            let mut st = state.lock();
             st.tracks = tracks;
             if let Some(idx) = st.current_track_index
                 && let Some(track) = st.tracks.get(idx)

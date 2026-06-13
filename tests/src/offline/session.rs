@@ -84,13 +84,13 @@ impl OfflineSession {
         let (reply_tx, reply_rx) = mpsc::channel();
         if self
             .cmd_tx
-            .lock_sync()
-            .send_sync(OfflineMsg::Render { frames, reply_tx })
+            .lock()
+            .send(OfflineMsg::Render { frames, reply_tx })
             .is_err()
         {
             return Vec::new();
         }
-        reply_rx.recv_sync().unwrap_or_default()
+        reply_rx.recv().unwrap_or_default()
     }
 }
 
@@ -103,12 +103,12 @@ impl Default for OfflineSession {
 impl Drop for OfflineSession {
     fn drop(&mut self) {
         // `Shutdown` lands on the engine-aware command channel; `run_auto`/
-        // `run_manual` block on its arrival event (`recv_sync`/`recv_sync_timeout`),
+        // `run_manual` block on its arrival event (`recv`/`recv_timeout`),
         // so the render thread wakes the instant this send signals the condvar —
         // no `unpark`, and no dependence on a virtual-clock advance the joining
         // thread below would otherwise pin.
-        let _ = self.cmd_tx.lock_sync().send_sync(OfflineMsg::Shutdown);
-        if let Some(handle) = self.worker.lock_sync().take() {
+        let _ = self.cmd_tx.lock().send(OfflineMsg::Shutdown);
+        if let Some(handle) = self.worker.lock().take() {
             let _ = handle.join();
         }
     }
@@ -118,11 +118,11 @@ impl SessionDispatcher for OfflineSession {
     fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.cmd_tx
-            .lock_sync()
-            .send_sync(OfflineMsg::Cmd { cmd, reply_tx })
+            .lock()
+            .send(OfflineMsg::Cmd { cmd, reply_tx })
             .map_err(|_| PlayError::Internal("offline session worker gone".into()))?;
         reply_rx
-            .recv_sync()
+            .recv()
             .map_err(|_| PlayError::Internal("offline session worker gone (reply)".into()))
     }
 }
@@ -148,15 +148,15 @@ fn offline_session_thread(cmd_rx: &mpsc::Receiver<OfflineMsg>, auto_render: bool
 }
 
 fn run_manual(state: &mut SessionState<OfflineBackend>, cmd_rx: &mpsc::Receiver<OfflineMsg>) {
-    while let Ok(msg) = cmd_rx.recv_sync() {
+    while let Ok(msg) = cmd_rx.recv() {
         match msg {
             OfflineMsg::Cmd { cmd, reply_tx } => {
                 let reply = run_cmd(state, cmd);
-                let _ = reply_tx.send_sync(reply);
+                let _ = reply_tx.send(reply);
             }
             OfflineMsg::Render { frames, reply_tx } => {
                 let block = render_block(state, frames);
-                let _ = reply_tx.send_sync(block);
+                let _ = reply_tx.send(block);
             }
             OfflineMsg::Shutdown => break,
         }
@@ -171,14 +171,14 @@ fn run_auto(state: &mut SessionState<OfflineBackend>, cmd_rx: &mpsc::Receiver<Of
         // advances even when the test thread never sends anything. There is no
         // `park_timeout` to lose a cross-thread wake against.
         let deadline = Instant::now() + Duration::from_millis(OFFLINE_PARK_MS);
-        match cmd_rx.recv_sync_timeout(deadline) {
+        match cmd_rx.recv_timeout(deadline) {
             Ok(OfflineMsg::Cmd { cmd, reply_tx }) => {
                 let reply = run_cmd(state, cmd);
-                let _ = reply_tx.send_sync(reply);
+                let _ = reply_tx.send(reply);
             }
             Ok(OfflineMsg::Render { frames, reply_tx }) => {
                 let block = render_block(state, frames);
-                let _ = reply_tx.send_sync(block);
+                let _ = reply_tx.send(block);
             }
             Ok(OfflineMsg::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
             Err(mpsc::RecvTimeoutError::Timeout) => {

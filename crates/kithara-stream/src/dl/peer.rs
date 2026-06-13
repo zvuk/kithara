@@ -216,7 +216,7 @@ impl PeerHandle {
     /// Currently attached bus, if any.
     #[must_use]
     pub fn bus(&self) -> Option<EventBus> {
-        self.inner.bus.lock_sync_read().clone()
+        self.inner.bus.read().clone()
     }
 
     /// Peer-level cancellation token.
@@ -292,7 +292,7 @@ impl PeerHandle {
     /// [`Downloader::register`](super::Downloader::register).
     #[must_use]
     pub fn with_bus(self, bus: EventBus) -> Self {
-        *self.inner.bus.lock_sync_write() = Some(bus.clone());
+        *self.inner.bus.write() = Some(bus.clone());
         let _ = self.inner.abr.clone().with_bus(bus);
         self
     }

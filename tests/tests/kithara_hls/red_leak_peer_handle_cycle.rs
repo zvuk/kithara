@@ -29,14 +29,14 @@ impl SelfReferencingPeer {
     }
 
     fn stash_handle(&self, handle: PeerHandle) {
-        *self.inner_handle.lock_sync() = Some(handle);
+        *self.inner_handle.lock() = Some(handle);
     }
 
     /// Mirror of `HlsPeer::teardown`: release the stashed `PeerHandle`
     /// clone so `PeerInner.cancel` can fire when the external handle
     /// drops, letting the Registry unregister this peer.
     fn teardown(&self) {
-        *self.inner_handle.lock_sync() = None;
+        *self.inner_handle.lock() = None;
     }
 }
 

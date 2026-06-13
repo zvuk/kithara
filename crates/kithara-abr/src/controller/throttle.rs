@@ -36,7 +36,7 @@ impl AbrController {
         let Some(bus) = bus else {
             return;
         };
-        let mut throttle = entry.throttle.lock_sync();
+        let mut throttle = entry.throttle.lock();
 
         if let Some(bps) = estimate_bps {
             let should_emit = match throttle.last_bandwidth_emit {

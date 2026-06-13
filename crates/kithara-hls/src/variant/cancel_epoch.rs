@@ -22,17 +22,17 @@ impl CancelEpoch {
 
     /// Cancel the current epoch token (variant deactivation).
     pub(super) fn cancel(&self) {
-        self.current.lock_sync_read().cancel();
+        self.current.read().cancel();
     }
 
     /// Clone the current epoch token — attached to every emitted `FetchCmd`.
     pub(super) fn handle(&self) -> CancelToken {
-        self.current.lock_sync_read().clone()
+        self.current.read().clone()
     }
 
     /// Rotate to a fresh child of `master` on re-activation.
     pub(super) fn rearm(&self) {
         let fresh = self.master.child();
-        *self.current.lock_sync_write() = fresh;
+        *self.current.write() = fresh;
     }
 }

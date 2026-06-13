@@ -21,7 +21,7 @@ use kithara_platform::{Mutex, time};
 
 let lock = Mutex::new(42_u32);
 {
-    let mut guard = lock.lock_sync();
+    let mut guard = lock.lock();
     *guard += 1;
 }
 
@@ -131,7 +131,7 @@ Contract:
     `thread::unpark(&t)` wakes it. `unpark` routes through the engine (it does
     not touch the OS park slot the engine cannot observe); an unpark that
     arrives before the park is remembered so the next park returns at once.
-  - `sync::Condvar` waits (`wait_sync_timeout`, `wait_sync`) register a
+  - `sync::Condvar` waits (`wait_timeout`, `wait`) register a
     condvar-group waiter keyed by a per-condvar id; `notify_all` / `notify_one`
     signal that group through the engine. The waiter registers its engine entry
     **before** releasing the domain guard, so a predicate change + notify (which

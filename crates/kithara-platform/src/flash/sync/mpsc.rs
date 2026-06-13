@@ -27,7 +27,7 @@ pub struct Receiver<T>(Arc<Chan<T>>);
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     let chan = Arc::new(Chan {
         queue: Mutex::new(VecDeque::new()),
-        cv: Condvar::new(),
+        cv: Condvar::default(),
         senders: AtomicUsize::new(1),
         receiver_alive: AtomicBool::new(true),
     });
@@ -40,11 +40,11 @@ impl<T> Sender<T> {
     /// # Errors
     ///
     /// Returns [`SendError`] if the receiver has been dropped.
-    pub fn send_sync(&self, value: T) -> Result<(), SendError<T>> {
+    pub fn send(&self, value: T) -> Result<(), SendError<T>> {
         if !self.0.receiver_alive.load(Ordering::Acquire) {
             return Err(SendError(value));
         }
-        self.0.queue.lock_sync().push_back(value);
+        self.0.queue.lock().push_back(value);
         // A receiver registers its condvar waiter UNDER the queue lock and
         // releases the lock only as it parks, so this notify (which we issue
         // after releasing the lock above) can never land before the waiter
@@ -68,7 +68,7 @@ impl<T> Drop for Sender<T> {
             // receiver registering its waiter under the same lock, then wake
             // it to observe the disconnect (no lost wakeup against the
             // unlocked `senders` predicate).
-            let guard = self.0.queue.lock_sync();
+            let guard = self.0.queue.lock();
             self.0.cv.notify_all();
             drop(guard);
         }
@@ -81,8 +81,8 @@ impl<T> Receiver<T> {
     /// # Errors
     ///
     /// Returns [`RecvError`] if all senders have been dropped.
-    pub fn recv_sync(&self) -> Result<T, RecvError> {
-        let mut q = self.0.queue.lock_sync();
+    pub fn recv(&self) -> Result<T, RecvError> {
+        let mut q = self.0.queue.lock();
         loop {
             if let Some(v) = q.pop_front() {
                 return Ok(v);
@@ -90,7 +90,7 @@ impl<T> Receiver<T> {
             if self.0.senders.load(Ordering::Acquire) == 0 {
                 return Err(RecvError);
             }
-            q = self.0.cv.wait_sync(q);
+            q = self.0.cv.wait(q);
         }
     }
 
@@ -100,7 +100,7 @@ impl<T> Receiver<T> {
     ///
     /// Returns [`TryRecvError`] if no value is available or senders are dropped.
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        let mut q = self.0.queue.lock_sync();
+        let mut q = self.0.queue.lock();
         match q.pop_front() {
             Some(v) => Ok(v),
             None if self.0.senders.load(Ordering::Acquire) == 0 => Err(TryRecvError::Disconnected),
@@ -115,8 +115,8 @@ impl<T> Receiver<T> {
     /// Returns [`RecvTimeoutError::Timeout`] when no value arrives before
     /// `deadline`, or [`RecvTimeoutError::Disconnected`] if all senders are
     /// dropped.
-    pub fn recv_sync_timeout(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
-        let mut q = self.0.queue.lock_sync();
+    pub fn recv_timeout(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
+        let mut q = self.0.queue.lock();
         loop {
             if let Some(v) = q.pop_front() {
                 return Ok(v);
@@ -127,7 +127,7 @@ impl<T> Receiver<T> {
             if Instant::now() >= deadline {
                 return Err(RecvTimeoutError::Timeout);
             }
-            q = self.0.cv.wait_sync_timeout(q, deadline);
+            q = self.0.cv.wait_timeout(q, deadline);
         }
     }
 }

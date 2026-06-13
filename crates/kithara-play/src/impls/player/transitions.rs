@@ -178,7 +178,7 @@ impl PlayerImpl {
 
         let armed_for_index = self
             .phase
-            .lock_sync()
+            .lock()
             .pending()
             .is_some_and(|p| !p.state.activated() && p.index == index);
         if armed_for_index {

@@ -45,7 +45,7 @@ impl PlayerImpl {
         // Resolve any already-armed slot under a short phase lock: either the
         // same index is already armed (return early), or it must be cleared
         // and possibly unloaded outside the lock.
-        let mut phase = self.phase.lock_sync();
+        let mut phase = self.phase.lock();
         let existing = phase.pending_mut().and_then(|slot| slot.as_ref());
         let decision = match existing {
             Some(existing) if existing.index == index => {
@@ -72,7 +72,7 @@ impl PlayerImpl {
         }
 
         let src = self.enqueue_to_processor(index)?;
-        if let Some(pending_slot) = self.phase.lock_sync().pending_mut() {
+        if let Some(pending_slot) = self.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
                 index,
                 src: Arc::clone(&src),
@@ -87,7 +87,7 @@ impl PlayerImpl {
     #[must_use]
     pub fn armed_next(&self) -> Option<usize> {
         self.phase
-            .lock_sync()
+            .lock()
             .pending()
             .filter(|pending| !pending.state.activated())
             .map(|pending| pending.index)
@@ -120,7 +120,7 @@ impl PlayerImpl {
     /// Mark the armed-next slot at `index` activated under a short lock,
     /// returning its src. `Ok(None)` when it was already activated.
     fn activate_pending(&self, index: usize) -> Result<Option<Arc<str>>, PlayError> {
-        let mut phase = self.phase.lock_sync();
+        let mut phase = self.phase.lock();
         let pending = phase
             .pending_mut()
             .and_then(|slot| slot.as_mut())
@@ -143,7 +143,7 @@ impl PlayerImpl {
     }
 
     pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<Arc<str>> {
-        let mut items = self.core.items.lock_sync();
+        let mut items = self.core.items.lock();
         if index >= items.len() {
             return None;
         }
@@ -152,7 +152,7 @@ impl PlayerImpl {
         let (item_id, resource) = (queued.item_id, queued.resource);
 
         let abr_handle = resource.abr_handle();
-        self.phase.lock_sync().set_abr_handle(abr_handle);
+        self.phase.lock().set_abr_handle(abr_handle);
 
         let current_rate = self.core.playback_rate_shared.load(Ordering::Relaxed);
         resource.set_playback_rate(current_rate);
@@ -214,7 +214,7 @@ impl PlayerImpl {
         };
 
         let mut out = Vec::new();
-        while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
+        while let Some(notification) = state.notification_rx.lock().try_pop() {
             out.push(format!("{notification:?}"));
         }
         state.drain_trash();
@@ -232,7 +232,7 @@ impl PlayerImpl {
     ///   do **not** dispatch a fresh `FadeIn` — the arena promotion already
     ///   advanced the track to `Playing`.
     fn finalize_handover_if_armed(&self) {
-        let pending = self.phase.lock_sync().pending_mut().and_then(Option::take);
+        let pending = self.phase.lock().pending_mut().and_then(Option::take);
         let Some(pending) = pending else {
             return;
         };
@@ -294,7 +294,7 @@ impl PlayerImpl {
         };
 
         let mut notifications = Vec::new();
-        while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
+        while let Some(notification) = state.notification_rx.lock().try_pop() {
             notifications.push(notification);
         }
         state.drain_trash();
@@ -322,7 +322,7 @@ impl PlayerImpl {
     }
 
     pub(crate) fn unarm_next_internal(&self, current_index_hint: Option<usize>) {
-        let pending = self.phase.lock_sync().pending_mut().and_then(Option::take);
+        let pending = self.phase.lock().pending_mut().and_then(Option::take);
         let Some(pending) = pending else {
             return;
         };
@@ -336,7 +336,7 @@ impl PlayerImpl {
     /// Remove all items from the queue.
     pub fn remove_all_items(&self) {
         self.unarm_next();
-        self.core.items.lock_sync().clear();
+        self.core.items.lock().clear();
         self.core.current_index.store(0, Ordering::Relaxed);
         self.set_status(crate::types::PlayerStatus::Unknown);
         // Drop the actively playing track from the audio-thread arena and

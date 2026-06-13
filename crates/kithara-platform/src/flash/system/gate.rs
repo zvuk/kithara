@@ -120,7 +120,7 @@ impl TaskGate {
     }
 
     pub(in crate::flash) fn store_runtime_waker(&self, w: &Waker) {
-        let mut g = self.runtime_waker.lock_sync();
+        let mut g = self.runtime_waker.lock();
         match g.as_ref() {
             Some(existing) if existing.will_wake(w) => {}
             _ => *g = Some(w.clone()),
@@ -128,7 +128,7 @@ impl TaskGate {
     }
 
     fn forward(&self) {
-        let w = self.runtime_waker.lock_sync().clone();
+        let w = self.runtime_waker.lock().clone();
         if let Some(w) = w {
             w.wake();
         }

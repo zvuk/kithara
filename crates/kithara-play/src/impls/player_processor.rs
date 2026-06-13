@@ -217,7 +217,7 @@ impl PlayerNodeProcessor {
                 self.shared_state.discard_track(track);
                 self.shared_state
                     .notification_tx
-                    .lock_sync()
+                    .lock()
                     .try_push(PlayerNotification::Unloaded {
                         src: Arc::clone(key),
                     })
@@ -308,7 +308,7 @@ impl PlayerNodeProcessor {
                     self.shared_state.discard_track(track);
                     self.shared_state
                         .notification_tx
-                        .lock_sync()
+                        .lock()
                         .try_push(PlayerNotification::Unloaded { src: key })
                         .ok();
                 }
@@ -371,7 +371,7 @@ impl PlayerNodeProcessor {
         {
             self.shared_state
                 .notification_tx
-                .lock_sync()
+                .lock()
                 .try_push(PlayerNotification::Changed { src: new_src })
                 .ok();
         }
@@ -396,7 +396,7 @@ impl PlayerNodeProcessor {
             self.shared_state.discard_track(track);
             self.shared_state
                 .notification_tx
-                .lock_sync()
+                .lock()
                 .try_push(PlayerNotification::Unloaded {
                     src: Arc::clone(src),
                 })
@@ -422,7 +422,7 @@ impl PlayerNodeProcessor {
 
         self.shared_state
             .notification_tx
-            .lock_sync()
+            .lock()
             .try_push(PlayerNotification::Loaded {
                 src: Arc::clone(src),
             })
@@ -633,7 +633,7 @@ impl PlayerNodeProcessor {
 
     /// Pop one notification from the processor → main-thread channel.
     pub fn try_pop_notification(&self) -> Option<PlayerNotification> {
-        self.shared_state.notification_rx.lock_sync().try_pop()
+        self.shared_state.notification_rx.lock().try_pop()
     }
 
     /// Unload a track from the arena.
@@ -642,7 +642,7 @@ impl PlayerNodeProcessor {
             self.shared_state.discard_track(track);
             self.shared_state
                 .notification_tx
-                .lock_sync()
+                .lock()
                 .try_push(PlayerNotification::Unloaded {
                     src: Arc::clone(src),
                 })

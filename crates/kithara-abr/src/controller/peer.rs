@@ -27,6 +27,6 @@ pub(crate) struct PeerEntry {
 
 impl PeerEntry {
     pub(super) fn bus(&self) -> Option<EventBus> {
-        self.bus.lock_sync_read().clone()
+        self.bus.read().clone()
     }
 }

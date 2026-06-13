@@ -88,13 +88,13 @@ impl SharedPlayerState {
     /// freed by the main thread, never on the audio thread. If the channel is
     /// full the track drops here as a bounded degraded path.
     pub(crate) fn discard_track(&self, track: PlayerTrack) {
-        let _ = self.trash_tx.lock_sync().try_push(track);
+        let _ = self.trash_tx.lock().try_push(track);
     }
 
     /// Drop every track queued for deferred destruction. Called from the
     /// main-thread notification drain, never from the audio thread.
     pub(crate) fn drain_trash(&self) {
-        let mut rx = self.trash_rx.lock_sync();
+        let mut rx = self.trash_rx.lock();
         while rx.try_pop().is_some() {}
     }
 
@@ -136,13 +136,13 @@ mod tests {
         let state = SharedPlayerState::new();
         let sent = state
             .notification_tx
-            .lock_sync()
+            .lock()
             .try_push(PlayerNotification::Loaded {
                 src: Arc::from("a.mp3"),
             });
         assert!(sent.is_ok());
 
-        let received = state.notification_rx.lock_sync().try_pop();
+        let received = state.notification_rx.lock().try_pop();
         let Some(PlayerNotification::Loaded { src }) = received else {
             panic!("expected Loaded notification, got {received:?}");
         };

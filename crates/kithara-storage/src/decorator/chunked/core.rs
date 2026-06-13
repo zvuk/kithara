@@ -98,7 +98,7 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// Mint a cheap read-only view without holding the inner lock during
     /// subsequent (possibly blocking) reads.
     fn read_view(&self) -> ResourceReader<D> {
-        self.inner.lock_sync().reader()
+        self.inner.lock().reader()
     }
 
     /// Open a fresh chunked-atomic resource at `canonical_path`.
@@ -175,10 +175,10 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// # Errors
     /// Propagates the inner commit error and any filesystem error.
     pub fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        let mut guard = self.inner.lock_sync();
+        let mut guard = self.inner.lock();
         guard.commit_in_place(final_len)?;
 
-        let tmp = self.tmp_path.lock_sync().take();
+        let tmp = self.tmp_path.lock().take();
         if let Some(tmp) = tmp {
             let f = OpenOptions::new().write(true).open(&tmp).map_err(|e| {
                 StorageError::Failed(format!("AtomicChunked commit: open tmp {tmp:?}: {e}"))
@@ -210,8 +210,8 @@ impl<D: DriverIo> AtomicChunked<D> {
 
     /// Mark the resource failed and remove the orphaned temp file.
     pub fn fail(&self, reason: String) {
-        self.inner.lock_sync().fail_in_place(reason);
-        if let Some(tmp) = self.tmp_path.lock_sync().take() {
+        self.inner.lock().fail_in_place(reason);
+        if let Some(tmp) = self.tmp_path.lock().take() {
             let _ = fs::remove_file(&tmp);
         }
     }
@@ -243,7 +243,7 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// # Errors
     /// Returns error if the resource is cancelled or the backend cannot reopen.
     pub fn reactivate(&self) -> StorageResult<()> {
-        self.inner.lock_sync().reactivate_in_place()
+        self.inner.lock().reactivate_in_place()
     }
 
     /// Read data at the given offset into `buf`.
@@ -292,7 +292,7 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// # Errors
     /// Returns error if the resource is cancelled, failed, or the write fails.
     pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner.lock_sync().write_at(offset, data)
+        self.inner.lock().write_at(offset, data)
     }
 }
 
@@ -302,7 +302,7 @@ impl<D: DriverIo> Drop for AtomicChunked<D> {
     /// `Drop` entirely, in which case the next `AtomicChunked::open`
     /// over the same canonical path wipes the stale temp.
     fn drop(&mut self) {
-        if let Some(tmp) = self.tmp_path.lock_sync().take() {
+        if let Some(tmp) = self.tmp_path.lock().take() {
             let _ = fs::remove_file(&tmp);
         }
     }

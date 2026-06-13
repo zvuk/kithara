@@ -11,7 +11,7 @@ use crate::error::PlayError;
 
 /// Native session client: sends `CmdMsg`s over an engine-aware channel drained
 /// by a dedicated `kithara-engine` worker thread. The worker blocks on the
-/// command-arrival EVENT (`recv_sync`), not a `park_timeout` budget, so a
+/// command-arrival EVENT (`recv`), not a `park_timeout` budget, so a
 /// latency-sensitive control command wakes it the instant it lands — under both
 /// the real and the virtual clock, with no cross-thread park/unpark to lose.
 pub(crate) struct SessionClient {
@@ -22,11 +22,11 @@ impl SessionClient {
     fn call(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.cmd_tx
-            .lock_sync()
-            .send_sync(CmdMsg { cmd, reply_tx })
+            .lock()
+            .send(CmdMsg { cmd, reply_tx })
             .map_err(|_| PlayError::Internal("session thread gone".into()))?;
         reply_rx
-            .recv_sync()
+            .recv()
             .map_err(|_| PlayError::Internal("session thread gone (reply)".into()))
     }
 }
@@ -42,11 +42,11 @@ fn engine_thread<B: AudioBackend>(
     start_stream_fn: StartStreamFn<B>,
 ) {
     let mut state = SessionState::<B>::new(start_stream_fn);
-    // Block on the command-arrival event. `recv_sync` returns `Err` only once
+    // Block on the command-arrival event. `recv` returns `Err` only once
     // every sender has been dropped, which is the worker's exit signal.
-    while let Ok(CmdMsg { cmd, reply_tx }) = cmd_rx.recv_sync() {
+    while let Ok(CmdMsg { cmd, reply_tx }) = cmd_rx.recv() {
         let reply = run_cmd(&mut state, cmd);
-        let _ = reply_tx.send_sync(reply);
+        let _ = reply_tx.send(reply);
     }
 }
 

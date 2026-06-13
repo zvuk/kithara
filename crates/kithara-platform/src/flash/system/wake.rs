@@ -27,18 +27,18 @@ impl Token {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             woken: Mutex::new(false),
-            cv: Condvar::new(),
+            cv: Condvar::default(),
         })
     }
     pub(crate) fn fire(&self) {
         {
-            let mut g = self.woken.lock_sync();
+            let mut g = self.woken.lock();
             *g = true;
         }
         self.cv.notify_all();
     }
     pub(crate) fn wait(&self) {
-        wait_set(&self.cv, self.woken.lock_sync());
+        wait_set(&self.cv, self.woken.lock());
     }
 }
 
@@ -49,7 +49,7 @@ impl Token {
 /// from mis-suggesting an early drop inside the loop).
 fn wait_set(cv: &Condvar, mut woken: MutexGuard<'_, bool>) {
     while !*woken {
-        woken = cv.wait_sync(woken);
+        woken = cv.wait(woken);
     }
 }
 

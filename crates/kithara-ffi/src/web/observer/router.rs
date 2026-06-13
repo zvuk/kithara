@@ -56,7 +56,7 @@ fn route_to_item(queue_view: &Arc<Mutex<QueueView>>, event: &FfiPlayerEvent) {
         return;
     };
     let item = queue_view
-        .lock_sync()
+        .lock()
         .iter()
         .find(|(id, _)| id == item_id)
         .map(|(_, item)| Arc::clone(item));
@@ -71,10 +71,10 @@ fn update_item_state(item: &Arc<AudioPlayerItem>, status: &FfiTrackStatus) {
     match status {
         FfiTrackStatus::Loaded => {
             let duration = item.duration_sec();
-            item.state.lock_sync().resolve_duration(duration);
+            item.state.lock().resolve_duration(duration);
         }
         FfiTrackStatus::Failed { .. } => {
-            item.state.lock_sync().mark_failed();
+            item.state.lock().mark_failed();
         }
         _ => {}
     }

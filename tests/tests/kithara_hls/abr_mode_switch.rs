@@ -120,7 +120,7 @@ impl EventCollector {
                     }
                     Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
                         if let Some(seg) = request_map.remove(request_id) {
-                            net_bg.lock_sync().insert(seg);
+                            net_bg.lock().insert(seg);
                         }
                     }
                     Event::Hls(HlsEvent::SegmentReadStart {
@@ -128,7 +128,7 @@ impl EventCollector {
                         segment_index,
                         ..
                     }) => {
-                        read_bg.lock_sync().push((*variant, *segment_index));
+                        read_bg.lock().push((*variant, *segment_index));
                     }
                     Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
                         info!(to = to.get(), ?reason, "VariantApplied");
@@ -152,8 +152,8 @@ impl EventCollector {
     /// per `SegmentReadStart`, dedup'd by (variant, seg) — first sighting
     /// wins.
     fn segments(&self) -> Vec<SegmentRecord> {
-        let net = self.network_fetches.lock_sync().clone();
-        let reads = self.reader_segments.lock_sync().clone();
+        let net = self.network_fetches.lock().clone();
+        let reads = self.reader_segments.lock().clone();
         let mut seen: HashSet<(usize, usize)> = HashSet::new();
         let mut out = Vec::new();
         for (v, s) in reads {
@@ -854,7 +854,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
                 Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock_sync().push(to.get());
+                applied_bg.lock().push(to.get());
             }
         }
     });
@@ -903,7 +903,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         .await
         .expect("read");
 
-    let targets = applied_targets.lock_sync().clone();
+    let targets = applied_targets.lock().clone();
     let saw_flac = targets.contains(&3);
 
     info!(
@@ -1379,7 +1379,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
                 Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock_sync().push(to.get());
+                applied_bg.lock().push(to.get());
             }
         }
     });
@@ -1441,7 +1441,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
         .await
         .expect("read");
 
-    let targets = applied_targets.lock_sync().clone();
+    let targets = applied_targets.lock().clone();
     info!(?targets, warmup_total, post_total, "S.3 result");
 
     // We must see both switches applied through the ABR contract.
@@ -1533,7 +1533,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
                 Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock_sync().push(to.get());
+                applied_bg.lock().push(to.get());
             }
         }
     });
@@ -1664,7 +1664,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     .await
     .expect("phase 4 join");
 
-    let targets = applied_targets.lock_sync().clone();
+    let targets = applied_targets.lock().clone();
     info!(
         ?targets,
         samples_phase1, samples_phase2, samples_phase4, saw_eof_phase4, "repro result"
@@ -1770,7 +1770,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         loop {
             match applied_rx.recv().await {
                 Ok(Event::Abr(AbrEvent::VariantApplied { to, .. })) => {
-                    applied_bg.lock_sync().push(to.get());
+                    applied_bg.lock().push(to.get());
                 }
                 Ok(_) => {}
                 Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
@@ -1878,7 +1878,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     .await
     .expect("phase 4 join");
 
-    let targets = applied_targets.lock_sync().clone();
+    let targets = applied_targets.lock().clone();
     info!(
         ?backend,
         target_variant,

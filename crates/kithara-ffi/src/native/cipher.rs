@@ -33,7 +33,7 @@ impl FfiCipher {
 
     /// Decrypt data using this cipher.
     pub fn decrypt(&self, data: Vec<u8>) -> Vec<u8> {
-        self.inner.lock_sync().decrypt(&Bytes::from(data)).to_vec()
+        self.inner.lock().decrypt(&Bytes::from(data)).to_vec()
     }
 }
 

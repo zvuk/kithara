@@ -86,7 +86,7 @@ impl AudioNode for PlayerNode {
     ) -> impl AudioNodeProcessor {
         let sample_rate = cx.stream_info.sample_rate;
         let max_block_frames = cx.stream_info.max_block_frames;
-        let cmd_rx = self.cmd_rx.lock_sync().take().unwrap_or_else(|| {
+        let cmd_rx = self.cmd_rx.lock().take().unwrap_or_else(|| {
             let (_, rx) = HeapRb::<PlayerCmd>::new(1).split();
             rx
         });
@@ -143,7 +143,7 @@ mod tests {
 
         tx.try_push(cmd).ok();
         let received = {
-            let mut guard = node.cmd_rx.lock_sync();
+            let mut guard = node.cmd_rx.lock();
             (*guard).as_mut().and_then(Consumer::try_pop)
         };
         assert!(received.is_some());

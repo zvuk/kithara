@@ -10,13 +10,13 @@ pub(crate) struct ThreadWake {
 
 impl ThreadWake {
     pub(crate) fn register_current(&self) {
-        *self.waiter.lock_sync() = Some(thread::current());
+        *self.waiter.lock() = Some(thread::current());
     }
 }
 
 impl crate::runtime::WakeSignal for ThreadWake {
     fn wake(&self) {
-        let waiter = self.waiter.lock_sync().as_ref().cloned();
+        let waiter = self.waiter.lock().as_ref().cloned();
         if let Some(waiter) = waiter {
             thread::unpark(&waiter);
         }

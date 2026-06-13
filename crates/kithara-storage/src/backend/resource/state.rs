@@ -59,7 +59,7 @@ impl<D: DriverIo> Clone for ResourceCore<D> {
 
 impl<D: DriverIo + Debug> Debug for ResourceCore<D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = self.inner.state.lock_sync();
+        let state = self.inner.state.lock();
         f.debug_struct("ResourceCore")
             .field("driver", &self.inner.driver)
             .field("committed", &state.committed)
@@ -103,7 +103,7 @@ impl<D: Driver> ResourceCore<D> {
                 cancel,
                 driver,
                 observer,
-                condvar: Condvar::new(),
+                condvar: Condvar::default(),
                 committed: AtomicBool::new(init.is_committed),
                 state: Mutex::new(CommonState {
                     failed: None,
@@ -123,7 +123,7 @@ impl<D: DriverIo> ResourceCore<D> {
             return Err(StorageError::Cancelled);
         }
         let failed = {
-            let state = self.inner.state.lock_sync();
+            let state = self.inner.state.lock();
             state.failed.clone()
         };
         if let Some(reason) = failed {

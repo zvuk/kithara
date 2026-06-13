@@ -104,7 +104,7 @@ impl Default for ThroughputEstimator {
 
 impl Estimator for ThroughputEstimator {
     fn estimate_bps(&self) -> Option<u64> {
-        let inner = self.inner.lock_sync();
+        let inner = self.inner.lock();
         let est = inner
             .fast_ewma
             .get_estimate()
@@ -120,7 +120,7 @@ impl Estimator for ThroughputEstimator {
     }
 
     fn push_sample(&self, bytes: u64, duration: Duration, source: BandwidthSource) {
-        let mut inner = self.inner.lock_sync();
+        let mut inner = self.inner.lock();
 
         if matches!(source, BandwidthSource::Cache) {
             inner.initial_bps = Self::CACHE_INITIAL_BPS;
@@ -141,7 +141,7 @@ impl Estimator for ThroughputEstimator {
     }
 
     fn seed_initial_bps(&self, bps: u64) {
-        let mut inner = self.inner.lock_sync();
+        let mut inner = self.inner.lock();
         inner.initial_bps = bps.to_f64().unwrap_or(0.0);
     }
 }

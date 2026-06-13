@@ -111,7 +111,7 @@ impl WasmInner {
 
     fn id_at(&self, index: u32) -> Option<kithara_queue::TrackId> {
         self.queue_view
-            .lock_sync()
+            .lock()
             .get(index as usize)
             .map(|(id, _)| *id)
     }
@@ -126,10 +126,10 @@ impl WasmInner {
         };
         let next = self
             .queue_view
-            .lock_sync()
+            .lock()
             .iter()
             .position(|(id, _)| *id == current)
-            .and_then(|idx| self.queue_view.lock_sync().get(idx + 1).map(|(id, _)| *id));
+            .and_then(|idx| self.queue_view.lock().get(idx + 1).map(|(id, _)| *id));
         if let Some(next) = next {
             let request_id = Self::next_request_id();
             self.send(WorkerCmd::SelectQueue {
@@ -146,8 +146,8 @@ impl WasmInner {
             id,
             url: item.url(),
         })?;
-        *item.inserted.lock_sync() = true;
-        self.queue_view.lock_sync().push((id, Arc::clone(item)));
+        *item.inserted.lock() = true;
+        self.queue_view.lock().push((id, Arc::clone(item)));
         item.restart_bridge();
         Ok(())
     }
@@ -159,7 +159,7 @@ impl WasmInner {
     pub(crate) fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
         let current = self.bridge.current_track_id()?;
         self.queue_view
-            .lock_sync()
+            .lock()
             .iter()
             .find(|(id, _)| *id == current)
             .map(|(_, item)| Arc::clone(item))
@@ -196,7 +196,7 @@ impl WasmInner {
             request_id,
         });
 
-        let mut view = self.queue_view.lock_sync();
+        let mut view = self.queue_view.lock();
         let pos = match after_id {
             None => 0,
             Some(after_id) => view
@@ -210,17 +210,17 @@ impl WasmInner {
         view.insert(pos, (id, Arc::clone(item)));
         drop(view);
 
-        *item.inserted.lock_sync() = true;
+        *item.inserted.lock() = true;
         item.restart_bridge();
         Ok(())
     }
 
     pub(crate) fn is_muted(&self) -> bool {
-        *self.muted.lock_sync()
+        *self.muted.lock()
     }
 
     pub(crate) fn item_count(&self) -> u32 {
-        let len = self.queue_view.lock_sync().len();
+        let len = self.queue_view.lock().len();
         u32::try_from(len).unwrap_or_else(|_| {
             tracing::error!(queue_len = len, "BUG: queue length exceeds u32::MAX");
             0
@@ -229,7 +229,7 @@ impl WasmInner {
 
     pub(crate) fn items(&self) -> Vec<Arc<AudioPlayerItem>> {
         self.queue_view
-            .lock_sync()
+            .lock()
             .iter()
             .map(|(_, item)| Arc::clone(item))
             .collect()
@@ -256,7 +256,7 @@ impl WasmInner {
     }
 
     pub(crate) fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {
-        if !*item.inserted.lock_sync() {
+        if !*item.inserted.lock() {
             return Err(FfiError::InvalidArgument {
                 reason: format!("item {} not in queue", item.audio_id()),
             });
@@ -265,17 +265,17 @@ impl WasmInner {
         let request_id = Self::next_request_id();
         self.send(WorkerCmd::Remove { id, request_id });
         self.queue_view
-            .lock_sync()
+            .lock()
             .retain(|(existing, _)| *existing != id);
-        *item.inserted.lock_sync() = false;
+        *item.inserted.lock() = false;
         Ok(())
     }
 
     pub(crate) fn remove_all_items(&self) {
         self.send(WorkerCmd::RemoveAll);
-        let mut view = self.queue_view.lock_sync();
+        let mut view = self.queue_view.lock();
         for (_, item) in view.drain(..) {
-            *item.inserted.lock_sync() = false;
+            *item.inserted.lock() = false;
         }
     }
 
@@ -288,7 +288,7 @@ impl WasmInner {
         let new_id = item.track_id();
         let request_id = Self::next_request_id();
 
-        let mut view = self.queue_view.lock_sync();
+        let mut view = self.queue_view.lock();
         if idx >= view.len() {
             return Err(FfiError::InvalidArgument {
                 reason: format!("item index {idx} out of range (len: {})", view.len()),
@@ -301,12 +301,12 @@ impl WasmInner {
             request_id,
         });
         if let Some((_, old)) = view.get(idx) {
-            *old.inserted.lock_sync() = false;
+            *old.inserted.lock() = false;
         }
         view[idx] = (new_id, Arc::clone(item));
         drop(view);
 
-        *item.inserted.lock_sync() = true;
+        *item.inserted.lock() = true;
         item.restart_bridge();
         Ok(())
     }
@@ -344,7 +344,7 @@ impl WasmInner {
         let id = self.id_at(index).ok_or_else(|| FfiError::InvalidArgument {
             reason: format!(
                 "item index {index} out of range (len: {})",
-                self.queue_view.lock_sync().len()
+                self.queue_view.lock().len()
             ),
         })?;
         let request_id = Self::next_request_id();
@@ -377,14 +377,14 @@ impl WasmInner {
     }
 
     pub(crate) fn set_muted(&self, muted: bool) {
-        *self.muted.lock_sync() = muted;
+        *self.muted.lock() = muted;
         let volume = if muted { 0.0 } else { load_f32(&self.volume) };
         self.send(WorkerCmd::SetVolume(volume));
     }
 
     pub(crate) fn set_observer(&self, observer: Arc<dyn PlayerObserver>) {
         crate::web::observer::router::install(Arc::clone(&observer), Arc::clone(&self.queue_view));
-        *self.observer.lock_sync() = Some(observer);
+        *self.observer.lock() = Some(observer);
     }
 
     pub(crate) fn set_playing_rate(&self, rate: f32) {
@@ -393,7 +393,7 @@ impl WasmInner {
 
     pub(crate) fn set_volume(&self, volume: f32) {
         store_f32(&self.volume, volume);
-        if !*self.muted.lock_sync() {
+        if !*self.muted.lock() {
             self.send(WorkerCmd::SetVolume(volume));
         }
     }
@@ -435,7 +435,7 @@ impl WasmInner {
             rate: self.rate(),
             playing_rate: load_f32(&self.playing_rate),
             volume: load_f32(&self.volume),
-            is_muted: *self.muted.lock_sync(),
+            is_muted: *self.muted.lock(),
         }
     }
 

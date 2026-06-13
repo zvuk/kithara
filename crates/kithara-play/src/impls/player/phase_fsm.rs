@@ -11,10 +11,7 @@ impl PlayerImpl {
     /// This is the single internal phase predicate; public wrappers absorb
     /// `WrongPhase` to preserve the pre-split no-op / typed-error contracts.
     pub(crate) fn require_active_slot(&self) -> Result<SlotId, TransitionError> {
-        self.phase
-            .lock_sync()
-            .slot()
-            .ok_or(TransitionError::WrongPhase)
+        self.phase.lock().slot().ok_or(TransitionError::WrongPhase)
     }
 
     /// Snapshot of the active slot under a short phase lock. Absorbs
@@ -25,7 +22,7 @@ impl PlayerImpl {
 
     /// Discriminant of the current phase under a short lock.
     pub(crate) fn phase_kind(&self) -> PlayerPhaseKind {
-        self.phase.lock_sync().kind()
+        self.phase.lock().kind()
     }
 
     /// Send a command to the current slot's processor.
@@ -45,7 +42,7 @@ impl PlayerImpl {
     /// next / ABR handle the previous active phase held. A no-op transition
     /// when the phase already holds a slot keeps the existing payload.
     pub(crate) fn enter_loading_with_slot(&self, slot: SlotId) {
-        let mut phase = self.phase.lock_sync();
+        let mut phase = self.phase.lock();
         let (abr_handle, pending) = match std::mem::replace(&mut *phase, PlayerPhase::Idle) {
             PlayerPhase::Loading {
                 abr_handle,
@@ -74,7 +71,7 @@ impl PlayerImpl {
 
     /// Move an active (slot-holding) phase into `Playing`. No-op from `Idle`.
     pub(crate) fn enter_playing(&self) {
-        let mut phase = self.phase.lock_sync();
+        let mut phase = self.phase.lock();
         match std::mem::replace(&mut *phase, PlayerPhase::Idle) {
             PlayerPhase::Loading {
                 slot,
@@ -113,7 +110,7 @@ impl PlayerImpl {
 
     /// Move an active (slot-holding) phase into `Paused`. No-op from `Idle`.
     pub(crate) fn enter_paused(&self) {
-        let mut phase = self.phase.lock_sync();
+        let mut phase = self.phase.lock();
         match std::mem::replace(&mut *phase, PlayerPhase::Idle) {
             PlayerPhase::Loading {
                 slot,
@@ -152,7 +149,7 @@ impl PlayerImpl {
 
     /// Move the player into `Stopped`, preserving the slot/ABR handle.
     pub(crate) fn enter_stopped(&self) {
-        let mut phase = self.phase.lock_sync();
+        let mut phase = self.phase.lock();
         let (slot, abr_handle) = match std::mem::replace(&mut *phase, PlayerPhase::Idle) {
             PlayerPhase::Loading {
                 slot, abr_handle, ..

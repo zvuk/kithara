@@ -56,7 +56,7 @@ impl ItemEventBridge {
                 .is_none_or(|current| (current - duration).abs() > Self::UPDATE_THRESHOLD)
         {
             *duration_seconds = Some(duration);
-            state.lock_sync().resolve_duration(duration);
+            state.lock().resolve_duration(duration);
             observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
         }
 
@@ -79,7 +79,7 @@ impl ItemEventBridge {
         Self::dispatch_variant_events(observer, event, variants);
 
         if let Some(error) = Self::error_from_event(event) {
-            state.lock_sync().mark_failed();
+            state.lock().mark_failed();
             observer.on_event(FfiItemEvent::StatusChanged {
                 status: FfiItemStatus::Failed,
             });
@@ -223,7 +223,7 @@ impl ItemEventBridge {
         cancel: CancelToken,
     ) -> Self {
         if let Some(duration) = duration_seconds {
-            state.lock_sync().resolve_duration(duration);
+            state.lock().resolve_duration(duration);
             observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
         }
         Self::spawn_event_task(rx, observer, duration_seconds, state, cancel.clone());

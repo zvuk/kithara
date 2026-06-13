@@ -49,7 +49,7 @@ pub struct MemDriver {
 
 impl fmt::Debug for MemDriver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = self.state.lock_sync();
+        let state = self.state.lock();
         f.debug_struct("MemDriver")
             .field("len", &state.len)
             .field("capacity", &state.buf.capacity())

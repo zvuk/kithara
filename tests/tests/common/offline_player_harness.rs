@@ -45,7 +45,7 @@ impl OfflinePlayerHarness {
         self.player.process_notifications();
 
         let mut events = Vec::new();
-        let mut rx = self.events.lock_sync();
+        let mut rx = self.events.lock();
         loop {
             match rx.try_recv() {
                 Ok(Event::Player(event)) => events.push(event),

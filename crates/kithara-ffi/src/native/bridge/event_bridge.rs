@@ -42,7 +42,7 @@ impl EventBridge {
             }
             Event::Queue(qe) => {
                 if let QueueEvent::CurrentTrackChanged { id } = qe {
-                    let mut prev = last_current.lock_sync();
+                    let mut prev = last_current.lock();
                     *prev = *id;
                 }
                 Self::dispatch_queue_event(observer, items, qe);
@@ -58,11 +58,11 @@ impl EventBridge {
     ) {
         match event {
             QueueEvent::CurrentTrackChanged { id } => {
-                let item_id = id.and_then(|tid| items.lock_sync().get(&tid).map(|i| i.audio_id()));
+                let item_id = id.and_then(|tid| items.lock().get(&tid).map(|i| i.audio_id()));
                 observer.on_event(FfiPlayerEvent::CurrentItemChanged { item_id });
             }
             QueueEvent::TrackStatusChanged { id, status } => {
-                let Some(item) = items.lock_sync().get(id).cloned() else {
+                let Some(item) = items.lock().get(id).cloned() else {
                     return;
                 };
                 let item_id = item.audio_id();
@@ -147,7 +147,7 @@ impl EventBridge {
     ) {
         let target = match event {
             PlayerEvent::ItemDidPlayToEnd { .. } | PlayerEvent::ItemDidFail { .. } => {
-                *last_current.lock_sync()
+                *last_current.lock()
             }
             PlayerEvent::TimeControlStatusChanged {
                 status: TimeControlStatus::WaitingToPlay,
@@ -156,7 +156,7 @@ impl EventBridge {
             _ => return,
         };
         let Some(track_id) = target else { return };
-        let Some(item) = items.lock_sync().get(&track_id).cloned() else {
+        let Some(item) = items.lock().get(&track_id).cloned() else {
             return;
         };
         let Some(item_obs) = item.observer() else {

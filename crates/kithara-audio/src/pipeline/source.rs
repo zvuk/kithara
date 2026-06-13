@@ -78,7 +78,7 @@ impl<T: StreamType> SharedStream<T> {
     }
 
     delegate! {
-        to self.inner.lock_sync() {
+        to self.inner.lock() {
             pub(crate) fn position(&self) -> u64;
             /// Absolute byte cursor set — forwards to the inner source's
             /// atomic, used post-seek when the audio FSM lands at a
@@ -140,7 +140,7 @@ impl<T: StreamType> Read for SharedStream<T> {
     /// [`Stream::read`] adapter so the single up-front decoder build waits for
     /// residual init lateness instead of erroring on the first not-ready probe.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let mut stream = self.inner.lock_sync();
+        let mut stream = self.inner.lock();
         if self.blocking.load(Ordering::Acquire) {
             stream.read(buf)
         } else {
@@ -151,7 +151,7 @@ impl<T: StreamType> Read for SharedStream<T> {
 
 impl<T: StreamType> Seek for SharedStream<T> {
     delegate! {
-        to self.inner.lock_sync() {
+        to self.inner.lock() {
             fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
         }
     }
