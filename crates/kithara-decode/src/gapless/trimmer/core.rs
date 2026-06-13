@@ -1,3 +1,4 @@
+use num_traits::AsPrimitive;
 use smallvec::SmallVec;
 
 use crate::{GaplessInfo, PcmChunk, duration_for_frames, gapless::heuristic::SilenceTrimParams};
@@ -587,8 +588,6 @@ fn trim_tail_frames(
 /// This widens the gap between "real" audio and codec quantisation
 /// noise, making the threshold easier to pick.
 fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
-    use num_traits::AsPrimitive;
-
     if tail_buffer.is_empty() {
         return 0;
     }

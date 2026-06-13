@@ -21,7 +21,7 @@ use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, ByteMap, ContainerFormat, MediaInfo, PendingReason, PlayheadRead, PlayheadState,
     PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState, SegmentDescriptor,
-    SourcePhase, SourceSeekAnchor, StreamResult, VariantControl,
+    SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantControl,
 };
 use kithara_test_utils::kithara;
 use tracing::info;
@@ -375,9 +375,7 @@ impl HlsCoord {
 
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         if self.cancel.is_cancelled() {
-            return Err(kithara_stream::StreamError::Source(
-                crate::HlsError::Cancelled.into(),
-            ));
+            return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
         }
         if self.variant_change_pending() {
             return Ok(ReadOutcome::Pending(PendingReason::VariantChange));
@@ -504,9 +502,7 @@ impl HlsCoord {
         timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
         if self.cancel.is_cancelled() {
-            return Err(kithara_stream::StreamError::Source(
-                crate::HlsError::Cancelled.into(),
-            ));
+            return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
         }
         if self.variant_change_pending() {
             return Ok(WaitOutcome::Interrupted);

@@ -1,6 +1,9 @@
 use std::{
     io::{ErrorKind, Read, Seek},
-    sync::{Arc, atomic::AtomicU64},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use kithara_platform::time::Duration;
@@ -15,13 +18,28 @@ use symphonia::core::{
         audio::{
             AudioCodecId, AudioCodecParameters,
             well_known::{
-                CODEC_ID_AAC, CODEC_ID_ALAC, CODEC_ID_FLAC, CODEC_ID_MP3, CODEC_ID_OPUS,
+                CODEC_ID_AAC, CODEC_ID_ADPCM_G722, CODEC_ID_ADPCM_G726, CODEC_ID_ADPCM_G726LE,
+                CODEC_ID_ADPCM_IMA_QT, CODEC_ID_ADPCM_IMA_WAV, CODEC_ID_ADPCM_MS, CODEC_ID_ALAC,
+                CODEC_ID_FLAC, CODEC_ID_MP3, CODEC_ID_OPUS, CODEC_ID_PCM_ALAW, CODEC_ID_PCM_F32BE,
+                CODEC_ID_PCM_F32BE_PLANAR, CODEC_ID_PCM_F32LE, CODEC_ID_PCM_F32LE_PLANAR,
+                CODEC_ID_PCM_F64BE, CODEC_ID_PCM_F64BE_PLANAR, CODEC_ID_PCM_F64LE,
+                CODEC_ID_PCM_F64LE_PLANAR, CODEC_ID_PCM_MULAW, CODEC_ID_PCM_S8,
+                CODEC_ID_PCM_S8_PLANAR, CODEC_ID_PCM_S16BE, CODEC_ID_PCM_S16BE_PLANAR,
+                CODEC_ID_PCM_S16LE, CODEC_ID_PCM_S16LE_PLANAR, CODEC_ID_PCM_S24BE,
+                CODEC_ID_PCM_S24BE_PLANAR, CODEC_ID_PCM_S24LE, CODEC_ID_PCM_S24LE_PLANAR,
+                CODEC_ID_PCM_S32BE, CODEC_ID_PCM_S32BE_PLANAR, CODEC_ID_PCM_S32LE,
+                CODEC_ID_PCM_S32LE_PLANAR, CODEC_ID_PCM_U8, CODEC_ID_PCM_U8_PLANAR,
+                CODEC_ID_PCM_U16BE, CODEC_ID_PCM_U16BE_PLANAR, CODEC_ID_PCM_U16LE,
+                CODEC_ID_PCM_U16LE_PLANAR, CODEC_ID_PCM_U24BE, CODEC_ID_PCM_U24BE_PLANAR,
+                CODEC_ID_PCM_U24LE, CODEC_ID_PCM_U24LE_PLANAR, CODEC_ID_PCM_U32BE,
+                CODEC_ID_PCM_U32BE_PLANAR, CODEC_ID_PCM_U32LE, CODEC_ID_PCM_U32LE_PLANAR,
                 CODEC_ID_VORBIS,
             },
         },
     },
     errors::{Error as SymphoniaError, SeekErrorKind},
     formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track, TrackType},
+    packet::Packet,
     units::{Time, TimeBase, Timestamp},
 };
 
@@ -53,7 +71,7 @@ pub(crate) struct SymphoniaDemuxer {
     /// directly — Symphonia owns the allocation, we don't clone it.
     /// Replaced (and the previous packet dropped) on every successful
     /// `next_frame` call.
-    current_packet: Option<symphonia::core::packet::Packet>,
+    current_packet: Option<Packet>,
     byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
     /// Time base used to translate packet timestamps into wall-clock
     /// [`std::time::Duration`].
@@ -81,7 +99,7 @@ impl SymphoniaDemuxer {
     fn current_byte(&self) -> Option<u64> {
         self.byte_pos_handle
             .as_ref()
-            .map(|h| h.load(std::sync::atomic::Ordering::Acquire))
+            .map(|h| h.load(Ordering::Acquire))
     }
 
     fn dur_to_duration(&self, dur: symphonia::core::units::Duration) -> Duration {
@@ -441,19 +459,6 @@ fn map_codec_id(id: AudioCodecId) -> AudioCodec {
 }
 
 fn is_pcm_codec_id(id: AudioCodecId) -> bool {
-    use symphonia::core::codecs::audio::well_known::{
-        CODEC_ID_PCM_ALAW, CODEC_ID_PCM_F32BE, CODEC_ID_PCM_F32BE_PLANAR, CODEC_ID_PCM_F32LE,
-        CODEC_ID_PCM_F32LE_PLANAR, CODEC_ID_PCM_F64BE, CODEC_ID_PCM_F64BE_PLANAR,
-        CODEC_ID_PCM_F64LE, CODEC_ID_PCM_F64LE_PLANAR, CODEC_ID_PCM_MULAW, CODEC_ID_PCM_S8,
-        CODEC_ID_PCM_S8_PLANAR, CODEC_ID_PCM_S16BE, CODEC_ID_PCM_S16BE_PLANAR, CODEC_ID_PCM_S16LE,
-        CODEC_ID_PCM_S16LE_PLANAR, CODEC_ID_PCM_S24BE, CODEC_ID_PCM_S24BE_PLANAR,
-        CODEC_ID_PCM_S24LE, CODEC_ID_PCM_S24LE_PLANAR, CODEC_ID_PCM_S32BE,
-        CODEC_ID_PCM_S32BE_PLANAR, CODEC_ID_PCM_S32LE, CODEC_ID_PCM_S32LE_PLANAR, CODEC_ID_PCM_U8,
-        CODEC_ID_PCM_U8_PLANAR, CODEC_ID_PCM_U16BE, CODEC_ID_PCM_U16BE_PLANAR, CODEC_ID_PCM_U16LE,
-        CODEC_ID_PCM_U16LE_PLANAR, CODEC_ID_PCM_U24BE, CODEC_ID_PCM_U24BE_PLANAR,
-        CODEC_ID_PCM_U24LE, CODEC_ID_PCM_U24LE_PLANAR, CODEC_ID_PCM_U32BE,
-        CODEC_ID_PCM_U32BE_PLANAR, CODEC_ID_PCM_U32LE, CODEC_ID_PCM_U32LE_PLANAR,
-    };
     matches!(
         id,
         CODEC_ID_PCM_S32LE
@@ -498,10 +503,6 @@ fn is_pcm_codec_id(id: AudioCodecId) -> bool {
 }
 
 fn is_adpcm_codec_id(id: AudioCodecId) -> bool {
-    use symphonia::core::codecs::audio::well_known::{
-        CODEC_ID_ADPCM_G722, CODEC_ID_ADPCM_G726, CODEC_ID_ADPCM_G726LE, CODEC_ID_ADPCM_IMA_QT,
-        CODEC_ID_ADPCM_IMA_WAV, CODEC_ID_ADPCM_MS,
-    };
     matches!(
         id,
         CODEC_ID_ADPCM_G722

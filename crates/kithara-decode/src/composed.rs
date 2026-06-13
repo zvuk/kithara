@@ -287,10 +287,13 @@ mod default_priming_tests {
     use std::io::Cursor;
 
     use kithara_stream::AudioCodec;
-    use symphonia::core::{
-        formats::{FormatOptions, probe::Hint},
-        io::{MediaSourceStream, MediaSourceStreamOptions},
-        meta::MetadataOptions,
+    use symphonia::{
+        core::{
+            formats::{FormatOptions, probe::Hint},
+            io::{MediaSourceStream, MediaSourceStreamOptions},
+            meta::MetadataOptions,
+        },
+        default,
     };
 
     use super::*;
@@ -305,7 +308,7 @@ mod default_priming_tests {
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
-        let format_reader = symphonia::default::get_probe()
+        let format_reader = default::get_probe()
             .probe(
                 &hint,
                 mss,
@@ -376,10 +379,13 @@ mod smoke_tests {
     use kithara_bufpool::PcmPool;
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
-    use symphonia::core::{
-        formats::{FormatOptions, probe::Hint},
-        io::{MediaSourceStream, MediaSourceStreamOptions},
-        meta::MetadataOptions,
+    use symphonia::{
+        core::{
+            formats::{FormatOptions, probe::Hint},
+            io::{MediaSourceStream, MediaSourceStreamOptions},
+            meta::MetadataOptions,
+        },
+        default,
     };
 
     use super::*;
@@ -398,7 +404,7 @@ mod smoke_tests {
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
-        let format_reader = symphonia::default::get_probe()
+        let format_reader = default::get_probe()
             .probe(
                 &hint,
                 mss,
@@ -744,7 +750,7 @@ mod hook_tests {
     };
     use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{test_stub_codec::ConstFrameCodec, *};
     use crate::{
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Frame, TrackInfo},
         traits::Decoder,
@@ -853,8 +859,6 @@ mod hook_tests {
             &self.track
         }
     }
-
-    use super::test_stub_codec::ConstFrameCodec;
 
     fn empty_track() -> TrackInfo {
         TrackInfo {

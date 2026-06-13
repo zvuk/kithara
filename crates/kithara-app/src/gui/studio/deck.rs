@@ -1,5 +1,5 @@
 use iced::{
-    Alignment, Background, Border, Element, Length, Theme,
+    Alignment, Background, Border, Color, Element, Length, Theme,
     font::Weight,
     widget::{
         Row, Space, button,
@@ -255,7 +255,7 @@ fn transport_secondary_style(p: GuiPalette, status: ButtonStatus) -> ButtonStyle
         ButtonStatus::Hovered => Some(Background::Color(with_alpha(p.bg_panel_2, 0.6))),
         ButtonStatus::Pressed => Some(Background::Color(with_alpha(p.bg_panel_2, 0.45))),
         ButtonStatus::Active | ButtonStatus::Disabled => {
-            Some(Background::Color(iced::Color::TRANSPARENT))
+            Some(Background::Color(Color::TRANSPARENT))
         }
     };
 

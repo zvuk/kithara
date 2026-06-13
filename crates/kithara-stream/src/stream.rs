@@ -19,6 +19,14 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
 
+use crate::{
+    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor,
+    error::{SourceError, StreamError, StreamResult},
+    playhead::PlayheadWrite,
+    seek_state::{Activity, SeekControl, SeekObserve},
+    source::{NotReadyCause, PendingReason, ReadOutcome, Source, VariantControl},
+};
+
 /// Real error from [`Stream::try_read`] — the underlying source
 /// surfaced an I/O failure.
 ///
@@ -159,14 +167,6 @@ impl fmt::Display for VariantChangeError {
 }
 
 impl StdError for VariantChangeError {}
-
-use crate::{
-    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor,
-    error::{SourceError, StreamError, StreamResult},
-    playhead::PlayheadWrite,
-    seek_state::{Activity, SeekControl, SeekObserve},
-    source::{NotReadyCause, PendingReason, ReadOutcome, Source, VariantControl},
-};
 
 /// Defines a stream type and how to create it.
 ///

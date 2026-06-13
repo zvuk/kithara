@@ -10,6 +10,7 @@ use firewheel::dsp::{
 };
 use kithara_audio::ServiceClass;
 use kithara_platform::Mutex;
+use num_traits::cast::{AsPrimitive, ToPrimitive};
 use ringbuf::{HeapProd, traits::Producer};
 
 use super::{
@@ -197,7 +198,6 @@ impl PlayerTrack {
         block_frames: usize,
         frames_until_eof: Option<usize>,
     ) {
-        use num_traits::cast::AsPrimitive;
         let block_frames_f32: f32 = block_frames.as_();
         let sr_f32: f32 = self.sample_rate.as_();
         let block_seconds = block_frames_f32 / sr_f32;
@@ -375,7 +375,7 @@ impl PlayerTrack {
     #[must_use]
     pub fn position(&self) -> f64 {
         let sample_rate = self.sample_rate.max(1);
-        let served_f64: f64 = num_traits::cast::AsPrimitive::as_(self.served_frames);
+        let served_f64: f64 = AsPrimitive::as_(self.served_frames);
         served_f64 / f64::from(sample_rate)
     }
 
@@ -453,7 +453,7 @@ impl PlayerTrack {
                 self.observed_duration = duration;
                 if let Some(remaining_frames) = frames_until_eof {
                     let sample_rate = self.sample_rate.max(1);
-                    let remaining_f64: f64 = num_traits::cast::AsPrimitive::as_(remaining_frames);
+                    let remaining_f64: f64 = AsPrimitive::as_(remaining_frames);
                     let observed_eof = self.position() + remaining_f64 / f64::from(sample_rate);
                     if self.observed_duration <= 0.0 || observed_eof < self.observed_duration {
                         self.observed_duration = observed_eof;
@@ -548,8 +548,7 @@ impl PlayerTrack {
         }
         let sample_rate = self.sample_rate.max(1);
         let frames =
-            num_traits::cast::ToPrimitive::to_u64(&(seconds.max(0.0) * f64::from(sample_rate)))
-                .unwrap_or(u64::MAX);
+            ToPrimitive::to_u64(&(seconds.max(0.0) * f64::from(sample_rate))).unwrap_or(u64::MAX);
         self.served_frames = frames;
         self.notified_track_requested = false;
         self.notified_prefetch_requested = false;
@@ -647,6 +646,7 @@ impl PlayerTrack {
 #[cfg(test)]
 mod tests {
     use kithara_audio::PcmReader;
+    use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
@@ -668,11 +668,7 @@ mod tests {
         src: Arc<str>,
         item_id: Option<Arc<str>>,
     ) -> PlayerTrack {
-        let player_resource = PlayerResource::new(
-            resource,
-            Arc::clone(&src),
-            &kithara_bufpool::PcmPool::default(),
-        );
+        let player_resource = PlayerResource::new(resource, Arc::clone(&src), &PcmPool::default());
         let arc_resource = Arc::new(Mutex::new(player_resource));
         let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         PlayerTrack::new(

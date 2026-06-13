@@ -1,5 +1,6 @@
 use std::{
     io,
+    io::Error,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -86,11 +87,11 @@ impl FilePeer {
         let writer = Box::new(move |chunk: &[u8]| -> io::Result<()> {
             let pos = writer_offset.fetch_add(chunk.len() as u64, Ordering::Relaxed);
             let Some(raw) = raw.as_ref() else {
-                return Err(io::Error::other(
+                return Err(Error::other(
                     "file resource has no writer (already committed or read-only)",
                 ));
             };
-            raw.write_at(pos, chunk).map_err(io::Error::other)?;
+            raw.write_at(pos, chunk).map_err(Error::other)?;
             coord_writer.set_download_pos(pos + chunk.len() as u64);
             Ok(())
         });

@@ -600,8 +600,8 @@ impl PlayerNodeProcessor {
             for (out_ch, mix_ch) in buffers.outputs.iter_mut().zip(mix_bufs.iter()) {
                 out_ch
                     .iter_mut()
-                    .zip(mix_ch.iter())
                     .take(frames)
+                    .zip(mix_ch.iter())
                     .for_each(|(out_sample, &mix_sample)| *out_sample += mix_sample);
             }
         }

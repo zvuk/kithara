@@ -3,7 +3,7 @@
 use std::{
     cell::Cell,
     ffi::c_void,
-    io::{self, Read, Seek, SeekFrom},
+    io::{Error, Read, Seek, SeekFrom},
     ptr,
 };
 
@@ -29,7 +29,7 @@ struct CallbackCtx {
     /// `DecodeError::classify` walks to decide retry vs terminal. We
     /// stash the original error here so the wrapper can rewrap it into
     /// `DecodeError::Backend` with the chain intact.
-    last_error: Cell<Option<io::Error>>,
+    last_error: Cell<Option<Error>>,
     size: i64,
 }
 
@@ -122,7 +122,7 @@ impl AppleAudioFile {
     /// `OSStatus` for terminal diagnostics.
     fn read_failure_error(&self, op: &str, status: OSStatus) -> DecodeError {
         let io_err = self._ctx.last_error.take().unwrap_or_else(|| {
-            io::Error::other(format!("{op} failed: {}", os_status_to_string(status)))
+            Error::other(format!("{op} failed: {}", os_status_to_string(status)))
         });
         DecodeError::backend(io_err)
     }
@@ -320,7 +320,7 @@ extern "C" fn read_callback(
 
     let Ok(pos) = u64::try_from(position) else {
         *actual = 0;
-        ctx.last_error.set(Some(io::Error::other(format!(
+        ctx.last_error.set(Some(Error::other(format!(
             "AppleAudioFile read_callback: negative position {position}"
         ))));
         return -1;
@@ -340,7 +340,7 @@ extern "C" fn read_callback(
     };
     let Ok(n_u32) = UInt32::try_from(n) else {
         *actual = 0;
-        ctx.last_error.set(Some(io::Error::other(
+        ctx.last_error.set(Some(Error::other(
             "AppleAudioFile read_callback: bytes read > u32::MAX",
         )));
         return -1;

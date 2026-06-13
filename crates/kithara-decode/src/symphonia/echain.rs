@@ -1,6 +1,8 @@
 use std::{error::Error as StdError, io};
 
-pub(crate) type SymphoniaError = symphonia::core::errors::Error;
+use symphonia::core::errors::Error;
+
+pub(crate) type SymphoniaError = Error;
 
 /// Inspect `err` for a Symphonia-wrapped error.
 ///

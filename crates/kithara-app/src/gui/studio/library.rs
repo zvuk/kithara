@@ -4,7 +4,10 @@ use iced::{
     Alignment, Background, Border, Color, Element, Length, Padding, Theme,
     font::Weight,
     widget::{
-        Space, button, button::Style as ButtonStyle, container, container::Style as ContainerStyle,
+        Space, button,
+        button::{Status, Style as ButtonStyle},
+        column, container,
+        container::Style as ContainerStyle,
         row, scrollable, text,
     },
 };
@@ -23,7 +26,7 @@ pub(super) fn view_library(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
 
     let body = state.ui_state.tracks.iter().enumerate().fold(
-        iced::widget::column![].spacing(0.0),
+        column![].spacing(0.0),
         |col, (index, entry)| {
             let artist = row_artist(entry.url.as_deref());
             col.push(library_row(
@@ -38,7 +41,7 @@ pub(super) fn view_library(state: &Kithara) -> Element<'_, Message> {
     );
 
     container(
-        iced::widget::column![
+        column![
             library_tabs(state.ui_state.shuffle_enabled, p),
             library_head_row(p),
             container(scrollable(body))
@@ -95,13 +98,11 @@ fn library_label(p: GuiPalette) -> Element<'static, Message> {
     .into()
 }
 
-fn shuffle_button_style(p: GuiPalette, status: button::Status) -> ButtonStyle {
+fn shuffle_button_style(p: GuiPalette, status: Status) -> ButtonStyle {
     let background = match status {
-        button::Status::Hovered => Some(Background::Color(with_alpha(p.bg_panel_2, 0.6))),
-        button::Status::Pressed => Some(Background::Color(p.accent_soft)),
-        button::Status::Active | button::Status::Disabled => {
-            Some(Background::Color(Color::TRANSPARENT))
-        }
+        Status::Hovered => Some(Background::Color(with_alpha(p.bg_panel_2, 0.6))),
+        Status::Pressed => Some(Background::Color(p.accent_soft)),
+        Status::Active | Status::Disabled => Some(Background::Color(Color::TRANSPARENT)),
     };
     ButtonStyle {
         background,
@@ -240,9 +241,7 @@ fn head_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
     }
 }
 
-fn row_style(p: GuiPalette, current: bool, selected: bool, status: button::Status) -> ButtonStyle {
-    use button::Status;
-
+fn row_style(p: GuiPalette, current: bool, selected: bool, status: Status) -> ButtonStyle {
     let active_bg = if current {
         with_alpha(p.bg_panel, 0.5)
     } else if selected {

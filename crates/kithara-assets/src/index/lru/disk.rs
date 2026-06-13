@@ -3,7 +3,10 @@
 use std::{
     fs,
     path::PathBuf,
-    sync::{Arc, OnceLock, atomic::Ordering},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use kithara_bufpool::BytePool;
@@ -45,7 +48,7 @@ impl LruIndex {
                     }),
                 }),
                 hub: OnceLock::new(),
-                dirty: std::sync::atomic::AtomicBool::new(false),
+                dirty: AtomicBool::new(false),
             }),
         }
     }

@@ -14,7 +14,7 @@ use kithara_events::{AbrMode, AbrProgressSnapshot, VariantDuration, VariantInfo}
 use kithara_platform::{
     CancelToken, Mutex,
     time::Duration,
-    tokio::{self, sync::mpsc},
+    tokio::{self, sync::mpsc, task::spawn},
 };
 use kithara_stream::{
     Activity, DeferredWake, SeekObserve,
@@ -154,7 +154,7 @@ impl HlsPeer {
 
         let peer_weak = Arc::downgrade(self);
         let wake_signal = self.wake_signal.clone();
-        tokio::task::spawn(async move {
+        spawn(async move {
             loop {
                 tokio::select! {
                     biased;

@@ -6,7 +6,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -57,14 +57,14 @@ pub(crate) struct SharedStream<T: StreamType> {
     /// before the worker is registered, so the RT decode loop the worker then
     /// drives always uses `probe_read`. See the crate `README.md`
     /// "Construction reads".
-    blocking: Arc<std::sync::atomic::AtomicBool>,
+    blocking: Arc<AtomicBool>,
 }
 
 impl<T: StreamType> SharedStream<T> {
     pub(crate) fn new(stream: Stream<T>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(stream)),
-            blocking: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            blocking: Arc::new(AtomicBool::new(false)),
         }
     }
 

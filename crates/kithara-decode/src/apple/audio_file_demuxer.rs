@@ -335,7 +335,7 @@ fn serialize_asbd(asbd: &AudioStreamBasicDescription) -> Vec<u8> {
 #[cfg(test)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod tests {
-    use std::io::{self, Cursor, Read, Seek, SeekFrom};
+    use std::io::{self, Cursor, Error, ErrorKind, Read, Seek, SeekFrom};
 
     use kithara_stream::{
         AudioCodec, ContainerFormat, NotReadyCause, PendingReason, SourcePhase, StreamPending,
@@ -393,8 +393,8 @@ mod tests {
             // crossing the delivery boundary fails outright, it is never
             // satisfied partially.
             if pos.saturating_add(buf.len() as u64) > self.ready {
-                return Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
+                return Err(Error::new(
+                    ErrorKind::Interrupted,
                     StreamPending {
                         reason: PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted),
                         pos,

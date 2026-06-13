@@ -10,6 +10,7 @@ use kithara_events::{EventBus, RequestPriority};
 use kithara_net::{Headers, NetError};
 use kithara_platform::{
     CancelGroup, CancelToken, RwLock,
+    time::Instant,
     tokio::sync::{mpsc, oneshot},
 };
 
@@ -96,7 +97,7 @@ pub(super) struct InternalCmd {
     /// Wall-clock instant the cmd was placed into a priority slot.
     /// Used to compute `RequestStarted::wait_in_queue` later in the
     /// pipeline.
-    pub(super) enqueued_at: kithara_platform::time::Instant,
+    pub(super) enqueued_at: Instant,
     /// Bus of the peer that issued this command. Downloader publishes
     /// per-fetch `DownloaderEvent`s here.
     pub(super) bus: Option<EventBus>,
@@ -263,7 +264,7 @@ impl PeerHandle {
         let cancel = CancelGroup::new(vec![self.inner.cancel.child()]);
         let (resp_tx, resp_rx) = oneshot::channel();
         let request_id = self.inner._pool.next_request_id();
-        let enqueued_at = kithara_platform::time::Instant::now();
+        let enqueued_at = Instant::now();
         let internal = InternalCmd {
             cmd,
             cancel,

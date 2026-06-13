@@ -7,7 +7,9 @@ use std::{
 
 use kithara_abr::AbrPeerId;
 use kithara_events::{DownloaderEvent, EventBus, RequestId, RequestPriority};
-use kithara_platform::{CancelGroup, CancelToken, RwLock, sync::Notify, tokio, tokio::sync::mpsc};
+use kithara_platform::{
+    CancelGroup, CancelToken, RwLock, sync::Notify, time::Instant, tokio, tokio::sync::mpsc,
+};
 use kithara_test_utils::kithara;
 use thunderdome::{Arena, Index};
 
@@ -212,7 +214,7 @@ impl Registry {
                         let cmd_prio = RequestPriority::Low;
                         let slot = slot_index(peer_prio, cmd_prio);
                         let request_id = inner.next_request_id();
-                        let enqueued_at = kithara_platform::time::Instant::now();
+                        let enqueued_at = Instant::now();
                         let internal = InternalCmd {
                             cmd,
                             cancel,

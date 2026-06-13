@@ -1,6 +1,7 @@
 use std::sync::{Arc, PoisonError};
 
 use kithara_events::{QueueEvent, TrackId, TrackStatus};
+use kithara_platform::tokio::task;
 use tracing::{debug, warn};
 
 use super::{
@@ -197,7 +198,7 @@ impl Queue {
         let navigation = Arc::clone(&self.navigation);
         let select_apply = Arc::clone(&self.select_apply);
         let bus = self.bus.clone();
-        drop(kithara_platform::tokio::task::spawn(async move {
+        drop(task::spawn(async move {
             let resource = match handle.await {
                 Ok(Ok(resource)) => resource,
                 Ok(Err(_)) => return,

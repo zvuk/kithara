@@ -10,15 +10,17 @@ use std::{
 
 use delegate::delegate;
 use fast_interleave::deinterleave_variable;
-use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
+use kithara_bufpool::{BytePool, PcmBuf, PcmPool};
+use kithara_decode::{DecoderConfig, DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, DeferredBus, EventBus, SeekLifecycleStage, SegmentLocation};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
 use kithara_platform::{
     CancelScope, CancelToken, thread::park_timeout, time::Duration, tokio::task::spawn_blocking,
 };
-use kithara_stream::{MediaInfo, PlayheadWrite, SeekControl, SeekObserve, Stream, StreamType};
+use kithara_stream::{
+    ChunkPosition, MediaInfo, PlayheadWrite, SeekControl, SeekObserve, Stream, StreamType,
+};
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
 use tracing::{debug, info, trace, warn};
@@ -480,8 +482,7 @@ impl<S> Audio<S> {
                 self.current_chunk_consumed_frames = consumed_total;
 
                 if final_segment {
-                    self.playhead
-                        .advance(&kithara_stream::ChunkPosition::from(&chunk.meta));
+                    self.playhead.advance(&ChunkPosition::from(&chunk.meta));
                     self.recycle_current_chunk();
                 } else {
                     let total_frames = chunk_total_frames.max(1);
@@ -799,7 +800,7 @@ where
         let cancel = CancelScope::new(config_cancel).token();
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
-        let byte_pool = byte_pool.unwrap_or_else(|| kithara_bufpool::BytePool::default().clone());
+        let byte_pool = byte_pool.unwrap_or_else(|| BytePool::default().clone());
         let stream = Self::create_stream_with_probe(stream_config, byte_pool.clone()).await?;
 
         let initial_byte_len = stream.len().unwrap_or(0);
@@ -955,7 +956,7 @@ where
         epoch: &Arc<AtomicU64>,
         byte_len_handle: &Arc<AtomicU64>,
         pool: &PcmPool,
-        byte_pool: &kithara_bufpool::BytePool,
+        byte_pool: &BytePool,
     ) -> crate::pipeline::source::DecoderFactory<T> {
         let factory_epoch = Arc::clone(epoch);
         let factory_byte_len = Arc::clone(byte_len_handle);
@@ -966,7 +967,7 @@ where
                 .len()
                 .map_or(0, |len| len.saturating_sub(base_offset));
             factory_byte_len.store(byte_len, Ordering::Release);
-            let config = kithara_decode::DecoderConfig::builder()
+            let config = DecoderConfig::builder()
                 .backend(decoder_backend)
                 .byte_len_handle(Arc::clone(&factory_byte_len))
                 .pcm_pool(factory_pool.clone())
@@ -1018,12 +1019,12 @@ where
         initial_media_info: Option<MediaInfo>,
         hint: Option<String>,
         pcm_pool: PcmPool,
-        byte_pool: kithara_bufpool::BytePool,
+        byte_pool: BytePool,
         decoder_backend: kithara_decode::DecoderBackend,
     ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
-        let decoder_config = kithara_decode::DecoderConfig::builder()
+        let decoder_config = DecoderConfig::builder()
             .backend(decoder_backend)
             .byte_len_handle(byte_len_handle)
             .pcm_pool(pcm_pool)
@@ -1055,7 +1056,7 @@ where
 
     async fn create_stream_with_probe(
         stream_config: T::Config,
-        byte_pool: kithara_bufpool::BytePool,
+        byte_pool: BytePool,
     ) -> Result<Stream<T>, DecodeError> {
         let stream = Self::open_stream(stream_config).await?;
         Self::spawn_probe(stream, byte_pool).await
@@ -1116,7 +1117,7 @@ where
 
     fn probe_stream_blocking(
         mut stream: Stream<T>,
-        _byte_pool: &kithara_bufpool::BytePool,
+        _byte_pool: &BytePool,
     ) -> Result<Stream<T>, DecodeError> {
         // No up-front warm read here: the single decoder build reads through
         // the blocking off-RT `Stream::read` adapter (`SharedStream` in
@@ -1134,10 +1135,7 @@ where
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    async fn spawn_probe(
-        stream: Stream<T>,
-        byte_pool: kithara_bufpool::BytePool,
-    ) -> Result<Stream<T>, DecodeError> {
+    async fn spawn_probe(stream: Stream<T>, byte_pool: BytePool) -> Result<Stream<T>, DecodeError> {
         debug!("Audio::new — spawning probe task...");
         let result = spawn_blocking(move || Self::probe_stream_blocking(stream, &byte_pool))
             .await
@@ -1151,10 +1149,7 @@ where
     /// `!Send` because it holds JS-backed network streams. Probe runs
     /// inline on the calling task.
     #[cfg(target_arch = "wasm32")]
-    async fn spawn_probe(
-        stream: Stream<T>,
-        byte_pool: kithara_bufpool::BytePool,
-    ) -> Result<Stream<T>, DecodeError> {
+    async fn spawn_probe(stream: Stream<T>, byte_pool: BytePool) -> Result<Stream<T>, DecodeError> {
         debug!("Audio::new — running probe inline (wasm)...");
         let result = Self::probe_stream_blocking(stream, &byte_pool)?;
         debug!("Audio::new — probe done");
@@ -1268,8 +1263,7 @@ impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
             self.consumer_phase = ConsumerPhase::Playing;
         }
 
-        self.playhead
-            .advance(&kithara_stream::ChunkPosition::from(&chunk.meta));
+        self.playhead.advance(&ChunkPosition::from(&chunk.meta));
         Ok(ChunkOutcome::Chunk(chunk))
     }
 
@@ -1388,6 +1382,7 @@ mod tests {
         },
     };
 
+    use kithara_stream::{PlayheadState, SeekState};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -1395,8 +1390,8 @@ mod tests {
     fn empty_audio() -> Audio<()> {
         let (_data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(1, None);
         let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
-        let playhead = Arc::new(kithara_stream::PlayheadState::new());
-        let seek = Arc::new(kithara_stream::SeekState::new());
+        let playhead = Arc::new(PlayheadState::new());
+        let seek = Arc::new(SeekState::new());
 
         Audio {
             pcm_rx,
@@ -1461,8 +1456,8 @@ mod tests {
     fn audio_with_channel() -> (Audio<()>, crate::runtime::Outlet<Fetch<PcmChunk>>) {
         let (data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(4, None);
         let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
-        let playhead = Arc::new(kithara_stream::PlayheadState::new());
-        let seek = Arc::new(kithara_stream::SeekState::new());
+        let playhead = Arc::new(PlayheadState::new());
+        let seek = Arc::new(SeekState::new());
 
         let audio = Audio {
             pcm_rx,

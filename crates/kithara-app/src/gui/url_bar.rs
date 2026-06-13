@@ -2,7 +2,7 @@ use iced::{
     Alignment, Background, Border, Color, Degrees, Element, Length, Padding, Shadow, Task, Vector,
     alignment::{Horizontal, Vertical},
     font::Weight,
-    gradient,
+    gradient::Linear,
     widget::{
         button,
         button::{Status as ButtonStatus, Style as ButtonStyle},
@@ -373,14 +373,14 @@ fn badge_padding() -> Padding {
 }
 
 fn bar_background(p: GuiPalette) -> Background {
-    gradient::Linear::new(Degrees(180.0))
+    Linear::new(Degrees(180.0))
         .add_stop(0.0, with_alpha(p.bg_inset, GRADIENT_ALPHA))
         .add_stop(1.0, with_alpha(p.bg_deep, GRADIENT_ALPHA))
         .into()
 }
 
 fn linear(start: Color, end: Color) -> Background {
-    gradient::Linear::new(Degrees(180.0))
+    Linear::new(Degrees(180.0))
         .add_stop(0.0, start)
         .add_stop(1.0, end)
         .into()

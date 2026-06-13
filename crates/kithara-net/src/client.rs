@@ -3,7 +3,10 @@ use std::{num::NonZeroU16, sync::Arc};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
-use kithara_platform::{CancelToken, time::timeout};
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, timeout},
+};
 use reqwest::Client;
 use url::Url;
 
@@ -106,7 +109,7 @@ fn build_client(options: &NetOptions) -> reqwest::Result<Client> {
     let base = Client::builder()
         .cookie_store(true)
         .pool_max_idle_per_host(options.pool_max_idle_per_host)
-        .pool_idle_timeout(Some(kithara_platform::time::Duration::from_secs(5)))
+        .pool_idle_timeout(Some(Duration::from_secs(5)))
         .danger_accept_invalid_certs(options.is_insecure);
     Vec::<ClientBuilderMod>::from(options.compression)
         .into_iter()
@@ -490,7 +493,6 @@ mod tests {
     // `::tokio` (the real crate) — `super::*` re-exports `kithara_platform::tokio`.
     use ::tokio::net::TcpListener;
     use axum::{Router, http::StatusCode, routing::get};
-    use kithara_platform::time::Duration;
 
     use super::*;
     use crate::types::RetryPolicy;

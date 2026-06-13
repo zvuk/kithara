@@ -2,6 +2,7 @@
 
 use std::{
     fs::{self, OpenOptions},
+    io,
     ops::Range,
     path::{Path, PathBuf},
 };
@@ -139,7 +140,7 @@ impl<D: DriverIo> AtomicChunked<D> {
             Ok(file) => {
                 drop(file);
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 return Err(StorageError::TmpClaimed(tmp_path));
             }
             Err(e) => return Err(StorageError::Io(e)),

@@ -1,6 +1,7 @@
 use biquad::{Biquad, Coefficients, DirectForm1, Type};
 use bon::Builder;
 use kithara_decode::PcmChunk;
+use num_traits::cast::AsPrimitive;
 
 use crate::AudioEffect;
 
@@ -124,8 +125,6 @@ impl Default for EqBandConfig {
 /// `Peaking`. Q factor scales with band count.
 #[must_use]
 pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
-    use num_traits::cast::AsPrimitive;
-
     if count == 0 {
         return Vec::new();
     }
@@ -272,8 +271,6 @@ impl GainState {
 
 /// One-pole smoother coefficient, accounting for block-rate updates.
 fn compute_smooth_coeff(sample_rate: f32) -> f32 {
-    use num_traits::cast::AsPrimitive;
-
     let tau = Consts::SMOOTH_TIME_MS / Consts::MS_PER_SEC;
     let block_size_f32: f32 = Consts::SMOOTH_BLOCK_SIZE.as_();
     let effective_rate = sample_rate / block_size_f32;
@@ -345,7 +342,6 @@ impl IsolatorEq {
     /// Create a new isolator EQ for the given band layout.
     #[must_use]
     pub fn new(bands: &[EqBandConfig], sample_rate: u32) -> Self {
-        use num_traits::cast::AsPrimitive;
         let sr: f32 = sample_rate.as_();
         let n = bands.len();
         let xover_count = n.saturating_sub(1);
@@ -566,7 +562,6 @@ impl IsolatorEq {
 
     /// Re-initialise for a new sample rate (e.g. after stream change).
     pub fn update_sample_rate(&mut self, sample_rate: u32) {
-        use num_traits::cast::AsPrimitive;
         self.sample_rate = sample_rate.as_();
         self.smooth_coeff = compute_smooth_coeff(self.sample_rate);
         self.rebuild_filters();
