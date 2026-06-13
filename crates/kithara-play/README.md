@@ -122,14 +122,25 @@ is idempotent, never a `"player already started"` session desync.
 
 ## Cancel Hierarchy
 
-A single `CancellationToken` master flows top-down; subsystems (Downloader,
-AssetStore, HlsPeer, audio worker, epoch cancel) derive children via
-`.child_token()`, and cancelling the master cascades to all of them. When used
-directly, `PlayerImpl::new` is the canonical fallback owner (`unwrap_or_default()`,
-marked `// kithara:cancel:owner`); consumer crates (`Queue`, `App`, FFI) build
-their own master and pass it through `PlayerConfig.cancel`. `Drop for PlayerImpl`
-pulses `cancel()` before teardown. Hard-coded `CancellationToken::new()` outside
-marked owner/bridge sites is forbidden.
+Cancel is a typed propagate-down tree (`kithara-platform` `common/cancel/`): a
+`CancelRoot` owns the tree root, `CancelToken` is a `Clone`-by-identity handle,
+and `cancel()` on any node flags it and cascades down to every descendant.
+`is_cancelled()` is a single Acquire-load of the node's own flag.
+
+`PlayerImpl` takes its cancel through `CancelScope::from_config(config.cancel)`:
+a passed `CancelToken` (consumer crates `Queue` / `App` / FFI build their own
+`CancelRoot` and pass `root.child()` through `PlayerConfig.cancel`) makes the
+scope a composed child of that token; `None` makes the player own a fresh
+`CancelRoot`. Subsystems (Downloader, AssetStore, HlsPeer, audio worker, epoch
+cancel) derive children via `.child()` from the scope's token, so a master /
+parent `cancel()` is observed by all of them.
+
+`CancelScope::Drop` is **passive**. Teardown is an explicit `scope.cancel()`
+that cancels the player's own subtree — it never implicitly cancels a
+potentially-foreign master passed in from above (the previous `Drop`-cancel of
+the passed token is gone). Hard-coded `CancelRoot::new()` / `CancelRoot::default()`
+and `CancelToken::never()` outside the allowlist are forbidden, enforced by
+`cargo xtask lint arch` (`cancel_root_sites`).
 
 ## Real-Time Audio Thread
 
