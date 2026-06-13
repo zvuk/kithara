@@ -281,7 +281,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 static INSTALL_ID: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(not(target_arch = "wasm32"))]
-tokio::task_local! {
+kithara_platform::tokio::task_local! {
     /// Per-test install_id captured at scope entry. Inherited by
     /// `tokio::spawn` automatically; not inherited by `spawn_blocking`
     /// — that path falls back to the global atomic, which is the

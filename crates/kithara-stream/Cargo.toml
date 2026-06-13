@@ -47,7 +47,6 @@ wasm_safe_thread = { workspace = true }
 dashmap = { workspace = true }
 kithara-stream = { path = ".", default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
-tokio-stream = { workspace = true }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 

@@ -1,9 +1,12 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara_events::{DownloaderEvent, Event, EventBus, TrackId, TrackStatus};
-use kithara_platform::tokio::{
-    sync::Semaphore,
-    task::{JoinHandle, spawn},
+use kithara_platform::{
+    tokio,
+    tokio::{
+        sync::Semaphore,
+        task::{JoinHandle, spawn},
+    },
 };
 use kithara_play::{PlayerImpl, Resource, ResourceConfig};
 use tracing::{debug, warn};
@@ -148,10 +151,9 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use kithara_events::{EventBus, QueueEvent};
-    use kithara_platform::time::{Duration, timeout};
+    use kithara_platform::time::Duration;
     use kithara_play::PlayerConfig;
     use kithara_test_utils::kithara;
-    use tokio::spawn;
 
     use super::*;
     use crate::track::TrackEntry;
@@ -274,7 +276,7 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[kithara::test(tokio, multi_thread)]
     async fn spawn_load_bad_url_emits_failed_status() {
         let fx = LoaderFixtureSpec::default().build();
         fx.tracks.lock().push(TrackEntry {
@@ -293,7 +295,7 @@ mod tests {
         let mut saw_loading = false;
         let mut saw_failed = false;
         for _ in 0..8 {
-            match timeout(Duration::from_millis(200), rx.recv()).await {
+            match time::timeout(Duration::from_millis(200), rx.recv()).await {
                 Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged {
                     id: TrackId(42),
                     status: TrackStatus::Loading,

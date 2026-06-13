@@ -13,7 +13,8 @@ use kithara::{
 use kithara_platform::{
     CancelToken,
     sync::{Mutex, Notify},
-    tokio::sync::broadcast::error::RecvError,
+    tokio,
+    tokio::{sync::broadcast::error::RecvError, task},
 };
 use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry, TrackSource};
 
@@ -244,7 +245,7 @@ fn spawn_listener(ctx: ListenerCtx) {
     } = ctx;
     let mut rx = queue.subscribe();
 
-    tokio::spawn(async move {
+    task::spawn(async move {
         let mut current_analyze: Option<CancelToken> = None;
         let analyze_ctx = AnalyzeCtx {
             queue: &queue,
@@ -323,7 +324,7 @@ fn spawn_analyze(ctx: AnalyzeCtx<'_>, current_analyze: &mut Option<CancelToken>)
     *current_analyze = Some(analyze_cancel.clone());
     let state = Arc::clone(state);
 
-    tokio::spawn(async move {
+    task::spawn(async move {
         let Some(envelope) = analyze(resource_cfg, WAVEFORM_BUCKETS, analyze_cancel).await else {
             return;
         };

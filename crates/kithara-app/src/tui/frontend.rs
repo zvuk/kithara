@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use kithara_platform::tokio;
 use kithara_queue::Queue;
 
 use super::runner;
