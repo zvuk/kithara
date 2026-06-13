@@ -36,25 +36,16 @@ pub use wasm::*;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub mod flash;
-// The path `kithara_platform::flash::*` (macro emissions, prod attributes)
-// must resolve in every configuration: inert forms off the engine.
+
+// W3 propagate-down cancel — the workspace's only cancel surface (the legacy
+// runtime-backed roots were dropped in 3.4).
+pub use common::cancel::{CancelGroup, CancelScope, CancelToken, CancelWakerGuard, Cancelled};
+// `kithara_platform::flash::*` (macro emissions, prod attributes) must resolve
+// in every configuration: inert forms off the engine.
 #[cfg(not(all(not(target_arch = "wasm32"), feature = "flash")))]
 pub use common::flash_inert as flash;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub use flash::*;
-
-// Legacy roots until the W3 cancel redesign (3.4 deletes them).
-mod cancel_group;
-mod rt_cancel;
-
-// W3 propagate-down cancel. The root `CancelGroup` now resolves to
-// `common::cancel` (switched off the legacy `cancel_group` in 3.3, atomic with
-// the workspace token migration). Legacy `CancellationToken` stays exported
-// until 3.4 deletes the legacy roots; it has no remaining consumers.
-pub use common::cancel::{
-    CancelGroup, CancelScope, CancelToken, CancelWakerGuard, Cancelled, CancelledOwned,
-};
-pub use rt_cancel::CancellationToken;
 
 // Root item re-exports: kept until the W5 mass name migration; they resolve
 // through the gated backend globs above.

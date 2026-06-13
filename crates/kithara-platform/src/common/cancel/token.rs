@@ -2,7 +2,7 @@ use std::{fmt, sync::Arc};
 
 use super::{
     node::{Node, Slot},
-    wait::{Cancelled, CancelledOwned},
+    wait::Cancelled,
 };
 
 /// A handle into a cancel subtree.
@@ -62,12 +62,6 @@ impl CancelToken {
     #[must_use]
     pub fn cancelled(&self) -> Cancelled<'_> {
         Cancelled::new(&self.node)
-    }
-
-    /// `'static` flavour of [`cancelled`](CancelToken::cancelled).
-    #[must_use]
-    pub fn cancelled_owned(&self) -> CancelledOwned {
-        CancelledOwned::new(Arc::clone(&self.node))
     }
 
     /// Register a synchronous waker fired when this token is cancelled — the sync
@@ -299,49 +293,6 @@ mod tests {
             .expect("cancelled() must resolve within the test timeout")
             .expect("spawned cancellation task must not panic");
         assert!(flag, "flag must be visible once cancelled() resolves");
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn async_cancelled_resolves_on_parent_cancel() {
-        let master = CancelToken::root();
-        let child = master.child();
-        let fut = child.cancelled_owned();
-        let handle = spawn(fut);
-        task::yield_now().await;
-
-        master.cancel();
-
-        tokio_time::timeout(Duration::from_secs(2), handle)
-            .await
-            .expect("child cancelled() must resolve on parent cancel")
-            .expect("spawned task must not panic");
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn flag_visible_after_owned_cancelled_resolves() {
-        // Replaces the legacy `release_store_orders_before_inner_cancel`: there
-        // is no inner token. The Node sets the flag (Release) before firing any
-        // waker, so a task that observed the wake must see the flag set.
-        let master = CancelToken::root();
-        let worker = master.child();
-        let w = worker.clone();
-
-        let handle = spawn(async move {
-            w.cancelled_owned().await;
-            w.is_cancelled()
-        });
-        task::yield_now().await;
-
-        master.cancel();
-
-        let flag_seen = tokio_time::timeout(Duration::from_secs(2), handle)
-            .await
-            .expect("cancelled() must resolve within the test timeout")
-            .expect("spawned task must not panic");
-        assert!(
-            flag_seen,
-            "a task that observed the cancel wake must also see the flag set"
-        );
     }
 
     fn counter() -> (Arc<AtomicUsize>, impl Fn() + Send + Sync + 'static) {

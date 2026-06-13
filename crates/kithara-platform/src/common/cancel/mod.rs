@@ -2,8 +2,8 @@
 //! `Weak` children + waker slots) and the public `CancelToken` / `CancelGroup` /
 //! `CancelScope` types built on it.
 //!
-//! Built entirely on `std::sync` (no `parking_lot`, no `tokio_util`), so it
-//! compiles unchanged on `wasm32`. `cancel()` flips this node's flag, drains its
+//! Built entirely on `std::sync` (no `parking_lot`, no async-runtime cancel
+//! crate), so it compiles unchanged on `wasm32`. `cancel()` flips this node's flag, drains its
 //! own wakers, then recurses **down** through the `Weak` children; reads
 //! (`is_cancelled`) are a single `Acquire` load of one flag. The full contract —
 //! the parent-liveness invariant, the born-cancelled race, and the
@@ -38,4 +38,4 @@ mod wait;
 pub use group::CancelGroup;
 pub use scope::CancelScope;
 pub use token::{CancelToken, CancelWakerGuard};
-pub use wait::{Cancelled, CancelledOwned};
+pub use wait::Cancelled;
