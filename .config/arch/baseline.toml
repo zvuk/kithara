@@ -59,7 +59,6 @@ schema_version = 1
 "crates/kithara-assets/src/identity.rs:34:11::from_headers" = 1
 "crates/kithara-assets/src/index/demand.rs:148:11::note_progress" = 1
 "crates/kithara-assets/src/key.rs:103:11::as_absolute_path" = 1
-"crates/kithara-assets/src/key.rs:119:11::matches_url" = 1
 "crates/kithara-assets/src/key.rs:44:18::serialize" = 1
 "crates/kithara-assets/src/lease.rs:120:11::flush_pins" = 1
 "crates/kithara-assets/src/unified.rs:225:11::is_ephemeral" = 1
