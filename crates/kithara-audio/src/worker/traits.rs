@@ -160,7 +160,7 @@ mod tests {
 
         let mut chain: Vec<Box<dyn AudioEffect>> = vec![stage0, stage1];
         let out = drain_effects(&mut chain);
-        let total: Vec<f32> = out.iter().flat_map(|c| c.pcm.iter().copied()).collect();
+        let total: Vec<f32> = out.iter().flat_map(|c| c.samples.iter().copied()).collect();
 
         assert!(
             out.len() > 1,

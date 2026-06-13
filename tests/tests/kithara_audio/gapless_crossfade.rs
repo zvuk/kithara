@@ -108,10 +108,10 @@ fn trim_track(
 
     let mut output = Vec::new();
     for chunk in trimmer.push(chunk) {
-        output.extend_from_slice(chunk.samples());
+        output.extend_from_slice(&chunk.samples[..]);
     }
     for chunk in trimmer.flush() {
-        output.extend_from_slice(chunk.samples());
+        output.extend_from_slice(&chunk.samples[..]);
     }
     output
 }

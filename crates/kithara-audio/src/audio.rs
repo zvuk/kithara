@@ -473,7 +473,7 @@ impl<S> Audio<S> {
                 let start_sample = frames_to_samples(consumed_frames_in_chunk, channels)?;
                 let take_samples = frames_to_samples(take_frames, channels)?;
                 buf[written..written + take_samples]
-                    .copy_from_slice(&chunk.pcm[start_sample..start_sample + take_samples]);
+                    .copy_from_slice(&chunk.samples[start_sample..start_sample + take_samples]);
                 last_output_meta = Some(chunk.meta);
                 written += take_samples;
 
@@ -1503,8 +1503,8 @@ mod tests {
 
     fn make_chunk(samples: &[f32]) -> PcmChunk {
         let mut chunk = PcmChunk::default();
-        chunk.pcm.clear();
-        chunk.pcm.extend_from_slice(samples);
+        chunk.samples.clear();
+        chunk.samples.extend_from_slice(samples);
         chunk
     }
 

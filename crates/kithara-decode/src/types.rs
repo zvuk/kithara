@@ -182,23 +182,23 @@ impl Default for PcmMeta {
 
 /// PCM chunk containing interleaved audio samples with automatic pool recycling.
 ///
-/// The `pcm` buffer is pool-backed via [`PcmBuf`]: when the chunk is dropped,
+/// The `samples` buffer is pool-backed via [`PcmBuf`]: when the chunk is dropped,
 /// the buffer returns to the global PCM pool for reuse instead of being deallocated.
 ///
 /// # Invariants
-/// - `pcm.len() % channels == 0` (frame-aligned)
+/// - `samples.len() % channels == 0` (frame-aligned)
 /// - `spec.channels > 0` and `spec.sample_rate > 0`
 /// - All samples are f32 and interleaved (LRLRLR...)
 #[derive(Debug)]
 pub struct PcmChunk {
-    pub pcm: PcmBuf,
+    pub samples: PcmBuf,
     pub meta: PcmMeta,
 }
 
 impl Default for PcmChunk {
     fn default() -> Self {
         Self {
-            pcm: PcmPool::default().get(),
+            samples: PcmPool::default().get(),
             meta: PcmMeta::default(),
         }
     }
@@ -210,10 +210,10 @@ impl Clone for PcmChunk {
     /// Each clone gets its own [`PcmBuf`] from the global pool,
     /// so both original and clone recycle independently on drop.
     fn clone(&self) -> Self {
-        let mut new_pcm = PcmPool::default().get();
-        new_pcm.extend_from_slice(&self.pcm);
+        let mut new_samples = PcmPool::default().get();
+        new_samples.extend_from_slice(&self.samples);
         Self {
-            pcm: new_pcm,
+            samples: new_samples,
             meta: self.meta,
         }
     }
@@ -222,8 +222,8 @@ impl Clone for PcmChunk {
 impl PcmChunk {
     /// Create a new `PcmChunk` from a pool-backed buffer.
     #[must_use]
-    pub fn new(meta: PcmMeta, pcm: PcmBuf) -> Self {
-        Self { pcm, meta }
+    pub fn new(meta: PcmMeta, samples: PcmBuf) -> Self {
+        Self { samples, meta }
     }
 
     /// Number of audio frames in this chunk.
@@ -232,7 +232,7 @@ impl PcmChunk {
     #[must_use]
     pub fn frames(&self) -> usize {
         let channels = self.meta.spec.channels as usize;
-        self.pcm.len().checked_div(channels).unwrap_or(0)
+        self.samples.len().checked_div(channels).unwrap_or(0)
     }
 
     /// Audio format specification.
@@ -244,7 +244,7 @@ impl PcmChunk {
 
 impl AsRef<[f32]> for PcmChunk {
     fn as_ref(&self) -> &[f32] {
-        &self.pcm
+        &self.samples
     }
 }
 
@@ -399,7 +399,7 @@ mod tests {
         let chunk = test_chunk(spec, pcm.clone());
 
         assert_eq!(chunk.spec(), spec);
-        assert_eq!(&chunk.pcm[..], &pcm[..]);
+        assert_eq!(&chunk.samples[..], &pcm[..]);
     }
 
     #[kithara::test]
@@ -432,7 +432,7 @@ mod tests {
         let pcm = vec![0.1, 0.2, 0.3, 0.4];
         let chunk = test_chunk(spec, pcm.clone());
 
-        let samples: &[f32] = &chunk.pcm;
+        let samples: &[f32] = &chunk.samples;
         assert_eq!(samples.len(), 4);
         assert_eq!(samples, &pcm[..]);
     }
@@ -445,7 +445,7 @@ mod tests {
         let cloned = chunk.clone();
 
         assert_eq!(cloned.spec(), chunk.spec());
-        assert_eq!(cloned.pcm, chunk.pcm);
+        assert_eq!(cloned.samples, chunk.samples);
     }
 
     #[kithara::test]

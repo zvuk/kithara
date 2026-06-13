@@ -688,9 +688,9 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
 
         let drop_samples = drop_frames.saturating_mul(channels);
-        let len = chunk.pcm.len();
-        chunk.pcm.copy_within(drop_samples..len, 0);
-        chunk.pcm.truncate(len - drop_samples);
+        let len = chunk.samples.len();
+        chunk.samples.copy_within(drop_samples..len, 0);
+        chunk.samples.truncate(len - drop_samples);
 
         chunk.meta.frame_offset = chunk.meta.frame_offset.saturating_add(drop_frames as u64);
         chunk.meta.timestamp = chunk
@@ -1298,7 +1298,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// Track chunk statistics and emit format events.
     fn track_chunk(&mut self, chunk: &PcmChunk) {
         self.chunks_decoded += 1;
-        self.total_samples += chunk.pcm.len() as u64;
+        self.total_samples += chunk.samples.len() as u64;
 
         if self.chunks_decoded == 1
             && let Some(ref emit) = self.emit
@@ -1594,7 +1594,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                             "apply_seek_skip never produces Eof — it only trims/drops the chunk"
                         ),
                     };
-                    if chunk.pcm.is_empty() {
+                    if chunk.samples.is_empty() {
                         continue;
                     }
                     hang_reset!();

@@ -666,7 +666,7 @@ impl ResamplerProcessor {
         self.resampler.as_ref()?;
 
         self.last_input_meta = Some(chunk.meta);
-        self.append_to_buffer(&chunk.pcm);
+        self.append_to_buffer(&chunk.samples);
 
         let input_frames = self.resampler.as_ref()?.input_frames_next();
         let channels = self.channels;
@@ -950,7 +950,7 @@ mod tests {
         let result = processor.process(chunk.clone());
         assert!(result.is_some());
         let out = result.unwrap();
-        assert_eq!(out.pcm, chunk.pcm);
+        assert_eq!(out.samples, chunk.samples);
         assert_eq!(out.spec().sample_rate.get(), 44100);
     }
 
@@ -986,7 +986,7 @@ mod tests {
         let result = processor.process(chunk);
         if produces_output {
             assert!(result.is_some());
-            assert!(!result.unwrap().pcm.is_empty());
+            assert!(!result.unwrap().samples.is_empty());
         } else {
             assert!(result.is_none());
             assert_eq!(processor.input_buffer[0].len(), interleaved_len / 2);

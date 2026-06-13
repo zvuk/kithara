@@ -48,7 +48,7 @@ mod tests {
         let mut fx = TimeStretchProcessor;
         let input = chunk();
         let out = fx.process(input.clone()).expect("passthrough emits");
-        assert_eq!(&out.pcm[..], &input.pcm[..]);
+        assert_eq!(&out.samples[..], &input.samples[..]);
         assert_eq!(out.meta, input.meta, "meta carried verbatim");
         assert!(fx.flush().is_none());
     }

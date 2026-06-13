@@ -134,8 +134,8 @@ impl FadeInState {
         let total = f32::from(self.total_frames.max(1));
         let start_frame = self.applied_frames;
         let shape_samples = usize::from(to_shape) * channels;
-        let prefix_len = shape_samples.min(chunk.pcm.len());
-        let prefix = &mut chunk.pcm[..prefix_len];
+        let prefix_len = shape_samples.min(chunk.samples.len());
+        let prefix = &mut chunk.samples[..prefix_len];
         for (frame_offset, frame_samples) in prefix.chunks_exact_mut(channels).enumerate() {
             let frame = start_frame.saturating_add(u16::try_from(frame_offset).unwrap_or(u16::MAX));
             let position = f32::from(frame) / total;
@@ -419,9 +419,9 @@ fn apply_trailing_fade_out(tail_buffer: &mut TailBuffer, sample_rate: u32) {
         let in_window = (total_frames - faded_so_far).min(chunk_total_frames);
         let first_to_shape = chunk_total_frames - in_window;
 
-        let pcm_end = (chunk_total_frames * channels).min(chunk.pcm.len());
+        let pcm_end = (chunk_total_frames * channels).min(chunk.samples.len());
         let pcm_start = (first_to_shape * channels).min(pcm_end);
-        let window = &mut chunk.pcm[pcm_start..pcm_end];
+        let window = &mut chunk.samples[pcm_start..pcm_end];
         for (frame_in_chunk, frame_samples) in window.chunks_exact_mut(channels).enumerate() {
             let frames_to_end = in_window - 1 - frame_in_chunk + faded_so_far;
             let frame_in_fade = total_frames - 1 - frames_to_end;
@@ -590,7 +590,7 @@ fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
 
     for chunk in tail_buffer.iter().rev() {
         let chunk_total_frames = chunk_frames(chunk);
-        let samples = &chunk.pcm[..];
+        let samples = &chunk.samples[..];
         let channels = usize::from(chunk.spec().channels.max(1));
         let channels_f64: f64 = channels.max(1).as_();
         for frame in (0..chunk_total_frames).rev() {
@@ -653,7 +653,7 @@ fn find_leading_trim_frames(
 
     for chunk in buffer {
         let chunk_frames = chunk_frames(chunk);
-        let samples = &chunk.pcm[..];
+        let samples = &chunk.samples[..];
         let channels = usize::from(chunk.spec().channels.max(1));
         for frame in 0..chunk_frames {
             if scanned_frames >= params.scan_window_frames {
@@ -714,11 +714,11 @@ fn trim_chunk_start(chunk: &mut PcmChunk, trim_frames: usize) {
     let spec = chunk.spec();
     let channels = usize::from(spec.channels.max(1));
     let trim_samples = trim_frames.saturating_mul(channels);
-    let len = chunk.pcm.len();
-    chunk.pcm.copy_within(trim_samples..len, 0);
-    chunk.pcm.truncate(len.saturating_sub(trim_samples));
+    let len = chunk.samples.len();
+    chunk.samples.copy_within(trim_samples..len, 0);
+    chunk.samples.truncate(len.saturating_sub(trim_samples));
     chunk.meta.frame_offset = chunk.meta.frame_offset.saturating_add(trim_frames as u64);
-    chunk.meta.frames = u32::try_from(chunk.pcm.len() / channels.max(1)).unwrap_or(u32::MAX);
+    chunk.meta.frames = u32::try_from(chunk.samples.len() / channels.max(1)).unwrap_or(u32::MAX);
     chunk.meta.timestamp = chunk.meta.timestamp.saturating_add(duration_for_frames(
         spec.sample_rate.get(),
         trim_frames as u64,
@@ -729,7 +729,7 @@ fn trim_chunk_end(chunk: &mut PcmChunk, trim_frames: u64) {
     let channels = usize::from(chunk.spec().channels.max(1));
     let keep_frames = usize_from_u64_saturating(chunk_frames(chunk).saturating_sub(trim_frames));
     let keep_samples = keep_frames.saturating_mul(channels);
-    chunk.pcm.truncate(keep_samples);
+    chunk.samples.truncate(keep_samples);
     chunk.meta.frames = u32::try_from(keep_frames).unwrap_or(u32::MAX);
 }
 

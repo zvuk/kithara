@@ -76,7 +76,7 @@ fn drain_all(decoder: &mut dyn Decoder) -> Vec<f32> {
     loop {
         match decoder.next_chunk().expect("decode should succeed") {
             kithara_decode::DecoderChunkOutcome::Chunk(chunk) => {
-                all.extend_from_slice(&chunk.pcm);
+                all.extend_from_slice(&chunk.samples);
             }
             kithara_decode::DecoderChunkOutcome::Pending(_) => continue,
             kithara_decode::DecoderChunkOutcome::Eof => break,

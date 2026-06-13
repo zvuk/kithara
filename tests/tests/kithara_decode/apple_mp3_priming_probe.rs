@@ -72,10 +72,10 @@ fn measure_leading_silence(
         let Ok(chunk) = PcmChunk::try_from(outcome) else {
             break;
         };
-        if chunk.pcm.is_empty() {
+        if chunk.samples.is_empty() {
             continue;
         }
-        for frame_chunk in chunk.pcm.chunks_exact(chan) {
+        for frame_chunk in chunk.samples.chunks_exact(chan) {
             left.push(frame_chunk[0]);
         }
         if left.len() >= (SAMPLE_RATE as usize) {
