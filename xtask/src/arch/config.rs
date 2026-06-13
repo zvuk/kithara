@@ -112,7 +112,7 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) field_always_equals_other_field: FieldAlwaysEqualsOtherFieldThreshold,
     #[serde(default)]
-    pub(crate) cancel_hierarchy: CancelHierarchyThreshold,
+    pub(crate) cancel_root_sites: CancelRootSitesThreshold,
     #[serde(default)]
     pub(crate) dead_exports: DeadExportsThreshold,
 }
@@ -531,13 +531,19 @@ pub(crate) struct NoLibStaticsThreshold {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct CancelHierarchyThreshold {
-    /// Crates whose production *is* test scaffolding (helpers, mocks).
-    /// Their hard-coded `CancellationToken::new()` calls are
-    /// indistinguishable from test fixtures and don't violate the
-    /// hierarchy contract. Project-specific — supplied via config.
+pub(crate) struct CancelRootSitesThreshold {
+    /// Crates whose production *is* test scaffolding (helpers, mocks). Their
+    /// hard-coded `CancelToken::root()` / `CancelToken::never()` calls are
+    /// indistinguishable from test fixtures and don't root an orphan tree.
+    /// Project-specific — supplied via config.
     #[serde(default)]
     pub(crate) exempt_crates: Vec<String>,
+    /// Relative file paths where minting a fresh cancel root
+    /// (`CancelToken::root` / `CancelToken::never`) is sanctioned: consumer-crate
+    /// owner tops, FFI bridges, `CancelScope`, and the dedicated sentinel / latch
+    /// sites.
+    #[serde(default)]
+    pub(crate) allowed_files: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

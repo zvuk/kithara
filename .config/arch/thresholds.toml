@@ -137,15 +137,27 @@ exempt_crates = [
     "kithara-probe-macros",
 ]
 
-[cancel_hierarchy]
+[cancel_root_sites]
 # Crates whose production *is* test scaffolding (helpers, mocks): their
-# hard-coded `CancellationToken::new()` calls are indistinguishable from
-# test fixtures and don't violate the cancel-hierarchy contract.
+# hard-coded `CancelToken::root()` / `CancelToken::never()` calls are
+# indistinguishable from test fixtures and don't root an orphan tree.
 exempt_crates = [
     "kithara-test-utils",
     "kithara-test-macros",
     "kithara-probe-macros",
     "xtask",
+]
+# Files where minting a fresh cancel root is sanctioned: consumer-crate owner
+# tops (App / FFI), FFI bridges that outlive the player, `CancelScope`'s
+# standalone root, and the dedicated never-cancelled sentinel / latch sites
+# (`kithara-stream` batch placeholder, `kithara-hls` peer `wake_signal`).
+allowed_files = [
+    "crates/kithara-app/src/main.rs",
+    "crates/kithara-ffi/src/native/inner.rs",
+    "crates/kithara-ffi/src/core/item.rs",
+    "crates/kithara-platform/src/common/cancel/scope.rs",
+    "crates/kithara-stream/src/dl/batch.rs",
+    "crates/kithara-hls/src/peer.rs",
 ]
 
 [shared_state]

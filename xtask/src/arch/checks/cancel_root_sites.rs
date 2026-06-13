@@ -9,77 +9,41 @@ use crate::common::{
     walker::{relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "cancel_hierarchy";
+pub(crate) const ID: &str = "cancel_root_sites";
 
-/// Inline-comment markers + the call patterns the lint matches.
-mod markers {
-    pub(super) const OWNER: &str = "kithara:cancel:owner";
-    pub(super) const BRIDGE: &str = "kithara:cancel:bridge";
-    /// Master-minting calls that must sit at a marked owner / bridge site:
-    /// the workspace `CancellationToken`'s fresh-root constructor
-    /// (`CancellationToken::default()`). It roots a new cancel hierarchy, so an
-    /// unmarked one is an orphan that never sees a parent shutdown pulse.
-    /// (`.unwrap_or_default()` is not matched — it is the sanctioned standalone
-    /// fallback on `Option<CancellationToken>`.)
-    pub(super) const PATTERNS: &[&str] = &["CancellationToken::default()"];
-}
+pub(crate) struct CancelRootSites;
 
-pub(crate) struct CancelHierarchy;
-
-impl Check for CancelHierarchy {
+impl Check for CancelRootSites {
     fn id(&self) -> &'static str {
         ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        let cfg = &ctx.config.thresholds.cancel_hierarchy;
+        let cfg = &ctx.config.thresholds.cancel_root_sites;
         let exempt: BTreeSet<&str> = cfg.exempt_crates.iter().map(String::as_str).collect();
+        let allowed: BTreeSet<&str> = cfg.allowed_files.iter().map(String::as_str).collect();
         let mut violations = Vec::new();
 
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let rel = relative_to(ctx.workspace_root, &path);
             let rel_str = rel.to_string_lossy().replace('\\', "/");
-            if rel_str.starts_with("tests/") || rel_str.contains("/tests/") {
+            if is_test_or_bench_path(&rel_str) {
                 continue;
             }
             if rel.file_name().and_then(|f| f.to_str()) == Some("tests.rs") {
                 continue;
             }
-            if crate_is_exempt(rel, &exempt) {
+            if crate_is_exempt(rel, &exempt) || allowed.contains(rel_str.as_str()) {
                 continue;
             }
 
             let content = fs::read_to_string(&path)?;
-            if !markers::PATTERNS.iter().any(|p| content.contains(p)) {
-                continue;
-            }
-            let Ok(file) = parse_file(&content) else {
-                continue;
-            };
-
-            let mut test_ranges: Vec<(usize, usize)> = Vec::new();
-            collect_test_ranges(&file.items, &mut test_ranges);
-
-            for (idx, line) in content.lines().enumerate() {
-                let code = strip_line_comment(line);
-                let Some(pattern) = markers::PATTERNS.iter().find(|p| code.contains(**p)) else {
-                    continue;
-                };
-                if line.contains(markers::OWNER) || line.contains(markers::BRIDGE) {
-                    continue;
-                }
-                let line_num = idx + 1;
-                if test_ranges
-                    .iter()
-                    .any(|&(s, e)| line_num >= s && line_num <= e)
-                {
-                    continue;
-                }
+            for (line_num, pattern) in scan_source(&content) {
                 violations.push(
                     Violation::deny(
                         ID,
                         format!("{rel_str}:{line_num}"),
-                        format!("orphan `{pattern}` master-cancel construction in production code"),
+                        format!("orphan `{pattern}()` cancel-root minting in production code"),
                     )
                     .with_explanation(EXPLANATION),
                 );
@@ -89,30 +53,68 @@ impl Check for CancelHierarchy {
     }
 }
 
+/// Pure core: the (1-based line, matched pattern) of every root-minting call in
+/// `content` that sits in production code (outside `#[cfg(test)]` ranges and
+/// line comments). Path-level allowlist / exempt-crate / test-path skips are
+/// applied by [`CancelRootSites::run`] before this is called.
+fn scan_source(content: &str) -> Vec<(usize, &'static str)> {
+    // Fresh-root minting calls denied outside the allowlist: the owning-master
+    // `CancelToken::root` and the never-cancelled sentinel `CancelToken::never`.
+    // Both root a new cancel tree; `.child()` (the sanctioned derivation) is
+    // never matched.
+    const PATTERNS: &[&str] = &["CancelToken::root", "CancelToken::never"];
+    if !PATTERNS.iter().any(|p| content.contains(p)) {
+        return Vec::new();
+    }
+    let Ok(file) = parse_file(content) else {
+        return Vec::new();
+    };
+
+    let mut test_ranges: Vec<(usize, usize)> = Vec::new();
+    collect_test_ranges(&file.items, &mut test_ranges);
+
+    let mut hits = Vec::new();
+    for (idx, line) in content.lines().enumerate() {
+        let code = strip_line_comment(line);
+        let Some(pattern) = PATTERNS.iter().find(|p| code.contains(**p)) else {
+            continue;
+        };
+        let line_num = idx + 1;
+        if test_ranges
+            .iter()
+            .any(|&(s, e)| line_num >= s && line_num <= e)
+        {
+            continue;
+        }
+        hits.push((line_num, *pattern));
+    }
+    hits
+}
+
+fn is_test_or_bench_path(rel_str: &str) -> bool {
+    rel_str.starts_with("tests/") || rel_str.contains("/tests/") || rel_str.contains("/benches/")
+}
+
 const EXPLANATION: &str = "\
-Summary: Hard-coded `CancellationToken::default()` outside the marked
-owner / bridge sites breaks the unified cancel hierarchy. It mints a fresh
-master and roots a new tree.
+Summary: minting a fresh cancel root — `CancelToken::root()` (owning master) or
+`CancelToken::never()` (never-cancelled sentinel) — outside the allowlisted
+sites roots a new cancel tree that no parent shutdown pulse reaches.
 
-Why: Every cancel token in production should be either (a) the
-single master owned by the consumer crate (`Queue` / `App` / FFI
-player / `PlayerImpl` fallback) or (b) a child of one such master
-derived via `.child_token()`. Orphans synthesised at subsystem level
-never see a parent shutdown pulse — dropping the player leaves the
-orphan-rooted task running. A fresh master is doubly dangerous: its
-lock-free flag chain roots a new tree, so a child of an orphan master
-never observes the real master cancel on the produce-core.
+Why: every production cancel token should be either (a) a master root owned at a
+consumer-crate top (`App` / FFI player) or vended by `CancelScope`, or (b) a
+child derived via `.child()` from such a master. A root minted at subsystem
+level is an orphan: dropping the player leaves its orphan-rooted tasks running,
+and a child of an orphan never observes the real master cancel on the
+produce-core.
 
-Fix: derive a child from the cancel passed in via your config struct
-(e.g. `config.cancel.clone().unwrap_or_default().child_token()`), or
-take a `CancellationToken` parameter from your caller. If
-the construction is genuinely an owner / bridge site, add the inline
-marker comment on the same line:
-  - `// kithara:cancel:owner`  (consumer-crate top, PlayerImpl fallback)
-  - `// kithara:cancel:bridge` (FFI bridge that outlives the player)
+Fix: derive a child from the cancel handed in via your config
+(`CancelScope::new(config.cancel).token().child()`), or take a `CancelToken`
+parameter from your caller. Genuine owner / bridge / sentinel sites are
+sanctioned per-file in the `cancel_root_sites` allowlist (see
+`.config/arch/thresholds.toml`); add a file there only with a clear owner
+reason.
 
-See `crates/kithara-play/README.md` \"Cancel Hierarchy\" for the
-full contract.";
+See `crates/kithara-play/README.md` \"Cancel Hierarchy\" and `AGENTS.md`.";
 
 fn collect_test_ranges(items: &[Item], out: &mut Vec<(usize, usize)>) {
     for item in items {
@@ -238,9 +240,9 @@ fn item_end_line(item: &Item) -> Option<usize> {
     Some(line)
 }
 
-/// Strip the trailing `//` line comment so the pattern match only
-/// inspects code. Keeps the part before the first `//` that is not
-/// inside a string literal (best-effort: counts unescaped double-quotes).
+/// Strip the trailing `//` line comment so the pattern match only inspects code.
+/// Keeps the part before the first `//` that is not inside a string literal
+/// (best-effort: counts unescaped double-quotes).
 fn strip_line_comment(line: &str) -> &str {
     let bytes = line.as_bytes();
     let mut in_string = false;
@@ -272,4 +274,58 @@ fn crate_is_exempt(rel: &std::path::Path, exempt: &BTreeSet<&str>) -> bool {
         return true;
     };
     exempt.contains(crate_name.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{crate_is_exempt, is_test_or_bench_path, scan_source};
+
+    #[test]
+    fn flags_root_and_never_in_production() {
+        let src = "fn build() {\n    let a = CancelToken::root();\n    let b = CancelToken::never();\n}\n";
+        let hits = scan_source(src);
+        assert_eq!(
+            hits,
+            vec![(2, "CancelToken::root"), (3, "CancelToken::never")]
+        );
+    }
+
+    #[test]
+    fn ignores_child_and_other_methods() {
+        let src = "fn run(parent: CancelToken) {\n    let _ = parent.child();\n    let _ = parent.is_cancelled();\n}\n";
+        assert!(scan_source(src).is_empty(), "got: {:?}", scan_source(src));
+    }
+
+    #[test]
+    fn skips_cfg_test_modules() {
+        let src = "fn prod() {\n    let _ = parent.child();\n}\n\n#[cfg(test)]\nmod tests {\n    fn t() {\n        let _ = CancelToken::root();\n    }\n}\n";
+        assert!(scan_source(src).is_empty(), "got: {:?}", scan_source(src));
+    }
+
+    #[test]
+    fn ignores_matches_in_comments() {
+        let src =
+            "fn f() {\n    // CancelToken::root() in a comment is not a mint\n    let _ = 1;\n}\n";
+        assert!(scan_source(src).is_empty(), "got: {:?}", scan_source(src));
+    }
+
+    #[test]
+    fn allowed_and_exempt_resolution() {
+        let exempt = ["kithara-test-utils"].into_iter().collect();
+        assert!(crate_is_exempt(
+            Path::new("crates/kithara-test-utils/src/lib.rs"),
+            &exempt
+        ));
+        assert!(!crate_is_exempt(
+            Path::new("crates/kithara-audio/src/audio.rs"),
+            &exempt
+        ));
+        assert!(is_test_or_bench_path(
+            "crates/kithara-platform/benches/cancel.rs"
+        ));
+        assert!(is_test_or_bench_path("crates/kithara-hls/src/tests/foo.rs"));
+        assert!(!is_test_or_bench_path("crates/kithara-app/src/main.rs"));
+    }
 }
