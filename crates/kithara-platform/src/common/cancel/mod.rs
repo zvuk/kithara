@@ -16,6 +16,18 @@
 //! stays consistent regardless. So a poisoned lock is recovered with
 //! `into_inner()` rather than propagated — `unwrap()`/`expect()` are forbidden in
 //! production code, and there is no correct state to lose.
+//!
+//! Flash: the bare `std::sync::Mutex` is deliberate and conformant. The platform
+//! treats `Mutex`/`RwLock` as **flash-blind by contract** (see `flash/sync/mod.rs`)
+//! — they guard bounded critical sections whose holder always runs (never parks
+//! while held), so virtual time can never advance with the lock held and a waiter
+//! is always served; flash adds no semantics and `flash::sync::Mutex` is a plain
+//! re-export of the native one. Flash-awareness lives only in the **wait**
+//! primitives (`Condvar`/`Notify`/`mpsc`). Cancel owns no wait: every section here
+//! is bounded and wakers fire outside the lock; `on_cancel` merely delivers a wake
+//! into a consumer's flash-aware `Condvar` (e.g. `kithara-storage` `wait_range`),
+//! where the actual blocking wait and its flash mediation live. So there is no
+//! flash variant to swap in and nothing to make generic over the lock type.
 
 mod group;
 mod node;
