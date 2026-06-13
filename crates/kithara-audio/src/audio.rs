@@ -27,9 +27,9 @@ use tracing::{debug, info, trace, warn};
 
 use crate::{
     pipeline::{
-        config::{AudioConfig, create_effects, expected_output_spec},
+        config::{AudioConfig, EffectsConfig, create_effects, expected_output_spec},
         fetch::{EpochValidator, Fetch, FetchKind},
-        source::{OffsetReader, SharedStream, StreamAudioSource},
+        source::{DecodeInit, OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
     runtime::AtomicServiceClass,
@@ -752,7 +752,17 @@ impl<S> Audio<S> {
 }
 
 /// Specialized impl for Stream-based audio pipelines.
-///
+/// Host-threaded decoder construction deps shared by
+/// [`Audio::create_initial_decoder`] and [`Audio::create_decoder_factory`]:
+/// the decoder `backend` plus the host's `pcm_pool` / `byte_pool`. All
+/// required — the host's configured pools must reach the decoder, never a
+/// silent process-global fallback.
+struct DecoderDeps {
+    backend: kithara_decode::DecoderBackend,
+    pcm_pool: PcmPool,
+    byte_pool: BytePool,
+}
+
 /// Provides async constructor that creates Stream internally.
 /// Uses `StreamAudioSource` for automatic format change detection on ABR switch.
 impl<T> Audio<Stream<T>>
@@ -825,13 +835,16 @@ where
         // bounded), then we disarm before the RT worker is registered so the
         // decode loop the worker drives reads non-blocking via `probe_read`.
         shared_stream.set_blocking(true);
+        let decoder_deps = DecoderDeps {
+            backend: decoder_backend,
+            pcm_pool: pool.clone(),
+            byte_pool: byte_pool.clone(),
+        };
         let decoder = Self::create_initial_decoder(
             shared_stream.clone(),
             initial_media_info.clone(),
             hint.clone(),
-            pool.clone(),
-            byte_pool.clone(),
-            decoder_backend,
+            &decoder_deps,
         )
         .await;
         shared_stream.set_blocking(false);
@@ -848,12 +861,14 @@ where
 
         let output_spec = expected_output_spec(initial_spec, &host_sample_rate);
         let effects = create_effects(
-            initial_spec,
-            &host_sample_rate,
-            &playback_rate,
-            config_tempo_ratio.as_ref(),
-            resampler_quality,
-            Some(pool.clone()),
+            EffectsConfig {
+                initial_spec,
+                host_sample_rate: Arc::clone(&host_sample_rate),
+                playback_rate: Arc::clone(&playback_rate),
+                tempo_ratio: config_tempo_ratio.clone(),
+                quality: resampler_quality,
+                pool: Some(pool.clone()),
+            },
             custom_effects,
         );
 
@@ -862,23 +877,19 @@ where
         let interleaved = Self::alloc_interleaved_scratch(pool, output_spec);
 
         let emit = Self::create_emit(&bus);
-        let decoder_factory = Self::create_decoder_factory(
-            decoder_backend,
-            &epoch,
-            &byte_len_handle,
-            pool,
-            &byte_pool,
-        );
+        let decoder_factory = Self::create_decoder_factory(&decoder_deps, &epoch, &byte_len_handle);
         let initial_variant = initial_media_info.as_ref().and_then(|i| i.variant_index);
         let abr_handle = shared_stream.abr_handle();
         let audio_source = StreamAudioSource::new(
             shared_stream,
-            decoder,
-            decoder_factory,
-            initial_media_info,
+            DecodeInit {
+                decoder,
+                decoder_factory,
+                media_info: initial_media_info,
+                gapless_mode: config_gapless_mode,
+            },
             Arc::clone(&epoch),
             effects,
-            config_gapless_mode,
         )
         .with_emit(emit);
 
@@ -952,16 +963,15 @@ where
     }
 
     fn create_decoder_factory(
-        decoder_backend: kithara_decode::DecoderBackend,
+        deps: &DecoderDeps,
         epoch: &Arc<AtomicU64>,
         byte_len_handle: &Arc<AtomicU64>,
-        pool: &PcmPool,
-        byte_pool: &BytePool,
     ) -> crate::pipeline::source::DecoderFactory<T> {
+        let decoder_backend = deps.backend;
         let factory_epoch = Arc::clone(epoch);
         let factory_byte_len = Arc::clone(byte_len_handle);
-        let factory_pool = pool.clone();
-        let factory_byte_pool = byte_pool.clone();
+        let factory_pool = deps.pcm_pool.clone();
+        let factory_byte_pool = deps.byte_pool.clone();
         Box::new(move |stream, info, base_offset| {
             let byte_len = stream
                 .len()
@@ -1018,17 +1028,15 @@ where
         shared_stream: SharedStream<T>,
         initial_media_info: Option<MediaInfo>,
         hint: Option<String>,
-        pcm_pool: PcmPool,
-        byte_pool: BytePool,
-        decoder_backend: kithara_decode::DecoderBackend,
+        deps: &DecoderDeps,
     ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
         let decoder_config = DecoderConfig::builder()
-            .backend(decoder_backend)
+            .backend(deps.backend)
             .byte_len_handle(byte_len_handle)
-            .pcm_pool(pcm_pool)
-            .byte_pool(byte_pool)
+            .pcm_pool(deps.pcm_pool.clone())
+            .byte_pool(deps.byte_pool.clone())
             .maybe_byte_map(shared_stream.byte_map())
             .maybe_hooks(shared_stream.take_reader_event_sink())
             .maybe_hint(hint.clone())

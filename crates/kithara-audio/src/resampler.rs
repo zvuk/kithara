@@ -241,6 +241,18 @@ pub struct ResamplerProcessor {
     chunk_size: usize,
 }
 
+/// Construction parameters for one rubato resampler instance, bundled so
+/// [`ResamplerProcessor::create_resampler`] takes a single argument.
+#[derive(Clone, Copy)]
+struct ResamplerBuild {
+    quality: ResamplerQuality,
+    ratio: f64,
+    chunk_size: usize,
+    channels: usize,
+    source_rate: u32,
+    target_rate: u32,
+}
+
 impl ResamplerProcessor {
     /// Default resampler chunk size in frames.
     const DEFAULT_CHUNK_SIZE: usize = 4096;
@@ -370,13 +382,16 @@ impl ResamplerProcessor {
     }
 
     fn create_resampler(
-        quality: ResamplerQuality,
-        ratio: f64,
-        chunk_size: usize,
-        channels: usize,
-        source_rate: u32,
-        target_rate: u32,
+        build: ResamplerBuild,
     ) -> Result<ResamplerKind, rubato::ResamplerConstructionError> {
+        let ResamplerBuild {
+            quality,
+            ratio,
+            chunk_size,
+            channels,
+            source_rate,
+            target_rate,
+        } = build;
         match quality {
             ResamplerQuality::Fast => {
                 let poly = Async::new_poly(
@@ -590,14 +605,14 @@ impl ResamplerProcessor {
     }
 
     fn recreate_resampler(&mut self, target_rate: u32, new_ratio: f64) {
-        match Self::create_resampler(
-            self.quality,
-            new_ratio,
-            self.chunk_size,
-            self.channels,
-            self.source_rate,
+        match Self::create_resampler(ResamplerBuild {
+            quality: self.quality,
+            ratio: new_ratio,
+            chunk_size: self.chunk_size,
+            channels: self.channels,
+            source_rate: self.source_rate,
             target_rate,
-        ) {
+        }) {
             Ok(resampler) => {
                 self.resampler = Some(resampler);
                 self.current_ratio = new_ratio;
