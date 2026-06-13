@@ -1,0 +1,136 @@
+use std::fmt;
+
+use super::token::{CancelRoot, CancelToken};
+
+/// A cancellation scope owned by a subsystem.
+///
+/// `from_config` is the canonical replacement for the legacy
+/// `cancel.unwrap_or_default()` fallback:
+/// - **composed** (`Some(parent)`): no owned root; the scope's token is a child
+///   of the parent, so a parent/master cancel reaches this subtree.
+/// - **standalone** (`None`): the scope owns a fresh root and hands out a child
+///   token; nothing above can cancel it.
+///
+/// Either way, the inner children handed out by [`token`](CancelScope::token)
+/// derive from one node, and [`cancel`](CancelScope::cancel) cancels exactly that
+/// subtree. `Drop` is **passive**: dropping a scope does not cancel its subtree;
+/// teardown is an explicit `cancel()` (so a composed scope never cancels a token
+/// it was handed from above).
+pub struct CancelScope {
+    root: Option<CancelRoot>,
+    token: CancelToken,
+}
+
+impl CancelScope {
+    // Domain-named constructor: the composed/standalone branch is the canonical
+    // `unwrap_or_default()`-replacement contract, not a generic `.into()`.
+    #[must_use]
+    // ast-grep-ignore: rust.prefer-from-trait
+    pub fn from_config(parent: Option<CancelToken>) -> Self {
+        parent.map_or_else(
+            || {
+                let root = CancelRoot::new();
+                let token = root.child();
+                Self {
+                    root: Some(root),
+                    token,
+                }
+            },
+            |parent| Self {
+                root: None,
+                token: parent.child(),
+            },
+        )
+    }
+
+    /// The scope's token. Clone it for the subsystem's own subtree (`.child()`
+    /// for per-task/per-fetch tokens).
+    #[must_use]
+    pub fn token(&self) -> CancelToken {
+        self.token.clone()
+    }
+
+    /// Cancel this scope's subtree (the node from which inner children derive).
+    pub fn cancel(&self) {
+        self.token.cancel();
+    }
+
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.token.is_cancelled()
+    }
+}
+
+impl fmt::Debug for CancelScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CancelScope")
+            .field("owned_root", &self.root.is_some())
+            .field("cancelled", &self.is_cancelled())
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use kithara_test_utils::kithara;
+
+    use super::CancelScope;
+    use crate::common::cancel::CancelToken;
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn standalone_scope_owns_uncancelled_root() {
+        let scope = CancelScope::from_config(None);
+        assert!(!scope.is_cancelled());
+        assert!(!scope.token().is_cancelled());
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn standalone_cancel_cancels_own_subtree() {
+        let scope = CancelScope::from_config(None);
+        let token = scope.token();
+        scope.cancel();
+        assert!(scope.is_cancelled());
+        assert!(token.is_cancelled());
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn composed_scope_observes_parent_cancel() {
+        let parent = CancelToken::never();
+        let scope = CancelScope::from_config(Some(parent.clone()));
+        let token = scope.token();
+        assert!(!scope.is_cancelled());
+        parent.cancel();
+        assert!(scope.is_cancelled());
+        assert!(token.is_cancelled());
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn composed_scope_cancel_does_not_cancel_parent() {
+        // The single sanctioned semantic of the wave: a scope cancels only its
+        // own subtree, never the token it was handed from above.
+        let parent = CancelToken::never();
+        let scope = CancelScope::from_config(Some(parent.clone()));
+        scope.cancel();
+        assert!(scope.is_cancelled());
+        assert!(
+            !parent.is_cancelled(),
+            "scope.cancel() must not cancel the parent token it was handed"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn drop_is_passive() {
+        // Dropping a scope must NOT cancel its subtree — teardown is explicit.
+        let parent = CancelToken::never();
+        let live = {
+            let scope = CancelScope::from_config(Some(parent.clone()));
+            scope.token()
+        };
+        assert!(
+            !live.is_cancelled() && !parent.is_cancelled(),
+            "dropping a scope must not cancel anything"
+        );
+    }
+}

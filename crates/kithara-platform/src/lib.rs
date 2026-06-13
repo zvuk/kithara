@@ -43,11 +43,16 @@ pub use common::flash_inert as flash;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub use flash::*;
 
-// Legacy roots until the W3 cancel redesign.
+// Legacy roots until the W3 cancel redesign (3.4 deletes them).
 mod cancel_group;
 mod rt_cancel;
 
 pub use cancel_group::CancelGroup;
+// W3 propagate-down cancel (built alongside the legacy roots; the root
+// `CancelGroup` re-export switches off the legacy onto `common::cancel` in 3.3).
+pub use common::cancel::{
+    CancelRoot, CancelScope, CancelToken, CancelWakerGuard, Cancelled, CancelledOwned,
+};
 pub use rt_cancel::CancellationToken;
 
 // Root item re-exports: kept until the W5 mass name migration; they resolve
