@@ -18,7 +18,11 @@ use kithara_assets::{
 };
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, NetError, Retryability};
-use kithara_platform::{CancelToken, sync::Mutex, time::Duration};
+use kithara_platform::{
+    CancelToken,
+    sync::{CondvarGate, Mutex, WaitGate},
+    time::Duration,
+};
 use kithara_storage::{ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SeekObserve,
@@ -365,21 +369,26 @@ pub(crate) struct InitEntry {
 }
 
 /// Whether a variant carries a *separately fetched* init segment. The
-/// discriminant is the construction-time init size, which subsumes all
-/// three "no separate init fetch" cases that were previously the dynamic
-/// `init_size() == 0` check: no `#EXT-X-MAP`, a byte-range-embedded init
-/// (init lives in segment 0's byte range), or a failed init HEAD. The size
-/// of a [`Pending`](VariantInit::Pending) init only ever shrinks on commit
-/// (HEAD estimate -> committed `final_len`) and never crosses back to 0, so
-/// the frozen discriminant stays equivalent to the old runtime probe — see
-/// the crate `README.md` "Variant init".
+/// discriminant is keyed on the playlist `#EXT-X-MAP` URL — a static fact —
+/// NOT on the init HEAD size. A variant has a separate init iff it advertises
+/// an `#EXT-X-MAP` URL; the two "no separate init fetch" cases (no `#EXT-X-MAP`,
+/// or a byte-range-embedded init living in segment 0's byte range) both leave
+/// `init_url()` absent. A [`Pending`](VariantInit::Pending) init's size starts
+/// at the HEAD estimate, which may be **0** when the init HEAD failed or was
+/// absent under load; the real size lands on the init's own commit
+/// (`final_len`). A size-0 `Pending` init is still fetched
+/// ([`needs_init_fetch`](SegmentStore::needs_init_fetch)), and `read_at` holds
+/// the prefix pending until the commit sizes it — keying existence on the HEAD
+/// size instead would drop the init and serve segment 0's container where the
+/// demuxer expects `ftyp`. See the crate `README.md` "Variant init".
 #[derive(Debug)]
 pub(crate) enum VariantInit {
-    /// No separate init fetch. Carries no resource: `rebuild` never enqueues
-    /// `PlannedFetch::Init`, and every init-size query reads as 0.
+    /// No separate init fetch (no `#EXT-X-MAP`, or a byte-range-embedded init).
+    /// Carries no resource: `rebuild` never enqueues `PlannedFetch::Init`, and
+    /// every init-size query reads as 0.
     NotApplicable,
-    /// A real, separately fetched init segment (`#EXT-X-MAP` with a known
-    /// size). Always has a real URL.
+    /// A real, separately fetched init segment (`#EXT-X-MAP`). Always has a real
+    /// URL; its size may be 0 until the init commits.
     Pending(InitEntry),
 }
 
@@ -442,6 +451,11 @@ pub(crate) struct PlanCtx {
     /// the scheduler issued *after* observing the new epoch.
     pub(crate) seek_epoch: u64,
     pub(crate) prefetch_budget: usize,
+    /// Shared readiness gate (owned by [`HlsCoord`]). Every `FetchCmd` this
+    /// plan emits signals it on each segment byte write and on settle
+    /// (commit/fail), so an off-RT reader parked in `wait_range(_, None)`
+    /// wakes the moment its range fills — no wall-clock poll.
+    pub(crate) ready: Arc<CondvarGate<u64>>,
 }
 
 /// Inputs to [`HlsVariant::activate_at_segment_with_shift`]: pin `from_seg`
@@ -630,6 +644,7 @@ impl HlsVariant {
         url: Url,
         acq: AssetResource<DecryptContext>,
         handle: Segment<Downloading>,
+        ready: Arc<CondvarGate<u64>>,
     ) -> Option<FetchCmd> {
         let writer = match acq {
             AcquisitionResult::Pending(writer) => writer,
@@ -659,12 +674,25 @@ impl HlsVariant {
             raw: writer.raw_write_handle(),
             writer,
             cancel: cancel.clone(),
+            ready: Arc::clone(&ready),
         };
+        let mut inner_writer = slot.writer();
+        // Per-chunk write signal: wake a reader parked in `wait_range(_, None)`
+        // the moment bytes land (not only on commit), so a sub-segment range
+        // resolves without waiting for settle. Runs on the downloader thread
+        // (off-RT) — taking the gate's condvar mutex is allowed here.
+        let writer_fn: WriterFn = Box::new(move |chunk: &[u8]| {
+            let result = inner_writer(chunk);
+            if result.is_ok() {
+                ready.signal();
+            }
+            result
+        });
         Some(
             FetchCmd::get(url)
                 .cancel(cancel)
                 .maybe_headers(self.headers.clone())
-                .writer(slot.writer())
+                .writer(writer_fn)
                 .on_complete(OnCompleteFn::from(slot))
                 .build(),
         )
@@ -688,7 +716,7 @@ impl HlsVariant {
                 .acquire_resource_with_ctx(&init.resource_id, None, Some(c.clone()))
                 .expect("acquire_resource_with_ctx for init must succeed"),
         };
-        self.build_cmd(init.url.clone(), resource, handle)
+        self.build_cmd(init.url.clone(), resource, handle, Arc::clone(&ctx.ready))
     }
 
     fn build_init_entry(
@@ -697,21 +725,21 @@ impl HlsVariant {
         decrypt_ctx: Option<DecryptContext>,
         scope: &AssetScope<DecryptContext>,
     ) -> VariantInit {
-        let size = playlist_state.init_size(variant_idx);
-        // A sized init always carries an `#EXT-X-MAP` URL (size is only
-        // populated from a successful init HEAD, which requires the URL),
-        // so `Pending` always has a real URL.
-        let Some(url) = (size > 0)
-            .then(|| playlist_state.init_url(variant_idx))
-            .flatten()
-        else {
+        // An init exists iff the playlist carries an `#EXT-X-MAP` URL — NOT iff
+        // the init HEAD produced a size. A failed or absent init HEAD leaves
+        // `init_size() == 0` while the URL is present; the init is still a real
+        // segment that must be fetched (its committed `final_len` sets the real
+        // size). Keying existence on the HEAD size drops such an init, and
+        // `read_at(0)` then serves segment 0's container where the demuxer
+        // expects `ftyp` ("re_mp4: ftyp not found") or wedges with no progress.
+        let Some(url) = playlist_state.init_url(variant_idx) else {
             return VariantInit::NotApplicable;
         };
         VariantInit::Pending(InitEntry {
             resource_id: scope.key_from_url(&url),
             url,
             state: SegmentSlotState::missing(),
-            size: AtomicU64::new(size),
+            size: AtomicU64::new(playlist_state.init_size(variant_idx)),
             content: SegmentContent::from(decrypt_ctx),
         })
     }
@@ -937,7 +965,7 @@ impl HlsVariant {
                 return None;
             }
         };
-        self.build_cmd(entry.url.clone(), resource, handle)
+        self.build_cmd(entry.url.clone(), resource, handle, Arc::clone(&ctx.ready))
     }
 
     /// Reader-facing lookup in **virtual** byte space — delegates to the
@@ -1062,6 +1090,17 @@ impl HlsVariant {
 
     pub(crate) fn init_size(&self) -> u64 {
         self.store.init_size()
+    }
+
+    /// Whether this variant declares a separately fetched `#EXT-X-MAP` init,
+    /// regardless of whether its size is yet known.
+    pub(crate) fn has_init(&self) -> bool {
+        self.store.has_init()
+    }
+
+    /// Whether the declared init settled terminally (`Failed`).
+    pub(crate) fn init_failed(&self) -> bool {
+        self.store.init_failed()
     }
 
     pub(crate) fn invalidate_init(&self) {
@@ -1270,6 +1309,29 @@ impl HlsVariant {
                 }
                 None => return Ok(Self::wrap(written)),
             }
+        }
+
+        // An `#EXT-X-MAP` init occupies the virtual prefix `[0, init_size)`.
+        // While the init is declared (`has_init`) but not yet sized
+        // (`init_size() == 0` — a failed/absent init HEAD, or the window before
+        // the init commits), the offset table transiently seeds segment 0 at
+        // offset 0. Serving media here would hand the demuxer segment 0's
+        // container where the init's `ftyp`/`moov` belongs
+        // ("re_mp4: ftyp not found"), or wedge the reader. Hold the read
+        // pending: `needs_init_fetch` keeps the init enqueued and its commit
+        // sizes the prefix, after which `init_descriptor_at` routes offset 0
+        // to the init. Only the fresh-activation frame (`served_from() == 0`)
+        // places the init at offset 0; a switched-in variant's init is
+        // orphaned in natural space (see `init_descriptor_at`), so its reads
+        // continue past offset 0 and must not be gated here. A terminally
+        // failed init (`init_failed`) stops reserving the prefix so the read
+        // surfaces an error instead of waiting forever.
+        if self.has_init()
+            && self.init_size() == 0
+            && self.served_from() == 0
+            && !self.init_failed()
+        {
+            return Ok(Self::wrap(written));
         }
 
         while cursor < read_end {
@@ -1555,6 +1617,10 @@ struct FetchSlot {
     /// Clone-able streaming-write handle for the fetch body closure.
     raw: RawWriteHandle,
     cancel: CancelToken,
+    /// Shared readiness gate — signalled on every terminal settle
+    /// (commit/fail/cancel) so an off-RT reader parked in `wait_range(_, None)`
+    /// re-probes the now-resolved range.
+    ready: Arc<CondvarGate<u64>>,
 }
 
 impl From<FetchSlot> for OnCompleteFn {
@@ -1577,6 +1643,14 @@ impl FetchSlot {
     /// [`Segment<Downloading>`](Segment) handle is moved into exactly one
     /// terminal transition, so the slot state can never be double-driven.
     fn settle(self, bytes_written: u64, err: Option<&NetError>) {
+        // Wake any reader parked on this range AFTER the terminal transition
+        // (commit makes bytes readable / fail flips `range_has_failed`).
+        let ready = Arc::clone(&self.ready);
+        self.settle_inner(bytes_written, err);
+        ready.signal();
+    }
+
+    fn settle_inner(self, bytes_written: u64, err: Option<&NetError>) {
         if self.cancel.is_cancelled() {
             self.settle_cancelled(bytes_written);
             return;

@@ -3,11 +3,11 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
-use kithara_assets::{AssetScope, AssetStoreBuilder, ProcessChunkFn};
+use kithara_assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, ProcessChunkFn, WriteSide};
 use kithara_drm::DecryptContext;
-use kithara_platform::{CancelToken, time::Duration};
+use kithara_platform::{CancelToken, sync::CondvarGate, time::Duration};
 use kithara_storage::WaitOutcome;
-use kithara_stream::{SeekControl, SeekObserve, SeekState, SourceError, StreamError};
+use kithara_stream::{ReadOutcome, SeekControl, SeekObserve, SeekState, SourceError, StreamError};
 use kithara_test_utils::kithara;
 use url::Url;
 
@@ -15,7 +15,7 @@ use super::{
     HlsVariant, InitEntry, PlanCtx, PlannedFetch, SegmentActivateParams, SegmentContent,
     SegmentEntry, SegmentSlotState, VariantInit, VariantParts,
 };
-use crate::playlist::PlaylistState;
+use crate::playlist::{PlaylistState, VariantState};
 
 fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     let cancel = CancelToken::never();
@@ -38,6 +38,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
         seek_epoch: 0,
         look_ahead_bytes: None,
         headers: None,
+        ready: Arc::new(CondvarGate::<u64>::default()),
     }
 }
 
@@ -501,6 +502,109 @@ fn variant_init_pending_stays_pending_after_commit_shrink() {
         "a shrink (still > 0) keeps the init Pending — size never crosses to 0"
     );
     assert!(v.init_resource().is_some());
+}
+
+/// Regression: an `#EXT-X-MAP` init whose HEAD size estimate is 0 (a failed or
+/// absent init HEAD under load) is still a real init that must be fetched.
+/// Existence follows the EXT-X-MAP URL, not the HEAD size. Misclassifying it as
+/// `NotApplicable` drops the init: `read_at(0)` then routes to the media loop
+/// and serves segment 0's container where the demuxer expects `ftyp`
+/// ("re_mp4: ftyp not found"), or the reader wedges ("no progress").
+#[kithara::test]
+fn init_with_url_but_zero_head_size_is_pending() {
+    let ctx = test_ctx(3);
+    let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
+    let playlist = PlaylistState::new(vec![VariantState {
+        codec: None,
+        container: None,
+        init_url: Some(url),
+        size_map: None,
+        segments: Vec::new(),
+    }]);
+
+    let init = HlsVariant::build_init_entry(&playlist, 0, None, &ctx.scope);
+
+    assert!(
+        matches!(init, VariantInit::Pending(_)),
+        "EXT-X-MAP init with a zero HEAD size estimate must stay Pending \
+         (existence follows the URL, not the HEAD size), got {init:?}"
+    );
+}
+
+/// Regression for the `read_at` init-prefix guard. While an `#EXT-X-MAP` init
+/// is declared but not yet sized (`init_size() == 0` — a failed/absent init
+/// HEAD, or the window before the init commits), the offset table seeds
+/// segment 0 at offset 0. A read at offset 0 must NOT serve that media — doing
+/// so hands the demuxer segment 0's container where the init's `ftyp` belongs
+/// ("re_mp4: ftyp not found"). The read is held pending until the init sizes
+/// the prefix.
+#[kithara::test]
+fn read_at_zero_holds_pending_while_init_unsized() {
+    let ctx = test_ctx(3);
+    let init_url: Url = "https://example.com/init.mp4".parse().expect("valid url");
+    let init = VariantInit::Pending(InitEntry {
+        resource_id: ctx.scope.key_from_url(&init_url),
+        url: init_url,
+        state: SegmentSlotState::missing(),
+        size: AtomicU64::new(0),
+        content: SegmentContent::Plain,
+    });
+    let v = HlsVariant::from_parts(
+        0,
+        VariantParts {
+            init,
+            segments: vec![make_seg(0, 1024, &ctx.scope)],
+            playlist_state: Arc::new(PlaylistState::new(Vec::new())),
+            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+            codec: None,
+            container: None,
+        },
+        &ctx,
+    );
+
+    assert!(
+        v.has_init() && v.init_size() == 0,
+        "precondition: a declared but unsized init"
+    );
+    assert!(
+        v.find_at_offset(0).is_some(),
+        "the trap: segment 0 is addressable at offset 0 while the init is unsized"
+    );
+
+    // Commit segment 0's bytes so an *unguarded* read_at(0) would serve them.
+    let seg0_key = v.store.segments()[0].resource_id.clone();
+    let AcquisitionResult::Pending(writer) = ctx
+        .scope
+        .store()
+        .acquire_resource(&seg0_key, None)
+        .expect("acquire segment 0")
+    else {
+        panic!("segment 0 resource must be pending");
+    };
+    // Commit a full 1024-byte segment (matching the size atom) so an unguarded
+    // read_at(0) resolves a satisfiable range and returns the bytes — making
+    // this a genuine red-without-the-guard regression, not a range-pending
+    // artifact. The `RIFF` magic stands in for "segment 0's container, not the
+    // init's `ftyp`".
+    let mut media = vec![0u8; 1024];
+    media[..4].copy_from_slice(b"RIFF");
+    writer.write_at(0, &media).expect("write segment 0");
+    writer
+        .commit(Some(media.len() as u64))
+        .expect("commit segment 0");
+
+    let mut buf = [0u8; 64];
+    let outcome = v.read_at(0, &mut buf).expect("read_at(0)");
+    assert!(
+        matches!(outcome, ReadOutcome::Pending(_)),
+        "read_at(0) must hold pending while the init is unsized, not serve \
+         segment 0's container; got {outcome:?}"
+    );
+    assert_ne!(
+        &buf[..4],
+        b"RIFF",
+        "segment 0's container must not have been served at offset 0"
+    );
 }
 
 #[kithara::test]

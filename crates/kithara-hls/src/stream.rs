@@ -10,7 +10,7 @@ use kithara_assets::{
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::EventBus;
 use kithara_net::HttpClient;
-use kithara_platform::{CancelScope, CancelToken, tokio::sync::mpsc};
+use kithara_platform::{CancelScope, CancelToken, sync::CondvarGate, tokio::sync::mpsc};
 use kithara_stream::{
     Activity, PlayheadState, PlayheadWrite, SeekObserve, SeekState, SourceError, StreamType,
     dl::{Downloader, DownloaderConfig, Peer},
@@ -58,14 +58,10 @@ impl StreamType for Hls {
             .clone()
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
-        let downloader = config.downloader.clone().unwrap_or_else(|| {
-            let dl_cancel = cancel.child();
-            let client = HttpClient::new(config.net_options.clone(), dl_cancel.child());
-            let dl_config = DownloaderConfig::for_client(client)
-                .cancel(dl_cancel)
-                .build();
-            Downloader::new(dl_config)
-        });
+        let downloader = config
+            .downloader
+            .clone()
+            .unwrap_or_else(|| default_downloader(&config, &cancel));
 
         let (evict_tx, evict_rx) = mpsc::unbounded_channel::<ResourceKey>();
         // App-wide shared store: reuse the injected backend and register
@@ -158,6 +154,9 @@ impl StreamType for Hls {
 
         playhead.set_duration(playlist_state.track_duration());
 
+        // Shared readiness gate for the off-RT `wait_range(_, None)` park (README).
+        let ready = Arc::new(CondvarGate::<u64>::default());
+
         let plan_ctx = PlanCtx {
             master_cancel: cancel.clone(),
             scope: scope.clone(),
@@ -169,6 +168,7 @@ impl StreamType for Hls {
                     .look_ahead_bytes
                     .unwrap_or(HlsConfig::DEFAULT_LOOK_AHEAD_BYTES),
             ),
+            ready: Arc::clone(&ready),
         };
 
         let variants: Vec<Arc<HlsVariant>> = media_playlists
@@ -194,6 +194,7 @@ impl StreamType for Hls {
                 cancel: cancel.clone(),
                 scope: scope.clone(),
                 headers: config.headers.clone(),
+                ready,
             },
             playhead,
             seek,
@@ -225,6 +226,17 @@ impl StreamType for Hls {
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
         config.bus.clone()
     }
+}
+
+/// Default transport when the caller injects none: a private `Downloader`
+/// rooted at a child of the stream's cancel token.
+fn default_downloader(config: &HlsConfig, cancel: &CancelToken) -> Downloader {
+    let dl_cancel = cancel.child();
+    let client = HttpClient::new(config.net_options.clone(), dl_cancel.child());
+    let dl_config = DownloaderConfig::for_client(client)
+        .cancel(dl_cancel)
+        .build();
+    Downloader::new(dl_config)
 }
 
 fn build_asset_store(

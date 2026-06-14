@@ -12,8 +12,7 @@ use std::{
 
 use kithara_platform::{
     maybe_send::{MaybeSend, MaybeSync},
-    thread::park_timeout,
-    time::{Duration, Instant},
+    time::Duration,
     tokio::task,
 };
 use kithara_storage::WaitOutcome;
@@ -351,82 +350,90 @@ impl<T: StreamType> Stream<T> {
     }
 }
 
+/// Per-probe wait policy threaded into [`Stream::try_read_with`]. Internal
+/// plumbing, NOT a public knob — it selects the `Source::wait_range` timeout
+/// from the caller's statically-known context.
+#[derive(Clone, Copy)]
+enum WaitMode {
+    /// RT / cooperative-yield probe (`probe_read`): bounded
+    /// `Some(WAIT_RANGE_TIMEOUT)`, returns without blocking.
+    Probe,
+    /// Off-RT consumer (`impl Read`): `None` — the source parks event-driven
+    /// until the range resolves (no wall-clock poll at this layer).
+    Block,
+}
+
+impl WaitMode {
+    fn timeout(self, probe: Duration) -> Option<Duration> {
+        match self {
+            Self::Probe => Some(probe),
+            Self::Block => None,
+        }
+    }
+}
+
 impl<T: StreamType> Stream<T> {
-    /// Bounded budget for the seek-priming `wait_range` spin. `Seek`
-    /// re-probes `wait_range(new_pos..new_pos+1)` to prime metadata (so
-    /// `source.len()` answers before the seek-past-EOF check). Each probe
-    /// returns immediately under the non-blocking-pull contract; the spin
-    /// parks [`Self::SEEK_PROBE_BACKOFF`] between probes and is capped by
-    /// the elapsed deadline: a broken downloader cannot hang the seek, and
-    /// on the happy path local metadata resolves well under this budget.
-    /// This is consumer-thread work, not the real-time worker read path.
-    /// The park (not a yield) matters under flash: it releases the
-    /// consumer's pacer credit so the clock and the async fetch side can
-    /// advance toward readiness — a yield-spin would pin the clock and the
-    /// virtual deadline could never elapse.
-    const SEEK_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
-
-    /// Per-probe park inside [`Self::prime_seek_range`].
-    const SEEK_PROBE_BACKOFF: Duration = Duration::from_millis(1);
-
-    /// Per-probe hint passed to [`Source::wait_range`] on the worker read
-    /// path. Non-blocking-pull sources (HLS) treat `wait_range` as a single
-    /// readiness probe and ignore this hint; the backoff between probes
-    /// lives in the audio scheduler's `Waiting` park (10ms). The value
-    /// still names the worker's re-poll cadence: one PCM chunk at 44100Hz
-    /// stereo / 4096 samples lasts ~46ms, so a 10ms re-check refills the
-    /// ringbuf with margin while staying fair to other tracks.
+    /// Per-probe hint passed to [`Source::wait_range`] on the RT worker read
+    /// path (`probe_read` → [`WaitMode::Probe`]). Non-blocking-pull sources
+    /// (HLS) ignore the value and answer with a single readiness probe; the
+    /// backoff between probes lives in the audio scheduler's `Waiting` park
+    /// (10ms). The off-RT [`Read`] path passes `None` ([`WaitMode::Block`])
+    /// instead and parks event-driven until the range resolves.
     const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
 
-    /// Per-spin park between blocking [`Read::read`] probes. Bounds the
-    /// re-check cadence while the awaited range downloads; small enough to
-    /// return promptly once bytes land, large enough to avoid a busy
-    /// spin. Off-RT consumer interface only.
-    const BLOCKING_READ_BACKOFF: Duration = Duration::from_millis(10);
-
-    /// Prime metadata for a seek target by re-probing the non-blocking
-    /// [`Source::wait_range`] until the range resolves (`Ready`/`Eof`),
-    /// the source reports an error, or the [`Self::SEEK_WAIT_TIMEOUT`]
-    /// wall-clock budget elapses. Runs on the consumer/seek thread — not
-    /// the real-time worker read path — so a bounded yield-spin is the
-    /// permitted backoff: `wait_range` returns immediately under the
-    /// non-blocking-pull contract, so the elapsed-time cap (not an
-    /// internal sleep) bounds a broken downloader. The outcome is
-    /// advisory; `seek` re-checks `source.len()` afterwards.
+    /// Prime metadata for a seek target by blocking on
+    /// [`Source::wait_range`]`(range, None)` until the range resolves
+    /// (`Ready`/`Eof`), a segment fails, or the source's cancel fires —
+    /// event-driven, **no** wall-clock budget. Runs on the consumer/seek
+    /// thread, never the RT worker. The one-time peer wake re-aims the
+    /// prefetch window at the new cursor so the awaited range starts
+    /// downloading; give-up authority lives lower in the stack (the
+    /// downloader's per-fetch inactivity timeout / the cancel hierarchy),
+    /// which is why a timer here would only fire on a legitimately in-flight
+    /// fetch. The outcome is advisory; `seek` re-checks `source.len()`
+    /// afterwards.
     #[kithara::flash(true)]
     fn prime_seek_range(&mut self, range: Range<u64>) {
-        let deadline = Instant::now() + Self::SEEK_WAIT_TIMEOUT;
-        loop {
-            let outcome = self
-                .source
-                .wait_range(range.clone(), Some(Self::WAIT_RANGE_TIMEOUT));
-            let budget_exceeded = matches!(
-                &outcome,
-                Err(StreamError::Source(SourceError::WaitBudgetExceeded))
-            );
-            // Consumer seek-prime path: a not-ready range means the peer must
-            // fetch it. Off the produce core, wake immediately so the prime is
-            // not gated on the worker's next pass.
-            if budget_exceeded && let Some(wake) = self.source.peer_wake() {
-                wake.notify_now();
-            }
-            let not_ready = budget_exceeded || matches!(&outcome, Ok(WaitOutcome::Interrupted));
-            if !not_ready || Instant::now() >= deadline {
-                return;
-            }
-            park_timeout(Self::SEEK_PROBE_BACKOFF);
+        // Cache-hit fast path: a non-blocking phase probe. A re-seek into
+        // already-resident bytes needs no fetch and no wait — skip the peer
+        // wake so a burst of random seeks over a warm cache does not fire one
+        // cross-thread `notify_one` (and downloader re-plan) per seek.
+        if matches!(
+            self.source.phase_at(range.clone()),
+            SourcePhase::Ready | SourcePhase::Eof
+        ) {
+            return;
         }
+        // Not resident: wake the peer once so it re-aims its prefetch at the
+        // new cursor, then block on the source's event-driven wait.
+        if let Some(wake) = self.source.peer_wake() {
+            wake.notify_now();
+        }
+        let _ = self.source.wait_range(range, None);
     }
 
     /// Typed read — returns a [`StreamReadOutcome`] discriminating
     /// progress (`Bytes` with [`NonZeroUsize`]) from non-progress
     /// (`Pending` with a typed [`PendingReason`]) and natural EOF.
-    /// Only genuine source I/O failures surface as
-    /// [`StreamReadError::Source`]. `impl Read for Stream` wraps this
-    /// outcome for `std::io::Read` consumers.
+    /// `impl Read for Stream` wraps this outcome for `std::io::Read`
+    /// consumers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StreamReadError::Source`] only when the underlying source
+    /// reports a genuine I/O failure. Backpressure, seek-pending, and a
+    /// variant fence are non-errors — they surface as `Ok(Pending(..))`.
+    pub fn try_read(&mut self, buf: &mut [u8]) -> Result<StreamReadOutcome, StreamReadError> {
+        self.try_read_with(buf, WaitMode::Probe)
+    }
+
     #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara::hang_watchdog]
-    pub fn try_read(&mut self, buf: &mut [u8]) -> Result<StreamReadOutcome, StreamReadError> {
+    fn try_read_with(
+        &mut self,
+        buf: &mut [u8],
+        wait: WaitMode,
+    ) -> Result<StreamReadOutcome, StreamReadError> {
         if buf.is_empty() {
             return Ok(StreamReadOutcome::Eof {
                 byte_position: self.source.position(),
@@ -449,7 +456,7 @@ impl<T: StreamType> Stream<T> {
 
             let wait_result = self
                 .source
-                .wait_range(range, Some(Self::WAIT_RANGE_TIMEOUT));
+                .wait_range(range, wait.timeout(Self::WAIT_RANGE_TIMEOUT));
             let wait_outcome = match wait_result {
                 Ok(outcome) => outcome,
                 Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
@@ -662,23 +669,27 @@ impl<T: StreamType> Read for Stream<T> {
     ///   (`HlsCoord::wait_range` / the storage wait surface both as a
     ///   terminal error).
     ///
-    /// Only the transient "data not ready" pending (`NotReady`/`Retry`) is
-    /// waited on, parking [`Self::BLOCKING_READ_BACKOFF`] between probes. A
-    /// genuine wedge (no fetch, no failure, no progress) is caught by the
-    /// downloader's hang watchdog rather than masked here. This is the off-RT
-    /// consumer interface — the real-time worker uses [`Self::probe_read`]
-    /// and never blocks here.
+    /// The blocking wait lives inside [`try_read_with`](Self::try_read_with)'s
+    /// `wait_range(_, None)` (event-driven — the source parks until the range
+    /// resolves, no wall-clock poll at this layer). The `NotReady`/`Retry`
+    /// re-loop is therefore reached only on an eviction `Retry` or a spurious
+    /// wake, and the next probe parks again at once — never a busy spin. A
+    /// genuine wedge (no signal site ever fires) is caught by the source's hang
+    /// watchdog rather than masked here. This is the off-RT consumer interface —
+    /// the real-time worker uses [`Self::probe_read`] and never blocks here.
     #[kithara::flash(true)]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
-            match self.try_read(buf) {
+            match self.try_read_with(buf, WaitMode::Block) {
                 Ok(StreamReadOutcome::Bytes { count, .. }) => return Ok(count.get()),
                 Ok(StreamReadOutcome::Eof { .. }) => return Ok(0),
                 Ok(StreamReadOutcome::Pending(
                     PendingReason::NotReady(_) | PendingReason::Retry,
                 )) => {
+                    // Wake the peer (an evicted `Retry` range must be re-fetched),
+                    // then re-loop — the next `try_read_with` parks in the
+                    // event-driven `wait_range(_, None)`.
                     self.notify_peer_wake();
-                    park_timeout(Self::BLOCKING_READ_BACKOFF);
                 }
                 Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
                     self.notify_peer_wake();

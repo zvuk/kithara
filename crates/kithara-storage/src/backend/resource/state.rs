@@ -5,10 +5,7 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 
-use kithara_platform::{
-    CancelToken,
-    sync::{Condvar, Mutex},
-};
+use kithara_platform::{CancelToken, sync::CondvarGate};
 use rangemap::RangeSet;
 
 use crate::{
@@ -27,9 +24,12 @@ pub(super) struct CommonState {
 /// Shared inner storage.
 pub(super) struct Inner<D: DriverIo> {
     pub(super) cancel: CancelToken,
-    pub(super) condvar: Condvar,
+    /// Guarded readiness state plus its condvar, unified in the shared
+    /// [`CondvarGate`] — the gold-standard single-lock event-driven wait the
+    /// project's other readiness gates are modelled on. `lock()` guards
+    /// [`CommonState`]; `wait()`/`notify_all()` coordinate `wait_range_inner`.
+    pub(super) gate: CondvarGate<CommonState>,
     pub(super) driver: D,
-    pub(super) state: Mutex<CommonState>,
     pub(super) observer: Option<Arc<dyn AvailabilityObserver>>,
     /// Lock-free lifecycle flag: `true` while the resource is committed, `false`
     /// once `reactivate` reopens it for a re-download. Distinct from the driver's
@@ -62,7 +62,7 @@ impl<D: DriverIo> Clone for ResourceCore<D> {
 
 impl<D: DriverIo + Debug> Debug for ResourceCore<D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = self.inner.state.lock();
+        let state = self.inner.gate.lock();
         f.debug_struct("ResourceCore")
             .field("driver", &self.inner.driver)
             .field("committed", &state.committed)
@@ -106,9 +106,8 @@ impl<D: Driver> ResourceCore<D> {
                 cancel,
                 driver,
                 observer,
-                condvar: Condvar::default(),
                 committed: AtomicBool::new(init.is_committed),
-                state: Mutex::new(CommonState {
+                gate: CondvarGate::new(CommonState {
                     failed: None,
                     final_len: init.final_len,
                     available: init.available,
@@ -126,7 +125,7 @@ impl<D: DriverIo> ResourceCore<D> {
             return Err(StorageError::Cancelled);
         }
         let failed = {
-            let state = self.inner.state.lock();
+            let state = self.inner.gate.lock();
             state.failed.clone()
         };
         if let Some(reason) = failed {

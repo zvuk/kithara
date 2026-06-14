@@ -128,6 +128,7 @@ impl HlsPeer {
                 scope: coord.scope.clone(),
                 headers: coord.headers.clone(),
                 seek_epoch: self.seek_obs.epoch(),
+                ready: coord.ready_gate(),
             };
             active.rebuild(&plan_ctx, initial_seg);
         }
@@ -446,6 +447,7 @@ impl HlsTrackState {
             prefetch_budget: self.prefetch_budget,
             seek_epoch: self.seek_obs.epoch(),
             look_ahead_bytes: self.look_ahead_bytes,
+            ready: self.coord.ready_gate(),
         }
     }
 

@@ -14,7 +14,7 @@ use std::{
 
 use kithara_bufpool::BytePool;
 use kithara_platform::{
-    sync::{Condvar, Mutex},
+    sync::CondvarGate,
     time::{Duration, Instant},
 };
 use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};
@@ -56,29 +56,27 @@ impl Consts {
 pub type ProcessChunkFn<Ctx> =
     Arc<dyn Fn(&[u8], &mut [u8], &mut Ctx, bool) -> Result<usize, String> + Send + Sync>;
 
-/// Pairs a `processed` flag with a [`Condvar`] so readers can block
-/// until [`ProcessedWriter::commit`] drains the processor.
+/// Pairs a `processed` flag with the shared [`CondvarGate`] so readers can
+/// block until [`ProcessedWriter::commit`] drains the processor.
 ///
-/// Splitting this out keeps the locking discipline explicit: the
-/// guard is only ever held inside [`ReadinessGate::wait_until_ready`]
+/// The gate guards the `processed` bool directly (single-lock event-driven
+/// wait); the guard is only ever held inside [`ReadinessGate::wait_until_ready`]
 /// or the brief flip in [`ReadinessGate::mark_ready`].
 struct ReadinessGate {
-    cv: Condvar,
-    processed: Mutex<bool>,
+    gate: CondvarGate<bool>,
     failed: AtomicBool,
 }
 
 impl ReadinessGate {
     fn new(initial: bool) -> Self {
         Self {
-            processed: Mutex::new(initial),
-            cv: Condvar::default(),
+            gate: CondvarGate::new(initial),
             failed: AtomicBool::new(false),
         }
     }
 
     fn is_ready(&self) -> bool {
-        *self.processed.lock()
+        *self.gate.lock()
     }
 
     fn is_failed(&self) -> bool {
@@ -92,13 +90,13 @@ impl ReadinessGate {
     /// committed) resource must not read as valid via `read_at`.
     fn fail(&self) {
         self.failed.store(true, Ordering::Release);
-        self.cv.notify_all();
+        self.gate.notify_all();
     }
 
     /// Mark the gate ready and wake every waiter.
     fn mark_ready(&self) {
-        *self.processed.lock() = true;
-        self.cv.notify_all();
+        *self.gate.lock() = true;
+        self.gate.notify_all();
     }
 
     /// Block the caller until `processed` becomes `true` or
@@ -115,12 +113,12 @@ impl ReadinessGate {
                 return false;
             }
             let ready = {
-                let guard = self.processed.lock();
+                let guard = self.gate.lock();
                 if *guard {
                     return !self.is_failed();
                 }
                 let deadline = Instant::now() + Duration::from_millis(COND_WAIT_MS);
-                let next = self.cv.wait_timeout(guard, deadline);
+                let next = self.gate.wait_until(guard, deadline);
                 *next
             };
             if ready {
