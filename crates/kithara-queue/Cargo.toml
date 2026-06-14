@@ -31,7 +31,6 @@ kithara-abr = { workspace = true }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 
-tokio = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 bon = { workspace = true }

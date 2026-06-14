@@ -19,8 +19,8 @@ use kithara::{
 use kithara_platform::{
     CancelToken,
     time::{Duration, Instant, sleep},
+    tokio::runtime::Builder,
 };
-use tokio::runtime::Builder;
 use tracing::{error, info};
 
 struct Consts;
