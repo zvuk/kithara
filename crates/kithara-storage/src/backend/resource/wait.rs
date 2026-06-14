@@ -4,7 +4,6 @@ use std::{ops::Range, sync::Arc};
 
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
-use tracing::debug;
 
 use crate::{
     StorageError, StorageResult,
@@ -43,8 +42,8 @@ impl<D: DriverIo> ResourceCore<D> {
         let _cancel_wake = {
             let inner = Arc::clone(&self.inner);
             self.inner.cancel.on_cancel(move || {
-                let _guard = inner.state.lock();
-                inner.condvar.notify_all();
+                let _guard = inner.gate.lock();
+                inner.gate.notify_all();
             })
         };
 
@@ -59,7 +58,7 @@ impl<D: DriverIo> ResourceCore<D> {
                 return Ok(WaitOutcome::Ready);
             }
 
-            let state = self.inner.state.lock();
+            let state = self.inner.gate.lock();
 
             if self.inner.cancel.is_cancelled() {
                 return Err(StorageError::Cancelled);
@@ -97,17 +96,9 @@ impl<D: DriverIo> ResourceCore<D> {
                 hang_reset!();
             }
 
-            debug!(
-                range_start = range.start,
-                range_end = range.end,
-                committed = state.committed,
-                final_len = ?state.final_len,
-                "storage::wait_range spinning"
-            );
-
-            // Park until a readiness transition notifies the condvar (bytes,
+            // Park until a readiness transition notifies the gate (bytes,
             // commit, fail, reactivate, or cancel) — event-driven, no timer.
-            let _state = self.inner.condvar.wait(state);
+            let _state = self.inner.gate.wait(state);
         }
     }
 }

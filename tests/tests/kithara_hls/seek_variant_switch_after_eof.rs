@@ -70,7 +70,21 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
         assert_eq!(pos, seek_pos);
         info!(seek_pos, "Seek applied");
 
-        let n = stream.read(&mut buf).unwrap();
+        // Raw byte consumer ack of the variant fence the structured-container
+        // switch raised: in the audio path the decode FSM clears it via decoder
+        // recreate; a byte-only `Stream` consumer has no FSM, so it acks the
+        // fence directly and re-reads the new variant. If the switch-commit
+        // dropped the seek-target segment (the deadlock this test guards), the
+        // post-ack read finds no data and the 1s watchdog fires.
+        let n = loop {
+            match stream.read(&mut buf) {
+                Ok(n) => break n,
+                Err(e) if e.to_string().contains("variant change") => {
+                    stream.clear_variant_fence();
+                }
+                Err(e) => panic!("read after seek + variant switch failed: {e}"),
+            }
+        };
         assert!(n > 0, "Read after seek + variant switch must return data");
         info!(n, "Read succeeded after seek + variant switch");
     })

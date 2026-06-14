@@ -64,10 +64,18 @@ impl SegmentStore {
     }
 
     /// Resource key for the variant's init segment — `None` when the
-    /// variant has no separately fetched init (raw TS/AAC, byte-range
-    /// embedded, or a failed init HEAD).
+    /// variant has no separately fetched init (raw TS/AAC, or byte-range
+    /// embedded).
     pub(super) fn init_resource(&self) -> Option<ResourceKey> {
         self.init.pending().map(|e| e.resource_id.clone())
+    }
+
+    /// Whether the variant declares a separately fetched `#EXT-X-MAP` init —
+    /// true regardless of whether its size is yet known. A `Pending` init
+    /// with `init_size() == 0` (failed/absent HEAD, pre-commit) still counts:
+    /// the init prefix `[0, init_size)` is reserved for it, not for media.
+    pub(super) fn has_init(&self) -> bool {
+        self.init.pending().is_some()
     }
 
     /// Whether the next dispatch should issue the separate init fetch —

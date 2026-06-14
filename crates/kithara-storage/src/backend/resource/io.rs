@@ -40,7 +40,7 @@ impl<D: DriverIo> ResourceCore<D> {
         self.check_health()?;
 
         let effective_len = {
-            let final_len = self.inner.state.lock().final_len;
+            let final_len = self.inner.gate.lock().final_len;
             let storage_len = self.inner.driver.storage_len();
             let data_len = final_len.unwrap_or(storage_len);
             data_len.min(storage_len)
@@ -75,7 +75,7 @@ impl<D: DriverIo> ResourceCore<D> {
         self.check_health()?;
 
         let effective_len = {
-            let final_len = self.inner.state.lock().final_len;
+            let final_len = self.inner.gate.lock().final_len;
             let storage_len = self.inner.driver.storage_len();
             final_len.unwrap_or(storage_len).min(storage_len)
         };
@@ -108,7 +108,7 @@ impl<D: DriverIo> ResourceCore<D> {
             })?;
 
         let committed = {
-            let state = self.inner.state.lock();
+            let state = self.inner.gate.lock();
             state.committed
         };
 
@@ -118,7 +118,7 @@ impl<D: DriverIo> ResourceCore<D> {
         self.inner.driver.notify_write(&range);
 
         {
-            let mut state = self.inner.state.lock();
+            let mut state = self.inner.gate.lock();
             state.available.insert(range.clone());
 
             if let Some(window) = self.inner.driver.valid_window() {
@@ -131,7 +131,7 @@ impl<D: DriverIo> ResourceCore<D> {
                 }
             }
         }
-        self.inner.condvar.notify_all();
+        self.inner.gate.notify_all();
 
         if let Some(observer) = self.inner.observer.as_ref() {
             observer.on_write(range);
@@ -196,7 +196,7 @@ mod tests {
     }
 
     /// A committed resource's `read_at_inner` must complete WITHOUT taking the
-    /// `inner.state` mutex. The test holds the state mutex on this thread while a
+    /// `inner.gate` state lock. The test holds that lock on this thread while a
     /// worker thread reads; a lock-free fast path completes immediately, a slow
     /// path blocks on the held guard and times out.
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -212,7 +212,7 @@ mod tests {
 
         assert_eq!(core.inner.driver.committed_len(), Some(11));
 
-        let guard = core.inner.state.lock();
+        let guard = core.inner.gate.lock();
 
         let (tx, rx) = mpsc::channel();
         let worker = core.clone();
@@ -234,8 +234,8 @@ mod tests {
     }
 
     /// A committed resource's `len_inner`/`contains_range_inner` must answer
-    /// WITHOUT taking the `inner.state` mutex. Mirrors the read fast-path test:
-    /// the state mutex is held on this thread while a worker queries length and
+    /// WITHOUT taking the `inner.gate` state lock. Mirrors the read fast-path test:
+    /// that lock is held on this thread while a worker queries length and
     /// coverage; a lock-free path completes immediately, a locking path blocks
     /// on the held guard and times out.
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -251,7 +251,7 @@ mod tests {
 
         assert_eq!(core.inner.driver.committed_len(), Some(11));
 
-        let guard = core.inner.state.lock();
+        let guard = core.inner.gate.lock();
 
         let (tx, rx) = mpsc::channel();
         let worker = core.clone();

@@ -15,21 +15,28 @@ use kithara_drm::DecryptContext;
 use kithara_events::AbrReason;
 use kithara_platform::{
     CancelToken,
+    sync::{CondvarGate, WaitGate},
     time::{Duration, Instant},
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, ByteMap, ContainerFormat, MediaInfo, PendingReason, PlayheadRead, PlayheadState,
     PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState, SegmentDescriptor,
-    SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantControl,
+    SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantControl,
 };
 use kithara_test_utils::kithara;
-use tracing::info;
 
 use crate::{
     playlist::{PlaylistAccess, PlaylistState},
     variant::{HlsVariant, PlanCtx, SegmentActivateParams},
 };
+
+/// Watchdog timeout for the off-RT blocking `wait_range(_, None)`: must exceed
+/// the `kithara-net` per-fetch total timeout so a stalled upstream is failed by
+/// the network layer (the wait then returns a terminal `Err`) before this
+/// deadlock watchdog fires. Mirrors `kithara-storage` `WAIT_HANG_TIMEOUT`. Only
+/// a wait that never wakes after every signal site fired is a real deadlock.
+const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Infrastructure handles shared with every [`HlsCoord`]:
 /// the parent cancel token (cancel hierarchy owner of `HlsCoord.cancel`)
@@ -39,6 +46,12 @@ pub(crate) struct HlsCoordEnv {
     pub(crate) scope: AssetScope<DecryptContext>,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
+    /// Shared readiness gate: every transition that can flip a blocked
+    /// reader's `wait_range` predicate (segment write/commit/fail, fence
+    /// raise/clear, seek reset, cancel) `signal`s it; the off-RT
+    /// `wait_range(_, None)` parks on it instead of polling a wall-clock
+    /// timer. See `README.md` "Event-driven read wait".
+    pub(crate) ready: Arc<CondvarGate<u64>>,
 }
 
 /// Thin router over a fixed `Vec<Arc<HlsVariant>>`. Every `Source`-side
@@ -90,6 +103,10 @@ pub(crate) struct HlsCoord {
     /// no format diff is observable there, so without the target the
     /// fence would never clear.
     fence_target: AtomicUsize,
+    /// Readiness gate for the off-RT blocking `wait_range(_, None)`. Shared
+    /// with every variant's fetch closures (write/commit/fail signal it) and
+    /// signalled by the coord on fence/seek transitions. See [`HlsCoordEnv::ready`].
+    ready: Arc<CondvarGate<u64>>,
 }
 
 impl HlsCoord {
@@ -125,7 +142,14 @@ impl HlsCoord {
             variant_generation: AtomicU64::new(0),
             fence_at: AtomicU64::new(0),
             fence_target: AtomicUsize::new(0),
+            ready: env.ready,
         }
+    }
+
+    /// The shared readiness gate, handed to [`PlanCtx`] so variant fetch
+    /// closures can signal segment write/commit/fail.
+    pub(crate) fn ready_gate(&self) -> Arc<CondvarGate<u64>> {
+        Arc::clone(&self.ready)
     }
 
     pub(crate) fn active(&self) -> Option<&Arc<HlsVariant>> {
@@ -170,14 +194,10 @@ impl HlsCoord {
     /// the decoder has been recreated against the new variant.
     pub(crate) fn clear_variant_fence(&self) {
         let current_gen = self.variant_generation.load(Ordering::Acquire);
-        let prev = self.fence_at.swap(current_gen, Ordering::AcqRel);
-        if prev != current_gen {
-            info!(
-                fence_was = prev,
-                fence_now = current_gen,
-                "HlsCoord: clear_variant_fence"
-            );
-        }
+        self.fence_at.swap(current_gen, Ordering::AcqRel);
+        // The fence gate opened: wake a reader parked in `wait_range(_, None)`
+        // (it short-circuited on `variant_change_pending`) so it re-probes.
+        self.ready.signal();
     }
 
     /// Commit any ABR pending decision at the reader's segment boundary.
@@ -209,19 +229,9 @@ impl HlsCoord {
             return false;
         };
         let v_old = self.variants.get(current_before);
-        let reader_pos_at_entry = self.position();
         let needs_byte_continuity = matches!(
             self.playlist_state.variant_container(new_v),
             Some(ContainerFormat::Wav)
-        );
-        info!(
-            from_variant = current_before,
-            to_variant = new_v,
-            from_seg,
-            reader_pos = reader_pos_at_entry,
-            needs_byte_continuity,
-            reason = ?decision.reason(),
-            "HlsCoord: commit_variant_switch"
         );
         if needs_byte_continuity {
             let switch_at = from_seg.saturating_add(1).min(v_new.num_segments());
@@ -275,6 +285,10 @@ impl HlsCoord {
         let reader_pt = self.playhead_read.position();
         self.abr
             .notify_commit(decision, current_before, reader_pt, Instant::now());
+        // Variant switched (fence raised on the structured-container branch, or
+        // a byte-continuity reactivation): wake a parked reader to re-probe /
+        // observe the new `Interrupted`(VariantChange) gate.
+        self.ready.signal();
         true
     }
 
@@ -406,6 +420,9 @@ impl HlsCoord {
             active.reset_to_full_range();
         }
         self.abr.invalidate_pending();
+        // A seek repositioned the active variant: wake a reader parked on the
+        // pre-seek range so it re-probes against the new position / flush gate.
+        self.ready.signal();
     }
 
     /// Mirror `abr.lock()` state to `seek_obs.is_pending()`.
@@ -508,6 +525,25 @@ impl HlsCoord {
         range: Range<u64>,
         timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
+        match timeout {
+            // RT / cooperative-yield probe path (`probe_read`): a single
+            // wake-free probe, unchanged — never parks on the gate.
+            Some(_) => self.probe_range(range, timeout),
+            // Off-RT consumer (`Stream::read` / `prime_seek_range`): block on
+            // the readiness gate until the range resolves, a segment fails, or
+            // cancel fires. Event-driven — no wall-clock poll.
+            None => self.wait_range_blocking(range),
+        }
+    }
+
+    /// Single wake-free readiness probe (the wake-free `HlsVariant::wait_range`
+    /// behind the coord's fence/cancel short-circuits). Shared by the RT probe
+    /// path and the off-RT blocking loop's per-iteration check.
+    fn probe_range(
+        &self,
+        range: Range<u64>,
+        timeout: Option<Duration>,
+    ) -> StreamResult<WaitOutcome> {
         if self.cancel.is_cancelled() {
             return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
         }
@@ -515,6 +551,65 @@ impl HlsCoord {
             return Ok(WaitOutcome::Interrupted);
         }
         self.variant_serving(range.start).wait_range(range, timeout)
+    }
+
+    /// Re-aim heartbeat for the off-RT blocking wait. The wait wakes immediately
+    /// on any readiness signal (the fact of a write/commit/fence/seek) —
+    /// event-driven. This interval bounds only the *quiet* case: if no signal
+    /// arrives within it, the peer may be mis-aimed after a seek (it fetched,
+    /// went idle, and the range the reader now wants is outside its prefetch
+    /// window), so the wait yields `WaitBudgetExceeded` to let the off-RT reader
+    /// re-assert the peer's aim (`notify_peer_wake`) and re-enter. It never polls
+    /// for data — readiness is always learned from a signal, never from a timer.
+    const READER_REAIM_INTERVAL: Duration = Duration::from_millis(25);
+
+    /// Off-RT blocking wait: park on the readiness gate until [`probe_range`]
+    /// resolves (`Ready`/`Eof`/`Interrupted`) or returns a terminal error.
+    /// Event-driven — every transition that can flip the probe (segment
+    /// write/commit/fail, fence raise/clear, seek reset, cancel) `signal`s the
+    /// gate. The pre-probe [`current`](WaitGate::current) snapshot + park-only-
+    /// if-unchanged is a seqlock guard closing the lost-wakeup window even
+    /// though the probe predicate and the gate sit under different locks
+    /// (mirrors `kithara-storage` `wait_range_inner`). A genuine wedge (no
+    /// signal at all) trips the hang watchdog rather than parking forever.
+    #[kithara::hang_watchdog(timeout = WAIT_HANG_TIMEOUT)]
+    fn wait_range_blocking(&self, range: Range<u64>) -> StreamResult<WaitOutcome> {
+        // Cancel is the one transition with no producer-side signal; register a
+        // waker that signals the gate so a parked wait observes it. The guard
+        // unregisters when this wait returns (mirror storage `wait.rs`).
+        let _cancel_wake = {
+            let ready = self.ready_gate();
+            self.cancel.on_cancel(move || ready.signal())
+        };
+        loop {
+            hang_tick!();
+            // Snapshot the gate BEFORE the probe: a signal landing between the
+            // probe and the park advances the counter, so the park returns at
+            // once and we re-probe — no lost wakeup.
+            let since = self.ready.current();
+            match self.probe_range(range.clone(), Some(Duration::from_millis(0))) {
+                Ok(WaitOutcome::Ready) => return Ok(WaitOutcome::Ready),
+                Ok(WaitOutcome::Eof) => return Ok(WaitOutcome::Eof),
+                Ok(WaitOutcome::Interrupted) => return Ok(WaitOutcome::Interrupted),
+                Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
+                    // Not ready: park on the gate until a signal advances it,
+                    // bounded by the re-aim heartbeat.
+                }
+                Err(e) => return Err(e),
+            }
+            // Event-driven park: a write/commit/fence/seek/cancel signal wakes
+            // us at once to re-probe (the fact of a write, never a timer). If
+            // the gate stays quiet for the heartbeat the peer may be mis-aimed
+            // after a seek; yield so the off-RT reader re-asserts its prefetch
+            // aim and re-enters (mirrors the old per-iteration `notify_peer_wake`
+            // without the wall-clock data poll).
+            if self.ready.wait_timeout(since, Self::READER_REAIM_INTERVAL) {
+                // Woke from a signal — activity, not a wedge: reset the watchdog.
+                hang_reset!();
+            } else {
+                return Err(StreamError::Source(SourceError::WaitBudgetExceeded));
+            }
+        }
     }
 
     delegate! {
