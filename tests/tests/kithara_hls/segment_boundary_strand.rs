@@ -74,7 +74,6 @@ fn segment_first_frame(segment: usize) -> u64 {
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(30)),

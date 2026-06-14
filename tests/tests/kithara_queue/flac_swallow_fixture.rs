@@ -19,7 +19,8 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancelToken,
-    time::{Duration, Instant, sleep},
+    flash::real_io,
+    time::{self, Duration, Instant},
 };
 use kithara_test_utils::probe::capture as probe_capture;
 
@@ -95,7 +96,7 @@ fn build_fixture() -> HlsFixtureBuilder {
 /// deadline ("проглатывание"). Detector: the `committed_ns` USDT probe on
 /// `PlayheadState::write_playhead` — fail if the committed playhead ever jumps
 /// forward by more than [`MAX_COMMITTED_STEP_SECS`] in a single commit.
-#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -137,14 +138,25 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
 
     let window_secs = (BLOCKS_PER_WINDOW * BLOCK_FRAMES) as f64 / f64::from(OUT_RATE);
     let windows = (PLAY_SECS / window_secs).ceil() as u64;
-    for _ in 0..windows {
-        let started = Instant::now();
-        for _ in 0..BLOCKS_PER_WINDOW {
-            let _ = player.render(BLOCK_FRAMES);
-        }
-        let elapsed = started.elapsed().as_secs_f64();
-        if window_secs > elapsed {
-            sleep(Duration::from_secs_f64(window_secs - elapsed)).await;
+    // This reproduces a REAL-TIME-DEADLINE bug: the swallow only occurs when a
+    // delayed FLAC segment (700 ms real) is not ready by the player's real-time
+    // render deadline. Hold a `RealIoScope` across the playout so the virtual
+    // clock is paced to real time — the real segment delays and the real
+    // FLAC+DRM decode then interact with a real deadline exactly as in prod,
+    // instead of the virtual clock racing past the producer (which starves the
+    // worker so the track never plays). Off the `flash` feature this is a ZST
+    // no-op and the clock is already real.
+    {
+        let _real_io = real_io();
+        for _ in 0..windows {
+            let started = Instant::now();
+            for _ in 0..BLOCKS_PER_WINDOW {
+                let _ = player.render(BLOCK_FRAMES);
+            }
+            let elapsed = started.elapsed().as_secs_f64();
+            if window_secs > elapsed {
+                time::sleep(Duration::from_secs_f64(window_secs - elapsed)).await;
+            }
         }
     }
 

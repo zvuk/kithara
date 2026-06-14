@@ -162,7 +162,7 @@ async fn wait_for_position_at_least(
 ///
 /// `#[ignore]` because the upstream is VPN-gated and the creds rot.
 // flash(false): prod-CDN e2e; sleep is a wall-clock stall-detection window racing real sockets.
-#[kithara::test(flash(false), tokio)]
+#[kithara::test(tokio)]
 #[ignore = "requires zvuk prod creds baked at build (KITHARA_DRM_PROD_*) — run with --run-ignored=only"]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
@@ -191,12 +191,16 @@ async fn zvuk_prod_drm_track_plays(#[case] backend: DecoderBackend) {
         .unwrap_or_else(|e| panic!("prod DRM play fail [{PROD_TRACK}]: {e}"));
 
     let before = ctx.queue.position_seconds().unwrap_or(0.0);
-    sleep(Duration::from_secs(2)).await;
+    wait_for_position_at_least(&ctx.queue, before + 0.9, Duration::from_secs(5))
+        .await
+        .unwrap_or_else(|e| {
+            panic!("prod DRM playback stalled [{PROD_TRACK}]: did not advance ≥0.9s from {before:.2}: {e}")
+        });
     let after = ctx.queue.position_seconds().unwrap_or(0.0);
     assert!(
         after - before >= 0.9,
         "prod DRM playback stalled [{PROD_TRACK}]: \
-         {before:.2}→{after:.2} over 2s wall clock"
+         {before:.2}→{after:.2} (advance below 0.9s)"
     );
 
     ctx.queue.remove(track_id).expect("remove");

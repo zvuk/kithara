@@ -16,7 +16,6 @@ const BLOCK_FRAMES: usize = 512;
 const STARTUP_CLEAR_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(10)),

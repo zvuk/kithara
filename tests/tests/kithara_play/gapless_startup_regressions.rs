@@ -30,7 +30,6 @@ const STARTUP_POSITION_SECS: f64 = 0.05;
 const AUDIBLE_SAMPLE_THRESHOLD: f32 = 1.0e-3;
 
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(20)),

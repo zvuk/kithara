@@ -15,12 +15,14 @@ use axum::{Router, body::Body, extract::State, http::header, response::Response,
 use bytes::Bytes;
 use kithara::{
     assets::AssetStoreBuilder,
-    audio::ChunkOutcome,
-    prelude::{Resource, ResourceConfig},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    file::{File, FileConfig, FileSrc},
+    prelude::ResourceConfig,
+    stream::Stream,
 };
 use kithara_app::waveform::analyze;
 use kithara_integration_tests::{TestHttpServer, create_test_wav};
-use kithara_platform::{CancelToken, thread::sleep, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 
 const WAVEFORM_BUCKETS: usize = 100;
 
@@ -41,11 +43,17 @@ async fn serve_wav(State(state): State<CountState>) -> Response {
         .expect("valid response")
 }
 
-fn drain_to_eof(mut resource: Resource) -> bool {
+/// Drain the player to EOF. The pipeline is built with `block_on_underrun`
+/// (see the call site), so `next_chunk` PARKS on the engine-coordinated ring
+/// underrun until the decode worker delivers the next chunk or signals EOF —
+/// it never returns `Pending`. The park drives the virtual clock forward under
+/// flash (no real-clock re-poll sleep), so the worker advances and the shared
+/// WAV is decoded deterministically.
+fn drain_to_eof(mut audio: Audio<Stream<File>>) -> bool {
     loop {
-        match resource.next_chunk() {
+        match audio.next_chunk() {
             Ok(ChunkOutcome::Chunk(_)) => {}
-            Ok(ChunkOutcome::Pending { .. }) => sleep(Duration::from_millis(2)),
+            Ok(ChunkOutcome::Pending { .. }) => {}
             Ok(ChunkOutcome::Eof { .. }) => return true,
             Err(_) => return false,
         }
@@ -53,7 +61,6 @@ fn drain_to_eof(mut resource: Resource) -> bool {
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     timeout(Duration::from_secs(2)),
     env(KITHARA_HANG_TIMEOUT_SECS = "2")
@@ -79,11 +86,16 @@ async fn waveform_and_player_share_one_get() {
         .file_asset_store(Arc::clone(&store))
         .build();
 
-    // Player consumer of the same URL through the same shared store.
-    let player_cfg = ResourceConfig::for_src(url.as_str())
-        .expect("player url")
-        .file_asset_store(Arc::clone(&store))
-        .build();
+    // Player consumer of the same URL through the same shared store. Built
+    // with `block_on_underrun(true)` so the drain parks on the virtual clock
+    // until the worker delivers, instead of sleep-polling on `Pending`.
+    let player_cfg = AudioConfig::<File>::for_stream(
+        FileConfig::for_src(FileSrc::Remote(url.clone()))
+            .asset_store(Arc::clone(&store))
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
 
     // Run both concurrently so they cooperate on one download.
     let analysis = tokio::spawn(analyze(
@@ -92,10 +104,10 @@ async fn waveform_and_player_share_one_get() {
         CancelToken::never(),
     ));
 
-    let mut player = Resource::new(player_cfg)
+    let mut player = Audio::<Stream<File>>::new(player_cfg)
         .await
-        .expect("open player resource");
-    player.preload().await.expect("player preload");
+        .expect("open player audio");
+    player.preload().expect("player preload");
     let player_drain = spawn_blocking(move || drain_to_eof(player));
 
     let envelope = analysis

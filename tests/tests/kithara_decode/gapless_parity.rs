@@ -233,7 +233,6 @@ async fn fetch_bytes(client: &Client, url: String) -> Vec<u8> {
 }
 
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(20)),

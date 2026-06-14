@@ -32,7 +32,7 @@ use kithara_integration_tests::{
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
-    time::{Duration, sleep, timeout},
+    time::{self, Duration, sleep, timeout},
     tokio::sync::broadcast::error::RecvError,
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
@@ -76,7 +76,9 @@ impl Consts {
     /// Gap between `select(slow)` and `select(fast)` in the completion-race
     /// test: long enough for slow's loader completion to fire around the
     /// superseding select (the contended window), short relative to
-    /// `RACE_OBSERVE`. Real-clock (the test is `flash(false)`).
+    /// `RACE_OBSERVE`. A deliberate race-widening pacing delay with no
+    /// state-wait equivalent — synchronising on a settled state would dissolve
+    /// the contended window (see the test's own note).
     const RACE_GAP: Duration = Duration::from_millis(50);
     /// Window after the selects during which the completion-race test watches
     /// for a barge-in (slow stomping current fast). Ample for the racing
@@ -482,18 +484,17 @@ fn drain_event_backlog(rx: &mut EventReceiver) {
 /// `select_item` landed after `select(fast)` committed fast, stomping it at
 /// ~tens of ms). With the lock the apply and the select are mutually
 /// exclusive, so it must not.
-// DEFER (flash(false)): this no-tick barge-in reproducer asserts the ABSENCE
-// of a stomp over a bounded observation window (`RACE_OBSERVE`) while a live
-// audio worker is decoding. The worker re-polls on its own (virtual) cadence
-// rather than parking indefinitely, so the engine never reaches the quiescence
-// the flash clock needs to collapse the absence window to ~0 — under flash the
-// per-iteration window costs real time, and 30 iterations blow the harness
-// budget (verified: TIMEOUT at 120 s). The contended window is a real-clock
-// race, so this test stays on the real wall clock. Its sibling
-// `supersede_while_loading_cancels_slow_track` flips cleanly because it has a
-// real terminal event (`QueueEnded`/`CurrentTrackChanged`) to wait on, not an
-// absence.
-#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
+// The absence watch (slow must not stomp the already-current fast) follows
+// `CurrentTrackChanged` on the bus rather than polling a virtual clock, so each
+// step blocks on a real current-track change; `RACE_OBSERVE` only bounds it as
+// a safety cap. The one remaining timer is `RACE_GAP` between `select(slow)`
+// and `select(fast)`: it is a deliberate race-WIDENING delay (it must land
+// `select(fast)` mid-flight, around slow's loader-completion `select_item`), not
+// a wait for a settled state — synchronising on slow reaching `Loaded` would
+// order the completion before the select and dissolve the contended window this
+// gate exists to probe. It therefore has no state-wait equivalent and is left
+// as a timer on purpose.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn concurrent_completion_race_does_not_barge_in() {
     let helper = TestServerHelper::new().await;
     let fast = build_hls(
@@ -538,19 +539,35 @@ async fn concurrent_completion_race_does_not_barge_in() {
         queue
             .select(slow_id, Transition::None)
             .unwrap_or_else(|e| panic!("[iter {iter}] select slow: {e}"));
-        sleep(Consts::RACE_GAP).await;
+        time::sleep(Consts::RACE_GAP).await;
         queue
             .select(fast_id, Transition::None)
             .unwrap_or_else(|e| panic!("[iter {iter}] select fast: {e}"));
 
-        // Watch a bounded window: once fast becomes current it must stay
-        // current (no auto-advance exists to move off it). slow appearing
-        // *after* fast is the barge-in.
+        // Watch the bounded window by following `CurrentTrackChanged` on the
+        // bus instead of polling `current()`: once fast becomes current it must
+        // stay current (no auto-advance exists to move off it), so slow
+        // appearing *after* fast is the barge-in. `RACE_OBSERVE` bounds the
+        // watch as a hard safety cap, not as a pacing wait — every step blocks
+        // on the next real current-track change. The initial `current()`
+        // snapshot catches a change that landed before we start consuming.
         let watch = kithara_platform::time::Instant::now();
-        let mut saw_fast = false;
-        let mut history: Vec<Option<TrackId>> = Vec::new();
-        while watch.elapsed() < Consts::RACE_OBSERVE {
-            let cur = queue.current().map(|e| e.id);
+        let mut history: Vec<Option<TrackId>> = vec![queue.current().map(|e| e.id)];
+        let mut saw_fast = history.last().copied().flatten() == Some(fast_id);
+        loop {
+            let remaining = Consts::RACE_OBSERVE.saturating_sub(watch.elapsed());
+            if remaining.is_zero() {
+                break;
+            }
+            // Block until the next current-track change (or the safety cap).
+            let Some(QueueEvent::CurrentTrackChanged { id: cur }) =
+                next_queue_event(&mut rx, remaining, |ev| {
+                    matches!(ev, QueueEvent::CurrentTrackChanged { .. })
+                })
+                .await
+            else {
+                break;
+            };
             if cur != history.last().copied().flatten() {
                 history.push(cur);
             }
@@ -564,7 +581,6 @@ async fn concurrent_completion_race_does_not_barge_in() {
                 ));
                 break;
             }
-            sleep(Consts::STATUS_POLL).await;
         }
     }
 

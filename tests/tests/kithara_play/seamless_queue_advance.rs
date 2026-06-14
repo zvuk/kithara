@@ -26,7 +26,6 @@ const POST_ROLL_BLOCKS: usize = 8;
 const SILENCE_THRESHOLD: f32 = 1.0e-3;
 
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(30)),
@@ -102,7 +101,6 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
 }
 
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(30)),
@@ -287,6 +285,13 @@ async fn render_until_second_item_end(
     harness: &OfflinePlayerHarness,
 ) -> (Vec<f32>, Vec<TimedPlayerEvent>) {
     let deadline = Instant::now() + Duration::from_secs(10);
+    // Pace each rendered block at its real audio duration so the decode worker
+    // stays ahead and the ring never underruns. Under flash a fixed sub-block
+    // sleep (e.g. 5 ms) advances virtual time faster than one block of audio is
+    // consumed, so the render loop outruns the producer — most visibly at the
+    // gapless handover, inflating the second track with underrun zero-fill.
+    let block_budget =
+        Duration::from_secs_f64(f64::from(BLOCK_FRAMES) / f64::from(GAPLESS_SAMPLE_RATE));
     let mut rendered = Vec::new();
     let mut rendered_frames = 0usize;
     let mut events = Vec::new();
@@ -327,7 +332,7 @@ async fn render_until_second_item_end(
             Instant::now() <= deadline,
             "timed out waiting for queue to finish; events={events:?}"
         );
-        time::sleep(Duration::from_millis(5)).await;
+        time::sleep(block_budget).await;
     }
 }
 

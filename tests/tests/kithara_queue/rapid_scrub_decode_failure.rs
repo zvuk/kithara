@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use kithara_assets::StoreOptions;
 use kithara_events::{
-    AbrMode, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
+    AbrMode, AudioEvent, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -132,6 +132,36 @@ async fn observe_scrub_outcome(
             Err(_) => continue,
         }
     }
+}
+
+/// Wait until the playback sink commits real PCM progress past
+/// `baseline_secs` — i.e. the audio worker has left the post-seek
+/// `WaitingForSource` state and is rendering again. This is the
+/// concrete state the old fixed inter-scrub sleep was approximating:
+/// "play between scrubs so recovery actually runs and real PCM is
+/// rendered". `budget` is a safety deadline that bounds a hang, not a
+/// pacing wait — the function returns the moment progress is observed.
+async fn wait_for_playback_progress(
+    rx: &mut EventReceiver,
+    baseline_secs: f64,
+    budget: Duration,
+) -> Option<f64> {
+    use kithara_platform::tokio::sync::broadcast::error::RecvError;
+    let fut = async {
+        loop {
+            match rx.recv().await {
+                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                    let pos_secs = position_ms as f64 / 1000.0;
+                    if pos_secs > baseline_secs {
+                        return Some(pos_secs);
+                    }
+                }
+                Ok(_) | Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    };
+    timeout(budget, fut).await.ok().flatten()
 }
 
 struct Harness {
@@ -326,10 +356,12 @@ fn assert_not_failed(outcome: ScrubOutcome, target: f64, tag: &str) {
 ///   to dodge with a passive scheduler warm-up.
 ///
 /// `second_ratio = None` skips the second seek; otherwise the
-/// harness sleeps `PLAY_BETWEEN_SCRUBS` between the two so any
-/// post-first-seek recovery actually runs. Each case asserts no
+/// harness waits between the two for the playback sink to commit
+/// real PCM progress past the first landing point — bounded by
+/// `PLAY_BETWEEN_SCRUBS` as a safety deadline — so any post-first-seek
+/// recovery actually runs. Each case asserts no
 /// `PlayerEvent::ItemDidFail` after the final scrub.
-#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::single_mid(0.40, None)]
 #[case::near_end(0.95, None)]
 #[case::fwd_then_back(0.80, Some(0.20))]
@@ -360,7 +392,13 @@ async fn seek_into_cold_range_does_not_fail(
         panic!("[first] CRASHED before second scrub (src={src})");
     }
 
-    sleep(PLAY_BETWEEN_SCRUBS).await;
+    // Between scrubs, wait for the audio worker to actually render real
+    // PCM past where the first seek landed — not a fixed timer. This is
+    // the state the second scrub needs: post-first-seek recovery has run
+    // and playback is progressing again. `PLAY_BETWEEN_SCRUBS` is the
+    // safety deadline bounding a stall, not a pacing wait.
+    let baseline_secs = harness.queue.position_seconds().unwrap_or(0.0);
+    wait_for_playback_progress(&mut harness.rx, baseline_secs, PLAY_BETWEEN_SCRUBS).await;
 
     let second_target = TRACK_DURATION_S * second_ratio;
     let second_outcome = harness.scrub(second_target, "second").await;
@@ -375,7 +413,7 @@ async fn seek_into_cold_range_does_not_fail(
 /// mid-atom from one of the racing earlier seeks — the exact
 /// torn-cursor shape three prod tracks crashed on in `app.log
 /// @ 11:50`.
-#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::drag_mid(0.40)]
 #[case::drag_end(0.95)]
 async fn seek_drag_into_cold_range_does_not_fail(temp_dir: TestTempDir, #[case] final_ratio: f64) {

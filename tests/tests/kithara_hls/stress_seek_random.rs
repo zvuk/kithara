@@ -29,7 +29,7 @@ use tracing::info;
 /// 5. Sample `seek_iterations` random seek positions in `(0, len - chunk_size)`
 /// 6. For each: seek → read → verify every byte matches `expected_byte_at`
 /// 7. Final: seek to `len - chunk_size`, read all → verify EOF
-#[kithara::test(flash(false),
+#[kithara::test(
     tokio,
     native,
     serial,

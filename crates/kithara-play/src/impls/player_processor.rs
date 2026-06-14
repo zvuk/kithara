@@ -172,6 +172,7 @@ impl PlayerNodeProcessor {
             return;
         }
 
+        let mut revived = false;
         for (_, track) in self.tracks.iter_mut() {
             match track.state() {
                 TrackState::FadingIn | TrackState::Playing => {
@@ -181,8 +182,20 @@ impl PlayerNodeProcessor {
                 TrackState::FadingOut => {
                     track.stop();
                 }
+                // Superpowered-style resume: a played-out track kept warm at
+                // end-of-queue (see `cleanup_finished_tracks`) resumes from an
+                // in-range seek. A seek at/past duration leaves it ended (the
+                // `< duration` guard skips revival), preserving PastEof.
+                TrackState::Finished if track.ended_at_eof() && seconds < track.duration() => {
+                    track.seek(seconds);
+                    track.play();
+                    revived = true;
+                }
                 _ => {}
             }
+        }
+        if revived {
+            self.shared_state.playing.store(true, Ordering::SeqCst);
         }
     }
 
@@ -211,8 +224,29 @@ impl PlayerNodeProcessor {
             }
         }
 
+        // Superpowered-style end-of-queue resume: if removing the finished
+        // tracks would empty the arena (the queue has played out) and one of
+        // them reached *natural* EOF, keep that single track resident (warm)
+        // so a later in-range seek can revive it (`apply_seek`). It is
+        // reclaimed by `evict_tracks_if_needed` (Finished evicts first) when
+        // the next track loads. Tracks that finished via `stop()` or a
+        // faded-out crossfade (not `ended_at_eof`) are discarded as usual.
+        let retain: Option<Index> = if count == self.tracks.len() {
+            finished[..count].iter().flatten().find_map(|(_, idx)| {
+                self.tracks
+                    .get_by_index(*idx)
+                    .filter(|t| t.ended_at_eof())
+                    .map(|_| *idx)
+            })
+        } else {
+            None
+        };
+
         for entry in finished[..count].iter().flatten() {
             let (key, idx) = entry;
+            if Some(*idx) == retain {
+                continue;
+            }
             if let Some(track) = self.tracks.remove_by_index(*idx) {
                 self.shared_state.discard_track(track);
                 self.shared_state
@@ -225,7 +259,12 @@ impl PlayerNodeProcessor {
             }
         }
 
-        if self.tracks.len() == 0 {
+        // Playback has stopped once nothing audible remains: either the arena
+        // is empty (all finished discarded) or only the retained, played-out
+        // track is left. The retained track is inert in `render_audio` (gated
+        // by `is_playing`), so `is_playing()` correctly stays false until a
+        // seek revives it.
+        if self.tracks.len() == 0 || retain.is_some() {
             self.shared_state.playing.store(false, Ordering::SeqCst);
         }
     }

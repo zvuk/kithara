@@ -15,11 +15,7 @@ use kithara_integration_tests::{
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep},
-    tokio::task::spawn_blocking,
-};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 /// Test that ABR variant switch does not cause byte reading glitches.
@@ -36,7 +32,6 @@ use tracing::info;
 /// - Variant switch should be seamless from reader's perspective
 /// - No gaps or duplicates in byte stream
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(10)),
@@ -92,8 +87,6 @@ async fn test_abr_variant_switch_no_byte_glitches(
     });
 
     info!("Reading bytes from Stream<Hls>");
-
-    sleep(Duration::from_millis(100)).await;
 
     let result = spawn_blocking(move || -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         let mut all_bytes = Vec::new();
@@ -219,7 +212,6 @@ async fn test_basic_multi_segment_reading(
 /// 5. BUG: `first_media_segment` stays at 2 instead of updating to 0
 /// 6. This causes gap detection or incorrect offset calculations
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(10)),
@@ -263,8 +255,6 @@ async fn test_abr_variant_switch_with_seek_backward(
             }
         }
     });
-
-    sleep(Duration::from_millis(100)).await;
 
     spawn_blocking(move || -> Result<(), Box<dyn Error + Send + Sync>> {
         let mut buffer = vec![0u8; 50000];

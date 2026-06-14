@@ -13,7 +13,7 @@ use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
     thread::active_named_thread_count,
-    time::{Duration, sleep},
+    time::{Duration, Instant, sleep},
 };
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tracing::info;
@@ -23,6 +23,28 @@ impl Consts {
     const ITERATIONS: usize = 4;
     const SEEK_TARGETS_SECS: &'static [f64] = &[30.0, 60.0, 10.0];
     const SETTLE_MS: u64 = 250;
+}
+
+/// Wait for the named-thread count to go quiescent after `drop(audio)`:
+/// poll `active_named_thread_count()` until it is unchanged across a
+/// confirmation read, then return the settled value. This waits on the real
+/// teardown state (the same counter the budget assertion reads) rather than
+/// assuming a fixed wall has elapsed. A leak keeps the count high — it still
+/// stabilizes high, so the budget assertion still catches the growth. Bounded
+/// by `budget` as a safety deadline against a hang.
+async fn settle_thread_count(budget: Duration) -> usize {
+    let deadline = Instant::now() + budget;
+    let mut last = active_named_thread_count();
+    loop {
+        // Poll cadence between two reads of the teardown counter; the loop
+        // condition is the real state (count unchanged), not the timer.
+        sleep(Duration::from_millis(20)).await;
+        let now = active_named_thread_count();
+        if now == last || Instant::now() >= deadline {
+            return now;
+        }
+        last = now;
+    }
 }
 
 async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
@@ -98,7 +120,6 @@ async fn run_drm_seek_resume_cycle(
 /// iteration-over-iteration growth indicates a real thread/task leak tied
 /// to the DRM seek path.
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(120)),
@@ -117,15 +138,13 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
     );
 
     run_drm_seek_resume_cycle(&server, &temp_dir, &downloader, &shared_worker, 0).await;
-    sleep(Duration::from_millis(Consts::SETTLE_MS)).await;
+    let threads_baseline = settle_thread_count(Duration::from_millis(Consts::SETTLE_MS)).await;
 
-    let threads_baseline = active_named_thread_count();
     info!(threads_baseline, "baseline after warmup DRM seek cycle");
 
     for i in 1..=Consts::ITERATIONS {
         run_drm_seek_resume_cycle(&server, &temp_dir, &downloader, &shared_worker, i).await;
-        sleep(Duration::from_millis(Consts::SETTLE_MS)).await;
-        let now = active_named_thread_count();
+        let now = settle_thread_count(Duration::from_millis(Consts::SETTLE_MS)).await;
         info!(
             iter = i,
             threads = now,
@@ -134,9 +153,7 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
         );
     }
 
-    sleep(Duration::from_millis(500)).await;
-
-    let threads_after = active_named_thread_count();
+    let threads_after = settle_thread_count(Duration::from_millis(500)).await;
     let growth = threads_after.saturating_sub(threads_baseline);
 
     assert!(

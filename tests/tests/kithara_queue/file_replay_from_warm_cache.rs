@@ -3,7 +3,7 @@
 
 use std::{path::Path, sync::Arc};
 
-use kithara_assets::StoreOptions;
+use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, TrackId, TrackStatus};
 use kithara_integration_tests::{
@@ -23,6 +23,7 @@ struct Session {
     queue: Arc<Queue>,
     downloader: Downloader,
     store: StoreOptions,
+    flush_hub: Arc<FlushHub>,
     tick: tokio::task::JoinHandle<()>,
 }
 
@@ -46,11 +47,17 @@ fn build_session(cache_path: &Path) -> Session {
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let store = StoreOptions::new(cache_path);
+    // Own the flush hub so the test can drive a synchronous durable
+    // checkpoint (`flush_now`) instead of guessing at the background
+    // worker's debounce with a timer.
+    let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
+    let mut store = StoreOptions::new(cache_path);
+    store.flush_hub = Some(Arc::clone(&flush_hub));
     Session {
         queue,
         downloader,
         store,
+        flush_hub,
         tick,
     }
 }
@@ -126,6 +133,14 @@ async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, labe
         .unwrap_or_else(|e| panic!("[{label}] play: {e}"));
     session.tick.abort();
     let _ = session.tick.await;
+    // Durable checkpoint: returns only once the on-disk indexes
+    // (availability / lru / pins) are committed, so the next warm-cache
+    // session observes a fully-written cache. This is a state-completion
+    // wait, not a timer.
+    session
+        .flush_hub
+        .flush_now()
+        .unwrap_or_else(|e| panic!("[{label}] flush: {e}"));
     drop(session.queue);
     drop(session.downloader);
 }
@@ -151,7 +166,7 @@ async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, labe
 /// `hls` exercises the HLS branch in the same restart shape so we catch
 /// any regression in `track_replay_after_switch.rs`-adjacent code paths
 /// when the cold-replay fix lands.
-#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 #[case::mp3_with_extension(WarmReplayKind::Mp3WithExtension)]
 #[case::mp3_no_extension(WarmReplayKind::Mp3NoExtension)]
 #[case::hls(WarmReplayKind::Hls)]
@@ -178,11 +193,10 @@ async fn file_replay_from_warm_cache(#[case] kind: WarmReplayKind) {
     let temp: TestTempDir = temp_dir();
     let cache_path = temp.path().to_path_buf();
 
+    // session-1 ends with a synchronous durable `flush_now`, so by the
+    // time it returns the cache is fully committed to disk; the warm
+    // session below observes the written file directly (no flush timer).
     play_one_session(&url, &cache_path, 1.5, "session-1 cold cache").await;
-
-    // Give the asset store a moment to flush dirty pages to disk so the
-    // second session sees the committed file, not a half-written one.
-    sleep(Duration::from_millis(200)).await;
 
     play_one_session(&url, &cache_path, 0.5, "session-2 warm cache").await;
 }

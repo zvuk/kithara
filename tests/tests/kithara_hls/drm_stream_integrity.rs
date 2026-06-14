@@ -122,7 +122,6 @@ fn scan_boxes(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,

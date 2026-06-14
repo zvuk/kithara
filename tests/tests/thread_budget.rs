@@ -55,7 +55,6 @@ fn thread_budget_audio_worker_is_one_thread() {
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     multi_thread,
     native,
@@ -97,7 +96,6 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     multi_thread,
     native,

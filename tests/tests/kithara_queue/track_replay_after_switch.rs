@@ -4,7 +4,7 @@
 use std::{fmt::Write, sync::Arc};
 
 use kithara_assets::StoreOptions;
-use kithara_events::{AbrMode, TrackId, TrackStatus};
+use kithara_events::{AbrMode, Event, QueueEvent, TrackId, TrackStatus};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
@@ -15,7 +15,7 @@ use kithara_integration_tests::{
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
-    time::{Duration, sleep},
+    time::{self, Duration, sleep},
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
@@ -51,8 +51,6 @@ impl Consts {
     /// the bug is observed as a budget-exhaustion failure inside the
     /// loader long before this fires.
     const LOAD_DEADLINE: Duration = Duration::from_secs(20);
-    /// Settle window after `select(...)` before issuing the next select.
-    const SELECT_SETTLE: Duration = Duration::from_secs(2);
     /// AES-128 key/IV used by the encrypted variant. Matches the
     /// "0123456789abcdef" + zero-IV pair already used elsewhere in the
     /// integration suite (see `local_track_plays.rs`).
@@ -158,7 +156,32 @@ async fn wait_for_loader_done(
     }
 }
 
-#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
+/// Wait until the queue reports the given track as the current playing
+/// item via [`QueueEvent::CurrentTrackChanged`]. The receiver must be
+/// subscribed *before* the triggering `select(...)` so the event is not
+/// missed. Bounded by a safety deadline so a stuck switch fails fast
+/// instead of hanging.
+async fn wait_for_current_track(
+    rx: &mut kithara_events::EventReceiver,
+    expected: TrackId,
+    deadline: Duration,
+) {
+    let wait = async {
+        while let Ok(ev) = rx.recv().await {
+            if let Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) = ev
+                && id == expected
+            {
+                return;
+            }
+        }
+        panic!("event bus closed before CurrentTrackChanged({expected:?})");
+    };
+    time::timeout(deadline, wait)
+        .await
+        .unwrap_or_else(|_| panic!("timeout waiting for CurrentTrackChanged({expected:?})"));
+}
+
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::plain(FixtureMode::Plain)]
 #[case::aes128(FixtureMode::Aes128)]
 async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMode) {
@@ -188,13 +211,14 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
         .await
         .unwrap_or_else(|e| panic!("[{mode:?}] initial load B: {e}"));
 
+    let mut events = queue.subscribe();
     queue
         .select(id_a, Transition::None)
         .expect("select A (first)");
-    sleep(Consts::SELECT_SETTLE).await;
+    wait_for_current_track(&mut events, id_a, Consts::LOAD_DEADLINE).await;
 
     queue.select(id_b, Transition::None).expect("select B");
-    sleep(Consts::SELECT_SETTLE).await;
+    wait_for_current_track(&mut events, id_b, Consts::LOAD_DEADLINE).await;
 
     queue
         .select(id_a, Transition::None)

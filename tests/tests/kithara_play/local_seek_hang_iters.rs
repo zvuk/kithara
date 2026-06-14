@@ -3,7 +3,7 @@
 
 use kithara::{
     assets::StoreOptions,
-    events::AbrMode,
+    events::{AbrMode, AudioEvent, Event, EventReceiver},
     play::{Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -13,8 +13,9 @@ use kithara_integration_tests::{
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancelToken, thread,
-    time::{Duration, Instant, timeout},
+    CancelToken,
+    time::{self, Duration, Instant, timeout},
+    tokio::sync::broadcast::error::TryRecvError,
 };
 use url::Url;
 
@@ -24,8 +25,10 @@ struct Consts;
 impl Consts {
     const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
     const BLOCK_FRAMES: usize = Shared::OFFLINE_BLOCK_FRAMES;
-    /// Synthetic fixture has no cold-CDN latency; 0.5 s is enough to
-    /// reach steady-state decode.
+    /// Produced-audio horizon for the event-driven warmup: the warmup
+    /// drives the render pull until `PlaybackProgress` advances past this
+    /// position, proving the decode worker primed the pipeline before the
+    /// first measurement window (synthetic fixture has no cold-CDN latency).
     const WARMUP_SECS: f64 = 0.5;
     /// Measurement window: long enough that a real hang manifests as
     /// >=20% silent blocks but short enough to keep the test fast.
@@ -47,10 +50,32 @@ struct WindowStats {
     window_start_sample: usize,
 }
 
-fn render_and_collect(
+/// Render `blocks` measured blocks, parking on the virtual clock between
+/// pulls so each block reflects audio the decode worker actually produced.
+///
+/// `OfflinePlayer::render` is a real-time pull: an underrun zero-fills the
+/// output rather than blocking, exactly as a hardware callback would. On the
+/// real clock the worker stays ahead because the render loop paces against
+/// wall-clock (`thread::sleep` per block); under flash that pacing collapses,
+/// so a tight render loop drains the producer ring faster than the worker can
+/// refill it and the window captures underrun silence that never happens on a
+/// device. This helper restores the contract by gating each measured block on
+/// real produced audio: it pulls a block, and if the ring underran (the block
+/// is silent) it parks the body on the virtual clock via `time::sleep().await`
+/// — letting the engine advance virtual time and the worker deliver — then
+/// re-pulls the same block slot. The window therefore advances only on frames
+/// the worker has produced, mirroring the real-clock behaviour where the ring
+/// is kept full. A genuine producer stall (recreate-loop after seek) never
+/// fills the ring, so the per-block `deadline` assert fires precisely at the
+/// stall. The window's silence-fraction / RMS contract is measured by the
+/// caller, unchanged.
+async fn render_and_collect(
     player: &mut OfflinePlayer,
+    events: &mut EventReceiver,
     blocks: u32,
     samples_out: &mut Vec<f32>,
+    deadline: Instant,
+    stage: &str,
 ) -> WindowStats {
     const ACTIVE_THRESHOLD: f32 = 0.001;
     let block_budget =
@@ -60,22 +85,53 @@ fn render_and_collect(
     let mut silent_blocks = 0u32;
 
     for _ in 0..blocks {
-        let started = Instant::now();
-        let out = player.render(Consts::BLOCK_FRAMES);
-        let elapsed = started.elapsed();
+        // Pull this block, parking on the virtual clock until the producer
+        // ring has data for it. `render()` shares the read path of a device
+        // callback, so a non-silent block proves the worker delivered real
+        // frames for it; a silent block is an underrun, so we let virtual time
+        // advance and re-pull rather than counting ring-empty silence.
+        let out = loop {
+            let out = player.render(Consts::BLOCK_FRAMES);
+            // Drain progress/lifecycle events so the bounded bus cannot lag and
+            // so polling them rides the virtual clock alongside the sleep below.
+            drain_events(events);
+
+            if out.iter().any(|s| s.abs() > ACTIVE_THRESHOLD) {
+                break out;
+            }
+
+            assert!(
+                Instant::now() <= deadline,
+                "[{stage}] decode worker stopped delivering audio mid-window \
+                 — producer ring underran and never refilled (pipeline stalled)"
+            );
+            time::sleep(block_budget).await;
+        };
 
         if !out.iter().any(|s| s.abs() > ACTIVE_THRESHOLD) {
             silent_blocks += 1;
         }
 
         samples_out.extend_from_slice(&out);
-        thread::sleep(block_budget.saturating_sub(elapsed));
     }
 
     WindowStats {
         silent_blocks,
         total_blocks: blocks,
         window_start_sample,
+    }
+}
+
+/// Drain pending bus events without blocking. Keeps the bounded broadcast bus
+/// from lagging while the render loop parks on the virtual clock; a lagged
+/// receiver would otherwise wedge later `try_recv` reads.
+fn drain_events(events: &mut EventReceiver) {
+    loop {
+        match events.try_recv() {
+            Ok(_) => continue,
+            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            Err(TryRecvError::Lagged(_)) => continue,
+        }
     }
 }
 
@@ -101,6 +157,63 @@ fn rms(samples: &[f32]) -> f32 {
     let n = samples.len() as f32;
     let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
     (sum_sq / n).sqrt()
+}
+
+/// Drive the offline render pull until the decode worker has actually
+/// delivered real PCM, signalled by `PlaybackProgress` events whose
+/// position advances past `min_position_secs`.
+///
+/// `OfflinePlayer::render` is a synchronous pull: when the worker's ring
+/// is still empty it returns silence rather than blocking. Under flash the
+/// real-time `thread::sleep` pacing collapses, so a fixed-length warmup can
+/// finish before the worker primes the pipeline and the first measurement
+/// window then captures all silence. This helper instead awaits the real
+/// produced-audio signal: `Audio::read` emits `PlaybackProgress` from the
+/// render pull when it returns non-zero frames, so observing the position
+/// advance proves audio is flowing. The interleaved `time::sleep().await`
+/// rides the virtual clock (poll cadence only), parking the body so the
+/// engine can advance virtual time and the worker can deliver; the outer
+/// `deadline` only bounds a genuine stall (the test-level `timeout` is the
+/// real backstop).
+async fn render_until_audio(
+    player: &mut OfflinePlayer,
+    events: &mut EventReceiver,
+    min_position_secs: f64,
+    deadline: Instant,
+    stage: &str,
+) {
+    let block_budget =
+        Duration::from_secs_f64(Consts::BLOCK_FRAMES as f64 / f64::from(Consts::SAMPLE_RATE));
+    // ms threshold computed via `Duration` so no float→int cast is needed.
+    let min_position_ms = Duration::from_secs_f64(min_position_secs).as_millis();
+
+    loop {
+        let _ = player.render(Consts::BLOCK_FRAMES);
+
+        let mut advanced = false;
+        loop {
+            match events.try_recv() {
+                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                    if u128::from(position_ms) > min_position_ms {
+                        advanced = true;
+                    }
+                }
+                Ok(_) => continue,
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+                Err(TryRecvError::Lagged(_)) => continue,
+            }
+        }
+        if advanced {
+            return;
+        }
+
+        assert!(
+            Instant::now() <= deadline,
+            "[{stage}] decode worker never delivered audio past {min_position_secs:.1}s \
+             — pipeline stalled before measurement window"
+        );
+        time::sleep(block_budget).await;
+    }
 }
 
 async fn build_resource(
@@ -129,7 +242,7 @@ async fn build_resource(
     resource
 }
 
-#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
 #[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
@@ -167,7 +280,6 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
         .master_url();
 
     let window_blocks = blocks_for_seconds(Consts::PLAY_WINDOW_SECS);
-    let warmup_blocks = blocks_for_seconds(Consts::WARMUP_SECS);
     let mut next_seek_epoch = 1u64;
 
     for iter in 0..Consts::ITERATIONS {
@@ -186,11 +298,36 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
         let mut iteration_samples: Vec<f32> = Vec::new();
 
         let resource = build_resource(&master, &downloader, &iter_label, store, backend, abr).await;
+        // Subscribe before the resource moves into the player so no
+        // `PlaybackProgress` event is missed once the render pull starts.
+        let mut events = resource.subscribe();
         player.load_and_fadein(resource, &format!("{iter_label}|local-hls"));
 
-        let _ = render_and_collect(&mut player, warmup_blocks, &mut iteration_samples);
+        // Event-driven warmup: drive the render pull until the worker has
+        // actually produced PCM (position advances past the warmup horizon),
+        // instead of burning a fixed number of blocks that — under flash —
+        // can finish before the worker primes the pipeline. Parks the body on
+        // the virtual clock so the engine advances and the worker delivers.
+        let warmup_deadline = Instant::now() + Duration::from_secs(30);
+        render_until_audio(
+            &mut player,
+            &mut events,
+            Consts::WARMUP_SECS,
+            warmup_deadline,
+            "warmup",
+        )
+        .await;
 
-        let initial = render_and_collect(&mut player, window_blocks, &mut iteration_samples);
+        let initial_window_deadline = Instant::now() + Duration::from_secs(30);
+        let initial = render_and_collect(
+            &mut player,
+            &mut events,
+            window_blocks,
+            &mut iteration_samples,
+            initial_window_deadline,
+            "pre-seek window",
+        )
+        .await;
         let initial_samples = &iteration_samples[initial.window_start_sample..];
         let initial_rms = rms(initial_samples);
         let initial_silence_fraction =
@@ -220,7 +357,37 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
         next_seek_epoch += 1;
         player.seek(seek_target, seek_epoch);
 
-        let after = render_and_collect(&mut player, window_blocks, &mut iteration_samples);
+        // Wait for the seek to land in produced audio before measuring: the
+        // post-seek render pull emits `PlaybackProgress` past the target once
+        // the worker has refetched + decoded the new region. Awaiting that real
+        // state (rather than rendering blindly into a not-yet-primed pipeline)
+        // is what makes the after-seek window reflect actual post-seek audio
+        // under flash. The contract — silence fraction + RMS over the window —
+        // is measured unchanged below.
+        // Threshold a hair below the target so a segment-boundary-aligned
+        // commit landing exactly at the seek point still registers (the seek
+        // has demonstrably landed and is producing post-seek audio).
+        let seek_landed_secs = (seek_target - 1.0).max(0.0);
+        let seek_deadline = Instant::now() + Duration::from_secs(30);
+        render_until_audio(
+            &mut player,
+            &mut events,
+            seek_landed_secs,
+            seek_deadline,
+            "after-seek",
+        )
+        .await;
+
+        let after_window_deadline = Instant::now() + Duration::from_secs(30);
+        let after = render_and_collect(
+            &mut player,
+            &mut events,
+            window_blocks,
+            &mut iteration_samples,
+            after_window_deadline,
+            "after-seek window",
+        )
+        .await;
         let after_samples = &iteration_samples[after.window_start_sample..];
         let after_rms = rms(after_samples);
         let after_silence_fraction =

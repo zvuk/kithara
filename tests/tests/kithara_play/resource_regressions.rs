@@ -27,7 +27,7 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancelToken,
-    time::{Duration, Instant, sleep, timeout},
+    time::{self, Duration, Instant, sleep, timeout},
 };
 use tracing::{debug, info};
 
@@ -364,7 +364,6 @@ async fn seek_and_read(resource: &mut Resource, position: Duration, stage: &str)
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -424,7 +423,6 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -485,7 +483,6 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -568,7 +565,6 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -773,7 +769,6 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session() {
 /// `PcmMeta` stays contiguous, `PlaybackProgress` remains monotonic, and the offline
 /// player output does not produce sustained silence or over-budget render stalls.
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(25)),
@@ -831,7 +826,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         };
         progress_probe.drain(&mut progress_rx);
         if read_count == 0 {
-            sleep(Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
             progress_probe.observe_idle();
             continue;
         }
@@ -860,7 +855,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
 
     let decode_audio = open_packaged_hls_audio(&url, store, codec, backend).await;
     let mut resource = resource_from_reader(decode_audio);
-    timeout(Consts::READ_TIMEOUT, resource.preload())
+    time::timeout(Consts::READ_TIMEOUT, resource.preload())
         .await
         .expect("packaged HLS preload must complete")
         .expect("packaged HLS preload must succeed");
@@ -893,7 +888,6 @@ async fn packaged_hls_single_variant_continuity_is_stable(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
@@ -990,7 +984,6 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
 /// (~11.6ms at 512 frames / 44100Hz), and no silence gaps > 1 block
 /// are allowed during crossfade.
 #[kithara::test(
-    flash(false),
     tokio,
     timeout(Duration::from_secs(60)),
     env(KITHARA_HANG_TIMEOUT_SECS = "10")
@@ -1039,7 +1032,7 @@ async fn stress_offline_crossfade_no_gaps() {
                 .await
                 .expect("HLS audio");
             let mut r = resource_from_reader(audio);
-            timeout(Consts::READ_TIMEOUT, r.preload())
+            time::timeout(Consts::READ_TIMEOUT, r.preload())
                 .await
                 .expect("HLS preload")
                 .expect("HLS preload result");
@@ -1047,23 +1040,35 @@ async fn stress_offline_crossfade_no_gaps() {
         }
     };
 
-    let mp3_1 = make_mp3(worker.clone(), store.clone()).await;
-    sleep(Duration::from_millis(200)).await;
+    let mut mp3_1 = make_mp3(worker.clone(), store.clone()).await;
+    time::timeout(Consts::READ_TIMEOUT, mp3_1.preload())
+        .await
+        .expect("mp3_1 preload deadline")
+        .expect("mp3_1 preload");
     player.load_and_fadein(mp3_1, "mp3_1");
     let s1a = render_offline_window(&mut player, 40, "MP3 solo", BLOCK, SR);
 
-    let hls_1 = make_hls(worker.clone(), store.clone()).await;
-    sleep(Duration::from_millis(200)).await;
+    let mut hls_1 = make_hls(worker.clone(), store.clone()).await;
+    time::timeout(Consts::READ_TIMEOUT, hls_1.preload())
+        .await
+        .expect("hls_1 preload deadline")
+        .expect("hls_1 preload");
     player.load_and_fadein(hls_1, "hls_1");
     let s1b = render_offline_window(&mut player, 80, "MP3→HLS fade", BLOCK, SR);
 
-    let mp3_2 = make_mp3(worker.clone(), store.clone()).await;
-    sleep(Duration::from_millis(200)).await;
+    let mut mp3_2 = make_mp3(worker.clone(), store.clone()).await;
+    time::timeout(Consts::READ_TIMEOUT, mp3_2.preload())
+        .await
+        .expect("mp3_2 preload deadline")
+        .expect("mp3_2 preload");
     player.load_and_fadein(mp3_2, "mp3_2");
     let s2 = render_offline_window(&mut player, 80, "HLS→MP3 fade", BLOCK, SR);
 
-    let mp3_3 = make_mp3(worker.clone(), store.clone()).await;
-    sleep(Duration::from_millis(200)).await;
+    let mut mp3_3 = make_mp3(worker.clone(), store.clone()).await;
+    time::timeout(Consts::READ_TIMEOUT, mp3_3.preload())
+        .await
+        .expect("mp3_3 preload deadline")
+        .expect("mp3_3 preload");
     player.load_and_fadein(mp3_3, "mp3_3");
     let s3 = render_offline_window(&mut player, 80, "MP3→MP3 fade", BLOCK, SR);
 
@@ -1078,13 +1083,19 @@ async fn stress_offline_crossfade_no_gaps() {
     let mut worst_render = Duration::ZERO;
 
     for iter in 0..5 {
-        let hls_n = make_hls(worker.clone(), store.clone()).await;
-        sleep(Duration::from_millis(200)).await;
+        let mut hls_n = make_hls(worker.clone(), store.clone()).await;
+        time::timeout(Consts::READ_TIMEOUT, hls_n.preload())
+            .await
+            .expect("hls_n preload deadline")
+            .expect("hls_n preload");
         player.load_and_fadein(hls_n, &format!("hls_iter{iter}"));
         let _sh = render_offline_window(&mut player, 40, &format!("HLS solo #{iter}"), BLOCK, SR);
 
-        let mp3_n = make_mp3(worker.clone(), store.clone()).await;
-        sleep(Duration::from_millis(200)).await;
+        let mut mp3_n = make_mp3(worker.clone(), store.clone()).await;
+        time::timeout(Consts::READ_TIMEOUT, mp3_n.preload())
+            .await
+            .expect("mp3_n preload deadline")
+            .expect("mp3_n preload");
         player.load_and_fadein(mp3_n, &format!("mp3_iter{iter}"));
         let sm = render_offline_window(&mut player, 60, &format!("HLS→MP3 #{iter}"), BLOCK, SR);
 
@@ -1144,7 +1155,6 @@ async fn stress_offline_crossfade_no_gaps() {
 /// MP3 through `ResourceConfig` (same path as kithara-app) must probe, decode,
 /// and report correct duration — with and without extension/hint.
 #[kithara::test(
-    flash(false),
     tokio,
     timeout(Duration::from_secs(15)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
@@ -1234,7 +1244,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
                 Instant::now() <= deadline,
                 "path={path}: timed out waiting for PCM data"
             );
-            sleep(Duration::from_millis(5)).await;
+            time::sleep(Duration::from_millis(5)).await;
         }
         let _ = saw_eof;
         (total, resource.position())
@@ -1254,7 +1264,6 @@ async fn resource_mp3_no_hint_decodes_with_duration(
 // flash(false): live-internet sockets are invisible to the flash engine; virtual
 // sleep/deadline would outrun the real download and fail spuriously.
 #[kithara::test(
-    flash(false),
     tokio,
     timeout(Duration::from_secs(30)),
     env(
@@ -1416,7 +1425,7 @@ async fn live_remote_resource_decodes_with_duration(
             "{url}: timed out waiting for PCM data (pos={:?}, samples={samples})",
             resource.position()
         );
-        sleep(Duration::from_millis(5)).await;
+        time::sleep(Duration::from_millis(5)).await;
     }
 
     assert!(samples > 0, "{url}: must decode PCM samples");
@@ -1432,7 +1441,6 @@ async fn live_remote_resource_decodes_with_duration(
 // flash(false): live-internet sockets are invisible to the flash engine; a virtual
 // 500ms pacing sleep would elapse before the real metadata fetch completes.
 #[kithara::test(
-    flash(false),
     tokio,
     timeout(Duration::from_secs(30)),
     env(
@@ -1504,7 +1512,13 @@ async fn player_mp3_duration_matches_app_flow(
     player.replace_item(0, resource);
     let _ = player.select_item(0, true);
 
-    sleep(Duration::from_millis(500)).await;
+    // Wait on the concrete state the assertion below reads: the selected
+    // slot's duration committed into player shared state. The inner sleep is
+    // only the poll cadence of this state-checking loop; the test-level
+    // `timeout(30s)` bounds a genuine stall.
+    while player.duration_seconds().is_none() {
+        time::sleep(Duration::from_millis(20)).await;
+    }
 
     let dur = player.duration_seconds();
     debug!("{url} duration_seconds={dur:?}");
@@ -1529,7 +1543,6 @@ enum LocalKind {
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "10")
@@ -1615,7 +1628,7 @@ async fn local_resource_decodes_with_duration(
             "{url}: timed out waiting for PCM (pos={:?}, samples={samples})",
             resource.position()
         );
-        sleep(Duration::from_millis(5)).await;
+        time::sleep(Duration::from_millis(5)).await;
     }
 
     assert!(samples > 0, "{url}: must decode PCM samples");

@@ -356,7 +356,6 @@ async fn vod_manual_switch_affects_future_segments() {
 /// deterministic: pre-fix this test trips the watchdog; post-fix it completes
 /// the full track via V1.
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     serial,
@@ -623,7 +622,6 @@ async fn multi_track_shared_abr_with_cache() {
 /// switch, downloading the entire new variant from the start. With ABR
 /// oscillation this produces 2× bandwidth usage.
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     serial,
@@ -824,7 +822,6 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
 /// bug where clicking Manual(3) (FLAC) in the GUI caused a 10s hang
 /// before Phase K's `decode_next_chunk` recovery + `apply_decision` split.
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     serial,
@@ -1085,7 +1082,6 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
 /// without going through the ABR controller, masking the wake hook from
 /// `on_mode_changed → tick`.
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     serial,
@@ -1230,7 +1226,6 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
 /// gate an aggressive up-switch would land at segment 1; with it the
 /// first boundary stays neutral.
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     serial,
@@ -1348,7 +1343,6 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 /// rewritten to deterministically force the rapid-recreate race
 /// (likely needs `DelayRule` on segment fetches).
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     serial,
@@ -1491,7 +1485,6 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
 /// variant to imitate the real-world CDN latency that lets the reader
 /// land mid-segment when the user clicks lq.
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     serial,
@@ -1506,8 +1499,6 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
 async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     #[case] backend: DecoderBackend,
 ) {
-    use kithara_platform::thread::sleep as thread_sleep;
-
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
@@ -1554,25 +1545,27 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
         .await
         .expect("create audio");
 
-    // Real-time-ish reader: each read pulls a 4096-frame buffer
-    // (~93 ms @ 44.1 kHz) and we sleep 50 ms between iterations so
-    // the network DelayRule-like cadence of the real CDN is imitated.
-    // Without the sleep the in-process server feeds the whole track
-    // before any switch can land mid-segment.
+    // Reader cadence is driven by SAMPLE TARGETS, not a wall clock. Each
+    // phase pumps until it has accumulated the decoded frames it needs and
+    // then hands control back to switch / seek. The mid-segment landing the
+    // production bug needs comes from where the sample target stops, not from
+    // a real-time sleep between reads: a real `thread::sleep` does not park on
+    // the virtual clock, so under flash it burns real wall-clock while the
+    // engine cannot advance — minutes of real sleep for 180 s of audio, which
+    // trips the harness timeout and eventually closes the pcm channel.
     //
-    // Each read loop runs on the tokio BLOCKING pool: `audio.read()`
-    // parks in `recv_outcome_blocking` (`park_timeout`) while it waits
-    // for the worker, and on the single-threaded test runtime that park
-    // would otherwise freeze the one thread that also drives
-    // `Downloader` — under full-suite CPU oversubscription the read can
-    // win that race and stall the network forever (15 s `HangDetector`).
-    // Parking on the blocking pool keeps the Downloader runnable; the
-    // worker still wakes the blocking read via `reader_wake`. Control
-    // ops (seek, set_mode) run back on the runtime thread between the
-    // blocking phases. Mirrors
+    // Each read loop runs on the tokio BLOCKING pool: `audio.read()` parks in
+    // `recv_outcome_blocking` (`#[kithara::flash(true)]` → `park_timeout` on
+    // the virtual clock) while it waits for the worker. That park is what
+    // advances virtual time, so the worker delivers frames and the sample
+    // target is reached in negligible real time. Parking on the blocking pool
+    // also keeps the Downloader runnable on the runtime thread; the worker
+    // wakes the blocking read via `reader_wake`. Control ops (seek, set_mode)
+    // run back on the runtime thread between the blocking phases. Mirrors
     // `seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang`.
+    // The `Instant::now()` deadlines below stay as real-time backstops only;
+    // they never fire because the parked reads keep real wall-clock near zero.
     let buf_frames = 4096usize;
-    let read_pace = Duration::from_millis(50);
 
     // Phase 1 — play near end. Track ≈ 220 s; pump 180 s of decoded
     // audio so the seek-back step targets a position well before the
@@ -1589,7 +1582,6 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("phase 1 decode error: {e}"),
             }
-            thread_sleep(read_pace);
         }
         (audio, samples)
     })
@@ -1621,7 +1613,6 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
                 }
                 Err(e) => panic!("phase 2 decode error: {e}"),
             }
-            thread_sleep(read_pace);
         }
         (audio, samples)
     })
@@ -1639,16 +1630,24 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
         .set_mode(AbrMode::manual(0))
         .expect("Manual(0) (slq AAC) target valid");
 
-    // Phase 4 — read 10 s post-switch. Bug repro: decoder emits a
-    // false `decoder_next_chunk_safe: Eof` ~hundreds of KB after the
+    // Phase 4 — pump sustained playback post-switch. Bug repro: decoder
+    // emits a false `decoder_next_chunk_safe: Eof` ~hundreds of KB after the
     // switch and `handle_decode_eof` surfaces it as terminal EOS.
+    //
+    // Bound by a SAMPLE TARGET, not a wall clock: after a seek to 55 s the
+    // track still has ~165 s ahead, so a real-time-only loop would (under
+    // flash, where parked reads collapse real time) read the whole tail and
+    // hit a *legitimate* end-of-track EOF — indistinguishable from the bug.
+    // Capping at `phase4_target` (≈ 11 s of audio) keeps us far short of the
+    // true tail: any `Eof` before the cap is the premature/false EOS the
+    // contract guards against, and is still recorded in `saw_eof`.
+    let phase4_target: u64 = 500_000;
     let (samples_phase4, saw_eof_phase4) = spawn_blocking(move || {
         let mut buf = vec![0f32; buf_frames * 2];
         let mut samples = 0u64;
         let mut saw_eof = false;
-        let post_pace = Duration::from_millis(30);
         let deadline = Instant::now() + Duration::from_secs(15);
-        while Instant::now() < deadline {
+        while samples < phase4_target && Instant::now() < deadline {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => samples += count.get() as u64,
                 Ok(ReadOutcome::Pending { .. }) => {}
@@ -1658,7 +1657,6 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
                 }
                 Err(e) => panic!("phase 4 decode error: {e}"),
             }
-            thread_sleep(post_pace);
         }
         (samples, saw_eof)
     })

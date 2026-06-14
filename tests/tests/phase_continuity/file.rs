@@ -434,7 +434,6 @@ fn write_wav_mono_f32(path: &std::path::Path, samples: &[f32], sample_rate: u32)
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -475,7 +474,6 @@ async fn dump_fixture_raw_bytes() {
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -545,7 +543,6 @@ async fn dump_aac_for_listening() {
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,

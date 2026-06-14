@@ -19,7 +19,7 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancelToken,
-    time::{Duration, sleep},
+    time::Duration,
     tokio::task::{spawn, spawn_blocking},
 };
 use tracing::info;
@@ -94,7 +94,6 @@ async fn test_driver_seek_after_playlist_finished(temp_dir: TestTempDir, rt_canc
 /// This tests seek backward at the Stream<Hls> level with ABR active,
 /// without the full decoder chain.
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(30)),
@@ -138,8 +137,9 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: CancelT
         }
     });
 
-    sleep(Duration::from_millis(100)).await;
-
+    // No settle timer: the blocking `stream.read()` below already waits for the
+    // first bytes to land (state-driven), exactly like
+    // `test_driver_seek_after_playlist_finished` which reads with no pre-sleep.
     spawn_blocking(move || {
         let mut first_read = vec![0u8; 50_000];
         let n1 = stream.read(&mut first_read).unwrap();

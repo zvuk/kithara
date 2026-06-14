@@ -128,6 +128,12 @@ pub struct PlayerTrack {
     /// decoder's pre-buffered position (which can be ~200 ms ahead of the
     /// mixer thanks to `PlayerResource`'s scratch buffer).
     served_frames: u64,
+    /// Set only when the track reaches *natural* EOF (`handle_natural_end`).
+    /// Marks a played-out track as eligible to be kept warm at end-of-queue
+    /// and revived by a later in-range seek (Superpowered-style resume).
+    /// Cleared by `seek`/`play`. A `Finished` state from `stop()` or a
+    /// faded-out crossfade leaves this `false`, so those are discarded as usual.
+    ended_at_eof: bool,
 }
 
 impl PlayerTrack {
@@ -170,6 +176,7 @@ impl PlayerTrack {
             sample_rate: sample_rate.get(),
             served_frames: 0,
             observed_duration,
+            ended_at_eof: false,
         };
         track.update_service_class(TrackState::Preloading);
         track
@@ -323,6 +330,7 @@ impl PlayerTrack {
         self.notified_prefetch_requested = true;
         self.emit_handover_requested(notification_tx);
         self.set_state(TrackState::Finished);
+        self.ended_at_eof = true;
         notification_tx
             .lock()
             .try_push(PlayerNotification::PlaybackStopped {
@@ -365,6 +373,7 @@ impl PlayerTrack {
         self.mix.reset_to_target();
         self.notified_track_requested = false;
         self.notified_prefetch_requested = false;
+        self.ended_at_eof = false;
     }
 
     /// Current position in seconds.
@@ -552,6 +561,7 @@ impl PlayerTrack {
         self.served_frames = frames;
         self.notified_track_requested = false;
         self.notified_prefetch_requested = false;
+        self.ended_at_eof = false;
     }
 
     /// Update the prefetch lead time used for the preload trigger.
@@ -581,6 +591,14 @@ impl PlayerTrack {
     #[must_use]
     pub fn state(&self) -> TrackState {
         self.state
+    }
+
+    /// Whether this track reached *natural* EOF (vs `stop()` / faded-out).
+    /// A natural-EOF `Finished` track is kept warm at end-of-queue and can be
+    /// revived by an in-range seek. See [`Self::ended_at_eof`].
+    #[must_use]
+    pub fn ended_at_eof(&self) -> bool {
+        self.ended_at_eof
     }
 
     /// Instantly stop (silent, finished state).

@@ -15,7 +15,7 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancelToken, thread,
-    time::{Duration, Instant, sleep, timeout},
+    time::{self, Duration, Instant, sleep},
     tokio::task::spawn_blocking,
 };
 use tracing::info;
@@ -183,7 +183,6 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
 /// - post-switch `PcmChunk` reads give root-cause diagnostics;
 /// - `OfflinePlayer::render()` is the player-level continuity oracle.
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -196,6 +195,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
 
     let bus = EventBus::new(64);
     let mut hls_rx = bus.subscribe();
+    let mut wake_rx = bus.subscribe();
     let mut progress_audio = open_packaged_hls_audio(
         &url,
         store.clone(),
@@ -238,7 +238,12 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         }
 
         if read == 0 {
-            sleep(Duration::from_millis(10)).await;
+            // Read is Pending: wait until the worker emits the next event
+            // (decode progress / segment read / variant applied) rather than
+            // sleeping on a timer. The dedicated wake receiver does not consume
+            // from hls_rx / progress_rx, so no switch or progress event is lost.
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let _ = time::timeout(remaining, wake_rx.recv()).await;
             progress_probe.observe_idle();
             continue;
         }
@@ -281,10 +286,57 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         progress_probe.max_gap_between_events
     );
 
+    // Offline render below pulls PCM on the real-time graph thread, which
+    // CANNOT block: a worker underrun there is zero-filled to silence (see
+    // `PlayerResource::fill_scratch`). Under flash the only clock advance
+    // during `render_offline_window` is its own per-block virtual sleep, so a
+    // network stall at the ABR seam (the V0 segment delay rule) would drop the
+    // worker behind the real-time render pace and produce a long silent run.
+    // Prime the shared store with EVERY segment of BOTH variants FIRST, on the
+    // blocking pool with `block_on_underrun(true)` so each `read()` parks on the
+    // worker (engine-aware, drives the virtual clock). Forcing each variant with
+    // a manual mode guarantees full coverage regardless of which path the
+    // offline render's `auto(0)` ABR then takes — after this the offline render
+    // is a decode-from-cache path with no network stall to fall behind on.
+    for variant in [0usize, 1usize] {
+        let warm_config = AudioConfig::<Hls>::for_stream(
+            HlsConfig::for_url(url.clone())
+                .store(store.clone())
+                .initial_abr_mode(AbrMode::manual(variant))
+                .download_batch_size(1)
+                .build(),
+        )
+        .block_on_underrun(true)
+        .build();
+        let mut warm_audio = Audio::<Stream<Hls>>::new(warm_config)
+            .await
+            .unwrap_or_else(|e| panic!("packaged ABR warm audio (v{variant}) must open: {e}"));
+        let warmed = spawn_blocking(move || {
+            let _ = warm_audio.preload();
+            let mut buf = vec![0f32; 4096];
+            let mut total = 0u64;
+            loop {
+                match warm_audio.read(&mut buf) {
+                    Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
+                    Ok(ReadOutcome::Pending { .. }) => {}
+                    Ok(ReadOutcome::Eof { .. }) => break,
+                    Err(e) => panic!("packaged ABR warm decode error (v{variant}): {e}"),
+                }
+            }
+            total
+        })
+        .await
+        .expect("packaged ABR warm read join");
+        assert!(
+            warmed > 0,
+            "packaged ABR warm pass (v{variant}) must decode the variant into the shared store"
+        );
+    }
+
     let decode_audio =
         open_packaged_hls_audio(&url, store, forced_downswitch_abr_options(), None).await;
     let mut resource = resource_from_reader(decode_audio);
-    let _ = timeout(Duration::from_secs(5), resource.preload())
+    let _ = time::timeout(Duration::from_secs(5), resource.preload())
         .await
         .expect("packaged ABR preload must complete");
     let mut player = OfflinePlayer::new(CONTINUITY_SAMPLE_RATE);
@@ -672,7 +724,6 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
 /// Uses chunk metadata (`variant_index`) instead of broadcast events to avoid
 /// broadcast lag issues.
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -709,7 +760,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
             if Instant::now() > deadline {
                 return None;
             }
-            sleep(Duration::from_millis(2)).await;
+            time::sleep(Duration::from_millis(2)).await;
         }
     }
 
@@ -807,7 +858,6 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
 /// 148 s of audio. Reading 15 s post-switch must produce at least
 /// `15 × 44_100 × 2 × 0.5 = 661_500` samples (50 % of nominal rate).
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -819,8 +869,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     let url = server.asset("hls/master.m3u8");
 
     let cancel = CancelToken::never();
-    let bus = EventBus::new(256);
-    let mut hls_rx = bus.subscribe();
+    let bus = EventBus::new(8192);
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
@@ -829,32 +878,54 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
+    // `block_on_underrun(true)` makes every `read()` park on the worker via
+    // `recv_outcome_blocking` (`#[kithara::flash(true)]` → `park_timeout` on the
+    // virtual clock) rather than zero-filling on underrun. The park is what
+    // advances virtual time, so the worker keeps delivering real decoded chunks
+    // and the post-switch window accumulates true FLAC frames. A genuine
+    // post-switch decoder stall then parks forever, the virtual clock cannot
+    // pass the hang budget, and the `KITHARA_HANG_TIMEOUT_SECS=5` watchdog fires
+    // — the flash-correct enforcement of the "no >5 s stall" contract.
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus.clone())
+        .block_on_underrun(true)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    let _ = audio.preload();
+
+    // Subscribe before any switch so `VariantApplied{to:3}` cannot be missed.
+    // The post-switch read owns this receiver and drains it inline.
+    let mut hls_rx = bus.subscribe();
 
     // Phase 1 — AAC warmup. Read until we have at least 200 ms of audio
-    // (44_100 × 2 × 0.2 = 17_640 frames) so AAC decoder is fully primed.
-    let mut buf = vec![0f32; 4096];
-    let mut pre_samples = 0u64;
-    let warmup_deadline = Instant::now() + Duration::from_secs(8);
-    while Instant::now() < warmup_deadline && pre_samples < 17_640 {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => pre_samples += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) => sleep(Duration::from_millis(20)).await,
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error during AAC warmup: {e}"),
+    // (44_100 × 2 × 0.2 = 17_640 frames) so AAC decoder is fully primed. The
+    // blocking read must run off the test runtime thread: parking it here would
+    // starve the HLS drive/fetch tasks that feed the worker.
+    let (mut audio, pre_samples) = spawn_blocking(move || {
+        let _ = audio.preload();
+        let mut buf = vec![0f32; 4096];
+        let mut pre = 0u64;
+        while pre < 17_640 {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => pre += count.get() as u64,
+                Ok(ReadOutcome::Pending { .. }) => {}
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("decode error during AAC warmup: {e}"),
+            }
         }
-    }
+        (audio, pre)
+    })
+    .await
+    .expect("AAC warmup join");
     assert!(
         pre_samples >= 17_640,
         "AAC warmup must produce ≥17_640 frames before the cross-codec flip; \
          got {pre_samples}"
     );
 
-    // Phase 2 — trigger cross-codec Manual switch to FLAC.
+    // Phase 2 — trigger cross-codec Manual switch to FLAC. Runs on the runtime
+    // thread between the blocking read phases.
     let handle = audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
@@ -862,40 +933,61 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
         .set_mode(AbrMode::manual(3))
         .expect("Manual(3) (FLAC) target must be valid");
 
-    // Phase 3 — sustained post-switch playback. Read for 15 s; collect
-    // VariantApplied events alongside.
-    let post_deadline = Instant::now() + Duration::from_secs(15);
-    let mut post_samples = 0u64;
-    let mut applied_targets: Vec<usize> = Vec::new();
-    let mut last_progress = Instant::now();
-    let mut max_stall_ms = 0u128;
-    while Instant::now() < post_deadline {
-        while let Ok(ev) = hls_rx.try_recv() {
-            if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_targets.push(to.get());
-            }
-        }
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => {
-                let frames = count.get() as u64;
-                post_samples += frames;
-                if frames > 0 {
-                    last_progress = Instant::now();
+    // Phase 3 — sustained post-switch playback. Bound by a SAMPLE TARGET, not a
+    // wall clock: under flash a parked read collapses real time to ~zero, so a
+    // `Instant::now() + 15 s` loop would drain the whole 148 s tail and hit a
+    // legitimate end-of-track EOF before any real time elapsed. Reading the
+    // ≥660_000-frame target proves sustained FLAC throughput; `saw_eof` records
+    // a PREMATURE end (the prod stall surfaces as a false EOS), and the read
+    // owns `hls_rx` to capture every `VariantApplied` without broadcast lag.
+    let post_target: u64 = 660_000;
+    let (post_samples, applied_targets, max_stall_ms, saw_eof) = spawn_blocking(move || {
+        let mut buf = vec![0f32; 4096];
+        let mut post = 0u64;
+        let mut applied: Vec<usize> = Vec::new();
+        let mut last_progress = Instant::now();
+        let mut max_stall = 0u128;
+        let mut eof = false;
+        while post < post_target {
+            while let Ok(ev) = hls_rx.try_recv() {
+                if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
+                    applied.push(to.get());
                 }
             }
-            Ok(ReadOutcome::Pending { .. }) => sleep(Duration::from_millis(20)).await,
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error post-switch: {e}"),
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    post += count.get() as u64;
+                    last_progress = Instant::now();
+                }
+                Ok(ReadOutcome::Pending { .. }) => {}
+                Ok(ReadOutcome::Eof { .. }) => {
+                    eof = true;
+                    break;
+                }
+                Err(e) => panic!("decode error post-switch: {e}"),
+            }
+            let stalled = Instant::now().duration_since(last_progress).as_millis();
+            if stalled > max_stall {
+                max_stall = stalled;
+            }
         }
-        let stalled = Instant::now().duration_since(last_progress).as_millis();
-        if stalled > max_stall_ms {
-            max_stall_ms = stalled;
+        while let Ok(ev) = hls_rx.try_recv() {
+            if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
+                applied.push(to.get());
+            }
         }
-    }
+        (post, applied, max_stall, eof)
+    })
+    .await
+    .expect("sustained post-switch read join");
 
     info!(
         ?applied_targets,
-        pre_samples, post_samples, max_stall_ms, "Phase P.0: cross-codec switch sustained playback"
+        pre_samples,
+        post_samples,
+        max_stall_ms,
+        saw_eof,
+        "Phase P.0: cross-codec switch sustained playback"
     );
 
     assert!(
@@ -904,9 +996,15 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
          applied_targets={applied_targets:?}"
     );
     assert!(
+        !saw_eof,
+        "FLAC playback after the cross-codec flip ended prematurely (false EOS) \
+         before the ≥660_000-frame target; got {post_samples}. \
+         Prod symptom: decoder stalls / dies after the switch."
+    );
+    assert!(
         post_samples >= 660_000,
         "sustained FLAC playback after cross-codec flip must produce \
-         ≥660_000 frames in 15 s (≈50 % nominal 44.1 kHz × 15 s × 2 ch); \
+         ≥660_000 frames (≈50 % nominal 44.1 kHz × 15 s × 2 ch); \
          got {post_samples}. Prod symptom: decoder stalls after the switch."
     );
     assert!(

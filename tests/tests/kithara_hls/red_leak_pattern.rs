@@ -16,9 +16,38 @@ use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
-    time::{Duration, sleep},
+    time::{self, Duration, Instant},
 };
 use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer};
+
+/// Settle window / hang budget for [`wait_thread_count_quiesced`].
+const SETTLE_WINDOW: usize = 4;
+const SETTLE_BUDGET: Duration = Duration::from_secs(5);
+
+/// Wait until OS-thread reaping after a stream drop has quiesced — i.e.
+/// `live_thread_count()` stops decreasing across a short settle window. This is
+/// a state-wait (the loop condition reads the same thread count the leak
+/// assertion measures), not a timer pace: the inner `time::sleep` is only the
+/// poll cadence and `budget` only bounds a hang.
+async fn wait_thread_count_quiesced(settle_window: usize, budget: Duration) -> usize {
+    const POLL: Duration = Duration::from_millis(25);
+    let deadline = Instant::now() + budget;
+    let mut last = live_thread_count();
+    let mut stable = 0usize;
+    loop {
+        time::sleep(POLL).await;
+        let now = live_thread_count();
+        if now < last {
+            stable = 0;
+        } else {
+            stable += 1;
+        }
+        last = now;
+        if stable >= settle_window || Instant::now() >= deadline {
+            return now;
+        }
+    }
+}
 
 /// A peer that behaves like `HlsPeer`: `poll_next` never returns
 /// `Ready(None)` — always `Pending`.
@@ -99,7 +128,6 @@ async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn Std
 /// shared Downloader and asserts that the OS thread count does not
 /// grow proportionally.
 #[kithara::test(
-    flash(false),
     native,
     tokio,
     timeout(Duration::from_secs(60)),
@@ -129,10 +157,11 @@ async fn red_hls_source_drop_leaks_peer(
         )
         .await?;
         drop(stream);
-        sleep(Duration::from_millis(300)).await;
     }
 
-    let threads_baseline = live_thread_count();
+    // Wait until warmup teardown has quiesced (thread count stops dropping) —
+    // state-wait on the same observable the leak assertion measures, not a timer.
+    let threads_baseline = wait_thread_count_quiesced(SETTLE_WINDOW, SETTLE_BUDGET).await;
 
     for i in 0..ITERATIONS {
         let stream = Stream::<Hls>::new(
@@ -144,12 +173,11 @@ async fn red_hls_source_drop_leaks_peer(
         )
         .await?;
         drop(stream);
-        sleep(Duration::from_millis(150)).await;
-        tracing::info!(iter = i, threads = live_thread_count(), "post-drop");
+        let threads = wait_thread_count_quiesced(SETTLE_WINDOW, SETTLE_BUDGET).await;
+        tracing::info!(iter = i, threads, "post-drop");
     }
 
-    sleep(Duration::from_millis(500)).await;
-    let threads_after = live_thread_count();
+    let threads_after = wait_thread_count_quiesced(SETTLE_WINDOW, SETTLE_BUDGET).await;
     let growth = threads_after.saturating_sub(threads_baseline);
 
     assert!(

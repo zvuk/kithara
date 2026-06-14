@@ -477,7 +477,6 @@ fn late_switches() -> Vec<(AbrMode, f64)> {
 /// `multi_switch`, but the consumer sleeps after every read so `committed`
 /// lags the producer the way full-suite CPU contention makes it lag.
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -544,7 +543,6 @@ async fn phase_continuity_hls_diag_paced(
 /// underruns — so the symptom needs true real-time cpal pressure or the live
 /// production stream, not a paced offline pull.
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,

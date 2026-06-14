@@ -57,7 +57,7 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancelToken,
-    time::{Duration, Instant, sleep},
+    time::{self, Duration, Instant},
     tokio::task::spawn_blocking,
 };
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
@@ -93,7 +93,6 @@ fn count_decode_steps(recorder: &Recorder) -> usize {
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     serial,
@@ -176,11 +175,11 @@ async fn forward_into_withheld_segment_parks_without_busy_spin() {
                 Instant::now() < deadline,
                 "decode never parked at the withheld boundary within budget"
             );
-            sleep(Duration::from_millis(5)).await;
+            time::sleep(Duration::from_millis(5)).await;
         }
 
         let before = count_decode_steps(&release_recorder);
-        sleep(OBSERVE_WINDOW).await;
+        time::sleep(OBSERVE_WINDOW).await;
         let after = count_decode_steps(&release_recorder);
         let delta = after.saturating_sub(before);
         info!(

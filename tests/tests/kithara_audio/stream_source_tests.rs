@@ -131,7 +131,35 @@ async fn rapid_seeks_via_timeline_all_complete() {
         .expect("audio construction");
     let mut events = audio.event_bus().subscribe();
 
-    let _ = wait_for_frames(&mut audio, Duration::from_secs(2)).await;
+    // The read-poll settles below are INLINED into the test body (not factored
+    // into `wait_for_frames`) on purpose: only direct `time::sleep` /
+    // `Instant::now` calls in the body are retargeted onto the virtual clock by
+    // the `#[kithara::test]` rewriter — a call inside a helper fn (or a
+    // `macro_rules!` invocation, whose tokens the syn rewriter never descends
+    // into) stays REAL. The read-poll MUST run on the virtual clock here:
+    // the worker emits `SeekRequest` and reading drives the consumer-side
+    // `SeekComplete` / `PlaybackProgress` (emitted from `read()`, never by the
+    // worker). On a real-clock settle the body's reads are paced on real time
+    // while the worker advances on collapsed virtual time, decoupling the two
+    // clocks — across rapid seeks the next `seek()`'s `begin()` bumps the shared
+    // epoch before the worker has emitted the prior seek's `SeekRequest`, so that
+    // epoch is coalesced away and never observed (the line-155 `None`). Keeping
+    // every wait virtual locks the body and worker to one clock.
+
+    // Prime: read until the first decoded frames arrive.
+    {
+        let mut buf = [0.0f32; 256];
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Eof { .. }) => break,
+                Ok(ReadOutcome::Pending { .. }) => {
+                    time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(error) => panic!("decode error while priming: {error}"),
+            }
+        }
+    }
 
     let mut expected_epochs = Vec::with_capacity(SEEK_COUNT);
     for i in 0..SEEK_COUNT {
@@ -154,7 +182,19 @@ async fn rapid_seeks_via_timeline_all_complete() {
         }
         expected_epochs.push(captured.expect("seek epoch from SeekRequest"));
 
-        let _ = wait_for_frames(&mut audio, Duration::from_millis(500)).await;
+        // Settle on the virtual clock: read post-seek frames so the consumer
+        // commits this seek and the worker advances before the next `seek()`.
+        let mut buf = [0.0f32; 256];
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < deadline {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Eof { .. }) => break,
+                Ok(ReadOutcome::Pending { .. }) => {
+                    time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(error) => panic!("decode error while settling seek: {error}"),
+            }
+        }
     }
 
     let highest_expected = *expected_epochs
@@ -162,9 +202,20 @@ async fn rapid_seeks_via_timeline_all_complete() {
         .max()
         .expect("at least one seek epoch");
 
+    let mut buf = [0.0f32; 256];
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut last_complete: Option<SeekEpoch> = None;
     while Instant::now() < deadline {
+        // Read each tick so the consumer keeps committing post-seek output and
+        // emitting `SeekComplete` for the highest requested epoch. `read()` is
+        // non-blocking; the `events.recv()` below parks on the virtual clock,
+        // letting the worker decode the next chunk.
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { .. })
+            | Ok(ReadOutcome::Eof { .. })
+            | Ok(ReadOutcome::Pending { .. }) => {}
+            Err(error) => panic!("decode error while draining seek completions: {error}"),
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
         match time::timeout(remaining, events.recv()).await {
             Ok(Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))) => {
@@ -173,9 +224,7 @@ async fn rapid_seeks_via_timeline_all_complete() {
                     break;
                 }
             }
-            Ok(_) => {
-                let _ = wait_for_frames(&mut audio, Duration::from_millis(80)).await;
-            }
+            Ok(_) => {}
             Err(_) => break,
         }
     }

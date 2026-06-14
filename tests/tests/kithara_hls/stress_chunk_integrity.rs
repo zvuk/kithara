@@ -92,7 +92,6 @@ async fn next_chunk_with_timeout(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     native,
     timeout(Duration::from_secs(60)),

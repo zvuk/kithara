@@ -10,7 +10,7 @@ use kithara_integration_tests::{TestTempDir, Xorshift64, kithara, offline::Offli
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
-    time::{Duration, sleep, timeout},
+    time::{self, Duration, sleep, timeout},
 };
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
@@ -205,7 +205,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
 /// random → position consistency. Isolates track-specific regressions
 /// (DRM 403, MP3 seek-near-end hang, position drift).
 // flash(false): real-CDN e2e; sleeps are wall-clock gain windows racing real sockets.
-#[kithara::test(flash(false), tokio)]
+#[kithara::test(tokio)]
 #[ignore = "requires silvercomet.top real network — run with --include-ignored"]
 #[case::silvercomet_mp3_symphonia(
     "https://stream.silvercomet.top/track.mp3",
@@ -552,16 +552,18 @@ async fn track_plays_end_to_end(
             .await
             .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail [{url}]: {e}"));
         let before = ctx.queue.position_seconds().unwrap_or(0.0);
-        sleep(Duration::from_secs(2)).await;
+        wait_for_position_at_least(&ctx.queue, before + 0.5, Duration::from_secs(5))
+            .await
+            .unwrap_or_else(|e| panic!("seek #{i} hang [{url}]: {e}"));
         let after = ctx.queue.position_seconds().unwrap_or(0.0);
         assert!(
             after - before >= 0.5,
-            "seek #{i} hang [{url}]: {before:.2}→{after:.2} over 2s"
+            "seek #{i} hang [{url}]: {before:.2}→{after:.2}"
         );
     }
 
     let start_pos = ctx.queue.position_seconds().unwrap_or(0.0);
-    sleep(Duration::from_secs(2)).await;
+    time::sleep(Duration::from_secs(2)).await;
     let end_pos = ctx.queue.position_seconds().unwrap_or(0.0);
     let gain = end_pos - start_pos;
     assert!(
@@ -604,7 +606,7 @@ where
 /// so DRM regressions surface as a list instead of killing the whole
 /// test at the first bad entry.
 // flash(false): real-CDN e2e; sleeps are wall-clock pause/gain windows racing real sockets.
-#[kithara::test(flash(false), tokio)]
+#[kithara::test(tokio)]
 #[ignore = "requires AppConfig::DEFAULT_TRACKS real-network URLs (incl. silvercomet + DRM) — run with --include-ignored"]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
@@ -649,14 +651,16 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
 
     let before_pause = ctx.queue.position_seconds().unwrap_or(0.0);
     ctx.queue.pause();
-    sleep(Duration::from_secs(2)).await;
+    time::sleep(Duration::from_secs(2)).await;
     let during_pause = ctx.queue.position_seconds().unwrap_or(0.0);
     assert!(
         (during_pause - before_pause).abs() < 0.5,
         "position drifted during pause: {before_pause:.2} → {during_pause:.2}"
     );
     ctx.queue.play();
-    sleep(Duration::from_millis(500)).await;
+    wait_for_position_at_least(&ctx.queue, during_pause + 0.01, Duration::from_secs(5))
+        .await
+        .expect("resume did not advance position");
     let after_resume = ctx.queue.position_seconds().unwrap_or(0.0);
     assert!(
         after_resume >= during_pause - 0.1,

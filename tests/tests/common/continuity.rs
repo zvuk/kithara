@@ -4,7 +4,7 @@ use std::fmt;
 use kithara::events::{AudioEvent, Event, EventReceiver};
 use kithara_integration_tests::offline::OfflinePlayer;
 use kithara_platform::{
-    thread,
+    flash, thread,
     time::{Duration, Instant},
 };
 pub(crate) const CONTINUITY_BLOCK_FRAMES: usize = 512;
@@ -108,6 +108,10 @@ pub(crate) fn render_offline_window(
     let mut slow = 0u32;
 
     for _ in 0..blocks {
+        // Render timing stays on REAL time: `slow_renders`/`max_render` measure
+        // the actual CPU cost of pulling one block through the graph, which is a
+        // wall-clock contract (RTSan / block-budget). `Instant::now`/`elapsed`
+        // here read real time because this helper runs with `active=false`.
         let started = Instant::now();
         let out = player.render(block_frames);
         let elapsed = started.elapsed();
@@ -128,6 +132,16 @@ pub(crate) fn render_offline_window(
         } else {
             current_silence += 1;
         }
+        // Inter-block pacing MUST drive the virtual clock so the decode worker
+        // (a `spawn_named` flash pacer parked on the engine) advances and fills
+        // the producer ring before the next `render` samples it. `enter_dynamic`
+        // flips this `thread::sleep` onto the engine (`sleep_timed`); inside the
+        // test driver's poll it is a BRIDGED wait that releases the task's
+        // `active_async` slot, lets the clock jump, and re-acquires on resume —
+        // so the worker delivers real PCM exactly as on the real clock instead
+        // of the render zero-filling silence on underrun. Off the flash feature
+        // `enter_dynamic` is a no-op and this stays a real wall-clock sleep.
+        let _flash = flash::enter_dynamic(true);
         thread::sleep(block_budget.saturating_sub(elapsed));
     }
 

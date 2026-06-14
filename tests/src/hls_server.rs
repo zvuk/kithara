@@ -775,7 +775,10 @@ fn test_key_data() -> Vec<u8> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_platform::time::{self, Duration};
+    use kithara_platform::{
+        flash::real_io,
+        time::{self, Duration},
+    };
 
     use super::PackagedTestServer;
     use crate::kithara;
@@ -785,14 +788,25 @@ mod tests {
     /// observe that the GET actually arrived. Polling that counter under a
     /// hard timeout is synchronization on an observable — a real stall fails
     /// the budget rather than being masked.
-    // Real-clock: drives raw `reqwest`/`tokio::spawn` over a real socket —
-    // hyper's tasks are invisible to the flash engine (no downloader real_io
-    // bracket), so a virtual timeout would outrun the in-flight request.
-    #[kithara::test(tokio, flash(false))]
+    //
+    // This drives raw `reqwest`/`tokio::spawn` over a real socket against the
+    // shared test server (a real-time island, no flash ambient). The in-flight
+    // request and its response live on the REAL clock, invisible to the flash
+    // engine (no downloader `real_io` bracket wraps them). Hold a `RealIoScope`
+    // across every wait on that real transit — the gated GET reaching the server
+    // and the released GET completing — so the virtual clock is PACED to real
+    // time while held: each `time::timeout` budget then fires only after the
+    // equivalent REAL time, never spuriously ahead of bytes still on the wire.
+    // The budget is preserved as a real stall oracle (a genuinely stuck request
+    // still exhausts the paced 5s), not relaxed. Off the `flash` feature the
+    // scope is a ZST no-op and the clock is already real.
+    #[kithara::test(tokio)]
     async fn segment_gate_withholds_get_until_release() {
         let (server, gate) = PackagedTestServer::with_segment_gate(0, 1).await;
         let url = server.url("/seg/v0_1.m4s");
         assert_eq!(gate.requested(), 0, "no GET before the test fires one");
+
+        let _real_io = real_io();
 
         let fetch = tokio::spawn(async move { reqwest::get(url).await.map(|r| r.status()) });
 
@@ -827,8 +841,12 @@ mod tests {
     /// withheld (and counts the HEAD), then the true size after
     /// `release_head()` — without ever parking the HEAD (which would block
     /// stream construction). The body GET stays unblocked throughout.
-    // Real-clock: same raw-reqwest-over-real-socket shape as above.
-    #[kithara::test(tokio, flash(false))]
+    //
+    // Same raw-reqwest-over-real-socket shape as above: hold a `RealIoScope`
+    // across every real HEAD/GET so the virtual clock is paced to real time and
+    // no `time::timeout` budget collapses ahead of the in-flight response. The
+    // budget stays a real stall oracle, not relaxed (see the sibling test).
+    #[kithara::test(tokio)]
     async fn segment_size_gate_reports_zero_until_release_head() {
         let (server, gate) = PackagedTestServer::with_segment_size_gate(0, 1).await;
         let url = server.url("/seg/v0_1.m4s");
@@ -837,6 +855,8 @@ mod tests {
             0,
             "no HEAD before the test fires one"
         );
+
+        let _real_io = real_io();
 
         let withheld = time::timeout(
             Duration::from_secs(5),

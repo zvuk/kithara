@@ -148,8 +148,7 @@ async fn wait_for_position_at_least(
 /// KITHARA_DRM_STAGE_AUTH_TOKEN=... \
 ///     cargo nextest run -E 'test(zvuk_stage_drm)' --run-ignored=only
 /// ```
-// flash(false): stage-CDN e2e; sleep is a wall-clock stall-detection window racing real sockets.
-#[kithara::test(flash(false), tokio)]
+#[kithara::test(tokio)]
 #[ignore = "PARKED 2026-05-20: stage keyserver returns keys that don't decrypt their \
             segments (3/3 tracks tested); waiting on server-team. Re-enable when \
             stage DRM confirmed working — needs KITHARA_DRM_STAGE_* creds + VPN."]
@@ -172,12 +171,14 @@ async fn zvuk_stage_drm_track_plays(#[case] backend: DecoderBackend) {
         .unwrap_or_else(|e| panic!("stage DRM play fail [{STAGE_TRACK}]: {e}"));
 
     let before = ctx.queue.position_seconds().unwrap_or(0.0);
-    sleep(Duration::from_secs(2)).await;
+    wait_for_position_at_least(&ctx.queue, before + 0.9, Duration::from_secs(15))
+        .await
+        .unwrap_or_else(|e| panic!("stage DRM playback stalled [{STAGE_TRACK}]: {e}"));
     let after = ctx.queue.position_seconds().unwrap_or(0.0);
     assert!(
         after - before >= 0.9,
         "stage DRM playback stalled [{STAGE_TRACK}]: \
-         {before:.2}→{after:.2} over 2s wall clock"
+         {before:.2}→{after:.2} (waited on position advance)"
     );
 
     ctx.queue.remove(track_id).expect("remove");

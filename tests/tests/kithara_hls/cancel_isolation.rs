@@ -15,8 +15,7 @@ use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
 };
 use kithara_platform::{
-    CancelToken,
-    thread::sleep,
+    CancelToken, thread,
     time::{Duration, Instant},
 };
 use tokio::task;
@@ -40,7 +39,7 @@ impl Consts {
 /// segment writer / `on_complete` failure into `epoch_cancel.cancel()` or
 /// into a wider abort, sibling segments would never be requested. That
 /// would manifest as `segments[i].request_count() == 0` for some `i != 3`.
-#[kithara::test(flash(false), tokio, timeout(Duration::from_secs(15)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
 async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
 
@@ -117,7 +116,7 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
             let _ = stream.seek(SeekFrom::Start(offset));
             let _ = stream.read(&mut buf);
             while handle.request_count() == 0 && Instant::now() < deadline {
-                sleep(Duration::from_millis(20));
+                thread::sleep(Duration::from_millis(20));
             }
         }
     })

@@ -13,14 +13,13 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancelToken,
-    time::{Duration, sleep, timeout},
+    time::Duration,
     tokio::{sync::oneshot, task::spawn},
 };
 use tracing::info;
 use url::Url;
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -48,16 +47,17 @@ async fn test_hls_session_creation(
     let (events_sender, events_receiver) = oneshot::channel::<u64>();
 
     spawn(async move {
+        // State-wait: block until session creation actually publishes its first
+        // event (no idle-timeout drain). One delivered event proves events flow.
         let mut event_count = 0;
-        while let Ok(Ok(event)) = timeout(Duration::from_millis(100), events_rx.recv()).await {
+        if let Ok(event) = events_rx.recv().await {
             event_count += 1;
-            if event_count <= 3 {
-                info!("Event {}: {:?}", event_count, event);
-            }
+            info!("Event {}: {:?}", event_count, event);
         }
         let _ = events_sender.send(event_count);
     });
 
+    // The enclosing `timeout(5s)` test attribute bounds this state wait.
     let event_count = events_receiver.await?;
     info!("Total events received: {}", event_count);
 
@@ -94,7 +94,6 @@ async fn test_hls_stream_creation(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -118,18 +117,16 @@ async fn test_hls_session_events_consumption(
 
     let _stream = Stream::<Hls>::new(config).await?;
 
-    let wait = Duration::from_millis(500);
-    let event_result = timeout(wait, events_rx.recv()).await;
-
-    match event_result {
-        Ok(Ok(event)) => {
+    // State-wait: block on the first published event instead of a fixed 500ms
+    // pacing window. Session creation publishes events; `recv()` returns when one
+    // lands (or `Err` if the bus closes). The `timeout(5s)` test attribute bounds
+    // this so a real hang still fails fast.
+    match events_rx.recv().await {
+        Ok(event) => {
             info!("Received event: {:?}", event);
         }
-        Ok(Err(_)) => {
-            info!("Event channel closed");
-        }
         Err(_) => {
-            info!("No events received within timeout (expected for some streams)");
+            info!("Event channel closed");
         }
     }
 
@@ -164,7 +161,6 @@ async fn test_hls_invalid_url_handling(
 }
 
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -179,9 +175,10 @@ async fn test_hls_session_drop_cleanup(
     let stream = HlsStreamBuilder::new()
         .build(&server, temp_dir.path(), CancelToken::never())
         .await;
+    // `drop` runs the stream's synchronous teardown before it returns; nothing
+    // here asserts on background cleanup, so there is no state to wait on and no
+    // pacing sleep is needed (the completed `drop` is the done signal).
     drop(stream);
-
-    sleep(Duration::from_millis(100)).await;
 
     info!("HLS session dropped without issues");
     Ok(())

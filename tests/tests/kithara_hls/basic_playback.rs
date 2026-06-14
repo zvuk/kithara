@@ -13,11 +13,7 @@ use kithara_integration_tests::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::tokio::task::spawn_blocking;
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep},
-    tokio::task::spawn,
-};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn};
 use tracing::info;
 use url::Url;
 
@@ -29,7 +25,6 @@ use url::Url;
 ///
 /// Note: This test uses a local test server.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -46,6 +41,7 @@ async fn test_basic_hls_playback(
 
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
+    let mut live_rx = bus.subscribe();
 
     info!("Opening HLS source...");
     let config = HlsConfig::for_url(test_stream_url.clone())
@@ -68,7 +64,14 @@ async fn test_basic_hls_playback(
     });
 
     let _ = stream;
-    sleep(Duration::from_millis(50)).await;
+    // Wait for the pipeline to become live: the first event published on the
+    // bus (segment-fetch enqueue / playlist activity) proves the stream is
+    // producing real work, instead of sleeping for a fixed duration. The
+    // enclosing `timeout(5s)` bounds this state-wait against a hang.
+    let _first = live_rx
+        .recv()
+        .await
+        .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)?;
     info!("HLS stream opened successfully");
     Ok(())
 }
@@ -185,7 +188,6 @@ async fn test_hls_invalid_url_handling(
 /// Test that INIT segment comes first in byte stream (offset 0).
 /// This is critical for fMP4 HLS where decoder needs moov box before mdat.
 #[kithara::test(
-    flash(false),
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
@@ -202,8 +204,6 @@ async fn test_init_segment_at_stream_start(
         .with_init()
         .build(&server, temp_dir.path(), rt_cancel)
         .await;
-
-    sleep(Duration::from_millis(100)).await;
 
     let mut buf = [0u8; 32];
 

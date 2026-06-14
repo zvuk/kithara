@@ -165,6 +165,22 @@ impl Queue {
     /// # Errors
     /// Returns [`QueueError::Play`] if the player reports a seek failure.
     pub fn seek(&self, seconds: f64) -> Result<kithara_play::SeekOutcome, QueueError> {
+        // Superpowered-style resume after end-of-queue: once the last track
+        // played to natural EOF the nav cursor ran off the end (`current()` is
+        // `None`) but the player keeps that track warm and `current_index()`
+        // stays parked on it. Re-park the cursor to the played-out item and
+        // re-announce it (`CurrentTrackChanged`) so `current()` and every
+        // event-mirrored consumer (wasm/FFI/app "now playing") un-latch from
+        // the ended state before the seek revives playback. During normal
+        // mid-track playback `current()` is `Some`, so this is a no-op and the
+        // seek passes straight through.
+        if self.current().is_none() {
+            let idx = self.player.current_index();
+            if idx < self.len() {
+                self.lock_navigation_mut().select(idx);
+                self.handle_current_item_changed();
+            }
+        }
         self.player.seek_seconds(seconds).map_err(QueueError::from)
     }
 

@@ -121,7 +121,7 @@ async fn audio_file_mp3_decodes_with_duration(
 /// Uses throttled server: Content-Length is sent immediately but body
 /// arrives in small chunks, so only a fraction is downloaded when
 /// the decoder initializes. Duration must still reflect the full track.
-#[kithara::test(flash(false), tokio, timeout(Duration::from_secs(15)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
 #[case::throttled_no_hint(None)]
 #[case::throttled_with_hint(Some("mp3"))]
 async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {

@@ -10,7 +10,7 @@ use kithara_integration_tests::{
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
-    time::{Duration, Instant, sleep},
+    time::{self, Duration, Instant},
 };
 use kithara_play::Resource;
 use kithara_queue::TrackSource;
@@ -66,7 +66,7 @@ const MAX_COMMITTED_STEP_SECS: f64 = 1.5;
 ///     cargo nextest run -E 'test(zvuk_prod_flac_no_swallow)' --run-ignored=only
 /// ```
 // flash(false): real-time paced on purpose (see doc) — sleep paces render at 1x wall clock vs prod CDN.
-#[kithara::test(flash(false), tokio, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(180)))]
 #[ignore = "requires zvuk prod creds baked at build (KITHARA_DRM_PROD_*) + VPN + usdt-probes — run with --run-ignored=only"]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
@@ -140,7 +140,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
         }
         let elapsed = started.elapsed().as_secs_f64();
         if window_secs > elapsed {
-            sleep(Duration::from_secs_f64(window_secs - elapsed)).await;
+            time::sleep(Duration::from_secs_f64(window_secs - elapsed)).await;
         }
     }
 

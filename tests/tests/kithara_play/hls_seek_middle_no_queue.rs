@@ -71,7 +71,7 @@ async fn render_burst_paced(player: &mut OfflinePlayer, blocks: u32, min_wall_ms
     }
 }
 
-#[kithara::test(flash(false), tokio, multi_thread, timeout(Duration::from_secs(90)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(90)))]
 #[case::no_delay(0)]
 #[case::good_4g_500ms(500)]
 #[case::congested_2s(2_000)]
