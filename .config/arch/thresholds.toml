@@ -160,6 +160,28 @@ allowed_files = [
     "crates/kithara-hls/src/peer.rs",
 ]
 
+[tokio_dep_quarantine]
+# Crates whose direct tokio dependency is never flagged. `kithara-platform` is
+# the quarantine OWNER (it wraps tokio behind `kithara_platform::{tokio,time,
+# sync}`). `kithara-workspace-hack` is the feature-unification shim that must
+# name every transitive dep. The test-support crates carry tokio purely as test
+# scaffolding (runtime + macros for fixtures), not production coupling.
+exempt_crates = [
+    "kithara-platform",
+    "kithara-workspace-hack",
+    "kithara-test-utils",
+    "kithara-integration-tests",
+]
+# Crates whose *production* tokio coupling is NOT yet migrated to the platform
+# re-exports — outstanding W6 quarantine debt. Now empty: `kithara-app`,
+# `kithara-ffi`, and `kithara-queue` were migrated to the
+# `kithara_platform::{tokio,time,sync}` re-exports and their direct production
+# tokio deps dropped (their remaining tokio is dev-only test scaffolding, which
+# the guard ignores). Any NEW crate adding a direct production tokio dep fails
+# the gate. (`kithara-net`'s tokio is dev-only — an axum fixture server — so it
+# is already clean and not listed here.)
+allowed_crates = []
+
 [shared_state]
 warn = 3
 deny = 5

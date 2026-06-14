@@ -114,6 +114,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) cancel_root_sites: CancelRootSitesThreshold,
     #[serde(default)]
+    pub(crate) tokio_dep_quarantine: TokioDepQuarantineThreshold,
+    #[serde(default)]
     pub(crate) dead_exports: DeadExportsThreshold,
 }
 
@@ -544,6 +546,23 @@ pub(crate) struct CancelRootSitesThreshold {
     /// sites.
     #[serde(default)]
     pub(crate) allowed_files: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TokioDepQuarantineThreshold {
+    /// Crates whose direct tokio dependency is never flagged: the
+    /// workspace-hack feature-unification shim (must name every transitive
+    /// dep) and the test-support crates (their tokio is test scaffolding).
+    /// Project-specific — supplied via config.
+    #[serde(default)]
+    pub(crate) exempt_crates: Vec<String>,
+    /// Crates whose *production* tokio coupling is not yet migrated to the
+    /// platform re-exports (W6 quarantine debt). Entries here are tracked work
+    /// to remove, not a standing exemption — adding a NEW crate with direct
+    /// production tokio still fails the gate.
+    #[serde(default)]
+    pub(crate) allowed_crates: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

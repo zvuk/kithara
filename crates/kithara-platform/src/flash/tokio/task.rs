@@ -34,9 +34,11 @@ use crate::{
 /// quiescence poll-wrapper ([`crate::flash::participate`]) so the spawned task
 /// counts as a running participant while it is being polled — the virtual clock
 /// cannot advance past an in-progress task. This is THE async-spawn chokepoint;
-/// a raw `tokio::spawn` bypassing it would run uncounted and let the clock race
-/// (forbidden by the `arch.no-raw-tokio-spawn` ast-grep rule). Off the sim path
-/// it delegates straight to the native `tokio` spawn.
+/// a raw `tokio::spawn` bypassing it would run uncounted and let the clock race.
+/// A raw `tokio::spawn` needs a direct `tokio` dependency, which the
+/// `arch.tokio_dep_quarantine` xtask check confines to this crate — so consumers
+/// must route through the platform re-export and reach this chokepoint. Off the
+/// sim path it delegates straight to the native `tokio` spawn.
 ///
 /// The future is also wrapped in [`crate::flash::with_ambient`] carrying
 /// the parent's ambient snapshot, re-asserted per-poll so the task sees the
