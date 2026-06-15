@@ -10,7 +10,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
-    events::{AbrEvent, DownloaderEvent, Event, EventBus, HlsEvent, RequestId},
+    events::{AbrEvent, DownloaderEvent, Event, EventBus, EventReceiver, HlsEvent, RequestId},
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
@@ -80,70 +80,76 @@ fn parse_segment_url(url: &str) -> Option<(usize, usize)> {
 }
 
 /// Collect download/reader segment events from a bus.
+///
+/// Drains the bus PULL-side (synchronously, on inspection) rather than from a
+/// spawned task. A spawned observer would, under flash on a current-thread
+/// runtime, pin the virtual clock: a bus event wakes it mid `audio.read()`,
+/// but the blocking read holds the runtime's only thread, so the woken task
+/// can never be re-polled to quiescence — its `active_async` slot freezes the
+/// clock, the producer can never advance, and the read deadlocks. A pull drain
+/// holds no slot, so it cannot pin the clock; the broadcast ring buffers events
+/// between drains.
 struct EventCollector {
+    /// Receiver held for pull draining (see [`Self::drain`]).
+    rx: Mutex<EventReceiver>,
+    /// In-flight request→(variant, seg) map, carried across drains.
+    request_map: Mutex<HashMap<RequestId, (usize, usize)>>,
     /// Network fetches that completed (URL→variant/seg parsed at enqueue).
-    network_fetches: Arc<Mutex<HashSet<(usize, usize)>>>,
+    network_fetches: Mutex<HashSet<(usize, usize)>>,
     /// Reader-side reads (segment boundaries crossed in `read_at`).
-    reader_segments: Arc<Mutex<Vec<(usize, usize)>>>,
-    switch_count: Arc<AtomicUsize>,
+    reader_segments: Mutex<Vec<(usize, usize)>>,
+    switch_count: AtomicUsize,
 }
 
 impl EventCollector {
     fn new(bus: &EventBus) -> Self {
-        let network_fetches: Arc<Mutex<HashSet<(usize, usize)>>> =
-            Arc::new(Mutex::new(HashSet::new()));
-        let reader_segments: Arc<Mutex<Vec<(usize, usize)>>> = Arc::new(Mutex::new(Vec::new()));
-        let switch_count = Arc::new(AtomicUsize::new(0));
-
-        let net_bg = Arc::clone(&network_fetches);
-        let read_bg = Arc::clone(&reader_segments);
-        let sw_bg = Arc::clone(&switch_count);
-        let mut rx = bus.subscribe();
-        spawn(async move {
-            let mut request_map: HashMap<RequestId, (usize, usize)> = HashMap::new();
-            loop {
-                let ev = match rx.recv().await {
-                    Ok(ev) => ev,
-                    Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        continue;
-                    }
-                    Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => {
-                        break;
-                    }
-                };
-                match &ev {
-                    Event::Downloader(DownloaderEvent::RequestEnqueued {
-                        request_id, url, ..
-                    }) => {
-                        if let Some(seg) = parse_segment_url(url.as_str()) {
-                            request_map.insert(*request_id, seg);
-                        }
-                    }
-                    Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
-                        if let Some(seg) = request_map.remove(request_id) {
-                            net_bg.lock().insert(seg);
-                        }
-                    }
-                    Event::Hls(HlsEvent::SegmentReadStart {
-                        variant,
-                        segment_index,
-                        ..
-                    }) => {
-                        read_bg.lock().push((*variant, *segment_index));
-                    }
-                    Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
-                        info!(to = to.get(), ?reason, "VariantApplied");
-                        sw_bg.fetch_add(1, Ordering::Release);
-                    }
-                    _ => {}
-                }
-            }
-        });
-
         Self {
-            network_fetches,
-            reader_segments,
-            switch_count,
+            rx: Mutex::new(bus.subscribe()),
+            request_map: Mutex::new(HashMap::new()),
+            network_fetches: Mutex::new(HashSet::new()),
+            reader_segments: Mutex::new(Vec::new()),
+            switch_count: AtomicUsize::new(0),
+        }
+    }
+
+    /// Fold every event published since the last drain into the accumulators.
+    /// `Lagged` is tolerated (mirrors the old task's `continue`); `Empty`/
+    /// `Closed` end the drain. No `.await`, so it never pins the virtual clock.
+    fn drain(&self) {
+        use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
+        let mut rx = self.rx.lock();
+        loop {
+            let ev = match rx.try_recv() {
+                Ok(ev) => ev,
+                Err(TryRecvError::Lagged(_)) => continue,
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            };
+            match &ev {
+                Event::Downloader(DownloaderEvent::RequestEnqueued {
+                    request_id, url, ..
+                }) => {
+                    if let Some(seg) = parse_segment_url(url.as_str()) {
+                        self.request_map.lock().insert(*request_id, seg);
+                    }
+                }
+                Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                    if let Some(seg) = self.request_map.lock().remove(request_id) {
+                        self.network_fetches.lock().insert(seg);
+                    }
+                }
+                Event::Hls(HlsEvent::SegmentReadStart {
+                    variant,
+                    segment_index,
+                    ..
+                }) => {
+                    self.reader_segments.lock().push((*variant, *segment_index));
+                }
+                Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
+                    info!(to = to.get(), ?reason, "VariantApplied");
+                    self.switch_count.fetch_add(1, Ordering::Release);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -153,6 +159,7 @@ impl EventCollector {
     /// per `SegmentReadStart`, dedup'd by (variant, seg) — first sighting
     /// wins.
     fn segments(&self) -> Vec<SegmentRecord> {
+        self.drain();
         let net = self.network_fetches.lock().clone();
         let reads = self.reader_segments.lock().clone();
         let mut seen: HashSet<(usize, usize)> = HashSet::new();
@@ -180,6 +187,7 @@ impl EventCollector {
     }
 
     fn switch_count(&self) -> usize {
+        self.drain();
         self.switch_count.load(Ordering::Acquire)
     }
 }
@@ -367,23 +375,28 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
     let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
     let pcm_data = Arc::new(create_pcm_segments(segment_count));
 
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: 2,
-        segments_per_variant: segment_count,
-        segment_size: D.segment_size,
-        segment_duration_secs: segment_duration_secs(),
-        custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
-        init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-        codecs: Some("wav".to_string()),
-        delay_rules: vec![DelayRule {
-            variant: Some(0),
-            segment_gte: Some(5),
-            delay_ms: 10_000,
+    // Slow variant modelled as STATE, not a wall-clock timer: withhold V0's
+    // segment-5 BODY entirely (its HEAD/size stays open, so the layout is learned
+    // up front). The reader consumes V0 seg 0..5, then blocks on the
+    // never-delivered seg 5 — exactly "reader blocked on a slow variant" — and the
+    // urgent rescue must hand the tail to V1. No `delay_ms`, no `sleep`: progress
+    // is driven purely by the read outcome and the rescue, deterministic on both
+    // the real and the virtual clock.
+    let (server, gate) = HlsTestServer::with_segment_gate(
+        HlsTestServerConfig {
+            variant_count: 2,
+            segments_per_variant: segment_count,
+            segment_size: D.segment_size,
+            segment_duration_secs: segment_duration_secs(),
+            custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
+            init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
+            variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+            codecs: Some("wav".to_string()),
             ..Default::default()
-        }],
-        ..Default::default()
-    })
+        },
+        0,
+        5,
+    )
     .await;
 
     let url = server.url("/master.m3u8");
@@ -391,6 +404,28 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
     let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
+
+    // Event-driven release: the moment the urgent down-switch commits (the first
+    // `VariantApplied`, which in this test is the rescue onto V1), the rescue owns
+    // the tail, so free V0's withheld seg-5 GET. Driven by the EVENT, never a
+    // timer — and it fires only AFTER the behaviour under test has happened, so it
+    // cannot mask a missing rescue (no rescue ⇒ no event ⇒ no release ⇒ the read
+    // stalls and the hang watchdog still catches a real regression).
+    let release_gate = gate.clone();
+    let mut release_rx = bus.subscribe();
+    drop(spawn(async move {
+        loop {
+            match release_rx.recv().await {
+                Ok(Event::Abr(AbrEvent::VariantApplied { .. })) => {
+                    release_gate.release();
+                    break;
+                }
+                Ok(_) => {}
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    }));
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
@@ -408,7 +443,7 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
         .await
         .expect("create audio");
 
-    let total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(20)))
+    let total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
 
@@ -1291,12 +1326,16 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
     // (large enough sample budget but bounded).
     let mut buf = vec![0.0f32; 4096];
     let mut samples = 0u64;
-    let deadline = Instant::now() + Duration::from_secs(3);
     let single_segment_frames = (D.segment_size / 4) as u64; // 200 KB / (stereo i16) ≈ 50_000 frames
-    while Instant::now() < deadline && samples < single_segment_frames * 2 {
+    // Engine-aware blocking read parks until each chunk commits, so wait on
+    // the *fact* of two segments' worth of samples — not a wall-clock window
+    // (a virtual deadline would race the clock past in-flight real bytes
+    // under flash). A genuine wedge is bounded by `KITHARA_HANG_TIMEOUT_SECS`.
+    while samples < single_segment_frames * 2 {
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => samples += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Ok(ReadOutcome::Pending { .. }) => {}
             Err(e) => panic!("decode error: {e}"),
         }
     }

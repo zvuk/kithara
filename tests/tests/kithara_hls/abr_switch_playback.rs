@@ -747,8 +747,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .expect("audio creation");
     let _ = audio.preload();
 
-    async fn next_chunk(audio: &mut Audio<Stream<Hls>>, timeout_ms: u64) -> Option<PcmChunk> {
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    async fn next_chunk(audio: &mut Audio<Stream<Hls>>) -> Option<PcmChunk> {
         loop {
             let _ = audio.preload();
             match PcmReader::next_chunk(audio) {
@@ -757,36 +756,30 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
                 Ok(ChunkOutcome::Pending { .. }) => {}
                 Err(e) => panic!("decode error in next_chunk: {e}"),
             }
-            if Instant::now() > deadline {
-                return None;
-            }
+            // Yield so the worker runs and (under flash) the virtual clock
+            // advances; wait on the *fact* of a chunk / EOF, never a
+            // wall-clock window. A genuine stall trips `KITHARA_HANG_TIMEOUT_SECS`.
             time::sleep(Duration::from_millis(2)).await;
         }
     }
 
     info!("Phase 1: warmup until ABR switches from variant 0");
     let mut initial_variant = None;
-    let warmup_deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < warmup_deadline {
-        let Some(chunk) = next_chunk(&mut audio, 500).await else {
-            continue;
-        };
+    let mut current_variant = None;
+    // Consume chunks until ABR actually switches off the initial variant (the
+    // fact we need) or the track ends — no wall-clock warmup window. Under
+    // flash the whole track decodes far faster than real time, so a timed
+    // window would either skip the switch or wedge; `next_chunk` parks on each
+    // chunk and the hang watchdog bounds a genuine stall.
+    while let Some(chunk) = next_chunk(&mut audio).await {
         let v = chunk.meta.variant_index;
         if initial_variant.is_none() {
             initial_variant = v;
         }
-        if v != initial_variant && v.is_some() {
+        if v.is_some() && v != initial_variant {
+            current_variant = v;
             info!(?initial_variant, switched_to = ?v, "ABR switched");
             break;
-        }
-    }
-    let mut current_variant = None;
-    for _ in 0..3 {
-        if let Some(chunk) = next_chunk(&mut audio, 1_000).await {
-            current_variant = chunk.meta.variant_index;
-            if current_variant.is_some() && current_variant != initial_variant {
-                break;
-            }
         }
     }
     if current_variant.is_none() || current_variant == initial_variant {
@@ -805,10 +798,10 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .expect("seek must not fail");
     let _ = audio.preload();
 
-    let post_seek_chunk = next_chunk(&mut audio, 500).await;
+    let post_seek_chunk = next_chunk(&mut audio).await;
     assert!(
         post_seek_chunk.is_some(),
-        "seek must produce a chunk within 500ms"
+        "seek must produce a chunk (stream ended before resuming)"
     );
     let variant_after_seek = post_seek_chunk.unwrap().meta.variant_index;
     assert_eq!(
@@ -817,14 +810,12 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     );
 
     info!("Phase 3: verify ABR still works post-seek");
-    let resume_deadline = Instant::now() + Duration::from_secs(8);
     let mut resume_chunks = 0u32;
-    while Instant::now() < resume_deadline {
-        if next_chunk(&mut audio, 200).await.is_some() {
+    while resume_chunks < 4 {
+        if next_chunk(&mut audio).await.is_some() {
             resume_chunks += 1;
-            if resume_chunks >= 4 {
-                break;
-            }
+        } else {
+            break; // natural EOF
         }
     }
     assert!(
