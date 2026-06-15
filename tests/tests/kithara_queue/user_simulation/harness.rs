@@ -6,7 +6,7 @@ use kithara_decode::DecoderBackend;
 use kithara_events::{
     AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus, VariantInfo,
 };
-use kithara_integration_tests::offline::OfflineSession;
+use kithara_integration_tests::{kithara, offline::OfflineSession};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
@@ -34,6 +34,28 @@ pub(crate) const SEEK_TARGET_TOLERANCE_S: f64 = 1.5;
 pub(crate) const NATURAL_EOF_WINDOW_S: f64 = 3.0;
 /// Tick interval driving the loop polling helpers.
 const POLL_INTERVAL: Duration = Duration::from_millis(40);
+
+/// Periodic queue tick driver, run as a spawned task. `#[kithara::flash(true)]`
+/// makes the body flash-ACTIVE under an ambient (flash) test, so its
+/// `sleep` resolves to the engine-backed virtual timer — without it the
+/// async spawn chokepoint only propagates the per-test ambient gate (it does
+/// NOT set the active flag, unlike the sync `spawn_named` pacer), and
+/// `kithara_platform::time::sleep` keys on the active flag, so the driver
+/// would run on a REAL timer. A real-paced driver keeps up with the virtual
+/// clock only while ongoing real I/O paces it (HLS); for a fully-buffered
+/// source (file / local mp3) the virtual clock collapses ahead of it, the
+/// cached playhead freezes relative to virtual time, and the action
+/// watchdog false-fires. Off the `flash` feature the macro is a no-op, so
+/// the driver is a plain real-time tick exactly as before.
+#[kithara::flash(true)]
+async fn run_tick_driver(queue: Arc<Queue>) {
+    loop {
+        sleep(Duration::from_millis(50)).await;
+        if queue.tick().is_err() {
+            break;
+        }
+    }
+}
 
 /// `SimHarness` is the integration-test entry point for the user
 /// simulation scenarios. It owns a `Queue + Player + Downloader` triple
@@ -96,23 +118,13 @@ impl SimHarness {
         ));
         let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
         let queue_for_tick = Arc::clone(&queue);
-        // Spawn through the platform chokepoint, NOT raw `tokio::spawn`:
-        // under flash this wraps the tick loop in the quiescence
-        // poll-wrapper + ambient, so the driver participates in the
-        // virtual clock and its `sleep` is virtual. A raw `tokio::spawn`
-        // runs uncounted on real time — the virtual clock then races
-        // past the ticks that actually render PCM, so the action
-        // watchdogs fire against time the driver never had ("false
-        // HANG"). This is what couples the offline render cadence to
-        // virtual time, exactly like the production decode worker.
-        let tick = kithara_platform::tokio::task::spawn(async move {
-            loop {
-                sleep(Duration::from_millis(50)).await;
-                if queue_for_tick.tick().is_err() {
-                    break;
-                }
-            }
-        });
+        // Spawn through the platform chokepoint, NOT raw `tokio::spawn`: under
+        // flash this installs the quiescence poll-wrapper + ambient gate so the
+        // driver participates in the virtual clock. The active flag that makes
+        // its `sleep` engine-virtual comes from `#[kithara::flash(true)]` on
+        // `run_tick_driver` (the async chokepoint propagates ambient only) — see
+        // that fn's doc for why a real-paced driver false-HANGs buffered sources.
+        let tick = kithara_platform::tokio::task::spawn(run_tick_driver(queue_for_tick));
 
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
