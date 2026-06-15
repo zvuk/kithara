@@ -1,5 +1,6 @@
 use std::{
     fmt,
+    panic::Location,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -571,8 +572,13 @@ impl FlashInner {
     /// construction; the PARKED→RUNNABLE wake re-acquire goes through
     /// [`FlashInner::gate_wake_parked`], which couples the acquire to the state CAS
     /// under the lock.
-    pub(in crate::flash) fn async_acquire(&self) {
-        self.core.lock().registry.active_async += 1;
+    pub(in crate::flash) fn async_acquire(&self, loc: &'static Location<'static>) -> u64 {
+        let mut s = self.core.lock();
+        let id = s.registry.next_task_id;
+        s.registry.next_task_id += 1;
+        s.registry.active_async += 1;
+        s.registry.active_async_holders.insert(id, loc);
+        id
     }
 
     /// Gate park under the `core` lock: atomically CAS `Running`→`Parked` and release
@@ -584,9 +590,10 @@ impl FlashInner {
     /// lock-free CAS and a separately-locked release, which would leave a re-runnable
     /// task uncounted and over-release on its next park. Returns the fully-handled
     /// outcome (callers need no further action on either arm).
-    pub(super) fn gate_park(&self, state: &AtomicTaskState) -> ParkOutcome {
+    pub(super) fn gate_park(&self, state: &AtomicTaskState, id: u64) -> ParkOutcome {
         let mut s = self.core.lock();
         if state.compare_exchange(TaskState::Running, TaskState::Parked) {
+            s.registry.active_async_holders.remove(&id);
             let adv = s.release_async(&self.clock);
             drop(s);
             adv.fire();
@@ -600,9 +607,10 @@ impl FlashInner {
     /// Gate completion under the `core` lock: mark `Done` and release the slot
     /// atomically (mirrors [`FlashInner::gate_park`]'s release arm for a poll that
     /// returned Ready).
-    pub(super) fn gate_complete(&self, state: &AtomicTaskState) {
+    pub(super) fn gate_complete(&self, state: &AtomicTaskState, id: u64) {
         let mut s = self.core.lock();
         state.store(TaskState::Done);
+        s.registry.active_async_holders.remove(&id);
         let adv = s.release_async(&self.clock);
         drop(s);
         adv.fire();
@@ -610,10 +618,11 @@ impl FlashInner {
 
     /// Gate drop under the `core` lock: swap to `Done`; release the slot iff the task
     /// still held one (its prior state was counted — `Runnable`/`Running`/`RunningNotified`).
-    pub(super) fn gate_drop_release(&self, state: &AtomicTaskState) {
+    pub(super) fn gate_drop_release(&self, state: &AtomicTaskState, id: u64) {
         let mut s = self.core.lock();
         match state.swap(TaskState::Done) {
             TaskState::Runnable | TaskState::Running | TaskState::RunningNotified => {
+                s.registry.active_async_holders.remove(&id);
                 let adv = s.release_async(&self.clock);
                 drop(s);
                 adv.fire();
@@ -628,10 +637,16 @@ impl FlashInner {
     /// the state was not `Parked` (the caller's wake loop re-reads and handles the
     /// current state lock-free). Coupling the acquire to the CAS under the lock is
     /// the counterpart to [`FlashInner::gate_park`]'s release.
-    pub(super) fn gate_wake_parked(&self, state: &AtomicTaskState) -> WakeOutcome {
+    pub(super) fn gate_wake_parked(
+        &self,
+        state: &AtomicTaskState,
+        id: u64,
+        loc: &'static Location<'static>,
+    ) -> WakeOutcome {
         let mut s = self.core.lock();
         if state.compare_exchange(TaskState::Parked, TaskState::Runnable) {
             s.registry.active_async += 1;
+            s.registry.active_async_holders.insert(id, loc);
             WakeOutcome::Resumed
         } else {
             WakeOutcome::NotParked
@@ -789,6 +804,22 @@ impl fmt::Display for FlashInner {
             },
             s.sched.yielders.len(),
         )?;
+        // Name WHO pins quiescence instead of leaving bare counters. Async: the
+        // spawn site of every task in a non-quiescent gate state (a task mid
+        // bridged-wait has released its slot, so `active_async` may be < the
+        // listed count — those are not pinning). Sync: every dedicated pacer
+        // currently `Running` (`active` may exceed the list by a reserved-but-
+        // unclaimed slot or an in-flight wake bump, which carry no thread yet).
+        for (id, loc) in &s.registry.active_async_holders {
+            writeln!(f, "  active_async holder task={id} spawned_at={loc}")?;
+        }
+        for (key, holder) in &s.registry.active_sync_holders {
+            writeln!(
+                f,
+                "  active holder thread={key:?} name={}",
+                holder.name.as_deref().unwrap_or("<unnamed>"),
+            )?;
+        }
         for ((deadline, id), entry) in &s.sched.timed {
             writeln!(
                 f,
@@ -901,8 +932,8 @@ pub(crate) fn register_notify_async(cvid: CvId, waker: Waker) -> (Option<AsyncHa
 }
 
 /// Process-engine forward of [`FlashInner::async_acquire`].
-pub(crate) fn async_acquire() {
-    FLASH.async_acquire();
+pub(crate) fn async_acquire(loc: &'static Location<'static>) -> u64 {
+    FLASH.async_acquire(loc)
 }
 
 /// Process-engine forward of [`FlashInner::cancel_async_wait`].

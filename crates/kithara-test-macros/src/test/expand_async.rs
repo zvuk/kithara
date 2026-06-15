@@ -76,6 +76,7 @@ pub(crate) fn emit_async_runtime_test(
                             kithara_platform::flash::with_ambient(#flash, async {
                                 #inner_body
                             })),
+                    ::core::panic::Location::caller(),
                 ),
             )
         }
@@ -244,6 +245,7 @@ pub(crate) fn emit_async_timeout_test(
                                     })
                                 },
                             ),
+                            ::core::panic::Location::caller(),
                         ),
                     )
                 })

@@ -32,7 +32,7 @@
 //! value is masked by equality and surfaces only at the later scope whose
 //! state it corrupted.
 
-use std::cell::Cell;
+use std::{cell::Cell, panic::Location};
 
 /// Two-flag flash mode of the current thread. The STATELESS time primitives
 /// (`Instant::now`, `thread::park_timeout`, `sleep`/`yield_now`/`unpark`,
@@ -82,6 +82,14 @@ struct ThreadCtx {
     /// pacer or an ambient `spawn_blocking` closure). See
     /// `system/credit.rs::mark_dedicated` for the pacer contract.
     dedicated: Cell<bool>,
+    /// Identity (`active_async` slot id + spawn site) of the task whose poll is
+    /// currently on top of this thread's poll stack — set by
+    /// [`Participating::poll`](crate::flash::Participating) around the inner
+    /// poll, saved/restored LIFO. Lets a BRIDGED sync wait taken mid-poll keep
+    /// the diagnostic async-holder map exact: the wait releases the task's slot
+    /// (`active_async -= 1`), so the holder must drop too, and be re-inserted on
+    /// resume. Diagnostic only.
+    cur_async: Cell<Option<(u64, &'static Location<'static>)>>,
 }
 
 thread_local! {
@@ -95,6 +103,7 @@ thread_local! {
             credit: Cell::new(Credit::None),
             poll_depth: Cell::new(0),
             dedicated: Cell::new(false),
+            cur_async: Cell::new(None),
         }
     };
 }
@@ -206,4 +215,18 @@ pub(in crate::flash) fn dedicated() -> bool {
 /// Set this thread's dedicated-pacer flag (credit functions only).
 pub(in crate::flash) fn set_dedicated(v: bool) {
     CTX.with(|c| c.dedicated.set(v));
+}
+
+/// Identity of the task whose poll is on top of this thread's poll stack, if
+/// any (for the bridged-wait holder bookkeeping — `AsyncPollGuard` only).
+pub(in crate::flash) fn cur_async() -> Option<(u64, &'static Location<'static>)> {
+    CTX.with(|c| c.cur_async.get())
+}
+
+/// Set the top-of-stack task identity, returning the previous value to restore
+/// on poll exit (LIFO save/restore — `AsyncPollGuard` only).
+pub(in crate::flash) fn swap_cur_async(
+    v: Option<(u64, &'static Location<'static>)>,
+) -> Option<(u64, &'static Location<'static>)> {
+    CTX.with(|c| c.cur_async.replace(v))
 }

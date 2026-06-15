@@ -9,6 +9,7 @@
 
 use std::{
     future::Future,
+    panic::Location,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll, Waker},
@@ -60,7 +61,7 @@ impl<F: Future> Future for Participating<F> {
         // releasing this task's `active_async` slot while it blocks instead of
         // pinning the clock. Drops (restoring the depth) even if the poll unwinds.
         let outcome = {
-            let _poll_guard = credit::AsyncPollGuard::enter();
+            let _poll_guard = credit::AsyncPollGuard::enter(this.gate.id(), this.gate.loc());
             this.fut.poll(&mut gate_cx)
         };
         match outcome {
@@ -79,10 +80,15 @@ impl<F: Future> Future for Participating<F> {
 /// Wrap `fut` so it participates in quiescence accounting (see [`Participating`]).
 /// The task occupies an `active_async` slot immediately — a constructed/spawned
 /// task is runnable until polled — balanced when it parks, completes, or drops.
-pub fn participate<F: Future>(fut: F) -> Participating<F> {
-    system::async_acquire();
+///
+/// `loc` is the spawn site (a [`crate::tokio::task::spawn`] caller, forwarded via
+/// `#[track_caller]`, or a direct test caller). It is the task's stable identity
+/// in the engine's `active_async` holder map, so a quiescence-hang dump names
+/// WHICH spawn pins the clock instead of printing a bare counter.
+pub fn participate<F: Future>(fut: F, loc: &'static Location<'static>) -> Participating<F> {
+    let id = system::async_acquire(loc);
     Participating {
         fut,
-        gate: TaskGate::new(),
+        gate: TaskGate::new(id, loc),
     }
 }

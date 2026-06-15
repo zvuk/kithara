@@ -8,13 +8,30 @@
 //! is the obligation to settle a wrapped wait — so an unwind through any of
 //! them returns the credit instead of wedging the engine.
 
-use std::{marker::PhantomData, mem, sync::atomic::Ordering};
+use std::{marker::PhantomData, mem, panic::Location, sync::atomic::Ordering};
 
-use super::{Core, FLASH, FlashInner};
+use super::{Core, FLASH, FlashInner, SyncHolder};
 use crate::{
     common::thread_id::ACTIVE_NAMED_THREADS,
-    flash::ctx::{self, Credit},
+    flash::{
+        ctx::{self, Credit},
+        ids::ThreadKey,
+    },
+    native::thread::current,
 };
+
+/// `ThreadKey` of the calling OS thread — the key under which it appears in the
+/// engine's sync-holder dump map (matches `park_timeout`'s keying).
+fn current_thread_key() -> ThreadKey {
+    ThreadKey::of(current().id())
+}
+
+/// The calling OS thread's name for the sync-holder dump (`spawn_named` pacers
+/// are always named; pool/main threads may be anonymous). Pure introspection —
+/// no engine interaction.
+fn current_thread_name() -> Option<String> {
+    std::thread::current().name().map(str::to_owned)
+}
 
 /// True when the calling OS thread is inside an async-task poll (a runtime
 /// worker driving a [`Participating`](crate::flash::Participating) future) —
@@ -49,6 +66,9 @@ pub(crate) fn mark_dedicated() {
     // (`Running -> Parked`, `active -= 1`); `on_participant_exit` settles it if the
     // thread returns while `Running`.
     ctx::set_credit(Credit::Running);
+    // Name this pacer in the sync-holder dump for as long as it holds its slot
+    // `Running` (removed on its first park / on exit). Diagnostic only.
+    FLASH.sync_holder_running();
 }
 
 /// True iff the current OS thread is a dedicated pacer (see [`mark_dedicated`]).
@@ -195,13 +215,21 @@ impl Drop for PoolParticipant {
 /// the inner future's poll, so a wrapped sync wait taken inside that poll is
 /// recognised as bridged (see [`in_async_poll`]). Drop-safe across an unwind.
 pub(in crate::flash) struct AsyncPollGuard {
+    /// The top-of-stack task identity to restore on drop (LIFO), so a nested
+    /// poll on the same thread does not lose the outer task's identity.
+    prev_cur: Option<(u64, &'static Location<'static>)>,
     _not_send: PhantomData<*mut ()>,
 }
 
 impl AsyncPollGuard {
-    pub(in crate::flash) fn enter() -> Self {
+    /// Enter a task poll: bump the poll depth and publish this task's identity
+    /// (`id`, spawn `loc`) as the top of the stack, so a bridged sync wait taken
+    /// inside the poll can keep the async-holder dump map exact.
+    pub(in crate::flash) fn enter(id: u64, loc: &'static Location<'static>) -> Self {
         ctx::set_poll_depth(ctx::poll_depth().saturating_add(1));
+        let prev_cur = ctx::swap_cur_async(Some((id, loc)));
         Self {
+            prev_cur,
             _not_send: PhantomData,
         }
     }
@@ -209,6 +237,7 @@ impl AsyncPollGuard {
 
 impl Drop for AsyncPollGuard {
     fn drop(&mut self) {
+        ctx::swap_cur_async(self.prev_cur);
         ctx::set_poll_depth(ctx::poll_depth().saturating_sub(1));
     }
 }
@@ -282,6 +311,21 @@ pub(crate) fn reset_credit() {
 }
 
 impl FlashInner {
+    /// Record (or refresh) the calling dedicated pacer thread as a `Running`
+    /// sync `active` holder in the diagnostic dump map. Called when it claims its
+    /// slot ([`mark_dedicated`]) and each time it resumes `Running` from a wait
+    /// (dedicated [`resume_after_wait`](FlashInner::resume_after_wait)). Keyed by
+    /// the thread; named by it. Diagnostic only — it does not touch `active`.
+    pub(in crate::flash) fn sync_holder_running(&self) {
+        let key = current_thread_key();
+        let name = current_thread_name();
+        self.core
+            .lock()
+            .registry
+            .active_sync_holders
+            .insert(key, SyncHolder { name });
+    }
+
     /// Reserve a dedicated pacer's slot: raw `active += 1` on the parent,
     /// before the child is scheduled (see [`DedicatedSlot`]).
     pub(in crate::flash) fn pre_count_dedicated(&self) {
@@ -329,6 +373,11 @@ impl FlashInner {
                 "bridged wait must be inside a counted async poll"
             );
             s.registry.active_async -= 1;
+            // Keep the diagnostic holder map exact: this task released its slot
+            // for the bridged block, so drop it (re-inserted on resume).
+            if let Some((id, _)) = ctx::cur_async() {
+                s.registry.active_async_holders.remove(&id);
+            }
         } else if !is_dedicated() {
             // Non-dedicated, non-async-poll thread (a tokio worker driving a raw-spawned
             // task, the main/test thread, a raw `thread::spawn`): NOT a virtual-time
@@ -345,6 +394,9 @@ impl FlashInner {
                     );
                     s.registry.active -= 1;
                     ctx::set_credit(Credit::Parked);
+                    // This pacer no longer holds its `active` slot — drop it from
+                    // the diagnostic holder map (re-added when it resumes Running).
+                    s.registry.active_sync_holders.remove(&current_thread_key());
                 }
                 Credit::Parked => {
                     debug_assert!(false, "a thread cannot enter two wrapped waits at once");
@@ -374,6 +426,11 @@ impl FlashInner {
             );
             s.registry.active -= 1;
             s.registry.active_async += 1;
+            // Re-insert the holder dropped when this task entered the bridged
+            // wait (keeps the diagnostic map matched to the counter).
+            if let Some((id, loc)) = ctx::cur_async() {
+                s.registry.active_async_holders.insert(id, loc);
+            }
             drop(s);
             return;
         }
@@ -390,6 +447,8 @@ impl FlashInner {
             return;
         }
         mark_running();
+        // Pacer is `Running` again — restore it to the diagnostic holder map.
+        self.sync_holder_running();
     }
 
     /// Decrement `active` for a thread that EXITS while `Running` — the balancing
@@ -409,6 +468,7 @@ impl FlashInner {
             "exiting running participant must be counted"
         );
         s.registry.active -= 1;
+        s.registry.active_sync_holders.remove(&current_thread_key());
         let adv = s.try_advance(&self.clock);
         drop(s);
         adv.fire();

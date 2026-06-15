@@ -35,7 +35,9 @@ pub(super) mod sched;
 /// Waiter wake handles ([`wake::Token`] / [`wake::Wake`]).
 pub(super) mod wake;
 
-pub(in crate::flash) use inner::{Clock, Core, CvId, FLASH, FlashInner, Registry, WaiterId};
+pub(in crate::flash) use inner::{
+    Clock, Core, CvId, FLASH, FlashInner, Registry, SyncHolder, WaiterId,
+};
 pub(in crate::flash) use pace::{real_io_enter, real_io_exit};
 pub(in crate::flash) use sched::{
     AsyncHandle, async_acquire, cancel_async_wait, cancel_yield, dump, next_condvar_id,

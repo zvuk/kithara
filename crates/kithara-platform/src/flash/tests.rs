@@ -1,5 +1,6 @@
 use std::{
     future::Future,
+    panic::Location,
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicUsize, Ordering},
@@ -155,9 +156,12 @@ fn woken_async_task_stays_counted_until_repolled() {
     reset();
 
     let notify = Notify::default();
-    let mut task = Box::pin(participate(async {
-        notify.notified().await;
-    }));
+    let mut task = Box::pin(participate(
+        async {
+            notify.notified().await;
+        },
+        Location::caller(),
+    ));
     let waker = Waker::from(Arc::new(NoopWake));
     let mut cx = Context::from_waker(&waker);
 
@@ -757,9 +761,12 @@ fn ambient_off_yield_now_is_real_passthrough() {
 
     let waker = Waker::from(Arc::new(NoopWake));
     let mut cx = Context::from_waker(&waker);
-    let mut task = Box::pin(participate(async {
-        yield_now().await;
-    }));
+    let mut task = Box::pin(participate(
+        async {
+            yield_now().await;
+        },
+        Location::caller(),
+    ));
 
     // First poll yields (Pending after re-arming the waker); it touches NO engine
     // yield-waiter, so re-poll resolves it with no advance.
@@ -787,9 +794,12 @@ fn ambient_on_yield_now_is_engine_backed() {
 
     let waker = Waker::from(Arc::new(NoopWake));
     let mut cx = Context::from_waker(&waker);
-    let mut task = Box::pin(participate(async {
-        yield_now().await;
-    }));
+    let mut task = Box::pin(participate(
+        async {
+            yield_now().await;
+        },
+        Location::caller(),
+    ));
 
     // First poll registers an engine yield-waiter. The participated task still
     // holds its `active_async` slot during the poll, so the lone-yield rescue does

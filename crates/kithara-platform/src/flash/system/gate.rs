@@ -3,6 +3,7 @@
 //! `flash/participant.rs`).
 
 use std::{
+    panic::Location,
     sync::{
         Arc,
         atomic::{AtomicU8, Ordering},
@@ -106,17 +107,36 @@ pub(in crate::flash) struct TaskGate {
     /// The runtime's waker for this task, refreshed each poll. The gate forwards
     /// to it on wake so the real poll is re-scheduled.
     runtime_waker: Mutex<Option<Waker>>,
+    /// Stable engine identity of this task's `active_async` slot: the id minted by
+    /// [`crate::flash::participate`] and the spawn-site [`Location`]. Every slot
+    /// release ([`park`](Self::park) / [`complete`](Self::complete) /
+    /// [`on_drop`](Self::on_drop)) and the wake re-acquire ([`Wake::wake_by_ref`])
+    /// carry them, so the engine's holder map names WHICH task pins quiescence.
+    id: u64,
+    loc: &'static Location<'static>,
 }
 
 impl TaskGate {
     /// A fresh gate starts `Runnable`: a constructed/spawned task is queued to be
     /// polled, so it occupies a slot at once (acquired by
-    /// [`crate::flash::participate`]).
-    pub(in crate::flash) fn new() -> Arc<Self> {
+    /// [`crate::flash::participate`], which mints `id` and supplies the spawn `loc`).
+    pub(in crate::flash) fn new(id: u64, loc: &'static Location<'static>) -> Arc<Self> {
         Arc::new(Self {
             state: AtomicTaskState::new(TaskState::Runnable),
             runtime_waker: Mutex::default(),
+            id,
+            loc,
         })
+    }
+
+    /// This task's `active_async` slot id (its stable engine identity).
+    pub(in crate::flash) fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// This task's spawn site (for the diagnostic holder map).
+    pub(in crate::flash) fn loc(&self) -> &'static Location<'static> {
+        self.loc
     }
 
     pub(in crate::flash) fn store_runtime_waker(&self, w: &Waker) {
@@ -149,7 +169,7 @@ impl TaskGate {
     /// Poll returned `Ready`: the task is done — release its slot. The `DONE`
     /// store and the counter decrement happen together under the engine lock.
     pub(in crate::flash) fn complete(&self) {
-        FLASH.gate_complete(&self.state);
+        FLASH.gate_complete(&self.state, self.id);
     }
 
     /// Poll returned `Pending`: `RUNNING`→`PARKED` releases the slot (a quiescent
@@ -160,13 +180,13 @@ impl TaskGate {
     /// [`super::FlashInner::gate_park`]. Both [`ParkOutcome`] arms are fully
     /// handled under that lock, so the returned outcome needs no action here.
     pub(in crate::flash) fn park(&self) {
-        let _: ParkOutcome = FLASH.gate_park(&self.state);
+        let _: ParkOutcome = FLASH.gate_park(&self.state, self.id);
     }
 
     /// Drop: release the slot iff the task still occupies one (`RUNNABLE`/`RUNNING`/
     /// `RUNNING_NOTIFIED`). `PARKED` and `DONE` hold none.
     pub(in crate::flash) fn on_drop(&self) {
-        FLASH.gate_drop_release(&self.state);
+        FLASH.gate_drop_release(&self.state, self.id);
     }
 }
 
@@ -186,7 +206,7 @@ impl Wake for TaskGate {
                     // release cannot cancel this acquire — see
                     // [`super::FlashInner::gate_wake_parked`]. `NotParked` means the
                     // state left `Parked` between the load and the CAS; loop to re-read.
-                    match FLASH.gate_wake_parked(&self.state) {
+                    match FLASH.gate_wake_parked(&self.state, self.id, self.loc) {
                         WakeOutcome::Resumed => {
                             self.forward();
                             return;

@@ -10,7 +10,7 @@
 //! participant accounting stays intrinsic to the platform — no consumer ever
 //! registers anything.
 
-use std::future::Future;
+use std::{future::Future, panic::Location};
 
 // Under `flash` (native) [`spawn`] wraps the future in the quiescence
 // poll-wrapper and `yield_now` participates in quiescence UNDER AMBIENT (a
@@ -45,15 +45,17 @@ use crate::{
 /// test's flash-eligibility gate even when tokio moves it between worker threads
 /// (thread-locals do not cross `spawn`). The ambient wrap is OUTER so both
 /// `participate`'s accounting and the task body run under the asserted ambient.
+#[track_caller]
 pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
     let on = crate::flash::ambient_snapshot();
+    let loc = Location::caller();
     native_task::spawn(crate::flash::with_ambient(
         on,
-        crate::flash::participate(future),
+        crate::flash::participate(future, loc),
     ))
 }
 
@@ -63,15 +65,17 @@ where
 /// orchestrators (e.g. the downloader run loop) that own their runtime. A raw
 /// `handle.spawn(fut)` here would run UNCOUNTED and let the virtual clock race
 /// past the orchestrator's event waits, freezing the clock.
+#[track_caller]
 pub fn spawn_on<F>(handle: &Handle, future: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
     let on = crate::flash::ambient_snapshot();
+    let loc = Location::caller();
     handle.spawn(crate::flash::with_ambient(
         on,
-        crate::flash::participate(future),
+        crate::flash::participate(future, loc),
     ))
 }
 

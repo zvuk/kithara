@@ -6,6 +6,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    panic::Location,
     sync::{
         Arc, LazyLock, OnceLock, Weak,
         atomic::{AtomicU64, Ordering},
@@ -111,6 +112,35 @@ pub(in crate::flash) struct Registry {
     pub(super) next_id: u64,
     /// Monotonic condvar-id mint — see `Registry::fresh_cv`.
     pub(super) next_cv: u64,
+    /// Monotonic async-task-id mint (one per [`crate::flash::participate`]).
+    pub(super) next_task_id: u64,
+    /// Identity of every async task currently holding an `active_async` slot,
+    /// keyed by its task id and valued by its spawn site. Inserted on acquire
+    /// (`async_acquire` / `gate_wake_parked`), removed on release
+    /// (`gate_park` / `gate_complete` / `gate_drop_release`), so the set always
+    /// names exactly the tasks the counter counts. Purely diagnostic: the hang
+    /// dump lists it so a quiescence pin reports WHICH task pins it (and where
+    /// it was spawned) instead of a bare `active_async=N`.
+    pub(super) active_async_holders: BTreeMap<u64, &'static Location<'static>>,
+    /// SYNC counterpart of [`active_async_holders`](Self::active_async_holders):
+    /// the dedicated-pacer OS threads currently counted as `Running` in `active`
+    /// (audio worker, downloader runtime, flush hub, …), keyed by `ThreadKey`
+    /// and named by the thread name. Inserted when a pacer claims/resumes
+    /// `Running` (`mark_dedicated` / dedicated `resume_after_wait`), removed when
+    /// it parks (`enter_wait_locked` `Running` arm) or exits
+    /// (`on_participant_exit`). It names the PERSISTENT clock pinners; `active`
+    /// may briefly exceed it by transient reserve / wake-handoff units (a parent
+    /// `pre_count_dedicated` slot not yet claimed, or a just-fired wake bump
+    /// before its thread resumes) — the dump annotates that gap.
+    pub(super) active_sync_holders: BTreeMap<ThreadKey, SyncHolder>,
+}
+
+/// Diagnostic identity of a sync `active` holder — a dedicated pacer thread.
+/// Purely for the hang dump (see
+/// [`Registry::active_sync_holders`](Registry::active_sync_holders)).
+pub(in crate::flash) struct SyncHolder {
+    /// The OS thread name, if it was named (`spawn_named` pacers always are).
+    pub(super) name: Option<String>,
 }
 
 /// Parked-waiter queues and pacing state of the engine.
@@ -177,6 +207,9 @@ impl Core {
                 active_async: 0,
                 next_id: 0,
                 next_cv: 0,
+                next_task_id: 0,
+                active_async_holders: BTreeMap::new(),
+                active_sync_holders: BTreeMap::new(),
             },
             sched: Scheduler {
                 timed: BTreeMap::new(),

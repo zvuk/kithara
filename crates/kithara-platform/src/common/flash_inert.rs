@@ -8,6 +8,7 @@
 pub use std::time::Duration;
 use std::{
     marker::PhantomData,
+    panic::Location,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -30,9 +31,10 @@ pub type Participating<F> = F;
 /// Off the sim path: spawning needs no quiescence bracket, so `participate` is
 /// an identity passthrough (the real clock already advances on its own). Under
 /// `flash` this is the engine's `participate`, which wraps the future so it
-/// counts in the engine's `active_async` while running.
+/// counts in the engine's `active_async` while running. The `loc` spawn-site
+/// identity (used by the engine's hang dump) is unused off the sim path.
 #[inline]
-pub fn participate<F: Future>(fut: F) -> Participating<F> {
+pub fn participate<F: Future>(fut: F, _loc: &'static Location<'static>) -> Participating<F> {
     fut
 }
 
