@@ -129,6 +129,7 @@ impl HlsPeer {
                 headers: coord.headers.clone(),
                 seek_epoch: self.seek_obs.epoch(),
                 ready: coord.ready_gate(),
+                worker_wake: coord.worker_wake_cell(),
             };
             active.rebuild(&plan_ctx, initial_seg);
         }
@@ -448,6 +449,7 @@ impl HlsTrackState {
             seek_epoch: self.seek_obs.epoch(),
             look_ahead_bytes: self.look_ahead_bytes,
             ready: self.coord.ready_gate(),
+            worker_wake: self.coord.worker_wake_cell(),
         }
     }
 

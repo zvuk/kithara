@@ -28,7 +28,7 @@ use kithara_test_utils::kithara;
 
 use crate::{
     playlist::{PlaylistAccess, PlaylistState},
-    variant::{HlsVariant, PlanCtx, SegmentActivateParams},
+    variant::{HlsVariant, PlanCtx, SegmentActivateParams, WorkerWakeCell},
 };
 
 /// Watchdog timeout for the off-RT blocking `wait_range(_, None)`: must exceed
@@ -52,6 +52,12 @@ pub(crate) struct HlsCoordEnv {
     /// `wait_range(_, None)` parks on it instead of polling a wall-clock
     /// timer. See `README.md` "Event-driven read wait".
     pub(crate) ready: Arc<CondvarGate<u64>>,
+    /// Late-bound audio-worker wake, vended to peer `PlanCtx`-builders via
+    /// [`HlsCoord::worker_wake_cell`] and filled once by
+    /// [`HlsCoord::set_worker_wake`]. Fired only at the two downloader
+    /// write/settle sites (NOT the coord's RT-reachable fence/seek
+    /// `ready.signal()`s), so the RT decoder's worker re-ticks on data arrival.
+    pub(crate) worker_wake: WorkerWakeCell,
 }
 
 /// Thin router over a fixed `Vec<Arc<HlsVariant>>`. Every `Source`-side
@@ -70,6 +76,9 @@ pub(crate) struct HlsCoord {
     /// Backing playhead state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
     playhead: Arc<PlayheadState>,
+    /// Late-bound audio-worker wake (see [`HlsCoordEnv::worker_wake`]). Vended
+    /// to peer re-plans and set once via [`Self::set_worker_wake`].
+    worker_wake: WorkerWakeCell,
     /// Backing seek/activity state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
     seek: Arc<SeekState>,
@@ -143,6 +152,7 @@ impl HlsCoord {
             fence_at: AtomicU64::new(0),
             fence_target: AtomicUsize::new(0),
             ready: env.ready,
+            worker_wake: env.worker_wake,
         }
     }
 
@@ -150,6 +160,20 @@ impl HlsCoord {
     /// closures can signal segment write/commit/fail.
     pub(crate) fn ready_gate(&self) -> Arc<CondvarGate<u64>> {
         Arc::clone(&self.ready)
+    }
+
+    /// The late-bound audio-worker wake cell, handed to [`PlanCtx`] so variant
+    /// fetch closures can re-tick the worker on write/settle. Empty until
+    /// [`Self::set_worker_wake`] fills it.
+    pub(crate) fn worker_wake_cell(&self) -> WorkerWakeCell {
+        Arc::clone(&self.worker_wake)
+    }
+
+    /// Install the audio worker's data-arrival wake (idempotent — only the
+    /// first set sticks). Called by `HlsSource::set_worker_wake` once the
+    /// worker exists; downloader fetch closures read it lock-free thereafter.
+    pub(crate) fn set_worker_wake(&self, wake: Arc<dyn kithara_stream::WorkerWake>) {
+        let _ = self.worker_wake.set(wake);
     }
 
     pub(crate) fn active(&self) -> Option<&Arc<HlsVariant>> {

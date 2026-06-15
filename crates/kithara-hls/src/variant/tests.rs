@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc, Barrier,
+    Arc, Barrier, OnceLock,
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
@@ -39,6 +39,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
         look_ahead_bytes: None,
         headers: None,
         ready: Arc::new(CondvarGate::<u64>::default()),
+        worker_wake: Arc::new(OnceLock::new()),
     }
 }
 

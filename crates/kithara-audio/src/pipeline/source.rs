@@ -115,6 +115,11 @@ impl<T: StreamType> SharedStream<T> {
             /// produce core (seek-apply / finalize); the scheduler shell
             /// flushes it off the forbid-blocking path.
             pub(crate) fn peer_wake(&self) -> Option<Arc<kithara_stream::DeferredWake>>;
+            /// Install the audio worker's data-arrival wake on the inner
+            /// source. Segmented sources (HLS) fire it from their off-RT
+            /// write/settle sites; no-op for non-segmented sources. Set once,
+            /// after the worker exists.
+            pub(crate) fn set_worker_wake(&self, wake: Arc<dyn kithara_stream::WorkerWake>);
             /// Real-time on-core seek (FSM recreate/boundary, decoder
             /// `OffsetReader`): position math + cursor set, no `prime_seek_range`
             /// spin on the forbid-blocking produce core. See [`Stream::probe_seek`].

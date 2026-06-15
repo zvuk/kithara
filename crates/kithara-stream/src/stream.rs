@@ -292,6 +292,9 @@ impl<T: StreamType> Stream<T> {
             /// The reader→peer wake handle — `Some` for segmented sources (HLS)
             /// that push a downloader peer, `None` otherwise.
             pub fn peer_wake(&self) -> Option<Arc<DeferredWake>>;
+            /// Install the audio worker's data-arrival wake. Segmented sources
+            /// fire it from their off-RT write/commit sites; no-op otherwise.
+            pub fn set_worker_wake(&self, wake: Arc<dyn crate::WorkerWake>);
             /// Build a fresh reader-side event-sink instance from the inner source.
             pub fn take_reader_event_sink(&mut self) -> Option<crate::BoxedEventSink>;
             /// Optional byte-map handle for segment-aware decoders.

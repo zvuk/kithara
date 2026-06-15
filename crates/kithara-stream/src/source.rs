@@ -14,7 +14,7 @@ use crate::{
     media::MediaInfo,
     playhead::{PlayheadRead, PlayheadWrite},
     seek_state::{Activity, SeekControl, SeekObserve},
-    wake::DeferredWake,
+    wake::{DeferredWake, WorkerWake},
 };
 
 /// Per-segment metadata exposed by segmented sources (HLS).
@@ -242,6 +242,15 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
         None
     }
+
+    /// Install the audio worker's data-arrival wake (the inverse of
+    /// [`peer_wake`](Self::peer_wake)). Segmented sources (HLS) store it and
+    /// fire it from their off-RT write/commit sites so an underran worker
+    /// re-ticks the instant bytes land, instead of polling. Set once, after
+    /// the worker exists; the default is a no-op for sources whose data is
+    /// always resident (File, mock), where the worker never underruns on a
+    /// download.
+    fn set_worker_wake(&self, _wake: Arc<dyn WorkerWake>) {}
 
     /// Get media info if available.
     fn media_info(&self) -> Option<MediaInfo> {

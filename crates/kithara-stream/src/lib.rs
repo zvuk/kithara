@@ -37,4 +37,4 @@ pub use stream::{
     Stream, StreamPending, StreamReadError, StreamReadOutcome, StreamSeekPastEof, StreamType,
     VariantChangeError,
 };
-pub use wake::DeferredWake;
+pub use wake::{DeferredWake, WorkerWake};

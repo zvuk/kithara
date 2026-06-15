@@ -95,6 +95,10 @@ impl Source for HlsSource {
         self.peer_wake.clone()
     }
 
+    fn set_worker_wake(&self, wake: Arc<dyn kithara_stream::WorkerWake>) {
+        self.coord.set_worker_wake(wake);
+    }
+
     fn variant_control(&self) -> Option<Arc<dyn kithara_stream::VariantControl>> {
         Some(Arc::clone(&self.coord) as Arc<dyn kithara_stream::VariantControl>)
     }

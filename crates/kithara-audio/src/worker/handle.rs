@@ -77,7 +77,12 @@ impl AudioWorkerHandle {
         self.inner.unregister(track_id);
     }
 
-    /// Wake the worker (e.g. when new data arrives from downloader).
+    /// Wake the worker so it re-ticks the decoder now. Called by the RT
+    /// consumer after it drains a chunk (ring-space freed) and — via
+    /// [`WorkerWakeBridge`] — by the HLS readiness gate from the downloader
+    /// thread when segment bytes are written/committed, so an underran worker
+    /// re-ticks on data arrival instead of on its 10 ms scheduler poll.
+    /// Wait-free: an atomic bump + `unpark`, safe from any thread.
     pub fn wake(&self) {
         self.inner.wake();
     }
@@ -100,6 +105,19 @@ impl AudioWorkerHandle {
             inner,
             id_gen: Arc::new(TrackIdGen::new()),
         }
+    }
+}
+
+/// Adapts an [`AudioWorkerHandle`] to the [`WorkerWake`](kithara_stream::WorkerWake)
+/// trait so kithara-hls (which does not depend on kithara-audio) can re-tick
+/// the worker on segment data arrival. Installed via `Stream::set_worker_wake`
+/// after the worker exists; the HLS readiness gate calls [`wake`](Self::wake)
+/// from its off-RT downloader write/settle path. Wait-free.
+pub(crate) struct WorkerWakeBridge(pub(crate) AudioWorkerHandle);
+
+impl kithara_stream::WorkerWake for WorkerWakeBridge {
+    fn wake(&self) {
+        self.0.wake();
     }
 }
 
