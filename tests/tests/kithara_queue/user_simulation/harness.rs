@@ -631,10 +631,20 @@ impl SimHarness {
         // Under flash these are virtual deadlines.
         let wall_budget = at_least * 2;
         let mut last_pos = pre_pos;
-        let mut stagnant_since = kithara_platform::time::Instant::now();
+        // No-progress is counted in producer-tick *wakes*, not virtual wall
+        // time: under flash a quiescent virtual clock can jump past a 3s
+        // window in a single tick while the producer simply has not been
+        // re-ticked yet, tripping a false SILENT HANG. Each loop wake (a
+        // delivered bus event OR a `POLL_INTERVAL` poll tick) is one real
+        // producer opportunity; counting consecutive no-progress wakes keys
+        // the detector on observed producer state instead of a clock the
+        // virtual engine fast-forwards past.
+        let mut no_progress_ticks: u32 = 0;
 
-        /// No-progress window before a stuck playhead is a SILENT HANG.
-        const STAGNATION: Duration = Duration::from_secs(3);
+        /// Consecutive no-progress producer-tick wakes before a stuck
+        /// playhead is a SILENT HANG. At one wake per `POLL_INTERVAL`
+        /// (40ms) this is the ~3s window the panic message names.
+        const STAGNATION_TICKS: u32 = 75;
 
         // Drive the watchdog off `PlaybackProgress` events (and any
         // other bus traffic) instead of a `sleep`-cadence position poll:
@@ -664,11 +674,11 @@ impl SimHarness {
             if cur + 1.0 < pre_pos {
                 pre_pos = cur;
                 last_pos = cur;
-                stagnant_since = kithara_platform::time::Instant::now();
+                no_progress_ticks = 0;
             }
             if cur > last_pos + 0.05 {
                 last_pos = cur;
-                stagnant_since = kithara_platform::time::Instant::now();
+                no_progress_ticks = 0;
             }
             if self.is_playing() {
                 if cur - pre_pos >= at_least.as_secs_f64() * 0.9 {
@@ -680,7 +690,7 @@ impl SimHarness {
                 if duration > 0.0 && (duration - cur).abs() < 0.5 {
                     return;
                 }
-                if stagnant_since.elapsed() > STAGNATION
+                if no_progress_ticks >= STAGNATION_TICKS
                     && self.position() < pre_pos + 0.1
                     && (duration <= 0.0 || (duration - cur).abs() >= NATURAL_EOF_WINDOW_S)
                 {
@@ -692,21 +702,21 @@ impl SimHarness {
                     );
                 }
             }
-            // Wait for the next bus event, but never park longer than
-            // what's left of either the wall budget or the stagnation
-            // window — so the stuck-position SILENT HANG above still
-            // fires on a track that emits no further progress events.
-            // Both deadlines are virtual under flash.
-            let elapsed = started.elapsed();
-            let until_wall = wall_budget.saturating_sub(elapsed);
-            let until_stagnation = STAGNATION.saturating_sub(stagnant_since.elapsed());
-            let wait_cap = until_wall.min(until_stagnation).max(POLL_INTERVAL);
+            // Park for the next bus event, but never longer than one
+            // `POLL_INTERVAL` — so a track that emits no further progress
+            // events still wakes once per producer tick, and each such wake is
+            // one no-progress observation the SILENT HANG above counts. The
+            // outer `while started.elapsed() < wall_budget` bounds the total.
+            // Both are virtual under flash.
             // A closed bus delivers `Err` instantly; without breaking we
             // would busy-spin and (under flash) freeze the virtual clock.
             // Stop watching and fall through to the post-loop checks.
-            if let Ok(Err(_)) = timeout(wait_cap, recv_event(&mut rx)).await {
+            if let Ok(Err(_)) = timeout(POLL_INTERVAL, recv_event(&mut rx)).await {
                 break;
             }
+            // One more producer-tick wake elapsed without progress (progress
+            // resets this to 0 at the top of the loop).
+            no_progress_ticks = no_progress_ticks.saturating_add(1);
         }
 
         let post = self.position();

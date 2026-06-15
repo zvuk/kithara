@@ -6,15 +6,53 @@ use kithara_hls::{AbrMode, Hls, HlsConfig};
 use kithara_integration_tests::{TestServerHelper, TestTempDir, kithara, temp_dir};
 use kithara_platform::{
     CancelToken,
-    thread::{active_named_thread_count, sleep},
-    time::{Duration, Instant},
+    thread::{active_named_thread_count, sleep as thread_sleep},
+    time::{self, Duration, Instant},
 };
 use kithara_stream::Stream;
 use tracing::info;
 
-/// Wait for spawned threads to register with the OS.
-fn settle() {
-    sleep(Duration::from_millis(1500));
+/// Settle window for the thread-count quiescence helpers: the named-thread
+/// counter must hold steady across this many consecutive virtual ticks before
+/// it is treated as quiesced.
+const QUIESCE_TICKS: usize = 3;
+/// Real-time watchdog for the quiescence helpers. Bounds only genuine
+/// non-progress (the counter never stops moving); a hit PANICS, it never
+/// returns a mid-teardown reading so an assertion cannot pass on timeout.
+const QUIESCE_WATCHDOG: Duration = Duration::from_secs(30);
+
+/// Wait until the named-thread counter goes quiescent — i.e.
+/// `active_named_thread_count()` stops decreasing across `QUIESCE_TICKS`
+/// consecutive virtual ticks — then return the settled value. This waits on
+/// the real teardown state (the same counter every budget assertion reads):
+/// the count is decremented when each spawned thread's closure RETURNS after
+/// shutdown/cancel, which is observable under the flash clock. A leak keeps the
+/// count high — it still stabilizes high, so the budget assertion still catches
+/// the growth. The per-tick wait uses the virtual `kithara_platform::time::sleep`
+/// so it advances under flash; a real `std::time::Instant` watchdog PANICS on
+/// genuine non-quiescence rather than silently returning a mid-teardown reading.
+async fn wait_thread_count_quiesced() -> usize {
+    let watchdog = Instant::now() + QUIESCE_WATCHDOG;
+    let mut last = active_named_thread_count();
+    let mut stable = 0usize;
+    loop {
+        time::sleep(Duration::from_millis(20)).await;
+        let now = active_named_thread_count();
+        if now == last {
+            stable += 1;
+            if stable >= QUIESCE_TICKS {
+                return now;
+            }
+        } else {
+            stable = 0;
+            last = now;
+        }
+        assert!(
+            Instant::now() < watchdog,
+            "named-thread count never quiesced: last={now} \
+             (active_named_thread_count kept changing for {QUIESCE_WATCHDOG:?} of real time)"
+        );
+    }
 }
 
 fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
@@ -23,7 +61,7 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
     loop {
         let last_count = active_named_thread_count();
         if last_count == target {
-            sleep(Duration::from_millis(200));
+            thread_sleep(Duration::from_millis(200));
             let stable_count = active_named_thread_count();
             if stable_count == target {
                 return stable_count;
@@ -34,7 +72,7 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
             return last_count;
         }
 
-        sleep(Duration::from_millis(100));
+        thread_sleep(Duration::from_millis(100));
     }
 }
 
@@ -42,12 +80,17 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
 fn thread_budget_audio_worker_is_one_thread() {
     let before = active_named_thread_count();
     let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
-    settle();
+    // The named-thread increment is eager/synchronous (it runs at the spawn
+    // call site, before the child runs), so `after` is already correct the
+    // moment `with_cancel()` returns — no settle needed on the spawn side.
     let after = active_named_thread_count();
 
     let delta = after.saturating_sub(before);
     worker.shutdown();
-    settle();
+    // Teardown gate: wait until the worker thread's closure has actually
+    // returned and decremented the counter back to baseline, leaving a clean
+    // state for the next serial test (state-driven, not a fixed sleep).
+    wait_for_named_threads(before, Duration::from_secs(30));
     assert_eq!(
         delta, 1,
         "AudioWorkerHandle must spawn exactly 1 thread (got delta={delta}, before={before}, after={after})"
@@ -78,15 +121,18 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
         .await
         .expect("create hls audio");
     audio.preload().expect("preload must succeed");
-    settle();
-
+    // Spawn side: the named-thread increment is eager/synchronous at each
+    // `spawn_named` call site, so once `preload()` returns the count already
+    // reflects every thread this pipeline started — no settle needed.
     let after = active_named_thread_count();
     let delta = after.saturating_sub(before);
     info!(before, after, delta, "single HLS pipeline");
 
     drop(audio);
     cancel.cancel();
-    settle();
+    // Teardown gate: wait until the pipeline's threads have actually returned
+    // and the counter has quiesced (state-driven), not a fixed sleep.
+    wait_thread_count_quiesced().await;
 
     assert!(
         delta <= 2,
@@ -114,8 +160,9 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         opts
     };
 
-    settle();
-    let before = active_named_thread_count();
+    // Baseline gate: measure `before` only once the shared worker's eager
+    // increment and any prior teardown have quiesced (state-driven).
+    let before = wait_thread_count_quiesced().await;
 
     let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
         .store(shared_store())
@@ -160,8 +207,10 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         a.preload().expect("preload must succeed");
         audios.push(Box::new(a));
     }
-    settle();
-
+    // Spawn side: the flush-hub worker starts lazily on the first store
+    // registration (during `new()`/`preload()`), and its named-thread increment
+    // is eager/synchronous at the spawn call site — so once the preloads return
+    // the count already reflects it. No settle needed.
     let after = active_named_thread_count();
     let delta = after.saturating_sub(before);
     info!(
@@ -176,7 +225,9 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     cancel.cancel();
     shared_worker.shutdown();
     drop(shared_hub);
-    settle();
+    // Teardown gate: wait until every torn-down thread's closure has returned
+    // and the counter has quiesced (state-driven), not a fixed sleep.
+    wait_thread_count_quiesced().await;
 
     assert_eq!(
         delta, 1,

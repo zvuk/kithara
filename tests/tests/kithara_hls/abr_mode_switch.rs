@@ -18,13 +18,15 @@ use kithara_integration_tests::{
     TestServerHelper, TestTempDir, auto,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
+    reads::{read_to_eof, read_until_samples},
     signal_pcm::{Finite, SignalPcm, signal},
+    waits::{wait_for_event, wait_until},
     wav::create_wav_header,
 };
 use kithara_platform::{
     CancelToken,
     sync::Mutex,
-    time::{Duration, Instant},
+    time::Duration,
     tokio::task::{spawn, spawn_blocking},
 };
 use tracing::info;
@@ -192,42 +194,24 @@ impl EventCollector {
     }
 }
 
-fn read_until_eof(audio: &mut Audio<Stream<Hls>>, timeout: Duration) -> u64 {
-    let mut buf = vec![0.0f32; 4096];
-    let mut total = 0u64;
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => {}
-            Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error: {e}"),
-        }
-    }
-    total
-}
-
-/// Event-driven read to the natural end of the track.
+/// Wait until every v0 media segment has been network-fetched (the all-cached
+/// precondition the bug repros against), polling the real download state.
 ///
-/// `Audio::read` is engine-aware blocking (`recv_outcome_blocking` parks
-/// until the worker commits a chunk or the stream ends), so this loop waits
-/// on the real terminal — `ReadOutcome::Eof` — instead of a wall-clock
-/// ceiling. Under flash a virtual deadline would race the clock past
-/// in-flight real socket bytes; parking on the read keeps the engine
-/// non-quiescent while data flows and stops exactly at true EOF. The
-/// harness `timeout(...)` (real wall time) is the only backstop.
-fn read_to_eof(audio: &mut Audio<Stream<Hls>>) -> u64 {
-    let mut buf = vec![0.0f32; 4096];
-    let mut total = 0u64;
-    loop {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => {}
-            Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error: {e}"),
-        }
-    }
-    total
+/// `EventCollector::segments()` drains the bus on each call, so the net-fetch
+/// count is the actual produced state (a `RequestCompleted` per segment), not a
+/// clock snapshot. Funnels through the shared `wait_until` poll primitive so the
+/// only timer tick lives in one audited place.
+async fn wait_v0_fully_cached(collector: &EventCollector, segment_count: usize) {
+    wait_until(Duration::from_secs(20), "v0_fully_cached", || {
+        collector
+            .segments()
+            .iter()
+            .filter(|s| s.variant == 0 && !s.cached)
+            .count()
+            >= segment_count
+    })
+    .await
+    .expect("v0 never fully prefetched");
 }
 
 /// VOD single-track: manual quality switch takes effect on future segments.
@@ -709,7 +693,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
         .await
         .expect("create audio");
 
-    let total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(25)))
+    let total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
 
@@ -906,16 +890,9 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         .await
         .expect("create audio");
 
-    let mut buf = vec![0f32; 4096];
-    let mut pre_total = 0u64;
-    let warmup_deadline = Instant::now() + Duration::from_secs(4);
-    while Instant::now() < warmup_deadline && pre_total < 16_384 {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => pre_total += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
-            Err(e) => panic!("decode error pre-switch: {e}"),
-        }
-    }
+    // Warmup: read until enough AAC samples are produced (state target, not a
+    // wall-clock deadline). The outer test timeout is the only backstop.
+    let pre_total = read_until_samples(&mut audio, 16_384);
     assert!(
         pre_total > 0,
         "warmup must produce AAC samples before the cross-codec flip"
@@ -932,7 +909,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     // `Pending(VariantChange)` without recovery, the hang_watchdog or
     // the test timeout will fail. Otherwise we should see post-switch
     // samples coming from the FLAC variant.
-    let post_total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(25)))
+    let post_total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
 
@@ -1040,23 +1017,13 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     }
     assert!(warmup_samples > 0, "warmup must produce some audio");
 
-    // The downloader must finish prefetching every v0 segment and the
-    // peer must park itself in `Poll::Pending` — the production state
-    // the bug reproduces against. Wait on the collector (event-driven,
-    // bounded by the harness timeout). The trailing sleep covers the
-    // park: under flash it completes only once the system is quiescent
-    // (= the peer parked); in real time it is a short settle after the
-    // last fetch.
-    while collector
-        .segments()
-        .iter()
-        .filter(|s| s.variant == 0 && !s.cached)
-        .count()
-        < segment_count
-    {
-        kithara_platform::time::sleep(Duration::from_millis(50)).await;
-    }
-    kithara_platform::time::sleep(Duration::from_millis(500)).await;
+    // The downloader must finish prefetching every v0 segment — the
+    // all-cached production state the bug reproduces against. Wait on the
+    // real download state (one `RequestCompleted` per v0 segment) with a
+    // virtual tick and a panicking watchdog; the prior trailing settle nap
+    // was a no-op under flash (it collapsed once the system was quiescent)
+    // and is unnecessary now the poll gates the precondition directly.
+    wait_v0_fully_cached(&collector, segment_count).await;
 
     let v0_fetched = collector
         .segments()
@@ -1157,6 +1124,10 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    // Subscribe before the bus is moved into the config so the post-seek
+    // `ReaderSeek` event is retained in the broadcast buffer for the
+    // seek-settled wait below.
+    let mut seek_rx = bus.subscribe();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
@@ -1167,19 +1138,13 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
 
     // Tiny warmup so the peer is actually pumping. Drop the reader to
     // let the prefetch finish in the background.
-    let mut buf = vec![0.0f32; 4096];
-    let mut warmup_samples = 0u64;
-    let warmup_deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < warmup_deadline && warmup_samples < 8_192 {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
-            Err(e) => panic!("decode error in warmup: {e}"),
-        }
-    }
+    let warmup_samples = read_until_samples(&mut audio, 8_192);
     assert!(warmup_samples > 0, "warmup must produce some audio");
 
-    kithara_platform::time::sleep(Duration::from_secs(2)).await;
+    // Wait on the real prefetch state (one net fetch per v0 segment), not a
+    // wall nap that collapses under flash and lets the assert below race the
+    // download.
+    wait_v0_fully_cached(&collector, segment_count).await;
 
     let v0_fetched = collector
         .segments()
@@ -1202,8 +1167,18 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
         .seek(Duration::from_secs_f64(seek_target_secs))
         .expect("seek must succeed");
 
-    // Let the peer process the seek epoch bump and re-park itself.
-    kithara_platform::time::sleep(Duration::from_millis(300)).await;
+    // Wait on the real seek-applied signal — the reader byte cursor jump
+    // (`HlsEvent::ReaderSeek`) — instead of a wall nap that collapses under
+    // flash and lets `set_mode` fire before the peer has processed the seek
+    // epoch bump (defeating the parked-after-seek repro precondition).
+    wait_for_event(
+        &mut seek_rx,
+        "ReaderSeek after seek",
+        |ev| matches!(ev, Event::Hls(HlsEvent::ReaderSeek { .. })),
+        Duration::from_secs(20),
+    )
+    .await
+    .expect("ReaderSeek after seek");
 
     let handle = audio
         .abr_handle()
@@ -1433,16 +1408,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
         .expect("create audio");
 
     // Warmup on v=0 (AAC).
-    let mut buf = vec![0f32; 4096];
-    let mut warmup_total = 0u64;
-    let warmup_deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < warmup_deadline && warmup_total < 16_384 {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => warmup_total += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
-            Err(e) => panic!("decode error pre-switch: {e}"),
-        }
-    }
+    let warmup_total = read_until_samples(&mut audio, 16_384);
     assert!(warmup_total > 0, "warmup must produce AAC samples");
 
     let handle = audio
@@ -1471,7 +1437,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     // Read for 15s. Without the fix, decoder hits false EOF inside this
     // window → `EndOfStream` → kithara-queue may trigger an auto-seek →
     // `HangDetector audio_worker_loop no progress for 10s` panic.
-    let post_total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(15)))
+    let post_total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
 
@@ -1488,7 +1454,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
         "Manual(1) same-codec must be applied, saw: {targets:?}"
     );
 
-    // Crucially: read_until_eof must NOT return prematurely on a false
+    // Crucially: read_to_eof must NOT return prematurely on a false
     // EOF mid-window. 15s @ 44100 stereo → ≥ ~600 000 frames if
     // playback continues; we accept any non-trivial post-switch
     // production as proof.
@@ -1826,6 +1792,13 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
+    // Subscribe before the bus is moved into the config so the new variant's
+    // first download enqueue is retained for the emission wait below. Real-
+    // asset URLs name the variant (slq/smq/shq/slossless), not the
+    // HlsTestServer `seg/vN` pattern the EventCollector parses, so we match
+    // the target variant's playlist stem directly.
+    let target_variant_name = ["slq", "smq", "shq", "slossless"][target_variant];
+    let mut emit_rx = bus.subscribe();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .events(bus)
         .decoder_backend(backend)
@@ -1872,11 +1845,30 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         .set_mode(AbrMode::manual(target_variant))
         .expect("Manual target valid");
 
-    // Mirror the production gap between `set_mode` and seek so the
-    // scheduler has time to emit V_new init + a few media segments
-    // around the current reader_pos (matches the app.log emit
-    // sequence preceding the hang).
-    kithara_platform::time::sleep(Duration::from_millis(300)).await;
+    // Mirror the production gap between `set_mode` and seek: wait on the real
+    // emission state — the scheduler enqueueing a download for the new
+    // variant (its init/media segment URL carries the variant stem) — instead
+    // of a wall nap that collapses under flash and lets the seek fire before
+    // the new variant has been scheduled, weakening the repro.
+    wait_for_event(
+        &mut emit_rx,
+        "new-variant segment/init enqueued",
+        |ev| {
+            // Match a media-segment or init download for the new variant — those
+            // are scheduled only after the switch. Exclude `.m3u8` playlists,
+            // which may already have been fetched at startup.
+            match ev {
+                Event::Downloader(DownloaderEvent::RequestEnqueued { url, .. }) => {
+                    let u = url.as_str();
+                    u.contains(target_variant_name) && (u.contains(".m4s") || u.contains(".mp4"))
+                }
+                _ => false,
+            }
+        },
+        Duration::from_secs(20),
+    )
+    .await
+    .expect("new-variant segment/init enqueued");
 
     // Phase 3 — seek BACKWARDS to a non-zero offset (37 s, as in
     // app.log run 1). reader_pos ends up at ≈ seg 6 byte-coords of

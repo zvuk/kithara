@@ -6,7 +6,7 @@ use std::{
 use kithara::{
     assets::StoreOptions,
     hls::{AbrMode, Hls, HlsConfig},
-    stream::Stream,
+    stream::{SourcePhase, Stream},
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
 use kithara_platform::{
@@ -189,11 +189,17 @@ async fn drm_stream_byte_integrity(
         while Instant::now() < deadline {
             match stream.read(&mut buf) {
                 Ok(0) => {
-                    thread::sleep(Duration::from_millis(50));
-                    if let Ok(0) = stream.read(&mut buf) {
+                    // Confirm true EOF on source STATE, not a wall-clock second
+                    // chance: the source reports `Eof` only once drained
+                    // (`pos >= total && sizes_complete()`). A non-terminal phase
+                    // means a byte-arrival/WorkerWake is still pending, so
+                    // re-poll on a virtual tick instead of recording a premature
+                    // `saw_eof` (a fixed sleep collapses to ~0 under flash).
+                    if matches!(stream.phase(), SourcePhase::Eof | SourcePhase::Cancelled) {
                         saw_eof = true;
                         break;
                     }
+                    thread::sleep(Duration::from_millis(50));
                 }
                 Ok(n) => total_read += n as u64,
                 Err(e) if e.kind() == ErrorKind::Interrupted => continue,

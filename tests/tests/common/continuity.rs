@@ -2,11 +2,8 @@
 use std::fmt;
 
 use kithara::events::{AudioEvent, Event, EventReceiver};
-use kithara_integration_tests::offline::OfflinePlayer;
-use kithara_platform::{
-    flash, thread,
-    time::{Duration, Instant},
-};
+use kithara_integration_tests::{flash_pace::virtual_pace, offline::OfflinePlayer};
+use kithara_platform::time::{Duration, Instant};
 pub(crate) const CONTINUITY_BLOCK_FRAMES: usize = 512;
 pub(crate) const CONTINUITY_SAMPLE_RATE: u32 = 44_100;
 const ACTIVE_SAMPLE_THRESHOLD: f32 = 0.001;
@@ -134,15 +131,14 @@ pub(crate) fn render_offline_window(
         }
         // Inter-block pacing MUST drive the virtual clock so the decode worker
         // (a `spawn_named` flash pacer parked on the engine) advances and fills
-        // the producer ring before the next `render` samples it. `enter_dynamic`
-        // flips this `thread::sleep` onto the engine (`sleep_timed`); inside the
-        // test driver's poll it is a BRIDGED wait that releases the task's
-        // `active_async` slot, lets the clock jump, and re-acquires on resume —
-        // so the worker delivers real PCM exactly as on the real clock instead
-        // of the render zero-filling silence on underrun. Off the flash feature
-        // `enter_dynamic` is a no-op and this stays a real wall-clock sleep.
-        let _flash = flash::enter_dynamic(true);
-        thread::sleep(block_budget.saturating_sub(elapsed));
+        // the producer ring before the next `render` samples it. `virtual_pace`
+        // is the `#[kithara::flash]`-guarded sleep: inside the test driver's poll
+        // it is a BRIDGED wait that releases the task's `active_async` slot, lets
+        // the clock jump, and re-acquires on resume — so the worker delivers real
+        // PCM exactly as on the real clock instead of the render zero-filling
+        // silence on underrun. Off the flash feature / off ambient it is a real
+        // wall-clock sleep.
+        virtual_pace(block_budget.saturating_sub(elapsed));
     }
 
     if current_silence > max_silence {

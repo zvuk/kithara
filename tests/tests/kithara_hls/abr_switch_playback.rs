@@ -10,12 +10,13 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, auto,
     fixture_protocol::{DelayRule, PcmPattern},
+    flash_pace::virtual_pace,
     offline::{OfflinePlayer, resource_from_reader},
     temp_dir,
 };
 use kithara_platform::{
-    CancelToken, thread,
-    time::{self, Duration, Instant, sleep},
+    CancelToken,
+    time::{Duration, Instant, sleep},
     tokio::task::spawn_blocking,
 };
 use tracing::info;
@@ -148,7 +149,7 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
         loop {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => {
-                    thread::sleep(Duration::from_millis(10));
+                    virtual_pace(Duration::from_millis(10));
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     total_samples += count.get() as u64;
@@ -443,7 +444,7 @@ async fn stream_continues_after_seek(
         while warmup_samples < 17_640 {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
-                Ok(ReadOutcome::Pending { .. }) => thread::sleep(Duration::from_millis(5)),
+                Ok(ReadOutcome::Pending { .. }) => virtual_pace(Duration::from_millis(5)),
                 Ok(ReadOutcome::Eof { .. }) => panic!("[{path}] unexpected EOF during warmup"),
                 Err(e) => panic!("decode error during warmup: {e}"),
             }
@@ -459,7 +460,7 @@ async fn stream_continues_after_seek(
             while samples < samples_per_seek {
                 match audio.read(&mut buf) {
                     Ok(ReadOutcome::Pending { .. }) => {
-                        thread::sleep(Duration::from_millis(10));
+                        virtual_pace(Duration::from_millis(10));
                     }
                     Ok(ReadOutcome::Frames { count, .. }) => {
                         samples += count.get() as u64;
@@ -478,7 +479,7 @@ async fn stream_continues_after_seek(
         while post_seek_samples < samples_per_seek {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => {
-                    thread::sleep(Duration::from_millis(10));
+                    virtual_pace(Duration::from_millis(10));
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     post_seek_samples += count.get() as u64;
@@ -529,7 +530,7 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
         loop {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => {
-                    thread::sleep(Duration::from_millis(10));
+                    virtual_pace(Duration::from_millis(10));
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     total_samples += count.get() as u64;
@@ -592,7 +593,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
         while warmup_samples < 17_640 {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
-                Ok(ReadOutcome::Pending { .. }) => thread::sleep(Duration::from_millis(5)),
+                Ok(ReadOutcome::Pending { .. }) => virtual_pace(Duration::from_millis(5)),
                 Ok(ReadOutcome::Eof { .. }) => panic!("[{path}] unexpected EOF during warmup"),
                 Err(e) => panic!("decode error during warmup: {e}"),
             }
@@ -612,7 +613,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
             while samples < samples_per_seek {
                 match audio.read(&mut buf) {
                     Ok(ReadOutcome::Pending { .. }) => {
-                        thread::sleep(Duration::from_millis(10));
+                        virtual_pace(Duration::from_millis(10));
                     }
                     Ok(ReadOutcome::Frames { count, .. }) => {
                         samples += count.get() as u64;
@@ -664,7 +665,7 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
         while warmup_samples < 17_640 {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
-                Ok(ReadOutcome::Pending { .. }) => thread::sleep(Duration::from_millis(5)),
+                Ok(ReadOutcome::Pending { .. }) => virtual_pace(Duration::from_millis(5)),
                 Ok(ReadOutcome::Eof { .. }) => panic!("[mp3] unexpected EOF during warmup"),
                 Err(e) => panic!("decode error during warmup: {e}"),
             }
@@ -680,7 +681,7 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
             while samples < samples_per_seek {
                 match audio.read(&mut buf) {
                     Ok(ReadOutcome::Pending { .. }) => {
-                        thread::sleep(Duration::from_millis(10));
+                        virtual_pace(Duration::from_millis(10));
                     }
                     Ok(ReadOutcome::Frames { count, .. }) => {
                         samples += count.get() as u64;
@@ -699,7 +700,7 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
         while post_seek_samples < samples_per_seek {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => {
-                    thread::sleep(Duration::from_millis(10));
+                    virtual_pace(Duration::from_millis(10));
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     post_seek_samples += count.get() as u64;

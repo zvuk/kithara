@@ -32,6 +32,8 @@ pub mod encode_test_pcm;
 pub(crate) mod fixture_cache;
 pub mod fixture_protocol;
 pub mod fixtures;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod flash_pace;
 pub mod hls_blob_store;
 pub mod hls_fixture;
 pub mod hls_server;
@@ -47,6 +49,7 @@ mod native;
 pub mod net_fixture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod offline;
+pub mod reads;
 pub mod rfc6381;
 pub mod rng;
 pub mod server_url;
@@ -59,6 +62,8 @@ pub mod storage_ext;
 pub mod swallow_detector;
 pub mod test_server;
 pub mod token_store;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod waits;
 pub mod wav;
 
 pub use abr_fixtures::{abr_fast, abr_initial_mode, abr_switch_trigger};

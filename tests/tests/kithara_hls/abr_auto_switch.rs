@@ -5,7 +5,7 @@ use std::sync::{
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{Audio, AudioConfig},
     events::EventBus,
     hls::{Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
@@ -14,13 +14,14 @@ use kithara_integration_tests::{
     TestTempDir, abr_fast, auto,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
+    reads::read_to_eof,
     signal_pcm::{Finite, SignalPcm, signal},
     temp_dir,
     wav::create_wav_header,
 };
 use kithara_platform::{
     CancelToken,
-    time::{Duration, Instant},
+    time::Duration,
     tokio::task::{spawn, spawn_blocking},
 };
 use tracing::info;
@@ -140,22 +141,7 @@ async fn abr_auto_switch_during_playback(
     let abr = audio.abr_handle();
 
     let result = spawn_blocking(move || {
-        let mut buf = vec![0.0f32; 4096];
-        let mut total_samples = 0u64;
-        let start = Instant::now();
-        let timeout = Duration::from_secs(5);
-
-        while start.elapsed() < timeout {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => continue,
-                Ok(ReadOutcome::Frames { count, .. }) => {
-                    total_samples += count.get() as u64;
-                }
-                Ok(ReadOutcome::Eof { .. }) => break,
-                Err(e) => panic!("decode error: {e}"),
-            }
-        }
-
+        let total_samples = read_to_eof(&mut audio);
         info!(total_samples, "playback finished");
         total_samples
     })

@@ -14,29 +14,33 @@ use kithara::{
 use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
 use kithara_platform::{
     CancelToken,
+    thread::active_named_thread_count,
     time::{self, Duration, Instant},
     tokio::task::spawn_blocking,
 };
 
 use crate::common::test_defaults::Consts as Shared;
 
-/// Wait until OS-thread reaping after a stream drop+cancel has quiesced —
-/// i.e. `live_thread_count()` stops decreasing across a short settle window.
-/// This is a state-wait, not a timer pace: the loop condition checks the real
-/// thread count (the same observable the leak assertion measures), and the
-/// inner `time::sleep` is only the poll cadence of that check (mirrors the
-/// `Arc::strong_count` poll loops in the sibling registry-leak tests). The
-/// `budget` bounds a hang; it does not pace progress.
+/// Wait until kithara's per-stream background work has quiesced after a stream
+/// drop+cancel — i.e. `active_named_thread_count()` stops decreasing across a
+/// short settle window. This is a state-wait, not a timer pace: the loop
+/// condition checks the runtime-internal named-thread counter, which is
+/// decremented when each spawned thread function returns and so flips under the
+/// flash clock (unlike `live_thread_count()`'s `ps -M` / `/proc/self/task`
+/// read, which tracks OS reap that lags real time and cannot be satisfied by
+/// virtual-clock advance alone). The inner `time::sleep` is only the poll
+/// cadence (mirrors `settle_thread_count` in the sibling DRM leak test). The
+/// `budget` bounds a hang via a real wall deadline; it does not pace progress.
 async fn wait_thread_count_quiesced(settle_window: usize, budget: Duration) -> usize {
     const POLL: Duration = Duration::from_millis(25);
     let deadline = Instant::now() + budget;
-    let mut last = live_thread_count();
+    let mut last = active_named_thread_count();
     let mut stable = 0usize;
     loop {
         time::sleep(POLL).await;
-        let now = live_thread_count();
+        let now = active_named_thread_count();
         if now < last {
-            // reaping still in progress — count is still dropping
+            // teardown still in progress — named-thread count is still dropping
             stable = 0;
         } else {
             stable += 1;

@@ -16,6 +16,7 @@ use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
+    thread::active_named_thread_count,
     time::{self, Duration, Instant},
 };
 use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer};
@@ -24,19 +25,24 @@ use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer};
 const SETTLE_WINDOW: usize = 4;
 const SETTLE_BUDGET: Duration = Duration::from_secs(5);
 
-/// Wait until OS-thread reaping after a stream drop has quiesced — i.e.
-/// `live_thread_count()` stops decreasing across a short settle window. This is
-/// a state-wait (the loop condition reads the same thread count the leak
-/// assertion measures), not a timer pace: the inner `time::sleep` is only the
-/// poll cadence and `budget` only bounds a hang.
+/// Wait until kithara-owned thread teardown after a stream drop has quiesced —
+/// i.e. `active_named_thread_count()` stops decreasing across a short settle
+/// window. This is a state-wait (the loop condition reads the same named-thread
+/// counter the leak assertion measures), not a timer pace: the inner
+/// `time::sleep` is only the poll cadence and `budget` only bounds a hang.
+///
+/// The counter decrements when each `spawn_named` thread function RETURNS, so it
+/// is observable once the engine is quiescent under the flash virtual clock —
+/// unlike `ps -M` / `/proc/self/task`, which track OS reap that lags real time
+/// and cannot be satisfied by virtual-clock advance.
 async fn wait_thread_count_quiesced(settle_window: usize, budget: Duration) -> usize {
     const POLL: Duration = Duration::from_millis(25);
     let deadline = Instant::now() + budget;
-    let mut last = live_thread_count();
+    let mut last = active_named_thread_count();
     let mut stable = 0usize;
     loop {
         time::sleep(POLL).await;
-        let now = live_thread_count();
+        let now = active_named_thread_count();
         if now < last {
             stable = 0;
         } else {
@@ -191,29 +197,4 @@ async fn red_hls_source_drop_leaks_peer(
     );
 
     Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn live_thread_count() -> usize {
-    use std::process::Command;
-    let out = Command::new("ps")
-        .args(["-M", "-p", &std::process::id().to_string()])
-        .output()
-        .expect("ps -M succeeded");
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .count()
-        .saturating_sub(1)
-}
-
-#[cfg(target_os = "linux")]
-fn live_thread_count() -> usize {
-    std::fs::read_dir("/proc/self/task")
-        .map(|it| it.count())
-        .unwrap_or(0)
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn live_thread_count() -> usize {
-    0
 }

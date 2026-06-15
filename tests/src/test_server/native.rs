@@ -2,7 +2,6 @@ use std::{env, sync::Arc};
 
 use axum::{Router, routing::get};
 use kithara_platform::{
-    flash,
     time::{Duration, sleep},
     tokio::task::spawn,
 };
@@ -225,26 +224,34 @@ impl TestServerHelper {
     }
 }
 
-/// Spawn the flash-participant releaser for one delay gate. The body runs inside a
-/// `flash::dynamic(true, ...)` region (which only takes effect under ambient, which
-/// the platform async [`spawn`] propagates), so its `sleep` is engine-backed: it
-/// awaits the segment GET's arrival, burns `delay_ms` of VIRTUAL time, then frees
-/// the parked body. Off the `flash` feature `flash::dynamic` is identity and
-/// the `sleep` is a real `tokio` timer — matching the legacy real-delay behaviour.
+/// Release one delay gate after `delay_ms` of (virtual under flash) time.
+///
+/// The `#[kithara::flash]` guard makes the body's `sleep` engine-backed inside an
+/// ambient flash test — it awaits the segment GET's arrival, burns `delay_ms` of
+/// VIRTUAL time, then frees the parked body. Off the `flash` feature or under
+/// `flash(false)` (ambient off) the guard is inert and the `sleep` is a real
+/// `tokio` timer, matching the legacy real-delay behaviour.
+#[kithara::flash(true)]
+async fn release_after_delay(gate: Arc<DelayGate>, delay_ms: u64, variant: usize, segment: usize) {
+    gate.wait_requested().await;
+    trace!(
+        variant,
+        segment, delay_ms, "delay gate: request arrived, starting virtual countdown"
+    );
+    sleep(Duration::from_millis(delay_ms)).await;
+    gate.release();
+    trace!(
+        variant,
+        segment, delay_ms, "delay gate: released after virtual delay"
+    );
+}
+
+/// Spawn the releaser for one delay gate. The test's flash-ambient mode
+/// propagates into the spawned task via the platform async [`spawn`], and the
+/// `#[kithara::flash]` guard on [`release_after_delay`] makes its `sleep`
+/// engine-backed under an ambient flash test (a real `tokio` timer otherwise).
 fn spawn_delay_releaser(gate: Arc<DelayGate>, delay_ms: u64, variant: usize, segment: usize) {
-    drop(spawn(flash::dynamic(true, async move {
-        gate.wait_requested().await;
-        trace!(
-            variant,
-            segment, delay_ms, "delay gate: request arrived, starting virtual countdown"
-        );
-        sleep(Duration::from_millis(delay_ms)).await;
-        gate.release();
-        trace!(
-            variant,
-            segment, delay_ms, "delay gate: released after virtual delay"
-        );
-    })));
+    drop(spawn(release_after_delay(gate, delay_ms, variant, segment)));
 }
 
 /// Handle to a registered init-segment withhold gate on the shared server.

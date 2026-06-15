@@ -18,7 +18,7 @@ use kithara_integration_tests::{
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
-    time::{self, Duration, Instant, sleep, timeout},
+    time::{self, Duration, Instant, sleep},
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
@@ -451,7 +451,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
 
 async fn observe_post_seek(
     rx: &mut kithara_events::EventReceiver,
-    seek_at: Instant,
+    _seek_at: Instant,
     pre_seek_enqueued: &HashSet<RequestId>,
 ) -> PostSeekObservation {
     let mut obs = PostSeekObservation::default();
@@ -459,52 +459,73 @@ async fn observe_post_seek(
     let mut enqueue_url: HashMap<RequestId, String> = HashMap::new();
     let mut target_segment: Option<usize> = None;
 
-    let deadline = seek_at + Consts::POST_SEEK_OBSERVATION;
-    while Instant::now() < deadline {
-        match timeout(Duration::from_millis(50), rx.recv()).await {
-            Ok(Ok(ev)) => match &ev {
-                Event::Hls(HlsEvent::ReaderSeek { segment_index, .. }) => {
-                    if obs.reader_seek.is_none() {
-                        target_segment = *segment_index;
-                        obs.reader_seek = Some(ev.clone());
-                    }
-                }
-                Event::Hls(HlsEvent::SegmentReadStart { .. }) => {
-                    if obs.reader_seek.is_some() && obs.first_segment_read_start.is_none() {
-                        obs.first_segment_read_start = Some(ev.clone());
-                    }
-                }
-                Event::Downloader(DownloaderEvent::RequestEnqueued {
-                    request_id, url, ..
-                }) => {
-                    if !pre_seek_enqueued.contains(request_id) {
-                        new_epoch_enqueued.insert(*request_id);
-                        enqueue_url.insert(*request_id, url.to_string());
-                        if let (Some(target), Some((_v, seg_idx))) =
-                            (target_segment, parse_segment_url(url.as_str()))
-                            && seg_idx + Consts::WARMUP_TOLERANCE < target
-                        {
-                            obs.prefix_enqueued_after_seek.insert(*request_id);
+    // Collect until the three discriminating facts are observed — ReaderSeek,
+    // the first post-seek SegmentReadStart, and the first post-seek
+    // RequestStarted — then exit immediately. `POST_SEEK_OBSERVATION` is a
+    // bounded *virtual* give-up budget (via `time::timeout`, which collapses on
+    // the flash clock), NOT a real-wall window: `rx.recv().await` parks on the
+    // virtual clock between events so the engine advances and delivers them. A
+    // genuinely broken seek that never populates a field still terminates here
+    // with a partial `obs`; the discriminating panics live in the caller and
+    // fire on the missing field, so this give-up never silently passes an
+    // assertion. Previously this loop spun on `Instant::now() < deadline`
+    // (real wall time), incommensurable with the virtual event delivery.
+    let _ = time::timeout(Consts::POST_SEEK_OBSERVATION, async {
+        loop {
+            match rx.recv().await {
+                Ok(ev) => match &ev {
+                    Event::Hls(HlsEvent::ReaderSeek { segment_index, .. }) => {
+                        if obs.reader_seek.is_none() {
+                            target_segment = *segment_index;
+                            obs.reader_seek = Some(ev.clone());
                         }
                     }
-                }
-                Event::Downloader(DownloaderEvent::RequestStarted {
-                    request_id,
-                    wait_in_queue,
-                }) => {
-                    if obs.target_started_wait.is_none() && new_epoch_enqueued.contains(request_id)
-                    {
-                        obs.target_started_wait = Some(*wait_in_queue);
+                    Event::Hls(HlsEvent::SegmentReadStart { .. }) => {
+                        if obs.reader_seek.is_some() && obs.first_segment_read_start.is_none() {
+                            obs.first_segment_read_start = Some(ev.clone());
+                        }
                     }
+                    Event::Downloader(DownloaderEvent::RequestEnqueued {
+                        request_id, url, ..
+                    }) => {
+                        if !pre_seek_enqueued.contains(request_id) {
+                            new_epoch_enqueued.insert(*request_id);
+                            enqueue_url.insert(*request_id, url.to_string());
+                            if let (Some(target), Some((_v, seg_idx))) =
+                                (target_segment, parse_segment_url(url.as_str()))
+                                && seg_idx + Consts::WARMUP_TOLERANCE < target
+                            {
+                                obs.prefix_enqueued_after_seek.insert(*request_id);
+                            }
+                        }
+                    }
+                    Event::Downloader(DownloaderEvent::RequestStarted {
+                        request_id,
+                        wait_in_queue,
+                    }) => {
+                        if obs.target_started_wait.is_none()
+                            && new_epoch_enqueued.contains(request_id)
+                        {
+                            obs.target_started_wait = Some(*wait_in_queue);
+                        }
+                    }
+                    _ => {}
+                },
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    continue;
                 }
-                _ => {}
-            },
-            Ok(Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
-                continue;
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
-            Ok(Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed)) => break,
-            Err(_) => continue,
+
+            if obs.reader_seek.is_some()
+                && obs.first_segment_read_start.is_some()
+                && obs.target_started_wait.is_some()
+            {
+                break;
+            }
         }
-    }
+    })
+    .await;
+
     obs
 }
