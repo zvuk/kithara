@@ -13,7 +13,11 @@ use kithara_integration_tests::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::tokio::task::spawn_blocking;
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn};
+use kithara_platform::{
+    CancelToken,
+    time::Duration,
+    tokio::{sync::broadcast::error::RecvError, task::spawn},
+};
 use tracing::info;
 use url::Url;
 
@@ -68,10 +72,16 @@ async fn test_basic_hls_playback(
     // bus (segment-fetch enqueue / playlist activity) proves the stream is
     // producing real work, instead of sleeping for a fixed duration. The
     // enclosing `timeout(5s)` bounds this state-wait against a hang.
-    let _first = live_rx
-        .recv()
-        .await
-        .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)?;
+    //
+    // A `Lagged(n)` is also proof of liveness: under flash the pipeline floods
+    // the (capacity-32) bus with events before this first `recv` is polled, so
+    // the receiver legitimately laps. `n` events were produced — exactly the
+    // signal we wait on. Only a `Closed` channel (the bus dropped without ever
+    // producing) is a real failure.
+    match live_rx.recv().await {
+        Ok(_) | Err(RecvError::Lagged(_)) => {}
+        Err(e @ RecvError::Closed) => return Err(Box::new(e) as Box<dyn Error + Send + Sync>),
+    }
     info!("HLS stream opened successfully");
     Ok(())
 }
