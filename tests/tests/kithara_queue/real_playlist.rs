@@ -6,11 +6,15 @@ use kithara_app::{baked, config::AppConfig, sources::build_source};
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_integration_tests::{TestTempDir, Xorshift64, kithara, offline::OfflineSession};
+use kithara_integration_tests::{
+    TestTempDir, Xorshift64, kithara,
+    offline::OfflineSession,
+    waits::{wait_for_position_at_least, wait_for_position_near},
+};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
-    time::{self, Duration, sleep, timeout},
+    time::{Duration, sleep, timeout},
 };
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
@@ -133,53 +137,6 @@ async fn wait_for_status(
             "timeout waiting for {target:?} after {:?}",
             deadline
         )),
-    }
-}
-
-async fn wait_for_position_at_least(
-    queue: &Queue,
-    min_secs: f64,
-    deadline: Duration,
-) -> Result<(), String> {
-    let start = kithara_platform::time::Instant::now();
-    loop {
-        if let Some(pos) = queue.position_seconds()
-            && pos >= min_secs
-        {
-            return Ok(());
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "position stayed below {min_secs:.2}s for {:?} (last: {:?})",
-                deadline,
-                queue.position_seconds()
-            ));
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
-}
-
-async fn wait_for_position_near(
-    queue: &Queue,
-    target: f64,
-    tolerance: f64,
-    deadline: Duration,
-) -> Result<(), String> {
-    let start = kithara_platform::time::Instant::now();
-    loop {
-        if let Some(pos) = queue.position_seconds()
-            && (pos - target).abs() < tolerance
-        {
-            return Ok(());
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "position never reached {target:.2}s (±{tolerance:.2}) in {:?} (last: {:?})",
-                deadline,
-                queue.position_seconds()
-            ));
-        }
-        sleep(Duration::from_millis(100)).await;
     }
 }
 

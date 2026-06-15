@@ -138,6 +138,87 @@ pub async fn wait_for_position_event(
     })?
 }
 
+/// Wait until `queue.position_seconds()` is within `tolerance` of `target`, then
+/// return the observed position. Queue-poll variant; prefer
+/// [`wait_for_position_near_event`] when an [`EventReceiver`] is available.
+pub async fn wait_for_position_near(
+    queue: &Queue,
+    target: f64,
+    tolerance: f64,
+    deadline: Duration,
+) -> Result<f64, String> {
+    let mut observed = target;
+    wait_until(deadline, "position_near", || {
+        match queue.position_seconds() {
+            Some(p) if (p - target).abs() < tolerance => {
+                observed = p;
+                true
+            }
+            _ => false,
+        }
+    })
+    .await
+    .map_err(|_| {
+        format!(
+            "position never reached {target:.2}s (±{tolerance:.2}) in {deadline:?} (last: {:?})",
+            queue.position_seconds()
+        )
+    })?;
+    Ok(observed)
+}
+
+/// Event-driven [`wait_for_position_near`]: resolves the moment sink-truth
+/// `PlaybackProgress` or `SeekComplete` lands within `tolerance` of `target`,
+/// returning that position. A fast-path and `Lagged` re-read guard against an
+/// already-near position or a dropped event.
+pub async fn wait_for_position_near_event(
+    rx: &mut EventReceiver,
+    queue: &Queue,
+    target: f64,
+    tolerance: f64,
+    deadline: Duration,
+) -> Result<f64, String> {
+    if let Some(pos) = queue.position_seconds()
+        && (pos - target).abs() < tolerance
+    {
+        return Ok(pos);
+    }
+    timeout(deadline, async {
+        loop {
+            match rx.recv().await {
+                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                    let pos = position_ms as f64 / 1000.0;
+                    if (pos - target).abs() < tolerance {
+                        return Ok(pos);
+                    }
+                }
+                Ok(Event::Audio(AudioEvent::SeekComplete { position, .. })) => {
+                    let pos = position.as_secs_f64();
+                    if (pos - target).abs() < tolerance {
+                        return Ok(pos);
+                    }
+                }
+                Ok(_) => {}
+                Err(RecvError::Lagged(_)) => {
+                    if let Some(pos) = queue.position_seconds()
+                        && (pos - target).abs() < tolerance
+                    {
+                        return Ok(pos);
+                    }
+                }
+                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
+            }
+        }
+    })
+    .await
+    .map_err(|_| {
+        format!(
+            "position never reached {target:.2}s (±{tolerance:.2}) in {deadline:?} (last: {:?})",
+            queue.position_seconds()
+        )
+    })?
+}
+
 /// Wait for the first bus event matching `pred`, recv-driven.
 ///
 /// Parks on the broadcast `recv` so the engine advances the virtual clock; the

@@ -8,12 +8,10 @@ use kithara::{
 use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
     PackagedTestServer, fixture_protocol::DelayRule, offline::OfflinePlayer, temp_dir,
+    waits::render_until_position,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep},
-};
+use kithara_platform::{CancelToken, time::Duration};
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -47,62 +45,6 @@ fn blocks_for_seconds(secs: f64) -> u32 {
     )]
     let result = blocks as u32;
     result
-}
-
-/// Render up to `max_blocks`, paced so the network has time to deliver
-/// data. Returns as soon as `player.position() >= until_position`
-/// (i.e. the player has actually played past the expected mark) AND at
-/// least `max_blocks` have been rendered — i.e. the wait is gated on the
-/// real produced-position state, not on a wall-clock budget. `render()`
-/// drives the engine each iteration and the per-iteration tick is on the
-/// virtual clock, so under flash the (virtual) server segment delay is
-/// advanced by quiescence jumps until the position actually crosses the
-/// mark. `min_wall_ms` only sizes a non-progress watchdog that PANICS:
-/// it is never an early-return path that lets a later assert pass on
-/// timeout. Callers pass `until_position = pre_pos + target_advance` for
-/// warmup and `until_position = seek_target + min_advance` for post-seek
-/// to discriminate seek-jump from render-driven progress.
-async fn render_until_position(
-    player: &mut OfflinePlayer,
-    max_blocks: u32,
-    until_position: f64,
-    min_wall_ms: u64,
-) {
-    const BATCH: u32 = 16;
-    const TICK_MS: u64 = 25;
-    // Safety net only: bound consecutive no-progress ticks so a genuinely
-    // wedged pipeline panics with a clear message instead of spinning to the
-    // outer test timeout. A healthy run reaches `until_position` and returns
-    // long before this trips. Derived from the caller's intended budget so it
-    // scales with the per-segment fetch window, never shorter than a floor.
-    let max_stall_ticks = (min_wall_ms / TICK_MS).max(40) + 40;
-    let mut rendered = 0u32;
-    let mut last_position = player.position();
-    let mut stall_ticks: u64 = 0;
-    loop {
-        let this = max_blocks.saturating_sub(rendered).min(BATCH).max(1);
-        for _ in 0..this {
-            let _ = player.render(Consts::BLOCK_FRAMES);
-        }
-        rendered = rendered.saturating_add(this);
-        let position = player.position();
-        if position >= until_position && rendered >= max_blocks {
-            return;
-        }
-        if position > last_position {
-            last_position = position;
-            stall_ticks = 0;
-        } else {
-            stall_ticks = stall_ticks.saturating_add(1);
-            assert!(
-                stall_ticks <= max_stall_ticks,
-                "render_until_position stalled: position {position:.3}s did not \
-                 reach {until_position:.3}s after {max_stall_ticks} no-progress \
-                 ticks (rendered {rendered}/{max_blocks} blocks)"
-            );
-        }
-        sleep(Duration::from_millis(TICK_MS)).await;
-    }
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
@@ -155,6 +97,7 @@ async fn hls_seek_middle_repeated_seeks_stress(
         &mut player,
         blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS),
         warmup_target,
+        Consts::BLOCK_FRAMES,
         1_500,
     )
     .await;
@@ -173,6 +116,7 @@ async fn hls_seek_middle_repeated_seeks_stress(
             &mut player,
             blocks_for_seconds(Consts::POST_SEEK_AUDIO_SECS),
             post_target,
+            Consts::BLOCK_FRAMES,
             post_seek_wall_ms,
         )
         .await;

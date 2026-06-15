@@ -5,7 +5,7 @@ use std::sync::Arc;
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_integration_tests::{kithara, temp_dir};
+use kithara_integration_tests::{kithara, temp_dir, waits::wait_for_position_at_least};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
@@ -56,26 +56,6 @@ async fn wait_for_status(
         }
     }
     Err("timeout".into())
-}
-
-async fn wait_for_position_at_least(
-    queue: &Queue,
-    min_secs: f64,
-    deadline: Duration,
-) -> Result<f64, String> {
-    let start = Instant::now();
-    while start.elapsed() < deadline {
-        if let Some(pos) = queue.position_seconds()
-            && pos >= min_secs
-        {
-            return Ok(pos);
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-    Err(format!(
-        "position never reached {min_secs:.2}s (last={:?})",
-        queue.position_seconds()
-    ))
 }
 
 /// Real-network reproduction against silvercomet's HLS — the exact

@@ -8,12 +8,10 @@ use std::{
 
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
-use kithara_events::{
-    AbrMode, AudioEvent, DownloaderEvent, Event, HlsEvent, RequestId, TrackId, TrackStatus,
-};
+use kithara_events::{AbrMode, AudioEvent, DownloaderEvent, Event, HlsEvent, RequestId};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
-    offline::OfflineSession, temp_dir,
+    offline::OfflineSession, temp_dir, waits::wait_for_loader_done,
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
@@ -121,30 +119,6 @@ fn build_queue_with_tick(
     );
     let store = StoreOptions::new(temp_dir.path());
     (queue, player, downloader, store, tick_handle)
-}
-
-async fn wait_for_loader_done(
-    queue: &Queue,
-    track_id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    let start = Instant::now();
-    loop {
-        if let Some(entry) = queue.track(track_id) {
-            match &entry.status {
-                TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
-                TrackStatus::Failed(err) => return Err(format!("loader failed: {err}")),
-                _ => {}
-            }
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "loader timeout {deadline:?} (last={:?})",
-                queue.track(track_id).map(|e| e.status)
-            ));
-        }
-        sleep(Duration::from_millis(40)).await;
-    }
 }
 
 #[derive(Debug, Default)]

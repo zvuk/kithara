@@ -5,9 +5,12 @@ use std::{path::Path, sync::Arc};
 
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_decode::DecoderBackend;
-use kithara_events::{AbrMode, TrackId, TrackStatus};
+use kithara_events::AbrMode;
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, kithara, offline::OfflineSession, temp_dir,
+    TestServerHelper, TestTempDir, kithara,
+    offline::OfflineSession,
+    temp_dir,
+    waits::{wait_for_loader_done, wait_for_position_at_least},
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
@@ -71,51 +74,6 @@ fn track_source(url: &Url, session: &Session) -> TrackSource {
         .initial_abr_mode(AbrMode::Auto(None))
         .build();
     TrackSource::Config(Box::new(cfg))
-}
-
-async fn wait_for_loader_done(
-    queue: &Queue,
-    track_id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    let start = kithara_platform::time::Instant::now();
-    loop {
-        if let Some(entry) = queue.track(track_id) {
-            match &entry.status {
-                TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
-                TrackStatus::Failed(err) => return Err(format!("Failed: {err}")),
-                _ => {}
-            }
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "timeout after {deadline:?} (last: {:?})",
-                queue.track(track_id).map(|e| e.status)
-            ));
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-}
-
-async fn wait_for_position_at_least(
-    queue: &Queue,
-    min_secs: f64,
-    deadline: Duration,
-) -> Result<(), String> {
-    let start = kithara_platform::time::Instant::now();
-    loop {
-        if let Some(pos) = queue.position_seconds()
-            && pos >= min_secs
-        {
-            return Ok(());
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "position stayed below {min_secs:.2}s for {deadline:?}"
-            ));
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
 }
 
 async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, label: &str) {

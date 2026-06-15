@@ -3,57 +3,21 @@
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_audio::{Audio, AudioConfig, AudioWorkerHandle};
 use kithara_hls::{AbrMode, Hls, HlsConfig};
-use kithara_integration_tests::{TestServerHelper, TestTempDir, kithara, temp_dir};
+use kithara_integration_tests::{
+    TestServerHelper, TestTempDir, kithara, temp_dir, waits::wait_thread_count_quiesced,
+};
 use kithara_platform::{
     CancelToken,
     thread::{active_named_thread_count, sleep as thread_sleep},
-    time::{self, Duration, Instant},
+    time::{Duration, Instant},
 };
 use kithara_stream::Stream;
 use tracing::info;
 
-/// Settle window for the thread-count quiescence helpers: the named-thread
-/// counter must hold steady across this many consecutive virtual ticks before
-/// it is treated as quiesced.
-const QUIESCE_TICKS: usize = 3;
-/// Real-time watchdog for the quiescence helpers. Bounds only genuine
-/// non-progress (the counter never stops moving); a hit PANICS, it never
-/// returns a mid-teardown reading so an assertion cannot pass on timeout.
+/// Real-time watchdog for the lib `wait_thread_count_quiesced` helper. Bounds
+/// only genuine non-progress (the counter never stops moving); a hit PANICS, it
+/// never returns a mid-teardown reading so an assertion cannot pass on timeout.
 const QUIESCE_WATCHDOG: Duration = Duration::from_secs(30);
-
-/// Wait until the named-thread counter goes quiescent — i.e.
-/// `active_named_thread_count()` stops decreasing across `QUIESCE_TICKS`
-/// consecutive virtual ticks — then return the settled value. This waits on
-/// the real teardown state (the same counter every budget assertion reads):
-/// the count is decremented when each spawned thread's closure RETURNS after
-/// shutdown/cancel, which is observable under the flash clock. A leak keeps the
-/// count high — it still stabilizes high, so the budget assertion still catches
-/// the growth. The per-tick wait uses the virtual `kithara_platform::time::sleep`
-/// so it advances under flash; a real `std::time::Instant` watchdog PANICS on
-/// genuine non-quiescence rather than silently returning a mid-teardown reading.
-async fn wait_thread_count_quiesced() -> usize {
-    let watchdog = Instant::now() + QUIESCE_WATCHDOG;
-    let mut last = active_named_thread_count();
-    let mut stable = 0usize;
-    loop {
-        time::sleep(Duration::from_millis(20)).await;
-        let now = active_named_thread_count();
-        if now == last {
-            stable += 1;
-            if stable >= QUIESCE_TICKS {
-                return now;
-            }
-        } else {
-            stable = 0;
-            last = now;
-        }
-        assert!(
-            Instant::now() < watchdog,
-            "named-thread count never quiesced: last={now} \
-             (active_named_thread_count kept changing for {QUIESCE_WATCHDOG:?} of real time)"
-        );
-    }
-}
 
 fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
     let deadline = Instant::now() + timeout;
@@ -132,7 +96,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     cancel.cancel();
     // Teardown gate: wait until the pipeline's threads have actually returned
     // and the counter has quiesced (state-driven), not a fixed sleep.
-    wait_thread_count_quiesced().await;
+    wait_thread_count_quiesced(QUIESCE_WATCHDOG).await;
 
     assert!(
         delta <= 2,
@@ -162,7 +126,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
 
     // Baseline gate: measure `before` only once the shared worker's eager
     // increment and any prior teardown have quiesced (state-driven).
-    let before = wait_thread_count_quiesced().await;
+    let before = wait_thread_count_quiesced(QUIESCE_WATCHDOG).await;
 
     let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
         .store(shared_store())
@@ -227,7 +191,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     drop(shared_hub);
     // Teardown gate: wait until every torn-down thread's closure has returned
     // and the counter has quiesced (state-driven), not a fixed sleep.
-    wait_thread_count_quiesced().await;
+    wait_thread_count_quiesced(QUIESCE_WATCHDOG).await;
 
     assert_eq!(
         delta, 1,

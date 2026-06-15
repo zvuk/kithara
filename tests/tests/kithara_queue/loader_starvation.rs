@@ -15,7 +15,7 @@ use kithara_assets::StoreOptions;
 use kithara_events::{AbrMode, TrackId, TrackStatus};
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession, temp_dir,
+    offline::OfflineSession, temp_dir, waits::wait_for_loader_done,
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
@@ -133,30 +133,6 @@ async fn wait_until_loading(queue: &Queue, id: TrackId, deadline: Duration) -> R
             return Err(format!(
                 "track {id:?} never reached Loading within {deadline:?} (last={:?})",
                 queue.track(id).map(|e| e.status)
-            ));
-        }
-        sleep(Consts::POLL_INTERVAL).await;
-    }
-}
-
-async fn wait_for_loader_done(
-    queue: &Queue,
-    track_id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    let start = kithara_platform::time::Instant::now();
-    loop {
-        if let Some(entry) = queue.track(track_id) {
-            match &entry.status {
-                TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
-                TrackStatus::Failed(err) => return Err(format!("track entered Failed: {err}")),
-                _ => {}
-            }
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "timeout after {deadline:?} (last status: {:?})",
-                queue.track(track_id).map(|e| e.status)
             ));
         }
         sleep(Consts::POLL_INTERVAL).await;

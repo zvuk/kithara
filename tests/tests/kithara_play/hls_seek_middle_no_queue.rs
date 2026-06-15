@@ -56,7 +56,7 @@ async fn render_until_position(player: &mut OfflinePlayer, min_blocks: u32, unti
     const TICK_MS: u64 = 25;
     let mut rendered = 0u32;
     loop {
-        let this = min_blocks.saturating_sub(rendered).min(BATCH).max(1);
+        let this = min_blocks.saturating_sub(rendered).clamp(1, BATCH);
         for _ in 0..this {
             let _ = player.render(Consts::BLOCK_FRAMES);
         }

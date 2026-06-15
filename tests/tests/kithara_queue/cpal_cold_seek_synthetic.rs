@@ -6,62 +6,18 @@ use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
 use kithara_events::{AudioEvent, Event};
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, fixture_protocol::DelayRule, kithara,
-    offline::OfflineSession, temp_dir,
+    HlsFixtureBuilder, TestServerHelper,
+    fixture_protocol::DelayRule,
+    kithara,
+    offline::OfflineSession,
+    temp_dir,
+    waits::{wait_for_loader_done, wait_for_position_at_least},
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{self, Duration, Instant, sleep},
-};
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-
-async fn wait_for_loader_done(
-    queue: &Queue,
-    track_id: kithara_events::TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    use kithara_events::TrackStatus;
-    let start = Instant::now();
-    loop {
-        if let Some(entry) = queue.track(track_id) {
-            match &entry.status {
-                TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
-                TrackStatus::Failed(err) => return Err(format!("track failed: {err}")),
-                _ => {}
-            }
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "timeout after {deadline:?} (last={:?})",
-                queue.track(track_id).map(|e| e.status)
-            ));
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-}
-
-async fn wait_for_position_at_least(
-    queue: &Queue,
-    min_secs: f64,
-    deadline: Duration,
-) -> Result<f64, String> {
-    let start = Instant::now();
-    while start.elapsed() < deadline {
-        if let Some(pos) = queue.position_seconds()
-            && pos >= min_secs
-        {
-            return Ok(pos);
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-    Err(format!(
-        "position never reached {min_secs:.2}s (last={:?})",
-        queue.position_seconds()
-    ))
-}
 
 /// Cold-cache seek into a far segment over the offline backend.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]

@@ -5,15 +5,19 @@ use std::sync::Arc;
 
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
-use kithara_events::{AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
+use kithara_events::{AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, TrackId};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
-    fixture_protocol::EncryptionRequest, kithara, offline::OfflineSession, temp_dir,
+    fixture_protocol::EncryptionRequest,
+    kithara,
+    offline::OfflineSession,
+    temp_dir,
+    waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
-    time::{self, Duration, sleep, timeout},
+    time::{Duration, sleep, timeout},
     tokio::sync::broadcast::error::{RecvError, TryRecvError},
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
@@ -71,187 +75,6 @@ async fn build_fixture_url(kind: LocalSource, helper: &TestServerHelper) -> Url 
                 .master_url()
         }
     }
-}
-
-/// Event-driven "loader is done with this track" wait.
-///
-/// Under the virtual clock a poll loop that sleeps on REAL time (helpers
-/// are not rewritten by `#[kithara::test]`, only the test body is) never
-/// parks on the quiescence engine, so the engine cannot advance and the
-/// loader never progresses. Instead we await the sink-truth
-/// `QueueEvent::TrackStatusChanged` on the shared bus: `rx.recv()` parks
-/// on the virtual clock AND resolves on real state. A `Queue::track()`
-/// fast-path covers a status that already settled before the first
-/// `recv`; the `Lagged` arm re-reads the live status so a dropped event
-/// cannot wedge the wait.
-///
-/// Treat both `Loaded` and `Consumed` as success, because
-/// `Queue::spawn_apply_after_load` flips the status straight from
-/// `Loaded` to `Consumed` when a `pending_select` was queued for the
-/// same track (via `select_item_with_crossfade` → `mark_consumed`). On
-/// synthetic fixtures that transition always happens for the first track
-/// and any auto-advanced neighbour.
-async fn wait_for_loader_done(
-    rx: &mut EventReceiver,
-    queue: &Queue,
-    track_id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    fn done(status: &TrackStatus) -> Option<Result<(), String>> {
-        match status {
-            TrackStatus::Loaded | TrackStatus::Consumed => Some(Ok(())),
-            TrackStatus::Failed(err) => Some(Err(format!("track entered Failed: {err}"))),
-            _ => None,
-        }
-    }
-    if let Some(entry) = queue.track(track_id)
-        && let Some(res) = done(&entry.status)
-    {
-        return res;
-    }
-    timeout(deadline, async {
-        loop {
-            match rx.recv().await {
-                Ok(Event::Queue(QueueEvent::TrackStatusChanged { id, status }))
-                    if id == track_id =>
-                {
-                    if let Some(res) = done(&status) {
-                        return res;
-                    }
-                }
-                Ok(_) => {}
-                Err(RecvError::Lagged(_)) => {
-                    if let Some(entry) = queue.track(track_id)
-                        && let Some(res) = done(&entry.status)
-                    {
-                        return res;
-                    }
-                }
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
-            }
-        }
-    })
-    .await
-    .map_err(|_| {
-        format!(
-            "timeout after {deadline:?} (last status: {:?})",
-            queue.track(track_id).map(|e| e.status)
-        )
-    })?
-}
-
-/// Wait until playback reaches `min_secs`, observed on sink-truth
-/// `AudioEvent::PlaybackProgress` (the offline render worker emits one on
-/// every committed PCM chunk). `recv()` parks on the virtual clock, so
-/// the engine advances and position grows. A `position_seconds()`
-/// fast-path and `Lagged` re-read keep it robust against an already-past
-/// target or a dropped event.
-///
-/// Returns the sink-truth position (seconds) observed at the moment the
-/// bound is met — sourced from the event, NOT the tick-cached
-/// `position_seconds()`, which is refreshed by the REAL-clock background
-/// tick loop and therefore goes stale once an event-driven wait collapses
-/// real time under flash. Callers that need a load-bearing position read
-/// it from this return value.
-async fn wait_for_position_at_least(
-    rx: &mut EventReceiver,
-    queue: &Queue,
-    min_secs: f64,
-    deadline: Duration,
-) -> Result<f64, String> {
-    if let Some(pos) = queue.position_seconds()
-        && pos >= min_secs
-    {
-        return Ok(pos);
-    }
-    let min_ms = (min_secs * 1000.0) as u64;
-    timeout(deadline, async {
-        loop {
-            match rx.recv().await {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
-                    if position_ms >= min_ms {
-                        return Ok(position_ms as f64 / 1000.0);
-                    }
-                }
-                Ok(_) => {}
-                Err(RecvError::Lagged(_)) => {
-                    if let Some(pos) = queue.position_seconds()
-                        && pos >= min_secs
-                    {
-                        return Ok(pos);
-                    }
-                }
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
-            }
-        }
-    })
-    .await
-    .map_err(|_| {
-        format!(
-            "position stayed below {min_secs:.2}s for {deadline:?} (last={:?})",
-            queue.position_seconds()
-        )
-    })?
-}
-
-/// Wait until playback reaches `target ± tolerance` after a seek,
-/// observed on the sink-truth `SeekComplete` (authoritative landed
-/// position) or `PlaybackProgress` (throttled to ~100ms of POSITION
-/// delta, not wall time). Because progress emits per ~100ms of position,
-/// the play head cannot cross the ±tolerance window without emitting an
-/// event inside it — so the two-sided window is observable here even
-/// though it was skipped by the old REAL-clock poll of the tick cache
-/// (the cache jumps multiple seconds per refresh under the virtual
-/// clock). Returns the sink-truth position (seconds) judged as landed,
-/// sourced from the event, not the stale tick cache. The two-sided check
-/// also avoids false-matching a stale pre-seek progress event on a
-/// backward seek.
-async fn wait_for_position_near(
-    rx: &mut EventReceiver,
-    queue: &Queue,
-    target: f64,
-    tolerance: f64,
-    deadline: Duration,
-) -> Result<f64, String> {
-    if let Some(pos) = queue.position_seconds()
-        && (pos - target).abs() < tolerance
-    {
-        return Ok(pos);
-    }
-    timeout(deadline, async {
-        loop {
-            match rx.recv().await {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
-                    let pos = position_ms as f64 / 1000.0;
-                    if (pos - target).abs() < tolerance {
-                        return Ok(pos);
-                    }
-                }
-                Ok(Event::Audio(AudioEvent::SeekComplete { position, .. })) => {
-                    let pos = position.as_secs_f64();
-                    if (pos - target).abs() < tolerance {
-                        return Ok(pos);
-                    }
-                }
-                Ok(_) => {}
-                Err(RecvError::Lagged(_)) => {
-                    if let Some(pos) = queue.position_seconds()
-                        && (pos - target).abs() < tolerance
-                    {
-                        return Ok(pos);
-                    }
-                }
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
-            }
-        }
-    })
-    .await
-    .map_err(|_| {
-        format!(
-            "position never reached {target:.2}s (±{tolerance:.2}) in {deadline:?} (last={:?})",
-            queue.position_seconds()
-        )
-    })?
 }
 
 /// Drain `rx` non-blockingly and return the most recent sink-truth
@@ -461,12 +284,12 @@ async fn local_track_plays_end_to_end(
 
     let track_id = queue.append(source);
 
-    wait_for_loader_done(&mut rx, &queue, track_id, Duration::from_secs(30))
+    wait_for_loader_done_event(&mut rx, &queue, track_id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("load fail [{label}]: {e}"));
 
     queue.select(track_id, Transition::None).expect("select");
-    wait_for_position_at_least(&mut rx, &queue, 0.5, Duration::from_secs(15))
+    wait_for_position_event(&mut rx, &queue, 0.5, Duration::from_secs(15))
         .await
         .unwrap_or_else(|e| panic!("play fail [{label}]: {e}"));
     let progress = sample_positions_via_progress(&mut rx, &queue, 5, Duration::from_secs(15))
@@ -484,13 +307,13 @@ async fn local_track_plays_end_to_end(
         // `before` / `after` come from the sink-truth events (the wait
         // helpers' return values), NOT the REAL-clock tick cache, which
         // goes stale once these waits collapse real time.
-        let before = wait_for_position_near(&mut rx, &queue, target, 1.0, Duration::from_secs(5))
-            .await
-            .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail [{label}]: {e}"));
-        let after =
-            wait_for_position_at_least(&mut rx, &queue, before + 0.5, Duration::from_secs(5))
+        let before =
+            wait_for_position_near_event(&mut rx, &queue, target, 1.0, Duration::from_secs(5))
                 .await
-                .unwrap_or_else(|e| panic!("seek #{i} hang [{label}]: {e}"));
+                .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail [{label}]: {e}"));
+        let after = wait_for_position_event(&mut rx, &queue, before + 0.5, Duration::from_secs(5))
+            .await
+            .unwrap_or_else(|e| panic!("seek #{i} hang [{label}]: {e}"));
         assert!(
             after - before >= 0.5,
             "seek #{i} hang [{label}]: {before:.2}→{after:.2}"
@@ -506,7 +329,7 @@ async fn local_track_plays_end_to_end(
     // guarantees a full 2s of remaining audio for every fixture.
     let window_anchor = duration * 0.25;
     queue.seek(window_anchor).expect("seek to window anchor");
-    wait_for_position_near(&mut rx, &queue, window_anchor, 1.0, Duration::from_secs(5))
+    wait_for_position_near_event(&mut rx, &queue, window_anchor, 1.0, Duration::from_secs(5))
         .await
         .unwrap_or_else(|e| panic!("window anchor seek [{label}]: {e}"));
 
@@ -643,10 +466,10 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     queue
         .select(ids[0], Transition::None)
         .expect("select first");
-    wait_for_loader_done(&mut rx, &queue, ids[0], Duration::from_secs(30))
+    wait_for_loader_done_event(&mut rx, &queue, ids[0], Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("first track load [{}]: {e}", urls[0]));
-    wait_for_position_at_least(&mut rx, &queue, 2.0, Duration::from_secs(15))
+    wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(15))
         .await
         .expect("first track position");
 
@@ -675,7 +498,7 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         "position drifted during pause: {before_pause:.2} → {during_pause:.2}"
     );
     queue.play();
-    let after_resume = wait_for_position_at_least(
+    let after_resume = wait_for_position_event(
         &mut rx,
         &queue,
         during_pause + 0.01,
@@ -695,11 +518,11 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     let duration_0 = queue.duration_seconds().expect("duration for first track");
     let seek_target = duration_0 * 0.4;
     queue.seek(seek_target).expect("seek");
-    wait_for_position_near(&mut rx, &queue, seek_target, 1.0, Duration::from_secs(5))
+    wait_for_position_near_event(&mut rx, &queue, seek_target, 1.0, Duration::from_secs(5))
         .await
         .expect("seek landed near target");
 
-    wait_for_loader_done(&mut rx, &queue, ids[1], Duration::from_secs(30))
+    wait_for_loader_done_event(&mut rx, &queue, ids[1], Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
     let xf_duration = queue.crossfade_duration();
@@ -730,10 +553,10 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         let url = urls[i].clone();
         let result: Result<(), String> =
             async {
-                wait_for_loader_done(&mut rx, &queue, ids[i], Duration::from_secs(30))
+                wait_for_loader_done_event(&mut rx, &queue, ids[i], Duration::from_secs(30))
                     .await
                     .map_err(|e| format!("load: {e}"))?;
-                wait_for_position_at_least(&mut rx, &queue, 2.0, Duration::from_secs(15))
+                wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(15))
                     .await
                     .map_err(|e| format!("play: {e}"))?;
 

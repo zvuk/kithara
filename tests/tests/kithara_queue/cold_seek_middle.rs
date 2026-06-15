@@ -7,6 +7,7 @@ use kithara_events::{AudioEvent, Event, EventReceiver, QueueEvent, TrackId, Trac
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
     fixture_protocol::DelayRule, kithara, offline::OfflineSession, temp_dir,
+    waits::wait_for_position_event,
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
@@ -57,54 +58,6 @@ async fn wait_for_status(
         }
     }
     Err(format!("timeout waiting for {target:?}"))
-}
-
-/// Wait until playback progress (sink-truth `AudioEvent::PlaybackProgress`)
-/// reaches `min_secs`, parking on the bus so the virtual clock advances on
-/// the real PCM-commit cadence (the offline render worker emits a
-/// `PlaybackProgress` on every non-zero `Audio::read`). Returns the actual
-/// observed position, which the caller uses to derive the seek target — a
-/// wall-clock sleep-poll would burn virtual time without driving the
-/// decode worker and never observe real progress under flash.
-async fn wait_for_position_at_least(
-    rx: &mut EventReceiver,
-    queue: &Queue,
-    min_secs: f64,
-    deadline: Duration,
-) -> Result<f64, String> {
-    if let Some(pos) = queue.position_seconds()
-        && pos >= min_secs
-    {
-        return Ok(pos);
-    }
-    let min_ms = (min_secs * 1000.0) as u64;
-    timeout(deadline, async {
-        loop {
-            match rx.recv().await {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
-                    if position_ms >= min_ms {
-                        return Ok(position_ms as f64 / 1000.0);
-                    }
-                }
-                Ok(_) => {}
-                Err(RecvError::Lagged(_)) => {
-                    if let Some(pos) = queue.position_seconds()
-                        && pos >= min_secs
-                    {
-                        return Ok(pos);
-                    }
-                }
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
-            }
-        }
-    })
-    .await
-    .map_err(|_| {
-        format!(
-            "position never reached {min_secs:.2}s in {deadline:?} (last={:?})",
-            queue.position_seconds()
-        )
-    })?
 }
 
 fn build_queue_with_tick(
@@ -307,7 +260,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     queue.select(selected_id, Transition::None).expect("select");
     queue.play();
 
-    let pos_before_seek = wait_for_position_at_least(&mut rx, &queue, 1.0, Duration::from_secs(15))
+    let pos_before_seek = wait_for_position_event(&mut rx, &queue, 1.0, Duration::from_secs(15))
         .await
         .expect("selected track never played past 1s");
 
@@ -445,7 +398,7 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     queue.select(id, Transition::None).expect("select");
     queue.play();
 
-    let pos_before = wait_for_position_at_least(&mut rx, &queue, 2.0, Duration::from_secs(30))
+    let pos_before = wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(30))
         .await
         .expect("track never played past 2s");
     eprintln!("[long-cold] pre-seek pos={pos_before:.3}s");
@@ -534,7 +487,7 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     queue.select(id, Transition::None).expect("select");
     queue.play();
 
-    let pos_before = wait_for_position_at_least(&mut rx, &queue, 2.0, Duration::from_secs(30))
+    let pos_before = wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(30))
         .await
         .expect("track never played past 2s");
     eprintln!("[multi-variant-cold] pre-seek pos={pos_before:.3}s");

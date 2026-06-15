@@ -6,7 +6,9 @@ use kithara_app::{config::AppConfig, sources::build_source};
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
+use kithara_integration_tests::{
+    TestTempDir, kithara, offline::OfflineSession, waits::wait_for_position_at_least,
+};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
@@ -114,29 +116,6 @@ async fn wait_for_loaded(
     })
     .await
     .map_err(|_| format!("no Loaded within {deadline:?}"))?
-}
-
-async fn wait_for_position_at_least(
-    queue: &Queue,
-    min_secs: f64,
-    deadline: Duration,
-) -> Result<(), String> {
-    let start = kithara_platform::time::Instant::now();
-    loop {
-        if let Some(pos) = queue.position_seconds()
-            && pos >= min_secs
-        {
-            return Ok(());
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "position stayed below {min_secs:.2}s for {:?} (last: {:?})",
-                deadline,
-                queue.position_seconds()
-            ));
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
 }
 
 /// Production zvuk DRM end-to-end: load → select → play, asserting

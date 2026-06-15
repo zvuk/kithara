@@ -7,7 +7,10 @@ use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara, offline::OfflineSession, temp_dir,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
+    offline::OfflineSession,
+    temp_dir,
+    waits::{wait_for_loader_done_event, wait_for_position_event},
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
@@ -137,107 +140,6 @@ fn build_queue_with_tick(
     (queue, downloader, store, tick_handle)
 }
 
-/// Wait until the loader drives the track to a terminal-success status
-/// (`Loaded`/`Consumed`) by observing the `QueueEvent::TrackStatusChanged`
-/// the loader publishes on the bus, rather than polling `entry.status`.
-/// A `Failed` transition is surfaced as an error. The `deadline` is a
-/// virtual hang ceiling under flash.
-async fn wait_for_loader_done(
-    rx: &mut EventReceiver,
-    queue: &Queue,
-    track_id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    if let Some(entry) = queue.track(track_id) {
-        match &entry.status {
-            TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
-            TrackStatus::Failed(err) => return Err(format!("loader failed: {err}")),
-            _ => {}
-        }
-    }
-    timeout(deadline, async {
-        loop {
-            match rx.recv().await {
-                Ok(Event::Queue(QueueEvent::TrackStatusChanged { id, status }))
-                    if id == track_id =>
-                {
-                    match status {
-                        TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
-                        TrackStatus::Failed(err) => return Err(format!("loader failed: {err}")),
-                        _ => {}
-                    }
-                }
-                Ok(_) => {}
-                Err(RecvError::Lagged(_)) => {
-                    if let Some(entry) = queue.track(track_id) {
-                        match &entry.status {
-                            TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
-                            TrackStatus::Failed(err) => {
-                                return Err(format!("loader failed: {err}"));
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
-            }
-        }
-    })
-    .await
-    .map_err(|_| {
-        format!(
-            "loader timeout {deadline:?} (last={:?})",
-            queue.track(track_id).map(|e| e.status)
-        )
-    })?
-}
-
-/// Wait until playback progress (sink-truth `AudioEvent::PlaybackProgress`)
-/// reaches `min` seconds. Replaces a wall-clock position poll: the offline
-/// auto-render worker commits PCM and emits `PlaybackProgress` on every
-/// successful `Audio::read`, so this advances on the (virtual under flash)
-/// render cadence without guessing by elapsed time.
-async fn wait_for_position_at_least(
-    rx: &mut EventReceiver,
-    queue: &Queue,
-    min: f64,
-    deadline: Duration,
-) -> Result<(), String> {
-    if let Some(p) = queue.position_seconds()
-        && p >= min
-    {
-        return Ok(());
-    }
-    let min_ms = (min * 1000.0) as u64;
-    timeout(deadline, async {
-        loop {
-            match rx.recv().await {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
-                    if position_ms >= min_ms {
-                        return Ok(());
-                    }
-                }
-                Ok(_) => {}
-                Err(RecvError::Lagged(_)) => {
-                    if let Some(p) = queue.position_seconds()
-                        && p >= min
-                    {
-                        return Ok(());
-                    }
-                }
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
-            }
-        }
-    })
-    .await
-    .map_err(|_| {
-        format!(
-            "position never reached {min:.2}s in {deadline:?} (last={:?})",
-            queue.position_seconds()
-        )
-    })?
-}
-
 /// Run one fresh-player attempt: spin up Queue + Player, append the HLS
 /// track, wait for loader, briefly play, seek to `target`, observe.
 ///
@@ -286,7 +188,9 @@ async fn run_one_attempt(
         };
     }
 
-    if let Err(e) = wait_for_loader_done(&mut rx, &queue, track_id, Consts::LOAD_DEADLINE).await {
+    if let Err(e) =
+        wait_for_loader_done_event(&mut rx, &queue, track_id, Consts::LOAD_DEADLINE).await
+    {
         tick_handle.abort();
         return IterOutcome::Errored {
             iter,
@@ -295,7 +199,7 @@ async fn run_one_attempt(
         };
     }
 
-    if let Err(e) = wait_for_position_at_least(
+    if let Err(e) = wait_for_position_event(
         &mut rx,
         &queue,
         Consts::PRE_SEEK_PLAY_S,
