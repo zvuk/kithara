@@ -890,6 +890,16 @@ impl HlsVariant {
     #[kithara::hang_watchdog]
     pub(crate) fn dispatch(self: &Arc<Self>, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
         let mut out = Vec::new();
+        // Popped segments that could not be dispatched this pass but are NOT
+        // terminal (a slot still `Downloading` under an orphaned/in-flight
+        // fetch, or one that raced back to `Missing`): re-queued at the front
+        // after the pass so a later dispatch re-claims them once the slot
+        // frees. Without this, a seek that re-queues the target while an old
+        // prefetch still holds it `Downloading` would pop+drop the target —
+        // the orphaned fetch settles back to `Missing` but the queue no longer
+        // references it, so it is never re-fetched and the reader hangs (the
+        // `player_worker_hls_then_unavailable_mp3_then_mp3_recovery` deadlock).
+        let mut deferred: Vec<PlannedFetch> = Vec::new();
         let mut remaining = budget;
         let prefetch_base = self.get_position().max(self.prefetch_anchor());
         let prefetch_byte_cap = ctx
@@ -927,13 +937,27 @@ impl HlsVariant {
                         .state
                         .try_claim(PlannedFetch::Init, Arc::downgrade(self))
                     else {
+                        if !init.state.is_loaded() && !init.state.is_failed() {
+                            deferred.push(planned);
+                        }
                         continue;
                     };
                     if let Some(actual) = self.store.committed_final_len(&init.resource_id) {
                         handle.into_loaded(actual);
                         continue;
                     }
-                    out.extend(self.build_init_cmd(ctx, handle));
+                    let Some(cmd) = self.build_init_cmd(ctx, handle) else {
+                        if self
+                            .store
+                            .init()
+                            .pending()
+                            .is_some_and(|i| !i.state.is_loaded() && !i.state.is_failed())
+                        {
+                            deferred.push(planned);
+                        }
+                        continue;
+                    };
+                    out.push(cmd);
                 }
                 PlannedFetch::Segment(seg_idx) => {
                     let Some(entry) = self.store.segments().get(seg_idx as usize) else {
@@ -943,6 +967,13 @@ impl HlsVariant {
                         .state
                         .try_claim(PlannedFetch::Segment(seg_idx), Arc::downgrade(self))
                     else {
+                        // Claim failed — another claim owns the slot. Re-queue
+                        // unless terminal (`Loaded` = already fetched, `Failed`
+                        // = gave up): a `Downloading` orphan settles back to
+                        // `Missing` and must stay re-claimable from the queue.
+                        if !entry.state.is_loaded() && !entry.state.is_failed() {
+                            deferred.push(planned);
+                        }
                         continue;
                     };
                     if let Some(actual) = self.store.committed_final_len(&entry.resource_id) {
@@ -950,12 +981,21 @@ impl HlsVariant {
                         continue;
                     }
                     let Some(cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle) else {
+                        // Acquire raced (the claim was reverted to `Missing`
+                        // inside `emit_fetch_cmd`): re-queue, don't drop it.
+                        deferred.push(planned);
                         continue;
                     };
                     out.push(cmd);
                 }
             }
             remaining -= 1;
+        }
+        if !deferred.is_empty() {
+            let mut queue = self.queue.lock();
+            for planned in deferred.into_iter().rev() {
+                queue.push_front(planned);
+            }
         }
         out
     }

@@ -692,6 +692,56 @@ fn dispatch_skips_non_missing_segments() {
 }
 
 #[kithara::test]
+fn dispatch_requeues_orphaned_downloading_segment() {
+    // Root C seek-rebuild race: a seek re-queues the target segment while an
+    // old (now-orphaned) prefetch still holds it `Downloading`. `dispatch`
+    // pops the segment then fails `try_claim` (slot is Downloading) — it must
+    // NOT silently drop the popped-but-unclaimed segment. Once the orphaned
+    // fetch settles back to `Missing`, a later dispatch must re-fetch it, else
+    // the reader blocked on that segment hangs forever (`recv_outcome_blocking`
+    // 5s watchdog). Pinned by `player_worker_hls_then_unavailable_mp3_then_mp3_recovery`.
+    let ctx = test_ctx(5);
+    let v = make_var(0, 0, &[100, 100, 100], &ctx);
+
+    // seg 1 is mid-flight under an orphaned claim (Missing -> Downloading).
+    let orphan = v.store.segments()[1]
+        .state
+        .try_claim(PlannedFetch::Segment(1), Arc::downgrade(&v))
+        .expect("seg 1 must be claimable");
+
+    v.queue.lock().clear();
+    for seg in 0..3_u32 {
+        push_planned(&v, seg);
+    }
+
+    // First dispatch: seg 0 + seg 2 emit; seg 1 is Downloading -> claim fails.
+    let cmds = v.dispatch(&ctx, 10);
+    assert_eq!(
+        cmds.len(),
+        2,
+        "seg 0 and seg 2 dispatch; seg 1 is in-flight"
+    );
+
+    // The orphaned fetch settles back to Missing (cancel before commit) — the
+    // unsettled `DownloadClaim` Drop reverts the slot to Missing.
+    drop(orphan);
+    assert!(
+        !v.store.segments()[1].state.is_loaded(),
+        "orphaned claim drop reverts seg 1 to Missing"
+    );
+
+    // A later dispatch (reader re-aim / next poll) MUST re-fetch seg 1. Before
+    // the fix the segment was popped+dropped from the queue and lost, so this
+    // returned 0 and the reader hung.
+    let cmds2 = v.dispatch(&ctx, 10);
+    assert_eq!(
+        cmds2.len(),
+        1,
+        "seg 1 (orphaned -> Missing) must be re-dispatched, not lost from the queue"
+    );
+}
+
+#[kithara::test]
 fn on_evict_returns_minus_one_for_init() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[100, 100, 100], &ctx);
