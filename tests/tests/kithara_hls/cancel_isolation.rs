@@ -14,10 +14,7 @@ use kithara::{
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
 };
-use kithara_platform::{
-    CancelToken, thread,
-    time::{Duration, Instant},
-};
+use kithara_platform::{CancelToken, thread, time::Duration};
 use tokio::task;
 
 struct Consts;

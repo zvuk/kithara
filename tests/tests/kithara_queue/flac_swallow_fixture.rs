@@ -17,11 +17,7 @@ use kithara_integration_tests::{
     offline::OfflinePlayer,
     swallow_detector::assert_no_committed_swallow,
 };
-use kithara_platform::{
-    CancelToken,
-    flash::real_io,
-    time::{self, Duration, Instant},
-};
+use kithara_platform::{CancelToken, flash::real_io, time::Duration};
 use kithara_test_utils::probe::capture as probe_capture;
 
 /// `b"0123456789abcdef"` — the AES-128 key/zero-IV pair used across the

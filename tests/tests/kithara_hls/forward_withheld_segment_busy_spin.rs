@@ -57,7 +57,7 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancelToken,
-    time::{self, Duration, Instant},
+    time::{Duration, Instant},
     tokio::task::spawn_blocking,
 };
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};

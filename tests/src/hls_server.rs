@@ -775,10 +775,7 @@ fn test_key_data() -> Vec<u8> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_platform::{
-        flash::real_io,
-        time::{self, Duration},
-    };
+    use kithara_platform::{flash::real_io, time::Duration};
 
     use super::PackagedTestServer;
     use crate::kithara;

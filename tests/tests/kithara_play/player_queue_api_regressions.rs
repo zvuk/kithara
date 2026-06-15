@@ -6,7 +6,7 @@ use kithara_assets::StoreOptions;
 use kithara_integration_tests::{
     SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara, temp_dir,
 };
-use kithara_platform::time::{self, Duration, Instant};
+use kithara_platform::time::Duration;
 use kithara_play::{PlayerConfig, PlayerEvent, PlayerImpl, Resource, ResourceConfig};
 
 use super::offline_player_harness::OfflinePlayerHarness;

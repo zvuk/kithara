@@ -11,7 +11,7 @@ use kithara_integration_tests::{
     },
     temp_dir,
 };
-use kithara_platform::time::{self, Duration, Instant};
+use kithara_platform::time::{Duration, Instant};
 use kithara_play::{PlayerConfig, Resource, ResourceConfig};
 use kithara_stream::AudioCodec;
 

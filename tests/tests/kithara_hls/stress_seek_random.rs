@@ -12,11 +12,7 @@ use kithara_integration_tests::{
     TestTempDir, Xorshift64,
     hls_server::{EncryptionConfig, HlsTestServer, HlsTestServerConfig},
 };
-use kithara_platform::{
-    CancelToken, thread,
-    time::{Duration, Instant},
-    tokio::task::spawn_blocking,
-};
+use kithara_platform::{CancelToken, thread, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 /// Random seek+read cycles with exact byte verification on HLS stream.

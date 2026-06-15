@@ -8,10 +8,7 @@ use kithara_integration_tests::{
     TestTempDir, kithara, offline::OfflinePlayer, swallow_detector::assert_no_committed_swallow,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{self, Duration, Instant},
-};
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_play::Resource;
 use kithara_queue::TrackSource;
 use kithara_stream::dl::{Downloader, DownloaderConfig};

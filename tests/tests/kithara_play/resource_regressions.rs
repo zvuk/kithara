@@ -27,7 +27,7 @@ use kithara_integration_tests::{
 };
 use kithara_platform::{
     CancelToken,
-    time::{self, Duration, Instant, sleep, timeout},
+    time::{Duration, Instant, sleep, timeout},
 };
 use tracing::{debug, info};
 
