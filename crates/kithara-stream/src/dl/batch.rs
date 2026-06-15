@@ -161,12 +161,21 @@ impl BatchGroup {
                     deliver_cancelled_with_event(entry.cmd, &entry.peer_cancel);
                     continue;
                 }
+                // Backpressure is the capacity gate alone: `spawn_fetch` bumps
+                // `inflight` synchronously (`start_request`), so the next
+                // iteration sees the updated count. No unconditional per-spawn
+                // yield: under `flash` this fn runs on the virtual clock while
+                // the spawned fetch tasks run real-socket I/O, and an engine
+                // `yield_now` only resolves on a clock advance (grant needs
+                // `active_async == 0`). The in-flight fetches' `fetch_waker`
+                // churn keeps `active_async` non-zero, so a mid-batch yield can
+                // never be granted — it strands the rest of the batch (a popped
+                // segment that the peer no longer holds is then lost forever).
                 while inner.inflight.load(Ordering::Relaxed) >= inner.max_concurrent {
                     task::yield_now().await;
                 }
                 spawn_fetch(inner, entry.cmd, entry.peer_cancel);
                 dispatched += 1;
-                task::yield_now().await;
             }
         }
         dispatched
