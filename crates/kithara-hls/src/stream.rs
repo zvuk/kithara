@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use dashmap::DashMap;
 use kithara_assets::{
@@ -156,6 +156,11 @@ impl StreamType for Hls {
 
         // Shared readiness gate for the off-RT `wait_range(_, None)` park (README).
         let ready = Arc::new(CondvarGate::<u64>::default());
+        // Late-bound audio-worker wake, filled by `HlsSource::set_worker_wake`
+        // once the worker exists; fired alongside `ready` on the two
+        // downloader write/settle sites so the RT decoder re-ticks on data
+        // arrival, not on its 10 ms scheduler poll. `None` until set.
+        let worker_wake = Arc::new(OnceLock::new());
 
         let plan_ctx = PlanCtx {
             master_cancel: cancel.clone(),
@@ -169,6 +174,7 @@ impl StreamType for Hls {
                     .unwrap_or(HlsConfig::DEFAULT_LOOK_AHEAD_BYTES),
             ),
             ready: Arc::clone(&ready),
+            worker_wake: Arc::clone(&worker_wake),
         };
 
         let variants: Vec<Arc<HlsVariant>> = media_playlists
@@ -195,6 +201,7 @@ impl StreamType for Hls {
                 scope: scope.clone(),
                 headers: config.headers.clone(),
                 ready,
+                worker_wake,
             },
             playhead,
             seek,

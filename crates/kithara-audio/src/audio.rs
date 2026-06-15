@@ -36,7 +36,7 @@ use crate::{
     traits::{ChunkOutcome, DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome},
     worker::{
         PreloadGate,
-        handle::{AudioWorkerHandle, TrackRegistration},
+        handle::{AudioWorkerHandle, TrackRegistration, WorkerWakeBridge},
         thread_wake::ThreadWake,
         types::{ServiceClass, TrackId},
     },
@@ -880,6 +880,10 @@ where
         let decoder_factory = Self::create_decoder_factory(&decoder_deps, &epoch, &byte_len_handle);
         let initial_variant = initial_media_info.as_ref().and_then(|i| i.variant_index);
         let abr_handle = shared_stream.abr_handle();
+        // Retain a handle to inject the worker wake after the worker exists —
+        // `shared_stream` itself is moved into the source below. `SharedStream`
+        // is `Arc`-backed, so the clone shares the same inner stream/coord.
+        let wake_stream = shared_stream.clone();
         let audio_source = StreamAudioSource::new(
             shared_stream,
             DecodeInit {
@@ -918,6 +922,12 @@ where
             preload_chunks: preload_chunks.get(),
             service_class: Arc::clone(&service_class),
         });
+
+        // Now that the worker exists, wire its data-arrival wake into the
+        // source: a segmented (HLS) source re-ticks the worker the instant
+        // segment bytes are written/committed, off the 10 ms scheduler poll.
+        // No-op for non-segmented sources (the default `set_worker_wake`).
+        wake_stream.set_worker_wake(Arc::new(WorkerWakeBridge(worker.clone())));
 
         Ok(Self {
             playhead,

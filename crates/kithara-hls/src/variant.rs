@@ -7,7 +7,7 @@ use std::{
     num::NonZeroUsize,
     ops::Range,
     sync::{
-        Arc, Weak,
+        Arc, OnceLock, Weak,
         atomic::{AtomicU8, AtomicU64, Ordering},
     },
 };
@@ -27,6 +27,7 @@ use kithara_storage::{ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SeekObserve,
     SegmentDescriptor, SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult,
+    WorkerWake,
     dl::{FetchCmd, OnCompleteFn, WriterFn},
 };
 use kithara_test_utils::kithara;
@@ -426,6 +427,25 @@ enum PlannedFetch {
     Segment(u32),
 }
 
+/// Late-bound audio-worker data-arrival wake, shared across the coord, every
+/// variant, and each `FetchCmd` it emits. Created empty in `HlsSource::create`
+/// and filled once by `HlsSource::set_worker_wake` after the audio worker
+/// exists; read lock-free on the off-RT write/settle path. `None` until set
+/// (the 10 ms scheduler backstop covers that warm-up window) and always `None`
+/// for non-audio consumers.
+pub(crate) type WorkerWakeCell = Arc<OnceLock<Arc<dyn WorkerWake>>>;
+
+/// Fire the worker wake if one is installed. Called right after
+/// `ready.signal()` on the off-RT downloader write/settle path so an underran
+/// audio worker re-ticks the instant its segment bytes land, instead of
+/// rediscovering them on the next 10 ms poll. Lock-free and wait-free; never
+/// reached from the RT produce core.
+pub(crate) fn wake_worker(cell: &WorkerWakeCell) {
+    if let Some(wake) = cell.get() {
+        wake.wake();
+    }
+}
+
 pub(crate) struct PlanCtx {
     pub(crate) scope: AssetScope<DecryptContext>,
     pub(crate) master_cancel: CancelToken,
@@ -456,6 +476,11 @@ pub(crate) struct PlanCtx {
     /// (commit/fail), so an off-RT reader parked in `wait_range(_, None)`
     /// wakes the moment its range fills — no wall-clock poll.
     pub(crate) ready: Arc<CondvarGate<u64>>,
+    /// Late-bound audio-worker wake, fired alongside `ready` on each write and
+    /// settle so the RT decoder's worker re-ticks on data arrival rather than
+    /// on its 10 ms scheduler poll. Only the two downloader-thread sites fire
+    /// it — the coord's RT-reachable fence/seek signals deliberately do not.
+    pub(crate) worker_wake: WorkerWakeCell,
 }
 
 /// Inputs to [`HlsVariant::activate_at_segment_with_shift`]: pin `from_seg`
@@ -645,6 +670,7 @@ impl HlsVariant {
         acq: AssetResource<DecryptContext>,
         handle: Segment<Downloading>,
         ready: Arc<CondvarGate<u64>>,
+        worker_wake: WorkerWakeCell,
     ) -> Option<FetchCmd> {
         let writer = match acq {
             AcquisitionResult::Pending(writer) => writer,
@@ -675,16 +701,20 @@ impl HlsVariant {
             writer,
             cancel: cancel.clone(),
             ready: Arc::clone(&ready),
+            worker_wake: Arc::clone(&worker_wake),
         };
         let mut inner_writer = slot.writer();
         // Per-chunk write signal: wake a reader parked in `wait_range(_, None)`
         // the moment bytes land (not only on commit), so a sub-segment range
-        // resolves without waiting for settle. Runs on the downloader thread
-        // (off-RT) — taking the gate's condvar mutex is allowed here.
+        // resolves without waiting for settle. Also re-ticks the RT decoder's
+        // audio worker (off the 10 ms scheduler poll) the instant plaintext
+        // bytes land. Runs on the downloader thread (off-RT) — taking the
+        // gate's condvar mutex and the wait-free worker unpark are allowed here.
         let writer_fn: WriterFn = Box::new(move |chunk: &[u8]| {
             let result = inner_writer(chunk);
             if result.is_ok() {
                 ready.signal();
+                wake_worker(&worker_wake);
             }
             result
         });
@@ -716,7 +746,13 @@ impl HlsVariant {
                 .acquire_resource_with_ctx(&init.resource_id, None, Some(c.clone()))
                 .expect("acquire_resource_with_ctx for init must succeed"),
         };
-        self.build_cmd(init.url.clone(), resource, handle, Arc::clone(&ctx.ready))
+        self.build_cmd(
+            init.url.clone(),
+            resource,
+            handle,
+            Arc::clone(&ctx.ready),
+            Arc::clone(&ctx.worker_wake),
+        )
     }
 
     fn build_init_entry(
@@ -965,7 +1001,13 @@ impl HlsVariant {
                 return None;
             }
         };
-        self.build_cmd(entry.url.clone(), resource, handle, Arc::clone(&ctx.ready))
+        self.build_cmd(
+            entry.url.clone(),
+            resource,
+            handle,
+            Arc::clone(&ctx.ready),
+            Arc::clone(&ctx.worker_wake),
+        )
     }
 
     /// Reader-facing lookup in **virtual** byte space — delegates to the
@@ -1621,6 +1663,10 @@ struct FetchSlot {
     /// (commit/fail/cancel) so an off-RT reader parked in `wait_range(_, None)`
     /// re-probes the now-resolved range.
     ready: Arc<CondvarGate<u64>>,
+    /// Late-bound audio-worker wake — fired alongside `ready` on settle so the
+    /// RT decoder's worker re-ticks the instant a commit makes bytes readable
+    /// (the decrypt gate opens here for DRM segments), not on its 10 ms poll.
+    worker_wake: WorkerWakeCell,
 }
 
 impl From<FetchSlot> for OnCompleteFn {
@@ -1644,10 +1690,15 @@ impl FetchSlot {
     /// terminal transition, so the slot state can never be double-driven.
     fn settle(self, bytes_written: u64, err: Option<&NetError>) {
         // Wake any reader parked on this range AFTER the terminal transition
-        // (commit makes bytes readable / fail flips `range_has_failed`).
+        // (commit makes bytes readable / fail flips `range_has_failed`). The
+        // worker wake re-ticks the RT decoder's audio worker too — for DRM the
+        // decrypted bytes only become readable at this commit, so settle (not
+        // the ciphertext write) is the load-bearing wake.
         let ready = Arc::clone(&self.ready);
+        let worker_wake = Arc::clone(&self.worker_wake);
         self.settle_inner(bytes_written, err);
         ready.signal();
+        wake_worker(&worker_wake);
     }
 
     fn settle_inner(self, bytes_written: u64, err: Option<&NetError>) {
