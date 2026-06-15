@@ -50,6 +50,18 @@ struct HlsTrackState {
     waker: Option<Waker>,
     eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
     last_seek_epoch: u64,
+    /// Target segment of an in-flight forward seek, held until the reader's
+    /// physical byte cursor catches up to it. `coord.position()` only
+    /// advances when the reader actually reads at the new offset, so right
+    /// after a forward seek it still resolves to the *pre-seek* segment until
+    /// the decoder recreate's first read lands (the off-RT `wait_range` is now
+    /// event-driven, but a native-backend recreate can still take several
+    /// scheduler polls). [`Self::seek_epoch_reset`] already aimed
+    /// `reader_segment` + the fetch plan at this target;
+    /// [`Self::apply_boundary_crossing`] honours it as a floor so a stale-low
+    /// resolved segment cannot drag the cursor back and re-plan the prefix.
+    /// Cleared once the reader physically resolves at/after the floor.
+    seek_settle_floor: Option<u32>,
     prefetch_budget: usize,
 }
 
@@ -145,6 +157,7 @@ impl HlsPeer {
                 prefetch_budget,
                 look_ahead_bytes,
                 last_seek_epoch: 0,
+                seek_settle_floor: None,
                 reader_segment: Arc::clone(&self.reader_segment),
                 waker: None,
             });
@@ -364,6 +377,22 @@ impl HlsTrackState {
         self.reader_variant = variant_now;
         let found = coord.find_at_offset(pos);
         let resolved = found.map_or_else(|| u32::try_from(prev).unwrap_or(0), |(idx, _, _)| idx);
+        // Forward-seek settle floor: while the reader's physical byte cursor
+        // still lags behind a just-applied seek target, ignore this poll's
+        // stale-low segment. `seek_epoch_reset` already aimed `reader_segment`
+        // + the fetch plan at the target; without this guard the lagging
+        // `resolved` re-keys the cursor backward and `rebuild`s the prefix
+        // (re-downloading seg 0..target). Only drop the floor once the reader
+        // *physically resolves* (`found.is_some()`) to a segment at/after it —
+        // a `None` lookup falls back to `prev` and must NOT be read as "caught
+        // up", or a later valid low lookup re-opens the race.
+        if let Some(floor) = self.seek_settle_floor {
+            if found.is_some_and(|(idx, _, _)| idx >= floor) {
+                self.seek_settle_floor = None;
+            } else {
+                return floor;
+            }
+        }
         let resolved_us = resolved as usize;
         let boundary_crossed = prev != resolved_us;
         if boundary_crossed {
@@ -469,6 +498,7 @@ impl HlsTrackState {
         {
             self.reader_segment.store(seg as usize, Ordering::Release);
             self.reader_variant = coord.variant_index();
+            self.seek_settle_floor = Some(seg);
         }
     }
 }
