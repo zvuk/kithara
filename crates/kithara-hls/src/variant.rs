@@ -1246,15 +1246,19 @@ impl HlsVariant {
     }
 
     pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
+        // EOF wins over `range_ready`'s zero-width "ready" at `range.start ==
+        // total` so the phase is observable as `Eof` at the stream end (see
+        // `wait_range`); a flush in flight takes precedence.
+        let total = self.total_bytes();
+        if total > 0 && range.start >= total && self.sizes_complete() && !self.reader.is_flushing()
+        {
+            return SourcePhase::Eof;
+        }
         if self.range_ready(&range) {
             return SourcePhase::Ready;
         }
         if self.reader.is_flushing() {
             return SourcePhase::Seeking;
-        }
-        let total = self.total_bytes();
-        if total > 0 && range.start >= total && self.sizes_complete() {
-            return SourcePhase::Eof;
         }
         SourcePhase::Waiting
     }
@@ -1645,16 +1649,24 @@ impl HlsVariant {
         range: Range<u64>,
         _timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
+        // EOF must win over `range_ready`'s zero-width "ready" at the stream
+        // end: a read at `range.start == total` clamps to a `[total, total)`
+        // range that `range_ready` reports ready, so the gate would mint
+        // `Ready`, `read_at` then returns `Eof`, and the consumer's
+        // `phase()` stays `Ready` forever — EOF never becomes observable and a
+        // reader polling on phase spins. A seek in flight may pull the
+        // position back into the stream, so let the flush path win first.
+        let total = self.total_bytes();
+        if total > 0 && range.start >= total && self.sizes_complete() && !self.reader.is_flushing()
+        {
+            return Ok(WaitOutcome::Eof);
+        }
         if self.range_ready(&range) {
             hang_reset!();
             return Ok(WaitOutcome::Ready);
         }
         if self.reader.is_flushing() {
             return Ok(WaitOutcome::Interrupted);
-        }
-        let total = self.total_bytes();
-        if total > 0 && range.start >= total && self.sizes_complete() {
-            return Ok(WaitOutcome::Eof);
         }
         // A segment covering this range settled terminally (the downloader
         // exhausted its retries): the bytes will never arrive, so surface a
