@@ -241,17 +241,9 @@ impl DecoderFactory {
         }
     }
 
-    /// The strict input contract — the construction-input *shape* — for the
-    /// demuxer this factory WOULD build for `media_info`.
-    ///
-    /// The readiness gate (kithara-audio) branches on this so it waits for the
-    /// right kind of bytes the chosen demuxer reads before emitting its first
-    /// frame. Without it the gate guessed a byte window, and a backend that
-    /// buffers a whole segment before parsing (Apple `AudioConverter`) starved
-    /// while one that reads incrementally (Symphonia) silently limped. Mirrors
-    /// [`should_use_segment_aware`]: only the segment-aware fMP4 path (AAC/FLAC
-    /// fMP4 with a byte map) is init-bearing; every other path is
-    /// [`InputRequirement::Incremental`]. See the crate `README.md`
+    /// Input contract of the demuxer this factory would build for `media_info`,
+    /// for the kithara-audio readiness gate. Mirrors [`should_use_segment_aware`]:
+    /// only the segment-aware fMP4 path is `InitOnly`. See the crate `README.md`
     /// "Decoder input contract".
     #[must_use]
     pub fn input_requirement(

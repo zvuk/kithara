@@ -62,6 +62,29 @@ match an unrelated codec (e.g. an MP3 frame sync inside raw AAC-in-fMP4
 bytes) and drive the rest of the pipeline off a codec the decoder never
 actually decoded — so the recreate path never probes.
 
+## Decoder input contract
+
+Each demuxer declares the *shape* of input it needs to be constructed via
+`Demuxer::required_input() -> InputRequirement` (default `Incremental`;
+`Fmp4SegmentDemuxer` overrides it). The value is a reading *discipline*, not a
+byte window — the concrete init range is resolved by the byte-space owner (the
+stream layer), which alone knows the ABR virtual-space byte shift.
+
+- `InitOnly` — segment-aware fMP4: the init header (moov/esds/STREAMINFO) must
+  be buffered before construction; the landing media segment is read later by the
+  first `next_frame` and pends until it arrives, so it is not a build
+  prerequisite (gating on it would invert build-then-pend into a circular
+  dependency). Both backends gate identically because both wrap
+  `Fmp4SegmentDemuxer`.
+- `Incremental` — single-file MP3/FLAC/Ogg, Apple `AudioFile`, Android
+  `MediaExtractor`: self-framing, no separate init, so nothing is gated up front;
+  the demuxer reads and pends as bytes arrive.
+
+`DecoderFactory::input_requirement(media_info, byte_map)` is the bridge to the
+kithara-audio readiness gate: it returns the contract of the demuxer the factory
+*would* build (mirroring `should_use_segment_aware`), which the gate then
+resolves to concrete bytes in its own virtual coordinate space.
+
 ## Gapless playback
 
 `DecoderConfig::gapless` is enabled by default. Decoders report engine-level trim

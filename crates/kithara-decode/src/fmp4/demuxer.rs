@@ -263,16 +263,9 @@ impl Demuxer for Fmp4SegmentDemuxer {
         &self.track_info
     }
 
-    /// fMP4 construction reads ONLY the init segment (moov/esds/STREAMINFO):
-    /// [`Fmp4SegmentDemuxer::open`] fills the init range and builds `TrackInfo`
-    /// from it, and the codec layer reads its config from `TrackInfo.extra_data`
-    /// — neither touches a media segment. The landing media segment is read by
-    /// the first `next_frame` and pends cleanly until it arrives, so it is NOT a
-    /// construction prerequisite: gating on it before construction would invert
-    /// build-then-pend into a circular dependency (the recreate parks waiting for
-    /// a segment whose fetch the parked recreate prevents). The contract is
-    /// therefore init-only, identically for every codec backend wrapping this
-    /// demuxer.
+    /// fMP4 construction reads only the init segment (moov/esds/STREAMINFO); the
+    /// landing media segment is read later by the first `next_frame`, so it is
+    /// not a construction prerequisite.
     fn required_input() -> InputRequirement {
         InputRequirement::InitOnly
     }

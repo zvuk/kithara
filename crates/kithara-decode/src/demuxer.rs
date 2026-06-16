@@ -58,20 +58,11 @@ pub(crate) trait Demuxer: Send {
     /// Track-level metadata exposed by the container.
     fn track_info(&self) -> &TrackInfo;
 
-    /// The strict input contract: the *shape* of the bytes that MUST be Ready
-    /// before this demuxer can be constructed. The readiness gate (kithara-audio)
-    /// branches on this instead of guessing a range that one backend tolerates
-    /// and another starves on; the concrete init byte range is resolved by the
-    /// stream layer (which alone knows the ABR virtual-space byte shift).
-    ///
-    /// Defaults to [`InputRequirement::Incremental`] — the read-and-pend
-    /// discipline of single-file / mid-stream demuxers, which is most of them.
-    /// **An init-bearing demuxer (fMP4) MUST override this** to
-    /// [`InputRequirement::InitOnly`]: without it the gate never waits for the
-    /// init header, and a backend that buffers a whole segment before parsing
-    /// (Apple `AudioConverter`) starves while one that reads incrementally
-    /// (Symphonia) silently limps — exactly the divergence this contract exists
-    /// to forbid. See the crate `README.md` "Decoder input contract".
+    /// The *shape* of bytes that must be Ready before this demuxer can be
+    /// constructed, for the kithara-audio readiness gate. Defaults to
+    /// [`InputRequirement::Incremental`]; init-bearing demuxers (fMP4) MUST
+    /// override to [`InputRequirement::InitOnly`]. See the crate `README.md`
+    /// "Decoder input contract".
     fn required_input() -> InputRequirement
     where
         Self: Sized,
