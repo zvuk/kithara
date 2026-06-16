@@ -14,13 +14,13 @@ use arc_swap::ArcSwap;
 use delegate::delegate;
 use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, ErrorClass,
-    GaplessMode, PcmChunk, PcmSpec, duration_for_frames,
+    GaplessMode, InputRequirement, PcmChunk, PcmSpec, duration_for_frames,
 };
 use kithara_events::{AudioEvent, AudioFormat, DeferredBus, SeekLifecycleStage, SegmentLocation};
 use kithara_platform::{sync::Mutex, time::Duration};
 use kithara_stream::{
-    Activity, ContainerFormat, MediaInfo, PendingReason, PlayheadWrite, SeekControl, SeekObserve,
-    SourcePhase, SourceSeekAnchor, Stream, StreamType,
+    Activity, ByteMap, ContainerFormat, MediaInfo, PendingReason, PlayheadWrite, SeekControl,
+    SeekObserve, SourcePhase, SourceSeekAnchor, Stream, StreamType,
 };
 use kithara_test_utils::kithara;
 use tracing::{debug, info, trace, warn};
@@ -97,7 +97,7 @@ impl<T: StreamType> SharedStream<T> {
             /// Pull a clone of the optional byte-map handle from the
             /// inner source. Used by the decoder factory to activate the
             /// segment-by-segment fMP4 path on HLS.
-            pub(crate) fn byte_map(&self) -> Option<Arc<dyn kithara_stream::ByteMap>>;
+            pub(crate) fn byte_map(&self) -> Option<Arc<dyn ByteMap>>;
             /// Narrow mutating playhead handle.
             pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
             /// Narrow seek-control handle.
@@ -1809,23 +1809,46 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    fn recreate_phase(&self, offset: u64) -> SourcePhase {
-        self.shared_stream
-            .phase_at(self.recreate_ready_range(offset))
+    /// Decoder-construction input contract for the demuxer `recreate` will
+    /// rebuild, declared per-demuxer by the decode factory: an init-bearing
+    /// container (segment-aware fMP4) reports [`InputRequirement::InitOnly`] —
+    /// its init header (moov/esds/STREAMINFO) must be buffered before the
+    /// rebuilt demuxer can construct; a raw / mid-stream source reports
+    /// [`InputRequirement::Incremental`] — nothing is gated up front, the
+    /// demuxer reads and pends as bytes arrive. The contract names the *shape*;
+    /// byte-space *resolution* stays here (see [`Self::recreate_ready_range`])
+    /// because only the stream knows the ABR virtual-space byte shift.
+    fn recreate_input(&self, recreate: &RecreateState) -> InputRequirement {
+        let byte_map = self.shared_stream.byte_map();
+        kithara_decode::DecoderFactory::input_requirement(&recreate.media_info, byte_map.as_deref())
     }
 
-    /// Byte range whose readiness gates decoder recreation, shared by the
-    /// gate and the wait path so the two never disagree (a mismatch
-    /// livelocks the worker). Init range alone for a separate CMAF init,
-    /// else the `[offset..offset+READ_AHEAD)` window. See the crate
+    /// Byte range whose readiness gates decoder recreation, shared by the gate
+    /// and the wait path so the two never disagree (a mismatch livelocks the
+    /// worker). The demuxer contract picks the shape; this layer resolves it in
+    /// virtual byte space. An init-bearing recreate gates on the init header via
+    /// [`format_change_segment_range`], which is `served_from`-aware: a
+    /// byte-shifted same-codec commit (init no longer addressable) and an
+    /// oversized init both degrade to the `[offset..offset+READ_AHEAD)` window.
+    /// An incremental recreate gates on that window directly. See the crate
     /// `README.md` "Recreate readiness gating".
-    fn recreate_ready_range(&self, offset: u64) -> Range<u64> {
+    ///
+    /// [`format_change_segment_range`]: kithara_stream::Stream::format_change_segment_range
+    fn recreate_ready_range(&self, recreate: &RecreateState) -> Range<u64> {
+        if matches!(self.recreate_input(recreate), InputRequirement::Incremental) {
+            return recreate.offset..self.boundary_end(recreate.offset);
+        }
         if let Ok(init_range) = self.shared_stream.format_change_segment_range()
             && init_range.end.saturating_sub(init_range.start) <= Self::DEFAULT_READ_AHEAD_BYTES
         {
             return init_range;
         }
-        offset..self.boundary_end(offset)
+        recreate.offset..self.boundary_end(recreate.offset)
+    }
+
+    fn recreate_phase(&self, recreate: &RecreateState) -> SourcePhase {
+        self.shared_stream
+            .phase_at(self.recreate_ready_range(recreate))
     }
 
     /// Compute the upper bound of the byte range required for the
@@ -1930,7 +1953,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 } => self.source_phase_for_seek_landing(byte),
                 SeekMode::Direct { target_byte: None } => self.shared_stream.phase(),
             },
-            WaitContext::Recreation(recreate) => self.recreate_phase(recreate.offset),
+            WaitContext::Recreation(recreate) => self.recreate_phase(recreate),
             WaitContext::PostSeek(resume) => resume.anchor_offset.map_or_else(
                 || self.shared_stream.phase(),
                 |byte| self.source_phase_for_boundary(byte),
@@ -1955,7 +1978,7 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     fn source_ready_for_recreate(&self, recreate: &RecreateState) -> bool {
         matches!(
-            self.recreate_phase(recreate.offset),
+            self.recreate_phase(recreate),
             SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
         )
     }
@@ -2123,7 +2146,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// track, depending on the source phase. Owns the `RecreateState`
     /// (moved out of the FSM by the caller) — no `self.state` re-read.
     fn wait_for_source_on_recreate(&mut self, recreate: RecreateState) -> TrackStep<PcmChunk> {
-        let phase = self.recreate_phase(recreate.offset);
+        let phase = self.recreate_phase(&recreate);
         if let Some(reason) = map_source_phase(phase) {
             self.update_state(CurrentFsm::waiting(
                 WaitContext::Recreation(recreate),

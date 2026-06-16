@@ -12,7 +12,7 @@ use super::probe::{
     resolve_codec_container,
 };
 use crate::{
-    Decoder,
+    Decoder, InputRequirement,
     error::{DecodeError, DecodeResult},
     mp4::sniff_mp4_codec,
     traits::BoxedSource,
@@ -238,6 +238,35 @@ impl DecoderFactory {
             DecoderBackend::Android => create_android(source, codec, container, config),
             #[cfg(feature = "symphonia")]
             DecoderBackend::Symphonia => create_symphonia(source, codec, container, config),
+        }
+    }
+
+    /// The strict input contract — the construction-input *shape* — for the
+    /// demuxer this factory WOULD build for `media_info`.
+    ///
+    /// The readiness gate (kithara-audio) branches on this so it waits for the
+    /// right kind of bytes the chosen demuxer reads before emitting its first
+    /// frame. Without it the gate guessed a byte window, and a backend that
+    /// buffers a whole segment before parsing (Apple `AudioConverter`) starved
+    /// while one that reads incrementally (Symphonia) silently limped. Mirrors
+    /// [`should_use_segment_aware`]: only the segment-aware fMP4 path (AAC/FLAC
+    /// fMP4 with a byte map) is init-bearing; every other path is
+    /// [`InputRequirement::Incremental`]. See the crate `README.md`
+    /// "Decoder input contract".
+    #[must_use]
+    pub fn input_requirement(
+        media_info: &MediaInfo,
+        byte_map: Option<&dyn ByteMap>,
+    ) -> InputRequirement {
+        match byte_map {
+            Some(_)
+                if media_info
+                    .codec
+                    .is_some_and(|codec| segment_aware_container(codec, media_info.container)) =>
+            {
+                <crate::fmp4::Fmp4SegmentDemuxer as crate::demuxer::Demuxer>::required_input()
+            }
+            _ => InputRequirement::Incremental,
         }
     }
 }
@@ -524,11 +553,18 @@ fn should_use_segment_aware(
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
 ) -> bool {
+    segment_aware_container(codec, container) && config.byte_map.is_some()
+}
+
+/// Codec+container half of the segment-aware fMP4 decision, factored out of
+/// [`should_use_segment_aware`] so [`DecoderFactory::input_requirement`] can
+/// ask the same question without a [`DecoderConfig`]. AAC / FLAC in fMP4 is
+/// the only segment-aware path; everything else reads incrementally.
+fn segment_aware_container(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
     matches!(
         codec,
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac
     ) && matches!(container, Some(ContainerFormat::Fmp4))
-        && config.byte_map.is_some()
 }
 
 #[cfg(feature = "symphonia")]
