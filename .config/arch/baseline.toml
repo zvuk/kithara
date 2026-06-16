@@ -433,7 +433,6 @@ schema_version = 1
 "crates/kithara-play/src/impls/player.rs::PlayerConfig" = 1
 "crates/kithara-play/src/impls/shared_player_state.rs::SharedPlayerState" = 1
 "crates/kithara-play/src/metadata.rs::Metadata" = 1
-"crates/kithara-play/src/traits/dj/bpm.rs::BeatGrid" = 1
 "crates/kithara-play/src/traits/dj/crossfade.rs::CrossfadeConfig" = 1
 "crates/kithara-queue/src/config.rs::QueueConfig" = 1
 "crates/kithara-queue/src/track.rs::TrackEntry" = 1

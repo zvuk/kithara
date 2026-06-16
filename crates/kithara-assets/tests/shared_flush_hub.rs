@@ -14,13 +14,13 @@ const INDEXES_PER_DISK_STORE: usize = 3;
 /// is debounced through the worker (it rewrites on every commit), so with
 /// `FlushPolicy::default()` the worker writes `availability.bin` ~50ms
 /// after a commit on its own. A test that asserts the checkpoint-only
-/// "nothing on disk before flush_now" invariant then races that 50ms
+/// "nothing on disk before `flush_now`" invariant then races that 50ms
 /// timer and flakes under load. A manual-only policy removes the race.
 fn manual_flush_policy() -> FlushPolicy {
     FlushPolicy {
         debounce: Duration::from_secs(3600),
         poll_interval: Duration::from_secs(3600),
-        force_every_n_ops: NonZeroUsize::new(usize::MAX).unwrap(),
+        force_every_n_ops: NonZeroUsize::new(usize::MAX).expect("usize::MAX is non-zero"),
     }
 }
 
@@ -29,8 +29,11 @@ fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8])
     let AcquisitionResult::Pending(w) = acq else {
         panic!("expected a Pending writer");
     };
-    w.write_at(0, data).unwrap();
-    drop(w.commit(Some(data.len() as u64)).unwrap());
+    w.write_at(0, data).expect("scripted write succeeds");
+    drop(
+        w.commit(Some(data.len() as u64))
+            .expect("scripted commit succeeds"),
+    );
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]

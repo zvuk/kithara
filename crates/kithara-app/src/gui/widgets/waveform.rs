@@ -1,22 +1,35 @@
 use iced::{
-    Color, Element, Event, Length, Point, Rectangle, Renderer, Theme,
+    Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
     mouse::{self, Button, Cursor},
-    widget::canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke, gradient},
+    widget::canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
 };
-use kithara::audio::Envelope;
+use kithara::audio::Waveform;
 use num_traits::cast::AsPrimitive;
 
-use crate::{gui::message::Message, theme::gui::GuiPalette};
+use crate::{
+    gui::message::Message,
+    theme::gui::{GuiPalette, WAVE_HIGH, WAVE_LOW, WAVE_MID},
+};
 
-/// Deck waveform: mirrored envelopes filled with played / unplayed
-/// vertical gradients split at the playhead, a faint full-height 1/8
-/// column grid, a 16-tick beat grid and a playhead. Click or drag the
-/// pointer to seek when `duration` is known.
-struct Waveform {
-    samples: Envelope,
+/// Deck waveform: per bucket, three concentric mirrored bars (low/mid/high band
+/// heights) painted low->mid->high so bass forms the outer hull and highs sit
+/// in the center, over a faint 1/8 column grid, a 16-tick beat grid and a
+/// playhead. Click or drag the pointer to seek when `duration` is known.
+struct WaveformCanvas {
+    wave: Waveform,
     progress: f32,
     duration: f64,
     p: GuiPalette,
+}
+
+/// Dim a played-past band color so the playhead split reads at a glance.
+fn dim(c: Color) -> Color {
+    Color {
+        r: c.r * 0.42,
+        g: c.g * 0.42,
+        b: c.b * 0.42,
+        a: 1.0,
+    }
 }
 
 /// Maps an absolute cursor x to a seek target in seconds, clamped to the
@@ -26,38 +39,6 @@ fn seek_target(cursor_x: f32, bounds: Rectangle, duration: f64) -> f64 {
     f64::from(frac) * duration
 }
 
-/// Top stop of the unplayed envelope gradient: a desaturated blue with no
-/// palette equivalent, kept local as a deliberate decorative tone. The
-/// bottom stop reuses the `line` palette token.
-const UNPLAYED_TOP: Color = Color::from_rgb(108.0 / 255.0, 111.0 / 255.0, 154.0 / 255.0);
-
-/// Mirrored closed envelope polygon for `samples`, laid out left-to-right
-/// from `x0` with horizontal `step` between points. The played/unplayed
-/// split uses two disjoint sub-range paths, not `Frame::with_clip`: clipping
-/// a gradient canvas mesh corrupts it in `iced_wgpu` (fan artifacts).
-fn envelope_path(samples: &[f32], x0: f32, step: f32, h: f32) -> Path {
-    let mid = h / 2.0;
-    let amp = mid - 4.0;
-    Path::new(|b| {
-        let mut x = x0;
-        for (i, &v) in samples.iter().enumerate() {
-            let y = mid - v * amp;
-            if i == 0 {
-                b.move_to(Point::new(x, y));
-            } else {
-                b.line_to(Point::new(x, y));
-            }
-            x += step;
-        }
-        for &v in samples.iter().rev() {
-            x -= step;
-            let y = mid + v * amp * 0.85;
-            b.line_to(Point::new(x, y));
-        }
-        b.close();
-    })
-}
-
 /// Tracks an in-progress pointer drag so cursor moves between press and
 /// release keep emitting seek updates even past the widget edges.
 #[derive(Default)]
@@ -65,7 +46,7 @@ struct DragState {
     dragging: bool,
 }
 
-impl canvas::Program<Message> for Waveform {
+impl canvas::Program<Message> for WaveformCanvas {
     type State = DragState;
 
     fn update(
@@ -148,56 +129,37 @@ impl canvas::Program<Message> for Waveform {
             );
         }
 
-        let n = self.samples.len();
-        if n >= 2 {
-            let last: f32 = (n - 1).as_();
-            let step = w / last;
+        let buckets = self.wave.buckets();
+        let n = buckets.len();
+        if n >= 1 {
+            let mid = h / 2.0;
+            let amp = (mid - 4.0).max(0.0);
+            let count: f32 = n.as_();
+            let col_w = w / count;
+            let bar_w = col_w.max(1.0);
+            let head_x = self.progress.clamp(0.0, 1.0) * w;
+            let bands = [WAVE_LOW, WAVE_MID, WAVE_HIGH];
 
-            let unplayed = gradient::Linear::new(Point::new(0.0, 0.0), Point::new(0.0, h))
-                .add_stop(
-                    0.0,
-                    Color {
-                        a: 0.55,
-                        ..UNPLAYED_TOP
-                    },
-                )
-                .add_stop(
-                    1.0,
-                    Color {
-                        a: 0.65,
-                        ..self.p.line
-                    },
-                );
-            let played = gradient::Linear::new(Point::new(0.0, 0.0), Point::new(0.0, h))
-                .add_stop(
-                    0.0,
-                    Color {
-                        a: 0.95,
-                        ..self.p.accent_strong
-                    },
-                )
-                .add_stop(
-                    1.0,
-                    Color {
-                        a: 0.70,
-                        ..self.p.accent
-                    },
-                );
+            for (i, bucket) in buckets.iter().enumerate() {
+                let idx: f32 = i.as_();
+                let x = idx * col_w;
+                let played = (x + bar_w * 0.5) <= head_x;
+                let heights = [bucket.low, bucket.mid, bucket.high];
 
-            // Sample index at the playhead; both sub-paths share this boundary.
-            // x0 comes from the pre-truncation float so the slice cast is the
-            // only one needed.
-            let split_f = (self.progress.clamp(0.0, 1.0) * last).round();
-            let x0 = split_f * step;
-            let split: usize = split_f.as_();
-
-            if split >= 1 {
-                let path = envelope_path(&self.samples[..=split], 0.0, step, h);
-                frame.fill(&path, played);
-            }
-            if split <= n - 2 {
-                let path = envelope_path(&self.samples[split..], x0, step, h);
-                frame.fill(&path, unplayed);
+                for (value, base) in heights.iter().zip(bands.iter()) {
+                    let v = value.clamp(0.0, 1.0);
+                    if v <= 0.0 {
+                        continue;
+                    }
+                    let half = v * amp;
+                    // The played past is dimmed so the upcoming part stays vivid.
+                    let color = if played { dim(*base) } else { *base };
+                    frame.fill_rectangle(
+                        Point::new(x, mid - half),
+                        Size::new(bar_w, half * 2.0),
+                        color,
+                    );
+                }
             }
         }
 
@@ -224,18 +186,18 @@ impl canvas::Program<Message> for Waveform {
     }
 }
 
-/// Build the deck waveform element from a precomputed peak envelope.
+/// Build the deck waveform element from a precomputed colored waveform.
 /// `duration` (track length in seconds) enables click/drag seeking; pass
 /// `0.0` when it is unknown to keep the widget display-only.
 pub(crate) fn waveform<'a>(
-    peaks: Envelope,
+    wave: Waveform,
     progress: f32,
     duration: f64,
     height: f32,
     p: GuiPalette,
 ) -> Element<'a, Message> {
-    Canvas::new(Waveform {
-        samples: peaks,
+    Canvas::new(WaveformCanvas {
+        wave,
         progress,
         duration,
         p,

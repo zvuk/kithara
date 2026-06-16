@@ -61,7 +61,7 @@ fn one_store_same_url_different_identity_yields_different_inner() {
         Ok(r2) => {
             let mut buf = [0u8; 5];
             assert!(
-                r2.read_at(0, &mut buf).map(|n| n == 0).unwrap_or(true),
+                r2.read_at(0, &mut buf).map_or(true, |n| n == 0),
                 "second identity must not observe writes from first identity"
             );
         }
@@ -87,7 +87,7 @@ fn one_store_two_asset_roots_isolated() {
         Ok(r_b) => {
             let mut buf = [0u8; 5];
             assert!(
-                r_b.read_at(0, &mut buf).map(|n| n == 0).unwrap_or(true),
+                r_b.read_at(0, &mut buf).map_or(true, |n| n == 0),
                 "different asset_root within one store must remain isolated"
             );
         }
@@ -114,7 +114,7 @@ fn two_stores_isolated_even_with_same_identity() {
         Ok(r_b) => {
             let mut buf = [0u8; 5];
             assert!(
-                r_b.read_at(0, &mut buf).map(|n| n == 0).unwrap_or(true),
+                r_b.read_at(0, &mut buf).map_or(true, |n| n == 0),
                 "distinct AssetStore instances must be fully isolated"
             );
         }

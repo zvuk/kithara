@@ -14,6 +14,7 @@ mod loader_starvation;
 mod local_track_plays;
 mod rapid_scrub_decode_failure;
 mod real_playlist;
+mod select_after_eof;
 mod track_replay_after_switch;
 mod track_switch_race;
 mod user_simulation;

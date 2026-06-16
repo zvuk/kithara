@@ -7,7 +7,7 @@ use kithara_decode::PcmChunk;
 use kithara_platform::CancellationToken;
 
 use super::{
-    AudioWorkerSource, PreloadGate,
+    AudioWorkerSource, EngineLoad, PreloadGate,
     decoder_node::DecoderNode,
     hang_observer::HangWatchdogObserver,
     types::{TrackId, TrackIdGen},
@@ -31,6 +31,7 @@ pub(crate) struct TrackRegistration {
     pub(crate) trash_inlet: crate::runtime::Inlet<PcmChunk>,
     pub(crate) outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
     pub(crate) preload_chunks: usize,
+    pub(crate) engine_load: Option<Arc<EngineLoad>>,
 }
 
 /// Clonable handle to a shared audio worker.
@@ -231,6 +232,7 @@ mod tests {
             source: Box::new(source),
             preload_gate: Arc::clone(&preload_gate),
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::Audible)),
+            engine_load: None,
         };
         (reg, inlet, preload_gate)
     }

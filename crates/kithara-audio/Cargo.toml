@@ -21,10 +21,13 @@ kithara-decode = { workspace = true }
 kithara-events = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-bufpool = { workspace = true }
+kithara-beat = { workspace = true, optional = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 biquad = { workspace = true }
 rubato = { workspace = true }
+realfft = { workspace = true }
+thiserror = { workspace = true }
 audioadapter-buffers = { workspace = true }
 smallvec = { workspace = true }
 ringbuf = { workspace = true }
@@ -55,8 +58,18 @@ symphonia = ["kithara-decode/symphonia"]
 # decoder is LC-only; without this feature, HE-AAC v2 streams fail to
 # play through the software fallback.
 fdk-aac = ["kithara-decode/fdk-aac"]
+# Native-only C++ time-stretch backends, opt-in. Each pulls a C++ toolchain
+# (signalsmith: cc+libclang; bungee: cmake). Without one, default + wasm
+# builds carry no stretch DSP: speed control stays, key-lock is compiled out.
+stretch-signalsmith = ["dep:signalsmith-stretch"]
+stretch-bungee = ["dep:bungee-rs"]
+# NN beat/downbeat detector (kithara-beat, embedded small model). Native-only
+# in practice: wasm builds simply do not enable it (rten on wasm unverified).
+beat-nn = ["dep:kithara-beat"]
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
+signalsmith-stretch = { workspace = true, optional = true }
+bungee-rs = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }
@@ -67,8 +80,13 @@ web-sys = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
-kithara-audio = { path = ".", default-features = false, features = ["mock", "probe", "symphonia"] }
+# `stretch-signalsmith` keeps the stretch-slot contract tests in the default
+# `cargo test -p kithara-audio` run now that no pure-Rust backend exists.
+kithara-audio = { path = ".", default-features = false, features = ["mock", "probe", "symphonia", "stretch-signalsmith"] }
 assert_no_alloc = { workspace = true }
+kithara-bufpool = { workspace = true }
+portable-atomic = { workspace = true }
+num-traits = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }

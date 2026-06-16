@@ -4,6 +4,7 @@ use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModif
 use kithara::{
     abr::AbrMode,
     events::{AppEvent, Event},
+    play::StretchControls,
 };
 use kithara_queue::{Queue, QueueEvent, TrackId, Transition};
 use tokio::{sync::broadcast::error::TryRecvError, task};
@@ -37,7 +38,11 @@ type RunnerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 ///
 /// # Errors
 /// Returns an error if the TUI event loop fails.
-pub(super) async fn run_tui(queue: Arc<Queue>, config: &crate::config::AppConfig) -> RunnerResult {
+pub(super) async fn run_tui(
+    queue: Arc<Queue>,
+    timestretch: Arc<StretchControls>,
+    config: &crate::config::AppConfig,
+) -> RunnerResult {
     let palette: tui::TuiPalette = config.palette.into();
 
     queue.set_tracks(crate::sources::build_sources(config));
@@ -45,6 +50,7 @@ pub(super) async fn run_tui(queue: Arc<Queue>, config: &crate::config::AppConfig
     let bus = queue.bus().clone();
     let controller = Arc::new(StateController::new(
         Arc::clone(&queue),
+        timestretch,
         config.clone(),
         config.shutdown.child_token(),
     ));
@@ -227,10 +233,10 @@ fn handle_event(
         Event::Engine(ee) => {
             ui.log_line(&format!("engine {ee:?}"), state)?;
         }
-        Event::Hls(_) | Event::File(_) | Event::Audio(_) => {
-            if !is_progress_event(event) || progress_log.should_emit() {
-                ui.log_line(&format!("{event:?}"), state)?;
-            }
+        Event::Hls(_) | Event::File(_) | Event::Audio(_)
+            if !is_progress_event(event) || progress_log.should_emit() =>
+        {
+            ui.log_line(&format!("{event:?}"), state)?;
         }
         _ => {}
     }

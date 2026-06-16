@@ -172,6 +172,29 @@ pub(crate) mod gui {
     fn to_iced(rgb: Rgb) -> Color {
         Color::from_rgb8(rgb.0, rgb.1, rgb.2)
     }
+
+    /// Deck-waveform band colors (Serato-style overlay): `low` magenta, `mid`
+    /// yellow, `high` cyan. The deck paints the three as concentric mirrored
+    /// bars (low behind, high in front), so all bands stay visible. This is the
+    /// single seam where waveform band-color policy lives.
+    pub(crate) const WAVE_LOW: Color = Color {
+        r: 0.92,
+        g: 0.16,
+        b: 0.55,
+        a: 1.0,
+    };
+    pub(crate) const WAVE_MID: Color = Color {
+        r: 0.95,
+        g: 0.82,
+        b: 0.16,
+        a: 1.0,
+    };
+    pub(crate) const WAVE_HIGH: Color = Color {
+        r: 0.18,
+        g: 0.78,
+        b: 0.92,
+        a: 1.0,
+    };
 }
 
 #[cfg(feature = "tui")]

@@ -44,6 +44,13 @@ symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia"]
 # LC-only AAC decoder; without this feature, HE-AAC v2 (parametric
 # stereo + SBR) streams fail in the software pipeline.
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
+# Native-only C++ time-stretch backends (selectable at runtime in the DJ
+# deck). Each pulls a C++ toolchain; without one, key-lock is compiled out.
+stretch-signalsmith = ["kithara-audio/stretch-signalsmith"]
+stretch-bungee = ["kithara-audio/stretch-bungee"]
+# NN beat/downbeat detector (kithara-beat, embedded small model) in the
+# analysis registry.
+beat-nn = ["kithara-audio/beat-nn"]
 file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
 hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net", "dep:kithara-drm"]
 assets = ["dep:kithara-assets", "dep:kithara-storage"]

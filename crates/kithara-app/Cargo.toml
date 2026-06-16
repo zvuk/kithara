@@ -12,10 +12,17 @@ workspace = true
 default = ["tui", "gui"]
 tui = ["dep:ratatui", "dep:crossterm"]
 gui = ["dep:iced"]
+# NN beat/downbeat detection.
+beat-nn = ["kithara/beat-nn"]
 # Build kithara-app as a plain library — exposes `config`/`sources`/`drm`
 # modules without pulling in iced/ratatui. Used by integration tests
 # (`tests/tests/kithara_queue/real_playlist.rs`).
 lib-only = []
+# Native-only C++ time-stretch backends, opt-in (need a C++ toolchain).
+stretch-signalsmith = ["kithara/stretch-signalsmith"]
+stretch-bungee = ["kithara/stretch-bungee"]
+# Enable both stretch libraries in the DJ deck's selector.
+stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 
 [dependencies]
 kithara = { workspace = true, features = ["file", "hls"] }
@@ -35,6 +42,7 @@ num-traits = { workspace = true }
 obfstr = { workspace = true }
 rand = { workspace = true }
 ratatui = { workspace = true, optional = true }
+sha2 = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -56,6 +64,7 @@ kithara-net = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 futures = { workspace = true }
+tempfile = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }

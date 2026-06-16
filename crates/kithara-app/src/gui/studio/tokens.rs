@@ -11,7 +11,7 @@ pub(super) mod studio_size {
     pub(crate) const BRAND_LOGO: f32 = 28.0;
     pub(crate) const BRAND_DIVIDER_HEIGHT: f32 = 16.0;
     pub(crate) const LIBRARY_WIDTH: f32 = 280.0;
-    pub(crate) const WAVEFORM_HEIGHT: f32 = 84.0;
+    pub(crate) const WAVEFORM_HEIGHT: f32 = 160.0;
     pub(crate) const FADER_HEIGHT: f32 = 90.0;
     pub(crate) const LIB_HEAD_HEIGHT: f32 = 28.0;
     pub(crate) const LIB_ROW_HEIGHT: f32 = 30.0;
@@ -23,6 +23,8 @@ pub(super) mod studio_size {
 pub(super) mod studio_radius {
     pub(crate) const SURFACE: f32 = 10.0;
     pub(crate) const BUTTON: f32 = 8.0;
+    /// Small radius for pills, stat tiles, key-lock and nudge controls.
+    pub(crate) const SM: f32 = 6.0;
     pub(crate) const ROUND: f32 = 999.0;
 }
 
