@@ -388,9 +388,47 @@ impl HlsTrackState {
         // a `None` lookup falls back to `prev` and must NOT be read as "caught
         // up", or a later valid low lookup re-opens the race.
         if let Some(floor) = self.seek_settle_floor {
+            // A pending Manual switch is explicit user intent and must commit
+            // on a seek poll REGARDLESS of which floor sub-case applies. Left
+            // behind the floor it self-reinforces: the reader cannot resolve
+            // at/after the floor while the switch is uncommitted (the scheduler
+            // no longer fetches the old variant), and a coincident decoder
+            // backoff landing would route through the re-aim arm below before
+            // the switch ever commits. Commit it up-front, then keep the floor
+            // for the re-key suppression. Auto never matches (no `Manual`), so
+            // the seek-no-switch freeze contract is untouched; a single-variant
+            // `Manual(N)` with no pending decision is a no-op.
+            if matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_))) {
+                coord.commit_variant_switch(ctx, floor);
+            }
             if found.is_some_and(|(idx, _, _)| idx >= floor) {
                 self.seek_settle_floor = None;
+            } else if let Some((landing, _, _)) = found
+                && floor.saturating_sub(landing) == 1
+            {
+                // Decoder-backoff landing, NOT a lagging cursor. The seek
+                // re-aimed the queue + floor at the time-derived target
+                // (`seek_epoch_reset` → `rebuild_at_time`), but the codec's
+                // recreate seek backs off by its warmup preroll and parks one
+                // segment earlier (60s target → 54s landing). `set_position`
+                // already put the reader cursor in that landing segment, yet
+                // the queue starts at the target segment, so the landing
+                // segment is never fetched and the decoder (reading forward
+                // from the landing) starves. Re-aim the prefetch at the
+                // reader's actual segment and drop the floor to it; the floor
+                // then clears normally once the cursor resolves at/after the
+                // target. The one-segment bound (`floor - landing == 1`) is
+                // the codec preroll bound: a stale *lagging* cursor resolves
+                // many segments below the floor and stays suppressed (the
+                // prefix re-download guard the floor was built for is intact).
+                if let Some(active) = coord.active() {
+                    active.rebuild(ctx, landing);
+                }
+                self.seek_settle_floor = Some(landing);
+                return landing;
             } else {
+                // Lagging cursor: suppress the re-key/rebuild below (the
+                // floor's sole job — guards rapid-seek prefix re-download).
                 return floor;
             }
         }
