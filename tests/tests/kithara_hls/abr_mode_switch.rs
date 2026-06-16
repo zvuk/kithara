@@ -1792,13 +1792,6 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    // Subscribe before the bus is moved into the config so the new variant's
-    // first download enqueue is retained for the emission wait below. Real-
-    // asset URLs name the variant (slq/smq/shq/slossless), not the
-    // HlsTestServer `seg/vN` pattern the EventCollector parses, so we match
-    // the target variant's playlist stem directly.
-    let target_variant_name = ["slq", "smq", "shq", "slossless"][target_variant];
-    let mut emit_rx = bus.subscribe();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .events(bus)
         .decoder_backend(backend)
@@ -1845,30 +1838,19 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         .set_mode(AbrMode::manual(target_variant))
         .expect("Manual target valid");
 
-    // Mirror the production gap between `set_mode` and seek: wait on the real
-    // emission state — the scheduler enqueueing a download for the new
-    // variant (its init/media segment URL carries the variant stem) — instead
-    // of a wall nap that collapses under flash and lets the seek fire before
-    // the new variant has been scheduled, weakening the repro.
-    wait_for_event(
-        &mut emit_rx,
-        "new-variant segment/init enqueued",
-        |ev| {
-            // Match a media-segment or init download for the new variant — those
-            // are scheduled only after the switch. Exclude `.m3u8` playlists,
-            // which may already have been fetched at startup.
-            match ev {
-                Event::Downloader(DownloaderEvent::RequestEnqueued { url, .. }) => {
-                    let u = url.as_str();
-                    u.contains(target_variant_name) && (u.contains(".m4s") || u.contains(".mp4"))
-                }
-                _ => false,
-            }
-        },
-        Duration::from_secs(20),
-    )
-    .await
-    .expect("new-variant segment/init enqueued");
+    // Deterministic ordering (no wall nap, no event race): `set_mode` only sets
+    // the pending Manual decision — it does NOT wake the HLS peer's downloader
+    // poll, and phase 1's reader has stopped, so the peer is parked and has not
+    // committed the switch (active is still V0). Seeking now forces the bug's
+    // interleaving every time: the worker resolves the seek anchor in V0's byte
+    // space (`apply_seek` calls `seek_time_anchor` BEFORE `arm_peer_wake`),
+    // THEN wakes the peer, which commits the Manual switch to the target and
+    // re-maps the reader into the target's byte space. The PostSeek gate is then
+    // left waiting on the stale V0 anchor offset, interpreted against the target
+    // variant's byte_map — a segment the producer (aimed at the real reader
+    // position) never fetches. The previous `wait_for_event(enqueue)` forced a
+    // peer poll here that sometimes committed the switch BEFORE the seek (anchor
+    // then resolved in the target's space → no hang), making the repro ~30%.
 
     // Phase 3 — seek BACKWARDS to a non-zero offset (37 s, as in
     // app.log run 1). reader_pos ends up at ≈ seg 6 byte-coords of
