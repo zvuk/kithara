@@ -589,7 +589,7 @@ async fn user_sim_three_track_bounce_with_seeks(#[case] kinds: &[TrackKind]) {
 // ─── Apple decoder backend (macOS/iOS) ─────────────────────────────────────
 // Hardware-decoder path. Production users on Mac/iOS see the
 // AudioToolbox path — repro the seek bugs on this backend too.
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod apple_backend {
     use super::*;
 

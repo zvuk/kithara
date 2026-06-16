@@ -1,12 +1,14 @@
 use std::io::Cursor;
 
 use kithara_decode::{Decoder, DecoderConfig, DecoderFactory, PcmChunk};
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_integration_tests::ensure_silence_1s_alac_m4a;
 use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcomeTestExt};
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_utils::kithara;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use num_traits::AsPrimitive;
 
 struct Consts;
 
@@ -20,7 +22,7 @@ impl Consts {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Backend {
     Symphonia,
-    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     Apple,
 }
 
@@ -53,18 +55,18 @@ impl Backend {
         use kithara_decode::DecoderBackend;
         match self {
             Self::Symphonia => DecoderBackend::Symphonia,
-            #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             Self::Apple => DecoderBackend::Apple,
         }
     }
 }
 
 fn available_backends() -> Vec<Backend> {
-    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
         vec![Backend::Symphonia, Backend::Apple]
     }
-    #[cfg(not(all(feature = "apple", any(target_os = "macos", target_os = "ios"))))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     {
         vec![Backend::Symphonia]
     }
@@ -86,7 +88,7 @@ fn drain_all(decoder: &mut dyn Decoder) -> Vec<f32> {
 }
 
 /// L2 norm of a PCM slice.
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn l2_norm(samples: &[f32]) -> f64 {
     samples
         .iter()
@@ -256,7 +258,7 @@ fn wav_pcm_round_trip_matches_signal_across_backends() {
     }
 }
 
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[kithara::test]
 fn apple_decodes_standalone_alac_m4a() {
     let path = ensure_silence_1s_alac_m4a();
@@ -270,7 +272,7 @@ fn apple_decodes_standalone_alac_m4a() {
 
     let samples = drain_all(&mut *decoder);
     let frames = samples.len() / usize::from(spec.channels.max(1));
-    let expected = spec.sample_rate as usize; // 1-second fixture
+    let expected: usize = spec.sample_rate.get().as_(); // 1-second fixture
     let tol = expected / 10;
     assert!(
         frames.abs_diff(expected) <= tol,
@@ -278,7 +280,7 @@ fn apple_decodes_standalone_alac_m4a() {
     );
 }
 
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[kithara::test]
 fn full_decode_l2_norm_matches_within_tolerance() {
     const TOL_REL: f64 = 0.02;
