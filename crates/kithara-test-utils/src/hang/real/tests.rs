@@ -116,6 +116,51 @@ mod native_detector_tests {
         assert_eq!(parsed["phase"], 7, "last tick_with wins");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // The whole point of the watchdog upgrade: a fired panic names the exact
+    // `hang_tick!` call site (its file:line), not the detector internals. Real
+    // clock so the 1ms timeout and the detector's `Instant` read the same clock.
+    #[kithara::test(native, flash(false))]
+    fn panic_reports_hang_tick_call_site_not_detector_internals() {
+        // `hang_tick!()` sits exactly one line below the `line!()` marker, so
+        // the captured expectation equals the line the macro forwards via
+        // `file!()`/`line!()` — exact and stable under rustfmt.
+        #[kithara::hang_watchdog(timeout = Duration::from_millis(1))]
+        fn spin(tick_line: &mut u32) {
+            loop {
+                sleep(Duration::from_millis(5));
+                *tick_line = line!() + 1;
+                hang_tick!();
+            }
+        }
+
+        let mut tick_line = 0u32;
+        let payload = catch_unwind(AssertUnwindSafe(|| spin(&mut tick_line)))
+            .expect_err("spin must panic past deadline");
+        let msg = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .expect("panic payload is a string")
+            .to_string();
+
+        assert!(msg.contains("HangDetector"), "msg: {msg}");
+        assert!(
+            msg.contains(&format!(
+                "kithara-test-utils/src/hang/real/tests.rs:{tick_line}"
+            )) || msg.contains(&format!("tests.rs:{tick_line}")),
+            "panic must name the exact hang_tick! line {tick_line}: {msg}"
+        );
+        assert!(
+            !msg.contains("detector_native.rs"),
+            "panic must not report detector internals: {msg}"
+        );
+        // No `hang_reset!` ran, so last progress is unknown but still reported.
+        assert!(
+            msg.contains("last progress at <unknown>"),
+            "diagnostic must report the last-progress location: {msg}"
+        );
+    }
 }
 
 #[kithara::test]
@@ -186,6 +231,7 @@ mod dump_tests {
                 value: 42,
             },
             Some(dir.as_path()),
+            "stuck at x.rs:1",
         );
 
         let newest = std::fs::read_dir(&dir)

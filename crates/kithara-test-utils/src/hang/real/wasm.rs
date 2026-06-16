@@ -10,9 +10,9 @@ use super::shared::HangDump;
 /// writes to the browser `console` and is safe in every scope (including the
 /// audio worklet, where the global `tracing` subscriber's cross-instance
 /// vtable would trap).
-pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, _dir: Option<&Path>) {
+pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, _dir: Option<&Path>, diag: &str) {
     kithara_platform::logging::log_error(&format!(
-        "[kithara_hang_detector] hang detected: {label} — {}",
+        "[kithara_hang_detector] hang detected: {label} [{diag}] — {}",
         ctx.dump_json()
     ));
 }
