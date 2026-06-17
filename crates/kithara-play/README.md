@@ -59,213 +59,24 @@ a `PlayerItem`. The engine owns master output and crossfade; a per-slot
 `Player` and `QueuePlayer` take `Box<dyn Fn>` time-observer callbacks, so they
 are integration-tested rather than `unimock`ed.
 
-## Crossfade
+## Orientation
 
-`Engine::crossfade(from, to, config)` fades one slot out while the other fades
-in. `CrossfadeConfig` selects the curve (`CrossfadeCurve`: `EqualPower`,
-`Linear`, `SCurve`, `ConstantPower`, `FastFadeIn`, `FastFadeOut`), duration,
-cut points, and a `beat_aligned` flag. Beat/BPM data types (`BeatGrid`,
-`BpmInfo`) and `DjEvent` exist for callers that supply their own analysis.
+- **Lifecycle:** `start()` → `allocate_slot()` → attach `Player` →
+  `replace_current_item(Some(item))` → `play()`; tear down with `release_slot(id)`
+  then `stop()`.
+- **Crossfade:** `Engine::crossfade(from, to, config)` fades one slot out and
+  another in via `CrossfadeConfig` / `CrossfadeCurve`.
+- **Tempo & key-lock:** driven by the shared `StretchControls` handle in
+  `PlayerConfig.timestretch`; speed, key-lock, and backend apply live, mid-track.
+- **Events:** `tokio::sync::broadcast` via `player.subscribe()` /
+  `engine.subscribe()` (`PlayerEvent`, `ItemEvent`, `EngineEvent`,
+  `SessionEvent`, `DjEvent`).
+- **Queue auto-advance:** `PlayerImpl` exposes an `arm_next` / `commit_next`
+  handover API for external orchestrators (e.g. `kithara-queue::Queue`).
+- **Cancel:** the player's `CancelScope` is derived from `PlayerConfig.cancel`;
+  the master cancel lives at the consumer-crate top.
 
-## Tempo & Key-Lock
+File and HLS pipelines are unconditional; cpal output is the default backend.
+Enable `mock` for trait-level `unimock` testing.
 
-`kithara-audio`'s `StretchControls` (one per deck, in `PlayerConfig.timestretch`)
-is a single `Arc` holding `speed` — plus `keylock` + `backend` when a stretch
-backend is compiled in (`stretch-signalsmith` / `stretch-bungee`). It is the one
-source of truth, shared between the UI and the worker's effect chain, which reads
-it each chunk. Rate setters (`set_rate`, `play`) and `set_keylock` / `set_backend`
-all write this one handle; there is no second rate atomic and no manual mirror.
-
-`prepare_config` always passes the shared controls into every track (`stretch =
-Some(..)`). With a compiled-in backend the effect chain runs a
-`TimeStretchProcessor` in tempo mode whether or not key-lock is on:
-
-- **key-lock off** (default): the stretch slot bypasses (PCM forwarded untouched)
-  and routes `speed` to the resampler — changing speed shifts pitch (vinyl-style).
-- **key-lock on**: the stretch slot changes tempo with pitch held and pins the
-  resampler to 1.0.
-
-Without one (default native build, wasm) there is no key-lock: the resampler
-follows the shared speed atomic directly, identical to key-lock off.
-
-Because the controls are read each chunk, **key-lock, backend, and speed all apply
-live, mid-track — no reload.** Switching key-lock or backend resets the FFT
-backend's buffer, so a brief transient (~100–300 ms) is expected at the switch.
-`Queue` delegates `set_rate` to the player; key-lock and backend are set by the
-consumer directly on the shared `StretchControls` handle.
-
-## Events
-
-`tokio::sync::broadcast`, via `player.subscribe()` / `engine.subscribe()`.
-
-<table>
-<tr><th>Enum</th><th>Scope</th></tr>
-<tr><td><code>PlayerEvent</code></td><td>Status, rate, volume, mute, current item, prefetch/handover, EOF, failure</td></tr>
-<tr><td><code>ItemEvent</code></td><td>Item status, buffering, seek, stall, end-of-stream</td></tr>
-<tr><td><code>EngineEvent</code></td><td>Slot lifecycle, crossfade progress, master volume</td></tr>
-<tr><td><code>SessionEvent</code></td><td>Interruption, route change, media services</td></tr>
-<tr><td><code>DjEvent</code></td><td>BPM detected, beat tick, sync engage/disengage, phase aligned</td></tr>
-</table>
-
-Status types: `PlayerStatus`, `TimeControlStatus`, `ItemStatus`,
-`WaitingReason`. Audio-session value types (`SessionCategory`, `SessionMode`,
-`SessionOptions`, `PortType`, `RouteDescription`) describe routing. Identity/time:
-`SlotId`, `ObserverId`, `MediaTime` (a `CMTime` mirror with `Ord` and arithmetic).
-
-## Queue Auto-Advance
-
-`PlayerImpl` exposes a handover API for external orchestrators (e.g.
-`kithara-queue::Queue`):
-
-- `arm_next(idx) -> Option<Arc<str>>` — load the next item into the audio thread,
-  ready for gapless stitch (cf=0) or parallel fade (cf>0).
-- `commit_next(idx) -> Result<(), PlayError>` — promote the armed slot (cf>0 only;
-  the audio thread handles cf=0 internally).
-- `unarm_next()` — drop the armed slot without committing.
-- `armed_next() -> Option<usize>` — snapshot of the armed index.
-
-Two near-end triggers are published: `PlayerEvent::PrefetchRequested` (arm the
-next track) and `PlayerEvent::TrackHandoverRequested` (commit it; emitted only
-when `crossfade_duration > 0`). `PlayerConfig::auto_advance_enabled` (default
-`true`) uses a built-in linear policy (`next = current + 1`); orchestrators turn
-it off and drive advance themselves.
-
-## Engine Lifecycle
-
-`start()` → `allocate_slot()` → attach `Player` → `replace_current_item(Some(item))`
-→ `play()`. For crossfade, allocate a second slot and call
-`Engine::crossfade(from, to, config)`. Tear down with `release_slot(id)` then
-`stop()`.
-
-`Engine::start` is **atomic single-start**: the `running` check-then-act is
-serialized by an internal `start_lock`, and `running` flips to `true` only after
-`session.start_player` has fully succeeded. Two concurrent starters (e.g. the
-synchronous `Queue::select` path and an async loader-completion both calling
-`PlayerImpl::ensure_engine_started`) cannot both dispatch `start_player`: the
-loser observes `running == true` under the lock and returns
-`EngineAlreadyRunning`. `ensure_engine_started` treats `EngineAlreadyRunning` as
-success — the engine is started, which is all it promises — so a concurrent start
-is idempotent, never a `"player already started"` session desync.
-
-## Cancel Hierarchy
-
-Cancel is a typed propagate-down tree (`kithara-platform` `common/cancel/`):
-`CancelToken` is a `Clone`-by-identity handle, `CancelToken::root()` mints a
-fresh tree root, and `cancel()` on any node flags it and cascades down to every
-descendant. `is_cancelled()` is a single Acquire-load of the node's own flag.
-
-`PlayerImpl` takes its cancel through `CancelScope::new(config.cancel)`:
-a passed `CancelToken` (consumer crates `Queue` / `App` / FFI mint their own
-`CancelToken::root()` and pass `root.child()` through `PlayerConfig.cancel`)
-makes the scope a composed child of that token; `None` makes the player's scope
-token itself a fresh `root()`. Subsystems (Downloader, AssetStore, HlsPeer,
-audio worker, epoch cancel) derive children via `.child()` from the scope's
-token, so a master / parent `cancel()` is observed by all of them.
-
-`CancelScope::Drop` is **passive**. Teardown is an explicit `scope.cancel()`
-that cancels the player's own subtree — it never implicitly cancels a
-potentially-foreign master passed in from above (the previous `Drop`-cancel of
-the passed token is gone). Hard-coded `CancelToken::root()` and
-`CancelToken::never()` outside the allowlist are forbidden, enforced by
-`cargo xtask lint arch` (`cancel_root_sites`).
-
-## Real-Time Audio Thread
-
-Two distinct real-time surfaces carry the `#[kithara::rtsan_forbid_blocking]`
-contract; both are verified by RealtimeSanitizer (gated by `--cfg rtsan`, so
-stable/production builds are byte-identical).
-
-**Consumer `process()` — permanent.** `PlayerNodeProcessor::process` and
-`MasterEqProcessor::process` run on the Firewheel audio thread and stay
-allocation-, free-, and lock-free: scratch buffers are pre-sized at stream
-start, and evicted tracks are handed to a bounded deferred-drop channel (drained
-on the main thread) instead of being freed on the audio thread.
-
-**Worker produce-core — verified-after-refactor.** The audio worker's
-`produce_pass` (`kithara-audio` scheduler) is `#[rtsan_forbid_blocking]`: the
-decode core reads/seeks without malloc/lock/syscall. Off-core work is pushed to
-the unchecked **shell** of the run-loop — pooled-buffer free, the deferred
-reader-hook + peer-wake flush (`flush_deferred`, run by `recycle`), the parked
-`wait`, and the intrinsic symphonia `next_packet` allocation are all
-**blocking-by-design in the shell**, never on the forbid path. The reader wakes
-the downloader by *arming* a lock-free flag on the core (`Stream::probe_read` /
-`probe_seek`); the shell delivers the cross-thread `notify_one`. FSM lifecycle
-telemetry (`AudioEvent` via `emit_seek_lifecycle`) is enqueued lock-free on the
-core into a `DeferredBus<AudioEvent>` and published by the shell
-(`flush_deferred` + `Drop`), so the `EventBus` tokio-broadcast send stays off
-the forbid path — like the reader-hooks. The produce-core read/seek path is
-verified kevent/yield-free; the CI lane stays advisory (soak) until that holds
-across the full lane set.
-
-**Lanes.** `just rtsan` (mock decoder, fast tripwire), `just rtsan-file`
-(real-decoder file-offline), `just rtsan-hls` (real-decoder HLS-offline). The
-nightly `.github/workflows/rtsan.yml.disabled` runs all three on linux+macos
-(pinned nightly + `rust-src`), `continue-on-error` until the produce-core lanes
-are green.
-
-**No `kithara-rtsan` crate.** The `permit()` / forbid-blocking macros stay in
-`kithara-test-utils` alongside the USDT probe system — it is a normal dependency
-of the production crates (most purely for probes), so splitting only the RT
-attributes would fragment the shared `kithara::` facade and shed nothing.
-
-## Session Hosting
-
-Platform-asymmetric by necessity. Native (`impls/session/host_native.rs`): a
-dedicated engine worker thread drains a `ringbuf` of commands. Web
-(`impls/session/host_web.rs`): `AudioContext` lives on the browser main thread,
-and Worker-side clients proxy commands over an `mpsc` bridge. The cross-platform
-core (`state.rs`, `client.rs`) carries zero `#[cfg]`; the only structural gate is
-two lines in `mod.rs`.
-
-## Feature Flags
-
-<table>
-<tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
-<tr><td><code>backend-cpal</code></td><td>yes</td><td>CPAL output via <code>firewheel/cpal</code></td></tr>
-<tr><td><code>backend-web-audio</code></td><td>no</td><td>WebAudio backend (wasm32)</td></tr>
-<tr><td><code>wasm-bindgen</code></td><td>no</td><td>WASM bindings via <code>firewheel/wasm-bindgen</code></td></tr>
-<tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox decode via <code>kithara-audio/apple</code></td></tr>
-<tr><td><code>probe</code></td><td>no</td><td>USDT runtime tracing</td></tr>
-<tr><td><code>mock</code></td><td>no</td><td><code>unimock</code> trait mocks</td></tr>
-</table>
-
-File and HLS pipelines are unconditional: `kithara-play` always links
-`kithara-file`, `kithara-hls`, `kithara-abr`, `kithara-assets`, `kithara-net`.
-
-## Invariants
-
-- `SlotId` is valid only between `allocate_slot()` and `release_slot()`.
-- At most `Engine::max_slots()` slots allocated at once; at most one active crossfade.
-- `Player::slot_id()` is `None` until registered with the engine.
-- `MediaTime::INVALID` has `timescale == 0`; arithmetic on invalid times stays invalid.
-- Audio-thread `process()` is allocation-, free-, and lock-free.
-
-## Current item
-
-`PlayerEvent::CurrentItemChanged` means the *identity* of the current item
-changed — not merely that playback (re)started. A bare `play()` that resumes
-the already-current item must **not** emit it: consumers (the queue, which
-re-publishes `QueueEvent::CurrentTrackChanged`, and FFI observers) treat the
-event as a track switch and do real work on it — e.g. the DJ studio re-analyses
-the waveform.
-
-`play()` enforces this with `last_announced_index` (sentinel `usize::MAX` until
-the first announce): it emits only when the loaded index differs from the last
-announced one, so first activation announces but a resume does not. The genuine
-track moves (`commit_next`, `advance_to_next_item`, the handover finaliser, the
-jump path) go through `announce_current_item`, which records the index and
-emits. Item-set mutations that change identity under a reused index
-(`remove_all_items`, `remove_at`, `replace_item*` on the announced index) reset
-the sentinel to `usize::MAX`, so the next `play()` re-announces.
-
-## Testing
-
-The offline render backend for deterministic engine/player tests lives in
-`kithara-integration-tests::offline`, not here. Enable `mock` for trait-level
-`unimock` testing.
-
-## Integration
-
-Defines the public player API consumed by higher-level crates. All traits are
-`Send + Sync + 'static`; failures propagate via `Result<T, PlayError>` (no
-`unwrap()`/`expect()` in production code).
+See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.
