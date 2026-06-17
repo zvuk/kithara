@@ -25,11 +25,10 @@ impl PreloadGate {
     /// perceptible budget while keeping the worker store-only.
     const POLL_INTERVAL: Duration = Duration::from_millis(2);
 
-    /// Mark the gate open. Called on the worker thread from every preload
-    /// terminal site (progress threshold, EOF, Failed, cancel). Idempotent
-    /// and lock-free: a single `Release` store.
-    pub(crate) fn signal(&self) {
-        self.ready.store(true, Ordering::Release);
+    /// `true` once [`signal`](PreloadGate::signal) has fired for the current
+    /// epoch.
+    pub(crate) fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::Acquire)
     }
 
     /// Re-close the gate so a fresh [`wait`](PreloadGate::wait) blocks again.
@@ -38,10 +37,11 @@ impl PreloadGate {
         self.ready.store(false, Ordering::Release);
     }
 
-    /// `true` once [`signal`](PreloadGate::signal) has fired for the current
-    /// epoch.
-    pub(crate) fn is_ready(&self) -> bool {
-        self.ready.load(Ordering::Acquire)
+    /// Mark the gate open. Called on the worker thread from every preload
+    /// terminal site (progress threshold, EOF, Failed, cancel). Idempotent
+    /// and lock-free: a single `Release` store.
+    pub(crate) fn signal(&self) {
+        self.ready.store(true, Ordering::Release);
     }
 
     /// Await the gate opening. Resolves once a worker `signal()` is observed;

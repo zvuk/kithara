@@ -64,16 +64,6 @@ impl SegmentReadState {
         }
     }
 
-    /// Resize `buffer` to the current `total()` and report whether the
-    /// segment is already fully filled. Every fill checkpoint runs this
-    /// after a live-range re-resolve that may have grown or shrunk the
-    /// target.
-    fn sync_buffer_ready(&mut self) -> DecodeResult<bool> {
-        let total = self.total();
-        self.resize_to(total)?;
-        Ok(self.filled >= total)
-    }
-
     /// Set `buffer` length to exactly `total`. Growth goes through the
     /// budget-tracked [`PooledOwned::ensure_len`] (a plain `resize` via
     /// `DerefMut` would leak the pool's byte budget); shrink uses
@@ -89,6 +79,16 @@ impl SegmentReadState {
         })?;
         self.buffer.truncate(total);
         Ok(())
+    }
+
+    /// Resize `buffer` to the current `total()` and report whether the
+    /// segment is already fully filled. Every fill checkpoint runs this
+    /// after a live-range re-resolve that may have grown or shrunk the
+    /// target.
+    fn sync_buffer_ready(&mut self) -> DecodeResult<bool> {
+        let total = self.total();
+        self.resize_to(total)?;
+        Ok(self.filled >= total)
     }
 
     pub(crate) fn total(&self) -> usize {
@@ -389,13 +389,17 @@ mod tests {
     /// fill loop's live re-resolve, timed to land between the two
     /// `refresh_range` calls of one fill iteration.
     struct ShrinkingLayout {
+        polls: AtomicUsize,
         full_end: u64,
         shrunk_end: u64,
         shrink_after: usize,
-        polls: AtomicUsize,
     }
 
     impl ShrinkingLayout {
+        fn desc(&self, range: Range<u64>) -> SegmentDescriptor {
+            SegmentDescriptor::new(range, Duration::ZERO, Duration::from_secs(1), 0, 0)
+        }
+
         fn range(&self) -> Range<u64> {
             let n = self.polls.fetch_add(1, Ordering::SeqCst);
             let end = if n >= self.shrink_after {
@@ -404,10 +408,6 @@ mod tests {
                 self.full_end
             };
             0..end
-        }
-
-        fn desc(&self, range: Range<u64>) -> SegmentDescriptor {
-            SegmentDescriptor::new(range, Duration::ZERO, Duration::from_secs(1), 0, 0)
         }
     }
 

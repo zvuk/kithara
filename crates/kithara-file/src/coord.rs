@@ -12,24 +12,24 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 
 pub(crate) struct FileCoord {
+    /// Narrow activity handle (`is_playing`) read by the downloader peer.
+    activity: Arc<dyn Activity>,
+    /// Backing playhead state — the coord owns the `Arc` directly and
+    /// vends narrow trait-object handles from it.
+    playhead: Arc<PlayheadState>,
     /// Authoritative byte cursor exposed via
     /// [`Source::position`](kithara_stream::Source::position) — File owns
     /// its own atomic, lock-free for both reader and downloader threads.
     position: Arc<AtomicU64>,
     read_pos: Arc<AtomicU64>,
-    total_bytes: Arc<AtomicU64>,
-    reader_advanced: Notify,
-    /// Backing playhead state — the coord owns the `Arc` directly and
-    /// vends narrow trait-object handles from it.
-    playhead: Arc<PlayheadState>,
     /// Backing seek/activity state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
     seek: Arc<SeekState>,
     /// Narrow seek-observe handle (flush gate) — derived from the shared
     /// `SeekState`, so it observes the same flags without the wide type.
     seek_obs: Arc<dyn SeekObserve>,
-    /// Narrow activity handle (`is_playing`) read by the downloader peer.
-    activity: Arc<dyn Activity>,
+    total_bytes: Arc<AtomicU64>,
+    reader_advanced: Notify,
 }
 
 impl FileCoord {
@@ -54,8 +54,28 @@ impl FileCoord {
         }
     }
 
+    #[must_use]
+    pub(crate) fn activity(&self) -> &Arc<dyn Activity> {
+        &self.activity
+    }
+
+    #[must_use]
+    pub(crate) fn activity_handle(&self) -> Arc<dyn Activity> {
+        Arc::clone(&self.seek) as Arc<dyn Activity>
+    }
+
     pub(crate) fn advance_position(&self, n: u64) {
         self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    #[must_use]
+    pub(crate) fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+    }
+
+    #[must_use]
+    pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
     }
 
     #[must_use]
@@ -73,6 +93,26 @@ impl FileCoord {
     #[must_use]
     pub(crate) fn read_pos_handle(&self) -> Arc<AtomicU64> {
         Arc::clone(&self.read_pos)
+    }
+
+    #[must_use]
+    pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl> {
+        Arc::clone(&self.seek) as Arc<dyn SeekControl>
+    }
+
+    #[must_use]
+    pub(crate) fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
+        self.seek.seek_epoch_arc()
+    }
+
+    #[must_use]
+    pub(crate) fn seek_obs(&self) -> &Arc<dyn SeekObserve> {
+        &self.seek_obs
+    }
+
+    #[must_use]
+    pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
     }
 
     /// Report the current download byte position. The value is not stored
@@ -96,46 +136,6 @@ impl FileCoord {
     pub(crate) fn set_total_bytes(&self, total: Option<u64>) {
         self.total_bytes
             .store(total.unwrap_or(Self::NO_TOTAL_BYTES), Ordering::Release);
-    }
-
-    #[must_use]
-    pub(crate) fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-        Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
-    }
-
-    #[must_use]
-    pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-        Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
-    }
-
-    #[must_use]
-    pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-    }
-
-    #[must_use]
-    pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl> {
-        Arc::clone(&self.seek) as Arc<dyn SeekControl>
-    }
-
-    #[must_use]
-    pub(crate) fn activity_handle(&self) -> Arc<dyn Activity> {
-        Arc::clone(&self.seek) as Arc<dyn Activity>
-    }
-
-    #[must_use]
-    pub(crate) fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
-        self.seek.seek_epoch_arc()
-    }
-
-    #[must_use]
-    pub(crate) fn seek_obs(&self) -> &Arc<dyn SeekObserve> {
-        &self.seek_obs
-    }
-
-    #[must_use]
-    pub(crate) fn activity(&self) -> &Arc<dyn Activity> {
-        &self.activity
     }
 
     #[must_use]

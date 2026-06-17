@@ -77,9 +77,9 @@ impl RegionPlan {
 /// segment or a gap between segments.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct ActiveRegion {
-    pub(crate) start: u64,
-    pub(crate) end: u64,
     pub(crate) correction: f64,
+    pub(crate) end: u64,
+    pub(crate) start: u64,
 }
 
 impl ActiveRegion {

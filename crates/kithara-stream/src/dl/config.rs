@@ -10,10 +10,6 @@ pub struct DownloaderConfig {
     /// Settings for the shared ABR controller owned by the Downloader.
     #[builder(default)]
     pub abr_settings: AbrSettings,
-    /// Optional parent cancel. `Some` → the download loop's scope is a child
-    /// of it (composed); `None` → the Downloader owns a standalone scope. The
-    /// `CancelScope` seam lives in [`Downloader::new`](super::Downloader::new).
-    pub cancel: Option<CancelToken>,
     /// Throttle delay for demand (low-priority) processing.
     /// Gives urgent work a chance to preempt before demand batch runs.
     #[builder(default = Duration::ZERO)]
@@ -30,6 +26,10 @@ pub struct DownloaderConfig {
     /// with the caller. Pass a single shared `HttpClient` to multiple
     /// Downloaders to share keep-alive sockets across them.
     pub client: HttpClient,
+    /// Optional parent cancel. `Some` → the download loop's scope is a child
+    /// of it (composed); `None` → the Downloader owns a standalone scope. The
+    /// `CancelScope` seam lives in [`Downloader::new`](super::Downloader::new).
+    pub cancel: Option<CancelToken>,
     /// Tokio runtime handle for the download loop.
     ///
     /// - `Some(handle)` — the loop runs as a task on this runtime.

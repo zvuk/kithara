@@ -16,10 +16,10 @@ use crate::{
 /// in the center, over a faint 1/8 column grid, a 16-tick beat grid and a
 /// playhead. Click or drag the pointer to seek when `duration` is known.
 struct WaveformCanvas {
+    p: GuiPalette,
     wave: Waveform,
     progress: f32,
     duration: f64,
-    p: GuiPalette,
 }
 
 /// Dim a played-past band color so the playhead split reads at a glance.
@@ -48,59 +48,6 @@ struct DragState {
 
 impl canvas::Program<Message> for WaveformCanvas {
     type State = DragState;
-
-    fn update(
-        &self,
-        state: &mut DragState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<Message>> {
-        if self.duration <= 0.0 {
-            return None;
-        }
-        match event {
-            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
-                cursor.position_over(bounds).map(|pos| {
-                    state.dragging = true;
-                    Action::publish(Message::SeekChanged(seek_target(
-                        pos.x,
-                        bounds,
-                        self.duration,
-                    )))
-                    .and_capture()
-                })
-            }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
-                cursor.position().map(|pos| {
-                    Action::publish(Message::SeekChanged(seek_target(
-                        pos.x,
-                        bounds,
-                        self.duration,
-                    )))
-                    .and_capture()
-                })
-            }
-            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.dragging => {
-                state.dragging = false;
-                Some(Action::publish(Message::SeekReleased).and_capture())
-            }
-            _ => None,
-        }
-    }
-
-    fn mouse_interaction(
-        &self,
-        state: &DragState,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
-        if self.duration > 0.0 && (state.dragging || cursor.is_over(bounds)) {
-            mouse::Interaction::Pointer
-        } else {
-            mouse::Interaction::default()
-        }
-    }
 
     fn draw(
         &self,
@@ -184,6 +131,59 @@ impl canvas::Program<Message> for WaveformCanvas {
 
         vec![frame.into_geometry()]
     }
+
+    fn mouse_interaction(
+        &self,
+        state: &DragState,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        if self.duration > 0.0 && (state.dragging || cursor.is_over(bounds)) {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::default()
+        }
+    }
+
+    fn update(
+        &self,
+        state: &mut DragState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<Message>> {
+        if self.duration <= 0.0 {
+            return None;
+        }
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
+                cursor.position_over(bounds).map(|pos| {
+                    state.dragging = true;
+                    Action::publish(Message::SeekChanged(seek_target(
+                        pos.x,
+                        bounds,
+                        self.duration,
+                    )))
+                    .and_capture()
+                })
+            }
+            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
+                cursor.position().map(|pos| {
+                    Action::publish(Message::SeekChanged(seek_target(
+                        pos.x,
+                        bounds,
+                        self.duration,
+                    )))
+                    .and_capture()
+                })
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.dragging => {
+                state.dragging = false;
+                Some(Action::publish(Message::SeekReleased).and_capture())
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Build the deck waveform element from a precomputed colored waveform.
@@ -197,10 +197,10 @@ pub(crate) fn waveform<'a>(
     p: GuiPalette,
 ) -> Element<'a, Message> {
     Canvas::new(WaveformCanvas {
+        p,
         wave,
         progress,
         duration,
-        p,
     })
     .width(Length::Fill)
     .height(Length::Fixed(height))

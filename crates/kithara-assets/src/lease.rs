@@ -105,12 +105,6 @@ where
         Self::with_byte_recorder(inner, cancel, None, pins)
     }
 
-    fn is_active(&self) -> bool {
-        self.inner
-            .capabilities()
-            .contains(crate::base::Capabilities::LEASE)
-    }
-
     /// Force-persist the in-memory pin set to disk. No-op when the lease
     /// layer is bypassed (capability inactive) or the underlying pins
     /// index is ephemeral.
@@ -122,6 +116,12 @@ where
             return Ok(());
         }
         self.pins.flush()
+    }
+
+    fn is_active(&self) -> bool {
+        self.inner
+            .capabilities()
+            .contains(crate::base::Capabilities::LEASE)
     }
 
     fn open_live_resource(&self, key: &ResourceKey, status: ResourceStatus) -> Arc<LiveResource> {
@@ -208,10 +208,10 @@ where
 /// clean `commit`, this removes the partial resource — unless the resource was
 /// committed in the meantime (checked via the shared [`LiveResource`] mirror).
 struct WriterCleanup {
-    remove: Option<RemoveFn>,
-    resource_key: Option<ResourceKey>,
     drop_token: Option<Arc<()>>,
     live: Option<Arc<LiveResource>>,
+    remove: Option<RemoveFn>,
+    resource_key: Option<ResourceKey>,
     armed: bool,
 }
 
@@ -248,9 +248,9 @@ impl Drop for WriterCleanup {
 /// records bytes + updates the live mirror on `commit`, and removes the partial
 /// resource if dropped without committing.
 pub struct LeaseWriter<W: WriteSide, L> {
-    inner: W,
     _lease: L,
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
+    inner: W,
     /// Owns the removal channel, resource key, drop-token and live mirror —
     /// the single home for those, also read by `commit`/`reader`/`fail`.
     cleanup: WriterCleanup,
@@ -260,12 +260,12 @@ pub struct LeaseWriter<W: WriteSide, L> {
 /// alive; read-only. Carries the write-side machinery (`byte_recorder`,
 /// `remove`) so [`reactivate`](ReadSide::reactivate) can rebuild a full writer.
 pub struct LeaseReader<R: ReadSide, L> {
-    inner: R,
     lease: L,
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
-    remove: Option<RemoveFn>,
     live: Option<Arc<LiveResource>>,
+    remove: Option<RemoveFn>,
     resource_key: Option<ResourceKey>,
+    inner: R,
 }
 
 impl<R, L> Clone for LeaseReader<R, L>
@@ -332,25 +332,6 @@ where
 {
     type Reader = LeaseReader<W::Reader, L>;
 
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner.write_at(offset, data)
-    }
-
-    fn reader(&self) -> LeaseReader<W::Reader, L> {
-        LeaseReader {
-            inner: self.inner.reader(),
-            lease: self._lease.clone(),
-            byte_recorder: self.byte_recorder.clone(),
-            remove: self.cleanup.remove.clone(),
-            live: self.cleanup.live.clone(),
-            resource_key: self.cleanup.resource_key.clone(),
-        }
-    }
-
-    fn raw_write_handle(&self) -> RawWriteHandle {
-        self.inner.raw_write_handle()
-    }
-
     fn commit(mut self, final_len: Option<u64>) -> StorageResult<LeaseReader<W::Reader, L>> {
         let reader_inner = self.inner.commit(final_len)?;
         if let Some(live) = &self.cleanup.live {
@@ -389,6 +370,25 @@ where
         // `resource_state` query. Only a writer dropped WITHOUT commit/fail
         // (silent abandonment) triggers the partial-resource removal.
         self.cleanup.disarm();
+    }
+
+    fn raw_write_handle(&self) -> RawWriteHandle {
+        self.inner.raw_write_handle()
+    }
+
+    fn reader(&self) -> LeaseReader<W::Reader, L> {
+        LeaseReader {
+            inner: self.inner.reader(),
+            lease: self._lease.clone(),
+            byte_recorder: self.byte_recorder.clone(),
+            remove: self.cleanup.remove.clone(),
+            live: self.cleanup.live.clone(),
+            resource_key: self.cleanup.resource_key.clone(),
+        }
+    }
+
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.inner.write_at(offset, data)
     }
 }
 
@@ -512,27 +512,6 @@ where
         Ok((lease, Some(remove), self.byte_recorder.clone()))
     }
 
-    fn wrap_writer(
-        &self,
-        key: &ResourceKey,
-        inner: A::ActiveRes,
-    ) -> AssetsResult<LeaseWriter<A::ActiveRes, LeaseGuard>> {
-        let live = self.open_live_resource(key, ResourceStatus::Active);
-        let (lease, remove, byte_recorder) = self.lease_for(key)?;
-        Ok(LeaseWriter {
-            inner,
-            _lease: lease,
-            byte_recorder,
-            cleanup: WriterCleanup {
-                remove,
-                resource_key: Some(key.clone()),
-                drop_token: Some(Arc::new(())),
-                live: Some(live),
-                armed: true,
-            },
-        })
-    }
-
     fn wrap_reader(
         &self,
         key: &ResourceKey,
@@ -547,6 +526,27 @@ where
             remove,
             live: Some(live),
             resource_key: Some(key.clone()),
+        })
+    }
+
+    fn wrap_writer(
+        &self,
+        key: &ResourceKey,
+        inner: A::ActiveRes,
+    ) -> AssetsResult<LeaseWriter<A::ActiveRes, LeaseGuard>> {
+        let live = self.open_live_resource(key, ResourceStatus::Active);
+        let (lease, remove, byte_recorder) = self.lease_for(key)?;
+        Ok(LeaseWriter {
+            inner,
+            byte_recorder,
+            _lease: lease,
+            cleanup: WriterCleanup {
+                remove,
+                resource_key: Some(key.clone()),
+                drop_token: Some(Arc::new(())),
+                live: Some(live),
+                armed: true,
+            },
         })
     }
 }

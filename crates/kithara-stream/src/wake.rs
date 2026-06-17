@@ -29,8 +29,8 @@ use kithara_platform::{
 /// this type holds no global state and makes no context decision itself.
 #[derive(Default)]
 pub struct DeferredWake {
-    notify: Notify,
     pending: AtomicBool,
+    notify: Notify,
 }
 
 impl DeferredWake {
@@ -53,17 +53,17 @@ impl DeferredWake {
         armed
     }
 
-    /// Immediate wake for off-core callers (an off-worker seek prime, the ABR
-    /// controller) — never reached from the RT produce core.
-    pub fn notify_now(&self) {
-        self.notify.notify_one();
-    }
-
     /// Future the peer's waker-forwarding task awaits. Resolves on the next
     /// [`flush`](Self::flush) / [`notify_now`](Self::notify_now); tokio's
     /// stored-permit semantics mean a wake delivered between awaits is not lost.
     pub fn notified(&self) -> impl Future<Output = ()> + '_ {
         self.notify.notified()
+    }
+
+    /// Immediate wake for off-core callers (an off-worker seek prime, the ABR
+    /// controller) — never reached from the RT produce core.
+    pub fn notify_now(&self) {
+        self.notify.notify_one();
     }
 }
 

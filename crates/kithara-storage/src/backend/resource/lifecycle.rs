@@ -51,7 +51,6 @@ impl<D: DriverIo> ResourceCore<D> {
         // Lock-free committed fast path. A published committed snapshot covers the
         // whole `[0, committed_len)` (both drivers are linear — `valid_window()` is
         // `None`, no eviction — so a snapshot implies no gaps), so coverage reduces
-        // to a bound check.
         if let Some(committed_len) = self.inner.driver.committed_len() {
             return range.end <= committed_len;
         }

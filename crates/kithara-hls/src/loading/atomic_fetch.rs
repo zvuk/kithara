@@ -50,7 +50,6 @@ pub(crate) async fn fetch_atomic_body(
         AcquisitionResult::Pending(writer) => Some(writer.retain()),
         // Committed by a concurrent caller after our cache-miss probe (or any
         // future variant) — the network bytes below are still correct; skip
-        // the redundant write.
         _ => None,
     };
     let bytes = download_atomic_bytes(downloader, url.clone(), headers).await?;

@@ -22,12 +22,12 @@ use crate::waveform::TrackAnalysis;
 struct Consts;
 
 impl Consts {
-    /// Cap on the in-memory tier; past it the oldest entries fall back to disk.
-    const MAX_MEM_ENTRIES: usize = 64;
     const ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0002;
     /// Analysis artifact resource under the track's asset scope. One blob per
     /// track: the active config fingerprint is checked inside it.
     const ANALYSIS_REL_PATH: &str = "analysis/track.analysis";
+    /// Cap on the in-memory tier; past it the oldest entries fall back to disk.
+    const MAX_MEM_ENTRIES: usize = 64;
 }
 
 /// Cache key for a track's analysis.
@@ -75,21 +75,21 @@ fn key_for_src(src: &ResourceSrc, name: Option<&str>) -> Option<AnalysisKey> {
 /// no synchronization.
 pub(crate) struct TrackAnalysisCache {
     mem: HashMap<AnalysisKey, TrackAnalysis>,
-    /// Insertion order of `mem` keys; the oldest is evicted past the cap.
-    order: VecDeque<AnalysisKey>,
     store: Option<Arc<AssetStore>>,
     /// Active analysis configuration; blobs carrying a different one are
     /// cache misses.
     fingerprint: String,
+    /// Insertion order of `mem` keys; the oldest is evicted past the cap.
+    order: VecDeque<AnalysisKey>,
 }
 
 impl TrackAnalysisCache {
     pub(crate) fn new(store: Option<Arc<AssetStore>>, fingerprint: String) -> Self {
         Self {
-            mem: HashMap::new(),
-            order: VecDeque::new(),
             store,
             fingerprint,
+            mem: HashMap::new(),
+            order: VecDeque::new(),
         }
     }
 
@@ -102,6 +102,29 @@ impl TrackAnalysisCache {
         let analysis = self.load_disk(key)?;
         self.remember(key.clone(), analysis.clone());
         Some(analysis)
+    }
+
+    fn load_disk(&self, key: &AnalysisKey) -> Option<TrackAnalysis> {
+        let store = self.store.as_ref()?;
+        let resource = Self::resource_key(store, key);
+        // Side-effect-free probe first: opening a missing key would create it.
+        match store.resource_state(&resource).ok()? {
+            AssetResourceState::Committed { .. } => {}
+            _ => return None,
+        }
+        let reader = store.open_resource(&resource, None).ok()?;
+        let mut bytes = Vec::new();
+        reader.read_into(&mut bytes).ok()?;
+        match analysis_from_bytes(&bytes, &self.fingerprint) {
+            Ok(analysis) => {
+                debug!("track analysis cache: disk hit");
+                Some(analysis)
+            }
+            Err(e) => {
+                warn!(%e, ?resource, "track analysis cache: ignoring stale/unreadable blob");
+                None
+            }
+        }
     }
 
     /// Store freshly derived track analysis in both tiers.
@@ -132,29 +155,6 @@ impl TrackAnalysisCache {
         store
             .scope(key.asset_root.as_str())
             .key(Consts::ANALYSIS_REL_PATH)
-    }
-
-    fn load_disk(&self, key: &AnalysisKey) -> Option<TrackAnalysis> {
-        let store = self.store.as_ref()?;
-        let resource = Self::resource_key(store, key);
-        // Side-effect-free probe first: opening a missing key would create it.
-        match store.resource_state(&resource).ok()? {
-            AssetResourceState::Committed { .. } => {}
-            _ => return None,
-        }
-        let reader = store.open_resource(&resource, None).ok()?;
-        let mut bytes = Vec::new();
-        reader.read_into(&mut bytes).ok()?;
-        match analysis_from_bytes(&bytes, &self.fingerprint) {
-            Ok(analysis) => {
-                debug!("track analysis cache: disk hit");
-                Some(analysis)
-            }
-            Err(e) => {
-                warn!(%e, ?resource, "track analysis cache: ignoring stale/unreadable blob");
-                None
-            }
-        }
     }
 
     fn store_disk(&self, key: &AnalysisKey, analysis: &TrackAnalysis) {

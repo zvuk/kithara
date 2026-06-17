@@ -16,9 +16,9 @@ const BUCKET_BYTES: usize = 12;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct Bucket {
+    pub high: f32,
     pub low: f32,
     pub mid: f32,
-    pub high: f32,
 }
 
 /// A track's analysed waveform: per-bucket band heights in `[0, 1]`, indexed by
@@ -33,13 +33,13 @@ impl Waveform {
     }
 
     #[must_use]
-    pub fn len(&self) -> usize {
-        self.0.len()
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -75,15 +75,6 @@ impl TryFrom<&[u8]> for Waveform {
 impl Blob for Waveform {
     const VERSION: u32 = WAVEFORM_BYTES_VERSION;
 
-    fn encode(&self, w: &mut Writer<'_>) {
-        w.reserve(self.0.len() * BUCKET_BYTES);
-        for b in self.0.iter() {
-            w.write_f32(b.low);
-            w.write_f32(b.mid);
-            w.write_f32(b.high);
-        }
-    }
-
     fn decode(r: &mut Reader<'_>) -> Result<Self, BlobError> {
         if !r.remaining().is_multiple_of(BUCKET_BYTES) {
             return Err(BlobError::Corrupt);
@@ -100,9 +91,18 @@ impl Blob for Waveform {
             if !(ok(low) && ok(mid) && ok(high)) {
                 return Err(BlobError::Corrupt);
             }
-            buckets.push(Bucket { low, mid, high });
+            buckets.push(Bucket { high, low, mid });
         }
         Ok(Self::from(buckets))
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) {
+        w.reserve(self.0.len() * BUCKET_BYTES);
+        for b in self.0.iter() {
+            w.write_f32(b.low);
+            w.write_f32(b.mid);
+            w.write_f32(b.high);
+        }
     }
 }
 

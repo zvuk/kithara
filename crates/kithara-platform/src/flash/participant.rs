@@ -1,12 +1,3 @@
-//! Per-task quiescence accounting for the flash engine.
-//!
-//! The [`TaskGate`] tracks whether a task currently occupies an `active_async`
-//! slot and INTERCEPTS every wake (it is handed to the inner future as its
-//! `Waker`), so a task that has been woken — its waker fired and it is queued to
-//! be polled — is counted from that instant until it is next polled. [`participate`]
-//! wraps a future in a [`Participating`] gate at the spawn chokepoint so every
-//! async task on the sim path participates.
-
 use std::{
     future::Future,
     panic::Location,
@@ -50,7 +41,6 @@ impl<F: Future> Future for Participating<F> {
         if !this.gate.try_enter_poll() {
             // Duplicate/stale schedule: the task is parked (or done), holding no
             // slot. Stay pending without re-polling the inner future — the real
-            // wake will re-arm it.
             return Poll::Pending;
         }
         let gate_waker = Waker::from(Arc::clone(this.gate));

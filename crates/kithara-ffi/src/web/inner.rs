@@ -42,13 +42,13 @@ type QueueView = Vec<(kithara_queue::TrackId, Arc<AudioPlayerItem>)>;
 /// worker and the local cache so the infallible facade getters can answer
 /// synchronously without a worker round-trip.
 pub(crate) struct WasmInner {
-    bridge: WorkerBridge,
     queue_view: Arc<Mutex<QueueView>>,
-    observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
-    volume: AtomicU32,
     crossfade_secs: AtomicU32,
     playing_rate: AtomicU32,
+    volume: AtomicU32,
     muted: Mutex<bool>,
+    observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
+    bridge: WorkerBridge,
     eq_gains: [AtomicU32; EQ_BANDS],
 }
 
@@ -76,44 +76,17 @@ fn store_f32(a: &AtomicU32, v: f32) {
 }
 
 impl WasmInner {
-    /// Default output volume, matching the legacy wasm player.
-    const DEFAULT_VOLUME: f32 = 0.5;
     /// Default crossfade window in seconds, matching the worker default.
     const DEFAULT_CROSSFADE_SECONDS: f32 = 5.0;
     /// Default target playback rate.
     const DEFAULT_PLAYING_RATE: f32 = 1.0;
+    /// Default output volume, matching the legacy wasm player.
+    const DEFAULT_VOLUME: f32 = 0.5;
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
     pub(crate) fn new(_config: FfiPlayerConfig) -> Self {
         Self::default()
-    }
-
-    /// Forward a command to the worker, mapping a channel failure to a
-    /// typed [`FfiError`]. Used by the fallible facade methods that should
-    /// surface a real error when the worker link is down.
-    fn try_send(&self, cmd: WorkerCmd) -> Result<(), FfiError> {
-        self.bridge.send(cmd).map_err(|err| into_internal(&err))
-    }
-
-    /// Forward a command for the infallible facade methods (play / pause /
-    /// volume / …), logging a dropped command rather than propagating —
-    /// these have no error channel in the facade signature.
-    fn send(&self, cmd: WorkerCmd) {
-        if let Err(err) = self.bridge.send(cmd) {
-            tracing::warn!(?err, "wasm worker command dropped: channel unavailable");
-        }
-    }
-
-    fn next_request_id() -> u32 {
-        crate::web::interop::next_request_id()
-    }
-
-    fn id_at(&self, index: u32) -> Option<kithara_queue::TrackId> {
-        self.queue_view
-            .lock()
-            .get(index as usize)
-            .map(|(id, _)| *id)
     }
 
     pub(crate) fn advance_to_next_item(&self) {
@@ -133,9 +106,9 @@ impl WasmInner {
         if let Some(next) = next {
             let request_id = Self::next_request_id();
             self.send(WorkerCmd::SelectQueue {
+                request_id,
                 id: next,
                 transition: Transition::None,
-                request_id,
             });
         }
     }
@@ -181,6 +154,13 @@ impl WasmInner {
         self.eq_gains.get(band as usize).map_or(0.0, load_f32)
     }
 
+    fn id_at(&self, index: u32) -> Option<kithara_queue::TrackId> {
+        self.queue_view
+            .lock()
+            .get(index as usize)
+            .map(|(id, _)| *id)
+    }
+
     pub(crate) fn insert(
         &self,
         item: &Arc<AudioPlayerItem>,
@@ -191,9 +171,9 @@ impl WasmInner {
         let request_id = Self::next_request_id();
         self.send(WorkerCmd::Insert {
             id,
+            request_id,
             url: item.url(),
             after: after_id,
-            request_id,
         });
 
         let mut view = self.queue_view.lock();
@@ -233,6 +213,10 @@ impl WasmInner {
             .iter()
             .map(|(_, item)| Arc::clone(item))
             .collect()
+    }
+
+    fn next_request_id() -> u32 {
+        crate::web::interop::next_request_id()
     }
 
     pub(crate) fn pause(&self) {
@@ -296,9 +280,9 @@ impl WasmInner {
         }
         self.send(WorkerCmd::Replace {
             index,
+            request_id,
             id: new_id,
             url: item.url(),
-            request_id,
         });
         if let Some((_, old)) = view.get(idx) {
             *old.inserted.lock() = false;
@@ -350,10 +334,19 @@ impl WasmInner {
         let request_id = Self::next_request_id();
         self.send(WorkerCmd::SelectQueue {
             id,
-            transition: Transition::from(transition),
             request_id,
+            transition: Transition::from(transition),
         });
         Ok(())
+    }
+
+    /// Forward a command for the infallible facade methods (play / pause /
+    /// volume / …), logging a dropped command rather than propagating —
+    /// these have no error channel in the facade signature.
+    fn send(&self, cmd: WorkerCmd) {
+        if let Err(err) = self.bridge.send(cmd) {
+            tracing::warn!(?err, "wasm worker command dropped: channel unavailable");
+        }
     }
 
     pub(crate) fn set_abr_mode(&self, mode: FfiAbrMode) {
@@ -441,6 +434,13 @@ impl WasmInner {
 
     pub(crate) fn stop(&self) {
         self.send(WorkerCmd::Stop);
+    }
+
+    /// Forward a command to the worker, mapping a channel failure to a
+    /// typed [`FfiError`]. Used by the fallible facade methods that should
+    /// surface a real error when the worker link is down.
+    fn try_send(&self, cmd: WorkerCmd) -> Result<(), FfiError> {
+        self.bridge.send(cmd).map_err(|err| into_internal(&err))
     }
 
     pub(crate) fn update_peak_bitrate(&self, wifi_bps: f64, cellular_bps: f64) {

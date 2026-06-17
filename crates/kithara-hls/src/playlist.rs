@@ -9,10 +9,10 @@ use crate::ids::{SegmentIndex, VariantIndex};
 pub struct SegmentState {
     /// Duration of the segment.
     pub duration: Duration,
-    /// Bounded segment index within the variant's media playlist.
-    pub(crate) index: SegmentIndex,
     /// Absolute URL of the segment.
     pub url: Url,
+    /// Bounded segment index within the variant's media playlist.
+    pub(crate) index: SegmentIndex,
 }
 
 /// Per-variant size information (from HEAD requests or download).

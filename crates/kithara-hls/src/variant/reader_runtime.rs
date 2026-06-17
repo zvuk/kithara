@@ -20,17 +20,9 @@ pub(super) struct ReaderRuntime {
 impl ReaderRuntime {
     pub(super) fn new(seek_obs: Arc<dyn SeekObserve>) -> Self {
         Self {
-            position: Arc::new(AtomicU64::new(0)),
             seek_obs,
+            position: Arc::new(AtomicU64::new(0)),
         }
-    }
-
-    pub(super) fn position(&self) -> u64 {
-        self.position.load(Ordering::Acquire)
-    }
-
-    pub(super) fn set_position(&self, pos: u64) {
-        self.position.store(pos, Ordering::Release);
     }
 
     pub(super) fn advance(&self, n: u64) {
@@ -39,5 +31,13 @@ impl ReaderRuntime {
 
     pub(super) fn is_flushing(&self) -> bool {
         self.seek_obs.is_flushing()
+    }
+
+    pub(super) fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    pub(super) fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
     }
 }

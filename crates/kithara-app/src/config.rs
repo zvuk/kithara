@@ -22,19 +22,19 @@ use crate::{baked, theme::Palette};
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct AppConfig {
+    /// App-wide shared file store: concurrent consumers of one URL
+    /// (player + waveform) share a single download and cache surface.
+    pub file_asset_store: Arc<AssetStore>,
     /// Shared `AssetStore` flush coordinator for every track.
     pub flush_hub: Arc<FlushHub>,
-    /// Shared HTTP downloader for every track.
-    pub downloader: Downloader,
     /// App master cancel. Single owner for the whole app subtree; the
     /// queue, player, stores, and UI listener all derive children from
     /// it (see `main.rs`). The chain flag reaches the audio worker and HLS
     /// coord lock-free `is_cancelled()` reads; every subsystem derives its
     /// own [`CancelToken::child`] from this consumer-top master.
     pub shutdown: CancelToken,
-    /// App-wide shared file store: concurrent consumers of one URL
-    /// (player + waveform) share a single download and cache surface.
-    pub file_asset_store: Arc<AssetStore>,
+    /// Shared HTTP downloader for every track.
+    pub downloader: Downloader,
     /// App-wide shared HLS store (shared cache + DRM `process_fn` +
     /// per-`asset_root` eviction routing).
     pub hls_asset_store: HlsStore,

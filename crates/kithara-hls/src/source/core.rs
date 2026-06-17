@@ -33,17 +33,17 @@ pub struct HlsSource {
     /// as `HlsEvent::ReaderSeek` / `HlsEvent::ReadProgress`.
     bus: EventBus,
     hls_peer: Option<Arc<HlsPeer>>,
+    /// Registry deregistration guard for the app-wide shared store. `Some`
+    /// only when an [`HlsStore`](crate::HlsStore) was injected; dropping it
+    /// removes this stream's eviction routing entry. `None` for a
+    /// private per-stream store.
+    invalidation_guard: Option<HlsInvalidationGuard>,
     peer_handle: Option<kithara_stream::dl::PeerHandle>,
     /// Reader→peer wake handle. Cloned from the owning [`HlsPeer`] once it is
     /// bound via [`Self::set_hls_peer`], and returned by [`Source::peer_wake`]
     /// so the reader drivers (`Stream::probe_read` / `read` / `prime_seek_range`
     /// and the audio FSM) can arm or notify the peer themselves.
     peer_wake: Option<Arc<DeferredWake>>,
-    /// Registry deregistration guard for the app-wide shared store. `Some`
-    /// only when an [`HlsStore`](crate::HlsStore) was injected; dropping it
-    /// removes this stream's eviction routing entry. `None` for a
-    /// private per-stream store.
-    invalidation_guard: Option<HlsInvalidationGuard>,
 }
 
 impl HlsSource {
@@ -58,15 +58,15 @@ impl HlsSource {
         }
     }
 
+    pub(crate) fn set_hls_peer(&mut self, peer: Arc<HlsPeer>) {
+        self.peer_wake = Some(peer.reader_wake());
+        self.hls_peer = Some(peer);
+    }
+
     /// Pin the shared-store deregistration guard to this source's
     /// lifetime. `None` keeps the private per-stream behaviour.
     pub(crate) fn set_invalidation_guard(&mut self, guard: Option<HlsInvalidationGuard>) {
         self.invalidation_guard = guard;
-    }
-
-    pub(crate) fn set_hls_peer(&mut self, peer: Arc<HlsPeer>) {
-        self.peer_wake = Some(peer.reader_wake());
-        self.hls_peer = Some(peer);
     }
 
     pub(crate) fn set_peer_handle(&mut self, handle: kithara_stream::dl::PeerHandle) {
@@ -87,24 +87,40 @@ impl Source for HlsSource {
         self.peer_handle.as_ref().map(|h| h.abr().clone())
     }
 
+    fn activity(&self) -> Arc<dyn Activity> {
+        self.coord.activity()
+    }
+
     fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
         Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
+    }
+
+    fn media_info(&self) -> Option<MediaInfo> {
+        Some(self.coord.media_info())
     }
 
     fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
         self.peer_wake.clone()
     }
 
+    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        self.coord.playhead_read()
+    }
+
+    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        self.coord.playhead_write()
+    }
+
+    fn seek_control(&self) -> Arc<dyn SeekControl> {
+        self.coord.seek_control()
+    }
+
+    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        self.coord.seek_observe()
+    }
+
     fn set_worker_wake(&self, wake: Arc<dyn kithara_stream::WorkerWake>) {
         self.coord.set_worker_wake(wake);
-    }
-
-    fn variant_control(&self) -> Option<Arc<dyn kithara_stream::VariantControl>> {
-        Some(Arc::clone(&self.coord) as Arc<dyn kithara_stream::VariantControl>)
-    }
-
-    fn media_info(&self) -> Option<MediaInfo> {
-        Some(self.coord.media_info())
     }
 
     fn take_reader_event_sink(&mut self) -> Option<BoxedEventSink> {
@@ -116,24 +132,8 @@ impl Source for HlsSource {
         Some(Box::new(sink))
     }
 
-    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-        self.coord.playhead_read()
-    }
-
-    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-        self.coord.playhead_write()
-    }
-
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        self.coord.seek_observe()
-    }
-
-    fn seek_control(&self) -> Arc<dyn SeekControl> {
-        self.coord.seek_control()
-    }
-
-    fn activity(&self) -> Arc<dyn Activity> {
-        self.coord.activity()
+    fn variant_control(&self) -> Option<Arc<dyn kithara_stream::VariantControl>> {
+        Some(Arc::clone(&self.coord) as Arc<dyn kithara_stream::VariantControl>)
     }
 
     delegate! {

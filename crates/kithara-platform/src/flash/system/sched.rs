@@ -33,8 +33,8 @@ enum WaitKind {
 
 /// A parked waiter's wake handle plus the group it belongs to.
 pub(super) struct Entry {
-    wake: Wake,
     kind: WaitKind,
+    wake: Wake,
 }
 
 impl Registry {
@@ -51,16 +51,16 @@ impl Registry {
         }
     }
 
-    fn fresh_id(&mut self) -> WaiterId {
-        let id = self.next_id;
-        self.next_id += 1;
-        WaiterId(id)
-    }
-
     fn fresh_cv(&mut self) -> CvId {
         let id = self.next_cv;
         self.next_cv += 1;
         CvId(id)
+    }
+
+    fn fresh_id(&mut self) -> WaiterId {
+        let id = self.next_id;
+        self.next_id += 1;
+        WaiterId(id)
     }
 }
 
@@ -80,6 +80,18 @@ impl WakeBatch {
 }
 
 impl Core {
+    /// Decrement the async slot count under a held `core` lock and return the
+    /// advance the quiescent edge may unblock. The caller fires it after
+    /// releasing the lock.
+    fn release_async(&mut self, clock: &Clock) -> WakeBatch {
+        debug_assert!(
+            self.registry.active_async > 0,
+            "async release without a matching acquire"
+        );
+        self.registry.active_async -= 1;
+        self.try_advance(clock)
+    }
+
     /// Evaluate the advance rule while holding the `core` lock. Returns the
     /// [`WakeBatch`] whose wakes the caller fires AFTER releasing the lock
     /// (firing under the lock would make the woken thread immediately contend
@@ -162,18 +174,6 @@ impl Core {
         }
         self.registry.account_woken(&woken);
         WakeBatch(woken)
-    }
-
-    /// Decrement the async slot count under a held `core` lock and return the
-    /// advance the quiescent edge may unblock. The caller fires it after
-    /// releasing the lock.
-    fn release_async(&mut self, clock: &Clock) -> WakeBatch {
-        debug_assert!(
-            self.registry.active_async > 0,
-            "async release without a matching acquire"
-        );
-        self.registry.active_async -= 1;
-        self.try_advance(clock)
     }
 }
 
@@ -336,39 +336,6 @@ impl FlashInner {
 
 /// Async-yield and condvar waiter surface: registers plus the condvar signal.
 impl FlashInner {
-    /// Register an ASYNC cooperative-yield waiter (sim `tokio::task::yield_now`).
-    /// Parks the task as a yield-waiter (woken on the next clock advance), then runs
-    /// the advance rule and returns its id + granted flag + the [`WakeBatch`] the caller
-    /// fires (mirroring the sibling `register_*_async` registers). This is the sim
-    /// analogue of a real `yield_now`: real time passes while a task yields, so here
-    /// the task releases its `active_async` slot (the spawn gate does so when the
-    /// yield future returns Pending) and the virtual clock is free to advance to the
-    /// next event. Still NO resolve-at-once: the waiter is inserted parked, and the
-    /// returned advance only GRANTS it on a quiescent edge (`active == active_async
-    /// == 0`) — under a participated poll the task is still running (`active_async >
-    /// 0`) so the advance is a no-op and the gate park does the real advance, exactly
-    /// as before. The grant (here, the lone-yield rescue, or a later clock advance)
-    /// sets `granted` and the waker re-polls. The fired advance unwedges a
-    /// genuinely-quiescent non-participated `block_on` whose only `.await` is a yield.
-    pub(in crate::flash) fn register_yield_async(
-        &self,
-        waker: Waker,
-    ) -> (WaiterId, Arc<AtomicBool>, WakeBatch) {
-        let granted = Arc::new(AtomicBool::new(false));
-        let mut s = self.core.lock();
-        let id = s.registry.fresh_id();
-        s.sched.yielders.insert(
-            id,
-            Wake::Task {
-                waker,
-                granted: Arc::clone(&granted),
-            },
-        );
-        let adv = s.try_advance(&self.clock);
-        drop(s);
-        (id, granted, adv)
-    }
-
     /// Drop path for a [`FlashInner::register_yield_async`] waiter cancelled
     /// before it resolved.
     pub(in crate::flash) fn cancel_yield(&self, id: WaiterId) {
@@ -397,7 +364,6 @@ impl FlashInner {
         // so the monotonic-clock invariant holds (a wait whose virtual timeout has
         // already elapsed fires on the next advance, and the caller re-checks its
         // predicate). This enforces "no backward clock" atomically at the single
-        // registration chokepoint.
         let deadline_nanos = deadline_nanos.max(self.clock.now_nanos());
         let id = s.registry.fresh_id();
         s.sched.timed.insert(
@@ -433,6 +399,39 @@ impl FlashInner {
         let adv = s.try_advance(&self.clock);
         drop(s);
         (token, adv, wait)
+    }
+
+    /// Register an ASYNC cooperative-yield waiter (sim `tokio::task::yield_now`).
+    /// Parks the task as a yield-waiter (woken on the next clock advance), then runs
+    /// the advance rule and returns its id + granted flag + the [`WakeBatch`] the caller
+    /// fires (mirroring the sibling `register_*_async` registers). This is the sim
+    /// analogue of a real `yield_now`: real time passes while a task yields, so here
+    /// the task releases its `active_async` slot (the spawn gate does so when the
+    /// yield future returns Pending) and the virtual clock is free to advance to the
+    /// next event. Still NO resolve-at-once: the waiter is inserted parked, and the
+    /// returned advance only GRANTS it on a quiescent edge (`active == active_async
+    /// == 0`) — under a participated poll the task is still running (`active_async >
+    /// 0`) so the advance is a no-op and the gate park does the real advance, exactly
+    /// as before. The grant (here, the lone-yield rescue, or a later clock advance)
+    /// sets `granted` and the waker re-polls. The fired advance unwedges a
+    /// genuinely-quiescent non-participated `block_on` whose only `.await` is a yield.
+    pub(in crate::flash) fn register_yield_async(
+        &self,
+        waker: Waker,
+    ) -> (WaiterId, Arc<AtomicBool>, WakeBatch) {
+        let granted = Arc::new(AtomicBool::new(false));
+        let mut s = self.core.lock();
+        let id = s.registry.fresh_id();
+        s.sched.yielders.insert(
+            id,
+            Wake::Task {
+                waker,
+                granted: Arc::clone(&granted),
+            },
+        );
+        let adv = s.try_advance(&self.clock);
+        drop(s);
+        (id, granted, adv)
     }
 
     /// Wake condvar waiters for `cvid`: `all == true` wakes every matching waiter
@@ -486,6 +485,42 @@ impl FlashInner {
 
 /// Async sleep/notify waiter registers.
 impl FlashInner {
+    /// Register an UNTIMED async `Notify` waiter for `cvid`, OR consume a stored
+    /// permit. Returns `(handle, to_wake)`; `handle` is `None` when a permit was
+    /// waiting (the caller resolves at once without parking).
+    pub(in crate::flash) fn register_notify_async(
+        &self,
+        cvid: CvId,
+        waker: Waker,
+    ) -> (Option<AsyncHandle>, WakeBatch) {
+        let granted = Arc::new(AtomicBool::new(false));
+        let mut s = self.core.lock();
+        if s.sched.notify_permits.remove(&cvid) {
+            return (None, WakeBatch(Vec::new()));
+        }
+        let id = s.registry.fresh_id();
+        s.sched.indef.insert(
+            id,
+            Entry {
+                wake: Wake::Task {
+                    waker,
+                    granted: Arc::clone(&granted),
+                },
+                kind: WaitKind::Condvar(cvid),
+            },
+        );
+        let adv = s.try_advance(&self.clock);
+        drop(s);
+        (
+            Some(AsyncHandle {
+                granted,
+                timed_key: None,
+                indef_key: Some(id),
+            }),
+            adv,
+        )
+    }
+
     /// Register a TIMED async sleep waiter `delta_nanos` from the CURRENT virtual
     /// instant, then run the advance rule. The deadline is computed from the clock
     /// read INSIDE the lock (so no advance can slip between reading the clock and
@@ -518,46 +553,10 @@ impl FlashInner {
         drop(s);
         (
             AsyncHandle {
+                granted,
                 timed_key: Some(key),
                 indef_key: None,
-                granted,
             },
-            adv,
-        )
-    }
-
-    /// Register an UNTIMED async `Notify` waiter for `cvid`, OR consume a stored
-    /// permit. Returns `(handle, to_wake)`; `handle` is `None` when a permit was
-    /// waiting (the caller resolves at once without parking).
-    pub(in crate::flash) fn register_notify_async(
-        &self,
-        cvid: CvId,
-        waker: Waker,
-    ) -> (Option<AsyncHandle>, WakeBatch) {
-        let granted = Arc::new(AtomicBool::new(false));
-        let mut s = self.core.lock();
-        if s.sched.notify_permits.remove(&cvid) {
-            return (None, WakeBatch(Vec::new()));
-        }
-        let id = s.registry.fresh_id();
-        s.sched.indef.insert(
-            id,
-            Entry {
-                wake: Wake::Task {
-                    waker,
-                    granted: Arc::clone(&granted),
-                },
-                kind: WaitKind::Condvar(cvid),
-            },
-        );
-        let adv = s.try_advance(&self.clock);
-        drop(s);
-        (
-            Some(AsyncHandle {
-                timed_key: None,
-                indef_key: Some(id),
-                granted,
-            }),
             adv,
         )
     }
@@ -579,29 +578,6 @@ impl FlashInner {
         s.registry.active_async += 1;
         s.registry.active_async_holders.insert(id, loc);
         id
-    }
-
-    /// Gate park under the `core` lock: atomically CAS `Running`→`Parked` and release
-    /// the async slot, or — a wake landed mid-poll, so the state is `RunningNotified`
-    /// and the CAS fails ([`ParkOutcome::WokenMidPoll`]) — store `Runnable`, keeping
-    /// the slot for the re-poll the wake already scheduled. Holding the lock across
-    /// the CAS and the counter update is what closes the wake→poll race: a concurrent
-    /// [`FlashInner::gate_wake_parked`] acquire can no longer interleave between a
-    /// lock-free CAS and a separately-locked release, which would leave a re-runnable
-    /// task uncounted and over-release on its next park. Returns the fully-handled
-    /// outcome (callers need no further action on either arm).
-    pub(super) fn gate_park(&self, state: &AtomicTaskState, id: u64) -> ParkOutcome {
-        let mut s = self.core.lock();
-        if state.compare_exchange(TaskState::Running, TaskState::Parked) {
-            s.registry.active_async_holders.remove(&id);
-            let adv = s.release_async(&self.clock);
-            drop(s);
-            adv.fire();
-            ParkOutcome::Parked
-        } else {
-            state.store(TaskState::Runnable);
-            ParkOutcome::WokenMidPoll
-        }
     }
 
     /// Gate completion under the `core` lock: mark `Done` and release the slot
@@ -628,6 +604,29 @@ impl FlashInner {
                 adv.fire();
             }
             TaskState::Parked | TaskState::Done => {}
+        }
+    }
+
+    /// Gate park under the `core` lock: atomically CAS `Running`→`Parked` and release
+    /// the async slot, or — a wake landed mid-poll, so the state is `RunningNotified`
+    /// and the CAS fails ([`ParkOutcome::WokenMidPoll`]) — store `Runnable`, keeping
+    /// the slot for the re-poll the wake already scheduled. Holding the lock across
+    /// the CAS and the counter update is what closes the wake→poll race: a concurrent
+    /// [`FlashInner::gate_wake_parked`] acquire can no longer interleave between a
+    /// lock-free CAS and a separately-locked release, which would leave a re-runnable
+    /// task uncounted and over-release on its next park. Returns the fully-handled
+    /// outcome (callers need no further action on either arm).
+    pub(super) fn gate_park(&self, state: &AtomicTaskState, id: u64) -> ParkOutcome {
+        let mut s = self.core.lock();
+        if state.compare_exchange(TaskState::Running, TaskState::Parked) {
+            s.registry.active_async_holders.remove(&id);
+            let adv = s.release_async(&self.clock);
+            drop(s);
+            adv.fire();
+            ParkOutcome::Parked
+        } else {
+            state.store(TaskState::Runnable);
+            ParkOutcome::WokenMidPoll
         }
     }
 
@@ -674,36 +673,6 @@ impl FlashInner {
         }
     }
 
-    /// Signal an async `Notify` for `cvid`: wake at most one waiter; if none are
-    /// parked, store a permit so the next `notified()` resolves at once (tokio
-    /// `notify_one` semantics).
-    pub(in crate::flash) fn signal_notify(&self, cvid: CvId) {
-        let mut s = self.core.lock();
-        let woken_key = s
-            .sched
-            .indef
-            .iter()
-            .find(|(_, e)| e.kind == WaitKind::Condvar(cvid))
-            .map(|(&k, _)| k);
-        let mut woken = Vec::new();
-        if let Some(key) = woken_key
-            && let Some(entry) = s.sched.indef.remove(&key)
-        {
-            woken.push(entry.wake);
-        }
-        if woken.is_empty() {
-            // No waiter: store a permit (notify_one) so the next notified() returns
-            // immediately.
-            s.sched.notify_permits.insert(cvid);
-        } else {
-            s.registry.account_woken(&woken);
-        }
-        drop(s);
-        for t in woken {
-            t.fire();
-        }
-    }
-
     /// Register an UNTIMED async channel waiter for `cvid`. Unlike
     /// [`FlashInner::register_notify_async`] this NEVER consumes a permit: a sim
     /// channel (`tokio::sync::mpsc`/`oneshot`) holds its own queue as the source of
@@ -734,9 +703,9 @@ impl FlashInner {
         drop(s);
         (
             AsyncHandle {
+                granted,
                 timed_key: None,
                 indef_key: Some(id),
-                granted,
             },
             adv,
         )
@@ -774,6 +743,35 @@ impl FlashInner {
         drop(s);
         for w in woken {
             w.fire();
+        }
+    }
+
+    /// Signal an async `Notify` for `cvid`: wake at most one waiter; if none are
+    /// parked, store a permit so the next `notified()` resolves at once (tokio
+    /// `notify_one` semantics).
+    pub(in crate::flash) fn signal_notify(&self, cvid: CvId) {
+        let mut s = self.core.lock();
+        let woken_key = s
+            .sched
+            .indef
+            .iter()
+            .find(|(_, e)| e.kind == WaitKind::Condvar(cvid))
+            .map(|(&k, _)| k);
+        let mut woken = Vec::new();
+        if let Some(key) = woken_key
+            && let Some(entry) = s.sched.indef.remove(&key)
+        {
+            woken.push(entry.wake);
+        }
+        if woken.is_empty() {
+            // No waiter: store a permit (notify_one) so the next notified() returns
+            s.sched.notify_permits.insert(cvid);
+        } else {
+            s.registry.account_woken(&woken);
+        }
+        drop(s);
+        for t in woken {
+            t.fire();
         }
     }
 }
@@ -846,9 +844,9 @@ impl fmt::Display for FlashInner {
 /// still-parked entry, and the `granted` flag the firer sets so the future can
 /// tell a real wake from a cancel and balance `active` exactly.
 pub(crate) struct AsyncHandle {
-    timed_key: Option<(u64, WaiterId)>,
-    indef_key: Option<WaiterId>,
     granted: Arc<AtomicBool>,
+    indef_key: Option<WaiterId>,
+    timed_key: Option<(u64, WaiterId)>,
 }
 
 impl AsyncHandle {
@@ -980,18 +978,13 @@ pub(crate) struct TestHold<'a> {
 
 #[cfg(test)]
 impl FlashInner {
-    pub(in crate::flash) fn test_hold(&self) -> TestHold<'_> {
-        self.core.lock().registry.active += 1;
-        TestHold { flash: self }
+    /// Test-only: number of currently RUNNING participants.
+    pub(in crate::flash) fn active_count(&self) -> usize {
+        self.core.lock().registry.active
     }
 
     pub(in crate::flash) fn advance_log(&self) -> Vec<u64> {
         self.core.lock().sched.advance_log.clone()
-    }
-
-    /// Test-only: number of currently RUNNING participants.
-    pub(in crate::flash) fn active_count(&self) -> usize {
-        self.core.lock().registry.active
     }
 
     /// Test-only: number of async tasks the engine currently counts as
@@ -1001,9 +994,9 @@ impl FlashInner {
         self.core.lock().registry.active_async
     }
 
-    /// Test-only: number of currently parked timed waiters.
-    pub(in crate::flash) fn timed_count(&self) -> usize {
-        self.core.lock().sched.timed.len()
+    /// Test-only: number of currently parked cooperative-yield waiters.
+    pub(in crate::flash) fn diag_yield_count(&self) -> usize {
+        self.core.lock().sched.yielders.len()
     }
 
     /// Test-only: number of currently parked untimed waiters.
@@ -1011,9 +1004,14 @@ impl FlashInner {
         self.core.lock().sched.indef.len()
     }
 
-    /// Test-only: number of currently parked cooperative-yield waiters.
-    pub(in crate::flash) fn diag_yield_count(&self) -> usize {
-        self.core.lock().sched.yielders.len()
+    pub(in crate::flash) fn test_hold(&self) -> TestHold<'_> {
+        self.core.lock().registry.active += 1;
+        TestHold { flash: self }
+    }
+
+    /// Test-only: number of currently parked timed waiters.
+    pub(in crate::flash) fn timed_count(&self) -> usize {
+        self.core.lock().sched.timed.len()
     }
 }
 

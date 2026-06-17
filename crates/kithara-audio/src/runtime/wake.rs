@@ -18,9 +18,9 @@ use kithara_platform::{
 /// wake, no per-chunk latency.
 #[derive(Default)]
 pub(crate) struct SchedulerWake {
-    gate: ThreadGate,
     /// Gate counter consumed as of the previous wait (scheduler-thread only).
     seen: AtomicU64,
+    gate: ThreadGate,
 }
 
 impl SchedulerWake {

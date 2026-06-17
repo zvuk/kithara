@@ -531,7 +531,7 @@ async fn dump_aac_for_listening() {
             / residual.len() as f64)
             .sqrt();
         let snr_db = if rms > 1e-9 {
-            20.0 * (f64::from(amp) / rms).log10()
+            20.0 * (amp / rms).log10()
         } else {
             f64::INFINITY
         };

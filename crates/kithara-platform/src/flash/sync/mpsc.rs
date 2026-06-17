@@ -13,13 +13,13 @@ use crate::{
 };
 
 struct Chan<T> {
-    queue: Mutex<VecDeque<T>>,
-    cv: Condvar,
+    /// Cleared on `Receiver` drop so a later `send` reports `SendError`.
+    receiver_alive: AtomicBool,
     /// Live `Sender` count. Reaching 0 means "disconnected": a blocked
     /// `recv` returns [`RecvError`], `try_recv` returns `Disconnected`.
     senders: AtomicUsize,
-    /// Cleared on `Receiver` drop so a later `send` reports `SendError`.
-    receiver_alive: AtomicBool,
+    cv: Condvar,
+    queue: Mutex<VecDeque<T>>,
 }
 
 pub struct Sender<T>(Arc<Chan<T>>);
@@ -79,6 +79,11 @@ impl<T> Drop for Sender<T> {
 }
 
 impl<T> Receiver<T> {
+    /// Iterate over received values, blocking until all senders disconnect.
+    pub fn iter(&self) -> impl Iterator<Item = T> + '_ {
+        std::iter::from_fn(move || self.recv().ok())
+    }
+
     /// Block until a value arrives.
     ///
     /// # Errors
@@ -94,20 +99,6 @@ impl<T> Receiver<T> {
                 return Err(RecvError);
             }
             q = self.0.cv.wait(q);
-        }
-    }
-
-    /// Try to receive without blocking.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TryRecvError`] if no value is available or senders are dropped.
-    pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        let mut q = self.0.queue.lock();
-        match q.pop_front() {
-            Some(v) => Ok(v),
-            None if self.0.senders.load(Ordering::Acquire) == 0 => Err(TryRecvError::Disconnected),
-            None => Err(TryRecvError::Empty),
         }
     }
 
@@ -134,14 +125,23 @@ impl<T> Receiver<T> {
         }
     }
 
-    /// Iterate over received values, blocking until all senders disconnect.
-    pub fn iter(&self) -> impl Iterator<Item = T> + '_ {
-        std::iter::from_fn(move || self.recv().ok())
-    }
-
     /// Iterate over currently-available values without blocking.
     pub fn try_iter(&self) -> impl Iterator<Item = T> + '_ {
         std::iter::from_fn(move || self.try_recv().ok())
+    }
+
+    /// Try to receive without blocking.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryRecvError`] if no value is available or senders are dropped.
+    pub fn try_recv(&self) -> Result<T, TryRecvError> {
+        let mut q = self.0.queue.lock();
+        match q.pop_front() {
+            Some(v) => Ok(v),
+            None if self.0.senders.load(Ordering::Acquire) == 0 => Err(TryRecvError::Disconnected),
+            None => Err(TryRecvError::Empty),
+        }
     }
 }
 

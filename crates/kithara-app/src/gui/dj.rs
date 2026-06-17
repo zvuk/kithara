@@ -7,17 +7,17 @@ use super::{app::Kithara, frontend::window_settings, message::Message};
 /// View-local DJ Studio state.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct DjView {
-    pub(crate) open: bool,
     pub(crate) timestretch: TimestretchState,
+    pub(crate) open: bool,
 }
 
 /// View-local timestretch deck state.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TimestretchState {
-    /// Tempo bound in ± percent (8 / 16 / 50 / 100).
-    pub(crate) range: u8,
     /// Tempo offset in percent.
     pub(crate) tempo: f32,
+    /// Tempo bound in ± percent (8 / 16 / 50 / 100).
+    pub(crate) range: u8,
 }
 
 impl Default for TimestretchState {
@@ -30,14 +30,14 @@ impl Default for TimestretchState {
 }
 
 impl TimestretchState {
-    /// Playback speed multiplier for the current tempo offset.
-    pub(crate) fn speed(self) -> f32 {
-        1.0 + self.tempo / 100.0
-    }
-
     fn clamp_tempo(&mut self) {
         let r = f32::from(self.range);
         self.tempo = self.tempo.clamp(-r, r);
+    }
+
+    fn nudge(&mut self, delta: f32) {
+        self.tempo = ((self.tempo + delta) * 100.0).round() / 100.0;
+        self.clamp_tempo();
     }
 
     fn set_range(&mut self, range: u8) {
@@ -50,9 +50,9 @@ impl TimestretchState {
         self.clamp_tempo();
     }
 
-    fn nudge(&mut self, delta: f32) {
-        self.tempo = ((self.tempo + delta) * 100.0).round() / 100.0;
-        self.clamp_tempo();
+    /// Playback speed multiplier for the current tempo offset.
+    pub(crate) fn speed(self) -> f32 {
+        1.0 + self.tempo / 100.0
     }
 }
 

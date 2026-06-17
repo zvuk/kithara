@@ -27,21 +27,21 @@ bitflags! {
 
 /// Read-only observations of seek/flush coordination state.
 pub trait SeekObserve: Send + Sync {
+    fn clear_pending_epoch(&self, epoch: u64) -> bool;
     fn epoch(&self) -> u64;
     fn is_flushing(&self) -> bool;
     fn is_pending(&self) -> bool;
-    fn target(&self) -> Option<Duration>;
-    fn take_preempt(&self) -> bool;
-    fn take_decoder_seek(&self) -> bool;
     fn pending_epoch(&self) -> Option<u64>;
-    fn clear_pending_epoch(&self, epoch: u64) -> bool;
+    fn take_decoder_seek(&self) -> bool;
+    fn take_preempt(&self) -> bool;
+    fn target(&self) -> Option<Duration>;
 }
 
 /// Mutating seek coordination — `FLUSH_START` / `FLUSH_STOP` protocol.
 pub trait SeekControl: Send + Sync {
     fn begin(&self, target: Duration) -> u64;
-    fn complete(&self, epoch: u64);
     fn clear_pending(&self, epoch: u64);
+    fn complete(&self, epoch: u64);
     fn mark_pending(&self, epoch: u64);
 }
 
@@ -60,18 +60,18 @@ pub struct SeekState {
     /// Kept as `Arc<AtomicU64>` so callers can hand out a cheap `Arc`
     /// clone of the shared seek epoch atomic.
     seek_epoch: Arc<AtomicU64>,
-    seek_target_ns: AtomicU64,
-    pending_seek_epoch: AtomicU64,
-    /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `PLAYING`.
-    flags: AtomicU8,
+    /// Independent one-shot for `DecoderNode::sync_seek_epoch`. Armed by
+    /// `begin` together with `seek_preempt_latch`.
+    decoder_node_seek_latch: AtomicBool,
     /// Hot-path latch: set by `begin`, consumed once by the audio worker's
     /// `swap(false, Acquire)`. The Release in `begin` (after epoch/target
     /// stores) synchronises with the Acquire in `take_preempt` — seeing
     /// `true` here guarantees the new epoch and target are visible.
     seek_preempt_latch: AtomicBool,
-    /// Independent one-shot for `DecoderNode::sync_seek_epoch`. Armed by
-    /// `begin` together with `seek_preempt_latch`.
-    decoder_node_seek_latch: AtomicBool,
+    pending_seek_epoch: AtomicU64,
+    seek_target_ns: AtomicU64,
+    /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `PLAYING`.
+    flags: AtomicU8,
 }
 
 impl SeekState {
@@ -91,12 +91,6 @@ impl SeekState {
         }
     }
 
-    /// Expose the raw seek-epoch `Arc` for callers that need to share
-    /// the atomic directly (e.g. a shared seek-epoch handle).
-    pub fn seek_epoch_arc(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.seek_epoch)
-    }
-
     /// Raw flags load with caller-specified ordering — used by the
     /// flag-snapshot tests below.
     #[cfg(test)]
@@ -110,6 +104,12 @@ impl SeekState {
     fn remove_flags_raw(&self, flags: TimelineFlags, order: Ordering) {
         self.flags.fetch_and(!flags.bits(), order);
     }
+
+    /// Expose the raw seek-epoch `Arc` for callers that need to share
+    /// the atomic directly (e.g. a shared seek-epoch handle).
+    pub fn seek_epoch_arc(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.seek_epoch)
+    }
 }
 
 impl Default for SeekState {
@@ -119,6 +119,17 @@ impl Default for SeekState {
 }
 
 impl SeekObserve for SeekState {
+    fn clear_pending_epoch(&self, epoch: u64) -> bool {
+        self.pending_seek_epoch
+            .compare_exchange(
+                epoch,
+                Self::NO_PENDING_SEEK,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
     fn epoch(&self) -> u64 {
         self.seek_epoch.load(Ordering::Acquire)
     }
@@ -133,23 +144,6 @@ impl SeekObserve for SeekState {
             .contains(TimelineFlags::SEEK_PENDING)
     }
 
-    fn target(&self) -> Option<Duration> {
-        let ns = self.seek_target_ns.load(Ordering::Acquire);
-        if ns == Self::NO_SEEK_TARGET {
-            None
-        } else {
-            Some(Duration::from_nanos(ns))
-        }
-    }
-
-    fn take_preempt(&self) -> bool {
-        self.seek_preempt_latch.swap(false, Ordering::Acquire)
-    }
-
-    fn take_decoder_seek(&self) -> bool {
-        self.decoder_node_seek_latch.swap(false, Ordering::Acquire)
-    }
-
     fn pending_epoch(&self) -> Option<u64> {
         let epoch = self.pending_seek_epoch.load(Ordering::Acquire);
         if epoch == Self::NO_PENDING_SEEK {
@@ -159,15 +153,21 @@ impl SeekObserve for SeekState {
         }
     }
 
-    fn clear_pending_epoch(&self, epoch: u64) -> bool {
-        self.pending_seek_epoch
-            .compare_exchange(
-                epoch,
-                Self::NO_PENDING_SEEK,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
+    fn take_decoder_seek(&self) -> bool {
+        self.decoder_node_seek_latch.swap(false, Ordering::Acquire)
+    }
+
+    fn take_preempt(&self) -> bool {
+        self.seek_preempt_latch.swap(false, Ordering::Acquire)
+    }
+
+    fn target(&self) -> Option<Duration> {
+        let ns = self.seek_target_ns.load(Ordering::Acquire);
+        if ns == Self::NO_SEEK_TARGET {
+            None
+        } else {
+            Some(Duration::from_nanos(ns))
+        }
     }
 }
 
@@ -197,6 +197,17 @@ impl SeekControl for SeekState {
         epoch
     }
 
+    /// Clear seek-pending flag after the decoder successfully applied the seek.
+    ///
+    /// Only clears if `epoch` matches the current seek epoch, preventing a
+    /// stale completion from clearing a newer seek.
+    fn clear_pending(&self, epoch: u64) {
+        if self.seek_epoch.load(Ordering::Acquire) == epoch {
+            self.flags
+                .fetch_and(!TimelineFlags::SEEK_PENDING.bits(), Ordering::Release);
+        }
+    }
+
     /// Complete a seek (`FLUSH_STOP`).
     ///
     /// Clears flushing flag only if `epoch` is still current.
@@ -215,17 +226,6 @@ impl SeekControl for SeekState {
         if self.seek_epoch.load(Ordering::SeqCst) != epoch {
             self.flags
                 .fetch_or(TimelineFlags::FLUSHING.bits(), Ordering::SeqCst);
-        }
-    }
-
-    /// Clear seek-pending flag after the decoder successfully applied the seek.
-    ///
-    /// Only clears if `epoch` matches the current seek epoch, preventing a
-    /// stale completion from clearing a newer seek.
-    fn clear_pending(&self, epoch: u64) {
-        if self.seek_epoch.load(Ordering::Acquire) == epoch {
-            self.flags
-                .fetch_and(!TimelineFlags::SEEK_PENDING.bits(), Ordering::Release);
         }
     }
 

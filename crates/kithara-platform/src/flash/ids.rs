@@ -1,10 +1,3 @@
-//! Typed engine ids plus the stateful-primitive [`Backend`] latch. Condvar
-//! ids, waiter ids and thread keys live in three distinct key spaces; the
-//! newtypes keep them from crossing at compile time. [`CvId`] and [`WaiterId`]
-//! are DEFINED inside `system/` with a private inner field — only the engine's
-//! `Registry` mints them — and re-exported here for the wrappers that store
-//! keys and pass them back.
-
 pub(in crate::flash) use super::system::{CvId, WaiterId};
 use crate::{common::thread_id::thread_id_hash, native::thread::ThreadId};
 

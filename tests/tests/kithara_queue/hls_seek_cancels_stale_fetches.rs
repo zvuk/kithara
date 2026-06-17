@@ -253,7 +253,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     let pre_seek_seq = probe_recorder
         .snapshot()
         .iter()
-        .filter_map(|e| e.seq())
+        .filter_map(kithara_test_utils::probe::capture::ProbeEvent::seq)
         .max()
         .unwrap_or(0);
 

@@ -23,11 +23,11 @@ pub(crate) fn load_golden(path: &Path) -> Golden {
 /// Result of an F-measure comparison, including timing diagnostics.
 pub(crate) struct Score {
     pub f_measure: f64,
-    pub matched: usize,
-    pub n_ref: usize,
-    pub n_est: usize,
     pub max_matched_diff: f64,
     pub mean_matched_diff: f64,
+    pub matched: usize,
+    pub n_est: usize,
+    pub n_ref: usize,
 }
 
 /// Standard MIR beat F-measure with one-to-one matching inside `window` seconds.

@@ -12,16 +12,16 @@ pub type VariantIndex = usize;
 pub(crate) struct SegmentIndex(usize);
 
 impl SegmentIndex {
-    /// Construct an in-bounds segment index. Returns `None` when
-    /// `idx >= len`, i.e. the index does not address a real segment.
-    pub(crate) fn try_new(idx: usize, len: usize) -> Option<Self> {
-        (idx < len).then_some(Self(idx))
-    }
-
     /// The raw `usize` value, for indexing and external `usize`/`u32`
     /// lookup boundaries.
     pub(crate) fn into_inner(self) -> usize {
         self.0
+    }
+
+    /// Construct an in-bounds segment index. Returns `None` when
+    /// `idx >= len`, i.e. the index does not address a real segment.
+    pub(crate) fn try_new(idx: usize, len: usize) -> Option<Self> {
+        (idx < len).then_some(Self(idx))
     }
 }
 
@@ -58,7 +58,6 @@ mod tests {
         );
         // idx == len is not a real segment index.
         assert_eq!(SegmentIndex::try_new(4, 4), None);
-        // idx > len.
         assert_eq!(SegmentIndex::try_new(5, 4), None);
         // empty: no index is addressable.
         assert_eq!(SegmentIndex::try_new(0, 0), None);
@@ -71,7 +70,6 @@ mod tests {
             Duration::from_secs(2),
             Duration::from_secs(3),
         ];
-        // Partial prefix.
         assert_eq!(duration_prefix(&durations, 0), Some(Duration::ZERO));
         assert_eq!(duration_prefix(&durations, 1), Some(Duration::from_secs(1)));
         assert_eq!(duration_prefix(&durations, 2), Some(Duration::from_secs(3)));

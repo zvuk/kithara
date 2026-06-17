@@ -43,15 +43,15 @@ const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 /// and the per-track [`AssetStore`] used by reader paths and by every
 /// variant's `dispatch` closures.
 pub(crate) struct HlsCoordEnv {
-    pub(crate) scope: AssetScope<DecryptContext>,
-    pub(crate) cancel: CancelToken,
-    pub(crate) headers: Option<kithara_net::Headers>,
     /// Shared readiness gate: every transition that can flip a blocked
     /// reader's `wait_range` predicate (segment write/commit/fail, fence
     /// raise/clear, seek reset, cancel) `signal`s it; the off-RT
     /// `wait_range(_, None)` parks on it instead of polling a wall-clock
     /// timer. See `README.md` "Event-driven read wait".
     pub(crate) ready: Arc<CondvarGate<u64>>,
+    pub(crate) scope: AssetScope<DecryptContext>,
+    pub(crate) cancel: CancelToken,
+    pub(crate) headers: Option<kithara_net::Headers>,
     /// Late-bound audio-worker wake, vended to peer `PlanCtx`-builders via
     /// [`HlsCoord::worker_wake_cell`] and filled once by
     /// [`HlsCoord::set_worker_wake`]. Fired only at the two downloader
@@ -69,26 +69,27 @@ pub(crate) struct HlsCoordEnv {
 /// references it hands to variants and to peer `PlanCtx`-builders.
 pub(crate) struct HlsCoord {
     pub(crate) abr: AbrHandle,
-    pub(crate) scope: AssetScope<DecryptContext>,
     pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
+    pub(crate) scope: AssetScope<DecryptContext>,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
     /// Backing playhead state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
     playhead: Arc<PlayheadState>,
-    /// Late-bound audio-worker wake (see [`HlsCoordEnv::worker_wake`]). Vended
-    /// to peer re-plans and set once via [`Self::set_worker_wake`].
-    worker_wake: WorkerWakeCell,
+    /// Narrow read-only playhead handle — derived from `playhead` at construction.
+    /// Used by internal methods that only need committed position reads.
+    playhead_read: Arc<dyn PlayheadRead>,
+    playlist_state: Arc<PlaylistState>,
+    /// Readiness gate for the off-RT blocking `wait_range(_, None)`. Shared
+    /// with every variant's fetch closures (write/commit/fail signal it) and
+    /// signalled by the coord on fence/seek transitions. See [`HlsCoordEnv::ready`].
+    ready: Arc<CondvarGate<u64>>,
     /// Backing seek/activity state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
     seek: Arc<SeekState>,
     /// Narrow seek-observe handle — derived from `seek` at construction.
     /// Used by internal methods that only need epoch/target/pending reads.
     seek_obs: Arc<dyn SeekObserve>,
-    /// Narrow read-only playhead handle — derived from `playhead` at construction.
-    /// Used by internal methods that only need committed position reads.
-    playhead_read: Arc<dyn PlayheadRead>,
-    playlist_state: Arc<PlaylistState>,
     /// Last generation acknowledged by the reader. When `<
     /// variant_generation` the read gate is closed; when equal the gate
     /// is open. [`Self::clear_variant_fence`] copies the current
@@ -112,13 +113,22 @@ pub(crate) struct HlsCoord {
     /// no format diff is observable there, so without the target the
     /// fence would never clear.
     fence_target: AtomicUsize,
-    /// Readiness gate for the off-RT blocking `wait_range(_, None)`. Shared
-    /// with every variant's fetch closures (write/commit/fail signal it) and
-    /// signalled by the coord on fence/seek transitions. See [`HlsCoordEnv::ready`].
-    ready: Arc<CondvarGate<u64>>,
+    /// Late-bound audio-worker wake (see [`HlsCoordEnv::worker_wake`]). Vended
+    /// to peer re-plans and set once via [`Self::set_worker_wake`].
+    worker_wake: WorkerWakeCell,
 }
 
 impl HlsCoord {
+    /// Re-aim heartbeat for the off-RT blocking wait. The wait wakes immediately
+    /// on any readiness signal (the fact of a write/commit/fence/seek) —
+    /// event-driven. This interval bounds only the *quiet* case: if no signal
+    /// arrives within it, the peer may be mis-aimed after a seek (it fetched,
+    /// went idle, and the range the reader now wants is outside its prefetch
+    /// window), so the wait yields `WaitBudgetExceeded` to let the off-RT reader
+    /// re-assert the peer's aim (`notify_peer_wake`) and re-enter. It never polls
+    /// for data — readiness is always learned from a signal, never from a timer.
+    const READER_REAIM_INTERVAL: Duration = Duration::from_millis(25);
+
     pub(crate) fn new(
         env: HlsCoordEnv,
         playhead: Arc<PlayheadState>,
@@ -156,26 +166,6 @@ impl HlsCoord {
         }
     }
 
-    /// The shared readiness gate, handed to [`PlanCtx`] so variant fetch
-    /// closures can signal segment write/commit/fail.
-    pub(crate) fn ready_gate(&self) -> Arc<CondvarGate<u64>> {
-        Arc::clone(&self.ready)
-    }
-
-    /// The late-bound audio-worker wake cell, handed to [`PlanCtx`] so variant
-    /// fetch closures can re-tick the worker on write/settle. Empty until
-    /// [`Self::set_worker_wake`] fills it.
-    pub(crate) fn worker_wake_cell(&self) -> WorkerWakeCell {
-        Arc::clone(&self.worker_wake)
-    }
-
-    /// Install the audio worker's data-arrival wake (idempotent — only the
-    /// first set sticks). Called by `HlsSource::set_worker_wake` once the
-    /// worker exists; downloader fetch closures read it lock-free thereafter.
-    pub(crate) fn set_worker_wake(&self, wake: Arc<dyn kithara_stream::WorkerWake>) {
-        let _ = self.worker_wake.set(wake);
-    }
-
     pub(crate) fn active(&self) -> Option<&Arc<HlsVariant>> {
         self.variants.get(self.variant_index())
     }
@@ -188,6 +178,10 @@ impl HlsCoord {
     fn active_required(&self) -> &Arc<HlsVariant> {
         self.active()
             .expect("HlsCoord constructed without variants — bug")
+    }
+
+    pub(crate) fn activity(&self) -> Arc<dyn Activity> {
+        Arc::clone(&self.seek) as Arc<dyn Activity>
     }
 
     /// Process one evicted resource key. Marks the lost segment
@@ -270,9 +264,9 @@ impl HlsCoord {
             v_new.activate_at_segment_with_shift(
                 ctx,
                 SegmentActivateParams {
-                    from_seg: switch_at,
                     seg_boundary,
                     reader_pos,
+                    from_seg: switch_at,
                 },
             );
             self.abr.apply_decision(&decision, Instant::now());
@@ -314,52 +308,6 @@ impl HlsCoord {
         // observe the new `Interrupted`(VariantChange) gate.
         self.ready.signal();
         true
-    }
-
-    /// Break the urgent-down-switch / blocked-reader deadlock: when the
-    /// active (slow) variant cannot deliver the next segment the reader
-    /// needs, an Auto-mode commit would otherwise wait for a boundary
-    /// cross that the undelivered segment prevents. Return the segment to
-    /// commit at (`download_head - 1`, so `commit_variant_switch`'s
-    /// `from_seg + 1` lands `switch_at = download_head`) when a proactive
-    /// rescue is both warranted and continuity-safe; otherwise `None`.
-    ///
-    /// Guards (all required):
-    /// - a pending decision exists and its reason is
-    ///   [`AbrReason::UrgentDownSwitch`] — only the rescue path commits
-    ///   early; opportunistic up/down-switches keep boundary-cross
-    ///   gating so `v_new` is not pinned prematurely;
-    /// - the target is a WAV byte-continuity variant — the structured
-    ///   recreate path reseeds by time and is not subject to this
-    ///   circular dependency;
-    /// - `download_head` is strictly ahead of the reader's current
-    ///   segment (`reader_seg`). This keeps the switch on a clean
-    ///   segment boundary the reader has not begun consuming: the
-    ///   reader finishes its fully-loaded current segment on `v_old`,
-    ///   `v_new` takes over at `download_head`. When
-    ///   `download_head == reader_seg` the reader is mid an undelivered
-    ///   segment, so handing it to `v_new` would be a mid-segment
-    ///   cross-bitrate switch (sample shift) — never rescue there;
-    /// - `download_head < num_segments`, i.e. `v_old` genuinely has
-    ///   un-downloaded tail (otherwise there is nothing to rescue from).
-    pub(crate) fn urgent_rescue_boundary(&self, reader_seg: u32) -> Option<u32> {
-        let decision = self.abr.peek_pending_decision()?;
-        if decision.reason() != AbrReason::UrgentDownSwitch {
-            return None;
-        }
-        if !matches!(
-            self.playlist_state
-                .variant_container(decision.target().get()),
-            Some(ContainerFormat::Wav)
-        ) {
-            return None;
-        }
-        let head = self.download_head();
-        let active = self.active()?;
-        if head >= active.num_segments() || head <= reader_seg {
-            return None;
-        }
-        Some(head.saturating_sub(1))
     }
 
     /// Cross-variant segment lookup. Mirrors [`Self::variant_serving`]'s
@@ -418,6 +366,31 @@ impl HlsCoord {
         self.variant_serving(range.start).phase_at(range)
     }
 
+    pub(crate) fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+    }
+
+    pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+    }
+
+    /// Single wake-free readiness probe (the wake-free `HlsVariant::wait_range`
+    /// behind the coord's fence/cancel short-circuits). Shared by the RT probe
+    /// path and the off-RT blocking loop's per-iteration check.
+    fn probe_range(
+        &self,
+        range: Range<u64>,
+        timeout: Option<Duration>,
+    ) -> StreamResult<WaitOutcome> {
+        if self.cancel.is_cancelled() {
+            return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
+        }
+        if self.variant_change_pending() {
+            return Ok(WaitOutcome::Interrupted);
+        }
+        self.variant_serving(range.start).wait_range(range, timeout)
+    }
+
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         if self.cancel.is_cancelled() {
             return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
@@ -426,6 +399,12 @@ impl HlsCoord {
             return Ok(ReadOutcome::Pending(PendingReason::VariantChange));
         }
         self.variant_serving(offset).read_at(offset, buf)
+    }
+
+    /// The shared readiness gate, handed to [`PlanCtx`] so variant fetch
+    /// closures can signal segment write/commit/fail.
+    pub(crate) fn ready_gate(&self) -> Arc<CondvarGate<u64>> {
+        Arc::clone(&self.ready)
     }
 
     /// Reset the active variant to a "fresh" single-variant layout on
@@ -449,6 +428,25 @@ impl HlsCoord {
         self.ready.signal();
     }
 
+    pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl> {
+        Arc::clone(&self.seek) as Arc<dyn SeekControl>
+    }
+
+    pub(crate) fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
+        self.seek.seek_epoch_arc()
+    }
+
+    pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+    }
+
+    /// Install the audio worker's data-arrival wake (idempotent — only the
+    /// first set sticks). Called by `HlsSource::set_worker_wake` once the
+    /// worker exists; downloader fetch closures read it lock-free thereafter.
+    pub(crate) fn set_worker_wake(&self, wake: Arc<dyn kithara_stream::WorkerWake>) {
+        let _ = self.worker_wake.set(wake);
+    }
+
     /// Mirror `abr.lock()` state to `seek_obs.is_pending()`.
     pub(crate) fn sync_abr_lock(&self) {
         let pending = self.seek_obs.is_pending();
@@ -460,28 +458,50 @@ impl HlsCoord {
         }
     }
 
-    pub(crate) fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-        Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
-    }
-
-    pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-        Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
-    }
-
-    pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-    }
-
-    pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl> {
-        Arc::clone(&self.seek) as Arc<dyn SeekControl>
-    }
-
-    pub(crate) fn activity(&self) -> Arc<dyn Activity> {
-        Arc::clone(&self.seek) as Arc<dyn Activity>
-    }
-
-    pub(crate) fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
-        self.seek.seek_epoch_arc()
+    /// Break the urgent-down-switch / blocked-reader deadlock: when the
+    /// active (slow) variant cannot deliver the next segment the reader
+    /// needs, an Auto-mode commit would otherwise wait for a boundary
+    /// cross that the undelivered segment prevents. Return the segment to
+    /// commit at (`download_head - 1`, so `commit_variant_switch`'s
+    /// `from_seg + 1` lands `switch_at = download_head`) when a proactive
+    /// rescue is both warranted and continuity-safe; otherwise `None`.
+    ///
+    /// Guards (all required):
+    /// - a pending decision exists and its reason is
+    ///   [`AbrReason::UrgentDownSwitch`] — only the rescue path commits
+    ///   early; opportunistic up/down-switches keep boundary-cross
+    ///   gating so `v_new` is not pinned prematurely;
+    /// - the target is a WAV byte-continuity variant — the structured
+    ///   recreate path reseeds by time and is not subject to this
+    ///   circular dependency;
+    /// - `download_head` is strictly ahead of the reader's current
+    ///   segment (`reader_seg`). This keeps the switch on a clean
+    ///   segment boundary the reader has not begun consuming: the
+    ///   reader finishes its fully-loaded current segment on `v_old`,
+    ///   `v_new` takes over at `download_head`. When
+    ///   `download_head == reader_seg` the reader is mid an undelivered
+    ///   segment, so handing it to `v_new` would be a mid-segment
+    ///   cross-bitrate switch (sample shift) — never rescue there;
+    /// - `download_head < num_segments`, i.e. `v_old` genuinely has
+    ///   un-downloaded tail (otherwise there is nothing to rescue from).
+    pub(crate) fn urgent_rescue_boundary(&self, reader_seg: u32) -> Option<u32> {
+        let decision = self.abr.peek_pending_decision()?;
+        if decision.reason() != AbrReason::UrgentDownSwitch {
+            return None;
+        }
+        if !matches!(
+            self.playlist_state
+                .variant_container(decision.target().get()),
+            Some(ContainerFormat::Wav)
+        ) {
+            return None;
+        }
+        let head = self.download_head();
+        let active = self.active()?;
+        if head >= active.num_segments() || head <= reader_seg {
+            return None;
+        }
+        Some(head.saturating_sub(1))
     }
 
     fn variant_change_pending(&self) -> bool {
@@ -560,33 +580,6 @@ impl HlsCoord {
         }
     }
 
-    /// Single wake-free readiness probe (the wake-free `HlsVariant::wait_range`
-    /// behind the coord's fence/cancel short-circuits). Shared by the RT probe
-    /// path and the off-RT blocking loop's per-iteration check.
-    fn probe_range(
-        &self,
-        range: Range<u64>,
-        timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome> {
-        if self.cancel.is_cancelled() {
-            return Err(StreamError::Source(crate::HlsError::Cancelled.into()));
-        }
-        if self.variant_change_pending() {
-            return Ok(WaitOutcome::Interrupted);
-        }
-        self.variant_serving(range.start).wait_range(range, timeout)
-    }
-
-    /// Re-aim heartbeat for the off-RT blocking wait. The wait wakes immediately
-    /// on any readiness signal (the fact of a write/commit/fence/seek) —
-    /// event-driven. This interval bounds only the *quiet* case: if no signal
-    /// arrives within it, the peer may be mis-aimed after a seek (it fetched,
-    /// went idle, and the range the reader now wants is outside its prefetch
-    /// window), so the wait yields `WaitBudgetExceeded` to let the off-RT reader
-    /// re-assert the peer's aim (`notify_peer_wake`) and re-enter. It never polls
-    /// for data — readiness is always learned from a signal, never from a timer.
-    const READER_REAIM_INTERVAL: Duration = Duration::from_millis(25);
-
     /// Off-RT blocking wait: park on the readiness gate until [`probe_range`]
     /// resolves (`Ready`/`Eof`/`Interrupted`) or returns a terminal error.
     /// Event-driven — every transition that can flip the probe (segment
@@ -636,6 +629,13 @@ impl HlsCoord {
         }
     }
 
+    /// The late-bound audio-worker wake cell, handed to [`PlanCtx`] so variant
+    /// fetch closures can re-tick the worker on write/settle. Empty until
+    /// [`Self::set_worker_wake`] fills it.
+    pub(crate) fn worker_wake_cell(&self) -> WorkerWakeCell {
+        Arc::clone(&self.worker_wake)
+    }
+
     delegate! {
         to self.active_required().as_ref() {
             #[call(get_position)]
@@ -662,16 +662,16 @@ impl VariantControl for HlsCoord {
         Self::clear_variant_fence(self);
     }
 
+    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        Self::format_change_segment_range(self)
+    }
+
     fn has_variant_change_pending(&self) -> bool {
         Self::has_variant_change_pending(self)
     }
 
     fn variant_change_target(&self) -> Option<usize> {
         Self::variant_change_target(self)
-    }
-
-    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
-        Self::format_change_segment_range(self)
     }
 }
 

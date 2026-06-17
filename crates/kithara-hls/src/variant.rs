@@ -74,23 +74,35 @@ mod tests;
 struct SegmentSlotState(AtomicU8);
 
 impl SegmentSlotState {
-    const MISSING: u8 = 0;
     const DOWNLOADING: u8 = 1;
-    const LOADED: u8 = 2;
     const FAILED: u8 = 3;
+    const LOADED: u8 = 2;
+    const MISSING: u8 = 0;
 
-    fn missing() -> Arc<Self> {
-        Arc::new(Self(AtomicU8::new(Self::MISSING)))
+    /// Terminal-failure probe. A `Failed` slot will never load (the
+    /// downloader gave up); readers surface a terminal error on it.
+    fn is_failed(&self) -> bool {
+        self.0.load(Ordering::Acquire) == Self::FAILED
     }
 
     fn is_loaded(&self) -> bool {
         self.0.load(Ordering::Acquire) == Self::LOADED
     }
 
-    /// Terminal-failure probe. A `Failed` slot will never load (the
-    /// downloader gave up); readers surface a terminal error on it.
-    fn is_failed(&self) -> bool {
-        self.0.load(Ordering::Acquire) == Self::FAILED
+    fn mark_failed(&self) {
+        self.0.store(Self::FAILED, Ordering::Release);
+    }
+
+    fn mark_loaded(&self) {
+        self.0.store(Self::LOADED, Ordering::Release);
+    }
+
+    fn mark_missing(&self) {
+        self.0.store(Self::MISSING, Ordering::Release);
+    }
+
+    fn missing() -> Arc<Self> {
+        Arc::new(Self(AtomicU8::new(Self::MISSING)))
     }
 
     /// Atomic `Missing -> Downloading` claim. Returns the owned
@@ -111,25 +123,13 @@ impl SegmentSlotState {
             .ok()
             .map(|_| Segment {
                 data: DownloadClaim {
-                    slot: Arc::clone(self),
                     planned,
                     variant,
+                    slot: Arc::clone(self),
                     settled: false,
                 },
                 _phase: PhantomData,
             })
-    }
-
-    fn mark_loaded(&self) {
-        self.0.store(Self::LOADED, Ordering::Release);
-    }
-
-    fn mark_missing(&self) {
-        self.0.store(Self::MISSING, Ordering::Release);
-    }
-
-    fn mark_failed(&self) {
-        self.0.store(Self::FAILED, Ordering::Release);
     }
 }
 
@@ -218,6 +218,28 @@ struct LoadedProof {
 }
 
 impl Segment<Downloading> {
+    /// Consume the claim without touching slot state — used for a stale
+    /// (cancelled) settle whose resource already committed: the new epoch
+    /// owns the slot, so leaving it as-is is correct.
+    fn abandon(mut self) {
+        self.data.settled = true;
+    }
+
+    /// `Downloading -> Failed` terminal settle: the downloader exhausted
+    /// its retry budget (the net layer's resilient body already retried
+    /// the stall/transient errors), so the slot is parked permanently —
+    /// `try_claim` will not re-dispatch it and a waiting reader surfaces a
+    /// terminal error. Unlike [`into_missing`](Self::into_missing) the
+    /// slot does NOT return to the dispatch pool.
+    fn into_failed(mut self) -> Segment<Failed> {
+        self.data.slot.mark_failed();
+        self.data.settled = true;
+        Segment {
+            data: (),
+            _phase: PhantomData,
+        }
+    }
+
     /// `Downloading -> Loaded` with a post-commit size apply. `actual` is
     /// the on-disk `final_len` (success / cache-hit / committed-by-race).
     /// `apply_commit` shrinks the variant's layout to match *before*
@@ -264,37 +286,15 @@ impl Segment<Downloading> {
             _phase: PhantomData,
         }
     }
-
-    /// `Downloading -> Failed` terminal settle: the downloader exhausted
-    /// its retry budget (the net layer's resilient body already retried
-    /// the stall/transient errors), so the slot is parked permanently —
-    /// `try_claim` will not re-dispatch it and a waiting reader surfaces a
-    /// terminal error. Unlike [`into_missing`](Self::into_missing) the
-    /// slot does NOT return to the dispatch pool.
-    fn into_failed(mut self) -> Segment<Failed> {
-        self.data.slot.mark_failed();
-        self.data.settled = true;
-        Segment {
-            data: (),
-            _phase: PhantomData,
-        }
-    }
-
-    /// Consume the claim without touching slot state — used for a stale
-    /// (cancelled) settle whose resource already committed: the new epoch
-    /// owns the slot, so leaving it as-is is correct.
-    fn abandon(mut self) {
-        self.data.settled = true;
-    }
 }
 
 impl Segment<Loaded> {
-    fn planned(&self) -> PlannedFetch {
-        self.data.planned
-    }
-
     fn final_len(&self) -> u64 {
         self.data.final_len
+    }
+
+    fn planned(&self) -> PlannedFetch {
+        self.data.planned
     }
 }
 
@@ -348,8 +348,8 @@ pub(crate) struct SegmentEntry {
     size: AtomicU64,
     decode_time: Duration,
     duration: Duration,
-    content: SegmentContent,
     resource_id: ResourceKey,
+    content: SegmentContent,
     url: Url,
 }
 
@@ -361,11 +361,11 @@ pub(crate) struct InitEntry {
     /// Encrypted init size from HEAD, shrunk on commit — see
     /// [`SegmentEntry::size`].
     size: AtomicU64,
+    resource_id: ResourceKey,
     /// Decryption disposition for the init segment. HLS init segments
     /// don't carry their own `#EXT-X-KEY`; an encrypted variant mirrors
     /// the first media segment's key — the standard packaging convention.
     content: SegmentContent,
-    resource_id: ResourceKey,
     url: Url,
 }
 
@@ -394,6 +394,13 @@ pub(crate) enum VariantInit {
 }
 
 impl VariantInit {
+    /// Unwrap the `Pending` entry for assertions on a variant known to
+    /// carry a separately fetched init.
+    #[cfg(test)]
+    fn expect_pending(&self) -> &InitEntry {
+        self.pending().expect("init is Pending")
+    }
+
     /// The `Pending` entry, or `None` for [`NotApplicable`](Self::NotApplicable).
     fn pending(&self) -> Option<&InitEntry> {
         match self {
@@ -408,13 +415,6 @@ impl VariantInit {
     fn size(&self) -> u64 {
         self.pending()
             .map_or(0, |entry| entry.size.load(Ordering::Acquire))
-    }
-
-    /// Unwrap the `Pending` entry for assertions on a variant known to
-    /// carry a separately fetched init.
-    #[cfg(test)]
-    fn expect_pending(&self) -> &InitEntry {
-        self.pending().expect("init is Pending")
     }
 }
 
@@ -447,6 +447,11 @@ pub(crate) fn wake_worker(cell: &WorkerWakeCell) {
 }
 
 pub(crate) struct PlanCtx {
+    /// Shared readiness gate (owned by [`HlsCoord`]). Every `FetchCmd` this
+    /// plan emits signals it on each segment byte write and on settle
+    /// (commit/fail), so an off-RT reader parked in `wait_range(_, None)`
+    /// wakes the moment its range fills — no wall-clock poll.
+    pub(crate) ready: Arc<CondvarGate<u64>>,
     pub(crate) scope: AssetScope<DecryptContext>,
     pub(crate) master_cancel: CancelToken,
     /// Per-resource HTTP headers applied to every init/segment fetch.
@@ -465,22 +470,17 @@ pub(crate) struct PlanCtx {
     /// `Init` is always emitted regardless — the fMP4 demuxer needs
     /// it before any segment can decode.
     pub(crate) look_ahead_bytes: Option<u64>,
+    /// Late-bound audio-worker wake, fired alongside `ready` on each write and
+    /// settle so the RT decoder's worker re-ticks on data arrival rather than
+    /// on its 10 ms scheduler poll. Only the two downloader-thread sites fire
+    /// it — the coord's RT-reachable fence/seek signals deliberately do not.
+    pub(crate) worker_wake: WorkerWakeCell,
     /// Snapshot of `SeekObserve::epoch()` at plan-time. Tagged on
     /// every emitted `FetchCmd`'s probe so integration tests can
     /// distinguish fetches that pre-date a user seek from those that
     /// the scheduler issued *after* observing the new epoch.
     pub(crate) seek_epoch: u64,
     pub(crate) prefetch_budget: usize,
-    /// Shared readiness gate (owned by [`HlsCoord`]). Every `FetchCmd` this
-    /// plan emits signals it on each segment byte write and on settle
-    /// (commit/fail), so an off-RT reader parked in `wait_range(_, None)`
-    /// wakes the moment its range fills — no wall-clock poll.
-    pub(crate) ready: Arc<CondvarGate<u64>>,
-    /// Late-bound audio-worker wake, fired alongside `ready` on each write and
-    /// settle so the RT decoder's worker re-ticks on data arrival rather than
-    /// on its 10 ms scheduler poll. Only the two downloader-thread sites fire
-    /// it — the coord's RT-reachable fence/seek signals deliberately do not.
-    pub(crate) worker_wake: WorkerWakeCell,
 }
 
 /// Inputs to [`HlsVariant::activate_at_segment_with_shift`]: pin `from_seg`
@@ -489,32 +489,16 @@ pub(crate) struct PlanCtx {
 #[derive(Clone, Copy)]
 pub(crate) struct SegmentActivateParams {
     pub(crate) from_seg: u32,
-    pub(crate) seg_boundary: u64,
     pub(crate) reader_pos: u64,
+    pub(crate) seg_boundary: u64,
 }
 
 pub(crate) struct HlsVariant {
-    /// Segment/init content domain: the asset scope plus the init and
-    /// media entry tables. Owns every resource read (`read_resource`,
-    /// `contains_range`) — the produce-core's open-and-read live here, and
-    /// it is the home for the `WS5d` held-resource lease. The fetch path on
-    /// this facade borrows its `init()` / `segments()` to claim slots and
-    /// build `FetchCmd`s.
-    store: SegmentStore,
     /// Parsed master/media-playlist data. Owned by `Arc` so multiple
     /// variants share a single immutable view; used by
     /// `seek_time_anchor` (`find_seek_point_for_time`) and as the
     /// source for the cached [`Self::codec`] / [`Self::container`].
     playlist_state: Arc<PlaylistState>,
-    /// Reader-side runtime: the shared byte cursor, peer wake handle, and the
-    /// timeline consulted for `is_flushing` gating. The probe-tagged
-    /// `get_position` / `set_position` stay on the facade and delegate here.
-    reader: ReaderRuntime,
-    /// Coherent owner of the cross-variant byte-address-space coordinates
-    /// (`byte_shift`, `served_from`, `served_until`, `init_seed`, the media
-    /// offset table). A single lock guards all five so a reader never mixes
-    /// the shift of one activation with the served bounds of the next.
-    layout: Layout,
     prefetch_anchor: AtomicU64,
     /// The variant's cancel epoch: the per-track parent (mirror of
     /// `coord.cancel` = `PlanCtx::master_cancel`) plus the rotating
@@ -523,6 +507,11 @@ pub(crate) struct HlsVariant {
     /// `v_old`, and the second activation of `v_old` must dispatch fetches
     /// under a *live* cancel, so [`Self::rearm_cancel`] rotates the child.
     cancel_epoch: CancelEpoch,
+    /// Coherent owner of the cross-variant byte-address-space coordinates
+    /// (`byte_shift`, `served_from`, `served_until`, `init_seed`, the media
+    /// offset table). A single lock guards all five so a reader never mixes
+    /// the shift of one activation with the served bounds of the next.
+    layout: Layout,
     queue: Mutex<VecDeque<PlannedFetch>>,
     /// Cached audio codec — pulled from `playlist_state` at construction
     /// time. The reader's hot path (`media_info`) reads this without
@@ -535,6 +524,17 @@ pub(crate) struct HlsVariant {
     /// resource-wide auth (e.g. zvuk `X-Auth-Token`) so segment GETs
     /// reach the same authenticated endpoint as the playlist load.
     headers: Option<Headers>,
+    /// Reader-side runtime: the shared byte cursor, peer wake handle, and the
+    /// timeline consulted for `is_flushing` gating. The probe-tagged
+    /// `get_position` / `set_position` stay on the facade and delegate here.
+    reader: ReaderRuntime,
+    /// Segment/init content domain: the asset scope plus the init and
+    /// media entry tables. Owns every resource read (`read_resource`,
+    /// `contains_range`) — the produce-core's open-and-read live here, and
+    /// it is the home for the `WS5d` held-resource lease. The fetch path on
+    /// this facade borrows its `init()` / `segments()` to claim slots and
+    /// build `FetchCmd`s.
+    store: SegmentStore,
     variant: usize,
 }
 
@@ -544,10 +544,10 @@ pub(crate) struct HlsVariant {
 /// build it inline from synthesised fixtures.
 pub(crate) struct VariantParts {
     pub(crate) playlist_state: Arc<PlaylistState>,
-    pub(crate) init: VariantInit,
+    pub(crate) seek_obs: Arc<dyn SeekObserve>,
     pub(crate) codec: Option<AudioCodec>,
     pub(crate) container: Option<ContainerFormat>,
-    pub(crate) seek_obs: Arc<dyn SeekObserve>,
+    pub(crate) init: VariantInit,
     pub(crate) segments: Vec<SegmentEntry>,
 }
 
@@ -589,8 +589,8 @@ impl HlsVariant {
                 container,
                 init,
                 segments,
-                playlist_state: Arc::clone(playlist_state),
                 seek_obs,
+                playlist_state: Arc::clone(playlist_state),
             },
             ctx,
         )
@@ -929,7 +929,6 @@ impl HlsVariant {
                     // Only a `Pending` init is ever enqueued (the `rebuild`
                     // gate skips `NotApplicable`), so a missing entry here is
                     // unreachable; skip defensively rather than claim a slot
-                    // that does not exist.
                     let Some(init) = self.store.init().pending() else {
                         continue;
                     };
@@ -1093,10 +1092,10 @@ impl HlsVariant {
             variant,
             store,
             playlist_state,
-            reader: ReaderRuntime::new(seek_obs),
             layout,
             codec,
             container,
+            reader: ReaderRuntime::new(seek_obs),
             prefetch_anchor: AtomicU64::new(0),
             queue: Mutex::default(),
             cancel_epoch: CancelEpoch::new(ctx.master_cancel.clone()),
@@ -1107,6 +1106,12 @@ impl HlsVariant {
     #[kithara::probe(variant = self.variant as u64, pos = self.reader.position())]
     pub(crate) fn get_position(&self) -> u64 {
         self.reader.position()
+    }
+
+    /// Whether this variant declares a separately fetched `#EXT-X-MAP` init,
+    /// regardless of whether its size is yet known.
+    pub(crate) fn has_init(&self) -> bool {
+        self.store.has_init()
     }
 
     /// Byte range a demuxer reads to re-establish container state after a
@@ -1164,6 +1169,11 @@ impl HlsVariant {
         Some((self.init_resource()?, range))
     }
 
+    /// Whether the declared init settled terminally (`Failed`).
+    pub(crate) fn init_failed(&self) -> bool {
+        self.store.init_failed()
+    }
+
     /// Resource key for the variant's init segment — `None` when the
     /// playlist has no `#EXT-X-MAP` (raw TS/AAC).
     pub(crate) fn init_resource(&self) -> Option<ResourceKey> {
@@ -1174,21 +1184,16 @@ impl HlsVariant {
         self.store.init_size()
     }
 
-    /// Whether this variant declares a separately fetched `#EXT-X-MAP` init,
-    /// regardless of whether its size is yet known.
-    pub(crate) fn has_init(&self) -> bool {
-        self.store.has_init()
-    }
-
-    /// Whether the declared init settled terminally (`Failed`).
-    pub(crate) fn init_failed(&self) -> bool {
-        self.store.init_failed()
-    }
-
     pub(crate) fn invalidate_init(&self) {
         if self.store.invalidate_init() {
             self.layout.clear_init_seed();
         }
+    }
+
+    /// Coherent "is this variant historical?" check — `served_from` and
+    /// `served_until` read under a single Layout lock.
+    pub(crate) fn is_shrunk(&self) -> bool {
+        self.layout.is_shrunk(self.num_segments())
     }
 
     /// Media descriptor for the segment covering `byte_offset` —
@@ -1267,6 +1272,44 @@ impl HlsVariant {
         self.prefetch_anchor.load(Ordering::Acquire)
     }
 
+    /// Whether any init/media segment covering `range` settled terminally
+    /// (`Failed`): the downloader exhausted its retry budget, so the range
+    /// will never load. [`wait_range`](Self::wait_range) consults this when
+    /// a range is not ready to tell "still downloading" (spin) from
+    /// "permanently failed" (terminal error). Walks the same descriptors as
+    /// [`range_ready`](Self::range_ready), checking slot state rather than
+    /// on-disk bytes; the per-byte `contains_range` walk stays out so this
+    /// only fires on a real terminal settle, never on a transient gap.
+    fn range_has_failed(&self, range: &Range<u64>) -> bool {
+        let total = self.total_bytes();
+        let end = if total > 0 {
+            range.end.min(total)
+        } else {
+            range.end
+        };
+        let mut cursor = range.start;
+        // The init prefix is not a media segment, so `find_at_offset` returns
+        // `None` for a byte inside it — skip past it (jumping to media space)
+        // after checking the init's own terminal state, exactly as
+        // `range_ready` walks init then media.
+        if let Some((_key, init_range)) = self.init_descriptor_at(cursor) {
+            if self.store.init_failed() {
+                return true;
+            }
+            cursor = init_range.end;
+        }
+        while cursor < end {
+            let Some((seg_idx, seg_off, seg_size)) = self.find_at_offset(cursor) else {
+                break;
+            };
+            if self.store.segment_failed(seg_idx) {
+                return true;
+            }
+            cursor = (seg_off + seg_size).max(cursor + 1);
+        }
+        false
+    }
+
     pub(crate) fn range_ready(&self, range: &Range<u64>) -> bool {
         let total = self.total_bytes();
         // When a served segment's size is still unknown, `total` is a lower
@@ -1320,44 +1363,6 @@ impl HlsVariant {
             cursor = slice_end;
         }
         cursor >= end
-    }
-
-    /// Whether any init/media segment covering `range` settled terminally
-    /// (`Failed`): the downloader exhausted its retry budget, so the range
-    /// will never load. [`wait_range`](Self::wait_range) consults this when
-    /// a range is not ready to tell "still downloading" (spin) from
-    /// "permanently failed" (terminal error). Walks the same descriptors as
-    /// [`range_ready`](Self::range_ready), checking slot state rather than
-    /// on-disk bytes; the per-byte `contains_range` walk stays out so this
-    /// only fires on a real terminal settle, never on a transient gap.
-    fn range_has_failed(&self, range: &Range<u64>) -> bool {
-        let total = self.total_bytes();
-        let end = if total > 0 {
-            range.end.min(total)
-        } else {
-            range.end
-        };
-        let mut cursor = range.start;
-        // The init prefix is not a media segment, so `find_at_offset` returns
-        // `None` for a byte inside it — skip past it (jumping to media space)
-        // after checking the init's own terminal state, exactly as
-        // `range_ready` walks init then media.
-        if let Some((_key, init_range)) = self.init_descriptor_at(cursor) {
-            if self.store.init_failed() {
-                return true;
-            }
-            cursor = init_range.end;
-        }
-        while cursor < end {
-            let Some((seg_idx, seg_off, seg_size)) = self.find_at_offset(cursor) else {
-                break;
-            };
-            if self.store.segment_failed(seg_idx) {
-                return true;
-            }
-            cursor = (seg_off + seg_size).max(cursor + 1);
-        }
-        false
     }
 
     #[kithara::hang_watchdog]
@@ -1598,12 +1603,6 @@ impl HlsVariant {
         self.layout.served_from()
     }
 
-    /// Coherent "is this variant historical?" check — `served_from` and
-    /// `served_until` read under a single Layout lock.
-    pub(crate) fn is_shrunk(&self) -> bool {
-        self.layout.is_shrunk(self.num_segments())
-    }
-
     #[kithara::probe(variant = self.variant as u64, pos)]
     pub(crate) fn set_position(&self, pos: u64) {
         self.reader.set_position(pos);
@@ -1626,14 +1625,6 @@ impl HlsVariant {
             .set_served_until(until, self.store.segments(), self.init_size());
     }
 
-    #[kithara::probe(
-        variant = self.variant as u64,
-        total = self.layout.total_bytes()
-    )]
-    pub(crate) fn total_bytes(&self) -> u64 {
-        self.layout.total_bytes()
-    }
-
     /// Whether every served segment's byte size is known. While `false`,
     /// [`Self::total_bytes`] is a lower bound (a segment's size estimate is
     /// missing), so the byte-EOF gates must hold `Waiting`/`Pending` rather
@@ -1641,6 +1632,14 @@ impl HlsVariant {
     /// against the under-count.
     pub(crate) fn sizes_complete(&self) -> bool {
         self.layout.sizes_complete()
+    }
+
+    #[kithara::probe(
+        variant = self.variant as u64,
+        total = self.layout.total_bytes()
+    )]
+    pub(crate) fn total_bytes(&self) -> u64 {
+        self.layout.total_bytes()
     }
 
     #[kithara::hang_watchdog]
@@ -1674,7 +1673,6 @@ impl HlsVariant {
         // here rather than spinning. Checked AFTER flushing/EOF: a seek in
         // flight may be moving the read position off the failed range, and
         // the failed check is scoped to the requested range so seeking to a
-        // healthy range still plays.
         if self.range_has_failed(&range) {
             return Err(StreamError::Source(HlsError::SegmentUnavailable.into()));
         }
@@ -1702,19 +1700,19 @@ impl HlsVariant {
 /// apply the post-decrypt size — we use `Weak` (not `Arc`) so a dropped
 /// peer doesn't keep the variant alive past teardown.
 struct FetchSlot {
-    handle: Segment<Downloading>,
-    /// Sole commit owner (non-`Clone`); consumed in `settle`.
-    writer: AssetWriter<DecryptContext>,
-    /// Read view of the writer's generation — used to observe a
-    /// committed-by-race status before deciding the terminal transition.
-    reader: AssetReader<DecryptContext>,
-    /// Clone-able streaming-write handle for the fetch body closure.
-    raw: RawWriteHandle,
-    cancel: CancelToken,
     /// Shared readiness gate — signalled on every terminal settle
     /// (commit/fail/cancel) so an off-RT reader parked in `wait_range(_, None)`
     /// re-probes the now-resolved range.
     ready: Arc<CondvarGate<u64>>,
+    /// Read view of the writer's generation — used to observe a
+    /// committed-by-race status before deciding the terminal transition.
+    reader: AssetReader<DecryptContext>,
+    /// Sole commit owner (non-`Clone`); consumed in `settle`.
+    writer: AssetWriter<DecryptContext>,
+    cancel: CancelToken,
+    /// Clone-able streaming-write handle for the fetch body closure.
+    raw: RawWriteHandle,
+    handle: Segment<Downloading>,
     /// Late-bound audio-worker wake — fired alongside `ready` on settle so the
     /// RT decoder's worker re-ticks the instant a commit makes bytes readable
     /// (the decrypt gate opens here for DRM segments), not on its 10 ms poll.
@@ -1751,17 +1749,6 @@ impl FetchSlot {
         self.settle_inner(bytes_written, err);
         ready.signal();
         wake_worker(&worker_wake);
-    }
-
-    fn settle_inner(self, bytes_written: u64, err: Option<&NetError>) {
-        if self.cancel.is_cancelled() {
-            self.settle_cancelled(bytes_written);
-            return;
-        }
-        match err {
-            None => self.settle_success(bytes_written),
-            Some(e) => self.settle_failure(e),
-        }
     }
 
     fn settle_cancelled(self, bytes_written: u64) {
@@ -1823,6 +1810,17 @@ impl FetchSlot {
             } else {
                 handle.into_missing();
             }
+        }
+    }
+
+    fn settle_inner(self, bytes_written: u64, err: Option<&NetError>) {
+        if self.cancel.is_cancelled() {
+            self.settle_cancelled(bytes_written);
+            return;
+        }
+        match err {
+            None => self.settle_success(bytes_written),
+            Some(e) => self.settle_failure(e),
         }
     }
 

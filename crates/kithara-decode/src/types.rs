@@ -48,8 +48,8 @@ pub struct TrackMetadata {
 /// `PcmSpec`. Use `PcmMeta::default()` for EOF/failure sentinel chunks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PcmSpec {
-    pub channels: u16,
     pub sample_rate: NonZeroU32,
+    pub channels: u16,
 }
 
 impl fmt::Display for PcmSpec {
@@ -63,8 +63,8 @@ impl PcmSpec {
     #[must_use]
     pub const fn new(channels: u16, sample_rate: NonZeroU32) -> Self {
         Self {
-            channels,
             sample_rate,
+            channels,
         }
     }
 

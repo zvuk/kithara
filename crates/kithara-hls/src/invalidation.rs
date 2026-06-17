@@ -1,15 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Shared HLS asset store and its invalidation routing.
-//!
-//! [`HlsStore`] bundles a shared `AssetStore<DecryptContext>` with a
-//! private registry that routes per-`asset_root` cache invalidations to
-//! the matching live stream's eviction channel. Inject one store into
-//! every HLS resource that should cooperate on a single cache; the
-//! registry is wired automatically by
-//! [`build_shared_asset_store`](crate::build_shared_asset_store) and
-//! never surfaces in any config. See `README.md` "Shared Asset Store".
-
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -40,8 +30,8 @@ pub struct HlsStore {
 /// stream.
 #[must_use = "drop the guard to deregister from the invalidation registry"]
 pub(crate) struct HlsInvalidationGuard {
-    registry: HlsInvalidationRegistry,
     asset_root: Arc<str>,
+    registry: HlsInvalidationRegistry,
 }
 
 impl HlsInvalidationGuard {
@@ -52,8 +42,8 @@ impl HlsInvalidationGuard {
     ) -> Self {
         registry.insert(Arc::clone(&asset_root), evict_tx);
         Self {
-            registry,
             asset_root,
+            registry,
         }
     }
 }

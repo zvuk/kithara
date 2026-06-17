@@ -82,13 +82,13 @@ impl MmapState {
 /// Uses `mmap-io` for file-backed storage with a lock-free `SegQueue`
 /// for fast-path wait notifications.
 pub struct MmapDriver {
+    /// Immutable committed snapshot for the lock-free read fast path.
+    pub(super) committed: ArcSwapOption<MemoryMappedFile>,
     pub(super) mmap: Mutex<MmapState>,
     pub(super) mode: OpenMode,
     pub(super) path: PathBuf,
     /// Lock-free queue for fast-path range notifications.
     pub(super) ready_ranges: SegQueue<Range<u64>>,
-    /// Immutable committed snapshot for the lock-free read fast path.
-    pub(super) committed: ArcSwapOption<MemoryMappedFile>,
 }
 
 impl fmt::Debug for MmapDriver {
@@ -162,10 +162,10 @@ impl Driver for MmapDriver {
 
         let driver = Self {
             mode,
+            committed,
             mmap: Mutex::new(mmap_state),
             path: opts.path,
             ready_ranges: SegQueue::new(),
-            committed,
         };
 
         Ok((driver, init))

@@ -48,6 +48,13 @@ impl Default for Notify {
 }
 
 impl Notify {
+    pub fn notified(&self) -> Notified<'_> {
+        Notified {
+            state: NotifiedState::Init,
+            notify: self,
+        }
+    }
+
     pub fn notify_one(&self) {
         match self.backend {
             Backend::Engine(cvid) => system::signal_notify(cvid),
@@ -75,13 +82,6 @@ impl Notify {
             }
         }
     }
-
-    pub fn notified(&self) -> Notified<'_> {
-        Notified {
-            state: NotifiedState::Init,
-            notify: self,
-        }
-    }
 }
 
 /// Park state of a [`Notified`] future, so re-poll and `Drop` use the matching
@@ -98,8 +98,8 @@ enum NotifiedState {
 
 /// Future returned by [`Notify::notified`] under `flash`.
 pub struct Notified<'a> {
-    state: NotifiedState,
     notify: &'a Notify,
+    state: NotifiedState,
 }
 
 impl Future for Notified<'_> {
@@ -112,7 +112,6 @@ impl Future for Notified<'_> {
                 if handle.granted() {
                     // The firer (notify_*) selected us; resolve. The task's
                     // `active_async` count is owned by the spawn poll-wrapper, so
-                    // resolve touches no counter.
                     self.state = NotifiedState::Done;
                     return Poll::Ready(());
                 }

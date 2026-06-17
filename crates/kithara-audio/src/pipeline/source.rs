@@ -46,7 +46,6 @@ use crate::{
 /// - Decoder to read via Read + Seek
 /// - `StreamAudioSource` to check `media_info()` for format changes
 pub(crate) struct SharedStream<T: StreamType> {
-    inner: Arc<Mutex<Stream<T>>>,
     /// Construction-phase read mode, shared across clones. When set, `Read`
     /// routes through the blocking off-RT [`Stream::read`] adapter (waits for
     /// the seeked range to download, cancel-bounded by its own timeout)
@@ -58,6 +57,7 @@ pub(crate) struct SharedStream<T: StreamType> {
     /// drives always uses `probe_read`. See the crate `README.md`
     /// "Construction reads".
     blocking: Arc<AtomicBool>,
+    inner: Arc<Mutex<Stream<T>>>,
 }
 
 impl<T: StreamType> SharedStream<T> {
@@ -233,19 +233,19 @@ pub(crate) type DecoderFactory<T> =
 /// When it encounters new segment data (different format), it errors or returns EOF.
 /// At that point, we seek to the segment boundary and recreate the decoder.
 pub(crate) struct StreamAudioSource<T: StreamType> {
+    /// Explicit FSM state — single source of truth for track phase.
+    pub(crate) state: CurrentFsm,
     /// Decoder + `base_offset` + `media_info` as an atomic unit.
     pub(crate) session: DecoderSession,
+    /// Narrow activity handle — set/query the `PLAYING` flag.
+    activity: Arc<dyn Activity>,
+    epoch: Arc<AtomicU64>,
     /// Narrow mutating playhead handle — committed position and total duration.
     playhead: Arc<dyn PlayheadWrite>,
     /// Narrow seek-control handle — begin / complete / clear-pending.
     seek: Arc<dyn SeekControl>,
     /// Narrow seek-observe handle — read seek state without mutation.
     seek_obs: Arc<dyn SeekObserve>,
-    /// Narrow activity handle — set/query the `PLAYING` flag.
-    activity: Arc<dyn Activity>,
-    /// Explicit FSM state — single source of truth for track phase.
-    pub(crate) state: CurrentFsm,
-    epoch: Arc<AtomicU64>,
     decoder_factory: DecoderFactory<T>,
     /// Gapless trim mode applied per-track. Built once at construction;
     /// ABR variant switches inside one track keep the same trimmer
@@ -254,12 +254,28 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     gapless_mode: GaplessMode,
     /// Per-track gapless trimmer adapter.
     gapless: GaplessStage,
+    /// Absolute content frame offset just past the most recently emitted chunk
+    /// (the producer's decode head), tagged with its epoch. A mid-playback
+    /// variant-switch recreate continues the new decoder from here — NOT from
+    /// the consumer's lagging `committed_position`: the chunks in
+    /// `[committed..decode_head]` are already queued in the outlet ring (a
+    /// `FormatBoundary` recreate neither flushes it nor bumps the seek epoch),
+    /// so resuming at `committed` would re-emit them and rewind content. Stored
+    /// as an exact frame (not a `Duration`) and converted back with
+    /// `duration_for_frames`; the demuxer quantizes the seek landing to a
+    /// sample and `frame_offset_for` rounds to the nearest frame, so the rebuilt
+    /// decoder relabels its first chunk at exactly this frame. See
+    /// `execute_recreation`.
+    decode_head: Option<(u64, u64)>,
     /// Deferred sink for FSM lifecycle events ([`AudioEvent`]). The FSM runs on
     /// the produce core, so `emit_event` enqueues lock-free; the scheduler shell
     /// flushes via [`flush_deferred`](AudioWorkerSource::flush_deferred) and on
     /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
     /// forbid path. `None` for sources built without an event bus.
     emit: Option<DeferredBus<AudioEvent>>,
+    /// Buffered effect-chain tail produced by a single end-of-stream drain (`drain_effects`).
+    /// `None` until true EOF arms it.
+    eof_drain_queue: Option<VecDeque<PcmChunk>>,
     last_spec: Option<PcmSpec>,
     /// Reader→peer wake handle, resolved from [`Source::peer_wake`] at
     /// construction. The FSM runs on the produce core, so it `arm`s this
@@ -268,9 +284,6 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// `SharedStream` mutex) keeps the arm out of the lock the FSM already holds
     /// at every `clear_seek_pending` callsite. `None` for file streams.
     peer_wake: Option<Arc<kithara_stream::DeferredWake>>,
-    /// Buffered effect-chain tail produced by a single end-of-stream drain (`drain_effects`).
-    /// `None` until true EOF arms it.
-    eof_drain_queue: Option<VecDeque<PcmChunk>>,
     /// `(seek_epoch, target)` of the most recent applied seek.
     /// `committed_position` lags `target` until the seek's first
     /// (trim-aligned) chunk is consumed: the decoder lands at the
@@ -287,19 +300,6 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     effects: Vec<Box<dyn AudioEffect>>,
     chunks_decoded: u64,
     total_samples: u64,
-    /// Absolute content frame offset just past the most recently emitted chunk
-    /// (the producer's decode head), tagged with its epoch. A mid-playback
-    /// variant-switch recreate continues the new decoder from here — NOT from
-    /// the consumer's lagging `committed_position`: the chunks in
-    /// `[committed..decode_head]` are already queued in the outlet ring (a
-    /// `FormatBoundary` recreate neither flushes it nor bumps the seek epoch),
-    /// so resuming at `committed` would re-emit them and rewind content. Stored
-    /// as an exact frame (not a `Duration`) and converted back with
-    /// `duration_for_frames`; the demuxer quantizes the seek landing to a
-    /// sample and `frame_offset_for` rounds to the nearest frame, so the rebuilt
-    /// decoder relabels its first chunk at exactly this frame. See
-    /// `execute_recreation`.
-    decode_head: Option<(u64, u64)>,
 }
 
 /// Initial decode state handed to [`StreamAudioSource::new`]: the freshly
@@ -308,8 +308,8 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
 pub(crate) struct DecodeInit<T: StreamType> {
     pub(crate) decoder: Box<dyn Decoder>,
     pub(crate) decoder_factory: DecoderFactory<T>,
-    pub(crate) media_info: Option<MediaInfo>,
     pub(crate) gapless_mode: GaplessMode,
+    pub(crate) media_info: Option<MediaInfo>,
 }
 
 /// The seek that failed inside [`StreamAudioSource::recover_from_decoder_seek_error`]:
@@ -318,11 +318,11 @@ pub(crate) struct DecodeInit<T: StreamType> {
 /// (direct vs anchor). The triggering `DecodeError` is passed separately.
 #[derive(Clone, Copy)]
 struct SeekAttempt {
-    request: SeekRequest,
     position: Duration,
+    seek_mode: SeekMode,
+    request: SeekRequest,
     epoch: u64,
     recreate_offset: u64,
-    seek_mode: SeekMode,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -364,7 +364,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             decoder_factory,
             epoch,
             effects,
-            eof_drain_queue: None,
             playhead,
             seek,
             seek_obs,
@@ -372,6 +371,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             gapless_mode,
             gapless,
             peer_wake,
+            eof_drain_queue: None,
             state: CurrentFsm::decoding(),
             chunks_decoded: 0,
             total_samples: 0,
@@ -1037,14 +1037,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         });
     }
 
-    /// Reset the effect chain and discard any armed `eof_drain_queue`.
-    /// Used on seek / decoder recreation, so a buffering effect's stale tail never leaks past
-    /// the discontinuity and a seek-after-EOF re-arms the drain from scratch.
-    fn reset_effect_chain(&mut self) {
-        reset_effects(&mut self.effects);
-        self.eof_drain_queue = None;
-    }
-
     /// Drain ready chunks from the gapless trimmer through the effect
     /// chain, returning the first chunk that survives effects.
     ///
@@ -1252,6 +1244,14 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.epoch.store(request.seek.epoch, Ordering::Release);
         self.finalize_seek_pending(request.seek.epoch);
         self.update_state(CurrentFsm::decoding());
+    }
+
+    /// Reset the effect chain and discard any armed `eof_drain_queue`.
+    /// Used on seek / decoder recreation, so a buffering effect's stale tail never leaks past
+    /// the discontinuity and a seek-after-EOF re-arms the drain from scratch.
+    fn reset_effect_chain(&mut self) {
+        reset_effects(&mut self.effects);
+        self.eof_drain_queue = None;
     }
 
     fn resume_state(&self) -> Option<&ResumeState> {
@@ -1526,7 +1526,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             // are synchronous (no await between the stores), so retry the
             // loop (`Interrupted`) instead of killing the producer; a
             // genuinely never-observable transition surfaces as a watchdog
-            // hang with this warn trail.
             if !self.seek_obs.is_pending() {
                 warn!(
                     ?no_change_err,
@@ -1719,6 +1718,15 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.update_state(CurrentFsm::applying_seek(ApplySeekState { mode, request }));
     }
 
+    /// Arm the reader→peer wake on the produce core (lock-free). The scheduler
+    /// shell flushes it off the forbid path, so the cross-thread `notify_one`
+    /// (a `kevent`) never fires on the RT core. No-op for file streams.
+    fn arm_peer_wake(&self) {
+        if let Some(ref wake) = self.peer_wake {
+            wake.arm();
+        }
+    }
+
     fn boundary_end(&self, start: u64) -> u64 {
         self.shared_stream.len().map_or_else(
             || start.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES),
@@ -1800,15 +1808,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.arm_peer_wake();
     }
 
-    /// Arm the reader→peer wake on the produce core (lock-free). The scheduler
-    /// shell flushes it off the forbid path, so the cross-thread `notify_one`
-    /// (a `kevent`) never fires on the RT core. No-op for file streams.
-    fn arm_peer_wake(&self) {
-        if let Some(ref wake) = self.peer_wake {
-            wake.arm();
-        }
-    }
-
     /// Decoder-construction input contract for the demuxer `recreate` will
     /// rebuild, declared per-demuxer by the decode factory: an init-bearing
     /// container (segment-aware fMP4) reports [`InputRequirement::InitOnly`] —
@@ -1821,6 +1820,11 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn recreate_input(&self, recreate: &RecreateState) -> InputRequirement {
         let byte_map = self.shared_stream.byte_map();
         kithara_decode::DecoderFactory::input_requirement(&recreate.media_info, byte_map.as_deref())
+    }
+
+    fn recreate_phase(&self, recreate: &RecreateState) -> SourcePhase {
+        self.shared_stream
+            .phase_at(self.recreate_ready_range(recreate))
     }
 
     /// Byte range whose readiness gates decoder recreation, shared by the gate
@@ -1844,11 +1848,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             return init_range;
         }
         recreate.offset..self.boundary_end(recreate.offset)
-    }
-
-    fn recreate_phase(&self, recreate: &RecreateState) -> SourcePhase {
-        self.shared_stream
-            .phase_at(self.recreate_ready_range(recreate))
     }
 
     /// Compute the upper bound of the byte range required for the
@@ -1884,22 +1883,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             .len()
             .map_or(check_end, |len| check_end.min(len));
         self.source_ready_for_range(pos..check_end)
-    }
-
-    /// Phase of the read-ahead window the decoder reads *through* during
-    /// steady-state playback: `[pos, pos + READ_AHEAD)`, clamped to the
-    /// stream length but — unlike [`source_is_ready`] — NOT clamped to the
-    /// next segment boundary. The decoder's container parser reads across
-    /// segment boundaries, so a boundary-clamped gate reports `Ready` while
-    /// the decoder is actually blocked on the (withheld) next segment. The
-    /// `WaitContext::Playback` wait path gates on this wider window so the
-    /// gate and the decoder's real read never disagree (a mismatch hot-spins
-    /// the worker; see crate `README.md` "Playback readiness gating").
-    fn source_phase_forward(&self) -> SourcePhase {
-        let pos = self.shared_stream.position();
-        let end = pos.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES);
-        let end = self.shared_stream.len().map_or(end, |len| end.min(len));
-        self.shared_stream.phase_at(pos..end)
     }
 
     fn source_is_ready_for_apply_seek(&self, applying: ApplySeekState) -> bool {
@@ -1967,6 +1950,22 @@ impl<T: StreamType> StreamAudioSource<T> {
             WaitContext::Playback => self.source_phase_forward(),
             WaitContext::Seek(_) => self.shared_stream.phase(),
         }
+    }
+
+    /// Phase of the read-ahead window the decoder reads *through* during
+    /// steady-state playback: `[pos, pos + READ_AHEAD)`, clamped to the
+    /// stream length but — unlike [`source_is_ready`] — NOT clamped to the
+    /// next segment boundary. The decoder's container parser reads across
+    /// segment boundaries, so a boundary-clamped gate reports `Ready` while
+    /// the decoder is actually blocked on the (withheld) next segment. The
+    /// `WaitContext::Playback` wait path gates on this wider window so the
+    /// gate and the decoder's real read never disagree (a mismatch hot-spins
+    /// the worker; see crate `README.md` "Playback readiness gating").
+    fn source_phase_forward(&self) -> SourcePhase {
+        let pos = self.shared_stream.position();
+        let end = pos.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES);
+        let end = self.shared_stream.len().map_or(end, |len| end.min(len));
+        self.shared_stream.phase_at(pos..end)
     }
 
     fn source_ready_for_range(&self, range: Range<u64>) -> bool {
@@ -2374,6 +2373,40 @@ impl<T: StreamType> Drop for StreamAudioSource<T> {
 impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
     type Chunk = PcmChunk;
 
+    fn decode_epoch(&self) -> u64 {
+        // The epoch the current decode belongs to — stored when a seek is
+        // applied (`ApplyingSeek` / `try_apply_seek`), and the same value
+        // stamped on produced chunks (`decode_one_step`). It LAGS
+        // `timeline().seek_epoch()`, which the consumer bumps the instant it
+        // requests a seek, long before the worker applies it. A terminal
+        // marker (EOF / failure) must carry this decode epoch so a stale
+        // end-of-stream produced for a superseded seek is discarded by the
+        // consumer's validator rather than mistaken for the new seek's
+        // terminal (the oversubscription false-EOF race).
+        self.epoch.load(Ordering::Acquire)
+    }
+
+    fn flush_deferred(&mut self) {
+        self.session.decoder.flush_reader_signals();
+        // Publish the FSM lifecycle events the produce core enqueued this pass,
+        // off the forbid path (the `broadcast::send` is a `kevent`).
+        if let Some(ref emit) = self.emit {
+            emit.flush();
+        }
+        // Deliver the peer wake the produce core armed this pass (a blocked
+        // `probe_read`, a seek-apply / finalize). The `notify_one` is a
+        // cross-thread `kevent` the forbid-blocking core must not make, so it
+        // lands here in the shell. Same `Arc<DeferredWake>` the reader drivers
+        // and the FSM arm, so one flush covers both. `None` for file streams.
+        if let Some(ref wake) = self.peer_wake {
+            wake.flush();
+        }
+    }
+
+    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        Arc::clone(&self.seek_obs)
+    }
+
     fn step_track(&mut self) -> TrackStep<PcmChunk> {
         if let Some(target) = self.preempt_seek_target() {
             self.update_state(CurrentFsm::seek_requested(SeekRequest {
@@ -2408,40 +2441,6 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                 self.state = CurrentFsm::Failed(handle);
                 TrackStep::Failed
             }
-        }
-    }
-
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek_obs)
-    }
-
-    fn decode_epoch(&self) -> u64 {
-        // The epoch the current decode belongs to — stored when a seek is
-        // applied (`ApplyingSeek` / `try_apply_seek`), and the same value
-        // stamped on produced chunks (`decode_one_step`). It LAGS
-        // `timeline().seek_epoch()`, which the consumer bumps the instant it
-        // requests a seek, long before the worker applies it. A terminal
-        // marker (EOF / failure) must carry this decode epoch so a stale
-        // end-of-stream produced for a superseded seek is discarded by the
-        // consumer's validator rather than mistaken for the new seek's
-        // terminal (the oversubscription false-EOF race).
-        self.epoch.load(Ordering::Acquire)
-    }
-
-    fn flush_deferred(&mut self) {
-        self.session.decoder.flush_reader_signals();
-        // Publish the FSM lifecycle events the produce core enqueued this pass,
-        // off the forbid path (the `broadcast::send` is a `kevent`).
-        if let Some(ref emit) = self.emit {
-            emit.flush();
-        }
-        // Deliver the peer wake the produce core armed this pass (a blocked
-        // `probe_read`, a seek-apply / finalize). The `notify_one` is a
-        // cross-thread `kevent` the forbid-blocking core must not make, so it
-        // lands here in the shell. Same `Arc<DeferredWake>` the reader drivers
-        // and the FSM arm, so one flush covers both. `None` for file streams.
-        if let Some(ref wake) = self.peer_wake {
-            wake.flush();
         }
     }
 

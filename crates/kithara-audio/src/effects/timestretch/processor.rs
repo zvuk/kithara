@@ -33,30 +33,30 @@ use crate::traits::AudioEffect;
 /// same worker thread, so the resampler always reads the value written for the
 /// current chunk. See the crate `README.md` ("Live stretch controls").
 pub struct TimeStretchProcessor {
-    backend: Box<dyn StretchBackend>,
-    /// Backend kind currently built; compared against `controls.backend()` to
-    /// detect a live backend swap.
-    current_kind: StretchBackendKind,
     controls: Arc<StretchControls>,
     /// Resampler rate atomic this slot drives. Shared with the resampler that
     /// follows it in the chain.
     resampler_rate: Arc<AtomicF32>,
-    pool: PcmPool,
-    spec: PcmSpec,
-    /// Last stretch factor pushed to the backend; avoids redundant updates.
-    applied_stretch: f64,
-    /// Whether the previous chunk ran through the backend (key-lock on). Drives
-    /// a clean backend reset on an on->off transition.
-    active: bool,
+    backend: Box<dyn StretchBackend>,
     /// Most recent input meta, carried onto each output chunk.
     last_input_meta: Option<PcmMeta>,
-    /// Interleaved output scratch, reused across calls (alloc-free steady state).
-    scratch: Vec<f32>,
     /// Region plan cached from the controls; `Arc::ptr_eq` detects a live swap.
     plan: Option<Arc<RegionPlan>>,
     /// Region covering the playhead — the lookup cursor. `None` forces a
     /// fresh binary search (first chunk, plan swap, region exit, seek).
     region: Option<ActiveRegion>,
+    pool: PcmPool,
+    spec: PcmSpec,
+    /// Backend kind currently built; compared against `controls.backend()` to
+    /// detect a live backend swap.
+    current_kind: StretchBackendKind,
+    /// Interleaved output scratch, reused across calls (alloc-free steady state).
+    scratch: Vec<f32>,
+    /// Whether the previous chunk ran through the backend (key-lock on). Drives
+    /// a clean backend reset on an on->off transition.
+    active: bool,
+    /// Last stretch factor pushed to the backend; avoids redundant updates.
+    applied_stretch: f64,
 }
 
 impl TimeStretchProcessor {
@@ -100,48 +100,6 @@ impl TimeStretchProcessor {
         me
     }
 
-    /// Route the playback speed: the resampler stays at `1.0` while key-locked
-    /// (this slot owns the tempo) and follows `speed` otherwise.
-    fn route_rate(&self) {
-        let rate = if self.controls.keylock() {
-            1.0
-        } else {
-            self.controls.speed()
-        };
-        self.resampler_rate.store(rate, Ordering::Relaxed);
-    }
-
-    /// Pull the live region plan handle; on a swap drop the region cursor.
-    fn sync_plan(&mut self) {
-        let want = self.controls.region_plan();
-        let same = match (&self.plan, &want) {
-            (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            _ => false,
-        };
-        if !same {
-            self.plan = want;
-            self.region = None;
-        }
-    }
-
-    /// Region covering `frame`, plus whether the playhead just crossed out
-    /// of a previously resolved region (a plan boundary or a seek).
-    fn region_for(&mut self, frame: u64) -> (ActiveRegion, bool) {
-        if let Some(r) = self.region
-            && r.contains(frame)
-        {
-            return (r, false);
-        }
-        let next = self
-            .plan
-            .as_ref()
-            .map_or(ActiveRegion::UNBOUNDED, |p| p.region_at(frame));
-        let crossed = self.region.is_some();
-        self.region = Some(next);
-        (next, crossed)
-    }
-
     /// Push `stretch` to the backend when it moved beyond `RATIO_EPS`. At a
     /// region `boundary` the old region's tail is drained (`flush`, into
     /// `scratch`) and the backend restarted so the new ratio starts clean;
@@ -163,18 +121,6 @@ impl TimeStretchProcessor {
             Ok(()) => self.applied_stretch = stretch,
             Err(e) => warn!(error = %e, "time-stretch set_ratio failed"),
         }
-    }
-
-    /// Rebuild the backend for `kind` at the current `spec`, discarding any
-    /// buffered state. Used on a live backend swap and on a source-spec change.
-    fn rebuild_backend(&mut self, kind: StretchBackendKind) {
-        self.backend = build_backend(kind, self.spec);
-        if let Err(e) = self.backend.set_pitch(1.0) {
-            warn!(error = %e, "time-stretch set_pitch(1.0) failed");
-        }
-        self.current_kind = kind;
-        self.applied_stretch = f64::NAN;
-        self.active = false;
     }
 
     /// Assemble an output chunk from `scratch`, preserving decoder timing.
@@ -200,6 +146,60 @@ impl TimeStretchProcessor {
         }
         pcm[..].copy_from_slice(&self.scratch);
         Some(PcmChunk::new(meta, pcm))
+    }
+
+    /// Rebuild the backend for `kind` at the current `spec`, discarding any
+    /// buffered state. Used on a live backend swap and on a source-spec change.
+    fn rebuild_backend(&mut self, kind: StretchBackendKind) {
+        self.backend = build_backend(kind, self.spec);
+        if let Err(e) = self.backend.set_pitch(1.0) {
+            warn!(error = %e, "time-stretch set_pitch(1.0) failed");
+        }
+        self.current_kind = kind;
+        self.applied_stretch = f64::NAN;
+        self.active = false;
+    }
+
+    /// Region covering `frame`, plus whether the playhead just crossed out
+    /// of a previously resolved region (a plan boundary or a seek).
+    fn region_for(&mut self, frame: u64) -> (ActiveRegion, bool) {
+        if let Some(r) = self.region
+            && r.contains(frame)
+        {
+            return (r, false);
+        }
+        let next = self
+            .plan
+            .as_ref()
+            .map_or(ActiveRegion::UNBOUNDED, |p| p.region_at(frame));
+        let crossed = self.region.is_some();
+        self.region = Some(next);
+        (next, crossed)
+    }
+
+    /// Route the playback speed: the resampler stays at `1.0` while key-locked
+    /// (this slot owns the tempo) and follows `speed` otherwise.
+    fn route_rate(&self) {
+        let rate = if self.controls.keylock() {
+            1.0
+        } else {
+            self.controls.speed()
+        };
+        self.resampler_rate.store(rate, Ordering::Relaxed);
+    }
+
+    /// Pull the live region plan handle; on a swap drop the region cursor.
+    fn sync_plan(&mut self) {
+        let want = self.controls.region_plan();
+        let same = match (&self.plan, &want) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        };
+        if !same {
+            self.plan = want;
+            self.region = None;
+        }
     }
 }
 
@@ -306,11 +306,11 @@ mod tests {
     struct Consts;
 
     impl Consts {
-        const SR: u32 = 44_100;
-        const F0: f64 = 440.0;
         const CH: u16 = 2;
+        const F0: f64 = 440.0;
         /// FFT length for the pitch (dominant-frequency) check.
         const N: usize = 1 << 14;
+        const SR: u32 = 44_100;
     }
 
     fn f32_of(x: f64) -> f32 {
@@ -439,7 +439,6 @@ mod tests {
         // Both C++ backends emit fixed-length output with leading latency-fill
         // (and bungee drops its tail), nudging the measured duration off an
         // exact 2x on a short clip — hence the ±10% band. Pitch is still
-        // checked tightly below.
         assert!(
             out_frames * 10 >= in_frames * 18 && out_frames * 10 <= in_frames * 22,
             "{kind:?}: expected ~2x duration, got {out_frames} from {in_frames}"

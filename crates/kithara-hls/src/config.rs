@@ -73,6 +73,22 @@ pub struct HlsConfig {
     /// Encryption key handling configuration.
     #[builder(default)]
     pub keys: KeyOptions,
+    /// Net options (idle/stall `inactivity_timeout`, `retry_policy`,
+    /// compression) for the HTTP client built when no [`downloader`] is
+    /// injected. Ignored when [`downloader`] is provided — the injected
+    /// downloader already carries its own client. Defaults to
+    /// [`NetOptions::default`]; lower the `inactivity_timeout` to bound a
+    /// withheld-body fetch sooner (the net resilient body owns the stall
+    /// and retries, then settles the segment terminally).
+    ///
+    /// [`downloader`]: Self::downloader
+    #[builder(default)]
+    pub net_options: NetOptions,
+    /// Optional app-wide shared store. When present, the stream reuses
+    /// this backend (cache + flush hub + DRM `process_fn`) and registers
+    /// its eviction channel in the store's routing registry instead of
+    /// building a private per-stream store. See [`HlsStore`].
+    pub asset_store: Option<HlsStore>,
     /// Base URL for resolving relative playlist/segment URLs.
     pub base_url: Option<Url>,
     /// Event bus (optional - if not provided, one is created internally).
@@ -86,17 +102,6 @@ pub struct HlsConfig {
     pub cancel: Option<CancelToken>,
     /// Shared downloader (created lazily if not provided).
     pub downloader: Option<Downloader>,
-    /// Net options (idle/stall `inactivity_timeout`, `retry_policy`,
-    /// compression) for the HTTP client built when no [`downloader`] is
-    /// injected. Ignored when [`downloader`] is provided — the injected
-    /// downloader already carries its own client. Defaults to
-    /// [`NetOptions::default`]; lower the `inactivity_timeout` to bound a
-    /// withheld-body fetch sooner (the net resilient body owns the stall
-    /// and retries, then settles the segment terminally).
-    ///
-    /// [`downloader`]: Self::downloader
-    #[builder(default)]
-    pub net_options: NetOptions,
     /// Additional HTTP headers to include in all requests.
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
@@ -116,11 +121,6 @@ pub struct HlsConfig {
     /// Storage configuration.
     #[builder(default)]
     pub store: StoreOptions,
-    /// Optional app-wide shared store. When present, the stream reuses
-    /// this backend (cache + flush hub + DRM `process_fn`) and registers
-    /// its eviction channel in the store's routing registry instead of
-    /// building a private per-stream store. See [`HlsStore`].
-    pub asset_store: Option<HlsStore>,
     /// Master playlist URL.
     pub url: Url,
     /// Max segments to download per step.

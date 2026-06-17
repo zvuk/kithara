@@ -1,23 +1,3 @@
-//! Sim-participating `tokio::sync::OnceCell` under `flash` (native).
-//!
-//! A real `tokio::OnceCell` parks concurrent `get_or_try_init` callers on the
-//! runtime reactor while the first caller's async initializer runs — invisible
-//! to the quiescence engine, so the virtual clock could advance across a
-//! cooperative wait on a (network-bound) init. This wrapper stores the value in
-//! a [`OnceLock`] (a stable `&T` once set) and coordinates init under a plain
-//! mutex, parking the losing callers on the engine's untimed channel waiter
-//! ([`system::register_channel_async`] / [`system::signal_channel`]). The init
-//! future itself is whatever `f` awaits (already flash-aware on the sim path);
-//! only the *wait for another caller's init* is wrapped. Off the sim path this
-//! module is not compiled and callers get the real `tokio` OnceCell.
-//!
-//! The park/wake mechanism is latched ONCE at construction (see [`Backend`]): a
-//! cell created under a flash-ambient context parks losers on the engine
-//! waiter; otherwise each loser stores its real [`Waker`] under the init mutex
-//! and the finishing initializer wakes it directly. The value / in-progress
-//! state is UNIFIED; only the latched mechanism differs, fixed for the cell's
-//! life so wait and wake always agree across threads of different ambient.
-
 use std::{
     future::Future,
     pin::Pin,
@@ -38,20 +18,39 @@ use crate::flash::{
 /// behind it (off the flash path; empty on the engine path).
 #[derive(Default)]
 struct Init {
-    in_progress: bool,
     wakers: Vec<Waker>,
+    in_progress: bool,
 }
 
 /// `OnceCell` under `flash`. The value lives in a [`OnceLock`] (stable `&T`);
 /// concurrent `get_or_try_init` losers park on the construction-latched
 /// [`Backend`] until the winner's init resolves.
 pub struct OnceCell<T> {
-    value: OnceLock<T>,
-    init: Mutex<Init>,
     backend: Backend,
+    init: Mutex<Init>,
+    value: OnceLock<T>,
 }
 
 impl<T> OnceCell<T> {
+    /// Release the init claim and wake every parked waiter so each re-checks the
+    /// value (set ⇒ resolves) or contends for the next turn (init failed). On
+    /// the flash path one `signal_channel(_, true)` wakes all engine waiters.
+    fn finish_init(&self) {
+        let mut init = self.init.lock();
+        init.in_progress = false;
+        let wakers = std::mem::take(&mut init.wakers);
+        drop(init);
+        match self.backend {
+            Backend::Engine(cvid) => system::signal_channel(cvid, true),
+            Backend::Native => {
+                trace_native_from_ambient("oncecell", "finish_init");
+                for waker in wakers {
+                    waker.wake();
+                }
+            }
+        }
+    }
+
     /// Get the value, or run `f` to initialize it. The first caller runs `f`;
     /// concurrent callers park until it resolves, then observe the value (on
     /// `Ok`) or take a turn to retry (on `Err` — the cell stays empty, matching
@@ -109,25 +108,6 @@ impl<T> OnceCell<T> {
                             Err(err)
                         }
                     };
-                }
-            }
-        }
-    }
-
-    /// Release the init claim and wake every parked waiter so each re-checks the
-    /// value (set ⇒ resolves) or contends for the next turn (init failed). On
-    /// the flash path one `signal_channel(_, true)` wakes all engine waiters.
-    fn finish_init(&self) {
-        let mut init = self.init.lock();
-        init.in_progress = false;
-        let wakers = std::mem::take(&mut init.wakers);
-        drop(init);
-        match self.backend {
-            Backend::Engine(cvid) => system::signal_channel(cvid, true),
-            Backend::Native => {
-                trace_native_from_ambient("oncecell", "finish_init");
-                for waker in wakers {
-                    waker.wake();
                 }
             }
         }
@@ -218,7 +198,6 @@ impl<T> Future for AwaitChange<'_, T> {
         }
         // Register the waiter WHILE holding the init lock so a concurrent
         // `finish_init` (same lock, then signal) cannot slip between this
-        // re-check and the park.
         let mut init = this.cell.init.lock();
         if this.cell.value.get().is_some() || !init.in_progress {
             return Poll::Ready(());

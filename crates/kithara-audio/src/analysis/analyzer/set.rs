@@ -18,11 +18,18 @@ pub fn beat_cache_tag() -> Option<String> {
 
 #[derive(Default)]
 pub(crate) struct TrackAnalyzers {
-    waveform: Option<WaveformPass>,
     beat: Option<BeatPass>,
+    waveform: Option<WaveformPass>,
 }
 
 impl TrackAnalyzers {
+    pub(crate) fn finish(self) -> TrackAnalysis {
+        TrackAnalysis {
+            waveform: self.waveform.map(Analyzer::finish),
+            beat: self.beat.and_then(Analyzer::finish),
+        }
+    }
+
     pub(crate) fn push(&mut self, chunk: &PcmChunk) {
         if let Some(a) = &mut self.waveform {
             a.push(chunk);
@@ -32,13 +39,6 @@ impl TrackAnalyzers {
             a.push(chunk);
         }
     }
-
-    pub(crate) fn finish(self) -> TrackAnalysis {
-        TrackAnalysis {
-            waveform: self.waveform.map(Analyzer::finish),
-            beat: self.beat.and_then(Analyzer::finish),
-        }
-    }
 }
 
 /// Configures which analyzers run, then mints a fresh [`TrackAnalyzers`]
@@ -46,18 +46,27 @@ impl TrackAnalyzers {
 /// absent at compile time is silently ignored.
 #[derive(Default)]
 pub struct AnalyzerBuilder {
-    waveform_buckets: Option<usize>,
     beat: Option<(SharedBeatDetector, GridParams)>,
+    waveform_buckets: Option<usize>,
 }
 
 impl AnalyzerBuilder {
-    /// Run a waveform analyzer at `buckets` resolution.
-    #[must_use]
-    pub fn with_waveform(self, buckets: usize) -> Self {
-        Self {
-            waveform_buckets: Some(buckets),
-            ..self
+    pub(crate) fn build(&self, spec: PcmSpec) -> TrackAnalyzers {
+        TrackAnalyzers {
+            waveform: self
+                .waveform_buckets
+                .map(|buckets| WaveformPass::new(spec.sample_rate.get(), buckets)),
+            beat: self.beat.as_ref().map(|(detector, params)| {
+                BeatPass::new(spec.sample_rate.get(), params.clone(), Arc::clone(detector))
+            }),
         }
+    }
+
+    /// `true` when no analyzer would run — the runtime signal to skip the
+    /// decode pass entirely.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.waveform_buckets.is_none() && self.beat.is_none()
     }
 
     /// Run the NN beat analyzer. No-op when no detector is compiled in or
@@ -77,24 +86,6 @@ impl AnalyzerBuilder {
         }
     }
 
-    /// `true` when no analyzer would run — the runtime signal to skip the
-    /// decode pass entirely.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.waveform_buckets.is_none() && self.beat.is_none()
-    }
-
-    pub(crate) fn build(&self, spec: PcmSpec) -> TrackAnalyzers {
-        TrackAnalyzers {
-            waveform: self
-                .waveform_buckets
-                .map(|buckets| WaveformPass::new(spec.sample_rate.get(), buckets)),
-            beat: self.beat.as_ref().map(|(detector, params)| {
-                BeatPass::new(spec.sample_rate.get(), params.clone(), Arc::clone(detector))
-            }),
-        }
-    }
-
     /// Test seam: install a mock detector without loading the NN model.
     #[cfg(test)]
     pub(crate) fn with_beat_detector(
@@ -104,5 +95,14 @@ impl AnalyzerBuilder {
     ) -> Self {
         self.beat = Some((detector, params));
         self
+    }
+
+    /// Run a waveform analyzer at `buckets` resolution.
+    #[must_use]
+    pub fn with_waveform(self, buckets: usize) -> Self {
+        Self {
+            waveform_buckets: Some(buckets),
+            ..self
+        }
     }
 }

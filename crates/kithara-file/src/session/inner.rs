@@ -77,8 +77,8 @@ pub(crate) struct FileAssetCtx {
     pub(crate) backend: Arc<AssetStore>,
     pub(crate) reader: AssetReader,
     pub(crate) writer: Mutex<Option<AssetWriter>>,
-    pub(crate) raw: Option<RawWriteHandle>,
     pub(crate) headers: Option<Headers>,
+    pub(crate) raw: Option<RawWriteHandle>,
     pub(crate) key: ResourceKey,
     pub(crate) url: Url,
 }
@@ -121,9 +121,9 @@ impl FileInner {
         let inner = Self {
             source,
             asset,
+            demand_lease,
             content_type_info: OnceLock::new(),
             segment_index: OnceLock::new(),
-            demand_lease,
             phase: AtomicU8::new(initial_phase as u8),
         };
         if matches!(initial_phase, FilePhase::Complete) {
@@ -143,12 +143,6 @@ impl FileInner {
         let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
         self.asset.reader.read_at(0, &mut buf).ok()?;
         FileSegmentIndex::try_build(&buf)
-    }
-
-    /// Take the single commit-owning writer, if this is a download path and it
-    /// has not been consumed yet.
-    pub(crate) fn take_writer(&self) -> Option<AssetWriter> {
-        self.asset.writer.lock().take()
     }
 
     /// Mark the resource failed and evict the pre-allocated cache file.
@@ -174,6 +168,12 @@ impl FileInner {
         if matches!(phase, FilePhase::Complete) {
             self.try_build_segment_index();
         }
+    }
+
+    /// Take the single commit-owning writer, if this is a download path and it
+    /// has not been consumed yet.
+    pub(crate) fn take_writer(&self) -> Option<AssetWriter> {
+        self.asset.writer.lock().take()
     }
 
     /// One-shot fragmented-mp4 parse from the fully cached file bytes.

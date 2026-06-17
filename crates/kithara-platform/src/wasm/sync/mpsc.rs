@@ -31,13 +31,9 @@ impl<T> Clone for Sender<T> {
 pub struct Receiver<T>(wasm_safe_thread::mpsc::Receiver<T>);
 
 impl<T> Receiver<T> {
-    /// Await a value asynchronously (WASM only).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RecvError`] if all senders have been dropped.
-    pub async fn recv_async(&self) -> Result<T, RecvError> {
-        self.0.recv_async().await
+    /// Iterate over received values, blocking until all senders disconnect.
+    pub fn iter(&self) -> impl Iterator<Item = T> + '_ {
+        std::iter::from_fn(move || self.recv().ok())
     }
 
     /// Block until a value arrives.
@@ -49,13 +45,13 @@ impl<T> Receiver<T> {
         self.0.recv_sync()
     }
 
-    /// Try to receive without blocking.
+    /// Await a value asynchronously (WASM only).
     ///
     /// # Errors
     ///
-    /// Returns [`TryRecvError`] if no value is available or senders are dropped.
-    pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        self.0.try_recv()
+    /// Returns [`RecvError`] if all senders have been dropped.
+    pub async fn recv_async(&self) -> Result<T, RecvError> {
+        self.0.recv_async().await
     }
 
     /// Block until a value arrives or `deadline` elapses.
@@ -73,13 +69,17 @@ impl<T> Receiver<T> {
         self.0.recv_sync_timeout(deadline)
     }
 
-    /// Iterate over received values, blocking until all senders disconnect.
-    pub fn iter(&self) -> impl Iterator<Item = T> + '_ {
-        std::iter::from_fn(move || self.recv().ok())
-    }
-
     /// Iterate over currently-available values without blocking.
     pub fn try_iter(&self) -> impl Iterator<Item = T> + '_ {
         std::iter::from_fn(move || self.try_recv().ok())
+    }
+
+    /// Try to receive without blocking.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryRecvError`] if no value is available or senders are dropped.
+    pub fn try_recv(&self) -> Result<T, TryRecvError> {
+        self.0.try_recv()
     }
 }

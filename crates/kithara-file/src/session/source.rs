@@ -60,9 +60,9 @@ impl FileSource {
             FileAssetCtx {
                 backend,
                 reader,
+                key,
                 writer: Mutex::default(),
                 raw: None,
-                key,
                 headers: None,
                 url: Url::parse("file:///local")
                     .expect("BUG: hard-coded literal `file:///local` is a valid URL"),
@@ -103,6 +103,10 @@ impl FileSource {
 }
 
 impl kithara_stream::Source for FileSource {
+    fn activity(&self) -> Arc<dyn Activity> {
+        self.coord.activity_handle()
+    }
+
     fn advance(&self, n: u64) {
         self.coord.advance_position(n);
     }
@@ -150,6 +154,14 @@ impl kithara_stream::Source for FileSource {
         SourcePhase::Waiting
     }
 
+    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        self.coord.playhead_read()
+    }
+
+    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        self.coord.playhead_write()
+    }
+
     fn position(&self) -> u64 {
         self.coord.position()
     }
@@ -176,6 +188,14 @@ impl kithara_stream::Source for FileSource {
         Ok(ReadOutcome::Bytes(count))
     }
 
+    fn seek_control(&self) -> Arc<dyn SeekControl> {
+        self.coord.seek_control()
+    }
+
+    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        self.coord.seek_observe()
+    }
+
     fn set_position(&self, pos: u64) {
         self.coord.set_position(pos);
     }
@@ -187,26 +207,6 @@ impl kithara_stream::Source for FileSource {
             self.coord.seek_epoch_handle(),
         );
         Some(Box::new(hooks))
-    }
-
-    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-        self.coord.playhead_read()
-    }
-
-    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-        self.coord.playhead_write()
-    }
-
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        self.coord.seek_observe()
-    }
-
-    fn seek_control(&self) -> Arc<dyn SeekControl> {
-        self.coord.seek_control()
-    }
-
-    fn activity(&self) -> Arc<dyn Activity> {
-        self.coord.activity_handle()
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]

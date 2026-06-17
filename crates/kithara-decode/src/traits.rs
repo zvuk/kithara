@@ -204,6 +204,15 @@ pub trait Decoder: Send + 'static {
     /// Returns `None` if duration cannot be determined.
     fn duration(&self) -> Option<Duration>;
 
+    /// Publish reader-hook events queued during decode.
+    ///
+    /// `next_chunk` / `seek` resolve hook events on the worker's
+    /// forbid-blocking decode core but defer the bus publish into a
+    /// lock-free ring. The audio worker drains that ring from its unchecked
+    /// shell, once per pass, by calling this. Default no-op for decoders
+    /// that carry no reader hooks.
+    fn flush_reader_signals(&mut self) {}
+
     /// Get track metadata (title, artist, album, artwork).
     ///
     /// Returns default metadata if not available.
@@ -262,13 +271,4 @@ pub trait Decoder: Send + 'static {
     /// calculation. Call this before seeking so the decoder can compute
     /// correct seek deltas.
     fn update_byte_len(&self, len: u64);
-
-    /// Publish reader-hook events queued during decode.
-    ///
-    /// `next_chunk` / `seek` resolve hook events on the worker's
-    /// forbid-blocking decode core but defer the bus publish into a
-    /// lock-free ring. The audio worker drains that ring from its unchecked
-    /// shell, once per pass, by calling this. Default no-op for decoders
-    /// that carry no reader hooks.
-    fn flush_reader_signals(&mut self) {}
 }

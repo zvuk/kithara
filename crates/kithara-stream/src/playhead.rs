@@ -47,8 +47,8 @@ pub struct PlayheadState {
 
 /// Read-only view of the committed playhead.
 pub trait PlayheadRead: Send + Sync {
-    fn position(&self) -> Duration;
     fn duration(&self) -> Option<Duration>;
+    fn position(&self) -> Duration;
 }
 
 /// Mutating view — the decode/produce path holds this. It is the ONLY mutator;
@@ -58,9 +58,9 @@ pub trait PlayheadWrite: PlayheadRead {
     fn advance(&self, pos: &ChunkPosition);
     /// Pin after a seek (caps at total duration).
     fn land(&self, pos: &ChunkPosition);
+    fn set_duration(&self, duration: Option<Duration>);
     /// Partial-chunk fixup — raw store, no duration cap.
     fn set_position(&self, position: Duration);
-    fn set_duration(&self, duration: Option<Duration>);
 }
 
 impl PlayheadState {
@@ -102,15 +102,15 @@ impl Default for PlayheadState {
 }
 
 impl PlayheadRead for PlayheadState {
-    fn position(&self) -> Duration {
-        Duration::from_nanos(self.position_ns.load(Ordering::Acquire))
-    }
-
     fn duration(&self) -> Option<Duration> {
         match self.total_duration_ns.load(Ordering::Acquire) {
             NO_DURATION => None,
             d => Some(Duration::from_nanos(d)),
         }
+    }
+
+    fn position(&self) -> Duration {
+        Duration::from_nanos(self.position_ns.load(Ordering::Acquire))
     }
 }
 
@@ -123,17 +123,17 @@ impl PlayheadWrite for PlayheadState {
         self.write_playhead(pos);
     }
 
-    fn set_position(&self, position: Duration) {
-        let nanos = u64::try_from(position.as_nanos())
-            .expect("BUG: position.as_nanos() fits in u64 for any realistic playback time");
-        self.position_ns.store(nanos, Ordering::Release);
-    }
-
     fn set_duration(&self, duration: Option<Duration>) {
         let raw = duration
             .and_then(|d| u64::try_from(d.as_nanos()).ok())
             .unwrap_or(NO_DURATION);
         self.total_duration_ns.store(raw, Ordering::Release);
+    }
+
+    fn set_position(&self, position: Duration) {
+        let nanos = u64::try_from(position.as_nanos())
+            .expect("BUG: position.as_nanos() fits in u64 for any realistic playback time");
+        self.position_ns.store(nanos, Ordering::Release);
     }
 }
 

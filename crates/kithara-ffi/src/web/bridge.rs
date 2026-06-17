@@ -41,30 +41,6 @@ impl WorkerBridge {
     /// Sentinel stored in [`CURRENT_TRACK_ID`] when no track is current.
     const NO_CURRENT_TRACK: i64 = -1;
 
-    fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
-        self.cmd_tx.lock()
-    }
-
-    /// Live playback position (seconds) read from the worker's audio
-    /// session bridge. `0.0` when no item is loaded.
-    pub(crate) fn position_secs(&self) -> f64 {
-        let _ = self;
-        wasm_support::bridge_position_secs()
-    }
-
-    /// Current item duration (seconds) read from the worker's audio
-    /// session bridge. `0.0` when unknown.
-    pub(crate) fn duration_secs(&self) -> f64 {
-        let _ = self;
-        wasm_support::bridge_duration_secs()
-    }
-
-    /// Whether the worker's audio session is currently playing.
-    pub(crate) fn is_playing(&self) -> bool {
-        let _ = self;
-        wasm_support::bridge_is_playing()
-    }
-
     /// Id of the worker's current track, read synchronously from the
     /// shared [`CURRENT_TRACK_ID`] atomic the worker's event source keeps
     /// in sync. `None` when no track is current.
@@ -74,6 +50,13 @@ impl WorkerBridge {
             Self::NO_CURRENT_TRACK => None,
             raw => u64::try_from(raw).ok().map(kithara_queue::TrackId),
         }
+    }
+
+    /// Current item duration (seconds) read from the worker's audio
+    /// session bridge. `0.0` when unknown.
+    pub(crate) fn duration_secs(&self) -> f64 {
+        let _ = self;
+        wasm_support::bridge_duration_secs()
     }
 
     /// Boot the engine worker once. Idempotent: subsequent calls return
@@ -104,6 +87,23 @@ impl WorkerBridge {
             crate::web::worker::worker_main(cmd_rx);
         });
         std::mem::forget(worker);
+    }
+
+    /// Whether the worker's audio session is currently playing.
+    pub(crate) fn is_playing(&self) -> bool {
+        let _ = self;
+        wasm_support::bridge_is_playing()
+    }
+
+    fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
+        self.cmd_tx.lock()
+    }
+
+    /// Live playback position (seconds) read from the worker's audio
+    /// session bridge. `0.0` when no item is loaded.
+    pub(crate) fn position_secs(&self) -> f64 {
+        let _ = self;
+        wasm_support::bridge_position_secs()
     }
 
     /// Forward a command to the worker, respawning the worker once if the

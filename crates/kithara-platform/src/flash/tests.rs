@@ -123,7 +123,7 @@ fn flash_active_defaults_real_and_nests() {
 #[test]
 fn dynamic_is_noop_without_ambient() {
     let _g = guard();
-    let _d = enter_dynamic(true); // no ambient_scope active
+    let _d = enter_dynamic(true);
     assert!(!flash_enabled(), "dynamic flash without ambient stays real");
 }
 
@@ -172,7 +172,6 @@ fn woken_async_task_stays_counted_until_repolled() {
 
     // Signal it. The task is now RUNNABLE (its waker fired, it is queued) but has
     // NOT been re-polled. It MUST be counted so a concurrent `try_advance` cannot
-    // jump the clock past it.
     notify.notify_one();
     assert_eq!(
         sched::async_active_count(),
@@ -636,7 +635,6 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
         // already-woken cvid is a harmless no-op, never a lost wakeup for an
         // already-parked waiter; the counter (not `indef_count`) is the loop
         // condition so a worker still en route to its `register` cannot make the
-        // loop exit early.
         drop(coordinator);
         while untimed_left.load(Ordering::Relaxed) != 0 {
             for cvid in &untimed_cvids {
@@ -653,7 +651,6 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
         }
 
         // Engine fully drained at the end of every round: no leaked waiters, no
-        // residual running participant.
         assert_eq!(flash.active_count(), 0, "round {round}: active leaked");
         assert_eq!(flash.timed_count(), 0, "round {round}: timed waiter leaked");
         assert_eq!(flash.indef_count(), 0, "round {round}: indef waiter leaked");

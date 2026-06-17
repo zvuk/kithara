@@ -135,8 +135,8 @@ fn library_head_row(p: GuiPalette) -> Element<'static, Message> {
 /// and whether the row is the current or the selected track.
 #[derive(Clone, Copy)]
 struct LibraryRow<'a> {
-    title: &'a str,
     artist: &'a str,
+    title: &'a str,
     current: bool,
     selected: bool,
 }

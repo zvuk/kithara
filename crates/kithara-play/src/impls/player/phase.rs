@@ -31,8 +31,8 @@ impl PendingNextState {
 /// already-enqueued successor and whether it has been activated.
 pub(crate) struct PendingNext {
     pub(crate) src: Arc<str>,
-    pub(crate) index: usize,
     pub(crate) state: PendingNextState,
+    pub(crate) index: usize,
 }
 
 /// Discriminant for [`PlayerPhase`] without its payload.
@@ -94,27 +94,6 @@ impl From<&PlayerPhase> for PlayerPhaseKind {
 }
 
 impl PlayerPhase {
-    pub(crate) fn kind(&self) -> PlayerPhaseKind {
-        self.into()
-    }
-
-    /// The active slot, if any phase currently holds one.
-    pub(crate) fn slot(&self) -> Option<SlotId> {
-        self.slot_ref().copied()
-    }
-
-    /// Borrow of the active slot. Returning a reference makes this a true
-    /// accessor (not a `self -> Other` conversion).
-    fn slot_ref(&self) -> Option<&SlotId> {
-        match self {
-            Self::Idle => None,
-            Self::Loading { slot, .. } | Self::Playing { slot, .. } | Self::Paused { slot, .. } => {
-                Some(slot)
-            }
-            Self::Stopped { slot, .. } => slot.as_ref(),
-        }
-    }
-
     /// The ABR handle of the resource currently in the processor, if any.
     pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.abr_handle_ref().cloned()
@@ -130,6 +109,10 @@ impl PlayerPhase {
             | Self::Paused { abr_handle, .. }
             | Self::Stopped { abr_handle, .. } => abr_handle.as_ref(),
         }
+    }
+
+    pub(crate) fn kind(&self) -> PlayerPhaseKind {
+        self.into()
     }
 
     /// Shared read access to the armed-next slot, if any.
@@ -160,6 +143,23 @@ impl PlayerPhase {
             | Self::Paused { abr_handle, .. }
             | Self::Stopped { abr_handle, .. } => *abr_handle = handle,
             Self::Idle => {}
+        }
+    }
+
+    /// The active slot, if any phase currently holds one.
+    pub(crate) fn slot(&self) -> Option<SlotId> {
+        self.slot_ref().copied()
+    }
+
+    /// Borrow of the active slot. Returning a reference makes this a true
+    /// accessor (not a `self -> Other` conversion).
+    fn slot_ref(&self) -> Option<&SlotId> {
+        match self {
+            Self::Idle => None,
+            Self::Loading { slot, .. } | Self::Playing { slot, .. } | Self::Paused { slot, .. } => {
+                Some(slot)
+            }
+            Self::Stopped { slot, .. } => slot.as_ref(),
         }
     }
 }

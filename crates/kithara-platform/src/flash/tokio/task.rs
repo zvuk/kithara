@@ -1,15 +1,3 @@
-//! Flash (native) task spawning: the async and blocking quiescence chokepoints.
-//!
-//! [`spawn_blocking`] is the chokepoint for offloading a blocking computation
-//! onto a runtime thread. It exists so that, under the `flash` test feature,
-//! the offloaded closure participates in the quiescence clock the same way a
-//! named thread does — its credit is reset on entry and dropped on exit by the
-//! same bracket [`crate::thread::spawn_named`] uses. Consumers that run a
-//! wrapped wait (`thread::park_timeout`, `sync::Condvar`) on a blocking thread
-//! must spawn through this wrapper instead of `tokio::task::spawn_blocking`, so
-//! participant accounting stays intrinsic to the platform — no consumer ever
-//! registers anything.
-
 use std::{future::Future, panic::Location};
 
 // Under `flash` (native) [`spawn`] wraps the future in the quiescence

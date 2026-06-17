@@ -65,7 +65,6 @@ fn prod_flash_io_paces_virtual_clock_across_await() {
 
     // The annotated op is parked mid-await: its `flash(io)` guard paces the
     // clock, so a 100ms VIRTUAL sleep must take ~100ms REAL instead of
-    // collapsing.
     let t0 = RealInstant::now();
     futures::executor::block_on(short_virtual_sleep());
     let paced = t0.elapsed();
@@ -91,7 +90,6 @@ fn prod_flash_real_without_ambient() {
     // No ambient: `enter_dynamic(true)` gates on ambient, so `flash(true)` is a
     // no-op and the sleep is REAL. A real `time::sleep` is a `tokio` timer, so it
     // is driven on a tokio runtime; a SHORT real sleep keeps the test fast while
-    // proving the wait stayed real.
     #[kithara_test_macros::flash(true)]
     async fn short_real_sleep() {
         time::sleep(Duration::from_millis(40)).await;

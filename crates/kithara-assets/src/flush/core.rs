@@ -113,9 +113,6 @@ pub(in crate::flush) struct HubWait {
 pub struct FlushHub {
     pub(in crate::flush) wait: Arc<HubWait>,
     pub(in crate::flush) cancel: CancelToken,
-    pub(in crate::flush) policy: FlushPolicy,
-    pub(in crate::flush) flush_lock: Mutex<()>,
-    pub(in crate::flush) sources: Mutex<Vec<Weak<dyn Flushable>>>,
     /// Live `Arc` identities of sources whose last flush was non-durable
     /// (best-effort, via the background worker). An explicit durable
     /// checkpoint must re-flush these even when their `dirty` flag is clear,
@@ -123,6 +120,9 @@ pub struct FlushHub {
     /// superseded by a durable, current one. Pruned to the alive set each
     /// `flush_dirty` pass; all mutations run under `flush_lock`.
     pub(in crate::flush) non_durable: DashSet<usize>,
+    pub(in crate::flush) policy: FlushPolicy,
+    pub(in crate::flush) flush_lock: Mutex<()>,
+    pub(in crate::flush) sources: Mutex<Vec<Weak<dyn Flushable>>>,
     pub(in crate::flush) worker: WorkerSlot,
 }
 
@@ -199,25 +199,6 @@ impl FlushHub {
         first_err.map_or(Ok(()), Err)
     }
 
-    /// Synchronously flush every dirty source. Serialises with the
-    /// worker through `flush_lock`, so concurrent worker invocations
-    /// see the same dirty set exactly once.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first per-source flush error encountered (others
-    /// are logged through `tracing::warn!` and the source's `dirty`
-    /// flag is restored so the next cycle retries).
-    /// Number of live (still-strong) sources registered with this hub.
-    /// GC-drops dead `Weak`s while counting so the result reflects only
-    /// indexes whose `AssetStore` is still alive.
-    #[must_use]
-    pub fn live_source_count(&self) -> usize {
-        let mut g = self.sources.lock();
-        g.retain(|w| w.strong_count() > 0);
-        g.len()
-    }
-
     /// Force an immediate synchronous flush of all dirty indexes.
     ///
     /// # Errors
@@ -237,6 +218,25 @@ impl FlushHub {
     #[must_use]
     pub fn has_worker(&self) -> bool {
         self.worker.is_started()
+    }
+
+    /// Synchronously flush every dirty source. Serialises with the
+    /// worker through `flush_lock`, so concurrent worker invocations
+    /// see the same dirty set exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first per-source flush error encountered (others
+    /// are logged through `tracing::warn!` and the source's `dirty`
+    /// flag is restored so the next cycle retries).
+    /// Number of live (still-strong) sources registered with this hub.
+    /// GC-drops dead `Weak`s while counting so the result reflects only
+    /// indexes whose `AssetStore` is still alive.
+    #[must_use]
+    pub fn live_source_count(&self) -> usize {
+        let mut g = self.sources.lock();
+        g.retain(|w| w.strong_count() > 0);
+        g.len()
     }
 
     /// Register an index for background-driven flushing. The hub holds

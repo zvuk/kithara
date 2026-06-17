@@ -200,6 +200,9 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
         None
     }
 
+    /// Narrow handle to the playback-activity flag.
+    fn activity(&self) -> Arc<dyn Activity>;
+
     /// Advance the byte cursor by `n` bytes after a successful read.
     fn advance(&self, n: u64);
 
@@ -210,12 +213,6 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// table — independent of the byte cursor passed to the decoder
     /// through `Read + Seek`. Default `None` for non-segmented sources.
     fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
-        None
-    }
-
-    /// Optional HLS-only variant-coordination handle. Adaptive sources (HLS)
-    /// return `Some`; non-adaptive sources keep the default `None`.
-    fn variant_control(&self) -> Option<Arc<dyn VariantControl>> {
         None
     }
 
@@ -232,6 +229,11 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// arrive (Content-Length discovery).
     fn len(&self) -> Option<u64>;
 
+    /// Get media info if available.
+    fn media_info(&self) -> Option<MediaInfo> {
+        None
+    }
+
     /// The reader→peer wake handle, if this source pushes a downloader peer.
     ///
     /// Segmented sources (HLS) return their [`DeferredWake`]; the driver
@@ -240,20 +242,6 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// off-core, per the driver's own statically-known context. Non-segmented
     /// sources have no peer and return `None`.
     fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
-        None
-    }
-
-    /// Install the audio worker's data-arrival wake (the inverse of
-    /// [`peer_wake`](Self::peer_wake)). Segmented sources (HLS) store it and
-    /// fire it from their off-RT write/commit sites so an underran worker
-    /// re-ticks the instant bytes land, instead of polling. Set once, after
-    /// the worker exists; the default is a no-op for sources whose data is
-    /// always resident (File, mock), where the worker never underruns on a
-    /// download.
-    fn set_worker_wake(&self, _wake: Arc<dyn WorkerWake>) {}
-
-    /// Get media info if available.
-    fn media_info(&self) -> Option<MediaInfo> {
         None
     }
 
@@ -278,6 +266,12 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// by `wait_range()` implementations for fast-path dispatch.
     fn phase_at(&self, range: Range<u64>) -> SourcePhase;
 
+    /// Narrow read-only handle to the playhead position and total duration.
+    fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
+
+    /// Narrow mutating handle to the playhead — for the decode/produce path.
+    fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
+
     /// Current byte position in the source's virtual byte space.
     ///
     /// HLS delegates to active variant; file owns its own atomic cursor.
@@ -296,10 +290,25 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// Returns an error if the read fails or the source is in an invalid state.
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome>;
 
+    /// Narrow mutating handle to seek coordination (`FLUSH_START` / `FLUSH_STOP`).
+    fn seek_control(&self) -> Arc<dyn SeekControl>;
+
+    /// Narrow read-only handle to seek/flush coordination state.
+    fn seek_observe(&self) -> Arc<dyn SeekObserve>;
+
     /// Absolute set of the byte cursor — used by [`Stream::seek`] and
     /// post-seek landings. Sources implement this via the same atomic
     /// cursor that backs [`Self::position`] / [`Self::advance`].
     fn set_position(&self, pos: u64);
+
+    /// Install the audio worker's data-arrival wake (the inverse of
+    /// [`peer_wake`](Self::peer_wake)). Segmented sources (HLS) store it and
+    /// fire it from their off-RT write/commit sites so an underran worker
+    /// re-ticks the instant bytes land, instead of polling. Set once, after
+    /// the worker exists; the default is a no-op for sources whose data is
+    /// always resident (File, mock), where the worker never underruns on a
+    /// download.
+    fn set_worker_wake(&self, _wake: Arc<dyn WorkerWake>) {}
 
     /// Build a fresh reader-side event-sink instance.
     ///
@@ -316,20 +325,11 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
         None
     }
 
-    /// Narrow read-only handle to the playhead position and total duration.
-    fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
-
-    /// Narrow mutating handle to the playhead — for the decode/produce path.
-    fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
-
-    /// Narrow read-only handle to seek/flush coordination state.
-    fn seek_observe(&self) -> Arc<dyn SeekObserve>;
-
-    /// Narrow mutating handle to seek coordination (`FLUSH_START` / `FLUSH_STOP`).
-    fn seek_control(&self) -> Arc<dyn SeekControl>;
-
-    /// Narrow handle to the playback-activity flag.
-    fn activity(&self) -> Arc<dyn Activity>;
+    /// Optional HLS-only variant-coordination handle. Adaptive sources (HLS)
+    /// return `Some`; non-adaptive sources keep the default `None`.
+    fn variant_control(&self) -> Option<Arc<dyn VariantControl>> {
+        None
+    }
 
     /// Wait for data in range to be available.
     ///
@@ -364,6 +364,15 @@ pub trait VariantControl: Send + Sync + 'static {
     /// Clear the variant fence after a decoder recreate acks an ABR switch.
     fn clear_variant_fence(&self);
 
+    /// Byte range of the header the decoder must re-read after a format
+    /// change (HLS ABR cross-codec switch).
+    ///
+    /// # Errors
+    /// `Err(SourceError::FormatChangeNotApplicable)` when the active variant
+    /// was served with a non-zero `served_from` so the init prefix lives
+    /// outside the virtual range.
+    fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
+
     /// Whether a cross-variant transition is in-flight (reads/waits are
     /// short-circuited until the decoder acks via `clear_variant_fence`).
     fn has_variant_change_pending(&self) -> bool;
@@ -374,15 +383,6 @@ pub trait VariantControl: Send + Sync + 'static {
     /// demands. Lets the decoder ack a fence whose target it is already
     /// aligned with — no format diff will ever become observable there.
     fn variant_change_target(&self) -> Option<usize>;
-
-    /// Byte range of the header the decoder must re-read after a format
-    /// change (HLS ABR cross-codec switch).
-    ///
-    /// # Errors
-    /// `Err(SourceError::FormatChangeNotApplicable)` when the active variant
-    /// was served with a non-zero `served_from` so the init prefix lives
-    /// outside the virtual range.
-    fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
 }
 
 /// Segment-table view exposed by segmented sources (HLS, fragmented
@@ -600,11 +600,9 @@ mod tests {
             position: Arc::new(AtomicU64::new(0)),
         };
 
-        // playhead_read / playhead_write
         assert_eq!(src.playhead_read().position(), Duration::ZERO);
         assert_eq!(src.playhead_read().duration(), None);
 
-        // seek_observe initial state
         assert_eq!(src.seek_observe().epoch(), 0);
         assert!(!src.seek_observe().is_flushing());
         assert!(src.seek_observe().target().is_none());
@@ -616,7 +614,6 @@ mod tests {
         assert_eq!(src.seek_observe().target(), Some(Duration::from_secs(5)));
         assert!(src.seek_observe().is_flushing());
 
-        // activity toggle
         assert!(!src.activity().is_playing());
         src.activity().set_playing(true);
         assert!(src.activity().is_playing());

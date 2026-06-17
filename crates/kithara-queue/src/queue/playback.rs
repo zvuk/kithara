@@ -11,18 +11,6 @@ use super::{
 use crate::error::QueueError;
 
 impl Queue {
-    /// Whether the user has paused playback.
-    ///
-    /// Reads the player's live rate: `pause()` (and a no-autoplay select)
-    /// stores `0.0`, while `play` / `set_rate` keep it `>= MIN_PLAYBACK_RATE`.
-    /// A natural end-of-track leaves the rate untouched, so this stays
-    /// distinct from `is_playing()` (which drops to `false` once the arena
-    /// drains at EOF). Auto-advance gates on this so a paused head freezes
-    /// without blocking the genuine end-of-track advance.
-    fn is_paused(&self) -> bool {
-        self.player.rate() <= 0.0
-    }
-
     /// If an advance was already armed from `tick()`, consume it and
     /// return `true` — the engine's trailing `ItemDidPlayToEnd` for
     /// the same track must not advance again.
@@ -114,6 +102,18 @@ impl Queue {
         } else {
             let _ = self.advance_to_next(Transition::Crossfade);
         }
+    }
+
+    /// Whether the user has paused playback.
+    ///
+    /// Reads the player's live rate: `pause()` (and a no-autoplay select)
+    /// stores `0.0`, while `play` / `set_rate` keep it `>= MIN_PLAYBACK_RATE`.
+    /// A natural end-of-track leaves the rate untouched, so this stays
+    /// distinct from `is_playing()` (which drops to `false` once the arena
+    /// drains at EOF). Auto-advance gates on this so a paused head freezes
+    /// without blocking the genuine end-of-track advance.
+    fn is_paused(&self) -> bool {
+        self.player.rate() <= 0.0
     }
 
     /// Start the next-track crossfade ahead of end-of-track when the
@@ -213,7 +213,6 @@ impl Queue {
         // event-mirrored consumer (wasm/FFI/app "now playing") un-latch from
         // the ended state before the seek revives playback. During normal
         // mid-track playback `current()` is `Some`, so this is a no-op and the
-        // seek passes straight through.
         if self.current().is_none() {
             let idx = self.player.current_index();
             if idx < self.len() {

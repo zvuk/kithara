@@ -19,8 +19,8 @@ use crate::{
 /// Writer (Pending) wrapper returned by [`CachedAssets`].
 pub struct CachedWriter<W> {
     pinned: Arc<DashSet<ResourceKey>>,
-    inner: W,
     key: ResourceKey,
+    inner: W,
 }
 
 /// Reader (Ready) wrapper returned by [`CachedAssets`]. Cheap to clone.
@@ -80,22 +80,6 @@ impl<R> CachedReader<R> {
 impl<W: WriteSide> WriteSide for CachedWriter<W> {
     type Reader = CachedReader<W::Reader>;
 
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner.write_at(offset, data)
-    }
-
-    fn reader(&self) -> CachedReader<W::Reader> {
-        CachedReader {
-            pinned: Arc::clone(&self.pinned),
-            inner: self.inner.reader(),
-            key: self.key.clone(),
-        }
-    }
-
-    fn raw_write_handle(&self) -> RawWriteHandle {
-        self.inner.raw_write_handle()
-    }
-
     fn commit(self, final_len: Option<u64>) -> StorageResult<CachedReader<W::Reader>> {
         Ok(CachedReader {
             pinned: Arc::clone(&self.pinned),
@@ -106,6 +90,22 @@ impl<W: WriteSide> WriteSide for CachedWriter<W> {
 
     fn fail(self, reason: String) {
         self.inner.fail(reason);
+    }
+
+    fn raw_write_handle(&self) -> RawWriteHandle {
+        self.inner.raw_write_handle()
+    }
+
+    fn reader(&self) -> CachedReader<W::Reader> {
+        CachedReader {
+            pinned: Arc::clone(&self.pinned),
+            inner: self.inner.reader(),
+            key: self.key.clone(),
+        }
+    }
+
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.inner.write_at(offset, data)
     }
 }
 
@@ -178,12 +178,12 @@ where
     pinned: Arc<DashSet<ResourceKey>>,
     capacity: NonZeroUsize,
     on_invalidated: Option<crate::store::OnInvalidatedFn>,
+    cache: SharedCache<A>,
     /// True when dropping a resource handle frees its bytes (ephemeral
     /// backing). Only then does LRU displacement mean the data is gone
     /// and `on_invalidated` must fire. For durable backends the bytes
     /// survive on disk, so displacement is a transparent cache miss.
     volatile: bool,
-    cache: SharedCache<A>,
 }
 
 impl<A> fmt::Debug for CachedAssets<A>
@@ -383,11 +383,16 @@ where
         cache.pop(&key).map(|entry| (key, entry))
     }
 
-    fn wrap_writer(&self, key: &ResourceKey, inner: A::ActiveRes) -> CachedWriter<A::ActiveRes> {
-        CachedWriter {
-            inner,
-            key: key.clone(),
-            pinned: Arc::clone(&self.pinned),
+    /// Wrap an [`AcquisitionResult`] from the inner store in cache wrappers
+    /// (used on the bypass and absolute-key paths where no caching happens).
+    fn wrap_acq(
+        &self,
+        key: &ResourceKey,
+        acq: AcquisitionResult<A::ActiveRes, A::ReadyRes>,
+    ) -> AcquisitionResult<CachedWriter<A::ActiveRes>, CachedReader<A::ReadyRes>> {
+        match acq {
+            AcquisitionResult::Pending(w) => AcquisitionResult::Pending(self.wrap_writer(key, w)),
+            AcquisitionResult::Ready(r) => AcquisitionResult::Ready(self.wrap_reader(key, r)),
         }
     }
 
@@ -399,16 +404,11 @@ where
         }
     }
 
-    /// Wrap an [`AcquisitionResult`] from the inner store in cache wrappers
-    /// (used on the bypass and absolute-key paths where no caching happens).
-    fn wrap_acq(
-        &self,
-        key: &ResourceKey,
-        acq: AcquisitionResult<A::ActiveRes, A::ReadyRes>,
-    ) -> AcquisitionResult<CachedWriter<A::ActiveRes>, CachedReader<A::ReadyRes>> {
-        match acq {
-            AcquisitionResult::Pending(w) => AcquisitionResult::Pending(self.wrap_writer(key, w)),
-            AcquisitionResult::Ready(r) => AcquisitionResult::Ready(self.wrap_reader(key, r)),
+    fn wrap_writer(&self, key: &ResourceKey, inner: A::ActiveRes) -> CachedWriter<A::ActiveRes> {
+        CachedWriter {
+            inner,
+            key: key.clone(),
+            pinned: Arc::clone(&self.pinned),
         }
     }
 }

@@ -187,7 +187,6 @@ impl<D: DriverIo> Resource<Active, D> {
     // consumers only get the consume-self `commit`/`reactivate`, so double
     // commit stays a compile error for them. The decorator owns its writer
     // exclusively (no clones), so an in-place commit/reactivate/fail has no
-    // aliasing hazard.
 
     /// Commit without consuming, for a decorator that rewrites in place.
     ///
@@ -219,16 +218,6 @@ impl<D: DriverIo> Resource<Committed, D> {
         self.data.core.len_inner()
     }
 
-    /// Mint a cloneable read-only view.
-    #[must_use]
-    pub fn reader(&self) -> Resource<Reader, D> {
-        Resource {
-            data: ReadCore {
-                core: self.data.core.clone(),
-            },
-        }
-    }
-
     /// Reactivate a committed resource for continued writing, consuming the
     /// committed handle and returning a fresh writer. Reactivating an `Active`
     /// handle is a compile error: no such method exists on the writer.
@@ -241,6 +230,16 @@ impl<D: DriverIo> Resource<Committed, D> {
         Ok(Resource {
             data: WriteGuard { core },
         })
+    }
+
+    /// Mint a cloneable read-only view.
+    #[must_use]
+    pub fn reader(&self) -> Resource<Reader, D> {
+        Resource {
+            data: ReadCore {
+                core: self.data.core.clone(),
+            },
+        }
     }
 }
 
@@ -256,11 +255,38 @@ impl<D: DriverIo> Clone for Resource<Reader, D> {
 /// [`Resource<Active, D>`], [`Resource<Committed, D>`] and
 /// [`Resource<Reader, D>`].
 pub trait ResourceRead: sealed::Sealed + MaybeSend + MaybeSync {
+    /// Whether the given range is fully covered by available data (non-blocking).
+    fn contains_range(&self, range: Range<u64>) -> bool;
+
+    /// Returns `true` if the resource has been committed with zero length.
+    fn is_empty(&self) -> bool {
+        self.len() == Some(0)
+    }
+
+    /// Committed length, if known.
+    fn len(&self) -> Option<u64>;
+
+    /// First gap in available data starting at `from`, up to `limit`.
+    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
+
+    /// Backing file path, if any.
+    fn path(&self) -> Option<&Path>;
+
     /// Read data at the given offset into `buf`; returns bytes read.
     ///
     /// # Errors
     /// Returns error if the resource is cancelled, failed, or the read fails.
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+
+    /// Read the **active working storage**, bypassing the lock-free committed
+    /// snapshot. A re-download keeps the prior generation's snapshot published
+    /// for concurrent [`read_at`](Self::read_at) callers; the producer's own
+    /// in-flight read-back (e.g. decrypt on commit) reads here to observe the
+    /// freshly-written generation rather than the stale snapshot.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
 
     /// Read the entire resource into a caller buffer; returns bytes read.
     ///
@@ -283,43 +309,16 @@ pub trait ResourceRead: sealed::Sealed + MaybeSend + MaybeSync {
         Ok(n)
     }
 
+    /// Runtime lifecycle observation (the resource mutates under concurrent
+    /// readers, so this is genuinely runtime state, not a type fact).
+    fn status(&self) -> ResourceStatus;
+
     /// Wait until the given byte range is available.
     ///
     /// # Errors
     /// Returns error if the range is invalid, the resource is cancelled, or the
     /// resource has failed.
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
-
-    /// Read the **active working storage**, bypassing the lock-free committed
-    /// snapshot. A re-download keeps the prior generation's snapshot published
-    /// for concurrent [`read_at`](Self::read_at) callers; the producer's own
-    /// in-flight read-back (e.g. decrypt on commit) reads here to observe the
-    /// freshly-written generation rather than the stale snapshot.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the read fails.
-    fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-
-    /// Committed length, if known.
-    fn len(&self) -> Option<u64>;
-
-    /// Returns `true` if the resource has been committed with zero length.
-    fn is_empty(&self) -> bool {
-        self.len() == Some(0)
-    }
-
-    /// Backing file path, if any.
-    fn path(&self) -> Option<&Path>;
-
-    /// Whether the given range is fully covered by available data (non-blocking).
-    fn contains_range(&self, range: Range<u64>) -> bool;
-
-    /// First gap in available data starting at `from`, up to `limit`.
-    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
-
-    /// Runtime lifecycle observation (the resource mutates under concurrent
-    /// readers, so this is genuinely runtime state, not a type fact).
-    fn status(&self) -> ResourceStatus;
 }
 
 impl<S: ResourcePhase, D: DriverIo> sealed::Sealed for Resource<S, D> {}

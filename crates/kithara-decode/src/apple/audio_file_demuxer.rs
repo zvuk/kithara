@@ -218,7 +218,6 @@ impl Demuxer for AppleAudioFileDemuxer {
             // an `Err` classifies as `Interrupted` upstream and the decode
             // loop retries it hot instead of parking the worker. The packet
             // cursor was not advanced, so the next call re-reads the same
-            // packets once the range lands.
             let (bytes, packets_read) =
                 match self
                     .file
@@ -391,13 +390,12 @@ mod tests {
             let total = self.inner.get_ref().len() as u64;
             // `probe_read` waits on the WHOLE requested range — a request
             // crossing the delivery boundary fails outright, it is never
-            // satisfied partially.
             if pos.saturating_add(buf.len() as u64) > self.ready {
                 return Err(Error::new(
                     ErrorKind::Interrupted,
                     StreamPending {
-                        reason: PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted),
                         pos,
+                        reason: PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted),
                         want: buf.len(),
                         len: Some(total),
                         phase: SourcePhase::Waiting,
@@ -428,8 +426,8 @@ mod tests {
         let ready = (bytes.len() / 2) as u64;
         let mut dx = AppleAudioFileDemuxer::open_for(
             Box::new(NotReadyAfter {
-                inner: Cursor::new(bytes),
                 ready,
+                inner: Cursor::new(bytes),
             }),
             AudioCodec::Pcm,
             Some(ContainerFormat::Wav),

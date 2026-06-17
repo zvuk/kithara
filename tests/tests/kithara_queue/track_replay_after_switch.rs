@@ -146,7 +146,7 @@ async fn wait_for_loader_done(
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<TrackStatus, String> {
-    let start = kithara_platform::time::Instant::now();
+    let start = time::Instant::now();
     loop {
         if let Some(entry) = queue.track(track_id) {
             match &entry.status {

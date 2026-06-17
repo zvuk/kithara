@@ -15,7 +15,7 @@ const CHANNELS: u16 = 2;
 ///      header (4-byte marker `Xing` or `Info`).
 ///   2. Exactly 120 bytes after that marker is the start of the 36-byte
 ///      LAME extension (encoder name "LAME"/"Lavc"/"Lavf" at offset 0,
-///      enc_delay/enc_padding 24-bit field at offset +21..+24).
+///      `enc_delay/enc_padding` 24-bit field at offset +21..+24).
 ///
 /// A bare search for "LAME"/"Lavc"/"Lavf" inside the bitstream is wrong:
 /// those four-byte sequences appear in audio data by coincidence.

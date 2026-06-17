@@ -34,7 +34,6 @@ pub fn analyze_reader(
             Ok(ChunkOutcome::Eof { .. }) => {
                 let analyzers = analyzers?;
                 // Finalize can be expensive: honor a cancel that raced the last chunk before
-                // paying for it.
                 if cancel.is_cancelled() {
                     debug!("analysis cancelled before finalize");
                     return None;

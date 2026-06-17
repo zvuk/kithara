@@ -1,14 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Per-resource consumer demand index.
-//!
-//! `DemandIndex` is the shared, protocol-agnostic answer to "how far ahead
-//! should the single download producer for this resource fetch?". It is a
-//! sibling of [`AvailabilityIndex`](super::AvailabilityIndex): created once
-//! per `AssetStore` build and shared across store clones via `Arc`.
-//!
-//! See `README.md` "Consumer Demand" for the full contract.
-
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -50,16 +41,16 @@ impl DemandEntry {
 /// Shared per-resource demand state, owned by the [`DemandIndex`] map and
 /// (for the elected producer) by a [`ProducerHandle`].
 pub(crate) struct DemandCell {
-    /// Live consumer contributions. Small N (decks + waveform).
-    entries: Mutex<Vec<Arc<DemandEntry>>>,
-    /// Attached consumer count. The slot is removed when this hits zero.
-    refcount: AtomicUsize,
     /// `true` once the single producer has been elected for this slot
     /// generation. CAS makes the election exactly-once.
     producer_spawned: AtomicBool,
+    /// Attached consumer count. The slot is removed when this hits zero.
+    refcount: AtomicUsize,
     /// Cancelled when the last consumer detaches. Child of the store
     /// cancel, so a store/master shutdown also cascades here.
     producer_cancel: CancelToken,
+    /// Live consumer contributions. Small N (decks + waveform).
+    entries: Mutex<Vec<Arc<DemandEntry>>>,
     /// Woken on attach and on consumer read-advance so the producer
     /// re-checks the aggregate watermark.
     notify: Notify,
@@ -68,10 +59,10 @@ pub(crate) struct DemandCell {
 impl DemandCell {
     fn new(producer_cancel: CancelToken) -> Self {
         Self {
+            producer_cancel,
             entries: Mutex::default(),
             refcount: AtomicUsize::new(0),
             producer_spawned: AtomicBool::new(false),
-            producer_cancel,
             notify: Notify::default(),
         }
     }
@@ -139,10 +130,10 @@ impl Drop for ProducerHandle {
 /// closing the attach-during-last-drop race.
 #[non_exhaustive]
 pub struct DemandLease {
-    inner: Arc<DemandInner>,
-    key: ResourceKey,
-    slot: Arc<DemandCell>,
     entry: Arc<DemandEntry>,
+    inner: Arc<DemandInner>,
+    slot: Arc<DemandCell>,
+    key: ResourceKey,
 }
 
 impl DemandLease {
@@ -150,6 +141,11 @@ impl DemandLease {
     /// Called by the consumer when its read position advances.
     pub fn note_progress(&self) {
         self.slot.notify.notify_one();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn producer_cancel_for_test(&self) -> CancelToken {
+        self.slot.producer_cancel.clone()
     }
 
     /// Try to become the slot's producer. Returns `Some(ProducerHandle)`
@@ -166,11 +162,6 @@ impl DemandLease {
             .then(|| ProducerHandle {
                 slot: Arc::clone(&self.slot),
             })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn producer_cancel_for_test(&self) -> CancelToken {
-        self.slot.producer_cancel.clone()
     }
 }
 
@@ -192,9 +183,9 @@ impl Drop for DemandLease {
 }
 
 struct DemandInner {
-    slots: DashMap<ResourceKey, Arc<DemandCell>>,
     /// Parent of every slot's `producer_cancel` (the store cancel).
     cancel: CancelToken,
+    slots: DashMap<ResourceKey, Arc<DemandCell>>,
 }
 
 /// Opaque handle to the per-resource consumer demand index.
@@ -216,8 +207,8 @@ impl DemandIndex {
     pub(crate) fn new(cancel: CancelToken) -> Self {
         Self {
             inner: Arc::new(DemandInner {
-                slots: DashMap::new(),
                 cancel,
+                slots: DashMap::new(),
             }),
         }
     }
@@ -258,10 +249,10 @@ impl DemandIndex {
             });
 
         let lease = DemandLease {
-            inner: Arc::clone(&self.inner),
-            key: key.clone(),
             slot,
             entry,
+            inner: Arc::clone(&self.inner),
+            key: key.clone(),
         };
         (lease, producer)
     }
@@ -446,7 +437,6 @@ mod tests {
         );
 
         // Producer abandons the download (its peer/source dropped) but the
-        // survivor remains attached.
         drop(producer);
         drop(winner_lease);
         assert!(

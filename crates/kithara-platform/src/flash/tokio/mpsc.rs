@@ -1,30 +1,3 @@
-//! Sim-participating `tokio::sync::mpsc` under `flash` (native).
-//!
-//! A real `tokio` mpsc parks a receiver/sender on the runtime's reactor, which
-//! is invisible to the quiescence engine — so the virtual clock would advance
-//! across a channel handoff and race the download chain. This wrapper keeps the
-//! queue under a plain mutex and uses the engine's untimed channel waiters
-//! ([`system::register_channel_async`] / [`system::signal_channel`]) as the wake
-//! mechanism, so every send→recv handoff keeps a participant `active` and the
-//! clock only advances at genuine quiescence. Off the sim path the module is not
-//! compiled; callers get the real `tokio` mpsc through the glob re-export.
-//!
-//! Lost-wakeup freedom: a receiver/sender registers its waiter (engine handle on
-//! the flash path, or its real [`Waker`] in the shared state off it) WHILE
-//! holding the queue mutex, so a concurrent producer/consumer either observes the
-//! parked waiter (and signals/wakes it) or has not yet taken the mutex.
-//!
-//! The park/wake mechanism is latched ONCE at channel creation (see
-//! `Backend`): a channel created under a flash-ambient context parks/wakes
-//! through the engine channel waiters; otherwise the parked half stores its
-//! real [`Waker`] under `inner` (the single receiver's `data_waker`, each
-//! blocked sender's `space_wakers`) and the peer wakes it directly —
-//! reactor-free, untouched by engine accounting. The queue/live-count state is
-//! UNIFIED; only the latched mechanism differs, and it is fixed for the
-//! channel's life so wait and wake always agree even across threads of
-//! different ambient. Outside a flash-ambient test every channel latches
-//! `Backend::Native`, so production behavior is unchanged.
-
 use std::{
     collections::VecDeque,
     future::Future,
@@ -45,11 +18,6 @@ use crate::flash::{
 };
 
 pub(super) struct Inner<T> {
-    queue: VecDeque<T>,
-    /// Live sender handles; the receiver observes close at `0`.
-    senders: usize,
-    /// Whether the single receiver is alive; senders observe close at `false`.
-    receiver_alive: bool,
     /// Real-wake slot for the single receiver (off the flash path), mirroring
     /// the engine `data` cvid. Stored under this mutex after the empty/close
     /// re-check.
@@ -59,6 +27,11 @@ pub(super) struct Inner<T> {
     /// list; each is woken (and the slot drained) per freed slot / on receiver
     /// close.
     space_wakers: Vec<Waker>,
+    queue: VecDeque<T>,
+    /// Whether the single receiver is alive; senders observe close at `false`.
+    receiver_alive: bool,
+    /// Live sender handles; the receiver observes close at `0`.
+    senders: usize,
 }
 
 /// Pair-carrying local form of the construction latch
@@ -77,18 +50,19 @@ enum Backend {
 }
 
 pub(super) struct Shared<T> {
-    inner: Mutex<Inner<T>>,
-    /// `Some(cap)` bounded, `None` unbounded.
-    capacity: Option<usize>,
     /// Park/wake mechanism latched ONCE at channel creation (see [`Backend`]):
     /// every wake/park on both halves uses it, so a sender/receiver on a thread
     /// that did not inherit the test's ambient still reaches an engine-parked peer.
     backend: Backend,
+    inner: Mutex<Inner<T>>,
+    /// `Some(cap)` bounded, `None` unbounded.
+    capacity: Option<usize>,
 }
 
 impl<T> Shared<T> {
     fn new(capacity: Option<usize>) -> Arc<Self> {
         Arc::new(Self {
+            capacity,
             inner: Mutex::new(Inner {
                 queue: VecDeque::new(),
                 senders: 1,
@@ -96,7 +70,6 @@ impl<T> Shared<T> {
                 data_waker: None,
                 space_wakers: Vec::new(),
             }),
-            capacity,
             backend: if flash_ambient() {
                 Backend::Engine {
                     data: system::next_condvar_id(),
@@ -348,8 +321,8 @@ impl<T> Drop for Sender<T> {
 /// Future returned by [`Sender::send`].
 pub struct Send<'a, T> {
     shared: &'a Shared<T>,
-    value: Option<T>,
     pending: Option<Parked>,
+    value: Option<T>,
 }
 
 // The queued value is plain data we move out via `take` — never structurally
@@ -434,17 +407,17 @@ pub struct Receiver<T> {
 }
 
 impl<T> Receiver<T> {
+    /// Poll for the next value; `Ready(None)` once the channel is closed and drained.
+    pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        poll_recv_inner(&self.shared, &mut self.pending, cx)
+    }
+
     /// Receive the next value, awaiting one while the channel is open and empty.
     pub fn recv(&mut self) -> Recv<'_, T> {
         Recv {
             shared: &self.shared,
             pending: &mut self.pending,
         }
-    }
-
-    /// Poll for the next value; `Ready(None)` once the channel is closed and drained.
-    pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        poll_recv_inner(&self.shared, &mut self.pending, cx)
     }
 
     /// Try to receive without blocking.
@@ -470,17 +443,17 @@ pub struct UnboundedReceiver<T> {
 }
 
 impl<T> UnboundedReceiver<T> {
+    /// Poll for the next value; `Ready(None)` once the channel is closed and drained.
+    pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        poll_recv_inner(&self.shared, &mut self.pending, cx)
+    }
+
     /// Receive the next value, awaiting one while the channel is open and empty.
     pub fn recv(&mut self) -> Recv<'_, T> {
         Recv {
             shared: &self.shared,
             pending: &mut self.pending,
         }
-    }
-
-    /// Poll for the next value; `Ready(None)` once the channel is closed and drained.
-    pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        poll_recv_inner(&self.shared, &mut self.pending, cx)
     }
 
     /// Try to receive without blocking.
@@ -501,8 +474,8 @@ impl<T> Drop for UnboundedReceiver<T> {
 
 /// Future returned by [`Receiver::recv`] / [`UnboundedReceiver::recv`].
 pub struct Recv<'a, T> {
-    shared: &'a Shared<T>,
     pending: &'a mut Option<Parked>,
+    shared: &'a Shared<T>,
 }
 
 impl<T> Future for Recv<'_, T> {
@@ -523,8 +496,8 @@ mod tests {
 
     struct Consts;
     impl Consts {
-        const PRODUCERS: usize = 8;
         const PER_PRODUCER: usize = 200;
+        const PRODUCERS: usize = 8;
     }
 
     /// Bounded channel under a multi-thread runtime: many producers fan into a

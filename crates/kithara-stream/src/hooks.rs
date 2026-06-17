@@ -44,14 +44,6 @@ pub enum ReaderSeekSignal {
 /// One call per `next_chunk` / `seek` — granularity is decoder
 /// operations, not byte-level reads.
 pub trait ReaderEventSink: Send + Sync {
-    /// Called once per `next_chunk` after the inner decoder produced
-    /// an outcome.
-    fn on_chunk(&mut self, signal: ReaderChunkSignal);
-
-    /// Called once per `seek` after the inner decoder parked at the
-    /// destination (or signalled `PastEof`).
-    fn on_seek(&mut self, signal: ReaderSeekSignal);
-
     /// Publish any events queued during `on_chunk` / `on_seek`.
     ///
     /// `on_chunk` / `on_seek` run on the worker's forbid-blocking decode
@@ -61,6 +53,14 @@ pub trait ReaderEventSink: Send + Sync {
     /// unchecked shell, once per pass. Default no-op for sinks that hold
     /// no deferred state.
     fn flush(&mut self) {}
+
+    /// Called once per `next_chunk` after the inner decoder produced
+    /// an outcome.
+    fn on_chunk(&mut self, signal: ReaderChunkSignal);
+
+    /// Called once per `seek` after the inner decoder parked at the
+    /// destination (or signalled `PastEof`).
+    fn on_seek(&mut self, signal: ReaderSeekSignal);
 }
 
 /// Single-owner event-sink handle. `Source::take_reader_event_sink` builds

@@ -12,19 +12,19 @@ use super::{
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct AnalysisParams {
-    /// FFT window length (real input); band bins span `0..=fft_size/2`.
-    pub fft_size: usize,
-    /// Low/mid crossover in Hz.
-    pub low_mid_hz: f32,
-    /// Mid/high crossover in Hz.
-    pub mid_high_hz: f32,
-    /// Per-window RMS gate; windows below it contribute no band energy.
-    pub energy_floor: f32,
     /// Per-band perceptual gain (`[low, mid, high]`) applied to magnitudes
     /// before shared normalization. Music tilts energy toward the low end, so
     /// without lifting mid/high the upper bands render as invisible slivers.
     /// This is the balance knob, not a color: low stays the dominant hull.
     pub band_gain: [f32; 3],
+    /// Per-window RMS gate; windows below it contribute no band energy.
+    pub energy_floor: f32,
+    /// Low/mid crossover in Hz.
+    pub low_mid_hz: f32,
+    /// Mid/high crossover in Hz.
+    pub mid_high_hz: f32,
+    /// FFT window length (real input); band bins span `0..=fft_size/2`.
+    pub fft_size: usize,
 }
 
 impl Default for AnalysisParams {
@@ -46,16 +46,16 @@ impl Default for AnalysisParams {
 pub struct WaveformAnalyzer {
     params: AnalysisParams,
     fft: Arc<dyn RealToComplex<f32>>,
-    hann: Vec<f32>,
-    low_mid_bin: usize,
-    mid_high_bin: usize,
-    band_bin_inv: [f32; 3],
-    window_hop: usize,
-    fill: Vec<f32>,
     fft_input: Vec<f32>,
     fft_output: Vec<Complex<f32>>,
     fft_scratch: Vec<Complex<f32>>,
+    fill: Vec<f32>,
+    hann: Vec<f32>,
     raw_bands: Vec<[f32; 3]>,
+    band_bin_inv: [f32; 3],
+    low_mid_bin: usize,
+    mid_high_bin: usize,
+    window_hop: usize,
 }
 
 impl WaveformAnalyzer {
@@ -78,7 +78,6 @@ impl WaveformAnalyzer {
         // Per-band inverse bin count: divide summed energy by bandwidth so a
         // wide band (mid/high) doesn't outweigh a narrow one (low) by sheer bin
         // count. This makes each band an energy density (RMS-like), so bass can
-        // be the hull instead of mid.
         let inv = |count: usize| 1.0 / count.max(1).to_f32().unwrap_or(1.0);
         let band_bin_inv = [
             inv(low_mid_bin.saturating_sub(1)),
@@ -93,13 +92,58 @@ impl WaveformAnalyzer {
             low_mid_bin,
             mid_high_bin,
             band_bin_inv,
-            window_hop: (fft_size / 4).max(1),
-            fill: Vec::with_capacity(fft_size),
             fft_input,
             fft_output,
             fft_scratch,
+            window_hop: (fft_size / 4).max(1),
+            fill: Vec::with_capacity(fft_size),
             raw_bands: Vec::new(),
         }
+    }
+
+    /// Bucketize the band-energy series (combine = component-wise max, so each
+    /// bucket keeps its loudest window) and turn it into per-bucket band heights
+    /// via [`normalize_bands`]. Empty when no frames were analysed.
+    #[must_use]
+    pub fn finalize(mut self, buckets: usize) -> Waveform {
+        if self.raw_bands.is_empty() {
+            self.flush_partial();
+        }
+        if buckets == 0 || self.raw_bands.is_empty() {
+            return Waveform::from(Vec::new());
+        }
+
+        let max = |a: [f32; 3], b: [f32; 3]| [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])];
+        let energy = bucketize(&self.raw_bands, buckets, [0.0; 3], max);
+        let bands = normalize_bands(energy, self.params.band_gain);
+
+        let out: Vec<Bucket> = bands
+            .into_iter()
+            .map(|b| Bucket {
+                low: b[0],
+                mid: b[1],
+                high: b[2],
+            })
+            .collect();
+        Waveform::from(out)
+    }
+
+    /// Window the leftover `fill` (zero-padded) into one final band frame. Only
+    /// needed for tracks shorter than one FFT window, which never trip the
+    /// full-window path and would otherwise analyse to nothing.
+    fn flush_partial(&mut self) {
+        if self.fill.is_empty() {
+            return;
+        }
+        let n = self.fill.len().min(self.fft_input.len());
+        for (i, dst) in self.fft_input.iter_mut().enumerate() {
+            *dst = if i < n {
+                self.fill[i] * self.hann[i]
+            } else {
+                0.0
+            };
+        }
+        self.push_window_bands();
     }
 
     /// Fold one interleaved chunk: downmix to mono (channel mean), fill FFT
@@ -117,20 +161,6 @@ impl WaveformAnalyzer {
                 self.run_window();
             }
         }
-    }
-
-    fn run_window(&mut self) {
-        for ((dst, &sample), &w) in self
-            .fft_input
-            .iter_mut()
-            .zip(self.fill.iter())
-            .zip(self.hann.iter())
-        {
-            *dst = sample * w;
-        }
-        // Slide by one hop; the retained tail overlaps the next window.
-        self.fill.drain(0..self.window_hop.min(self.fill.len()));
-        self.push_window_bands();
     }
 
     /// Run the FFT on the current `fft_input` and push its band energies.
@@ -151,21 +181,17 @@ impl WaveformAnalyzer {
         self.raw_bands.push(bands);
     }
 
-    /// Window the leftover `fill` (zero-padded) into one final band frame. Only
-    /// needed for tracks shorter than one FFT window, which never trip the
-    /// full-window path and would otherwise analyse to nothing.
-    fn flush_partial(&mut self) {
-        if self.fill.is_empty() {
-            return;
+    fn run_window(&mut self) {
+        for ((dst, &sample), &w) in self
+            .fft_input
+            .iter_mut()
+            .zip(self.fill.iter())
+            .zip(self.hann.iter())
+        {
+            *dst = sample * w;
         }
-        let n = self.fill.len().min(self.fft_input.len());
-        for (i, dst) in self.fft_input.iter_mut().enumerate() {
-            *dst = if i < n {
-                self.fill[i] * self.hann[i]
-            } else {
-                0.0
-            };
-        }
+        // Slide by one hop; the retained tail overlaps the next window.
+        self.fill.drain(0..self.window_hop.min(self.fill.len()));
         self.push_window_bands();
     }
 
@@ -194,33 +220,6 @@ impl WaveformAnalyzer {
             band[1] * self.band_bin_inv[1],
             band[2] * self.band_bin_inv[2],
         ]
-    }
-
-    /// Bucketize the band-energy series (combine = component-wise max, so each
-    /// bucket keeps its loudest window) and turn it into per-bucket band heights
-    /// via [`normalize_bands`]. Empty when no frames were analysed.
-    #[must_use]
-    pub fn finalize(mut self, buckets: usize) -> Waveform {
-        if self.raw_bands.is_empty() {
-            self.flush_partial();
-        }
-        if buckets == 0 || self.raw_bands.is_empty() {
-            return Waveform::from(Vec::new());
-        }
-
-        let max = |a: [f32; 3], b: [f32; 3]| [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])];
-        let energy = bucketize(&self.raw_bands, buckets, [0.0; 3], max);
-        let bands = normalize_bands(energy, self.params.band_gain);
-
-        let out: Vec<Bucket> = bands
-            .into_iter()
-            .map(|b| Bucket {
-                low: b[0],
-                mid: b[1],
-                high: b[2],
-            })
-            .collect();
-        Waveform::from(out)
     }
 }
 
@@ -287,8 +286,8 @@ mod tests {
     struct Consts;
 
     impl Consts {
-        const SR: u32 = 44_100;
         const EPS: f32 = 1e-6;
+        const SR: u32 = 44_100;
     }
 
     fn approx(a: f32, b: f32) -> bool {
@@ -454,7 +453,6 @@ mod tests {
     fn full_spectrum_track_has_no_color_gaps() {
         // Regression for a band series coarser than the bucket count, which left
         // columns with no bar. Every column of a full-spectrum track must carry
-        // at least one nonzero band.
         let sr = Consts::SR.to_f32().unwrap_or(1.0);
         let frames = 45 * Consts::SR.to_usize().unwrap_or(0);
         let l = std::f32::consts::TAU * 80.0 / sr;

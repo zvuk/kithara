@@ -1,22 +1,3 @@
-//! Sim-participating `tokio::sync::oneshot` under `flash` (native).
-//!
-//! Same rationale as the sibling [`mpsc`](super::mpsc): the single value handoff
-//! goes through the quiescence engine (an untimed channel waiter) instead of the
-//! runtime reactor, so a receiver awaiting the response keeps a participant
-//! `active` and the virtual clock cannot race past the send. Off the sim path
-//! this module is not compiled and callers get the real `tokio` oneshot.
-//!
-//! The park/wake mechanism is latched ONCE at channel creation (see
-//! `Backend`): a channel created under a flash-ambient context routes the
-//! handoff through the engine waiter; otherwise the receiver stores its real
-//! [`Waker`] in the shared state (under the SAME `inner` mutex that guards the
-//! value) and the sender wakes it directly — a true reactor-free wake that does
-//! not touch the engine's participant accounting. The queue/value/alive state
-//! is UNIFIED; only the latched mechanism differs, and it is fixed for the
-//! channel's life so wait and wake always agree even across threads of
-//! different ambient. Outside a flash-ambient test every channel latches
-//! `Backend::Native`, so production behavior is unchanged.
-
 use std::{
     future::Future,
     pin::Pin,
@@ -53,23 +34,23 @@ pub mod error {
 pub use error::RecvError;
 
 struct Inner<T> {
-    value: Option<T>,
-    sender_alive: bool,
-    receiver_alive: bool,
     /// Real-wake slot for the single receiver (off the flash path). Stored under
     /// this mutex, after the receiver re-checks `value`/`sender_alive`, so a
     /// concurrent `send`/sender-drop (which takes the same mutex, then wakes)
     /// cannot slip its wake between the receiver's check and its park.
     real_waker: Option<Waker>,
+    value: Option<T>,
+    receiver_alive: bool,
+    sender_alive: bool,
 }
 
 struct Shared<T> {
-    inner: Mutex<Inner<T>>,
     /// Park/wake mechanism latched ONCE at `channel()` (see
     /// [`crate::flash::ids::Backend`]): both halves use it regardless of the
     /// calling thread's ambient, so a sender on a thread that did not inherit
     /// the test's ambient still reaches an engine-parked receiver.
     backend: Backend,
+    inner: Mutex<Inner<T>>,
 }
 
 /// How the [`Receiver`] future parked, so re-poll and `Drop` use the matching

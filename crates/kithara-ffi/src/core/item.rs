@@ -44,9 +44,9 @@ pub(crate) struct ItemView {
 impl ItemView {
     fn new(is_live_stream: bool) -> Self {
         Self {
+            is_live_stream,
             loading: LoadingState::Pending,
             has_protected_content: false,
-            is_live_stream,
         }
     }
 
@@ -66,6 +66,11 @@ impl ItemView {
         matches!(self.loading, LoadingState::Ready { .. })
     }
 
+    /// Terminal failure transition from any state.
+    pub(crate) fn mark_failed(&mut self) {
+        self.loading = LoadingState::Failed;
+    }
+
     /// Metadata resolved with `duration_sec`. A no-op once `Failed`
     /// (failure is sticky), mirroring the old `is_failed` flag never
     /// being cleared.
@@ -73,11 +78,6 @@ impl ItemView {
         if !matches!(self.loading, LoadingState::Failed) {
             self.loading = LoadingState::Ready { duration_sec };
         }
-    }
-
-    /// Terminal failure transition from any state.
-    pub(crate) fn mark_failed(&mut self) {
-        self.loading = LoadingState::Failed;
     }
 }
 

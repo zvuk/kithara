@@ -1,9 +1,3 @@
-//! Platform-aware async task spawning (native backend).
-//!
-//! Baseline re-exported from `tokio_with_wasm::alias::task` (provides `spawn`,
-//! `yield_now`, `JoinHandle`, `JoinError`, etc.). Backend selection happens in
-//! `lib.rs` behind the `crate::tokio::task` facade.
-
 pub use tokio_with_wasm::alias::task::*;
 
 use super::runtime::Handle;

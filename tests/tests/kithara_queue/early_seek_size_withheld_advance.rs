@@ -122,7 +122,7 @@ enum Trigger {
 // pins — and is owned by the seek-stall workstream. Mixing it in would make
 // this otherwise-deterministic guard flaky.
 
-/// Size withheld, body open: seek lands where total_bytes under-counts.
+/// Size withheld, body open: seek lands where `total_bytes` under-counts.
 #[kithara::test(
     tokio,
     multi_thread,

@@ -102,7 +102,6 @@ fn main() -> AppResult {
     // App master root held for the whole process: it goes into `AppConfig` and
     // every subsystem derives from `shutdown.child()`, so a frontend
     // `config.shutdown.cancel()` propagates down the shutdown subtree to all of
-    // them.
     let shutdown = CancelToken::root();
     let net = NetOptions::builder()
         .is_insecure(args.insecure || baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)

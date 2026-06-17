@@ -61,6 +61,7 @@ pub(crate) struct SymphoniaDemuxer {
     /// loses information (PCM bit-depth/endianness, ADPCM dialect).
     native_params: AudioCodecParameters,
     format_reader: Box<dyn FormatReader>,
+    byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
     /// Live byte cursor of the underlying media source. Populated by
     /// the [`super::super::symphonia::adapter::ReadSeekAdapter`] when
     /// the demuxer is built through that path; absent for synthetic
@@ -72,12 +73,17 @@ pub(crate) struct SymphoniaDemuxer {
     /// Replaced (and the previous packet dropped) on every successful
     /// `next_frame` call.
     current_packet: Option<Packet>,
-    byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
     /// Time base used to translate packet timestamps into wall-clock
     /// [`std::time::Duration`].
     time_base: Option<TimeBase>,
     track_info: TrackInfo,
-    track_id: u32,
+    /// Set when a `next_frame` read was interrupted at a not-ready segment
+    /// boundary. Symphonia's `MediaSourceStream` may have consumed
+    /// ring-buffered bytes into a packet that was then discarded (its read
+    /// position advanced), stranding those bytes. The next `next_frame`
+    /// re-seeks the reader back to `resume_ts` before reading so the
+    /// interrupted packet is re-read from its start instead of skipped.
+    needs_resume: bool,
     /// Native (timebase-unit) timestamp the *next* packet must start at.
     /// Authoritative across a `Pending`: set to the seek's `actual_ts` on
     /// seek and advanced to `pts + dur` after each successfully-returned
@@ -86,13 +92,7 @@ pub(crate) struct SymphoniaDemuxer {
     /// loses sub-frame precision and snaps one packet early. Used to undo a
     /// read-ahead strand (see `next_frame` / `reseek_to_resume`).
     resume_ts: i64,
-    /// Set when a `next_frame` read was interrupted at a not-ready segment
-    /// boundary. Symphonia's `MediaSourceStream` may have consumed
-    /// ring-buffered bytes into a packet that was then discarded (its read
-    /// position advanced), stranding those bytes. The next `next_frame`
-    /// re-seeks the reader back to `resume_ts` before reading so the
-    /// interrupted packet is re-read from its start instead of skipped.
-    needs_resume: bool,
+    track_id: u32,
 }
 
 /// Inputs to [`SymphoniaDemuxer::open_file`] besides the reader: the
@@ -100,10 +100,10 @@ pub(crate) struct SymphoniaDemuxer {
 /// skips probing when known, the bootstrap `byte_len_handle`, and an
 /// optional `byte_map` over the underlying source.
 pub(crate) struct FileOpen {
-    pub(crate) hint: Option<String>,
-    pub(crate) container: Option<ContainerFormat>,
     pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
     pub(crate) byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
+    pub(crate) container: Option<ContainerFormat>,
+    pub(crate) hint: Option<String>,
 }
 
 impl SymphoniaDemuxer {

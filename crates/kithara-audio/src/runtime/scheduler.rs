@@ -708,12 +708,12 @@ mod tests {
     struct RecyclingNode {
         trash: crate::runtime::Inlet<u32>,
         pcm: crate::runtime::Outlet<usize>,
-        produced: usize,
-        max_produce: usize,
-        recycled: usize,
-        trash_high_water: usize,
         last_call_recycle: bool,
         recycle_before_produce: bool,
+        max_produce: usize,
+        produced: usize,
+        recycled: usize,
+        trash_high_water: usize,
     }
 
     impl Node for RecyclingNode {

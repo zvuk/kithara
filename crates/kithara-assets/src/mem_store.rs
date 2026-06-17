@@ -31,8 +31,8 @@ use crate::{
 /// contract in `README.md`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct MemCacheKey {
-    key: ResourceKey,
     identity: Option<RequestIdentity>,
+    key: ResourceKey,
 }
 
 impl MemCacheKey {
@@ -107,11 +107,11 @@ impl AssetDeleter for MemAssetDeleter {
 /// token, optional `mem_resource_capacity`, the shared `availability` index,
 /// the `active_resources` map, and the canonical `deleter`.
 pub(crate) struct MemStoreSetup {
-    pub(crate) cancel: CancelToken,
-    pub(crate) mem_resource_capacity: Option<usize>,
-    pub(crate) availability: AvailabilityIndex,
     pub(crate) active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
     pub(crate) deleter: Arc<dyn AssetDeleter>,
+    pub(crate) availability: AvailabilityIndex,
+    pub(crate) cancel: CancelToken,
+    pub(crate) mem_resource_capacity: Option<usize>,
 }
 
 impl MemAssetStore {
@@ -154,11 +154,11 @@ impl MemAssetStore {
             Arc::clone(&active_resources),
         ));
         Self::with_availability_and_deleter(MemStoreSetup {
-            cancel,
-            mem_resource_capacity,
-            availability,
             active_resources,
             deleter,
+            availability,
+            cancel,
+            mem_resource_capacity,
         })
     }
 

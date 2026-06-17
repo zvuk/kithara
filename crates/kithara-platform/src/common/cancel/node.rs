@@ -32,9 +32,9 @@ impl Slot {
 /// instead of parking forever.
 #[derive(Default)]
 struct WakerSlots {
+    slots: Vec<(u64, Slot)>,
     fired: bool,
     next_id: u64,
-    slots: Vec<(u64, Slot)>,
 }
 
 /// One node in the propagate-down cancel tree.
@@ -49,41 +49,12 @@ struct WakerSlots {
 #[derive(Default)]
 pub(super) struct Node {
     flag: AtomicBool,
-    _parent: Option<Arc<Self>>,
     children: Mutex<Vec<Weak<Self>>>,
     wakers: Mutex<WakerSlots>,
+    _parent: Option<Arc<Self>>,
 }
 
 impl Node {
-    pub(super) fn root() -> Arc<Self> {
-        Arc::new(Self::default())
-    }
-
-    /// Derive a child. Born under the parent's children-lock so a concurrent
-    /// `cancel()` either includes the new child in its snapshot or has already
-    /// set the parent flag — in the latter case the child is born cancelled
-    /// (`flag = true`, `fired = true`) so a future/waker on it never parks.
-    pub(super) fn child(parent: &Arc<Self>) -> Arc<Self> {
-        let mut kids = lock(&parent.children);
-        let born_cancelled = parent.flag.load(Ordering::Acquire);
-        let node = Arc::new(Self {
-            flag: AtomicBool::new(born_cancelled),
-            _parent: Some(Arc::clone(parent)),
-            children: Mutex::new(Vec::new()),
-            wakers: Mutex::new(WakerSlots {
-                fired: born_cancelled,
-                ..WakerSlots::default()
-            }),
-        });
-        kids.retain(|w| w.strong_count() > 0);
-        kids.push(Arc::downgrade(&node));
-        node
-    }
-
-    pub(super) fn is_cancelled(&self) -> bool {
-        self.flag.load(Ordering::Acquire)
-    }
-
     /// Cancel this node and, recursively, every live descendant.
     ///
     /// Idempotent: the `AcqRel` swap returns the prior value, so a repeat cancel
@@ -113,6 +84,44 @@ impl Node {
         }
     }
 
+    /// Derive a child. Born under the parent's children-lock so a concurrent
+    /// `cancel()` either includes the new child in its snapshot or has already
+    /// set the parent flag — in the latter case the child is born cancelled
+    /// (`flag = true`, `fired = true`) so a future/waker on it never parks.
+    pub(super) fn child(parent: &Arc<Self>) -> Arc<Self> {
+        let mut kids = lock(&parent.children);
+        let born_cancelled = parent.flag.load(Ordering::Acquire);
+        let node = Arc::new(Self {
+            flag: AtomicBool::new(born_cancelled),
+            _parent: Some(Arc::clone(parent)),
+            children: Mutex::new(Vec::new()),
+            wakers: Mutex::new(WakerSlots {
+                fired: born_cancelled,
+                ..WakerSlots::default()
+            }),
+        });
+        kids.retain(|w| w.strong_count() > 0);
+        kids.push(Arc::downgrade(&node));
+        node
+    }
+
+    pub(super) fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::Acquire)
+    }
+
+    /// Overwrite the waker of an existing parked slot (each `Future::poll` may
+    /// arrive with a fresh `Context`). If the slot is gone the node has fired —
+    /// wake the new waker so the poll resolves.
+    pub(super) fn refresh_task(&self, id: u64, waker: &Waker) {
+        let mut w = lock(&self.wakers);
+        if let Some((_, slot)) = w.slots.iter_mut().find(|(sid, _)| *sid == id) {
+            *slot = Slot::Task(waker.clone());
+        } else {
+            drop(w);
+            waker.wake_by_ref();
+        }
+    }
+
     /// Register a slot on THIS node. If already fired, the slot fires at once and
     /// no id is stored. Returns `Some(id)` for a parked slot, `None` if it fired.
     pub(super) fn register(&self, slot: Slot) -> Option<u64> {
@@ -130,17 +139,8 @@ impl Node {
         None
     }
 
-    /// Overwrite the waker of an existing parked slot (each `Future::poll` may
-    /// arrive with a fresh `Context`). If the slot is gone the node has fired —
-    /// wake the new waker so the poll resolves.
-    pub(super) fn refresh_task(&self, id: u64, waker: &Waker) {
-        let mut w = lock(&self.wakers);
-        if let Some((_, slot)) = w.slots.iter_mut().find(|(sid, _)| *sid == id) {
-            *slot = Slot::Task(waker.clone());
-        } else {
-            drop(w);
-            waker.wake_by_ref();
-        }
+    pub(super) fn root() -> Arc<Self> {
+        Arc::new(Self::default())
     }
 
     pub(super) fn unregister(&self, id: u64) {

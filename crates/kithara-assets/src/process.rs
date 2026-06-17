@@ -63,8 +63,8 @@ pub type ProcessChunkFn<Ctx> =
 /// wait); the guard is only ever held inside [`ReadinessGate::wait_until_ready`]
 /// or the brief flip in [`ReadinessGate::mark_ready`].
 struct ReadinessGate {
-    gate: CondvarGate<bool>,
     failed: AtomicBool,
+    gate: CondvarGate<bool>,
 }
 
 impl ReadinessGate {
@@ -75,14 +75,6 @@ impl ReadinessGate {
         }
     }
 
-    fn is_ready(&self) -> bool {
-        *self.gate.lock()
-    }
-
-    fn is_failed(&self) -> bool {
-        self.failed.load(Ordering::Acquire)
-    }
-
     /// Fail the gate: wake every waiter so a writer dropped without
     /// `commit` cannot deadlock a reader parked in [`Self::wait_until_ready`].
     /// Waiters observe [`Self::is_failed`] and abort. `processed` is left
@@ -91,6 +83,14 @@ impl ReadinessGate {
     fn fail(&self) {
         self.failed.store(true, Ordering::Release);
         self.gate.notify_all();
+    }
+
+    fn is_failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
+
+    fn is_ready(&self) -> bool {
+        *self.gate.lock()
     }
 
     /// Mark the gate ready and wake every waiter.
@@ -172,10 +172,10 @@ impl Drop for GateGuard {
 /// `ctx` to clone per call, the `process` chunk fn, the byte `pool`, and
 /// the `final_len` to process up to.
 struct ProcessArgs<'a, W, Ctx> {
-    inner: &'a W,
+    pool: &'a BytePool,
     ctx: &'a Ctx,
     process: &'a ProcessChunkFn<Ctx>,
-    pool: &'a BytePool,
+    inner: &'a W,
     final_len: u64,
 }
 
@@ -238,8 +238,8 @@ where
 /// into a [`ProcessedReader`]; dropping without `commit`/`fail` fails the gate
 /// so a waiting reader cannot deadlock. See the crate `README.md`.
 pub struct ProcessedWriter<W, Ctx> {
-    guard: GateGuard,
     pool: BytePool,
+    guard: GateGuard,
     ctx: Option<Ctx>,
     process: ProcessChunkFn<Ctx>,
     inner: W,
@@ -318,11 +318,11 @@ where
 
     fn build_reader(&self, inner: W::Reader) -> ProcessedReader<W::Reader, Ctx> {
         ProcessedReader {
+            inner,
             readiness: Arc::clone(&self.guard.readiness),
             pool: self.pool.clone(),
             ctx: self.ctx.clone(),
             process: Arc::clone(&self.process),
-            inner,
         }
     }
 }
@@ -334,24 +334,12 @@ where
 {
     type Reader = ProcessedReader<W::Reader, Ctx>;
 
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner.write_at(offset, data)
-    }
-
-    fn reader(&self) -> ProcessedReader<W::Reader, Ctx> {
-        self.build_reader(self.inner.reader())
-    }
-
-    fn raw_write_handle(&self) -> RawWriteHandle {
-        self.inner.raw_write_handle()
-    }
-
     fn commit(mut self, final_len: Option<u64>) -> StorageResult<ProcessedReader<W::Reader, Ctx>> {
         let needs_processing = self.ctx.is_some() && !self.guard.readiness.is_ready();
         let actual_len = match (needs_processing, final_len, self.ctx.as_ref()) {
             (true, Some(len), Some(ctx)) if len > 0 => Some(run_process(&ProcessArgs {
-                inner: &self.inner,
                 ctx,
+                inner: &self.inner,
                 process: &self.process,
                 pool: &self.pool,
                 final_len: len,
@@ -378,6 +366,18 @@ where
         self.guard.readiness.fail();
         self.guard.disarm();
     }
+
+    fn raw_write_handle(&self) -> RawWriteHandle {
+        self.inner.raw_write_handle()
+    }
+
+    fn reader(&self) -> ProcessedReader<W::Reader, Ctx> {
+        self.build_reader(self.inner.reader())
+    }
+
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.inner.write_at(offset, data)
+    }
 }
 
 impl<R, Ctx> ProcessedReader<R, Ctx>
@@ -385,6 +385,20 @@ where
     R: ReadSide,
     Ctx: Clone + Send + Sync + Debug + 'static,
 {
+    /// A waiter must abort when the gate failed (writer dropped) or the backing
+    /// resource reached a terminal state — neither will ever flip ready.
+    fn inner_terminal(&self) -> bool {
+        self.readiness.is_failed()
+            || matches!(
+                self.inner.status(),
+                ResourceStatus::Failed(_) | ResourceStatus::Cancelled
+            )
+    }
+
+    fn is_readable(&self) -> bool {
+        self.ctx.is_none() || self.readiness.is_ready()
+    }
+
     /// Wrap a Ready (committed or in-flight shared) inner reader. The gate is
     /// open when no processing is required (`ctx` is `None`) or the inner
     /// resource is already committed (its on-disk bytes are already processed).
@@ -396,26 +410,12 @@ where
     ) -> Self {
         let ready = ctx.is_none() || matches!(inner.status(), ResourceStatus::Committed { .. });
         Self {
-            readiness: Arc::new(ReadinessGate::new(ready)),
             pool,
             ctx,
             process,
             inner,
+            readiness: Arc::new(ReadinessGate::new(ready)),
         }
-    }
-
-    fn is_readable(&self) -> bool {
-        self.ctx.is_none() || self.readiness.is_ready()
-    }
-
-    /// A waiter must abort when the gate failed (writer dropped) or the backing
-    /// resource reached a terminal state — neither will ever flip ready.
-    fn inner_terminal(&self) -> bool {
-        self.readiness.is_failed()
-            || matches!(
-                self.inner.status(),
-                ResourceStatus::Failed(_) | ResourceStatus::Cancelled
-            )
     }
 }
 
@@ -425,33 +425,6 @@ where
     Ctx: Clone + Send + Sync + Debug + 'static,
 {
     type Writer = ProcessedWriter<R::Writer, Ctx>;
-
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        if !self.is_readable() {
-            return Err(StorageError::NotReadable);
-        }
-        self.inner.read_at(offset, buf)
-    }
-
-    fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        // Raw producer read-back: deliberately bypasses the processing gate
-        // (on-commit processing reads the not-yet-processed bytes to transform
-        // them) and the committed snapshot. Not a consumer read — minted from
-        // the writer via `reader()` for `run_process`, not handed to clients.
-        self.inner.read_inflight_at(offset, buf)
-    }
-
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        let outcome = self.inner.wait_range(range)?;
-        if self.ctx.is_none() || outcome != WaitOutcome::Ready {
-            return Ok(outcome);
-        }
-        if self.readiness.wait_until_ready(&|| self.inner_terminal()) {
-            Ok(WaitOutcome::Ready)
-        } else {
-            Ok(WaitOutcome::Interrupted)
-        }
-    }
 
     fn contains_range(&self, range: Range<u64>) -> bool {
         self.is_readable() && self.inner.contains_range(range)
@@ -469,20 +442,47 @@ where
         self.inner.path()
     }
 
-    fn status(&self) -> ResourceStatus {
-        self.inner.status()
-    }
-
     fn reactivate(self) -> StorageResult<ProcessedWriter<R::Writer, Ctx>> {
         let inner = self.inner.reactivate()?;
         let ready = self.ctx.is_none();
         Ok(ProcessedWriter {
+            inner,
             guard: GateGuard::new(Arc::new(ReadinessGate::new(ready))),
             pool: self.pool,
             ctx: self.ctx,
             process: self.process,
-            inner,
         })
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        if !self.is_readable() {
+            return Err(StorageError::NotReadable);
+        }
+        self.inner.read_at(offset, buf)
+    }
+
+    fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        // Raw producer read-back: deliberately bypasses the processing gate
+        // (on-commit processing reads the not-yet-processed bytes to transform
+        // them) and the committed snapshot. Not a consumer read — minted from
+        // the writer via `reader()` for `run_process`, not handed to clients.
+        self.inner.read_inflight_at(offset, buf)
+    }
+
+    fn status(&self) -> ResourceStatus {
+        self.inner.status()
+    }
+
+    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
+        let outcome = self.inner.wait_range(range)?;
+        if self.ctx.is_none() || outcome != WaitOutcome::Ready {
+            return Ok(outcome);
+        }
+        if self.readiness.wait_until_ready(&|| self.inner_terminal()) {
+            Ok(WaitOutcome::Ready)
+        } else {
+            Ok(WaitOutcome::Interrupted)
+        }
     }
 }
 

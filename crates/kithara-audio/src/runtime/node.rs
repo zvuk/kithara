@@ -83,16 +83,19 @@ pub(crate) trait Node: Send + 'static {
     /// Called when the scheduler is cancelled or the node is unregistered.
     fn on_cancel(&mut self) {}
 
-    /// Return the current service class (priority) of this node.
-    fn service_class(&self) -> ServiceClass {
-        ServiceClass::Audible
-    }
-
     /// Reclaim deferred bookkeeping (free/recycle spent buffers) outside the
     /// forbid-blocking produce core. Run once per pass by the scheduler shell
     /// before [`tick`](Node::tick), so a `free` on a full pool never lands on
     /// the checked produce path. Default no-op.
     fn recycle(&mut self) {}
+
+    /// Return the current service class (priority) of this node.
+    fn service_class(&self) -> ServiceClass {
+        ServiceClass::Audible
+    }
+
+    /// Perform one quantum of work.
+    fn tick(&mut self) -> TickResult;
 
     /// One-time worker-thread warmup, run by the scheduler shell when the node
     /// is registered — before any [`tick`](Node::tick) reaches the
@@ -101,9 +104,6 @@ pub(crate) trait Node: Send + 'static {
     /// `arc_swap`'s per-thread debt node, hit via the storage committed-read
     /// snapshot). Default no-op.
     fn warm_up(&mut self) {}
-
-    /// Perform one quantum of work.
-    fn tick(&mut self) -> TickResult;
 }
 
 impl Node for Box<dyn Node> {
@@ -111,20 +111,20 @@ impl Node for Box<dyn Node> {
         (**self).on_cancel();
     }
 
-    fn service_class(&self) -> ServiceClass {
-        (**self).service_class()
-    }
-
     fn recycle(&mut self) {
         (**self).recycle();
     }
 
-    fn warm_up(&mut self) {
-        (**self).warm_up();
+    fn service_class(&self) -> ServiceClass {
+        (**self).service_class()
     }
 
     fn tick(&mut self) -> TickResult {
         (**self).tick()
+    }
+
+    fn warm_up(&mut self) {
+        (**self).warm_up();
     }
 }
 

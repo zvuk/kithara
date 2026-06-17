@@ -1,29 +1,3 @@
-//! Sim-participating `tokio::sync::watch` under `flash` (native).
-//!
-//! A watch channel holds a single latest value plus a version counter; a
-//! receiver awaits the version moving past the one it last observed. A real
-//! `tokio` watch parks that wait on the runtime reactor, invisible to the
-//! quiescence engine — so the virtual clock could advance across the handoff
-//! and race a real producer (the background [`AnalysisWorker`] runs decode on a
-//! real OS thread and delivers its result here). This wrapper keeps the value +
-//! version under a plain mutex and routes the *wait for the next version*
-//! through the engine's untimed channel waiters
-//! ([`system::register_channel_async`] / [`system::signal_channel`]), so a
-//! receiver awaiting a change keeps a participant `active` and the clock only
-//! advances at genuine quiescence. Off the sim path this module is not compiled
-//! and callers get the real `tokio` watch.
-//!
-//! Lost-wakeup freedom rests on the gate (mirroring the sibling `broadcast`):
-//! `send` bumps `version` and signals WHILE holding the gate, and `changed`
-//! reads `version` and registers its engine waiter WHILE holding the SAME gate.
-//! So a receiver either observes the just-bumped version (its read is sequenced
-//! after the bump by the gate's mutex order) or is woken by the signal. Sender
-//! close is handled the same way: the last sender marks `closed` under the gate
-//! and signals, so a receiver re-checking after the senders dropped resolves
-//! [`RecvError`] instead of re-parking.
-//!
-//! The park/wake mechanism is latched ONCE at construction (see [`Backend`]).
-
 use std::{
     future::Future,
     ops::Deref,
@@ -65,21 +39,21 @@ pub use error::RecvError;
 /// higher one.
 struct State<T> {
     value: T,
-    version: u64,
+    /// Off-flash real wakers for parked receivers; drained on each signal.
+    wakers: Vec<Waker>,
     /// Set by the last sender's drop so a receiver re-checking after the senders
     /// are gone resolves `RecvError` instead of re-parking.
     closed: bool,
-    /// Off-flash real wakers for parked receivers; drained on each signal.
-    wakers: Vec<Waker>,
+    version: u64,
 }
 
 /// Shared between both halves (not generic over wake coordination): the gated
 /// state, the live sender count and the construction-latched [`Backend`].
 struct Shared<T> {
-    state: Mutex<State<T>>,
+    backend: Backend,
     /// Live sender handles; the last to drop closes the channel.
     senders: Mutex<usize>,
-    backend: Backend,
+    state: Mutex<State<T>>,
 }
 
 impl<T> Shared<T> {
@@ -200,10 +174,10 @@ impl<T> std::error::Error for SendError<T> {}
 /// Receiving half: borrows the latest value and awaits version changes.
 pub struct Receiver<T> {
     shared: Arc<Shared<T>>,
+    pending: Option<Parked>,
     /// The version this receiver has observed; `changed` resolves once the
     /// stored version exceeds it.
     seen: u64,
-    pending: Option<Parked>,
 }
 
 impl<T> Clone for Receiver<T> {
@@ -278,7 +252,6 @@ impl<T> Future for Changed<'_, T> {
         let rx = &mut *self.get_mut().rx;
         // Engine wait resolves only when granted; a real wait re-checks the
         // version below (a spurious wake just re-parks). Clear the marker either
-        // way so we re-evaluate.
         match rx.pending.as_ref() {
             Some(Parked::Engine(handle)) => {
                 if handle.granted() {

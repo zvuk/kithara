@@ -29,9 +29,9 @@ pub(crate) struct TrackRegistration {
     /// pooled buffer is freed/recycled on the worker thread rather than on
     /// the audio thread. See `crates/kithara-audio/README.md`.
     pub(crate) trash_inlet: crate::runtime::Inlet<PcmChunk>,
+    pub(crate) engine_load: Option<Arc<EngineLoad>>,
     pub(crate) outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
     pub(crate) preload_chunks: usize,
-    pub(crate) engine_load: Option<Arc<EngineLoad>>,
 }
 
 /// Clonable handle to a shared audio worker.
@@ -186,6 +186,10 @@ mod tests {
     impl AudioWorkerSource for MockSource {
         type Chunk = PcmChunk;
 
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek_obs)
+        }
+
         fn step_track(&mut self) -> TrackStep<PcmChunk> {
             if self.seek_obs.is_pending() || self.seek_obs.is_flushing() {
                 let epoch = self.seek_obs.epoch();
@@ -205,10 +209,6 @@ mod tests {
             self.cursor += 1;
             TrackStep::Produced(Fetch::new(PcmChunk::default(), false, 0))
         }
-
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek_obs)
-        }
     }
 
     struct FailingSource {
@@ -226,12 +226,12 @@ mod tests {
     impl AudioWorkerSource for FailingSource {
         type Chunk = PcmChunk;
 
-        fn step_track(&mut self) -> TrackStep<PcmChunk> {
-            TrackStep::Failed
-        }
-
         fn seek_observe(&self) -> Arc<dyn SeekObserve> {
             Arc::clone(&self.seek_obs)
+        }
+
+        fn step_track(&mut self) -> TrackStep<PcmChunk> {
+            TrackStep::Failed
         }
     }
 

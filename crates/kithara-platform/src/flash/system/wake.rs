@@ -1,9 +1,3 @@
-//! Waiter wake handles for the flash quiescence engine.
-//!
-//! A parked waiter stores either a [`Token`] (an OS-thread flag+condvar the
-//! blocked thread sits on) or an async-task [`Waker`]; [`Wake`] is the union the
-//! scheduler collects and fires AFTER releasing its lock.
-
 use std::{
     sync::{
         Arc,
@@ -19,8 +13,8 @@ use crate::native::sync::{Condvar, Mutex, MutexGuard};
 /// `signal_condvar` fires it. The flag is set under its own lock before
 /// `notify_all`, so a fire that lands before the block is not lost.
 pub(crate) struct Token {
-    woken: Mutex<bool>,
     cv: Condvar,
+    woken: Mutex<bool>,
 }
 
 impl Token {
@@ -78,6 +72,15 @@ impl Wake {
         }
     }
 
+    /// True for an async-task waiter. Async tasks are counted in `active_async`
+    /// by the spawn poll-wrapper (per-poll), NOT by the firer — so a fired
+    /// async waiter is `mark_granted` but never bumps a counter. Sync OS-thread
+    /// waiters (`Sync`) ARE bumped by the firer into `active` (their wake has
+    /// real OS-scheduling latency the bump must cover).
+    pub(crate) fn is_task(&self) -> bool {
+        matches!(self, Self::Task { .. })
+    }
+
     /// Mark an async-task wake as granted an `active` slot. MUST run under the
     /// engine `core` lock at the same moment the firer does `active += 1`, so a
     /// concurrent `cancel_async_wait` (which also takes the lock) sees a
@@ -86,14 +89,5 @@ impl Wake {
         if let Self::Task { granted, .. } = self {
             granted.store(true, Ordering::Release);
         }
-    }
-
-    /// True for an async-task waiter. Async tasks are counted in `active_async`
-    /// by the spawn poll-wrapper (per-poll), NOT by the firer — so a fired
-    /// async waiter is `mark_granted` but never bumps a counter. Sync OS-thread
-    /// waiters (`Sync`) ARE bumped by the firer into `active` (their wake has
-    /// real OS-scheduling latency the bump must cover).
-    pub(crate) fn is_task(&self) -> bool {
-        matches!(self, Self::Task { .. })
     }
 }

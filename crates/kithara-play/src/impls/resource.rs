@@ -31,6 +31,8 @@ use crate::impls::{config::ResourceConfig, source_type::SourceType};
 /// resource.read(&mut buf);
 /// ```
 pub struct Resource {
+    pub(crate) inner: Box<dyn PcmReader>,
+    src: Arc<str>,
     /// Drop guard for the per-track cancel — the token passed as
     /// `ResourceConfig.cancel`, whose subtree covers BOTH the inner stream
     /// (File/Hls) and the `Audio` pipeline (each a `child()` of it). Declared
@@ -41,8 +43,6 @@ pub struct Resource {
     /// disarmed by the `From<Resource>` reader unwrap when the live reader
     /// passes to the analysis worker.
     cancel: CancelGuard,
-    pub(crate) inner: Box<dyn PcmReader>,
-    src: Arc<str>,
     bus: EventBus,
 }
 
@@ -300,8 +300,8 @@ mod tests {
     /// it; reads report EOF immediately.
     struct EofReader {
         bus: EventBus,
-        meta: TrackMetadata,
         spec: PcmSpec,
+        meta: TrackMetadata,
     }
 
     impl Default for EofReader {
@@ -315,6 +315,18 @@ mod tests {
     }
 
     impl PcmReader for EofReader {
+        fn duration(&self) -> Option<Duration> {
+            None
+        }
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+        fn position(&self) -> Duration {
+            Duration::ZERO
+        }
         fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
             Ok(ReadOutcome::Eof {
                 position: Duration::ZERO,
@@ -337,18 +349,6 @@ mod tests {
         fn spec(&self) -> PcmSpec {
             self.spec
         }
-        fn position(&self) -> Duration {
-            Duration::ZERO
-        }
-        fn duration(&self) -> Option<Duration> {
-            None
-        }
-        fn metadata(&self) -> &TrackMetadata {
-            &self.meta
-        }
-        fn event_bus(&self) -> &EventBus {
-            &self.bus
-        }
     }
 
     /// Pin (W3 Task 3.3 (b)): a mid-session unload — i.e. dropping the
@@ -360,7 +360,7 @@ mod tests {
     /// `T` so the stream subtree (modelled here by `stream_sub`) is torn down.
     #[test]
     fn drop_cancels_whole_per_track_subtree_not_just_audio() {
-        let track = CancelToken::never(); // the per-track token T
+        let track = CancelToken::never();
         let stream_sub = track.child(); // File/Hls subtree F = T.child()
         let audio_sub = track.child(); // Audio subtree A = T.child()
 
@@ -382,6 +382,6 @@ mod tests {
     #[test]
     fn drop_without_cancel_is_passive() {
         let resource = Resource::from_reader(EofReader::default(), None);
-        drop(resource); // must not panic
+        drop(resource);
     }
 }

@@ -53,28 +53,6 @@ impl FilePeer {
         }
     }
 
-    /// Whether this peer may issue GETs for the shared resource.
-    ///
-    /// Resources with no demand lease (standalone store, single
-    /// consumer) always drive. With a lease, only the elected producer
-    /// drives; a non-producer first tries to take over an abandoned slot
-    /// (`try_take_producer`) and otherwise yields to the live producer.
-    fn ensure_producer(&self) -> bool {
-        let Some(lease) = self.inner.demand_lease.as_ref() else {
-            return true;
-        };
-        let mut producer = self.producer.lock();
-        if producer.is_some() {
-            return true;
-        }
-        if let Some(handle) = lease.try_take_producer() {
-            *producer = Some(handle);
-            return true;
-        }
-        drop(producer);
-        false
-    }
-
     fn build_fetch_cmd(&self, resume_from: u64) -> FetchCmd {
         let url = self.inner.asset.url.clone();
         let headers = self.inner.asset.headers.clone();
@@ -123,6 +101,28 @@ impl FilePeer {
             .maybe_headers(headers)
             .on_complete(on_complete)
             .build()
+    }
+
+    /// Whether this peer may issue GETs for the shared resource.
+    ///
+    /// Resources with no demand lease (standalone store, single
+    /// consumer) always drive. With a lease, only the elected producer
+    /// drives; a non-producer first tries to take over an abandoned slot
+    /// (`try_take_producer`) and otherwise yields to the live producer.
+    fn ensure_producer(&self) -> bool {
+        let Some(lease) = self.inner.demand_lease.as_ref() else {
+            return true;
+        };
+        let mut producer = self.producer.lock();
+        if producer.is_some() {
+            return true;
+        }
+        if let Some(handle) = lease.try_take_producer() {
+            *producer = Some(handle);
+            return true;
+        }
+        drop(producer);
+        false
     }
 
     /// Start of the next byte range worth fetching, or `None` when the

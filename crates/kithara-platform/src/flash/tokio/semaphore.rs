@@ -1,28 +1,3 @@
-//! Sim-participating `tokio::sync::Semaphore` under `flash` (native).
-//!
-//! A real `tokio::Semaphore` parks an acquirer on the runtime reactor while no
-//! permit is free — invisible to the quiescence engine, so the virtual clock
-//! could advance across the wait for a permit (e.g. a download slot). This
-//! wrapper keeps the permit count under a plain mutex and uses the engine's
-//! untimed channel waiter ([`system::register_channel_async`] /
-//! [`system::signal_channel`]) as the wake mechanism, mirroring the `space`
-//! group of [`mpsc`](super::mpsc): a freed permit wakes one parked acquirer,
-//! which re-checks the count and takes a permit (the count, not the signal, is
-//! the source of truth). Off the sim path this module is not compiled and
-//! callers get the real `tokio` Semaphore.
-//!
-//! The park/wake mechanism is latched ONCE at construction (see [`Backend`]): a
-//! semaphore created under a flash-ambient context parks acquirers on the
-//! engine waiter; otherwise each stores its real [`Waker`] under the count
-//! mutex and a permit release wakes it directly. Only the latched mechanism
-//! differs; the permit/wait state is UNIFIED.
-//!
-//! Only the consumed surface is implemented: [`Semaphore::new`] and
-//! [`Semaphore::acquire_owned`] (the sole call site is `kithara-queue`'s loader,
-//! which caps concurrent loads via owned permits). [`AcquireError`] exists for
-//! `tokio` API parity — the real backend produces it on `close()`, which this
-//! wrapper does not expose, so on the flash path it is never produced.
-
 use std::{
     future::Future,
     pin::Pin,
@@ -54,19 +29,19 @@ impl std::fmt::Display for AcquireError {
 impl std::error::Error for AcquireError {}
 
 struct Inner {
-    permits: usize,
     /// Real-wake slots for acquirers parked on permits (off the flash path);
     /// each woken (and drained) per freed permit. Empty on the engine path.
     wakers: Vec<Waker>,
+    permits: usize,
 }
 
 /// `Semaphore` under `flash`. See module docs.
 pub struct Semaphore {
-    inner: Mutex<Inner>,
     /// Park/wake mechanism latched ONCE at construction (see [`Backend`]); used
     /// by every acquire/release so an acquirer and a releaser on threads of
     /// different ambient still agree on the mechanism.
     backend: Backend,
+    inner: Mutex<Inner>,
 }
 
 impl Semaphore {
@@ -227,8 +202,8 @@ mod tests {
 
     struct Consts;
     impl Consts {
-        const TASKS: usize = 16;
         const PERMITS: usize = 3;
+        const TASKS: usize = 16;
     }
 
     /// Many tasks contend for a few permits; each acquires, yields (forcing the

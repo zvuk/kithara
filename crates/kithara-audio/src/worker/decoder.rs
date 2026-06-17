@@ -35,24 +35,24 @@ pub(crate) struct DecoderRuntime {
 /// stateless with respect to parked chunks.
 pub(crate) struct DecoderNode {
     preload_gate: Arc<PreloadGate>,
+    /// Held seek-observe handle — avoids an Arc clone on every hot
+    /// `sync_seek_epoch` tick.
+    seek_obs: Arc<dyn SeekObserve>,
     /// Shared priority hint written wait-free by the real-time consumer and
     /// read back here by the scheduler each pass — see [`AtomicServiceClass`].
     service_class: Arc<AtomicServiceClass>,
     source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
-    /// Held seek-observe handle — avoids an Arc clone on every hot
-    /// `sync_seek_epoch` tick.
-    seek_obs: Arc<dyn SeekObserve>,
     runtime: DecoderRuntime,
     /// Spent chunks returned by the real-time consumer. Drained once per pass
     /// by [`recycle`](DecoderNode::recycle), in the scheduler's unchecked shell
     /// before the produce core, so the pooled buffers are freed/recycled on
     /// this worker thread, never on the audio thread.
     trash_inlet: Inlet<PcmChunk>,
-    outlet: Outlet<Fetch<PcmChunk>>,
-    preload_chunks: usize,
     /// Live engine cost meter. When present, each produced chunk records the
     /// tick's decode+effects wall time against the audio it yielded.
     engine_load: Option<Arc<EngineLoad>>,
+    outlet: Outlet<Fetch<PcmChunk>>,
+    preload_chunks: usize,
 }
 
 impl DecoderNode {
@@ -71,6 +71,18 @@ impl DecoderNode {
         self.runtime.chunks_sent += 1;
         if self.runtime.chunks_sent >= self.preload_chunks && !self.outlet.has_pending() {
             self.complete_preload();
+        }
+    }
+
+    /// Record one produced chunk's decode+effects cost into the shared engine
+    /// meter.
+    fn record_load(&self, busy: Duration, fetch: &Fetch<PcmChunk>) {
+        if let Some(load) = self.engine_load.as_ref() {
+            load.record(
+                busy,
+                fetch.data.frames(),
+                fetch.data.spec().sample_rate.get(),
+            );
         }
     }
 
@@ -103,18 +115,6 @@ impl DecoderNode {
             ..Default::default()
         };
     }
-
-    /// Record one produced chunk's decode+effects cost into the shared engine
-    /// meter.
-    fn record_load(&self, busy: Duration, fetch: &Fetch<PcmChunk>) {
-        if let Some(load) = self.engine_load.as_ref() {
-            load.record(
-                busy,
-                fetch.data.frames(),
-                fetch.data.spec().sample_rate.get(),
-            );
-        }
-    }
 }
 
 impl From<TrackRegistration> for DecoderNode {
@@ -143,17 +143,13 @@ impl Node for DecoderNode {
         self.complete_preload();
     }
 
-    fn service_class(&self) -> ServiceClass {
-        self.service_class.load()
-    }
-
     fn recycle(&mut self) {
         while self.trash_inlet.try_pop().is_some() {}
         self.source.flush_deferred();
     }
 
-    fn warm_up(&mut self) {
-        self.source.warm_up();
+    fn service_class(&self) -> ServiceClass {
+        self.service_class.load()
     }
 
     fn tick(&mut self) -> TickResult {
@@ -221,6 +217,10 @@ impl Node for DecoderNode {
                 }
             }
         }
+    }
+
+    fn warm_up(&mut self) {
+        self.source.warm_up();
     }
 }
 
@@ -330,9 +330,9 @@ mod tests {
         let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(4, None);
         let mut node = DecoderNode {
             source,
-            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
             outlet,
             trash_inlet,
+            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
             preload_gate: Arc::new(PreloadGate::default()),
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
             preload_chunks: 1,

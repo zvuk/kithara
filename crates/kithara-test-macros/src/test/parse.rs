@@ -6,12 +6,12 @@ use syn::{
 
 #[derive(Default)]
 pub(crate) struct TestArgs {
-    pub(crate) timeout: Option<Expr>,
-    pub(crate) tracing_filter: Option<String>,
     /// `flash(true|false)`; `None` defaults to `true` at expansion. `true` runs
     /// the lexical body-only time-call rewrite + sets the per-test ambient gate;
     /// `false` sets ambient off and does NOT rewrite (the body runs REAL).
     pub(crate) flash: Option<bool>,
+    pub(crate) timeout: Option<Expr>,
+    pub(crate) tracing_filter: Option<String>,
     pub(crate) env_vars: Vec<(String, String)>,
     /// Substring patterns for soft-fail: if a panic message contains any of
     /// these (case-insensitive), the test prints a warning instead of failing.

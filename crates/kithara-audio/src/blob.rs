@@ -1,9 +1,3 @@
-//! Versioned little-endian blob codec shared by the waveform artifacts.
-//!
-//! The framework owns the `u32` version header and full-consumption check;
-//! each artifact only encodes/decodes its own body. See the crate README
-//! "Blob codec" section for the on-disk contract.
-
 /// Cap speculative `Vec` preallocation from untrusted length prefixes.
 pub(crate) const MAX_PREALLOC: usize = 4096;
 
@@ -25,10 +19,10 @@ pub enum BlobError {
 pub(crate) trait Blob: Sized {
     /// Wire/disk format version. Bump when the body encoding changes.
     const VERSION: u32;
-    /// Append the body after the version header.
-    fn encode(&self, w: &mut Writer<'_>);
     /// Read the body; the header version has already been validated.
     fn decode(r: &mut Reader<'_>) -> Result<Self, BlobError>;
+    /// Append the body after the version header.
+    fn encode(&self, w: &mut Writer<'_>);
 }
 
 /// Serialize to a versioned blob: the `u32` version, then the body.
@@ -64,14 +58,6 @@ impl Writer<'_> {
         self.0.reserve(extra);
     }
 
-    pub(crate) fn write_u32(&mut self, v: u32) {
-        self.0.extend_from_slice(&v.to_le_bytes());
-    }
-
-    pub(crate) fn write_u64(&mut self, v: u64) {
-        self.0.extend_from_slice(&v.to_le_bytes());
-    }
-
     pub(crate) fn write_f32(&mut self, v: f32) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
@@ -80,18 +66,26 @@ impl Writer<'_> {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
 
-    /// Write a `u64` length prefix, clamping an oversized `usize` to `u64::MAX`
-    /// (a length that always fails to read back).
-    pub(crate) fn write_len(&mut self, len: usize) {
-        self.write_u64(u64::try_from(len).unwrap_or(u64::MAX));
-    }
-
     /// Write a length-prefixed `u64` list.
     pub(crate) fn write_frames(&mut self, frames: &[u64]) {
         self.write_len(frames.len());
         for frame in frames {
             self.write_u64(*frame);
         }
+    }
+
+    /// Write a `u64` length prefix, clamping an oversized `usize` to `u64::MAX`
+    /// (a length that always fails to read back).
+    pub(crate) fn write_len(&mut self, len: usize) {
+        self.write_u64(u64::try_from(len).unwrap_or(u64::MAX));
+    }
+
+    pub(crate) fn write_u32(&mut self, v: u32) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+
+    pub(crate) fn write_u64(&mut self, v: u64) {
+        self.0.extend_from_slice(&v.to_le_bytes());
     }
 }
 
@@ -104,11 +98,6 @@ pub(crate) struct Reader<'a> {
 impl<'a> Reader<'a> {
     pub(crate) fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
-    }
-
-    /// Bytes not yet consumed.
-    pub(crate) fn remaining(&self) -> usize {
-        self.bytes.len() - self.cursor
     }
 
     /// Succeed only if the whole blob was consumed.
@@ -129,25 +118,12 @@ impl<'a> Reader<'a> {
         Ok(out)
     }
 
-    pub(crate) fn read_u32(&mut self) -> Result<u32, BlobError> {
-        Ok(u32::from_le_bytes(self.read_array::<4>()?))
-    }
-
-    pub(crate) fn read_u64(&mut self) -> Result<u64, BlobError> {
-        Ok(u64::from_le_bytes(self.read_array::<8>()?))
-    }
-
     pub(crate) fn read_f32(&mut self) -> Result<f32, BlobError> {
         Ok(f32::from_le_bytes(self.read_array::<4>()?))
     }
 
     pub(crate) fn read_f64(&mut self) -> Result<f64, BlobError> {
         Ok(f64::from_le_bytes(self.read_array::<8>()?))
-    }
-
-    /// Read a `u64` length prefix as a `usize`.
-    pub(crate) fn read_len(&mut self) -> Result<usize, BlobError> {
-        usize::try_from(self.read_u64()?).map_err(|_| BlobError::Corrupt)
     }
 
     /// Read a length-prefixed `u64` list, capping preallocation.
@@ -158,6 +134,24 @@ impl<'a> Reader<'a> {
             out.push(self.read_u64()?);
         }
         Ok(out)
+    }
+
+    /// Read a `u64` length prefix as a `usize`.
+    pub(crate) fn read_len(&mut self) -> Result<usize, BlobError> {
+        usize::try_from(self.read_u64()?).map_err(|_| BlobError::Corrupt)
+    }
+
+    pub(crate) fn read_u32(&mut self) -> Result<u32, BlobError> {
+        Ok(u32::from_le_bytes(self.read_array::<4>()?))
+    }
+
+    pub(crate) fn read_u64(&mut self) -> Result<u64, BlobError> {
+        Ok(u64::from_le_bytes(self.read_array::<8>()?))
+    }
+
+    /// Bytes not yet consumed.
+    pub(crate) fn remaining(&self) -> usize {
+        self.bytes.len() - self.cursor
     }
 }
 
@@ -170,23 +164,23 @@ mod tests {
     /// Minimal artifact exercising the header framing in isolation.
     #[derive(Debug, PartialEq)]
     struct Pair {
-        a: u64,
         b: f64,
+        a: u64,
     }
 
     impl Blob for Pair {
         const VERSION: u32 = 7;
-
-        fn encode(&self, w: &mut Writer<'_>) {
-            w.write_u64(self.a);
-            w.write_f64(self.b);
-        }
 
         fn decode(r: &mut Reader<'_>) -> Result<Self, BlobError> {
             Ok(Self {
                 a: r.read_u64()?,
                 b: r.read_f64()?,
             })
+        }
+
+        fn encode(&self, w: &mut Writer<'_>) {
+            w.write_u64(self.a);
+            w.write_f64(self.b);
         }
     }
 

@@ -1,12 +1,3 @@
-//! Real-I/O pacing: while a real socket operation is in flight, the virtual
-//! clock may not outrun real time. The engine cannot see real-world transit
-//! (a parked socket await releases its quiescence slot), so without pacing it
-//! jumps to the next virtual deadline — firing watchdogs/timeouts spuriously
-//! ahead of bytes that are still on the wire. Pacing (not pinning) keeps a
-//! virtually-delayed peer live: its deadline still fires once the equivalent
-//! REAL time has passed. See the crate README ("Real I/O pacing") and
-//! [`crate::flash::RealIoScope`].
-
 use std::sync::{Once, Weak};
 
 use super::{FLASH, FlashInner};
@@ -22,8 +13,8 @@ use crate::{
 /// loop), so a disarm racing a fresh enter can never leave the pacer asleep
 /// while `real_io > 0`.
 pub(super) struct Pacer {
-    armed: Mutex<bool>,
     cv: Condvar,
+    armed: Mutex<bool>,
     /// One-shot lazy spawn of the pacer thread, on the first arm
     /// ([`FlashInner::real_io_enter`]).
     spawn: Once,
@@ -41,10 +32,10 @@ impl Pacer {
 
     pub(super) fn new(owner: Weak<FlashInner>) -> Self {
         Self {
+            owner,
             armed: Mutex::default(),
             cv: Condvar::default(),
             spawn: Once::new(),
-            owner,
         }
     }
 }

@@ -193,11 +193,11 @@ impl StreamType for Hls {
 
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {
+                ready,
+                worker_wake,
                 cancel: cancel.clone(),
                 scope: scope.clone(),
                 headers: config.headers.clone(),
-                ready,
-                worker_wake,
             },
             playhead,
             seek,
@@ -327,8 +327,8 @@ pub fn build_shared_asset_store(
     }
 
     HlsStore {
-        backend: Arc::new(builder.build()),
         registry,
+        backend: Arc::new(builder.build()),
     }
 }
 

@@ -58,19 +58,11 @@ const MEDIA_PLAYLIST: &str = "#EXTM3U\n\
 type ProbeCounts = Arc<Mutex<HashMap<String, usize>>>;
 
 struct TestServer {
-    master_url: Url,
     probes: ProbeCounts,
+    master_url: Url,
 }
 
 impl TestServer {
-    fn probe_snapshot(&self) -> HashMap<String, usize> {
-        self.probes.lock().expect("probes lock").clone()
-    }
-
-    fn reset_probes(&self) {
-        self.probes.lock().expect("probes lock").clear();
-    }
-
     fn media_probe_count(&self, path: &str) -> usize {
         self.probes
             .lock()
@@ -78,6 +70,14 @@ impl TestServer {
             .get(path)
             .copied()
             .unwrap_or(0)
+    }
+
+    fn probe_snapshot(&self) -> HashMap<String, usize> {
+        self.probes.lock().expect("probes lock").clone()
+    }
+
+    fn reset_probes(&self) {
+        self.probes.lock().expect("probes lock").clear();
     }
 }
 
@@ -177,7 +177,7 @@ async fn spawn_server() -> TestServer {
             .expect("serve");
     });
     let master_url = Url::parse(&format!("http://{addr}/master.m3u8")).expect("master url");
-    TestServer { master_url, probes }
+    TestServer { probes, master_url }
 }
 
 /// Verification-only store over the same `cache_dir`: read-only

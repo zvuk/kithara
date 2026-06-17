@@ -27,29 +27,18 @@ use crate::{coord::HlsCoord, ids::duration_prefix, variant::PlanCtx};
 
 struct HlsTrackState {
     coord: Arc<HlsCoord>,
-    /// Narrow seek-observe handle — cloned from `HlsPeer.seek_obs` at
-    /// activation time. All epoch/target/pending reads use this directly
-    /// rather than routing through `coord.timeline`.
-    seek_obs: Arc<dyn SeekObserve>,
     /// Reused from the parent [`HlsPeer`]: stores the reader's last-known
     /// segment index — read by [`Abr::progress`] and compared against the
     /// freshly resolved segment in `poll_next` to detect a boundary
     /// crossing. The initial value is set in [`HlsPeer::activate`].
     reader_segment: Arc<AtomicUsize>,
-    /// Variant the stored `reader_segment` was resolved against. A
-    /// variant switch re-keys the byte space under an unmoved cursor:
-    /// the same segment index now points at a different variant's bytes,
-    /// so `prev == resolved` no longer proves the reader stayed inside
-    /// the planned window. [`HlsTrackState::apply_boundary_crossing`]
-    /// treats a variant flip as a discontinuity and re-aims the fetch
-    /// plan at the reader's actual segment.
-    reader_variant: usize,
+    /// Narrow seek-observe handle — cloned from `HlsPeer.seek_obs` at
+    /// activation time. All epoch/target/pending reads use this directly
+    /// rather than routing through `coord.timeline`.
+    seek_obs: Arc<dyn SeekObserve>,
     /// Mirrors `HlsConfig::look_ahead_bytes` — capped idle prefetch
     /// budget threaded into every `PlanCtx` constructed for `dispatch`.
     look_ahead_bytes: Option<u64>,
-    waker: Option<Waker>,
-    eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
-    last_seek_epoch: u64,
     /// Target segment of an in-flight forward seek, held until the reader's
     /// physical byte cursor catches up to it. `coord.position()` only
     /// advances when the reader actually reads at the new offset, so right
@@ -62,7 +51,18 @@ struct HlsTrackState {
     /// resolved segment cannot drag the cursor back and re-plan the prefix.
     /// Cleared once the reader physically resolves at/after the floor.
     seek_settle_floor: Option<u32>,
+    waker: Option<Waker>,
+    eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
+    last_seek_epoch: u64,
     prefetch_budget: usize,
+    /// Variant the stored `reader_segment` was resolved against. A
+    /// variant switch re-keys the byte space under an unmoved cursor:
+    /// the same segment index now points at a different variant's bytes,
+    /// so `prev == resolved` no longer proves the reader stayed inside
+    /// the planned window. [`HlsTrackState::apply_boundary_crossing`]
+    /// treats a variant flip as a discontinuity and re-aims the fetch
+    /// plan at the reader's actual segment.
+    reader_variant: usize,
 }
 
 /// HLS peer — one per track. Pre-init: `poll_next` returns Pending.
@@ -71,6 +71,9 @@ struct HlsTrackState {
 /// next batch of `FetchCmd`s (thin event router per spec).
 pub(crate) struct HlsPeer {
     abr: Arc<AbrState>,
+    /// Narrow activity handle. Used by `priority()` to check whether
+    /// the track is currently playing.
+    activity: Arc<dyn Activity>,
     /// Reader→peer wake channel. The HLS `Source` fires this whenever it
     /// advances the byte cursor or completes a seek, so `poll_next` runs
     /// again without waiting for the next downloader-driven wakeup. Owned
@@ -78,6 +81,10 @@ pub(crate) struct HlsPeer {
     /// of the peer, not of shared state.
     reader_advanced: Arc<DeferredWake>,
     reader_segment: Arc<AtomicUsize>,
+    /// Narrow seek-observe handle. Used by `poll_next`'s inner logic
+    /// (via `HlsTrackState`) to read the current epoch/target without
+    /// holding a wide seek/playhead aggregate.
+    seek_obs: Arc<dyn SeekObserve>,
     state: Arc<Mutex<Option<HlsTrackState>>>,
     /// Wake-up trigger for the waker-forwarding micro-task: not a
     /// cancellation of work — fires from `teardown()` / `Drop`. A free
@@ -91,13 +98,6 @@ pub(crate) struct HlsPeer {
     /// [`Self::set_abr_variants`] after the master + media playlists
     /// have been parsed; never mutated again for the peer's lifetime.
     variants: Mutex<Vec<VariantInfo>>,
-    /// Narrow seek-observe handle. Used by `poll_next`'s inner logic
-    /// (via `HlsTrackState`) to read the current epoch/target without
-    /// holding a wide seek/playhead aggregate.
-    seek_obs: Arc<dyn SeekObserve>,
-    /// Narrow activity handle. Used by `priority()` to check whether
-    /// the track is currently playing.
-    activity: Arc<dyn Activity>,
 }
 
 impl HlsPeer {

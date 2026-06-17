@@ -31,13 +31,6 @@ impl CancelScope {
         Self { token }
     }
 
-    /// The scope's token. Clone it for the subsystem's own subtree (`.child()`
-    /// for per-task/per-fetch tokens).
-    #[must_use]
-    pub fn token(&self) -> CancelToken {
-        self.token.clone()
-    }
-
     /// Cancel this scope's subtree (the node from which inner children derive).
     pub fn cancel(&self) {
         self.token.cancel();
@@ -46,6 +39,13 @@ impl CancelScope {
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.token.is_cancelled()
+    }
+
+    /// The scope's token. Clone it for the subsystem's own subtree (`.child()`
+    /// for per-task/per-fetch tokens).
+    #[must_use]
+    pub fn token(&self) -> CancelToken {
+        self.token.clone()
     }
 }
 

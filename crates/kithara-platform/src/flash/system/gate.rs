@@ -1,7 +1,3 @@
-//! Per-task gate FSM for quiescence accounting — the engine half of
-//! [`crate::flash::Participating`] (the control-surface wrapper stays in
-//! `flash/participant.rs`).
-
 use std::{
     panic::Location,
     sync::{
@@ -39,16 +35,16 @@ impl AtomicTaskState {
         Self(AtomicU8::new(initial as u8))
     }
 
-    fn unpack(v: u8) -> TaskState {
-        match v {
-            0 => TaskState::Parked,
-            1 => TaskState::Runnable,
-            2 => TaskState::Running,
-            3 => TaskState::RunningNotified,
-            4 => TaskState::Done,
-            // Only `TaskState` discriminants are ever stored in the cell.
-            _ => unreachable!("BUG: invalid TaskState discriminant {v}"),
-        }
+    /// CAS `current -> new`; `true` iff it transitioned.
+    pub(super) fn compare_exchange(&self, current: TaskState, new: TaskState) -> bool {
+        self.0
+            .compare_exchange(
+                current as u8,
+                new as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
     }
 
     pub(super) fn load(&self) -> TaskState {
@@ -63,16 +59,16 @@ impl AtomicTaskState {
         Self::unpack(self.0.swap(new as u8, Ordering::AcqRel))
     }
 
-    /// CAS `current -> new`; `true` iff it transitioned.
-    pub(super) fn compare_exchange(&self, current: TaskState, new: TaskState) -> bool {
-        self.0
-            .compare_exchange(
-                current as u8,
-                new as u8,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
+    fn unpack(v: u8) -> TaskState {
+        match v {
+            0 => TaskState::Parked,
+            1 => TaskState::Runnable,
+            2 => TaskState::Running,
+            3 => TaskState::RunningNotified,
+            4 => TaskState::Done,
+            // Only `TaskState` discriminants are ever stored in the cell.
+            _ => unreachable!("BUG: invalid TaskState discriminant {v}"),
+        }
     }
 }
 
@@ -103,6 +99,7 @@ pub(super) enum WakeOutcome {
 /// past it). Because the gate IS the inner future's waker, EVERY wake routes
 /// through it: engine wakes, the real-I/O reactor, `JoinHandle`, raw channels.
 pub(in crate::flash) struct TaskGate {
+    loc: &'static Location<'static>,
     state: AtomicTaskState,
     /// The runtime's waker for this task, refreshed each poll. The gate forwards
     /// to it on wake so the real poll is re-scheduled.
@@ -113,7 +110,6 @@ pub(in crate::flash) struct TaskGate {
     /// [`on_drop`](Self::on_drop)) and the wake re-acquire ([`Wake::wake_by_ref`])
     /// carry them, so the engine's holder map names WHICH task pins quiescence.
     id: u64,
-    loc: &'static Location<'static>,
 }
 
 impl TaskGate {
@@ -122,11 +118,24 @@ impl TaskGate {
     /// [`crate::flash::participate`], which mints `id` and supplies the spawn `loc`).
     pub(in crate::flash) fn new(id: u64, loc: &'static Location<'static>) -> Arc<Self> {
         Arc::new(Self {
-            state: AtomicTaskState::new(TaskState::Runnable),
-            runtime_waker: Mutex::default(),
             id,
             loc,
+            state: AtomicTaskState::new(TaskState::Runnable),
+            runtime_waker: Mutex::default(),
         })
+    }
+
+    /// Poll returned `Ready`: the task is done — release its slot. The `DONE`
+    /// store and the counter decrement happen together under the engine lock.
+    pub(in crate::flash) fn complete(&self) {
+        FLASH.gate_complete(&self.state, self.id);
+    }
+
+    fn forward(&self) {
+        let w = self.runtime_waker.lock().clone();
+        if let Some(w) = w {
+            w.wake();
+        }
     }
 
     /// This task's `active_async` slot id (its stable engine identity).
@@ -139,37 +148,10 @@ impl TaskGate {
         self.loc
     }
 
-    pub(in crate::flash) fn store_runtime_waker(&self, w: &Waker) {
-        let mut g = self.runtime_waker.lock();
-        match g.as_ref() {
-            Some(existing) if existing.will_wake(w) => {}
-            _ => *g = Some(w.clone()),
-        }
-    }
-
-    fn forward(&self) {
-        let w = self.runtime_waker.lock().clone();
-        if let Some(w) = w {
-            w.wake();
-        }
-    }
-
-    /// Poll entry: claim the poll iff the task is `RUNNABLE` (it holds a slot and
-    /// was genuinely queued). Returns `false` for any other state — a
-    /// duplicate/stale schedule (the runtime can poll more times than there are
-    /// wakes when several `forward`s race a `park`). The caller MUST then return
-    /// `Pending` without polling the inner future or touching the slot, so the
-    /// `active_async` accounting stays balanced. The slot is already held from
-    /// spawn or the waking transition, so a successful claim changes no counter.
-    pub(in crate::flash) fn try_enter_poll(&self) -> bool {
-        self.state
-            .compare_exchange(TaskState::Runnable, TaskState::Running)
-    }
-
-    /// Poll returned `Ready`: the task is done — release its slot. The `DONE`
-    /// store and the counter decrement happen together under the engine lock.
-    pub(in crate::flash) fn complete(&self) {
-        FLASH.gate_complete(&self.state, self.id);
+    /// Drop: release the slot iff the task still occupies one (`RUNNABLE`/`RUNNING`/
+    /// `RUNNING_NOTIFIED`). `PARKED` and `DONE` hold none.
+    pub(in crate::flash) fn on_drop(&self) {
+        FLASH.gate_drop_release(&self.state, self.id);
     }
 
     /// Poll returned `Pending`: `RUNNING`→`PARKED` releases the slot (a quiescent
@@ -183,10 +165,24 @@ impl TaskGate {
         let _: ParkOutcome = FLASH.gate_park(&self.state, self.id);
     }
 
-    /// Drop: release the slot iff the task still occupies one (`RUNNABLE`/`RUNNING`/
-    /// `RUNNING_NOTIFIED`). `PARKED` and `DONE` hold none.
-    pub(in crate::flash) fn on_drop(&self) {
-        FLASH.gate_drop_release(&self.state, self.id);
+    pub(in crate::flash) fn store_runtime_waker(&self, w: &Waker) {
+        let mut g = self.runtime_waker.lock();
+        match g.as_ref() {
+            Some(existing) if existing.will_wake(w) => {}
+            _ => *g = Some(w.clone()),
+        }
+    }
+
+    /// Poll entry: claim the poll iff the task is `RUNNABLE` (it holds a slot and
+    /// was genuinely queued). Returns `false` for any other state — a
+    /// duplicate/stale schedule (the runtime can poll more times than there are
+    /// wakes when several `forward`s race a `park`). The caller MUST then return
+    /// `Pending` without polling the inner future or touching the slot, so the
+    /// `active_async` accounting stays balanced. The slot is already held from
+    /// spawn or the waking transition, so a successful claim changes no counter.
+    pub(in crate::flash) fn try_enter_poll(&self) -> bool {
+        self.state
+            .compare_exchange(TaskState::Runnable, TaskState::Running)
     }
 }
 

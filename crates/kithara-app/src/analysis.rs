@@ -76,11 +76,11 @@ pub(crate) async fn listen(
 /// Background source-analysis controller owned by the state listener task.
 /// Results land in the two-tier [`TrackAnalysisCache`];
 pub(crate) struct AnalysisController {
-    runner: TrackAnalysisRunner,
-    cache: TrackAnalysisCache,
     current: Option<Run>,
     /// Content key of the analysis currently published to the UI.
     displayed: Option<AnalysisKey>,
+    cache: TrackAnalysisCache,
+    runner: TrackAnalysisRunner,
     /// Tracks waiting for background analysis, current track first.
     pending: VecDeque<TrackId>,
 }
@@ -88,9 +88,9 @@ pub(crate) struct AnalysisController {
 /// An in-flight analysis: the track it is for (stale-guard), its content cache
 /// key (`None` for an unkeyable source), and its result channel.
 struct Run {
-    track_id: TrackId,
     key: Option<AnalysisKey>,
     rx: watch::Receiver<Option<TrackAnalysis>>,
+    track_id: TrackId,
 }
 
 impl AnalysisController {
@@ -107,16 +107,34 @@ impl AnalysisController {
         }
     }
 
-    /// Await the in-flight run's result, or pend forever when no run is
-    /// active so the caller's `select!` branch stays inert.
-    pub(crate) async fn wait_result(&mut self) {
-        match &mut self.current {
-            Some(run) => {
-                // `changed` errs when the sender dropped without a result
-                // (failed/cancelled run); `on_result` then just clears it.
-                let _ = run.rx.changed().await;
-            }
-            None => std::future::pending::<()>().await,
+    /// Commit a finished analysis: cache it under its content key (valid for
+    /// that content regardless of the current track), then publish it if its
+    /// track is still current. Clears the run either way.
+    fn commit(&mut self, state: &Mutex<UiState>) {
+        let Some(run) = self.current.take() else {
+            return;
+        };
+
+        let Some(analysis) = run.rx.borrow().clone() else {
+            return;
+        };
+
+        if let Some(key) = run.key.clone() {
+            self.cache.put(key, analysis.clone());
+        }
+
+        let mut st = state.lock();
+        let still_current = st
+            .current_track_index
+            .and_then(|i| st.tracks.get(i))
+            .map(|entry| entry.id);
+        let is_current = still_current == Some(run.track_id);
+        if is_current {
+            st.analysis = Some(analysis);
+        }
+        drop(st);
+        if is_current {
+            self.displayed = run.key;
         }
     }
 
@@ -222,41 +240,23 @@ impl AnalysisController {
                     }
 
                     let rx = self.runner.analyze(cfg);
-                    self.current = Some(Run { track_id, key, rx });
+                    self.current = Some(Run { key, rx, track_id });
                     return;
                 }
             }
         }
     }
 
-    /// Commit a finished analysis: cache it under its content key (valid for
-    /// that content regardless of the current track), then publish it if its
-    /// track is still current. Clears the run either way.
-    fn commit(&mut self, state: &Mutex<UiState>) {
-        let Some(run) = self.current.take() else {
-            return;
-        };
-
-        let Some(analysis) = run.rx.borrow().clone() else {
-            return;
-        };
-
-        if let Some(key) = run.key.clone() {
-            self.cache.put(key, analysis.clone());
-        }
-
-        let mut st = state.lock();
-        let still_current = st
-            .current_track_index
-            .and_then(|i| st.tracks.get(i))
-            .map(|entry| entry.id);
-        let is_current = still_current == Some(run.track_id);
-        if is_current {
-            st.analysis = Some(analysis);
-        }
-        drop(st);
-        if is_current {
-            self.displayed = run.key;
+    /// Await the in-flight run's result, or pend forever when no run is
+    /// active so the caller's `select!` branch stays inert.
+    pub(crate) async fn wait_result(&mut self) {
+        match &mut self.current {
+            Some(run) => {
+                // `changed` errs when the sender dropped without a result
+                // (failed/cancelled run); `on_result` then just clears it.
+                let _ = run.rx.changed().await;
+            }
+            None => std::future::pending::<()>().await,
         }
     }
 }
@@ -288,7 +288,6 @@ fn plan_analysis(
 ) -> Plan {
     let Some(key) = key else {
         // No stable key (the reserved non-exhaustive source seam): cannot
-        // memoize, so always decode.
         return Plan::Decode;
     };
 

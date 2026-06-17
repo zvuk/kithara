@@ -41,126 +41,6 @@ impl SegmentStore {
         }
     }
 
-    /// Borrow the init slot — the fetch path (on the facade) matches on it,
-    /// reading a `Pending` entry's `url` / `content` / `resource_id` and
-    /// claiming its state atom.
-    pub(super) fn init(&self) -> &VariantInit {
-        &self.init
-    }
-
-    /// Borrow the media table — the fetch path and the descriptor builders
-    /// (on the facade) index it for `url` / `content` / `decode_time`.
-    pub(super) fn segments(&self) -> &[SegmentEntry] {
-        &self.segments
-    }
-
-    #[must_use]
-    pub(super) fn num_segments(&self) -> u32 {
-        u32::try_from(self.segments.len()).unwrap_or(u32::MAX)
-    }
-
-    pub(super) fn init_size(&self) -> u64 {
-        self.init.size()
-    }
-
-    /// Resource key for the variant's init segment — `None` when the
-    /// variant has no separately fetched init (raw TS/AAC, or byte-range
-    /// embedded).
-    pub(super) fn init_resource(&self) -> Option<ResourceKey> {
-        self.init.pending().map(|e| e.resource_id.clone())
-    }
-
-    /// Whether the variant declares a separately fetched `#EXT-X-MAP` init —
-    /// true regardless of whether its size is yet known. A `Pending` init
-    /// with `init_size() == 0` (failed/absent HEAD, pre-commit) still counts:
-    /// the init prefix `[0, init_size)` is reserved for it, not for media.
-    pub(super) fn has_init(&self) -> bool {
-        self.init.pending().is_some()
-    }
-
-    /// Whether the next dispatch should issue the separate init fetch —
-    /// true only for a `Pending`, not-yet-loaded init segment.
-    pub(super) fn needs_init_fetch(&self) -> bool {
-        self.init.pending().is_some_and(|e| !e.state.is_loaded())
-    }
-
-    /// Flip the init slot to `Missing`; returns whether the variant
-    /// actually carries an init segment, so the caller knows to clear the
-    /// Layout seed in step.
-    pub(super) fn invalidate_init(&self) -> bool {
-        self.init.pending().is_some_and(|entry| {
-            entry.state.mark_missing();
-            true
-        })
-    }
-
-    pub(super) fn segment_resource(&self, seg_idx: u32) -> Option<ResourceKey> {
-        self.segments
-            .get(seg_idx as usize)
-            .map(|e| e.resource_id.clone())
-    }
-
-    /// Media size of segment `idx` — pure media only; the init prefix lives
-    /// in its own `[0, init.size)` range.
-    pub(super) fn segment_size(&self, idx: usize) -> Option<u64> {
-        Some(self.segments.get(idx)?.size.load(Ordering::Acquire))
-    }
-
-    /// Whether media segment `seg_idx` settled terminally (`Failed`): the
-    /// downloader exhausted its retry budget, so the segment will never
-    /// load. Readers surface a terminal error on it.
-    pub(super) fn segment_failed(&self, seg_idx: u32) -> bool {
-        self.segments
-            .get(seg_idx as usize)
-            .is_some_and(|e| e.state.is_failed())
-    }
-
-    /// Whether the (separately fetched) init segment settled terminally.
-    pub(super) fn init_failed(&self) -> bool {
-        self.init.pending().is_some_and(|e| e.state.is_failed())
-    }
-
-    /// Index of the first non-`Loaded` segment — the ABR controller's
-    /// "download head". Returns `num_segments()` when every segment is
-    /// `Loaded`.
-    pub(super) fn download_head(&self) -> u32 {
-        let head = self
-            .segments
-            .iter()
-            .position(|s| !s.state.is_loaded())
-            .unwrap_or(self.segments.len());
-        u32::try_from(head).unwrap_or(u32::MAX)
-    }
-
-    /// Clamped segment index whose decode-time window contains `t`, or
-    /// `None` when the variant has no segments.
-    pub(super) fn index_at_time(&self, t: Duration) -> Option<usize> {
-        if self.segments.is_empty() {
-            return None;
-        }
-        let idx = bisect_right_decode_time(&self.segments, t).saturating_sub(1);
-        Some(idx.min(self.segments.len() - 1))
-    }
-
-    /// Returns evicted `seg_idx` (`-1` for init), or `None` if `key` does
-    /// not belong to this variant. Flips `Loaded -> Missing`; queue
-    /// reseeding is the caller's job.
-    pub(super) fn on_evict(&self, key: &ResourceKey) -> Option<i32> {
-        if let Some(entry) = self.init.pending()
-            && &entry.resource_id == key
-        {
-            entry.state.mark_missing();
-            return Some(-1);
-        }
-        for (seg_idx, entry) in self.segments.iter().enumerate() {
-            if &entry.resource_id == key {
-                entry.state.mark_missing();
-                return i32::try_from(seg_idx).ok();
-            }
-        }
-        None
-    }
-
     /// Settle-side size store: shrink the appropriate atom to `final_len`.
     /// The caller runs this inside [`Layout::apply_commit`](
     /// super::layout::Layout::apply_commit)'s write-lock so a reader never
@@ -197,6 +77,99 @@ impl SegmentStore {
         self.scope.store().contains_range(key, range)
     }
 
+    /// Index of the first non-`Loaded` segment — the ABR controller's
+    /// "download head". Returns `num_segments()` when every segment is
+    /// `Loaded`.
+    pub(super) fn download_head(&self) -> u32 {
+        let head = self
+            .segments
+            .iter()
+            .position(|s| !s.state.is_loaded())
+            .unwrap_or(self.segments.len());
+        u32::try_from(head).unwrap_or(u32::MAX)
+    }
+
+    /// Whether the variant declares a separately fetched `#EXT-X-MAP` init —
+    /// true regardless of whether its size is yet known. A `Pending` init
+    /// with `init_size() == 0` (failed/absent HEAD, pre-commit) still counts:
+    /// the init prefix `[0, init_size)` is reserved for it, not for media.
+    pub(super) fn has_init(&self) -> bool {
+        self.init.pending().is_some()
+    }
+
+    /// Clamped segment index whose decode-time window contains `t`, or
+    /// `None` when the variant has no segments.
+    pub(super) fn index_at_time(&self, t: Duration) -> Option<usize> {
+        if self.segments.is_empty() {
+            return None;
+        }
+        let idx = bisect_right_decode_time(&self.segments, t).saturating_sub(1);
+        Some(idx.min(self.segments.len() - 1))
+    }
+
+    /// Borrow the init slot — the fetch path (on the facade) matches on it,
+    /// reading a `Pending` entry's `url` / `content` / `resource_id` and
+    /// claiming its state atom.
+    pub(super) fn init(&self) -> &VariantInit {
+        &self.init
+    }
+
+    /// Whether the (separately fetched) init segment settled terminally.
+    pub(super) fn init_failed(&self) -> bool {
+        self.init.pending().is_some_and(|e| e.state.is_failed())
+    }
+
+    /// Resource key for the variant's init segment — `None` when the
+    /// variant has no separately fetched init (raw TS/AAC, or byte-range
+    /// embedded).
+    pub(super) fn init_resource(&self) -> Option<ResourceKey> {
+        self.init.pending().map(|e| e.resource_id.clone())
+    }
+
+    pub(super) fn init_size(&self) -> u64 {
+        self.init.size()
+    }
+
+    /// Flip the init slot to `Missing`; returns whether the variant
+    /// actually carries an init segment, so the caller knows to clear the
+    /// Layout seed in step.
+    pub(super) fn invalidate_init(&self) -> bool {
+        self.init.pending().is_some_and(|entry| {
+            entry.state.mark_missing();
+            true
+        })
+    }
+
+    /// Whether the next dispatch should issue the separate init fetch —
+    /// true only for a `Pending`, not-yet-loaded init segment.
+    pub(super) fn needs_init_fetch(&self) -> bool {
+        self.init.pending().is_some_and(|e| !e.state.is_loaded())
+    }
+
+    #[must_use]
+    pub(super) fn num_segments(&self) -> u32 {
+        u32::try_from(self.segments.len()).unwrap_or(u32::MAX)
+    }
+
+    /// Returns evicted `seg_idx` (`-1` for init), or `None` if `key` does
+    /// not belong to this variant. Flips `Loaded -> Missing`; queue
+    /// reseeding is the caller's job.
+    pub(super) fn on_evict(&self, key: &ResourceKey) -> Option<i32> {
+        if let Some(entry) = self.init.pending()
+            && &entry.resource_id == key
+        {
+            entry.state.mark_missing();
+            return Some(-1);
+        }
+        for (seg_idx, entry) in self.segments.iter().enumerate() {
+            if &entry.resource_id == key {
+                entry.state.mark_missing();
+                return i32::try_from(seg_idx).ok();
+            }
+        }
+        None
+    }
+
     /// Open `key` and copy `range` into `dst`. `Ok(None)` means the
     /// resource is not on disk yet (`NotFound`) — the caller treats that as
     /// a pending read. This per-call `open_resource` is the `WS5d` residual
@@ -219,6 +192,33 @@ impl SegmentStore {
             .read_at(range.start, dst)
             .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
         Ok(Some(n))
+    }
+
+    /// Whether media segment `seg_idx` settled terminally (`Failed`): the
+    /// downloader exhausted its retry budget, so the segment will never
+    /// load. Readers surface a terminal error on it.
+    pub(super) fn segment_failed(&self, seg_idx: u32) -> bool {
+        self.segments
+            .get(seg_idx as usize)
+            .is_some_and(|e| e.state.is_failed())
+    }
+
+    pub(super) fn segment_resource(&self, seg_idx: u32) -> Option<ResourceKey> {
+        self.segments
+            .get(seg_idx as usize)
+            .map(|e| e.resource_id.clone())
+    }
+
+    /// Media size of segment `idx` — pure media only; the init prefix lives
+    /// in its own `[0, init.size)` range.
+    pub(super) fn segment_size(&self, idx: usize) -> Option<u64> {
+        Some(self.segments.get(idx)?.size.load(Ordering::Acquire))
+    }
+
+    /// Borrow the media table — the fetch path and the descriptor builders
+    /// (on the facade) index it for `url` / `content` / `decode_time`.
+    pub(super) fn segments(&self) -> &[SegmentEntry] {
+        &self.segments
     }
 }
 

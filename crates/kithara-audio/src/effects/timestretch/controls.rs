@@ -44,9 +44,9 @@ pub struct StretchControls {
 ))]
 #[derive(Debug)]
 struct EngineControls {
+    region_plan: ArcSwapOption<RegionPlan>,
     keylock: AtomicBool,
     backend: AtomicU8,
-    region_plan: ArcSwapOption<RegionPlan>,
 }
 
 impl StretchControls {
@@ -67,16 +67,16 @@ impl StretchControls {
         })
     }
 
+    /// Set the playback speed.
+    pub fn set_speed(&self, speed: f32) {
+        self.speed.store(speed, Ordering::Relaxed);
+    }
+
     /// Playback speed (>1 faster). In tempo mode this drives the stretch
     /// factor; with key-lock off it is routed to the resampler instead.
     #[must_use]
     pub fn speed(&self) -> f32 {
         self.speed.load(Ordering::Relaxed)
-    }
-
-    /// Set the playback speed.
-    pub fn set_speed(&self, speed: f32) {
-        self.speed.store(speed, Ordering::Relaxed);
     }
 
     /// The speed atomic itself, for chains where the resampler follows the
@@ -95,21 +95,22 @@ impl StretchControls {
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
 impl StretchControls {
+    /// The selected time-stretch backend.
+    #[must_use]
+    pub fn backend(&self) -> StretchBackendKind {
+        StretchBackendKind::from_u8(self.engine.backend.load(Ordering::Relaxed))
+    }
+
     /// Whether key-lock (pitch-preserving tempo) is enabled.
     #[must_use]
     pub fn keylock(&self) -> bool {
         self.engine.keylock.load(Ordering::Relaxed)
     }
 
-    /// Enable/disable key-lock.
-    pub fn set_keylock(&self, on: bool) {
-        self.engine.keylock.store(on, Ordering::Relaxed);
-    }
-
-    /// The selected time-stretch backend.
+    /// The active region-stretch plan, if any.
     #[must_use]
-    pub fn backend(&self) -> StretchBackendKind {
-        StretchBackendKind::from_u8(self.engine.backend.load(Ordering::Relaxed))
+    pub fn region_plan(&self) -> Option<Arc<RegionPlan>> {
+        self.engine.region_plan.load_full()
     }
 
     /// Select the time-stretch backend.
@@ -119,10 +120,9 @@ impl StretchControls {
             .store(backend.to_u8(), Ordering::Relaxed);
     }
 
-    /// The active region-stretch plan, if any.
-    #[must_use]
-    pub fn region_plan(&self) -> Option<Arc<RegionPlan>> {
-        self.engine.region_plan.load_full()
+    /// Enable/disable key-lock.
+    pub fn set_keylock(&self, on: bool) {
+        self.engine.keylock.store(on, Ordering::Relaxed);
     }
 
     /// Install or clear the region-stretch plan; picked up on the next chunk.

@@ -15,8 +15,8 @@ use crate::traits::PcmReader;
 /// inside one cancel hierarchy. The caller keeps at most one job in
 /// flight and cancels the previous token before queueing the next.
 pub struct AnalysisWorker {
-    jobs: mpsc::Sender<Job>,
     cancel: CancelToken,
+    jobs: mpsc::Sender<Job>,
 }
 
 struct Job {
@@ -36,7 +36,7 @@ impl AnalysisWorker {
         thread::spawn_named("kithara-analysis", move || {
             run_jobs(&rx, &builder, &thread_cancel);
         });
-        Self { jobs, cancel }
+        Self { cancel, jobs }
     }
 
     /// Queue one opened track. On success the result arrives on the

@@ -1,8 +1,3 @@
-//! Decoder input requirement — the typed *shape* of input a demuxer needs to be
-//! constructed, declared via [`Demuxer::required_input`](crate::demuxer::Demuxer::required_input).
-//! The byte-space *resolution* lives in the stream layer; see the crate
-//! `README.md` "Decoder input contract".
-
 /// The shape of input a demuxer needs before it can be constructed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]

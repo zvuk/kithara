@@ -44,14 +44,6 @@ pub struct AudioConfig<T: StreamType> {
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = NonZeroUsize::new(3).expect("3 is non-zero"))]
     pub preload_chunks: NonZeroUsize,
-    /// Make a producer-ring underrun block (engine-aware park) instead of
-    /// surfacing an empty outcome. Offline (faster-than-real-time) consumers
-    /// opt in so `read` / `next_chunk` wait for the decode worker instead of
-    /// returning `Pending` / zero frames the caller would have to sleep-poll.
-    /// Real-time hosts must keep the default (`false`): the audio callback
-    /// can never block.
-    #[builder(default)]
-    pub block_on_underrun: bool,
     /// Unified event bus (optional — if not provided, one is created internally).
     #[builder(name = events)]
     pub bus: Option<EventBus>,
@@ -59,6 +51,9 @@ pub struct AudioConfig<T: StreamType> {
     pub byte_pool: Option<BytePool>,
     /// Master cancel token for the audio pipeline.
     pub cancel: Option<kithara_platform::CancelToken>,
+    /// Live audio-engine cost meter (decode + effects). When set, the worker
+    /// publishes its per-chunk processing cost here.
+    pub engine_load: Option<Arc<EngineLoad>>,
     /// Optional format hint (file extension like "mp3", "wav")
     pub hint: Option<String>,
     /// Target sample rate of the audio host (for resampling).
@@ -77,9 +72,6 @@ pub struct AudioConfig<T: StreamType> {
     /// the speed directly. `None` keeps the resampler-first chain reading
     /// `playback_rate`.
     pub stretch: Option<Arc<StretchControls>>,
-    /// Live audio-engine cost meter (decode + effects). When set, the worker
-    /// publishes its per-chunk processing cost here.
-    pub engine_load: Option<Arc<EngineLoad>>,
     /// Optional shared audio worker handle.
     pub worker: Option<handle::AudioWorkerHandle>,
     /// Resampling quality preset.
@@ -88,6 +80,14 @@ pub struct AudioConfig<T: StreamType> {
     /// Additional effects to append after resampler in the processing chain.
     #[builder(default)]
     pub effects: Vec<Box<dyn AudioEffect>>,
+    /// Make a producer-ring underrun block (engine-aware park) instead of
+    /// surfacing an empty outcome. Offline (faster-than-real-time) consumers
+    /// opt in so `read` / `next_chunk` wait for the decode worker instead of
+    /// returning `Pending` / zero frames the caller would have to sleep-poll.
+    /// Real-time hosts must keep the default (`false`): the audio callback
+    /// can never block.
+    #[builder(default)]
+    pub block_on_underrun: bool,
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s).
     /// Default: 10 on native, 32 on wasm32.
     #[builder(default = default_pcm_buffer_chunks())]

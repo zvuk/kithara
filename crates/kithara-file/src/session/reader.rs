@@ -59,6 +59,10 @@ impl FileReaderEventSink {
 }
 
 impl ReaderEventSink for FileReaderEventSink {
+    fn flush(&mut self) {
+        self.bus.flush();
+    }
+
     fn on_chunk(&mut self, signal: ReaderChunkSignal) {
         if !matches!(signal, ReaderChunkSignal::Chunk) {
             return;
@@ -88,9 +92,5 @@ impl ReaderEventSink for FileReaderEventSink {
             from_offset: from,
             to_offset: to,
         });
-    }
-
-    fn flush(&mut self) {
-        self.bus.flush();
     }
 }

@@ -1,6 +1,3 @@
-//! Cross-platform thread bookkeeping shared by every backend: the named-thread
-//! counter family and the stable thread-id hash.
-
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
     sync::atomic::{AtomicUsize, Ordering},

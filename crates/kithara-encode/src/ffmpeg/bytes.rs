@@ -138,10 +138,10 @@ struct DirectEncoder {
 /// `target` format, and the source `sample_rate` / `channels`.
 #[derive(Clone, Copy)]
 struct DirectEncodeConfig<'a> {
-    output_path: &'a Path,
     target: &'a EncodeTarget,
-    sample_rate: u32,
+    output_path: &'a Path,
     channels: u16,
+    sample_rate: u32,
 }
 
 impl DirectEncoder {

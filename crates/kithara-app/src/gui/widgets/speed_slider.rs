@@ -21,8 +21,8 @@ use consts::*;
 /// current value, snap targets sit at `SNAPS` (within 0.04) and round
 /// to 0.01.
 struct SpeedSlider {
-    value: f32,
     p: GuiPalette,
+    value: f32,
 }
 
 impl SpeedSlider {
@@ -49,38 +49,6 @@ fn to_x(bounds: Rectangle, v: f32) -> f32 {
 
 impl canvas::Program<Message> for SpeedSlider {
     type State = bool;
-
-    fn update(
-        &self,
-        dragging: &mut bool,
-        event: &canvas::Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<Message>> {
-        match event {
-            CanvasEvent::Mouse(MouseEvent::ButtonPressed(Button::Left)) => {
-                let pos = cursor.position_in(bounds)?;
-                *dragging = true;
-                let abs = Point::new(bounds.x + pos.x, bounds.y + pos.y);
-                Some(
-                    Action::publish(Message::PlayRateChanged(Self::value_at(bounds, abs)))
-                        .and_capture(),
-                )
-            }
-            CanvasEvent::Mouse(MouseEvent::CursorMoved { .. }) if *dragging => {
-                let pos = cursor.position()?;
-                Some(
-                    Action::publish(Message::PlayRateChanged(Self::value_at(bounds, pos)))
-                        .and_capture(),
-                )
-            }
-            CanvasEvent::Mouse(MouseEvent::ButtonReleased(Button::Left)) if *dragging => {
-                *dragging = false;
-                Some(Action::capture())
-            }
-            _ => None,
-        }
-    }
 
     fn draw(
         &self,
@@ -194,11 +162,43 @@ impl canvas::Program<Message> for SpeedSlider {
             Interaction::default()
         }
     }
+
+    fn update(
+        &self,
+        dragging: &mut bool,
+        event: &canvas::Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<Message>> {
+        match event {
+            CanvasEvent::Mouse(MouseEvent::ButtonPressed(Button::Left)) => {
+                let pos = cursor.position_in(bounds)?;
+                *dragging = true;
+                let abs = Point::new(bounds.x + pos.x, bounds.y + pos.y);
+                Some(
+                    Action::publish(Message::PlayRateChanged(Self::value_at(bounds, abs)))
+                        .and_capture(),
+                )
+            }
+            CanvasEvent::Mouse(MouseEvent::CursorMoved { .. }) if *dragging => {
+                let pos = cursor.position()?;
+                Some(
+                    Action::publish(Message::PlayRateChanged(Self::value_at(bounds, pos)))
+                        .and_capture(),
+                )
+            }
+            CanvasEvent::Mouse(MouseEvent::ButtonReleased(Button::Left)) if *dragging => {
+                *dragging = false;
+                Some(Action::capture())
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Build the interactive speed scrubber for the compact player.
 pub(crate) fn speed_slider<'a>(value: f32, p: GuiPalette) -> Element<'a, Message> {
-    Canvas::new(SpeedSlider { value, p })
+    Canvas::new(SpeedSlider { p, value })
         .width(Length::Fill)
         .height(Length::Fixed(34.0))
         .into()

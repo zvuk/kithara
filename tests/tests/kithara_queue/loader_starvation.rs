@@ -32,7 +32,7 @@ impl Consts {
     /// Loader permits; equals `HUNG_TRACKS` so hung loads take them all.
     const CAP: usize = 2;
     const HUNG_TRACKS: usize = 2;
-    /// Above the probe buffer (1 KiB) so the probe waits for bytes, not EOF.
+    /// Above the probe buffer (1 `KiB`) so the probe waits for bytes, not EOF.
     const HUNG_BODY_LEN: usize = 64 * 1024;
     const HUNG_THROTTLE_CHUNK: usize = 1;
     /// Past the test window and the 30s net `inactivity_timeout`, so the

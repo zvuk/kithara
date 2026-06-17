@@ -27,12 +27,6 @@ impl<C: HangDump> HangDetector<C> {
         Self(PhantomData)
     }
 
-    #[inline(always)]
-    pub fn reset(&mut self) {}
-
-    #[inline(always)]
-    pub fn tick(&mut self) {}
-
     /// No watchdog compiled in: bound an event wait by the fallback timeout
     /// rather than below it, so a no-`hang` build still re-checks instead of
     /// blocking forever on a lost wakeup. (`&mut self` mirrors the real
@@ -42,6 +36,12 @@ impl<C: HangDump> HangDetector<C> {
     pub fn remaining(&mut self) -> Duration {
         default_timeout()
     }
+
+    #[inline(always)]
+    pub fn reset(&mut self) {}
+
+    #[inline(always)]
+    pub fn tick(&mut self) {}
 
     #[inline(always)]
     pub fn tick_with(&mut self, _ctx: C) {}

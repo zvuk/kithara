@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Key factory bound to one `asset_root` over a shared [`AssetStore`].
-
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use url::Url;
@@ -21,8 +19,8 @@ pub struct AssetScope<Ctx = ()>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
-    store: AssetStore<Ctx>,
     asset_root: Arc<str>,
+    store: AssetStore<Ctx>,
 }
 
 impl<Ctx> AssetScope<Ctx>
@@ -30,7 +28,7 @@ where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
     pub(crate) fn new(store: AssetStore<Ctx>, asset_root: Arc<str>) -> Self {
-        Self { store, asset_root }
+        Self { asset_root, store }
     }
 
     /// The `asset_root` this scope is bound to.
@@ -39,10 +37,12 @@ where
         &self.asset_root
     }
 
-    /// The underlying shared store, where per-resource operations live.
-    #[must_use]
-    pub fn store(&self) -> &AssetStore<Ctx> {
-        &self.store
+    /// Delete this entire asset (all resources under its `asset_root`).
+    ///
+    /// # Errors
+    /// Returns `AssetsError` if the asset directory cannot be removed.
+    pub fn delete_asset(&self) -> AssetsResult<()> {
+        self.store.delete_asset(&self.asset_root)
     }
 
     /// Mint a relative key for `rel_path` under this scope's `asset_root`.
@@ -60,11 +60,9 @@ where
         )
     }
 
-    /// Delete this entire asset (all resources under its `asset_root`).
-    ///
-    /// # Errors
-    /// Returns `AssetsError` if the asset directory cannot be removed.
-    pub fn delete_asset(&self) -> AssetsResult<()> {
-        self.store.delete_asset(&self.asset_root)
+    /// The underlying shared store, where per-resource operations live.
+    #[must_use]
+    pub fn store(&self) -> &AssetStore<Ctx> {
+        &self.store
     }
 }

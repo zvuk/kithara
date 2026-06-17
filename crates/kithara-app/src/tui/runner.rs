@@ -475,9 +475,9 @@ fn apply_volume(controller: &StateController, delta: f32) {
 #[derive(Clone, Copy)]
 struct SwitchCtx<'a> {
     controller: &'a StateController,
+    state: &'a UiState,
     id: TrackId,
     index: usize,
-    state: &'a UiState,
 }
 
 fn switch_to_id(

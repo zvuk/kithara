@@ -42,13 +42,13 @@ bitflags::bitflags! {
 /// facade on the reader. See crate `README.md` for the asset / resource /
 /// identity model.
 pub trait Assets: Clone + Send + Sync + 'static {
+    /// Writer (Pending) phase returned by `acquire_resource*`.
+    type ActiveRes: WriteSide<Reader = Self::ReadyRes>;
     /// Context type for resource processing. Use `()` for no context.
     type Context: Clone + Send + Sync + Hash + Eq + Debug + 'static;
     /// Resource type for index persistence (pins, LRU). Cached and cloned by
     /// the cache decorator; no resource API is invoked on it directly.
     type IndexRes: Clone + Send + Sync + Debug + 'static;
-    /// Writer (Pending) phase returned by `acquire_resource*`.
-    type ActiveRes: WriteSide<Reader = Self::ReadyRes>;
     /// Reader (Ready) phase returned by `open_resource*` and by the `Ready`
     /// arm of `acquire_resource*`.
     type ReadyRes: ReadSide<Writer = Self::ActiveRes>;

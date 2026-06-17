@@ -99,8 +99,8 @@ impl AbrController {
             &bus,
             ThrottleSample {
                 now,
-                estimate_bps,
                 buffer_ahead,
+                estimate_bps,
             },
         );
 

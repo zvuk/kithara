@@ -51,9 +51,9 @@ fn chunk(samples: &[f32]) -> PcmChunk {
 /// Scripted `PcmReader` for analysis tests: pops pre-built `next_chunk`
 /// outcomes; the playback-oriented methods are unreachable on this path.
 struct FakeReader {
-    outcomes: VecDeque<Result<ChunkOutcome, DecodeError>>,
     bus: EventBus,
     metadata: TrackMetadata,
+    outcomes: VecDeque<Result<ChunkOutcome, DecodeError>>,
 }
 
 impl FakeReader {
@@ -86,14 +86,14 @@ impl FakeReader {
         Self::new(with_pending)
     }
 
+    fn empty() -> Self {
+        Self::new(VecDeque::from([Ok(eof())]))
+    }
+
     fn failing() -> Self {
         Self::new(VecDeque::from([Err(DecodeError::InvalidData(
             "scripted failure".into(),
         ))]))
-    }
-
-    fn empty() -> Self {
-        Self::new(VecDeque::from([Ok(eof())]))
     }
 }
 

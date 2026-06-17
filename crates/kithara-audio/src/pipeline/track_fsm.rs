@@ -127,32 +127,20 @@ pub(crate) enum CurrentFsm {
 }
 
 impl CurrentFsm {
-    pub(crate) fn decoding() -> Self {
-        Self::Decoding(Track::new(()))
+    pub(crate) fn applying_seek(state: ApplySeekState) -> Self {
+        Self::ApplyingSeek(Track::new(state))
     }
 
     pub(crate) fn at_eof() -> Self {
         Self::AtEof(Track::new(()))
     }
 
-    pub(crate) fn seek_requested(request: SeekRequest) -> Self {
-        Self::SeekRequested(Track::new(request))
-    }
-
-    pub(crate) fn waiting(context: WaitContext, reason: WaitingReason) -> Self {
-        Self::WaitingForSource(Track::new(WaitState { context, reason }))
-    }
-
-    pub(crate) fn applying_seek(state: ApplySeekState) -> Self {
-        Self::ApplyingSeek(Track::new(state))
-    }
-
-    pub(crate) fn recreating(state: RecreateState) -> Self {
-        Self::RecreatingDecoder(Track::new(state))
-    }
-
     pub(crate) fn awaiting_resume(state: ResumeState) -> Self {
         Self::AwaitingResume(Track::new(state))
+    }
+
+    pub(crate) fn decoding() -> Self {
+        Self::Decoding(Track::new(()))
     }
 
     pub(crate) fn failed(failure: TrackFailure) -> Self {
@@ -165,6 +153,18 @@ impl CurrentFsm {
     /// Only `Failed` is truly terminal (track will be removed).
     pub(crate) fn is_terminal(&self) -> bool {
         matches!(self, Self::Failed(_))
+    }
+
+    pub(crate) fn recreating(state: RecreateState) -> Self {
+        Self::RecreatingDecoder(Track::new(state))
+    }
+
+    pub(crate) fn seek_requested(request: SeekRequest) -> Self {
+        Self::SeekRequested(Track::new(request))
+    }
+
+    pub(crate) fn waiting(context: WaitContext, reason: WaitingReason) -> Self {
+        Self::WaitingForSource(Track::new(WaitState { context, reason }))
     }
 }
 

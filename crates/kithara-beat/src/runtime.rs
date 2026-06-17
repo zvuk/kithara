@@ -8,16 +8,16 @@ use crate::api::BeatError;
 /// Simple f32 tensor with shape (row-major / C-order).
 #[derive(Debug, Clone)]
 pub(crate) struct Tensor {
-    pub(crate) shape: Vec<usize>,
     pub(crate) data: Vec<f32>,
+    pub(crate) shape: Vec<usize>,
 }
 
 /// ONNX model loaded from bytes, run via the pure-Rust rten runtime.
 pub(crate) struct RtenModel {
-    model: RtenGraph,
     input_map: HashMap<String, NodeId>,
-    output_names: Vec<(NodeId, String)>,
+    model: RtenGraph,
     output_ids: Vec<NodeId>,
+    output_names: Vec<(NodeId, String)>,
 }
 
 /// Load a model from ONNX bytes; `name` tags load errors.
@@ -53,10 +53,10 @@ impl TryFrom<(&'static str, &[u8])> for RtenModel {
         let output_ids: Vec<NodeId> = model.output_ids().to_vec();
 
         Ok(Self {
-            model,
             input_map,
-            output_names,
+            model,
             output_ids,
+            output_names,
         })
     }
 }
@@ -112,7 +112,7 @@ impl RtenModel {
             let shape: Vec<usize> = rten_tensor.shape().to_vec();
             let data: Vec<f32> = rten_tensor.to_vec();
 
-            result.insert(name, Tensor { shape, data });
+            result.insert(name, Tensor { data, shape });
         }
 
         Ok(result)

@@ -1,17 +1,3 @@
-//! Self-healing body stream: the [`ByteStream`] returned by streaming fetches
-//! re-fetches/resumes on a stall or a transient mid-body error, so the stall
-//! timeout and the retry count live in one place (the net layer) and cover the
-//! BODY, not just request establishment.
-//!
-//! The stall detector bounds the REAL chunk-arrival gap with [`timeout`] from
-//! inside a `flash(io)` bracket ([`next_chunk`]): a chunk await is a real
-//! socket read, so under `flash` the virtual clock is paced to real time
-//! while it is in flight — the quiescence engine cannot fire the (virtual)
-//! stall timer ahead of in-flight loopback bytes; it measures at least the
-//! equivalent real time. The retry BACKOFF between attempts is a pure wait
-//! with no concurrent I/O, so it stays virtual (`time::sleep`, collapses
-//! under `flash`).
-
 use std::pin::Pin;
 
 use bytes::Bytes;
@@ -65,36 +51,19 @@ pub(crate) type Refetch =
 /// Per-stream state threaded through the `unfold`.
 struct State {
     inner: ByteStream,
+    cancel: CancelToken,
+    stall: Duration,
     refetch: Refetch,
+    policy: RetryPolicy,
+    /// Resume re-fetches already performed, bounded by `policy.max_retries`.
+    resumes: u32,
     consumed: u64,
     /// Leading bytes of the current (post-resume) body to discard before
     /// yielding — the already-consumed prefix a non-range server re-sent.
     to_skip: u64,
-    stall: Duration,
-    policy: RetryPolicy,
-    /// Resume re-fetches already performed, bounded by `policy.max_retries`.
-    resumes: u32,
-    cancel: CancelToken,
 }
 
 impl State {
-    /// Account one received chunk: drop the already-consumed prefix a
-    /// non-range (`200`) resume re-sent, advance `consumed`, and return the
-    /// bytes to yield — `None` when the chunk was prefix only (still
-    /// progress: the stall timer re-arms on the next chunk await).
-    fn take(&mut self, mut bytes: Bytes) -> Option<Bytes> {
-        // `usize -> u64` is a widening cast (lossless on every target), so
-        // `AsPrimitive` is infallible; `u64 -> usize` can narrow, so it goes
-        // through checked `ToPrimitive` — `min` caps the skip at the chunk
-        // length, so it always fits and the fallback is a valid split point.
-        let len: u64 = bytes.len().as_();
-        let skip = self.to_skip.min(len);
-        self.to_skip -= skip;
-        self.consumed = self.consumed.saturating_add(len - skip);
-        let rest = bytes.split_off(skip.to_usize().unwrap_or(bytes.len()));
-        (!rest.is_empty()).then_some(rest)
-    }
-
     /// Heal one transient failure: spend a unit of retry budget, back off
     /// (virtual under flash), and re-establish from the consumed offset.
     ///
@@ -116,6 +85,23 @@ impl State {
         self.inner = resumed.stream;
         self.to_skip = resumed.skip;
         Ok(())
+    }
+
+    /// Account one received chunk: drop the already-consumed prefix a
+    /// non-range (`200`) resume re-sent, advance `consumed`, and return the
+    /// bytes to yield — `None` when the chunk was prefix only (still
+    /// progress: the stall timer re-arms on the next chunk await).
+    fn take(&mut self, mut bytes: Bytes) -> Option<Bytes> {
+        // `usize -> u64` is a widening cast (lossless on every target), so
+        // `AsPrimitive` is infallible; `u64 -> usize` can narrow, so it goes
+        // through checked `ToPrimitive` — `min` caps the skip at the chunk
+        // length, so it always fits and the fallback is a valid split point.
+        let len: u64 = bytes.len().as_();
+        let skip = self.to_skip.min(len);
+        self.to_skip -= skip;
+        self.consumed = self.consumed.saturating_add(len - skip);
+        let rest = bytes.split_off(skip.to_usize().unwrap_or(bytes.len()));
+        (!rest.is_empty()).then_some(rest)
     }
 }
 
@@ -146,14 +132,14 @@ pub(crate) fn resumable_body(
     cancel: CancelToken,
 ) -> RawBody {
     let state = State {
-        inner: first,
         refetch,
-        consumed: 0,
-        to_skip: 0,
         stall,
         policy,
-        resumes: 0,
         cancel,
+        inner: first,
+        consumed: 0,
+        to_skip: 0,
+        resumes: 0,
     };
     // `Option<State>` is the unfold's alive/finished switch: a terminal error
     // is yielded together with `None`, so the next poll ends the stream.

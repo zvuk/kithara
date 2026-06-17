@@ -101,13 +101,6 @@ pub struct EngineImpl {
     /// Whether this engine/player instance is currently running.
     running: AtomicBool,
 
-    /// Serialises [`Engine::start`]'s check-then-act on `running`, so two
-    /// concurrent starters cannot both pass the `!running` gate and
-    /// double-dispatch `session.start_player`. The loser observes
-    /// `running == true` under the lock and returns `EngineAlreadyRunning`.
-    /// See `README.md` "Engine start".
-    start_lock: Mutex<()>,
-
     /// Master output volume for this player instance (linear 0.0 ..= 1.0).
     master_volume: AtomicF32,
 
@@ -129,6 +122,13 @@ pub struct EngineImpl {
 
     /// Per-slot command channels and shared state.
     slot_registry: Mutex<ArenaRegistry<SlotId, SlotHandle>>,
+
+    /// Serialises [`Engine::start`]'s check-then-act on `running`, so two
+    /// concurrent starters cannot both pass the `!running` gate and
+    /// double-dispatch `session.start_player`. The loser observes
+    /// `running == true` under the lock and returns `EngineAlreadyRunning`.
+    /// See `README.md` "Engine start".
+    start_lock: Mutex<()>,
 
     runtime: Option<RuntimeHandle>,
     /// Resolved PCM pool used when registering this player in the session.

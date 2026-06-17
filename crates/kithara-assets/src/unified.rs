@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Unified asset store: disk or memory backend.
-
 use std::{
     fmt::Debug,
     hash::Hash,
@@ -80,15 +78,6 @@ impl<Ctx> AssetStore<Ctx>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
-    /// Bind this store to one `asset_root`, returning a scoped handle
-    /// that drops the per-call `asset_root` argument. Cheap to clone --
-    /// the backing store is shared, so many scopes over distinct asset
-    /// roots cooperate on one store.
-    #[must_use]
-    pub fn scope<R: Into<Arc<str>>>(&self, asset_root: R) -> AssetScope<Ctx> {
-        AssetScope::new(self.clone(), asset_root.into())
-    }
-
     /// Acquire a resource explicitly for mutation.
     ///
     /// # Errors
@@ -139,15 +128,6 @@ where
             #[cfg(not(target_arch = "wasm32"))]
             Self::Disk { availability, .. } => availability,
             Self::Mem { availability, .. } => availability,
-        }
-    }
-
-    /// Return the crate-private aggregate demand handle.
-    fn demand(&self) -> &DemandIndex {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { demand, .. } => demand,
-            Self::Mem { demand, .. } => demand,
         }
     }
 
@@ -220,18 +200,21 @@ where
         false
     }
 
-    /// Whether this backend is ephemeral (in-memory).
-    #[must_use]
-    pub fn is_ephemeral(&self) -> bool {
-        matches!(self, Self::Mem { .. })
-    }
-
     /// Delete the entire asset directory.
     ///
     /// # Errors
     /// Returns `AssetsError` if the directory cannot be removed.
     pub(crate) fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
         delegate_to_store!(self, delete_asset, asset_root)
+    }
+
+    /// Return the crate-private aggregate demand handle.
+    fn demand(&self) -> &DemandIndex {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk { demand, .. } => demand,
+            Self::Mem { demand, .. } => demand,
+        }
     }
 
     /// Return the committed final length of the resource, if known.
@@ -247,6 +230,12 @@ where
             return Some(len);
         }
         None
+    }
+
+    /// Whether this backend is ephemeral (in-memory).
+    #[must_use]
+    pub fn is_ephemeral(&self) -> bool {
+        matches!(self, Self::Mem { .. })
     }
 
     /// Open a resource by key (no processing context).
@@ -303,6 +292,15 @@ where
     #[must_use]
     pub fn root_dir(&self) -> &Path {
         delegate_to_store!(self, root_dir)
+    }
+
+    /// Bind this store to one `asset_root`, returning a scoped handle
+    /// that drops the per-call `asset_root` argument. Cheap to clone --
+    /// the backing store is shared, so many scopes over distinct asset
+    /// roots cooperate on one store.
+    #[must_use]
+    pub fn scope<R: Into<Arc<str>>>(&self, asset_root: R) -> AssetScope<Ctx> {
+        AssetScope::new(self.clone(), asset_root.into())
     }
 }
 

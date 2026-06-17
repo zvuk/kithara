@@ -1,26 +1,3 @@
-//! Sim-participating `tokio::sync::broadcast` under `flash` (native).
-//!
-//! A hybrid wrapper: the real `tokio::broadcast` ring lives inside (so the
-//! bounded-capacity / lag / overflow-drop semantics are tokio's, unchanged),
-//! and only the *wait for the next message* is routed through the quiescence
-//! engine. A real broadcast parks a receiver on the runtime reactor, invisible
-//! to the engine, so the virtual clock could advance across an event-bus
-//! handoff. Here `send` appends to the ring then signals the engine waiter; a
-//! receiver `recv` tries the ring under a shared gate and, on `Empty`, registers
-//! an engine waiter and parks, re-checking on each wake. Off the sim path this
-//! module is not compiled and callers get the real `tokio` broadcast.
-//!
-//! Lost-wakeup freedom rests on the gate: `send` does `inner.send` BEFORE taking
-//! the gate to signal, and `recv` does `try_recv` + waiter-registration WHILE
-//! holding the gate. So a receiver either observes the just-sent value (its
-//! `try_recv` is sequenced after the append by the gate's mutex order) or is
-//! woken by the signal. Sender close is handled the same way: the last sender
-//! marks `closed` under the gate and signals, so a receiver that re-checks
-//! before the inner tokio sender field finishes dropping still resolves `Closed`
-//! instead of re-parking.
-//!
-//! The park/wake mechanism is latched ONCE at construction (see [`Backend`]).
-
 use std::{
     future::Future,
     pin::Pin,
@@ -114,10 +91,10 @@ pub use error::{RecvError, SendError, TryRecvError};
 /// gate (off-flash parked-receiver wakers + the `closed` latch) plus the live
 /// sender count and the construction-latched [`Backend`].
 struct Shared {
-    gate: Mutex<Gate>,
     /// Live sender handles; the last to drop closes the channel.
     senders: AtomicUsize,
     backend: Backend,
+    gate: Mutex<Gate>,
 }
 
 #[derive(Default)]
@@ -130,23 +107,6 @@ struct Gate {
 }
 
 impl Shared {
-    /// Wake every parked receiver so each re-checks the ring (a broadcast send is
-    /// visible to all). Called AFTER the inner `send`.
-    fn signal(&self) {
-        let mut gate = self.gate.lock();
-        let drained = std::mem::take(&mut gate.wakers);
-        drop(gate);
-        match self.backend {
-            Backend::Engine(cvid) => system::signal_channel(cvid, true),
-            Backend::Native => {
-                trace_native_from_ambient("broadcast", "send");
-                for waker in drained {
-                    waker.wake();
-                }
-            }
-        }
-    }
-
     /// Mark the channel closed and wake every parked receiver so each observes
     /// it. Called by the last sender's drop.
     fn close(&self) {
@@ -158,6 +118,23 @@ impl Shared {
             Backend::Engine(cvid) => system::signal_channel(cvid, true),
             Backend::Native => {
                 trace_native_from_ambient("broadcast", "close");
+                for waker in drained {
+                    waker.wake();
+                }
+            }
+        }
+    }
+
+    /// Wake every parked receiver so each re-checks the ring (a broadcast send is
+    /// visible to all). Called AFTER the inner `send`.
+    fn signal(&self) {
+        let mut gate = self.gate.lock();
+        let drained = std::mem::take(&mut gate.wakers);
+        drop(gate);
+        match self.backend {
+            Backend::Engine(cvid) => system::signal_channel(cvid, true),
+            Backend::Native => {
+                trace_native_from_ambient("broadcast", "send");
                 for waker in drained {
                     waker.wake();
                 }
@@ -185,8 +162,8 @@ pub fn channel<T: Clone>(capacity: usize) -> (Sender<T>, Receiver<T>) {
             shared: Arc::clone(&shared),
         },
         Receiver {
-            inner: rx,
             shared,
+            inner: rx,
             pending: None,
         },
     )
@@ -194,8 +171,8 @@ pub fn channel<T: Clone>(capacity: usize) -> (Sender<T>, Receiver<T>) {
 
 /// Broadcast sender (clone for multi-producer).
 pub struct Sender<T> {
-    inner: inner::Sender<T>,
     shared: Arc<Shared>,
+    inner: inner::Sender<T>,
 }
 
 impl<T> Clone for Sender<T> {
@@ -220,6 +197,12 @@ impl<T> Drop for Sender<T> {
 }
 
 impl<T> Sender<T> {
+    /// Number of live receivers.
+    #[must_use]
+    pub fn receiver_count(&self) -> usize {
+        self.inner.receiver_count()
+    }
+
     /// Subscribe a new receiver to subsequently-sent messages.
     #[must_use]
     pub fn subscribe(&self) -> Receiver<T> {
@@ -228,12 +211,6 @@ impl<T> Sender<T> {
             shared: Arc::clone(&self.shared),
             pending: None,
         }
-    }
-
-    /// Number of live receivers.
-    #[must_use]
-    pub fn receiver_count(&self) -> usize {
-        self.inner.receiver_count()
     }
 }
 
@@ -252,9 +229,9 @@ impl<T: Clone> Sender<T> {
 
 /// Broadcast receiver (one independent cursor into the ring).
 pub struct Receiver<T> {
-    inner: inner::Receiver<T>,
     shared: Arc<Shared>,
     pending: Option<Parked>,
+    inner: inner::Receiver<T>,
 }
 
 /// How a [`Recv`] parked, so re-poll and `Drop` use the matching teardown.
@@ -385,8 +362,8 @@ mod tests {
 
     struct Consts;
     impl Consts {
-        const SUBS: usize = 4;
         const MSGS: usize = 100;
+        const SUBS: usize = 4;
     }
 
     /// One sender fans out to several subscribers across worker threads; each

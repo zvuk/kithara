@@ -65,7 +65,6 @@ impl DriverIo for MemDriver {
         // immutable prior generation until the next `commit` atomically swaps in
         // the new one — never the half-rewritten working buffer. The lifecycle
         // flag (`ResourceCore::committed`) is what flips to active; the snapshot
-        // is purely the read view.
         if let Some(snapshot) = self.committed.load_full() {
             let mut state = self.state.lock();
             let snap_len = snapshot.len();

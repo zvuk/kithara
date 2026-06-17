@@ -39,6 +39,10 @@ use crate::{
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct PlayerConfig {
+    /// Per-deck time-stretch control handle, shared with the UI and the
+    /// worker effect chain (see `kithara_audio::StretchControls`).
+    #[builder(default = StretchControls::new(1.0))]
+    pub timestretch: Arc<StretchControls>,
     /// How resources created for this player trim leading/trailing PCM.
     #[builder(default)]
     pub gapless_mode: GaplessMode,
@@ -75,10 +79,6 @@ pub struct PlayerConfig {
     /// Maximum concurrent slots in the engine. Default: 4.
     #[builder(default = 4)]
     pub max_slots: usize,
-    /// Per-deck time-stretch control handle, shared with the UI and the
-    /// worker effect chain (see `kithara_audio::StretchControls`).
-    #[builder(default = StretchControls::new(1.0))]
-    pub timestretch: Arc<StretchControls>,
 }
 
 impl fmt::Debug for PlayerConfig {
@@ -127,18 +127,18 @@ pub(crate) struct PlayerCore {
     /// observe the pulse before structural Arc teardown unwinds. See
     /// `crates/kithara-play/README.md` "Cancel hierarchy" section.
     pub(crate) cancel: CancelToken,
+    /// Engine drops last — worker shutdown happens after all tracks
+    /// unregister and after `items` releases their resources.
+    pub(crate) engine: EngineImpl,
     pub(crate) bus: EventBus,
+    /// Items drop before engine — Audio tracks unregister from worker
+    /// while it is still alive.
+    pub(crate) items: Mutex<Vec<Option<QueuedResource>>>,
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
     pub(crate) status: Mutex<PlayerStatus>,
     pub(crate) pcm_pool: PcmPool,
     pub(crate) config: PlayerConfig,
-    /// Items drop before engine — Audio tracks unregister from worker
-    /// while it is still alive.
-    pub(crate) items: Mutex<Vec<Option<QueuedResource>>>,
-    /// Engine drops last — worker shutdown happens after all tracks
-    /// unregister and after `items` releases their resources.
-    pub(crate) engine: EngineImpl,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -192,43 +192,6 @@ impl PlayerImpl {
         Self::new_with_engine(config, resolved_pool, bus, engine)
     }
 
-    pub(crate) fn new_with_engine(
-        config: PlayerConfig,
-        resolved_pool: PcmPool,
-        bus: EventBus,
-        engine: EngineImpl,
-    ) -> Self {
-        let cancel = config
-            .cancel
-            .clone()
-            .expect("BUG: PlayerImpl::new / with_engine must populate config.cancel");
-        // Seed the single speed source with the configured default rate.
-        config.timestretch.set_speed(config.default_rate);
-        let core = PlayerCore {
-            engine_load: Arc::new(EngineLoad::default()),
-            auto_advance_enabled: AtomicBool::new(config.auto_advance_enabled),
-            muted: AtomicBool::new(false),
-            crossfade_duration: AtomicF32::new(config.crossfade_duration),
-            default_rate: AtomicF32::new(config.default_rate),
-            prefetch_duration: AtomicF32::new(config.prefetch_duration.max(0.0)),
-            rate: AtomicF32::new(0.0),
-            volume: AtomicF32::new(1.0),
-            current_index: AtomicUsize::new(0),
-            last_announced_index: AtomicUsize::new(usize::MAX),
-            cancel,
-            bus,
-            status: Mutex::default(),
-            pcm_pool: resolved_pool,
-            config,
-            items: Mutex::default(),
-            engine,
-        };
-        Self {
-            phase: Mutex::new(PlayerPhase::Idle),
-            core,
-        }
-    }
-
     /// Advance to the next item in the queue.
     ///
     /// Does nothing if the current item is already the last one.
@@ -242,6 +205,20 @@ impl PlayerImpl {
             drop(items);
             self.announce_current_item(current + 1);
             debug!(new_index = current + 1, "advanced to next item");
+        }
+    }
+
+    /// Sole publisher of `CurrentItemChanged`: emits only when `index` differs
+    /// from the last announced item, so a `play()` resume of the same item
+    /// stays quiet.
+    pub(crate) fn announce_current_item(&self, index: usize) {
+        if self
+            .core
+            .last_announced_index
+            .swap(index, Ordering::Relaxed)
+            != index
+        {
+            self.core.bus.publish(PlayerEvent::CurrentItemChanged);
         }
     }
 
@@ -307,20 +284,6 @@ impl PlayerImpl {
         self.core.engine_load.snapshot()
     }
 
-    /// Sole publisher of `CurrentItemChanged`: emits only when `index` differs
-    /// from the last announced item, so a `play()` resume of the same item
-    /// stays quiet.
-    pub(crate) fn announce_current_item(&self, index: usize) {
-        if self
-            .core
-            .last_announced_index
-            .swap(index, Ordering::Relaxed)
-            != index
-        {
-            self.core.bus.publish(PlayerEvent::CurrentItemChanged);
-        }
-    }
-
     /// Ensure the audio engine is started.
     ///
     /// Idempotent under concurrency: if another thread wins the start race
@@ -364,6 +327,43 @@ impl PlayerImpl {
     /// Get the number of items in the queue (including consumed items).
     pub fn item_count(&self) -> usize {
         self.core.items.lock().len()
+    }
+
+    pub(crate) fn new_with_engine(
+        config: PlayerConfig,
+        resolved_pool: PcmPool,
+        bus: EventBus,
+        engine: EngineImpl,
+    ) -> Self {
+        let cancel = config
+            .cancel
+            .clone()
+            .expect("BUG: PlayerImpl::new / with_engine must populate config.cancel");
+        // Seed the single speed source with the configured default rate.
+        config.timestretch.set_speed(config.default_rate);
+        let core = PlayerCore {
+            engine_load: Arc::new(EngineLoad::default()),
+            auto_advance_enabled: AtomicBool::new(config.auto_advance_enabled),
+            muted: AtomicBool::new(false),
+            crossfade_duration: AtomicF32::new(config.crossfade_duration),
+            default_rate: AtomicF32::new(config.default_rate),
+            prefetch_duration: AtomicF32::new(config.prefetch_duration.max(0.0)),
+            rate: AtomicF32::new(0.0),
+            volume: AtomicF32::new(1.0),
+            current_index: AtomicUsize::new(0),
+            last_announced_index: AtomicUsize::new(usize::MAX),
+            cancel,
+            bus,
+            status: Mutex::default(),
+            pcm_pool: resolved_pool,
+            config,
+            items: Mutex::default(),
+            engine,
+        };
+        Self {
+            core,
+            phase: Mutex::new(PlayerPhase::Idle),
+        }
     }
 
     /// Get prefetch lead time in seconds.

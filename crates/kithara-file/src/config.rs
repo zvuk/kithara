@@ -38,6 +38,11 @@ impl From<PathBuf> for FileSrc {
 pub struct FileConfig {
     /// File source (remote URL or local path).
     pub src: FileSrc,
+    /// Externally-owned shared `AssetStore<()>`. When `Some`, the file
+    /// session reuses it and skips building a private store from
+    /// [`Self::store`]. Lets several `Resource`s pointing at the same
+    /// URL share one cached resource and availability surface.
+    pub asset_store: Option<Arc<AssetStore<()>>>,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
     pub bus: Option<EventBus>,
@@ -59,11 +64,6 @@ pub struct FileConfig {
     /// fallback chain.
     #[builder(default)]
     pub store: StoreOptions,
-    /// Externally-owned shared `AssetStore<()>`. When `Some`, the file
-    /// session reuses it and skips building a private store from
-    /// [`Self::store`]. Lets several `Resource`s pointing at the same
-    /// URL share one cached resource and availability surface.
-    pub asset_store: Option<Arc<AssetStore<()>>>,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,

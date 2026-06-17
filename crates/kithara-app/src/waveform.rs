@@ -22,8 +22,8 @@ use tracing::warn;
 /// and keeps at most one run in flight. Dropping it cancels the run and
 /// stops the worker.
 pub struct TrackAnalysisRunner {
-    cancel: CancelToken,
     worker: Arc<AnalysisWorker>,
+    cancel: CancelToken,
     current: Option<RunHandle>,
     /// Whether any analyzer is compiled in; without one a decode pass would
     /// produce nothing, so the driver skips analysis entirely.
@@ -53,16 +53,9 @@ impl TrackAnalysisRunner {
         Self {
             cancel,
             worker,
-            current: None,
             active,
+            current: None,
         }
-    }
-
-    /// `false` when no analyzer is configured (`builder.is_empty()`) — the
-    /// runtime signal to skip analysis scheduling.
-    #[must_use]
-    pub fn is_active(&self) -> bool {
-        self.active
     }
 
     /// Cancel any prior run and queue `config` for analysis. The latest
@@ -93,6 +86,13 @@ impl TrackAnalysisRunner {
             prev.cancel.cancel();
             prev.task.abort();
         }
+    }
+
+    /// `false` when no analyzer is configured (`builder.is_empty()`) — the
+    /// runtime signal to skip analysis scheduling.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.active
     }
 }
 

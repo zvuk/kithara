@@ -11,7 +11,6 @@
 // engine `flash` module takes the path), so `unreachable_pub`/`dead_code` are
 // structurally false-positive there. OFF + wasm lanes re-export the inert
 // forms and keep full coverage. See AGENTS.md "Non-Negotiables" legalized
-// exceptions.
 #[cfg_attr(
     all(not(target_arch = "wasm32"), feature = "flash"),
     expect(unreachable_pub, dead_code)

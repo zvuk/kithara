@@ -222,13 +222,68 @@ impl<T: StreamType> Stream<T> {
         Ok(Self { source })
     }
 
+    /// Narrow activity handle — set/query the `PLAYING` flag.
+    #[must_use]
+    pub fn activity(&self) -> Arc<dyn Activity> {
+        self.source.activity()
+    }
+
+    /// Clear the variant fence, allowing reads from the next variant.
+    /// No-op for non-adaptive sources.
+    pub fn clear_variant_fence(&mut self) {
+        if let Some(vc) = self.source.variant_control() {
+            vc.clear_variant_fence();
+        }
+    }
+
+    /// Header byte range for decoder recreate after a format change.
+    ///
+    /// # Errors
+    ///
+    /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS sources
+    /// or HLS variants activated with `served_from > 0` (init prefix
+    /// unreachable via Stream reads).
+    pub fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        self.source.variant_control().map_or(
+            Err(StreamError::Source(SourceError::FormatChangeNotApplicable)),
+            |vc| vc.format_change_segment_range(),
+        )
+    }
+
+    /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
+    /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
+    #[must_use]
+    pub fn has_variant_change_pending(&self) -> bool {
+        self.source
+            .variant_control()
+            .is_some_and(|vc| vc.has_variant_change_pending())
+    }
+
     pub fn is_empty(&self) -> Option<bool> {
         self.len().map(|len| len == 0)
+    }
+
+    /// Narrow mutating playhead handle — position + duration.
+    #[must_use]
+    pub fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        self.source.playhead_write()
     }
 
     /// Get current read position.
     pub fn position(&self) -> u64 {
         self.source.position()
+    }
+
+    /// Narrow seek-control handle — begin / complete / `mark_pending`.
+    #[must_use]
+    pub fn seek_control(&self) -> Arc<dyn SeekControl> {
+        self.source.seek_control()
+    }
+
+    /// Narrow seek-observe handle — read seek state without mutation.
+    #[must_use]
+    pub fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        self.source.seek_observe()
     }
 
     /// Resolve a deterministic time-based seek anchor.
@@ -253,28 +308,20 @@ impl<T: StreamType> Stream<T> {
         &self.source
     }
 
-    /// Narrow mutating playhead handle — position + duration.
+    /// Target variant index of the pending fence, `None` when no fence
+    /// is up (or the source is non-adaptive).
     #[must_use]
-    pub fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-        self.source.playhead_write()
+    pub fn variant_change_target(&self) -> Option<usize> {
+        self.source
+            .variant_control()
+            .and_then(|vc| vc.variant_change_target())
     }
 
-    /// Narrow seek-control handle — begin / complete / `mark_pending`.
+    /// Optional HLS-only variant-coordination handle — `Some` for adaptive
+    /// sources (HLS), `None` otherwise.
     #[must_use]
-    pub fn seek_control(&self) -> Arc<dyn SeekControl> {
-        self.source.seek_control()
-    }
-
-    /// Narrow seek-observe handle — read seek state without mutation.
-    #[must_use]
-    pub fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        self.source.seek_observe()
-    }
-
-    /// Narrow activity handle — set/query the `PLAYING` flag.
-    #[must_use]
-    pub fn activity(&self) -> Arc<dyn Activity> {
-        self.source.activity()
+    pub fn variant_control(&self) -> Option<Arc<dyn VariantControl>> {
+        self.source.variant_control()
     }
 
     delegate::delegate! {
@@ -303,53 +350,6 @@ impl<T: StreamType> Stream<T> {
             /// and audio FSM landings. Forwards to the source's atomic cursor.
             pub fn set_position(&self, pos: u64);
         }
-    }
-
-    /// Optional HLS-only variant-coordination handle — `Some` for adaptive
-    /// sources (HLS), `None` otherwise.
-    #[must_use]
-    pub fn variant_control(&self) -> Option<Arc<dyn VariantControl>> {
-        self.source.variant_control()
-    }
-
-    /// Clear the variant fence, allowing reads from the next variant.
-    /// No-op for non-adaptive sources.
-    pub fn clear_variant_fence(&mut self) {
-        if let Some(vc) = self.source.variant_control() {
-            vc.clear_variant_fence();
-        }
-    }
-
-    /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
-    /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
-    #[must_use]
-    pub fn has_variant_change_pending(&self) -> bool {
-        self.source
-            .variant_control()
-            .is_some_and(|vc| vc.has_variant_change_pending())
-    }
-
-    /// Target variant index of the pending fence, `None` when no fence
-    /// is up (or the source is non-adaptive).
-    #[must_use]
-    pub fn variant_change_target(&self) -> Option<usize> {
-        self.source
-            .variant_control()
-            .and_then(|vc| vc.variant_change_target())
-    }
-
-    /// Header byte range for decoder recreate after a format change.
-    ///
-    /// # Errors
-    ///
-    /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS sources
-    /// or HLS variants activated with `served_from > 0` (init prefix
-    /// unreachable via Stream reads).
-    pub fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
-        self.source.variant_control().map_or(
-            Err(StreamError::Source(SourceError::FormatChangeNotApplicable)),
-            |vc| vc.format_change_segment_range(),
-        )
     }
 }
 
@@ -534,6 +534,26 @@ impl<T: StreamType> Stream<T> {
 }
 
 impl<T: StreamType> Stream<T> {
+    /// Worker (produce-core) peer wake: a reader-blocked probe arms the wake
+    /// lock-free. The audio scheduler shell flushes it off the forbid path, so
+    /// the cross-thread `notify_one` (a `kevent`) never fires on the RT core.
+    /// No-op for sources without a peer (file streams).
+    fn arm_peer_wake(&self) {
+        if let Some(wake) = self.source.peer_wake() {
+            wake.arm();
+        }
+    }
+
+    /// Consumer (off-core) peer wake: a not-ready probe wakes the peer
+    /// immediately — the consumer never runs on the RT produce core, so the
+    /// `notify_one` is allowed and the read is not stalled on the worker's next
+    /// pass. No-op for sources without a peer (file streams).
+    fn notify_peer_wake(&self) {
+        if let Some(wake) = self.source.peer_wake() {
+            wake.notify_now();
+        }
+    }
+
     /// Map a single [`Self::try_read`] probe to the `std::io::Read`
     /// contract **without blocking**: a not-ready range surfaces as an
     /// `Interrupted`/`Other` `io::Error` carrying the typed
@@ -574,24 +594,24 @@ impl<T: StreamType> Stream<T> {
         }
     }
 
-    /// Worker (produce-core) peer wake: a reader-blocked probe arms the wake
-    /// lock-free. The audio scheduler shell flushes it off the forbid path, so
-    /// the cross-thread `notify_one` (a `kevent`) never fires on the RT core.
-    /// No-op for sources without a peer (file streams).
-    fn arm_peer_wake(&self) {
-        if let Some(wake) = self.source.peer_wake() {
-            wake.arm();
-        }
-    }
-
-    /// Consumer (off-core) peer wake: a not-ready probe wakes the peer
-    /// immediately — the consumer never runs on the RT produce core, so the
-    /// `notify_one` is allowed and the read is not stalled on the worker's next
-    /// pass. No-op for sources without a peer (file streams).
-    fn notify_peer_wake(&self) {
-        if let Some(wake) = self.source.peer_wake() {
-            wake.notify_now();
-        }
+    /// Real-time on-core seek: resolve + cursor set, with NO `prime_seek_range`
+    /// spin — no `yield_now`/`notify_one` on the forbid-blocking produce core.
+    /// The audio worker (the FSM's recreate/boundary seeks and the decoder's
+    /// `OffsetReader`) seeks through this; the off-RT [`Seek::seek`] adapter
+    /// primes inline instead. The seeked range's readiness is discovered by the
+    /// next `probe_read` (park-on-not-ready), and the armed peer wake — flushed
+    /// by the shell — drives the fetch.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::resolve_seek_target`].
+    pub fn probe_seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let new_pos = self.resolve_seek_target(pos, self.source.len())?;
+        self.source.set_position(new_pos);
+        // The reader cursor moved on the produce core: arm the peer so it
+        // re-targets fetches around the new position. The shell flushes it.
+        self.arm_peer_wake();
+        Ok(new_pos)
     }
 
     /// Resolve a [`SeekFrom`] to an absolute, clamped byte target — the shared
@@ -628,26 +648,6 @@ impl<T: StreamType> Stream<T> {
             ));
         }
         Ok(u64::try_from(new_pos).unwrap_or(u64::MAX))
-    }
-
-    /// Real-time on-core seek: resolve + cursor set, with NO `prime_seek_range`
-    /// spin — no `yield_now`/`notify_one` on the forbid-blocking produce core.
-    /// The audio worker (the FSM's recreate/boundary seeks and the decoder's
-    /// `OffsetReader`) seeks through this; the off-RT [`Seek::seek`] adapter
-    /// primes inline instead. The seeked range's readiness is discovered by the
-    /// next `probe_read` (park-on-not-ready), and the armed peer wake — flushed
-    /// by the shell — drives the fetch.
-    ///
-    /// # Errors
-    ///
-    /// See [`Self::resolve_seek_target`].
-    pub fn probe_seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let new_pos = self.resolve_seek_target(pos, self.source.len())?;
-        self.source.set_position(new_pos);
-        // The reader cursor moved on the produce core: arm the peer so it
-        // re-targets fetches around the new position. The shell flushes it.
-        self.arm_peer_wake();
-        Ok(new_pos)
     }
 }
 
@@ -805,14 +805,14 @@ mod tests {
     }
 
     struct ScriptSource {
-        position: Arc<AtomicU64>,
-        anchor: Option<SourceSeekAnchor>,
-        seek: Arc<SeekState>,
         playhead: Arc<PlayheadState>,
+        position: Arc<AtomicU64>,
+        seek: Arc<SeekState>,
+        anchor: Option<SourceSeekAnchor>,
+        peer_wake: Option<Arc<DeferredWake>>,
         data: Vec<u8>,
         reads: VecDeque<ScriptRead>,
         waits: VecDeque<WaitOutcome>,
-        peer_wake: Option<Arc<DeferredWake>>,
     }
 
     impl ScriptSource {
@@ -824,8 +824,8 @@ mod tests {
         ) -> Self {
             Self {
                 seek,
-                playhead: Arc::new(PlayheadState::new()),
                 data,
+                playhead: Arc::new(PlayheadState::new()),
                 position: Arc::new(AtomicU64::new(0)),
                 anchor: None,
                 reads: reads.into_iter().collect(),
@@ -841,16 +841,39 @@ mod tests {
     }
 
     impl Source for ScriptSource {
+        fn activity(&self) -> Arc<dyn Activity> {
+            Arc::clone(&self.seek) as Arc<dyn Activity>
+        }
+
         fn advance(&self, n: u64) {
             self.position.fetch_add(n, Ordering::AcqRel);
+        }
+
+        fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>> {
+            Some(Arc::new(ScriptByteMap {
+                anchor: self.anchor,
+                len: self.data.len() as u64,
+            }))
         }
 
         fn len(&self) -> Option<u64> {
             Some(self.data.len() as u64)
         }
 
+        fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
+            self.peer_wake.clone()
+        }
+
         fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
             SourcePhase::Waiting
+        }
+
+        fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+        }
+
+        fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
         }
 
         fn position(&self) -> u64 {
@@ -876,35 +899,16 @@ mod tests {
             }
         }
 
-        fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>> {
-            Some(Arc::new(ScriptByteMap {
-                anchor: self.anchor,
-                len: self.data.len() as u64,
-            }))
-        }
-
-        fn set_position(&self, pos: u64) {
-            self.position.store(pos, Ordering::Release);
-        }
-
-        fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-            Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
-        }
-
-        fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-            Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+        fn seek_control(&self) -> Arc<dyn SeekControl> {
+            Arc::clone(&self.seek) as Arc<dyn SeekControl>
         }
 
         fn seek_observe(&self) -> Arc<dyn SeekObserve> {
             Arc::clone(&self.seek) as Arc<dyn SeekObserve>
         }
 
-        fn seek_control(&self) -> Arc<dyn SeekControl> {
-            Arc::clone(&self.seek) as Arc<dyn SeekControl>
-        }
-
-        fn activity(&self) -> Arc<dyn Activity> {
-            Arc::clone(&self.seek) as Arc<dyn Activity>
+        fn set_position(&self, pos: u64) {
+            self.position.store(pos, Ordering::Release);
         }
 
         fn wait_range(
@@ -913,10 +917,6 @@ mod tests {
             _timeout: Option<Duration>,
         ) -> StreamResult<WaitOutcome> {
             Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
-        }
-
-        fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
-            self.peer_wake.clone()
         }
     }
 
@@ -976,13 +976,17 @@ mod tests {
     }
 
     struct SeekDuringWaitSource {
+        playhead: Arc<PlayheadState>,
         position: Arc<AtomicU64>,
         seek: Arc<SeekState>,
-        playhead: Arc<PlayheadState>,
         read_calls: usize,
     }
 
     impl Source for SeekDuringWaitSource {
+        fn activity(&self) -> Arc<dyn Activity> {
+            Arc::clone(&self.seek) as Arc<dyn Activity>
+        }
+
         fn advance(&self, n: u64) {
             self.position.fetch_add(n, Ordering::AcqRel);
         }
@@ -995,6 +999,14 @@ mod tests {
             SourcePhase::Ready
         }
 
+        fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+        }
+
+        fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+        }
+
         fn position(&self) -> u64 {
             self.position.load(Ordering::Acquire)
         }
@@ -1004,28 +1016,16 @@ mod tests {
             Ok(bytes(4))
         }
 
-        fn set_position(&self, pos: u64) {
-            self.position.store(pos, Ordering::Release);
-        }
-
-        fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
-            Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
-        }
-
-        fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
-            Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+        fn seek_control(&self) -> Arc<dyn SeekControl> {
+            Arc::clone(&self.seek) as Arc<dyn SeekControl>
         }
 
         fn seek_observe(&self) -> Arc<dyn SeekObserve> {
             Arc::clone(&self.seek) as Arc<dyn SeekObserve>
         }
 
-        fn seek_control(&self) -> Arc<dyn SeekControl> {
-            Arc::clone(&self.seek) as Arc<dyn SeekControl>
-        }
-
-        fn activity(&self) -> Arc<dyn Activity> {
-            Arc::clone(&self.seek) as Arc<dyn Activity>
+        fn set_position(&self, pos: u64) {
+            self.position.store(pos, Ordering::Release);
         }
 
         fn wait_range(
@@ -1043,7 +1043,6 @@ mod tests {
         // Worker read path: a not-ready probe ARMS the deferred wake (lock-free)
         // instead of waking the downloader cross-thread — that `notify_one` is a
         // `kevent` the RT produce core must not make. The scheduler shell flushes
-        // it off the forbid path.
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
             Arc::new(SeekState::new()),

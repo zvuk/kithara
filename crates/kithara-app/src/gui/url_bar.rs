@@ -75,8 +75,8 @@ use consts::*;
 /// ephemeral submit flash.
 #[derive(Debug, Default)]
 pub(crate) struct UrlBar {
-    pub(crate) text: String,
     pub(crate) flash: Option<Flash>,
+    pub(crate) text: String,
 }
 
 /// Transient feedback shown in place of the format chip after a submit.

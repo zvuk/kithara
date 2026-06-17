@@ -33,15 +33,15 @@ struct DecodedFrames {
 pub(crate) struct Fmp4SegmentDemuxer {
     segments: Arc<dyn ByteMap>,
     source: BoxedSource,
-    init: Fmp4InitInfo,
-    cursor: Option<SegmentCursor>,
-    duration: Option<Duration>,
-    track_info: TrackInfo,
     /// Host byte-buffer pool. Each segment cursor draws its read buffer
     /// from here and returns it on drop, so a steady-state decode loop
     /// recycles one high-water allocation instead of mallocing per
     /// segment (and per variant-switch demuxer recreate).
     byte_pool: BytePool,
+    init: Fmp4InitInfo,
+    cursor: Option<SegmentCursor>,
+    duration: Option<Duration>,
+    track_info: TrackInfo,
     /// Index of the next segment to decode. Sequential playback advances
     /// this by one per segment; a seek sets it to the segment after the
     /// landing segment. Advancing by index (rather than by the previous
@@ -211,6 +211,13 @@ impl Demuxer for Fmp4SegmentDemuxer {
         }
     }
 
+    /// fMP4 construction reads only the init segment (moov/esds/STREAMINFO); the
+    /// landing media segment is read later by the first `next_frame`, so it is
+    /// not a construction prerequisite.
+    fn required_input() -> InputRequirement {
+        InputRequirement::InitOnly
+    }
+
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
         // WHY: back off to `target - warmup` for SBR/PS pre-roll (README "Seek pre-roll and trim").
         let seek_target =
@@ -234,8 +241,8 @@ impl Demuxer for Fmp4SegmentDemuxer {
         let variant_index = desc.variant_index;
         let preroll = match compute_preroll_byte(
             &PrerollProbe {
-                target,
                 landed_at,
+                target,
                 segment_index,
             },
             self.segments.as_ref(),
@@ -262,13 +269,6 @@ impl Demuxer for Fmp4SegmentDemuxer {
     fn track_info(&self) -> &TrackInfo {
         &self.track_info
     }
-
-    /// fMP4 construction reads only the init segment (moov/esds/STREAMINFO); the
-    /// landing media segment is read later by the first `next_frame`, so it is
-    /// not a construction prerequisite.
-    fn required_input() -> InputRequirement {
-        InputRequirement::InitOnly
-    }
 }
 
 /// Seek warm-up back-off duration for `codec` at `sample_rate`, derived
@@ -292,8 +292,8 @@ fn warmup_backoff(codec: AudioCodec, sample_rate: u32, priming: &CodecPriming) -
 /// time, the `landed_at` time actually reached, and the `segment_index`
 /// it landed in. Inputs to [`compute_preroll_byte`].
 struct PrerollProbe {
-    target: Duration,
     landed_at: Duration,
+    target: Duration,
     segment_index: u32,
 }
 

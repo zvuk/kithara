@@ -11,10 +11,10 @@ use crate::{
 struct Consts;
 
 impl Consts {
-    /// Frames per chunk (30 seconds at 50 fps).
-    const CHUNK_SIZE: i64 = 1500;
     /// Frames discarded from each edge of predictions.
     const BORDER_SIZE: i64 = 6;
+    /// Frames per chunk (30 seconds at 50 fps).
+    const CHUNK_SIZE: i64 = 1500;
     /// Effective step between chunks.
     const STRIDE: i64 = Self::CHUNK_SIZE - 2 * Self::BORDER_SIZE;
 }
@@ -167,8 +167,8 @@ fn extract_chunk(mel: &Tensor, start: i64) -> Tensor {
     }
 
     Tensor {
-        shape: vec![1, chunk_time, n_mels],
         data,
+        shape: vec![1, chunk_time, n_mels],
     }
 }
 

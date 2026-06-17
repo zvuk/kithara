@@ -18,29 +18,29 @@ use crate::{config::AppConfig, waveform::TrackAnalysis};
 /// listener task and direct setter calls from the UI controller.
 #[derive(Debug, Clone)]
 pub struct UiState {
+    pub engine_load: EngineLoadSnapshot,
+    /// Source analysis of the current track; `None` until analysed.
+    pub analysis: Option<TrackAnalysis>,
     pub crossfade_progress: Option<f32>,
     pub current_track_index: Option<usize>,
     pub selected_variant: Option<usize>,
     pub status_note: Option<String>,
+    pub repeat_mode: RepeatMode,
     pub track_name: String,
     pub variant_label: String,
     pub abr_variants: Vec<(usize, String)>,
     pub eq_bands: Vec<f32>,
     pub tracks: Vec<TrackEntry>,
-    /// Source analysis of the current track; `None` until analysed.
-    pub analysis: Option<TrackAnalysis>,
-    pub repeat_mode: RepeatMode,
     pub abr_mode_is_auto: bool,
-    pub shuffle_enabled: bool,
     pub is_seeking: bool,
     pub playing: bool,
+    pub shuffle_enabled: bool,
     pub crossfade: f32,
     pub selected_rate: f32,
     pub volume: f32,
     pub duration: f64,
     pub position: f64,
     pub seek_position: f64,
-    pub engine_load: EngineLoadSnapshot,
 }
 
 impl UiState {
@@ -90,9 +90,9 @@ impl UiState {
 /// would panic; this one avoids `await`s while the lock is held.
 pub struct StateController {
     queue: Arc<Queue>,
+    state: Arc<Mutex<UiState>>,
     /// Per-deck time-stretch handle.
     timestretch: Arc<StretchControls>,
-    state: Arc<Mutex<UiState>>,
     cancel: CancelToken,
 }
 
@@ -121,10 +121,16 @@ impl StateController {
 
         Self {
             queue,
-            timestretch,
             state,
+            timestretch,
             cancel,
         }
+    }
+
+    /// The per-deck time-stretch handle.
+    #[must_use]
+    pub fn deck(&self) -> &Arc<StretchControls> {
+        &self.timestretch
     }
 
     /// Apply a closure under the lock. Returns the closure's result.
@@ -141,12 +147,6 @@ impl StateController {
     #[must_use]
     pub fn queue(&self) -> &Arc<Queue> {
         &self.queue
-    }
-
-    /// The per-deck time-stretch handle.
-    #[must_use]
-    pub fn deck(&self) -> &Arc<StretchControls> {
-        &self.timestretch
     }
 
     /// Pull the continuous values (position, duration, volume, tracks,

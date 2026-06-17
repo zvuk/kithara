@@ -467,7 +467,7 @@ mod tests {
         sigma * (-2.0 * u1.ln()).sqrt() * (2.0 * PI * u2).cos()
     }
 
-    /// Verifies LS fit error matches theory σ_s ≈ √(2/N)·(σ_n/A)/δ
+    /// Verifies LS fit error matches theory `σ_s` ≈ √(`2/N)·(σ_n/A)/δ`
     /// for additive white Gaussian noise. If this passes, the LS fit is
     /// correct; any larger error from real AAC must come from non-white
     /// noise structure, not a bug in the estimator.
@@ -494,7 +494,7 @@ mod tests {
             let diff_samples = wrap_pi(measured - predicted) / delta;
             sum_sq += diff_samples * diff_samples;
         }
-        let observed_rms = (sum_sq / trials as f64).sqrt();
+        let observed_rms = (sum_sq / f64::from(trials)).sqrt();
         let ratio = observed_rms / theory_sigma_samples;
         assert!(
             (0.85..1.15).contains(&ratio),

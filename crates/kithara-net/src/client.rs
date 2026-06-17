@@ -140,11 +140,11 @@ fn extract_headers(resp: &reqwest::Response) -> Headers {
 /// the [`Net`] trait, never constructed by callers directly.
 #[derive(Clone)]
 struct RawHttp {
-    inner: Client,
-    options: NetOptions,
     /// Master-derived cancel, captured by the self-healing body so a re-fetch
     /// loop exits promptly on teardown. Same token the `RetryNet` layer uses.
     cancel: CancelToken,
+    inner: Client,
+    options: NetOptions,
 }
 
 impl RawHttp {
@@ -170,6 +170,25 @@ impl RawHttp {
         self.inner.get(url).header("Range", "bytes=0-0")
     }
 
+    /// Establish ONE body stream (no self-healing) for `range` (`None` = full
+    /// GET). Shared by the first attempt and by the resume re-fetch — keeping
+    /// it un-wrapped is what prevents the resilient wrapper recursing.
+    async fn raw_body(
+        &self,
+        url: Url,
+        range: Option<RangeSpec>,
+        headers: Option<Headers>,
+        accept_partial: bool,
+    ) -> Result<(crate::ByteStream, bool), NetError> {
+        let mut req = self.inner.get(url.clone());
+        if let Some(range) = &range {
+            req = req.header("Range", range.to_string());
+        }
+        let resp = self.send_checked(req, headers, url, accept_partial).await?;
+        let partial = resp.status().as_u16() == HTTP_PARTIAL_CONTENT;
+        Ok((Self::response_to_stream(resp), partial))
+    }
+
     /// Body-chunk awaits on this stream happen inside [`resumable_body`]'s
     /// `flash(io)` bracket (`next_chunk`) — every streaming fetch is wrapped
     /// by [`Self::wrap_resumable`] before it reaches a consumer.
@@ -177,28 +196,6 @@ impl RawHttp {
         let headers = extract_headers(&resp);
         let stream = resp.bytes_stream().map_err(NetError::from);
         crate::ByteStream::new(headers, Box::pin(stream))
-    }
-
-    /// Await a request's response under the idle/stall timeout: no response
-    /// headers within `inactivity_timeout` ⇒ a transient [`NetError::Timeout`]
-    /// so the retry decorator re-issues it. This is the establish-side half of
-    /// the single idle timer (the body half lives in [`resumable_body`]).
-    ///
-    /// This bound measures a REAL socket operation (connect + header wait), so
-    /// the fn is a `flash(io)` bracket: under `flash` the virtual clock
-    /// is paced to real time while the op is in flight, so the (virtual) idle
-    /// timer cannot be fired by the quiescence engine racing ahead of an
-    /// in-flight loopback establish — it measures at least the equivalent real
-    /// time, and never fires for a fast healthy fetch.
-    #[kithara::flash(io)]
-    async fn send_idle_bounded(
-        &self,
-        req: reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response, NetError> {
-        timeout(self.options.inactivity_timeout, req.send())
-            .await
-            .map_err(|_| NetError::Timeout)?
-            .map_err(NetError::from)
     }
 
     async fn send_checked(
@@ -226,23 +223,26 @@ impl RawHttp {
         Ok(resp)
     }
 
-    /// Establish ONE body stream (no self-healing) for `range` (`None` = full
-    /// GET). Shared by the first attempt and by the resume re-fetch — keeping
-    /// it un-wrapped is what prevents the resilient wrapper recursing.
-    async fn raw_body(
+    /// Await a request's response under the idle/stall timeout: no response
+    /// headers within `inactivity_timeout` ⇒ a transient [`NetError::Timeout`]
+    /// so the retry decorator re-issues it. This is the establish-side half of
+    /// the single idle timer (the body half lives in [`resumable_body`]).
+    ///
+    /// This bound measures a REAL socket operation (connect + header wait), so
+    /// the fn is a `flash(io)` bracket: under `flash` the virtual clock
+    /// is paced to real time while the op is in flight, so the (virtual) idle
+    /// timer cannot be fired by the quiescence engine racing ahead of an
+    /// in-flight loopback establish — it measures at least the equivalent real
+    /// time, and never fires for a fast healthy fetch.
+    #[kithara::flash(io)]
+    async fn send_idle_bounded(
         &self,
-        url: Url,
-        range: Option<RangeSpec>,
-        headers: Option<Headers>,
-        accept_partial: bool,
-    ) -> Result<(crate::ByteStream, bool), NetError> {
-        let mut req = self.inner.get(url.clone());
-        if let Some(range) = &range {
-            req = req.header("Range", range.to_string());
-        }
-        let resp = self.send_checked(req, headers, url, accept_partial).await?;
-        let partial = resp.status().as_u16() == HTTP_PARTIAL_CONTENT;
-        Ok((Self::response_to_stream(resp), partial))
+        req: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, NetError> {
+        timeout(self.options.inactivity_timeout, req.send())
+            .await
+            .map_err(|_| NetError::Timeout)?
+            .map_err(NetError::from)
     }
 
     /// Wrap a freshly-established body in the self-healing stream: on a stall

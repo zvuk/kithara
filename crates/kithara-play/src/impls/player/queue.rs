@@ -28,6 +28,31 @@ enum ArmDecision {
 }
 
 impl PlayerImpl {
+    /// Mark the armed-next slot at `index` activated under a short lock,
+    /// returning its src. `Ok(None)` when it was already activated.
+    fn activate_pending(&self, index: usize) -> Result<Option<Arc<str>>, PlayError> {
+        let mut phase = self.phase.lock();
+        let pending = phase
+            .pending_mut()
+            .and_then(|slot| slot.as_mut())
+            .ok_or(PlayError::NotReady)?;
+        if pending.index != index {
+            return Err(PlayError::Internal(format!(
+                "commit_next index mismatch: requested {index}, armed {}",
+                pending.index
+            )));
+        }
+        let outcome = if pending.state.activated() {
+            None
+        } else {
+            let src = Arc::clone(&pending.src);
+            pending.state = PendingNextState::ActivatedReady;
+            Some(src)
+        };
+        drop(phase);
+        Ok(outcome)
+    }
+
     /// Load `items[index]` into the audio-thread arena in `Preloading`
     /// state, ready for sample-accurate gapless stitch (cf=0) or parallel
     /// fade (cf>0).
@@ -117,65 +142,6 @@ impl PlayerImpl {
         Ok(())
     }
 
-    /// Mark the armed-next slot at `index` activated under a short lock,
-    /// returning its src. `Ok(None)` when it was already activated.
-    fn activate_pending(&self, index: usize) -> Result<Option<Arc<str>>, PlayError> {
-        let mut phase = self.phase.lock();
-        let pending = phase
-            .pending_mut()
-            .and_then(|slot| slot.as_mut())
-            .ok_or(PlayError::NotReady)?;
-        if pending.index != index {
-            return Err(PlayError::Internal(format!(
-                "commit_next index mismatch: requested {index}, armed {}",
-                pending.index
-            )));
-        }
-        let outcome = if pending.state.activated() {
-            None
-        } else {
-            let src = Arc::clone(&pending.src);
-            pending.state = PendingNextState::ActivatedReady;
-            Some(src)
-        };
-        drop(phase);
-        Ok(outcome)
-    }
-
-    pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<Arc<str>> {
-        let mut items = self.core.items.lock();
-        if index >= items.len() {
-            return None;
-        }
-
-        let queued = items[index].take()?;
-        let (item_id, resource) = (queued.item_id, queued.resource);
-
-        let abr_handle = resource.abr_handle();
-        self.phase.lock().set_abr_handle(abr_handle);
-
-        let current_rate = self.core.config.timestretch.speed();
-        resource.set_playback_rate(current_rate);
-
-        let host_sr = self.core.engine.master_sample_rate();
-        if let Some(sr) = std::num::NonZeroU32::new(host_sr) {
-            resource.set_host_sample_rate(sr);
-        }
-
-        let src = Arc::clone(resource.src());
-        let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.core.pcm_pool);
-        let arc_resource = Arc::new(Mutex::new(player_resource));
-        drop(items);
-
-        let _ = self.send_to_slot(PlayerCmd::LoadTrack {
-            item_id,
-            resource: arc_resource,
-            src: Arc::clone(&src),
-        });
-
-        Some(src)
-    }
-
     pub(crate) fn dispatch_notification(&self, notification: PlayerNotification) {
         match notification.clone() {
             PlayerNotification::Requested => {
@@ -219,6 +185,40 @@ impl PlayerImpl {
         }
         state.drain_trash();
         out
+    }
+
+    pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<Arc<str>> {
+        let mut items = self.core.items.lock();
+        if index >= items.len() {
+            return None;
+        }
+
+        let queued = items[index].take()?;
+        let (item_id, resource) = (queued.item_id, queued.resource);
+
+        let abr_handle = resource.abr_handle();
+        self.phase.lock().set_abr_handle(abr_handle);
+
+        let current_rate = self.core.config.timestretch.speed();
+        resource.set_playback_rate(current_rate);
+
+        let host_sr = self.core.engine.master_sample_rate();
+        if let Some(sr) = std::num::NonZeroU32::new(host_sr) {
+            resource.set_host_sample_rate(sr);
+        }
+
+        let src = Arc::clone(resource.src());
+        let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.core.pcm_pool);
+        let arc_resource = Arc::new(Mutex::new(player_resource));
+        drop(items);
+
+        let _ = self.send_to_slot(PlayerCmd::LoadTrack {
+            item_id,
+            resource: arc_resource,
+            src: Arc::clone(&src),
+        });
+
+        Some(src)
     }
 
     /// Promote the armed slot to current after an audio-thread handover.
@@ -309,6 +309,24 @@ impl PlayerImpl {
         }
     }
 
+    /// Remove all items from the queue.
+    pub fn remove_all_items(&self) {
+        self.unarm_next();
+        self.core.items.lock().clear();
+        self.core.current_index.store(0, Ordering::Relaxed);
+        // Whatever is inserted next is a new identity, so re-open announce.
+        self.core
+            .last_announced_index
+            .store(usize::MAX, Ordering::Relaxed);
+        self.set_status(crate::types::PlayerStatus::Unknown);
+        // Drop the actively playing track from the audio-thread arena and
+        // reset the position/duration snapshot; otherwise the stale snapshot
+        // outlives the cleared queue. No-op when no slot is allocated.
+        let _ = self.send_to_slot(PlayerCmd::Clear);
+        self.enter_stopped();
+        debug!("all items removed");
+    }
+
     /// Drop the armed next slot without committing.
     ///
     /// Sends `UnloadTrack` to the audio thread for the armed src and
@@ -329,24 +347,6 @@ impl PlayerImpl {
         if !preserve_active_current {
             let _ = self.send_to_slot(PlayerCmd::UnloadTrack { src: pending.src });
         }
-    }
-
-    /// Remove all items from the queue.
-    pub fn remove_all_items(&self) {
-        self.unarm_next();
-        self.core.items.lock().clear();
-        self.core.current_index.store(0, Ordering::Relaxed);
-        // Whatever is inserted next is a new identity, so re-open announce.
-        self.core
-            .last_announced_index
-            .store(usize::MAX, Ordering::Relaxed);
-        self.set_status(crate::types::PlayerStatus::Unknown);
-        // Drop the actively playing track from the audio-thread arena and
-        // reset the position/duration snapshot; otherwise the stale snapshot
-        // outlives the cleared queue. No-op when no slot is allocated.
-        let _ = self.send_to_slot(PlayerCmd::Clear);
-        self.enter_stopped();
-        debug!("all items removed");
     }
 }
 

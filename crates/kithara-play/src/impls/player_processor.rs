@@ -263,10 +263,28 @@ impl PlayerNodeProcessor {
         // is empty (all finished discarded) or only the retained, played-out
         // track is left. The retained track is inert in `render_audio` (gated
         // by `is_playing`), so `is_playing()` correctly stays false until a
-        // seek revives it.
         if self.tracks.len() == 0 || retain.is_some() {
             self.shared_state.playing.store(false, Ordering::SeqCst);
         }
+    }
+
+    /// Unload every track from the arena and reset the published
+    /// position/duration snapshot to zero. Backs [`PlayerCmd::Clear`],
+    /// sent when the queue is explicitly cleared, so a subsequent read of
+    /// `shared_state` reflects an empty player instead of a stale snapshot.
+    fn clear_all_tracks(&mut self) {
+        let keys: SmallVec<[Arc<str>; Self::MAX_TRACKS]> = self
+            .tracks
+            .iter_keys()
+            .map(|(key, _)| Arc::clone(key))
+            .collect();
+        for key in keys {
+            self.unload_track(&key);
+        }
+        self.tracks_transitions.clear();
+        self.shared_state.playing.store(false, Ordering::SeqCst);
+        self.shared_state.position.store(0.0, Ordering::Relaxed);
+        self.shared_state.duration.store(0.0, Ordering::Relaxed);
     }
 
     /// Drain all pending commands from the channel.
@@ -687,25 +705,6 @@ impl PlayerNodeProcessor {
                 })
                 .ok();
         }
-    }
-
-    /// Unload every track from the arena and reset the published
-    /// position/duration snapshot to zero. Backs [`PlayerCmd::Clear`],
-    /// sent when the queue is explicitly cleared, so a subsequent read of
-    /// `shared_state` reflects an empty player instead of a stale snapshot.
-    fn clear_all_tracks(&mut self) {
-        let keys: SmallVec<[Arc<str>; Self::MAX_TRACKS]> = self
-            .tracks
-            .iter_keys()
-            .map(|(key, _)| Arc::clone(key))
-            .collect();
-        for key in keys {
-            self.unload_track(&key);
-        }
-        self.tracks_transitions.clear();
-        self.shared_state.playing.store(false, Ordering::SeqCst);
-        self.shared_state.position.store(0.0, Ordering::Relaxed);
-        self.shared_state.duration.store(0.0, Ordering::Relaxed);
     }
 
     /// Update `shared_state.position` / `shared_state.duration` from the

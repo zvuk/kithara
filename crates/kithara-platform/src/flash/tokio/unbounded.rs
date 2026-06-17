@@ -1,5 +1,3 @@
-//! Unbounded sender half of the flash-engine mpsc channel.
-
 use std::sync::Arc;
 
 use super::mpsc::{Shared, drop_sender, error::SendError, push_unbounded};

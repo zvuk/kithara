@@ -6,14 +6,14 @@ use crate::blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer};
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct BeatGrid {
-    /// Stable-window tempo of the track, beats per minute.
-    pub bpm: f64,
     /// Beat positions in source frames, ascending.
     pub beats: Vec<u64>,
     /// Downbeat (bar start) positions in source frames, ascending.
     pub downbeats: Vec<u64>,
     /// Piecewise-constant stretch segments, sorted and non-overlapping.
     pub segments: Vec<GridSegment>,
+    /// Stable-window tempo of the track, beats per minute.
+    pub bpm: f64,
 }
 
 /// Wire/disk format version for the [`BeatGrid`] blob. Bump when the
@@ -25,10 +25,10 @@ impl BeatGrid {
     #[must_use]
     pub fn new(bpm: f64, beats: Vec<u64>, downbeats: Vec<u64>, segments: Vec<GridSegment>) -> Self {
         Self {
-            bpm,
             beats,
             downbeats,
             segments,
+            bpm,
         }
     }
 }
@@ -56,21 +56,6 @@ impl TryFrom<&[u8]> for BeatGrid {
 impl Blob for BeatGrid {
     const VERSION: u32 = BEAT_GRID_BYTES_VERSION;
 
-    fn encode(&self, w: &mut Writer<'_>) {
-        w.reserve(
-            8 + 3 * 8 + 8 * (self.beats.len() + self.downbeats.len()) + 24 * self.segments.len(),
-        );
-        w.write_f64(self.bpm);
-        w.write_frames(&self.beats);
-        w.write_frames(&self.downbeats);
-        w.write_len(self.segments.len());
-        for segment in &self.segments {
-            w.write_u64(segment.start_frame);
-            w.write_u64(segment.end_frame);
-            w.write_f64(segment.ratio_correction);
-        }
-    }
-
     fn decode(r: &mut Reader<'_>) -> Result<Self, BlobError> {
         let bpm = read_finite(r)?;
         let beats = r.read_frames()?;
@@ -85,11 +70,26 @@ impl Blob for BeatGrid {
             });
         }
         Ok(Self {
-            bpm,
             beats,
             downbeats,
             segments,
+            bpm,
         })
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) {
+        w.reserve(
+            8 + 3 * 8 + 8 * (self.beats.len() + self.downbeats.len()) + 24 * self.segments.len(),
+        );
+        w.write_f64(self.bpm);
+        w.write_frames(&self.beats);
+        w.write_frames(&self.downbeats);
+        w.write_len(self.segments.len());
+        for segment in &self.segments {
+            w.write_u64(segment.start_frame);
+            w.write_u64(segment.end_frame);
+            w.write_f64(segment.ratio_correction);
+        }
     }
 }
 
@@ -108,10 +108,10 @@ fn read_finite(r: &mut Reader<'_>) -> Result<f64, BlobError> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct GridSegment {
-    pub start_frame: u64,
-    pub end_frame: u64,
     /// `nominal_bar / fitted_bar`; 1.0 = the region already sits on the grid.
     pub ratio_correction: f64,
+    pub end_frame: u64,
+    pub start_frame: u64,
 }
 
 impl GridSegment {
@@ -119,9 +119,9 @@ impl GridSegment {
     #[must_use]
     pub fn new(start_frame: u64, end_frame: u64, ratio_correction: f64) -> Self {
         Self {
-            start_frame,
-            end_frame,
             ratio_correction,
+            end_frame,
+            start_frame,
         }
     }
 }

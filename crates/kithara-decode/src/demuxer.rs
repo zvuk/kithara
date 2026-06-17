@@ -38,6 +38,18 @@ pub(crate) trait Demuxer: Send {
     /// states return `Ok(DemuxOutcome::Pending(_))`.
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>>;
 
+    /// The *shape* of bytes that must be Ready before this demuxer can be
+    /// constructed, for the kithara-audio readiness gate. Defaults to
+    /// [`InputRequirement::Incremental`]; init-bearing demuxers (fMP4) MUST
+    /// override to [`InputRequirement::InitOnly`]. See the crate `README.md`
+    /// "Decoder input contract".
+    fn required_input() -> InputRequirement
+    where
+        Self: Sized,
+    {
+        InputRequirement::Incremental
+    }
+
     /// Seek the demuxer to `target` time.
     ///
     /// `priming` carries the codec's pre-roll requirements — packets/frames
@@ -57,18 +69,6 @@ pub(crate) trait Demuxer: Send {
 
     /// Track-level metadata exposed by the container.
     fn track_info(&self) -> &TrackInfo;
-
-    /// The *shape* of bytes that must be Ready before this demuxer can be
-    /// constructed, for the kithara-audio readiness gate. Defaults to
-    /// [`InputRequirement::Incremental`]; init-bearing demuxers (fMP4) MUST
-    /// override to [`InputRequirement::InitOnly`]. See the crate `README.md`
-    /// "Decoder input contract".
-    fn required_input() -> InputRequirement
-    where
-        Self: Sized,
-    {
-        InputRequirement::Incremental
-    }
 }
 
 /// Track-level metadata produced by [`Demuxer::track_info`].

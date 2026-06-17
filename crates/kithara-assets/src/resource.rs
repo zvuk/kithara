@@ -41,19 +41,6 @@ impl BaseReader {
 impl WriteSide for BaseWriter {
     type Reader = BaseReader;
 
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.0.write_at(offset, data)
-    }
-
-    fn reader(&self) -> BaseReader {
-        BaseReader(self.0.clone())
-    }
-
-    fn raw_write_handle(&self) -> RawWriteHandle {
-        let storage = self.0.clone();
-        RawWriteHandle::new(move |offset, data| storage.write_at(offset, data))
-    }
-
     fn commit(self, final_len: Option<u64>) -> StorageResult<BaseReader> {
         self.0.commit(final_len)?;
         Ok(BaseReader(self.0))
@@ -62,22 +49,23 @@ impl WriteSide for BaseWriter {
     fn fail(self, reason: String) {
         self.0.fail(reason);
     }
+
+    fn raw_write_handle(&self) -> RawWriteHandle {
+        let storage = self.0.clone();
+        RawWriteHandle::new(move |offset, data| storage.write_at(offset, data))
+    }
+
+    fn reader(&self) -> BaseReader {
+        BaseReader(self.0.clone())
+    }
+
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.0.write_at(offset, data)
+    }
 }
 
 impl ReadSide for BaseReader {
     type Writer = BaseWriter;
-
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        self.0.read_at(offset, buf)
-    }
-
-    fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        self.0.read_inflight_at(offset, buf)
-    }
-
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        self.0.wait_range(range)
-    }
 
     fn contains_range(&self, range: Range<u64>) -> bool {
         self.0.contains_range(range)
@@ -95,12 +83,24 @@ impl ReadSide for BaseReader {
         self.0.path()
     }
 
+    fn reactivate(self) -> StorageResult<BaseWriter> {
+        self.0.reactivate()?;
+        Ok(BaseWriter(self.0))
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        self.0.read_at(offset, buf)
+    }
+
+    fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        self.0.read_inflight_at(offset, buf)
+    }
+
     fn status(&self) -> ResourceStatus {
         self.0.status()
     }
 
-    fn reactivate(self) -> StorageResult<BaseWriter> {
-        self.0.reactivate()?;
-        Ok(BaseWriter(self.0))
+    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
+        self.0.wait_range(range)
     }
 }

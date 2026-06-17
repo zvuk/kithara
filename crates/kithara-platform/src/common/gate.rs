@@ -1,33 +1,3 @@
-//! Unified wait/notify gates — one home for the project's off-RT and
-//! RT-safe readiness primitives (the former `SchedulerWake`, the assets
-//! `ReadinessGate`, and the storage range-wait condvar).
-//!
-//! Two shapes cover every constraint profile in the workspace; both are
-//! flash-aware (built on `crate::sync::{Mutex, Condvar}` / `crate::thread`),
-//! so a timed wait collapses the virtual clock and an untimed wait is
-//! lost-wakeup-free under `flash`.
-//!
-//! - [`CondvarGate<S>`] — off-RT, multi-waiter. A `Mutex<S>` guarded state
-//!   plus a `Condvar`. Used two ways:
-//!   - **guarded-state** (`S` = the predicate itself, e.g. storage
-//!     `CommonState`, the readiness `bool`): the predicate lives *inside* the
-//!     gate lock, so a wait is single-lock airtight — the storage model.
-//!   - **edge** (`S` = `u64` counter, external predicate): [`signal`] bumps
-//!     the counter, a waiter snapshots [`current`] before checking its
-//!     externally-locked predicate and parks only if the counter is
-//!     unchanged. A seqlock guard that closes the lost-wakeup window without
-//!     the predicate and the gate sharing a lock.
-//! - [`ThreadGate`] — RT-safe wake, single-waiter. A lock-free [`signal`]
-//!   (atomic bump + `unpark`, callable from the forbid-blocking audio core)
-//!   plus a `park_timeout` waiter. The wake side never touches a condvar
-//!   mutex; the counter bump alone covers the rare race where a `signal`
-//!   lands before the waiter registers.
-//!
-//! ## When to pick which
-//!
-//! - Off-RT signaller, want pure event-driven (no timer): `CondvarGate`.
-//! - Signaller runs on the RT audio core (must not lock): `ThreadGate`.
-
 #![forbid(unsafe_code)]
 
 use std::sync::{
@@ -62,8 +32,8 @@ pub trait WaitGate {
 /// Off-RT condvar gate over guarded state `S`. See the module docs for the
 /// guarded-state vs edge usage.
 pub struct CondvarGate<S> {
-    state: Mutex<S>,
     cv: Condvar,
+    state: Mutex<S>,
 }
 
 impl<S> CondvarGate<S> {

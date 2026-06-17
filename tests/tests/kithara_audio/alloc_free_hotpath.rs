@@ -90,7 +90,7 @@ fn active_resampler(pool: &PcmPool) -> kithara_audio::ResamplerProcessor {
     ResamplerProcessor::new(params)
 }
 
-/// WS5b: the ACTIVE resampler (source != host) pre-allocates its scratch at
+/// `WS5b`: the ACTIVE resampler (source != host) pre-allocates its scratch at
 /// construction, so the VERY FIRST `process` on the produce-core is already
 /// allocation-free — no cold-start malloc once `decode_next_chunk` loses its
 /// permit. Without the constructor pre-size this aborts (SIGABRT) on the first
@@ -116,7 +116,7 @@ fn resampler_active_first_chunk_alloc_free() {
     });
 }
 
-/// WS5b: a live ratio change (DJ rate sweep) stays allocation-free — the
+/// `WS5b`: a live ratio change (DJ rate sweep) stays allocation-free — the
 /// scratch is pre-sized to the resampler's worst-case block across the whole
 /// `MAX_RATIO_ADJUSTMENT` window, so the steady `process` after a rate change
 /// never reallocates.
@@ -145,7 +145,7 @@ fn resampler_active_steady_state_alloc_free() {
     });
 }
 
-/// WS5b bit-exactness guard: pre-sizing the scratch only changes capacity, so
+/// `WS5b` bit-exactness guard: pre-sizing the scratch only changes capacity, so
 /// two independent processors fed the same input must emit byte-identical
 /// output. Catches any accidental value/length change the pre-size could
 /// introduce (pro-DJ zero phase tolerance).

@@ -106,7 +106,7 @@ async fn build_hls(helper: &TestServerHelper, include_sidx: bool) -> Url {
 /// (participant + ambient propagation) with `#[kithara::flash(true)]` so the
 /// 50ms cadence rides the VIRTUAL clock under flash. The previous raw
 /// `tokio::spawn` + bare real sleep ran invisible to the engine: the test's
-/// virtual ITER_DEADLINE elapsed after a handful of real ticks under load.
+/// virtual `ITER_DEADLINE` elapsed after a handful of real ticks under load.
 #[kithara::flash(true)]
 async fn drive_queue_ticks(queue: Arc<Queue>) {
     loop {

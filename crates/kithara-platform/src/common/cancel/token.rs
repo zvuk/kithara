@@ -20,23 +20,16 @@ pub struct CancelToken {
 }
 
 impl CancelToken {
-    /// Mint a fresh root of a new cancel subtree — the owning master a subsystem
-    /// holds and cancels on teardown. `Drop` is passive: dropping the root does
-    /// **not** cancel its subtree; teardown is an explicit `cancel()`. Minted only
-    /// at owner sites (enforced by the `cancel_root_sites` guard). For a token that
-    /// is structurally required but never cancelled, use
-    /// [`never`](CancelToken::never) instead.
-    #[must_use]
-    pub fn root() -> Self {
-        Self { node: Node::root() }
+    /// Cancel this token's subtree.
+    pub fn cancel(&self) {
+        self.node.cancel();
     }
 
-    /// A token that is never cancelled — a placeholder where a token is required
-    /// but no cancellation source exists. The sentinel sibling of
-    /// [`root`](CancelToken::root); both mint a fresh subtree root.
+    /// Future that resolves once this token's subtree is cancelled. Cancel-safe
+    /// in `tokio::select!`: dropping it unregisters its slot.
     #[must_use]
-    pub fn never() -> Self {
-        Self { node: Node::root() }
+    pub fn cancelled(&self) -> Cancelled<'_> {
+        Cancelled::new(&self.node)
     }
 
     /// Derive a child token rooted at this token's subtree.
@@ -47,21 +40,17 @@ impl CancelToken {
         }
     }
 
-    /// Cancel this token's subtree.
-    pub fn cancel(&self) {
-        self.node.cancel();
-    }
-
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.node.is_cancelled()
     }
 
-    /// Future that resolves once this token's subtree is cancelled. Cancel-safe
-    /// in `tokio::select!`: dropping it unregisters its slot.
+    /// A token that is never cancelled — a placeholder where a token is required
+    /// but no cancellation source exists. The sentinel sibling of
+    /// [`root`](CancelToken::root); both mint a fresh subtree root.
     #[must_use]
-    pub fn cancelled(&self) -> Cancelled<'_> {
-        Cancelled::new(&self.node)
+    pub fn never() -> Self {
+        Self { node: Node::root() }
     }
 
     /// Register a synchronous waker fired when this token is cancelled — the sync
@@ -81,6 +70,17 @@ impl CancelToken {
         CancelWakerGuard {
             node: id.map(|id| (Arc::clone(&self.node), id)),
         }
+    }
+
+    /// Mint a fresh root of a new cancel subtree — the owning master a subsystem
+    /// holds and cancels on teardown. `Drop` is passive: dropping the root does
+    /// **not** cancel its subtree; teardown is an explicit `cancel()`. Minted only
+    /// at owner sites (enforced by the `cancel_root_sites` guard). For a token that
+    /// is structurally required but never cancelled, use
+    /// [`never`](CancelToken::never) instead.
+    #[must_use]
+    pub fn root() -> Self {
+        Self { node: Node::root() }
     }
 }
 
@@ -146,7 +146,6 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn child_cancel_does_not_cancel_parent() {
         // WHY: cancelling a child sets only the child's subtree, never the
-        // parent's.
         let parent = CancelToken::root();
         let child = parent.child();
         child.cancel();
@@ -277,7 +276,6 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn async_cancelled_resolves_on_self_cancel() {
         // Node mechanism: cancelled() resolves when this node cancels; the flag
-        // is visible after it resolves.
         let c = CancelToken::never();
         let c2 = c.clone();
         let handle = spawn(async move {

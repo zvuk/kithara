@@ -54,8 +54,8 @@ impl Drop for RealIoScope {
 /// bare clock check; the task's `active_async` slot is owned by the spawn
 /// poll-wrapper gate ([`Participating`]), so this future touches no counter.
 pub(crate) struct FlashSleep {
-    delta_nanos: u64,
     handle: Option<system::AsyncHandle>,
+    delta_nanos: u64,
 }
 
 impl FlashSleep {
@@ -442,6 +442,25 @@ impl Instant {
     /// start and its checks in the same mode).
     pub(in crate::flash) const BASE_NANOS: u64 = 86_400_000_000_000;
 
+    /// Absolute virtual nanoseconds this instant represents. Used by the
+    /// platform `Condvar` to convert a deadline into the engine's nanos space.
+    #[inline]
+    pub(crate) fn as_virtual_nanos(self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn duration_since(&self, earlier: Self) -> Duration {
+        self.saturating_duration_since(earlier)
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn elapsed(&self) -> Duration {
+        Self::now().saturating_duration_since(*self)
+    }
+
     #[inline]
     #[must_use]
     pub fn now() -> Self {
@@ -460,25 +479,6 @@ impl Instant {
     #[must_use]
     pub fn now_virtual() -> Self {
         Self(FLASH.clock.now_nanos())
-    }
-
-    /// Absolute virtual nanoseconds this instant represents. Used by the
-    /// platform `Condvar` to convert a deadline into the engine's nanos space.
-    #[inline]
-    pub(crate) fn as_virtual_nanos(self) -> u64 {
-        self.0
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn elapsed(&self) -> Duration {
-        Self::now().saturating_duration_since(*self)
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn duration_since(&self, earlier: Self) -> Duration {
-        self.saturating_duration_since(earlier)
     }
 
     #[inline]

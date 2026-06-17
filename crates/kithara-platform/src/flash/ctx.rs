@@ -1,37 +1,3 @@
-//! The flash engine's ONE per-thread context. Every thread-local the engine
-//! consults lives in the single [`ThreadCtx`] cell: the two-flag time mode
-//! (`ambient` / `active`), the quiescence credit, the async-poll depth and the
-//! dedicated-pacer flag. Fields are private — the mode is written only by the
-//! RAII scopes in `api.rs` (via [`push_ambient`] / [`push_active`] /
-//! [`restore_mode`]); credit / poll-depth / dedicated only by the credit
-//! functions in `system/credit.rs`, each touching ONLY its own field (a
-//! pooled thread's credit reset must not clobber the mode of the scope
-//! around it).
-//!
-//! # LIFO premise (whole-`Mode` save/restore)
-//!
-//! A mode scope saves and restores the WHOLE [`Mode`] (`Copy`, cheap), not
-//! just the flag it sets. That is equivalent to a per-field restore ONLY
-//! under strictly LIFO nesting of mode scopes on a thread — which every
-//! current holder satisfies: the per-poll wrapper guards
-//! (`WithAmbient`/`FlashDynamic`), the spawn-bracket scopes, the prod
-//! `#[kithara::flash]` guard and the test macro's body-held ambient scope
-//! (sync/wasm emissions only; async-native bodies carry `with_ambient`
-//! per-poll instead). A non-LIFO holder (a scope outliving a sibling created
-//! after it) would silently restore a stale flag — e.g. drag `ambient = true`
-//! into foreign code, re-latching stateful primitives constructed there.
-//!
-//! ENFORCED, not assumed: [`push_active`]/[`push_ambient`] return a
-//! [`ModeSnapshot`] carrying both the previous and the just-set [`Mode`];
-//! [`restore_mode`] `debug_assert`s the current mode still equals the set one.
-//! Since the only mode writers are the RAII scopes, a mismatch on drop means
-//! a non-LIFO drop: an interleaved later scope is still alive, or one already
-//! restored over this scope's mode. The check fires at the first
-//! VALUE-VISIBLE violation (debug assertions are on in the gate's
-//! test-release profile); a non-LIFO drop that restores the very same `Mode`
-//! value is masked by equality and surfaces only at the later scope whose
-//! state it corrupted.
-
 use std::{cell::Cell, panic::Location};
 
 /// Two-flag flash mode of the current thread. The STATELESS time primitives
@@ -41,13 +7,13 @@ use std::{cell::Cell, panic::Location};
 /// [`flash_ambient`] once at construction. Default = REAL (both false).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::flash) struct Mode {
+    /// Dynamic: "is flash propagating on this callstack right now?" Pushed by
+    /// a prod `#[kithara::flash(true)]` guard (only when ambient).
+    active: bool,
     /// Per-test gate: "is this test flash-eligible?" Set by the test macro,
     /// propagated across spawn. A gate — only [`push_active`] consults it to
     /// decide whether a prod flash region may take effect.
     ambient: bool,
-    /// Dynamic: "is flash propagating on this callstack right now?" Pushed by
-    /// a prod `#[kithara::flash(true)]` guard (only when ambient).
-    active: bool,
 }
 
 /// Per-thread quiescence credit. Participants are NOT registered explicitly:
@@ -70,18 +36,7 @@ pub(in crate::flash) enum Credit {
 
 /// The single flash thread-local (see the module doc).
 struct ThreadCtx {
-    mode: Cell<Mode>,
     credit: Cell<Credit>,
-    /// Nesting depth of an async-task poll on THIS OS thread. Non-zero means
-    /// a runtime worker is currently inside
-    /// [`Participating::poll`](crate::flash::Participating) — driving a task
-    /// that occupies an `active_async` slot. See
-    /// `system/credit.rs::in_async_poll` for the bridged-wait contract.
-    poll_depth: Cell<u32>,
-    /// True iff this OS thread is a DEDICATED participant (a `spawn_named`
-    /// pacer or an ambient `spawn_blocking` closure). See
-    /// `system/credit.rs::mark_dedicated` for the pacer contract.
-    dedicated: Cell<bool>,
     /// Identity (`active_async` slot id + spawn site) of the task whose poll is
     /// currently on top of this thread's poll stack — set by
     /// [`Participating::poll`](crate::flash::Participating) around the inner
@@ -90,6 +45,17 @@ struct ThreadCtx {
     /// (`active_async -= 1`), so the holder must drop too, and be re-inserted on
     /// resume. Diagnostic only.
     cur_async: Cell<Option<(u64, &'static Location<'static>)>>,
+    /// True iff this OS thread is a DEDICATED participant (a `spawn_named`
+    /// pacer or an ambient `spawn_blocking` closure). See
+    /// `system/credit.rs::mark_dedicated` for the pacer contract.
+    dedicated: Cell<bool>,
+    mode: Cell<Mode>,
+    /// Nesting depth of an async-task poll on THIS OS thread. Non-zero means
+    /// a runtime worker is currently inside
+    /// [`Participating::poll`](crate::flash::Participating) — driving a task
+    /// that occupies an `active_async` slot. See
+    /// `system/credit.rs::in_async_poll` for the bridged-wait contract.
+    poll_depth: Cell<u32>,
 }
 
 thread_local! {

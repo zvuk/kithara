@@ -27,17 +27,6 @@ impl StretchBackendKind {
         Self::Bungee,
     ];
 
-    /// Stable discriminant for storing the selection in an atomic. Values are
-    /// fixed regardless of which feature-gated variants are compiled in.
-    pub(crate) const fn to_u8(self) -> u8 {
-        match self {
-            #[cfg(feature = "stretch-signalsmith")]
-            Self::Signalsmith => 1,
-            #[cfg(feature = "stretch-bungee")]
-            Self::Bungee => 2,
-        }
-    }
-
     /// Decode a discriminant written by [`Self::to_u8`]. Any value outside the
     /// compiled-in set decodes to the default (first compiled-in) backend.
     pub(crate) const fn from_u8(v: u8) -> Self {
@@ -47,6 +36,17 @@ impl StretchBackendKind {
             #[cfg(feature = "stretch-bungee")]
             2 => Self::Bungee,
             _ => Self::ALL[0],
+        }
+    }
+
+    /// Stable discriminant for storing the selection in an atomic. Values are
+    /// fixed regardless of which feature-gated variants are compiled in.
+    pub(crate) const fn to_u8(self) -> u8 {
+        match self {
+            #[cfg(feature = "stretch-signalsmith")]
+            Self::Signalsmith => 1,
+            #[cfg(feature = "stretch-bungee")]
+            Self::Bungee => 2,
         }
     }
 }

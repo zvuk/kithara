@@ -23,6 +23,13 @@ pub(super) struct CommonState {
 
 /// Shared inner storage.
 pub(super) struct Inner<D: DriverIo> {
+    /// Lock-free lifecycle flag: `true` while the resource is committed, `false`
+    /// once `reactivate` reopens it for a re-download. Distinct from the driver's
+    /// committed snapshot, which stays published across a reactivate so reads
+    /// keep serving consistent (immutable) bytes; this flag tracks the *lifecycle*
+    /// so `len()` reports `None` for an active (being-rewritten) resource without
+    /// taking the state mutex.
+    pub(super) committed: AtomicBool,
     pub(super) cancel: CancelToken,
     /// Guarded readiness state plus its condvar, unified in the shared
     /// [`CondvarGate`] — the gold-standard single-lock event-driven wait the
@@ -31,13 +38,6 @@ pub(super) struct Inner<D: DriverIo> {
     pub(super) gate: CondvarGate<CommonState>,
     pub(super) driver: D,
     pub(super) observer: Option<Arc<dyn AvailabilityObserver>>,
-    /// Lock-free lifecycle flag: `true` while the resource is committed, `false`
-    /// once `reactivate` reopens it for a re-download. Distinct from the driver's
-    /// committed snapshot, which stays published across a reactivate so reads
-    /// keep serving consistent (immutable) bytes; this flag tracks the *lifecycle*
-    /// so `len()` reports `None` for an active (being-rewritten) resource without
-    /// taking the state mutex.
-    pub(super) committed: AtomicBool,
 }
 
 /// Generic storage resource state machine, parameterized by backend driver.

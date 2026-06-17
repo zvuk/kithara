@@ -75,11 +75,11 @@ impl<A: Assets> fmt::Debug for EvictAssets<A> {
 /// `inner` store: the `cfg`, the `cancel` token, the shared `lru` / `pins`
 /// indices, and the canonical `deleter`.
 pub(crate) struct EvictDeps {
-    pub(crate) cfg: EvictConfig,
+    pub(crate) deleter: Arc<dyn AssetDeleter>,
     pub(crate) cancel: CancelToken,
+    pub(crate) cfg: EvictConfig,
     pub(crate) lru: LruIndex,
     pub(crate) pins: PinsIndex,
-    pub(crate) deleter: Arc<dyn AssetDeleter>,
 }
 
 impl<A> EvictAssets<A>

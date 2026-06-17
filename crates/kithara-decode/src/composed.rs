@@ -65,10 +65,10 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
 /// single place that opts into the global pool, and it is `#[cfg(test)]`
 /// so production code physically cannot reach it.
 pub(crate) struct DecoderRuntime {
-    pub(crate) pool: PcmPool,
-    pub(crate) epoch: u64,
     pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
     pub(crate) hooks: Option<BoxedEventSink>,
+    pub(crate) pool: PcmPool,
+    pub(crate) epoch: u64,
 }
 
 impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
@@ -256,6 +256,12 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
         self.duration
     }
 
+    fn flush_reader_signals(&mut self) {
+        if let Some(hooks) = self.hooks.as_mut() {
+            hooks.flush();
+        }
+    }
+
     fn metadata(&self) -> TrackMetadata {
         TrackMetadata::default()
     }
@@ -283,12 +289,6 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
     fn update_byte_len(&self, len: u64) {
         if let Some(handle) = &self.byte_len_handle {
             handle.store(len, Ordering::Release);
-        }
-    }
-
-    fn flush_reader_signals(&mut self) {
-        if let Some(hooks) = self.hooks.as_mut() {
-            hooks.flush();
         }
     }
 }

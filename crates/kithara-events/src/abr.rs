@@ -18,21 +18,6 @@ const ABR_MODE_AUTO_THRESHOLD: usize = usize::MAX / 2;
 pub struct VariantIndex(usize);
 
 impl VariantIndex {
-    /// Validated constructor: `Ok` iff `idx < available`.
-    ///
-    /// # Errors
-    /// Returns [`BoundsError`] when `idx >= available`.
-    pub fn try_new(idx: usize, available: usize) -> Result<Self, BoundsError> {
-        if idx < available {
-            Ok(Self(idx))
-        } else {
-            Err(BoundsError {
-                requested: idx,
-                available,
-            })
-        }
-    }
-
     /// Wrap an index whose validity is already guaranteed by construction
     /// (atomic reload, playlist id, test literal). No bounds check.
     #[must_use]
@@ -43,6 +28,21 @@ impl VariantIndex {
     #[must_use]
     pub const fn get(self) -> usize {
         self.0
+    }
+
+    /// Validated constructor: `Ok` iff `idx < available`.
+    ///
+    /// # Errors
+    /// Returns [`BoundsError`] when `idx >= available`.
+    pub fn try_new(idx: usize, available: usize) -> Result<Self, BoundsError> {
+        if idx < available {
+            Ok(Self(idx))
+        } else {
+            Err(BoundsError {
+                available,
+                requested: idx,
+            })
+        }
     }
 }
 
@@ -55,8 +55,8 @@ impl std::fmt::Display for VariantIndex {
 /// A variant index out of range against a known variant count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BoundsError {
-    pub requested: usize,
     pub available: usize,
+    pub requested: usize,
 }
 
 impl std::fmt::Display for BoundsError {

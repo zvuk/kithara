@@ -21,8 +21,8 @@ pub struct RawBeats {
 
 /// `beat_this` NN detector: mel → chunked inference → peak picking.
 pub struct BeatThis {
-    mel: MelExtractor,
     predictor: BeatPredictor,
+    mel: MelExtractor,
     picker: PeakPicker,
 }
 

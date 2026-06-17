@@ -403,10 +403,10 @@ fn aac_codec_and_frames() -> AacFrameHarness {
         CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
     };
     let track = TrackInfo {
+        extra_data,
         codec: init.codec,
         sample_rate: init.sample_rate,
         channels: init.channels,
-        extra_data,
         duration: None,
         gapless: init.gapless,
     };

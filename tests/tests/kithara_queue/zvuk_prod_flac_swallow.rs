@@ -109,8 +109,10 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
         .iter()
         .find(|v| is_flac(&v.codecs) || is_flac(&v.container))
         .or_else(|| variants.iter().max_by_key(|v| v.bandwidth_bps.unwrap_or(0)))
-        .map(|v| v.variant_index.get())
-        .unwrap_or_else(|| panic!("no lossless/top variant among {} variants", variants.len()));
+        .map_or_else(
+            || panic!("no lossless/top variant among {} variants", variants.len()),
+            |v| v.variant_index.get(),
+        );
     abr.set_mode(AbrMode::manual(flac_idx))
         .unwrap_or_else(|e| panic!("pin lossless variant {flac_idx} failed: {e:?}"));
     info!(

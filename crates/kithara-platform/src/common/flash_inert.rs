@@ -1,10 +1,3 @@
-//! Inert mirror of the flash control surface for the OFF-feature and wasm32
-//! configurations (`lib.rs` aliases this module as `kithara_platform::flash`).
-//! Parity contract (refactor spec §1 rule 4, §4): the public item set here
-//! mirrors the real `flash` control surface 1:1 — macro emissions and prod
-//! `#[kithara::flash]` attributes resolve these paths in every configuration —
-//! with "flash disabled" semantics: ZSTs, no-ops and transparent passthroughs.
-
 pub use std::time::Duration;
 use std::{
     marker::PhantomData,

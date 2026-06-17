@@ -1,13 +1,3 @@
-//! Participant credit accounting for the flash engine: which OS threads count
-//! as virtual-time pacers, and how a wrapped wait moves them in and out of the
-//! engine's `active` count. The per-thread state lives in the single
-//! `ThreadCtx` (`flash/ctx.rs`); the engine-state halves are `FlashInner`
-//! methods. RAII owns the bracket ends: a [`DedicatedSlot`] holds a pacer's
-//! reservation from the parent-side reserve to the child-side claim, a
-//! [`Participant`]/[`PoolParticipant`] settles the exit, and a [`WaitGuard`]
-//! is the obligation to settle a wrapped wait — so an unwind through any of
-//! them returns the credit instead of wedging the engine.
-
 use std::{marker::PhantomData, mem, panic::Location, sync::atomic::Ordering};
 
 use super::{Core, FLASH, FlashInner, SyncHolder};
@@ -99,21 +89,6 @@ pub(crate) struct DedicatedSlot {
 }
 
 impl DedicatedSlot {
-    /// Reserve for a `spawn_named` pacer thread: the `active` slot AND the
-    /// named-thread count, both returned by Drop if the slot is never claimed.
-    pub(crate) fn reserve_named() -> Self {
-        ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
-        FLASH.pre_count_dedicated();
-        Self { named: true }
-    }
-
-    /// Reserve for an ambient `spawn_blocking` closure: the `active` slot
-    /// only (the named-thread count is not this path's resource).
-    pub(crate) fn reserve() -> Self {
-        FLASH.pre_count_dedicated();
-        Self { named: false }
-    }
-
     /// Claim the reservation on a `spawn_named` child: mark this thread a
     /// dedicated pacer holding the reserved slot as `Running`. The returned
     /// [`Participant`] owes the exit settle (and the named-count decrement).
@@ -145,6 +120,21 @@ impl DedicatedSlot {
             _not_send: PhantomData,
         }
     }
+
+    /// Reserve for an ambient `spawn_blocking` closure: the `active` slot
+    /// only (the named-thread count is not this path's resource).
+    pub(crate) fn reserve() -> Self {
+        FLASH.pre_count_dedicated();
+        Self { named: false }
+    }
+
+    /// Reserve for a `spawn_named` pacer thread: the `active` slot AND the
+    /// named-thread count, both returned by Drop if the slot is never claimed.
+    pub(crate) fn reserve_named() -> Self {
+        ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
+        FLASH.pre_count_dedicated();
+        Self { named: true }
+    }
 }
 
 impl Drop for DedicatedSlot {
@@ -167,8 +157,8 @@ impl Drop for DedicatedSlot {
 /// participant owns it.
 #[must_use]
 pub(crate) struct Participant {
-    named: bool,
     _not_send: PhantomData<*mut ()>,
+    named: bool,
 }
 
 impl Participant {
@@ -199,8 +189,8 @@ impl Drop for Participant {
 /// restores the pool thread's previous dedicated flag.
 #[must_use]
 pub(crate) struct PoolParticipant {
-    prev_dedicated: bool,
     _not_send: PhantomData<*mut ()>,
+    prev_dedicated: bool,
 }
 
 impl Drop for PoolParticipant {
@@ -262,14 +252,6 @@ pub(crate) struct WaitGuard<'a> {
 }
 
 impl WaitGuard<'_> {
-    /// Settle the firer's `active` bump per this thread's credit class —
-    /// see [`FlashInner::resume_after_wait`].
-    pub(crate) fn resume(self) {
-        let flash = self.flash;
-        mem::forget(self);
-        flash.resume_after_wait();
-    }
-
     /// Test-only bare settle: mark this thread `Running`, keeping the firer's
     /// bump, WITHOUT the credit-class dispatch of [`WaitGuard::resume`]. The
     /// harness `park_for` site is un-bracketed (no spawn bracket balances its
@@ -280,6 +262,14 @@ impl WaitGuard<'_> {
     pub(super) fn mark_running(self) {
         mem::forget(self);
         mark_running();
+    }
+
+    /// Settle the firer's `active` bump per this thread's credit class —
+    /// see [`FlashInner::resume_after_wait`].
+    pub(crate) fn resume(self) {
+        let flash = self.flash;
+        mem::forget(self);
+        flash.resume_after_wait();
     }
 }
 
@@ -311,42 +301,6 @@ pub(crate) fn reset_credit() {
 }
 
 impl FlashInner {
-    /// Record (or refresh) the calling dedicated pacer thread as a `Running`
-    /// sync `active` holder in the diagnostic dump map. Called when it claims its
-    /// slot ([`mark_dedicated`]) and each time it resumes `Running` from a wait
-    /// (dedicated [`resume_after_wait`](FlashInner::resume_after_wait)). Keyed by
-    /// the thread; named by it. Diagnostic only — it does not touch `active`.
-    pub(in crate::flash) fn sync_holder_running(&self) {
-        let key = current_thread_key();
-        let name = current_thread_name();
-        self.core
-            .lock()
-            .registry
-            .active_sync_holders
-            .insert(key, SyncHolder { name });
-    }
-
-    /// Reserve a dedicated pacer's slot: raw `active += 1` on the parent,
-    /// before the child is scheduled (see [`DedicatedSlot`]).
-    pub(in crate::flash) fn pre_count_dedicated(&self) {
-        self.core.lock().registry.active += 1;
-    }
-
-    /// Return a reservation no thread ever claimed ([`DedicatedSlot`] Drop):
-    /// undo the raw `active += 1` and fire any advance the release unblocks.
-    /// No credit is touched — the slot never became any thread's `Running`.
-    fn release_unclaimed_slot(&self) {
-        let mut s = self.core.lock();
-        debug_assert!(
-            s.registry.active > 0,
-            "unclaimed slot release without a matching reserve"
-        );
-        s.registry.active -= 1;
-        let adv = s.try_advance(&self.clock);
-        drop(s);
-        adv.fire();
-    }
-
     /// Account this thread as it ENTERS a wrapped wait, under the engine's
     /// `core` lock. Called at the start of EACH wrapped wait (park/condvar)
     /// right where the entry is inserted, replacing the old explicit
@@ -409,6 +363,50 @@ impl FlashInner {
         }
     }
 
+    /// Decrement `active` for a thread that EXITS while `Running` — the balancing
+    /// half of the bootstrap (`None -> Parked` left `active` untouched; the first
+    /// wake then `active += 1`'d it). Called from the spawn bracket after the
+    /// thread's body returns. Reads + clears the credit; if it was `Running`, drops
+    /// it from `active` and fires any advance the drop unblocks.
+    pub(in crate::flash) fn on_participant_exit(&self) {
+        let was = ctx::credit();
+        ctx::set_credit(Credit::None);
+        if was != Credit::Running {
+            return;
+        }
+        let mut s = self.core.lock();
+        debug_assert!(
+            s.registry.active > 0,
+            "exiting running participant must be counted"
+        );
+        s.registry.active -= 1;
+        s.registry.active_sync_holders.remove(&current_thread_key());
+        let adv = s.try_advance(&self.clock);
+        drop(s);
+        adv.fire();
+    }
+
+    /// Reserve a dedicated pacer's slot: raw `active += 1` on the parent,
+    /// before the child is scheduled (see [`DedicatedSlot`]).
+    pub(in crate::flash) fn pre_count_dedicated(&self) {
+        self.core.lock().registry.active += 1;
+    }
+
+    /// Return a reservation no thread ever claimed ([`DedicatedSlot`] Drop):
+    /// undo the raw `active += 1` and fire any advance the release unblocks.
+    /// No credit is touched — the slot never became any thread's `Running`.
+    fn release_unclaimed_slot(&self) {
+        let mut s = self.core.lock();
+        debug_assert!(
+            s.registry.active > 0,
+            "unclaimed slot release without a matching reserve"
+        );
+        s.registry.active -= 1;
+        let adv = s.try_advance(&self.clock);
+        drop(s);
+        adv.fire();
+    }
+
     /// Resume accounting after a wrapped sync wait's `token.wait()` returned. The firer
     /// always `active += 1`'d the woken Sync entry to cover wake latency; how that is
     /// settled depends on the thread:
@@ -451,26 +449,18 @@ impl FlashInner {
         self.sync_holder_running();
     }
 
-    /// Decrement `active` for a thread that EXITS while `Running` — the balancing
-    /// half of the bootstrap (`None -> Parked` left `active` untouched; the first
-    /// wake then `active += 1`'d it). Called from the spawn bracket after the
-    /// thread's body returns. Reads + clears the credit; if it was `Running`, drops
-    /// it from `active` and fires any advance the drop unblocks.
-    pub(in crate::flash) fn on_participant_exit(&self) {
-        let was = ctx::credit();
-        ctx::set_credit(Credit::None);
-        if was != Credit::Running {
-            return;
-        }
-        let mut s = self.core.lock();
-        debug_assert!(
-            s.registry.active > 0,
-            "exiting running participant must be counted"
-        );
-        s.registry.active -= 1;
-        s.registry.active_sync_holders.remove(&current_thread_key());
-        let adv = s.try_advance(&self.clock);
-        drop(s);
-        adv.fire();
+    /// Record (or refresh) the calling dedicated pacer thread as a `Running`
+    /// sync `active` holder in the diagnostic dump map. Called when it claims its
+    /// slot ([`mark_dedicated`]) and each time it resumes `Running` from a wait
+    /// (dedicated [`resume_after_wait`](FlashInner::resume_after_wait)). Keyed by
+    /// the thread; named by it. Diagnostic only — it does not touch `active`.
+    pub(in crate::flash) fn sync_holder_running(&self) {
+        let key = current_thread_key();
+        let name = current_thread_name();
+        self.core
+            .lock()
+            .registry
+            .active_sync_holders
+            .insert(key, SyncHolder { name });
     }
 }

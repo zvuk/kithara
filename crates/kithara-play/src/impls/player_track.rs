@@ -103,6 +103,12 @@ pub struct PlayerTrack {
     mix: MixDSP,
     item_id: Option<Arc<str>>,
     state: TrackState,
+    /// Set only when the track reaches *natural* EOF (`handle_natural_end`).
+    /// Marks a played-out track as eligible to be kept warm at end-of-queue
+    /// and revived by a later in-range seek (Superpowered-style resume).
+    /// Cleared by `seek`/`play`. A `Finished` state from `stop()` or a
+    /// faded-out crossfade leaves this `false`, so those are discarded as usual.
+    ended_at_eof: bool,
     notified_prefetch_requested: bool,
     notified_track_requested: bool,
     state_dirty: bool,
@@ -128,12 +134,6 @@ pub struct PlayerTrack {
     /// decoder's pre-buffered position (which can be ~200 ms ahead of the
     /// mixer thanks to `PlayerResource`'s scratch buffer).
     served_frames: u64,
-    /// Set only when the track reaches *natural* EOF (`handle_natural_end`).
-    /// Marks a played-out track as eligible to be kept warm at end-of-queue
-    /// and revived by a later in-range seek (Superpowered-style resume).
-    /// Cleared by `seek`/`play`. A `Finished` state from `stop()` or a
-    /// faded-out crossfade leaves this `false`, so those are discarded as usual.
-    ended_at_eof: bool,
 }
 
 impl PlayerTrack {
@@ -283,6 +283,14 @@ impl PlayerTrack {
         {
             self.notified_prefetch_requested = true;
         }
+    }
+
+    /// Whether this track reached *natural* EOF (vs `stop()` / faded-out).
+    /// A natural-EOF `Finished` track is kept warm at end-of-queue and can be
+    /// revived by an in-range seek. See [`Self::ended_at_eof`].
+    #[must_use]
+    pub fn ended_at_eof(&self) -> bool {
+        self.ended_at_eof
     }
 
     /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
@@ -591,14 +599,6 @@ impl PlayerTrack {
     #[must_use]
     pub fn state(&self) -> TrackState {
         self.state
-    }
-
-    /// Whether this track reached *natural* EOF (vs `stop()` / faded-out).
-    /// A natural-EOF `Finished` track is kept warm at end-of-queue and can be
-    /// revived by an in-range seek. See [`Self::ended_at_eof`].
-    #[must_use]
-    pub fn ended_at_eof(&self) -> bool {
-        self.ended_at_eof
     }
 
     /// Instantly stop (silent, finished state).

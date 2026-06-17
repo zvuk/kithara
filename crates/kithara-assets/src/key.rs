@@ -57,11 +57,36 @@ impl ResourceKey {
         Self::Absolute(path.into())
     }
 
-    /// Create a relative key under `asset_root`.
-    pub(crate) fn relative(asset_root: impl Into<Arc<str>>, rel_path: impl Into<Arc<str>>) -> Self {
-        Self::Relative {
-            asset_root: asset_root.into(),
-            rel_path: rel_path.into(),
+    /// Returns the absolute path if this is an Absolute key.
+    #[must_use]
+    pub fn as_absolute_path(&self) -> Option<&Path> {
+        match self {
+            Self::Absolute(p) => Some(p),
+            Self::Relative { .. } => None,
+        }
+    }
+
+    /// The asset namespace, or `None` for an absolute key.
+    #[must_use]
+    pub fn asset_root(&self) -> Option<&str> {
+        match self {
+            Self::Relative { asset_root, .. } => Some(asset_root),
+            Self::Absolute(_) => None,
+        }
+    }
+
+    /// Returns true if this is an absolute path key.
+    #[must_use]
+    pub fn is_absolute(&self) -> bool {
+        matches!(self, Self::Absolute(_))
+    }
+
+    /// The relative path, or `None` for an absolute key.
+    #[must_use]
+    pub fn rel_path(&self) -> Option<&str> {
+        match self {
+            Self::Relative { rel_path, .. } => Some(rel_path),
+            Self::Absolute(_) => None,
         }
     }
 
@@ -80,37 +105,12 @@ impl ResourceKey {
             .map_or_else(|| segment.to_string(), |q| format!("{segment}_{q}"))
     }
 
-    /// The asset namespace, or `None` for an absolute key.
-    #[must_use]
-    pub fn asset_root(&self) -> Option<&str> {
-        match self {
-            Self::Relative { asset_root, .. } => Some(asset_root),
-            Self::Absolute(_) => None,
+    /// Create a relative key under `asset_root`.
+    pub(crate) fn relative(asset_root: impl Into<Arc<str>>, rel_path: impl Into<Arc<str>>) -> Self {
+        Self::Relative {
+            asset_root: asset_root.into(),
+            rel_path: rel_path.into(),
         }
-    }
-
-    /// The relative path, or `None` for an absolute key.
-    #[must_use]
-    pub fn rel_path(&self) -> Option<&str> {
-        match self {
-            Self::Relative { rel_path, .. } => Some(rel_path),
-            Self::Absolute(_) => None,
-        }
-    }
-
-    /// Returns the absolute path if this is an Absolute key.
-    #[must_use]
-    pub fn as_absolute_path(&self) -> Option<&Path> {
-        match self {
-            Self::Absolute(p) => Some(p),
-            Self::Relative { .. } => None,
-        }
-    }
-
-    /// Returns true if this is an absolute path key.
-    #[must_use]
-    pub fn is_absolute(&self) -> bool {
-        matches!(self, Self::Absolute(_))
     }
 }
 

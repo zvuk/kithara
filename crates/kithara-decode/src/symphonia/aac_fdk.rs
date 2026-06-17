@@ -224,6 +224,28 @@ impl fmt::Debug for AacDecoder {
 }
 
 impl AacDecoder {
+    /// Build a fresh fdk-aac C decoder from the stored codec parameters.
+    ///
+    /// Used at construction and on [`Self::reset`] (seek/flush). The fdk-aac
+    /// C handle owns MDCT/QMF/SBR overlap-add state that survives across
+    /// `fill`/`decode_frame` and has no public mid-stream flush, so the only
+    /// way to return it to a cold (zero-overlap) state after a seek is to
+    /// drop and re-create it. Without this, the first access unit decoded
+    /// after a seek inherits the pre-seek overlap-add tail and emits
+    /// contaminated PCM (a ~2-AU phase shift at seek seams). See the
+    /// `kithara-decode` README "Seek pre-roll and trim".
+    fn build_decoder(transport: Transport, params: &AudioCodecParameters) -> Result<Decoder> {
+        let mut decoder = Decoder::new(transport);
+        if matches!(transport, Transport::Raw)
+            && let Some(extra) = &params.extra_data
+        {
+            decoder
+                .config_raw(extra)
+                .map_err(|e| Error::DecodeError(e.message()))?;
+        }
+        Ok(decoder)
+    }
+
     fn configure_metadata(&mut self) -> Result<()> {
         let info = self.decoder.stream_info();
         let core_rate = u32::try_from(info.aacSampleRate).unwrap_or(self.config.sample_rate);
@@ -252,28 +274,6 @@ impl AacDecoder {
             "AAC stream metadata refreshed from decoder",
         );
         Ok(())
-    }
-
-    /// Build a fresh fdk-aac C decoder from the stored codec parameters.
-    ///
-    /// Used at construction and on [`Self::reset`] (seek/flush). The fdk-aac
-    /// C handle owns MDCT/QMF/SBR overlap-add state that survives across
-    /// `fill`/`decode_frame` and has no public mid-stream flush, so the only
-    /// way to return it to a cold (zero-overlap) state after a seek is to
-    /// drop and re-create it. Without this, the first access unit decoded
-    /// after a seek inherits the pre-seek overlap-add tail and emits
-    /// contaminated PCM (a ~2-AU phase shift at seek seams). See the
-    /// `kithara-decode` README "Seek pre-roll and trim".
-    fn build_decoder(transport: Transport, params: &AudioCodecParameters) -> Result<Decoder> {
-        let mut decoder = Decoder::new(transport);
-        if matches!(transport, Transport::Raw)
-            && let Some(extra) = &params.extra_data
-        {
-            decoder
-                .config_raw(extra)
-                .map_err(|e| Error::DecodeError(e.message()))?;
-        }
-        Ok(decoder)
     }
 
     fn try_new(params: &AudioCodecParameters, _opts: AudioDecoderOptions) -> Result<Self> {

@@ -78,8 +78,17 @@ enum RecvOutcome {
 /// Provides a simple interface for reading decoded PCM audio, compatible
 /// with cpal and rodio backends. See the crate `README.md` "Usage".
 pub struct Audio<S> {
+    /// Narrow mutating playhead handle — committed position and total duration.
+    pub(crate) playhead: Arc<dyn PlayheadWrite>,
+
     /// Startup gate for async preload (first chunk available).
     pub(crate) preload_gate: Arc<PreloadGate>,
+
+    /// Narrow seek-control handle — initiates and marks seek epochs.
+    pub(crate) seek: Arc<dyn SeekControl>,
+
+    /// Narrow seek-observe handle — reads seek state (pending epoch, etc.).
+    pub(crate) seek_obs: Arc<dyn SeekObserve>,
 
     /// Consumer-side phase — replaces the old `eof: bool` flag.
     pub(crate) consumer_phase: ConsumerPhase,
@@ -92,15 +101,6 @@ pub struct Audio<S> {
 
     /// Current audio specification (updated from chunks).
     pub(crate) spec: PcmSpec,
-
-    /// Narrow mutating playhead handle — committed position and total duration.
-    pub(crate) playhead: Arc<dyn PlayheadWrite>,
-
-    /// Narrow seek-control handle — initiates and marks seek epochs.
-    pub(crate) seek: Arc<dyn SeekControl>,
-
-    /// Narrow seek-observe handle — reads seek state (pending epoch, etc.).
-    pub(crate) seek_obs: Arc<dyn SeekObserve>,
 
     /// How many frames of `current_chunk` have been served to the
     /// caller. Local consumer cursor — reset to 0 on every new chunk
@@ -119,11 +119,6 @@ pub struct Audio<S> {
     /// the resampler in the non-tempo chain; in tempo mode `set_playback_rate`
     /// routes into `stretch` instead.
     playback_rate: Arc<AtomicF32>,
-
-    /// Live time-stretch controls when this source runs in tempo mode. `Some`
-    /// makes it the sink for `set_playback_rate` (speed) so the effect chain's
-    /// `TimeStretchProcessor` sees rate moves; `None` for the plain chain.
-    stretch: Option<Arc<StretchControls>>,
 
     /// Wake handle for blocking PCM reads.
     reader_wake: Arc<ThreadWake>,
@@ -153,6 +148,17 @@ pub struct Audio<S> {
     /// `read` call, then restored.
     interleaved: Option<PcmBuf>,
 
+    /// `(seek_epoch, position_ms)` of the last emitted `PlaybackProgress`.
+    /// Throttles high-frequency progress telemetry within an epoch so it
+    /// cannot starve low-frequency control events on the shared bounded bus;
+    /// a new seek epoch always emits.
+    last_progress_emit: Option<(u64, u64)>,
+
+    /// Live time-stretch controls when this source runs in tempo mode. `Some`
+    /// makes it the sink for `set_playback_rate` (speed) so the effect chain's
+    /// `TimeStretchProcessor` sees rate moves; `None` for the plain chain.
+    stretch: Option<Arc<StretchControls>>,
+
     /// Assigned track ID in the shared worker (used for unregister on drop).
     track_id: Option<TrackId>,
 
@@ -176,22 +182,16 @@ pub struct Audio<S> {
     /// Track metadata (title, artist, album, artwork).
     metadata: TrackMetadata,
 
+    /// Offline-consumer opt-in: a ring underrun blocks (engine-aware park)
+    /// instead of returning an empty outcome. Never set on real-time hosts.
+    block_on_underrun: bool,
+
     /// Whether the worker was auto-created for this track (standalone mode).
     /// Standalone workers are shut down when the track is dropped.
     is_standalone_worker: bool,
 
     /// Whether `preload()` has been called (enables non-blocking mode).
     preloaded: bool,
-
-    /// Offline-consumer opt-in: a ring underrun blocks (engine-aware park)
-    /// instead of returning an empty outcome. Never set on real-time hosts.
-    block_on_underrun: bool,
-
-    /// `(seek_epoch, position_ms)` of the last emitted `PlaybackProgress`.
-    /// Throttles high-frequency progress telemetry within an epoch so it
-    /// cannot starve low-frequency control events on the shared bounded bus;
-    /// a new seek epoch always emits.
-    last_progress_emit: Option<(u64, u64)>,
 }
 
 impl<S> Audio<S> {
@@ -766,9 +766,9 @@ impl<S> Audio<S> {
 /// required — the host's configured pools must reach the decoder, never a
 /// silent process-global fallback.
 struct DecoderDeps {
+    byte_pool: BytePool,
     backend: kithara_decode::DecoderBackend,
     pcm_pool: PcmPool,
-    byte_pool: BytePool,
 }
 
 /// Provides async constructor that creates Stream internally.
@@ -945,12 +945,13 @@ where
             bus,
             host_sample_rate,
             playback_rate,
-            stretch: config_stretch,
             preload_gate,
             reader_wake,
             abr_handle,
             trash_tx,
             service_class,
+            block_on_underrun,
+            stretch: config_stretch,
             pcm_rx: data_rx,
             _epoch: epoch,
             validator: EpochValidator::default(),
@@ -962,7 +963,6 @@ where
             interleaved: Some(interleaved),
             pcm_pool: pool.clone(),
             preloaded: false,
-            block_on_underrun,
             last_progress_emit: None,
             track_id: Some(track_id),
             worker: Some(worker),
@@ -1244,12 +1244,6 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
         self.abr_handle.clone()
     }
 
-    delegate! {
-        to self.playhead {
-            fn duration(&self) -> Option<Duration>;
-        }
-    }
-
     fn event_bus(&self) -> &EventBus {
         &self.bus
     }
@@ -1292,12 +1286,6 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
 
         self.playhead.advance(&ChunkPosition::from(&chunk.meta));
         Ok(ChunkOutcome::Chunk(chunk))
-    }
-
-    delegate! {
-        to self.playhead {
-            fn position(&self) -> Duration;
-        }
     }
 
     fn preload(&mut self) -> Result<(), DecodeError> {
@@ -1383,6 +1371,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
         self.host_sample_rate
             .store(sample_rate.get(), Ordering::Relaxed);
     }
+
     fn set_playback_rate(&self, rate: f32) {
         // Tempo mode: speed lives in the shared controls (the stretch slot and
         // its resampler read it). Plain chain: drive the resampler atomic.
@@ -1398,9 +1387,20 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
             worker.wake();
         }
     }
-
     fn spec(&self) -> PcmSpec {
         Self::spec(self)
+    }
+
+    delegate! {
+        to self.playhead {
+            fn duration(&self) -> Option<Duration>;
+        }
+    }
+
+    delegate! {
+        to self.playhead {
+            fn position(&self) -> Duration;
+        }
     }
 }
 

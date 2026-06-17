@@ -17,8 +17,8 @@ use crate::{Event, EventBus};
 /// The element is the narrow per-domain event (`HlsEvent` / `FileEvent`),
 /// converted to [`Event`] only at publish time, so the ring stays small.
 pub struct DeferredBus<E> {
-    bus: EventBus,
     pending: ArrayQueue<E>,
+    bus: EventBus,
 }
 
 impl<E: Into<Event>> DeferredBus<E> {

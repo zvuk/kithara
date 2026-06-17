@@ -17,8 +17,8 @@ pub(super) struct EventThrottleCache {
 #[derive(Clone, Copy)]
 pub(super) struct ThrottleSample {
     pub(super) now: Instant,
-    pub(super) estimate_bps: Option<u64>,
     pub(super) buffer_ahead: Option<Duration>,
+    pub(super) estimate_bps: Option<u64>,
 }
 
 impl AbrController {

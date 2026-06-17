@@ -14,9 +14,9 @@ use crate::observer::FfiKeyProcessor;
 /// then blocks on the matching receiver until the main thread pump posts
 /// the decrypted bytes back.
 struct KeyMsg {
-    key: Vec<u8>,
-    salt: String,
     reply: mpsc::Sender<Vec<u8>>,
+    salt: String,
+    key: Vec<u8>,
 }
 
 /// Shared state for the cross-thread DRM key round-trip. Lives behind a
@@ -24,15 +24,15 @@ struct KeyMsg {
 /// JS processor and drains requests) and the engine Worker (which posts
 /// requests from its `KeyProcessor` closure) reach the same channel.
 struct KeyBridge {
-    /// Worker → main key-request channel sender; the worker clones it.
-    request_tx: Mutex<Option<mpsc::Sender<KeyMsg>>>,
-    /// Receiver half, drained by [`pump`] on the main thread.
-    request_rx: Mutex<Option<mpsc::Receiver<KeyMsg>>>,
     /// JS key callback registered on the main thread by `setup_hls_aes`.
     /// Held behind a `SendWrapper` (inside the JS shim) so the `!Send` JS
     /// `Function` can live here while only ever being invoked on the
     /// installing thread. `None` until the first `setup_hls_aes`.
     processor: Mutex<Option<Arc<dyn FfiKeyProcessor>>>,
+    /// Receiver half, drained by [`pump`] on the main thread.
+    request_rx: Mutex<Option<mpsc::Receiver<KeyMsg>>>,
+    /// Worker → main key-request channel sender; the worker clones it.
+    request_tx: Mutex<Option<mpsc::Sender<KeyMsg>>>,
 }
 
 static BRIDGE: LazyLock<KeyBridge> = LazyLock::new(|| KeyBridge {

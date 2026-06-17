@@ -125,8 +125,8 @@ impl Downloader {
                 #[cfg(not(target_arch = "wasm32"))]
                 runtime,
                 abr,
-                client: config.client,
                 cancel,
+                client: config.client,
                 max_concurrent: config.max_concurrent,
                 demand_throttle: config.demand_throttle,
                 inflight: Arc::new(AtomicUsize::new(0)),

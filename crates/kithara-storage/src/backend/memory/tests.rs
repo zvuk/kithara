@@ -206,7 +206,6 @@ fn test_reactivate() {
 
 // `test_write_rejected_after_commit` removed: writing after commit is now a
 // compile error (`Resource<Committed, D>` has no `write_at`), not a runtime
-// rejection.
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
 #[case::sparse(100, b"sparse")]

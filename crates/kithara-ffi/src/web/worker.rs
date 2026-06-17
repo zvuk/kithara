@@ -24,8 +24,8 @@ use crate::{
 /// and each track build snapshots it into a [`ResourceConfig`].
 #[derive(Default)]
 struct BuildState {
-    keys: KeyOptions,
     headers: HashMap<String, String>,
+    keys: KeyOptions,
 }
 
 macro_rules! clog {

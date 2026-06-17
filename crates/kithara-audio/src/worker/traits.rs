@@ -18,20 +18,6 @@ mod kithara {
 pub trait AudioWorkerSource: Send + 'static {
     type Chunk: Send + 'static;
 
-    /// Advance the track FSM by one step.
-    ///
-    /// Handles seek preemption, source readiness, decoding, and all
-    /// internal state transitions. Returns:
-    /// - `Produced` — decoded chunk ready for the consumer.
-    /// - `StateChanged` — internal transition; caller should call again.
-    /// - `Blocked` — the source is not ready; the caller should wait for a wake.
-    /// - `Eof` — end of stream (may transition out via seek-after-EOF).
-    /// - `Failed` — terminal failure.
-    fn step_track(&mut self) -> track_fsm::TrackStep<Self::Chunk>;
-
-    /// Narrow seek-observe handle — epoch queries and decoder-node seek latch.
-    fn seek_observe(&self) -> Arc<dyn SeekObserve>;
-
     /// The producer's current decode epoch — the seek epoch the most recent
     /// decode operated under. The worker stamps terminal markers (EOF /
     /// failure) with this rather than the live `seek_observe().epoch()`,
@@ -49,6 +35,20 @@ pub trait AudioWorkerSource: Send + 'static {
     /// wake (a cross-thread `notify_one` the RT core must not make). The worker
     /// shell calls this once per pass, off the checked path. Default no-op.
     fn flush_deferred(&mut self) {}
+
+    /// Narrow seek-observe handle — epoch queries and decoder-node seek latch.
+    fn seek_observe(&self) -> Arc<dyn SeekObserve>;
+
+    /// Advance the track FSM by one step.
+    ///
+    /// Handles seek preemption, source readiness, decoding, and all
+    /// internal state transitions. Returns:
+    /// - `Produced` — decoded chunk ready for the consumer.
+    /// - `StateChanged` — internal transition; caller should call again.
+    /// - `Blocked` — the source is not ready; the caller should wait for a wake.
+    /// - `Eof` — end of stream (may transition out via seek-after-EOF).
+    /// - `Failed` — terminal failure.
+    fn step_track(&mut self) -> track_fsm::TrackStep<Self::Chunk>;
 
     /// One-time worker-thread warmup, called from the scheduler shell when the
     /// node registers. Pre-touches the produce-core read path so lazy global

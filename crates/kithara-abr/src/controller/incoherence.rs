@@ -92,10 +92,7 @@ impl AbrController {
 mod tests {
     use std::sync::Arc;
 
-    use kithara_platform::{
-        CancelToken,
-        time::{Duration, Instant},
-    };
+    use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
 
     use crate::{Abr, AbrController, AbrSettings};

@@ -99,11 +99,11 @@ impl Default for AbrSettings {
 pub struct AbrController {
     pub(super) settings: AbrSettings,
     pub(super) estimator: Arc<dyn Estimator>,
-    pub(super) self_weak: Weak<Self>,
     /// Parent cancel gating this controller's background watches. Per-watch
     /// incoherence tokens derive from it (`parent_cancel.child()`), so a parent
     /// cancel (player/downloader teardown) gates every in-flight watch.
     pub(super) parent_cancel: CancelToken,
+    pub(super) self_weak: Weak<Self>,
     next_peer_id: AtomicU64,
     peers: DashMap<AbrPeerId, Arc<PeerEntry>>,
 }

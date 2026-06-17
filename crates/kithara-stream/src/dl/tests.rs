@@ -65,15 +65,15 @@ fn test_body_stream(chunks: Vec<&'static [u8]>) -> BodyStream {
 /// (REAL wall time) is the only backstop.
 struct CompletionGate {
     done: AtomicUsize,
-    target: usize,
     ready: Notify,
+    target: usize,
 }
 
 impl CompletionGate {
     fn new(target: usize) -> Arc<Self> {
         Arc::new(Self {
-            done: AtomicUsize::new(0),
             target,
+            done: AtomicUsize::new(0),
             ready: Notify::default(),
         })
     }
@@ -707,10 +707,10 @@ type CompletionLog = Arc<Mutex<Vec<(PeerTag, usize)>>>;
 /// `SeekState` activity so a mid-stream flip of `set_playing` is observable.
 struct TaggedPriorityPeer {
     gate: Arc<CompletionGate>,
+    seek: Arc<SeekState>,
     completion_log: CompletionLog,
     remaining: Mutex<usize>,
     tag: PeerTag,
-    seek: Arc<SeekState>,
     url: Url,
 }
 

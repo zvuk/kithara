@@ -42,9 +42,9 @@ pub(super) struct MemState {
 ///
 /// `path()` returns `None`.
 pub struct MemDriver {
-    pub(super) state: Mutex<MemState>,
     /// Immutable committed snapshot for the lock-free read fast path.
     pub(super) committed: ArcSwapOption<Vec<u8>>,
+    pub(super) state: Mutex<MemState>,
 }
 
 impl fmt::Debug for MemDriver {
@@ -105,8 +105,8 @@ impl Driver for MemDriver {
         };
 
         let driver = Self {
-            state: Mutex::new(MemState { buf, len }),
             committed,
+            state: Mutex::new(MemState { buf, len }),
         };
 
         Ok((driver, init_state))

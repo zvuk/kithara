@@ -103,6 +103,8 @@ pub struct DecoderConfig {
     pub backend: DecoderBackend,
     /// Handle for dynamic byte length updates (HLS).
     pub byte_len_handle: Option<Arc<AtomicU64>>,
+    /// Optional byte-map handle over the underlying source.
+    pub byte_map: Option<Arc<dyn ByteMap>>,
     /// Raw byte buffer pool, propagated from the host. `None` falls
     /// back to `BytePool::default()`.
     pub byte_pool: Option<BytePool>,
@@ -114,8 +116,6 @@ pub struct DecoderConfig {
     /// PCM buffer pool, propagated from the host. `None` falls back to
     /// `PcmPool::default()`.
     pub pcm_pool: Option<PcmPool>,
-    /// Optional byte-map handle over the underlying source.
-    pub byte_map: Option<Arc<dyn ByteMap>>,
     /// Enable gapless trim wiring through the per-backend codec.
     #[builder(default = true)]
     pub gapless: bool,
@@ -501,8 +501,8 @@ fn create_file_symphonia_universal(
     let (mut demuxer, _byte_len) = SymphoniaDemuxer::open_file(
         source,
         FileOpen {
-            hint: config.hint.clone(),
             container,
+            hint: config.hint.clone(),
             byte_len_handle: config.byte_len_handle.clone(),
             byte_map: config.byte_map.clone(),
         },

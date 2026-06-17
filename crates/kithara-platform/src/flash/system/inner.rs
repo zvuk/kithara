@@ -1,9 +1,3 @@
-//! [`FlashInner`] — the single owner of all engine state — plus its parts:
-//! [`Clock`], [`Core`] (= [`Registry`] + [`Scheduler`] data behind ONE lock),
-//! the typed engine ids it mints, and the process-wide [`FLASH`] instance.
-//! The engine mechanics (advance rule, register/signal surface) live as
-//! `FlashInner` methods in the sibling files.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     panic::Location,
@@ -55,21 +49,18 @@ impl Clock {
         }
     }
 
+    /// Manually advance the virtual clock. Additive and test-only: the
+    /// production clock is driven solely by the quiescence engine, so the
+    /// engine is the single clock writer. The arithmetic clock tests use this
+    /// as a manual bump to exercise `Instant` arithmetic without the engine.
+    #[cfg(test)]
+    pub(in crate::flash) fn advance(&self, delta_nanos: u64) {
+        self.nanos.fetch_add(delta_nanos, Ordering::Release);
+    }
+
     /// Current virtual instant in nanoseconds.
     pub(in crate::flash) fn now_nanos(&self) -> u64 {
         self.nanos.load(Ordering::Acquire)
-    }
-
-    /// Engine-side store. Called only by `Core::try_advance` (the sole engine
-    /// writer), under the `core` lock.
-    pub(super) fn store(&self, nanos: u64) {
-        self.nanos.store(nanos, Ordering::Release);
-    }
-
-    /// Reset the timeline to its base (the harness `reset()` path).
-    fn reset(&self) {
-        self.nanos
-            .store(crate::flash::Instant::BASE_NANOS, Ordering::Release);
     }
 
     /// REAL arm of `Instant::now`: `BASE_NANOS + elapsed` since the lazily
@@ -81,39 +72,21 @@ impl Clock {
         crate::flash::Instant::BASE_NANOS.saturating_add(elapsed)
     }
 
-    /// Manually advance the virtual clock. Additive and test-only: the
-    /// production clock is driven solely by the quiescence engine, so the
-    /// engine is the single clock writer. The arithmetic clock tests use this
-    /// as a manual bump to exercise `Instant` arithmetic without the engine.
-    #[cfg(test)]
-    pub(in crate::flash) fn advance(&self, delta_nanos: u64) {
-        self.nanos.fetch_add(delta_nanos, Ordering::Release);
+    /// Reset the timeline to its base (the harness `reset()` path).
+    fn reset(&self) {
+        self.nanos
+            .store(crate::flash::Instant::BASE_NANOS, Ordering::Release);
+    }
+
+    /// Engine-side store. Called only by `Core::try_advance` (the sole engine
+    /// writer), under the `core` lock.
+    pub(super) fn store(&self, nanos: u64) {
+        self.nanos.store(nanos, Ordering::Release);
     }
 }
 
 /// Participant bookkeeping: the two quiescence counters plus the id mints.
 pub(in crate::flash) struct Registry {
-    /// SYNC participants currently RUNNING (OS threads not inside a wrapped
-    /// `park_timeout`/`Condvar` wait). Bumped by the firer on wake (real OS
-    /// scheduling latency must be covered), decremented at the next wait /
-    /// thread exit via the thread-local `Credit` bracket (`credit` module).
-    pub(super) active: usize,
-    /// ASYNC tasks the engine counts as NON-QUIESCENT. A task is counted from the
-    /// moment it becomes RUNNABLE — spawned, or woken (its waker fired and it is
-    /// queued to be polled) — until it next PARKS (poll returns `Pending` with no
-    /// pending re-wake), completes, or is dropped. Maintained by the spawn
-    /// poll-wrapper's per-task gate via `async_acquire`/`release_async`, NOT
-    /// the firer. Counting a woken-but-not-yet-repolled task (not merely a
-    /// mid-poll one) is what stops the clock jumping past a runnable task — it
-    /// closes the wake→poll window. The engine may advance only when BOTH
-    /// `active` and `active_async` are zero.
-    pub(super) active_async: usize,
-    /// Monotonic waiter-id mint — see `Registry::fresh_id`.
-    pub(super) next_id: u64,
-    /// Monotonic condvar-id mint — see `Registry::fresh_cv`.
-    pub(super) next_cv: u64,
-    /// Monotonic async-task-id mint (one per [`crate::flash::participate`]).
-    pub(super) next_task_id: u64,
     /// Identity of every async task currently holding an `active_async` slot,
     /// keyed by its task id and valued by its spawn site. Inserted on acquire
     /// (`async_acquire` / `gate_wake_parked`), removed on release
@@ -133,6 +106,27 @@ pub(in crate::flash) struct Registry {
     /// `pre_count_dedicated` slot not yet claimed, or a just-fired wake bump
     /// before its thread resumes) — the dump annotates that gap.
     pub(super) active_sync_holders: BTreeMap<ThreadKey, SyncHolder>,
+    /// Monotonic condvar-id mint — see `Registry::fresh_cv`.
+    pub(super) next_cv: u64,
+    /// Monotonic waiter-id mint — see `Registry::fresh_id`.
+    pub(super) next_id: u64,
+    /// Monotonic async-task-id mint (one per [`crate::flash::participate`]).
+    pub(super) next_task_id: u64,
+    /// SYNC participants currently RUNNING (OS threads not inside a wrapped
+    /// `park_timeout`/`Condvar` wait). Bumped by the firer on wake (real OS
+    /// scheduling latency must be covered), decremented at the next wait /
+    /// thread exit via the thread-local `Credit` bracket (`credit` module).
+    pub(super) active: usize,
+    /// ASYNC tasks the engine counts as NON-QUIESCENT. A task is counted from the
+    /// moment it becomes RUNNABLE — spawned, or woken (its waker fired and it is
+    /// queued to be polled) — until it next PARKS (poll returns `Pending` with no
+    /// pending re-wake), completes, or is dropped. Maintained by the spawn
+    /// poll-wrapper's per-task gate via `async_acquire`/`release_async`, NOT
+    /// the firer. Counting a woken-but-not-yet-repolled task (not merely a
+    /// mid-poll one) is what stops the clock jumping past a runnable task — it
+    /// closes the wake→poll window. The engine may advance only when BOTH
+    /// `active` and `active_async` are zero.
+    pub(super) active_async: usize,
 }
 
 /// Diagnostic identity of a sync `active` holder — a dedicated pacer thread.
@@ -233,12 +227,12 @@ impl Core {
 /// `self.core` and read/write `self.clock` in the SAME hold (or pass `&Clock`
 /// into `Core` methods) — never a pre-lock snapshot.
 pub(in crate::flash) struct FlashInner {
-    pub(in crate::flash) clock: Clock,
     /// The ONE engine lock (former global `SCHED`).
     pub(super) core: Mutex<Core>,
     /// Real-I/O pacer state + its lazily-spawned eternal thread. Lock order:
     /// `pacer.armed` is taken BEFORE `core`, never the other way.
     pub(super) pacer: Pacer,
+    pub(in crate::flash) clock: Clock,
 }
 
 impl FlashInner {

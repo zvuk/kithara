@@ -350,11 +350,11 @@ where
         let evict = Arc::new(EvictAssets::new(
             disk,
             EvictDeps {
+                lru,
+                deleter,
                 cfg: evict_cfg,
                 cancel: cancel.clone(),
-                lru,
                 pins: pins.clone(),
-                deleter,
             },
         ));
         let processing = Arc::new(ProcessingAssets::new(
@@ -411,21 +411,21 @@ where
             ));
         let mem = Arc::new(MemAssetStore::with_availability_and_deleter(
             MemStoreSetup {
+                active_resources,
                 cancel: cancel.clone(),
                 mem_resource_capacity: self.mem_resource_capacity,
                 availability: availability.clone(),
-                active_resources,
                 deleter: Arc::clone(&deleter),
             },
         ));
         let evict = Arc::new(EvictAssets::new(
             mem,
             EvictDeps {
+                lru,
+                deleter,
                 cfg: evict_cfg,
                 cancel: cancel.clone(),
-                lru,
                 pins: pins.clone(),
-                deleter,
             },
         ));
         let capacity = self

@@ -108,8 +108,8 @@ fn make_var_with_seek_obs(
         VariantParts {
             init,
             segments,
-            playlist_state: Arc::new(PlaylistState::new(Vec::new())),
             seek_obs,
+            playlist_state: Arc::new(PlaylistState::new(Vec::new())),
             codec: None,
             container: None,
         },
@@ -171,8 +171,8 @@ fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
         &ctx,
         SegmentActivateParams {
             from_seg,
-            seg_boundary,
             reader_pos,
+            seg_boundary,
         },
     );
 
@@ -510,7 +510,7 @@ fn variant_init_pending_stays_pending_after_commit_shrink() {
 /// Existence follows the EXT-X-MAP URL, not the HEAD size. Misclassifying it as
 /// `NotApplicable` drops the init: `read_at(0)` then routes to the media loop
 /// and serves segment 0's container where the demuxer expects `ftyp`
-/// ("re_mp4: ftyp not found"), or the reader wedges ("no progress").
+/// ("`re_mp4`: ftyp not found"), or the reader wedges ("no progress").
 #[kithara::test]
 fn init_with_url_but_zero_head_size_is_pending() {
     let ctx = test_ctx(3);
@@ -537,7 +537,7 @@ fn init_with_url_but_zero_head_size_is_pending() {
 /// HEAD, or the window before the init commits), the offset table seeds
 /// segment 0 at offset 0. A read at offset 0 must NOT serve that media — doing
 /// so hands the demuxer segment 0's container where the init's `ftyp` belongs
-/// ("re_mp4: ftyp not found"). The read is held pending until the init sizes
+/// ("`re_mp4`: ftyp not found"). The read is held pending until the init sizes
 /// the prefix.
 #[kithara::test]
 fn read_at_zero_holds_pending_while_init_unsized() {

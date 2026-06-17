@@ -28,6 +28,7 @@ use super::{
 pub struct HangDetector<C: HangDump = NoContext> {
     label: &'static str,
     timeout: Duration,
+    ctx: Option<C>,
     /// Stamped lazily on the first observation (`tick`/`remaining`), NOT in
     /// `new`, so the deadline and every later comparison read the SAME clock.
     /// Under `flash` the constructor can run outside the watched fn's
@@ -36,14 +37,13 @@ pub struct HangDetector<C: HangDump = NoContext> {
     /// `Instant::now` is real while the body's reads are virtual; an eager
     /// stamp mixes clocks and false-fires the moment virtual time outruns real.
     deadline: Option<Instant>,
-    ctx: Option<C>,
     dump_dir: Option<PathBuf>,
-    _marker: PhantomData<C>,
-    fired: bool,
-    /// Source location of the most recent tick — where the loop stalled.
-    last_tick: Option<(&'static str, u32)>,
     /// Source location of the most recent reset — the last observed progress.
     last_progress: Option<(&'static str, u32)>,
+    /// Source location of the most recent tick — where the loop stalled.
+    last_tick: Option<(&'static str, u32)>,
+    _marker: PhantomData<C>,
+    fired: bool,
     /// Ticks observed since the last reset (spin depth before the deadline).
     spins_since_progress: u32,
 }
@@ -52,9 +52,9 @@ impl<C: HangDump> HangDetector<C> {
     #[must_use]
     pub fn new(label: &'static str, timeout: Duration) -> Self {
         Self {
-            deadline: None,
             label,
             timeout,
+            deadline: None,
             ctx: None,
             dump_dir: None,
             fired: false,
@@ -101,6 +101,16 @@ impl<C: HangDump> HangDetector<C> {
         }
     }
 
+    /// Liveness budget left before the deadline, on the current (real or
+    /// virtual) clock; zero once it has passed. An event-driven wait parks
+    /// bounded by this: woken early by its event on progress, or released at
+    /// the deadline so the following [`tick`](Self::tick) fires on a genuine
+    /// stall — no busy-poll, and no dependency on counting the producer.
+    #[must_use]
+    pub fn remaining(&mut self) -> Duration {
+        self.deadline().saturating_duration_since(Instant::now())
+    }
+
     #[track_caller]
     pub fn reset(&mut self) {
         let loc = Location::caller();
@@ -113,16 +123,6 @@ impl<C: HangDump> HangDetector<C> {
         self.fired = false;
         self.last_progress = Some((file, line));
         self.spins_since_progress = 0;
-    }
-
-    /// Liveness budget left before the deadline, on the current (real or
-    /// virtual) clock; zero once it has passed. An event-driven wait parks
-    /// bounded by this: woken early by its event on progress, or released at
-    /// the deadline so the following [`tick`](Self::tick) fires on a genuine
-    /// stall — no busy-poll, and no dependency on counting the producer.
-    #[must_use]
-    pub fn remaining(&mut self) -> Duration {
-        self.deadline().saturating_duration_since(Instant::now())
     }
 
     /// Progress check without updating the stored context. Keeps whatever was

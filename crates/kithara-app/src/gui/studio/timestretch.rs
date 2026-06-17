@@ -34,12 +34,12 @@ use crate::{
 struct Consts;
 
 impl Consts {
+    /// Range / library pill height.
+    const PILL_H: f32 = 24.0;
     /// Selectable tempo bounds in ± percent.
     const RANGES: [u8; 4] = [8, 16, 50, 100];
     /// Shared height of the stat tile / key-lock / nudge row so they align.
     const STAT_H: f32 = 38.0;
-    /// Range / library pill height.
-    const PILL_H: f32 = 24.0;
 }
 
 /// The timestretch deck panel, matching the design `.ts` block: a single

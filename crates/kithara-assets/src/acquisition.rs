@@ -81,6 +81,31 @@ pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
     /// The writer phase produced by [`reactivate`](Self::reactivate).
     type Writer: WriteSide<Reader = Self>;
 
+    /// Whether `range` is fully readable.
+    fn contains_range(&self, range: Range<u64>) -> bool;
+
+    /// Whether the resource committed with zero length.
+    fn is_empty(&self) -> bool {
+        self.len() == Some(0)
+    }
+
+    /// Committed length, if known.
+    fn len(&self) -> Option<u64>;
+
+    /// First gap in available data starting at `from`, up to `limit`.
+    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
+
+    /// Backing file path, if any.
+    fn path(&self) -> Option<&Path>;
+
+    /// Consume this reader and reopen the backing resource for writing, minting
+    /// a **fresh** generation (a new readiness gate). Other clones of this
+    /// reader keep their own generation and are never poisoned.
+    ///
+    /// # Errors
+    /// Propagates the backing reactivate error.
+    fn reactivate(self) -> StorageResult<Self::Writer>;
+
     /// Read already-readable bytes at `offset`.
     ///
     /// # Errors
@@ -100,26 +125,6 @@ pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
     /// # Errors
     /// Propagates the backing read error.
     fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-
-    /// Wait until `range` is available (and, for processed resources, processed).
-    ///
-    /// # Errors
-    /// Propagates the backing wait error.
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
-
-    /// Whether `range` is fully readable.
-    fn contains_range(&self, range: Range<u64>) -> bool;
-
-    /// Committed length, if known.
-    fn len(&self) -> Option<u64>;
-
-    /// Whether the resource committed with zero length.
-    fn is_empty(&self) -> bool {
-        self.len() == Some(0)
-    }
-
-    /// First gap in available data starting at `from`, up to `limit`.
-    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
 
     /// Read the entire resource into a caller buffer; returns bytes read.
     ///
@@ -142,19 +147,14 @@ pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
         Ok(n)
     }
 
-    /// Backing file path, if any.
-    fn path(&self) -> Option<&Path>;
-
     /// Current runtime lifecycle status of the backing resource.
     fn status(&self) -> ResourceStatus;
 
-    /// Consume this reader and reopen the backing resource for writing, minting
-    /// a **fresh** generation (a new readiness gate). Other clones of this
-    /// reader keep their own generation and are never poisoned.
+    /// Wait until `range` is available (and, for processed resources, processed).
     ///
     /// # Errors
-    /// Propagates the backing reactivate error.
-    fn reactivate(self) -> StorageResult<Self::Writer>;
+    /// Propagates the backing wait error.
+    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
 }
 
 /// Write capability of a resource handle — the `Pending` phase.
@@ -174,24 +174,6 @@ pub trait WriteSide: Send + Sync + Debug + 'static {
     /// The reader phase produced by [`commit`](Self::commit).
     type Reader: ReadSide;
 
-    /// Stream raw (pre-processing) bytes to the backing resource.
-    ///
-    /// # Errors
-    /// Propagates the backing write error.
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
-
-    /// A shared read view of this writer's generation. The view is `Clone`;
-    /// the writer is not. For a processed (encrypted) writer the view blocks in
-    /// [`wait_range`](ReadSide::wait_range) until this writer
-    /// [`commit`](Self::commit)s.
-    fn reader(&self) -> Self::Reader;
-
-    /// A clone-able raw-write handle for streaming pre-processing bytes into
-    /// this writer's generation (see [`RawWriteHandle`]). Lets a `'static`
-    /// download closure write while the writer keeps sole ownership of
-    /// `commit`.
-    fn raw_write_handle(&self) -> RawWriteHandle;
-
     /// Finalize the resource (running any processing) and consume the writer
     /// into a [`ReadSide`] reader.
     ///
@@ -201,4 +183,22 @@ pub trait WriteSide: Send + Sync + Debug + 'static {
 
     /// Mark the resource failed, waking any waiting reader.
     fn fail(self, reason: String);
+
+    /// A clone-able raw-write handle for streaming pre-processing bytes into
+    /// this writer's generation (see [`RawWriteHandle`]). Lets a `'static`
+    /// download closure write while the writer keeps sole ownership of
+    /// `commit`.
+    fn raw_write_handle(&self) -> RawWriteHandle;
+
+    /// A shared read view of this writer's generation. The view is `Clone`;
+    /// the writer is not. For a processed (encrypted) writer the view blocks in
+    /// [`wait_range`](ReadSide::wait_range) until this writer
+    /// [`commit`](Self::commit)s.
+    fn reader(&self) -> Self::Reader;
+
+    /// Stream raw (pre-processing) bytes to the backing resource.
+    ///
+    /// # Errors
+    /// Propagates the backing write error.
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
 }

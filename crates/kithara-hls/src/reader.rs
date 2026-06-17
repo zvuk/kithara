@@ -116,6 +116,10 @@ impl HlsReaderEventSink {
 }
 
 impl ReaderEventSink for HlsReaderEventSink {
+    fn flush(&mut self) {
+        self.bus.flush();
+    }
+
     fn on_chunk(&mut self, signal: ReaderChunkSignal) {
         if !matches!(signal, ReaderChunkSignal::Chunk) {
             return;
@@ -146,9 +150,5 @@ impl ReaderEventSink for HlsReaderEventSink {
         self.last_cursor = to;
         self.last_segment = None;
         self.publish_seek(from, to);
-    }
-
-    fn flush(&mut self) {
-        self.bus.flush();
     }
 }

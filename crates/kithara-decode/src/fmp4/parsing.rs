@@ -431,9 +431,9 @@ pub(crate) fn parse_segment_frames(
             collect_frames(
                 &SegmentParse {
                     init,
+                    segment_bytes,
                     moof: &moof,
                     moof_start: box_start,
-                    segment_bytes,
                 },
                 &mut frames,
             )?;
@@ -455,8 +455,8 @@ pub(crate) fn parse_segment_frames(
 struct SegmentParse<'a> {
     init: &'a Fmp4InitInfo,
     moof: &'a MoofBox,
-    moof_start: u64,
     segment_bytes: &'a [u8],
+    moof_start: u64,
 }
 
 fn collect_frames(parse: &SegmentParse, out: &mut Vec<Fmp4Frame>) -> DecodeResult<()> {

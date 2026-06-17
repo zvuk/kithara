@@ -6,29 +6,29 @@ use crate::waveform::{BeatGrid, GridSegment};
 /// Grid-cleanup tuning.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct GridParams {
-    /// Drop a downbeat closer than this fraction of a nominal bar to its
-    /// predecessor (double-detection filter).
-    pub(crate) min_gap_ratio: f64,
-    /// Hard sanity bounds on a bar length, as fractions of the nominal bar.
-    pub(crate) min_bar_ratio: f64,
     pub(crate) max_bar_ratio: f64,
-    /// Neighbour median window (bars each side) for outlier classification.
-    pub(crate) outlier_window: usize,
-    /// Outlier threshold vs the neighbour-window median bar factor.
-    pub(crate) outlier_ratio: f64,
-    /// Sliding window length (bars) for the stable-tempo anchor search.
-    pub(crate) stable_window_bars: usize,
     /// Stable window median must lie within this fraction of nominal.
     pub(crate) median_trust_ratio: f64,
-    /// Bisection leaf fit tolerance: worst bar residual, milliseconds.
-    pub(crate) residual_ms: f64,
-    /// Minimum segment length in bars.
-    pub(crate) min_leaf_bars: usize,
-    /// Snap bisection split points to multiples of this many bars.
-    pub(crate) align_bars: usize,
     /// Merge adjacent leaves whose ratio corrections agree within this
     /// epsilon — collinear halves around the anchor collapse to one segment.
     pub(crate) merge_ratio_eps: f64,
+    /// Hard sanity bounds on a bar length, as fractions of the nominal bar.
+    pub(crate) min_bar_ratio: f64,
+    /// Drop a downbeat closer than this fraction of a nominal bar to its
+    /// predecessor (double-detection filter).
+    pub(crate) min_gap_ratio: f64,
+    /// Outlier threshold vs the neighbour-window median bar factor.
+    pub(crate) outlier_ratio: f64,
+    /// Bisection leaf fit tolerance: worst bar residual, milliseconds.
+    pub(crate) residual_ms: f64,
+    /// Snap bisection split points to multiples of this many bars.
+    pub(crate) align_bars: usize,
+    /// Minimum segment length in bars.
+    pub(crate) min_leaf_bars: usize,
+    /// Neighbour median window (bars each side) for outlier classification.
+    pub(crate) outlier_window: usize,
+    /// Sliding window length (bars) for the stable-tempo anchor search.
+    pub(crate) stable_window_bars: usize,
 }
 
 impl Default for GridParams {
@@ -65,8 +65,8 @@ pub(crate) fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) 
     db.sort_by(f64::total_cmp);
     if db.len() < 2 {
         return BeatGrid {
-            bpm: 0.0,
             beats,
+            bpm: 0.0,
             downbeats: positions_to_frames(&db),
             segments: Vec::new(),
         };
@@ -82,9 +82,9 @@ pub(crate) fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) 
     // trustworthy piecewise grid — report tempo only, no segments.
     let Some((anchor_idx, nominal_bar)) = find_stable_window(&db, nominal_seed, params) else {
         return BeatGrid {
-            bpm: bar_to_bpm(median(&bar_gaps(&db)), sr),
             beats,
             downbeats,
+            bpm: bar_to_bpm(median(&bar_gaps(&db)), sr),
             segments: Vec::new(),
         };
     };
@@ -94,10 +94,10 @@ pub(crate) fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) 
     let segments = build_segments(&db, &outliers, &boundaries, nominal_bar, params);
 
     BeatGrid {
-        bpm: bar_to_bpm(nominal_bar, sr),
         beats,
         downbeats,
         segments,
+        bpm: bar_to_bpm(nominal_bar, sr),
     }
 }
 
@@ -425,15 +425,15 @@ mod tests {
 
     impl Consts {
         const SR: u32 = 44_100;
+        const TOL_100MS: u64 = 4_410;
         /// 0.02 s and 0.1 s at `SR`, in frames.
         const TOL_20MS: u64 = 882;
-        const TOL_100MS: u64 = 4_410;
     }
 
     fn raw(downbeats: Vec<f32>) -> RawBeats {
         RawBeats {
-            beats: Vec::new(),
             downbeats,
+            beats: Vec::new(),
         }
     }
 

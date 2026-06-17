@@ -181,7 +181,6 @@ impl File {
         // concurrent consumer of the same URL (e.g. a waveform analyzer)
         // loses and reads the shared bytes instead of issuing its own
         // download. With a private per-stream store this is a single
-        // consumer that always wins.
         let (demand_lease, producer) =
             backend.attach_demand(&key, coord.read_pos_handle(), config.look_ahead_bytes);
 
@@ -193,9 +192,9 @@ impl File {
             },
             FileAssetCtx {
                 url,
+                reader,
                 headers: config.headers,
                 backend: Arc::clone(&backend),
-                reader,
                 writer: Mutex::new(Some(writer)),
                 raw: Some(raw),
                 key: key.clone(),
