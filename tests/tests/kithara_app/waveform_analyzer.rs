@@ -30,10 +30,13 @@ async fn run_analysis(
 ) -> Option<TrackAnalysis> {
     let mut runner = TrackAnalysisRunner::new(master, buckets);
     let mut rx = runner.analyze(config);
-    if rx.changed().await.is_err() {
-        return None;
+    
+    // Staged analysis can emit twice (waveform, then waveform+beat).
+    let mut last = None;
+    while rx.changed().await.is_ok() {
+        last = rx.borrow().clone();
     }
-    rx.borrow().clone()
+    last
 }
 
 #[kithara::test(

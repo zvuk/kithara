@@ -18,9 +18,9 @@ use crate::{
     waveform::{TrackAnalysis, TrackAnalysisRunner},
 };
 
-/// Analysis resolution for the colored waveform. Changing it invalidates
-/// cached track-analysis blobs.
-const WAVEFORM_BUCKETS: usize = 1500;
+/// Upper bound on waveform buckets (native = one per FFT window); only caps very
+/// long tracks to bound the cached blob.
+const WAVEFORM_MAX_BUCKETS: usize = 96_000;
 
 /// Analysis-aware state listener: mirrors queue events into [`UiState`] and
 /// drives the background [`AnalysisController`]. Starts analysing the already
@@ -41,9 +41,7 @@ pub(crate) async fn listen(
         tokio::select! {
             biased;
             () = cancel.cancelled() => break,
-            () = driver.wait_result() => {
-                driver.on_result(&queue, &state, &config);
-            }
+            () = driver.drive(&queue, &state, &config) => {}
             event = rx.recv() => match event {
                 Ok(event) => {
                     let track_changed =
@@ -87,13 +85,20 @@ struct Run {
     rx: watch::Receiver<Option<TrackAnalysis>>,
 }
 
+/// A run that closed with a usable analysis result.
+struct CompletedRun {
+    track_id: TrackId,
+    key: Option<AnalysisKey>,
+    analysis: TrackAnalysis,
+}
+
 impl AnalysisController {
     /// `cancel` must be a child of the app master so analysis stops on app
     /// shutdown; `store` is the shared file store whose per-track asset
     /// scopes hold the durable analysis blobs.
     pub(crate) fn new(cancel: &CancellationToken, store: Option<Arc<AssetStore>>) -> Self {
         Self {
-            runner: TrackAnalysisRunner::new(cancel, WAVEFORM_BUCKETS),
+            runner: TrackAnalysisRunner::new(cancel, WAVEFORM_MAX_BUCKETS),
             cache: TrackAnalysisCache::new(store, analysis_fingerprint()),
             current: None,
             displayed: None,
@@ -101,28 +106,25 @@ impl AnalysisController {
         }
     }
 
-    /// Await the in-flight run's result, or pend forever when no run is
-    /// active so the caller's `select!` branch stays inert.
-    pub(crate) async fn wait_result(&mut self) {
-        match &mut self.current {
-            Some(run) => {
-                // `changed` errs when the sender dropped without a result
-                // (failed/cancelled run); `on_result` then just clears it.
-                let _ = run.rx.changed().await;
-            }
-            None => std::future::pending::<()>().await,
-        }
-    }
-
-    /// Commit the finished (or failed) run, then start the next pending one.
-    pub(crate) fn on_result(
+    /// Await the run's next event and handle it: publish the staged
+    /// intermediate, or commit and pump on close. Parks when no run is active.
+    pub(crate) async fn drive(
         &mut self,
         queue: &Arc<Queue>,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
-        self.commit(state);
-        self.pump(queue, state, config);
+        let closed = match &mut self.current {
+            Some(run) => run.rx.changed().await.is_err(),
+            None => std::future::pending::<bool>().await,
+        };
+
+        if closed {
+            self.commit(state);
+            self.pump(queue, state, config);
+        } else {
+            self.publish_intermediate(state);
+        }
     }
 
     /// The current track changed: put it at the front of the queue and
@@ -195,7 +197,7 @@ impl AnalysisController {
                 Plan::Skip => {}
                 Plan::Serve(analysis) => {
                     if is_current {
-                        state.lock_sync().analysis = Some(analysis);
+                        state.lock_sync().set_analysis(Some(analysis));
                         self.displayed = key;
                     }
                 }
@@ -211,7 +213,7 @@ impl AnalysisController {
                     };
 
                     if is_current {
-                        state.lock_sync().analysis = None;
+                        state.lock_sync().set_analysis(None);
                         self.displayed = None;
                     }
 
@@ -223,11 +225,10 @@ impl AnalysisController {
         }
     }
 
-    /// Commit a finished analysis: cache it under its content key (valid for
-    /// that content regardless of the current track), then publish it if its
-    /// track is still current. Clears the run either way.
-    fn commit(&mut self, state: &Mutex<UiState>) {
-        let Some(run) = self.current.take() else {
+    /// Publish the first part emit to the UI (no caching) when its
+    /// track is still current; the beat overlay arrives on the closing commit.
+    fn publish_intermediate(&self, state: &Mutex<UiState>) {
+        let Some(run) = &self.current else {
             return;
         };
 
@@ -235,22 +236,37 @@ impl AnalysisController {
             return;
         };
 
-        if let Some(key) = run.key.clone() {
-            self.cache.put(key, analysis.clone());
-        }
+        publish_if_current(state, run.track_id, analysis);
+    }
 
-        let mut st = state.lock_sync();
-        let still_current = st
-            .current_track_index
-            .and_then(|i| st.tracks.get(i))
-            .map(|entry| entry.id);
-        let is_current = still_current == Some(run.track_id);
-        if is_current {
-            st.analysis = Some(analysis);
+    /// Cache the finished analysis under its content key, publish it if its
+    /// track is still current, and clear the run.
+    fn commit(&mut self, state: &Mutex<UiState>) {
+        let Some(completed) = self.take_completed_run() else {
+            return;
+        };
+
+        self.cache_completed(&completed);
+
+        if publish_if_current(state, completed.track_id, completed.analysis) {
+            self.displayed = completed.key;
         }
-        drop(st);
-        if is_current {
-            self.displayed = run.key;
+    }
+
+    fn take_completed_run(&mut self) -> Option<CompletedRun> {
+        let run = self.current.take()?;
+        let analysis = run.rx.borrow().clone()?;
+
+        Some(CompletedRun {
+            track_id: run.track_id,
+            key: run.key,
+            analysis,
+        })
+    }
+
+    fn cache_completed(&mut self, completed: &CompletedRun) {
+        if let Some(key) = &completed.key {
+            self.cache.put(key.clone(), completed.analysis.clone());
         }
     }
 }
@@ -259,7 +275,7 @@ impl AnalysisController {
 /// A mismatch is a cache miss, so config changes re-analyse.
 fn analysis_fingerprint() -> String {
     let beat = beat_cache_tag().unwrap_or_else(|| "off".to_string());
-    format!("buckets={WAVEFORM_BUCKETS};beat={beat}")
+    format!("wave=native:max{WAVEFORM_MAX_BUCKETS};beat={beat}")
 }
 
 /// What [`AnalysisController::pump`] should do for a track.
@@ -310,9 +326,22 @@ fn pending_order(ids: &[TrackId], current: Option<usize>) -> VecDeque<TrackId> {
 
 fn current_track_id(state: &Mutex<UiState>) -> Option<TrackId> {
     let st = state.lock_sync();
+    current_track_id_in(&st)
+}
+
+fn current_track_id_in(st: &UiState) -> Option<TrackId> {
     st.current_track_index
         .and_then(|i| st.tracks.get(i))
         .map(|entry| entry.id)
+}
+
+fn publish_if_current(state: &Mutex<UiState>, track_id: TrackId, analysis: TrackAnalysis) -> bool {
+    let mut st = state.lock_sync();
+    if current_track_id_in(&st) != Some(track_id) {
+        return false;
+    }
+    st.set_analysis(Some(analysis));
+    true
 }
 
 /// Build an analysis resource from a track's source, reusing the shared
@@ -327,10 +356,14 @@ fn resource_config_from_source(source: TrackSource, config: &AppConfig) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use kithara::audio::Waveform;
+    use kithara::{audio::Waveform, events::TrackId};
+    use kithara_platform::{CancellationToken, sync::Mutex};
+    use kithara_queue::{Queue, QueueConfig};
+    use tokio::sync::watch;
 
-    use super::{Plan, pending_order, plan_analysis};
+    use super::{AnalysisController, Plan, Run, pending_order, plan_analysis};
     use crate::{
+        state::UiState,
         wave_cache::{AnalysisKey, TrackAnalysisCache},
         waveform::TrackAnalysis,
     };
@@ -349,6 +382,33 @@ mod tests {
 
     fn cache() -> TrackAnalysisCache {
         TrackAnalysisCache::new(None, "test".to_string())
+    }
+
+    fn state_with_current(ids: &[TrackId], current: usize) -> Mutex<UiState> {
+        let queue = Queue::new(QueueConfig::new());
+        for id in ids {
+            queue.append_with_id(*id, format!("file:///tmp/track-{id}.mp3"));
+        }
+        let mut state = UiState::empty();
+        state.tracks = queue.tracks();
+        state.current_track_index = Some(current);
+        Mutex::new(state)
+    }
+
+    fn controller_with_run(
+        track_id: TrackId,
+        key: AnalysisKey,
+        value: Option<TrackAnalysis>,
+    ) -> (AnalysisController, watch::Sender<Option<TrackAnalysis>>) {
+        let cancel = CancellationToken::default();
+        let mut controller = AnalysisController::new(&cancel, None);
+        let (tx, rx) = watch::channel(value);
+        controller.current = Some(Run {
+            track_id,
+            key: Some(key),
+            rx,
+        });
+        (controller, tx)
     }
 
     #[test]
@@ -391,8 +451,6 @@ mod tests {
 
     #[test]
     fn pending_puts_current_track_first_then_list_order() {
-        use kithara::events::TrackId;
-
         let ids: Vec<TrackId> = [10u64, 11, 12].into_iter().map(TrackId::from).collect();
 
         let order: Vec<u64> = pending_order(&ids, Some(1))
@@ -406,5 +464,86 @@ mod tests {
             .map(u64::from)
             .collect();
         assert_eq!(order, vec![10, 11, 12], "no current: plain list order");
+    }
+
+    /// Drive `commit` with a run whose result channel already holds `value`,
+    /// returning whether the run's key landed in the cache.
+    fn commit_caches(value: Option<TrackAnalysis>) -> bool {
+        let key = AnalysisKey::new("root");
+        let (mut controller, tx) = controller_with_run(TrackId::allocate(), key.clone(), value);
+        let state = Mutex::new(UiState::empty());
+        controller.commit(&state);
+        drop(tx);
+        controller.cache.get(&key).is_some()
+    }
+
+    #[test]
+    fn commit_caches_the_complete_result() {
+        assert!(
+            commit_caches(Some(analysis())),
+            "a close carrying a value caches the complete analysis"
+        );
+    }
+
+    #[test]
+    fn commit_caches_nothing_when_the_run_failed() {
+        assert!(
+            !commit_caches(None),
+            "a run that closes with no value (failure/cancel) caches nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn commit_publishes_current_track_and_marks_displayed() {
+        let key = AnalysisKey::new("root_current");
+        let analysis = analysis();
+        let ids = [
+            TrackId::allocate(),
+            TrackId::allocate(),
+            TrackId::allocate(),
+        ];
+        let (mut controller, tx) = controller_with_run(ids[1], key.clone(), Some(analysis));
+        let state = state_with_current(&ids, 1);
+
+        controller.commit(&state);
+
+        let state = state.lock_sync();
+        assert!(state.analysis.is_some(), "current run publishes to the UI");
+        assert_eq!(
+            controller.displayed.as_ref(),
+            Some(&key),
+            "displayed tracks the content key currently shown in the UI"
+        );
+        drop(tx);
+    }
+
+    #[tokio::test]
+    async fn commit_caches_stale_track_without_publishing_or_marking_displayed() {
+        let key = AnalysisKey::new("root_stale");
+        let analysis = analysis();
+        let ids = [
+            TrackId::allocate(),
+            TrackId::allocate(),
+            TrackId::allocate(),
+        ];
+        let (mut controller, tx) = controller_with_run(ids[0], key.clone(), Some(analysis));
+        let state = state_with_current(&ids, 1);
+
+        controller.commit(&state);
+
+        let state = state.lock_sync();
+        assert!(
+            state.analysis.is_none(),
+            "stale run must not replace the current track's analysis"
+        );
+        assert!(
+            controller.cache.get(&key).is_some(),
+            "stale run is still reusable by content key"
+        );
+        assert!(
+            controller.displayed.is_none(),
+            "stale cached analysis is not the analysis displayed by the UI"
+        );
+        drop(tx);
     }
 }

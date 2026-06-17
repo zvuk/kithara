@@ -17,7 +17,6 @@ use tracing::warn;
 /// and keeps at most one run in flight. Dropping it cancels the run and
 /// stops the worker.
 pub struct TrackAnalysisRunner {
-    cancel: CancellationToken,
     worker: Arc<AnalysisWorker>,
     current: Option<RunHandle>,
     /// Whether any analyzer is compiled in; without one a decode pass would
@@ -35,18 +34,16 @@ struct RunHandle {
 
 impl TrackAnalysisRunner {
     /// `master` must be a child of the app master cancel; the worker thread
-    /// and every run scope live under it. `buckets` is the waveform
-    /// resolution registered with the worker.
+    /// and every run scope live under it. `buckets` caps the waveform output;
+    /// the native window count is the real resolution.
     #[must_use]
     pub fn new(master: &CancellationToken, buckets: usize) -> Self {
-        let cancel = master.child_token();
         let builder = AnalyzerBuilder::default()
             .with_waveform(buckets)
             .with_beat();
         let active = !builder.is_empty();
-        let worker = Arc::new(AnalysisWorker::new(&cancel, builder));
+        let worker = Arc::new(AnalysisWorker::new(master, builder));
         Self {
-            cancel,
             worker,
             current: None,
             active,
@@ -60,16 +57,13 @@ impl TrackAnalysisRunner {
         self.active
     }
 
-    /// Cancel any prior run and queue `config` for analysis. The latest
-    /// result (or none on failure/cancel) arrives on the returned receiver.
-    ///
-    /// Two watch channels bridge here on purpose: this receiver must exist
-    /// before the async `Resource` open completes, while the worker hands
-    /// out its own channel only once the opened reader is queued.
+    /// Cancel any prior run and queue `config` for analysis.
+    /// Staged results arrive on the returned receiver,
+    /// which closes when the run ends; nothing arrives on failure/cancel.
     pub fn analyze(&mut self, config: ResourceConfig) -> watch::Receiver<Option<TrackAnalysis>> {
         self.clear();
 
-        let run = self.cancel.child_token();
+        let run = self.worker.child_token();
         let (tx, rx) = watch::channel(None);
         let task = tokio::spawn(run_analysis(
             Arc::clone(&self.worker),
@@ -81,8 +75,7 @@ impl TrackAnalysisRunner {
         rx
     }
 
-    /// Cancel the in-flight run, if any, without starting a new one. The
-    /// worker skips or aborts the job at its next cancel check.
+    /// Cancel the in-flight run.
     pub fn clear(&mut self) {
         if let Some(prev) = self.current.take() {
             prev.cancel.cancel();
@@ -94,12 +87,11 @@ impl TrackAnalysisRunner {
 impl Drop for TrackAnalysisRunner {
     fn drop(&mut self) {
         self.clear();
-        self.cancel.cancel();
     }
 }
 
-/// Open `config` and run it through the shared worker, forwarding the
-/// result to `tx`. Nothing is sent on failure or cancel.
+/// Open `config` and run it through the shared worker, forwarding every
+/// staged update to `tx`.
 async fn run_analysis(
     worker: Arc<AnalysisWorker>,
     config: ResourceConfig,
@@ -110,13 +102,13 @@ async fn run_analysis(
         return;
     };
     let mut rx = worker.analyze(reader, cancel);
-    if rx.changed().await.is_err() {
-        return;
-    }
-    let analysis = rx.borrow().clone();
-    if let Some(analysis) = analysis {
-        // The receiver may be gone (deck swapped); a failed send is fine.
-        let _ = tx.send(Some(analysis));
+
+    while rx.changed().await.is_ok() {
+        let analysis = rx.borrow().clone();
+        if let Some(analysis) = analysis {
+            // The receiver may be gone (deck swapped).
+            let _ = tx.send(Some(analysis));
+        }
     }
 }
 
