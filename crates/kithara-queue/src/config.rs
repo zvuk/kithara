@@ -1,7 +1,7 @@
 use std::{fmt, num::NonZeroUsize, sync::Arc};
 
 use bon::Builder;
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 use kithara_play::PlayerImpl;
 
 /// Default parallelism cap for async track loads.
@@ -47,7 +47,7 @@ pub struct QueueConfig {
     /// queue subtree cascades from one app-wide owner; `None` falls back
     /// to a fresh standalone token (test / library use). Must never be
     /// `None` on the production app path.
-    pub cancel: Option<CancellationToken>,
+    pub cancel: Option<CancelToken>,
 
     /// Whether the queue auto-advances to the next track at EOF.
     #[builder(default = true)]
@@ -93,7 +93,7 @@ impl QueueConfig {
     /// Thread an app-wide master cancel so the queue subtree derives from
     /// a single owner instead of minting its own root.
     #[must_use]
-    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
+    pub fn with_cancel(mut self, cancel: CancelToken) -> Self {
         self.cancel = Some(cancel);
         self
     }

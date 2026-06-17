@@ -11,7 +11,7 @@ use std::{
 };
 
 use dashmap::DashMap;
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use kithara_storage::AvailabilityObserver;
 use rangemap::RangeSet;
 
@@ -109,7 +109,7 @@ impl AvailabilityIndex {
         if let Some(asset) = self.inner.assets.get(root)
             && let Some(arc) = asset.get(path)
         {
-            return arc.lock_sync().ranges.clone();
+            return arc.lock().ranges.clone();
         }
         RangeSet::new()
     }
@@ -135,7 +135,7 @@ impl AvailabilityIndex {
         if let Some(asset) = self.inner.assets.get(root)
             && let Some(arc) = asset.get(path)
         {
-            return arc.lock_sync().contains(&range);
+            return arc.lock().contains(&range);
         }
         false
     }
@@ -145,7 +145,7 @@ impl AvailabilityIndex {
         if let Some(asset) = self.inner.assets.get(root)
             && let Some(arc) = asset.get(path)
         {
-            return arc.lock_sync().final_len;
+            return arc.lock().final_len;
         }
         None
     }
@@ -181,7 +181,7 @@ impl AvailabilityIndex {
             || {
                 asset_map
                     .entry(path.to_string())
-                    .or_insert_with(|| Arc::new(Mutex::new(Availability::default())))
+                    .or_insert_with(|| Arc::new(Mutex::default()))
                     .clone()
             },
             |arc| arc.clone(),
@@ -191,7 +191,7 @@ impl AvailabilityIndex {
     pub(crate) fn record_commit(&self, key: &ResourceKey, final_len: u64) {
         let (root, path) = Self::resolve_refs(key);
         let arc = self.insert_or_get_entry(root, path);
-        arc.lock_sync().mark_committed(final_len);
+        arc.lock().mark_committed(final_len);
         self.inner.dirty.store(true, Ordering::Release);
     }
 
@@ -201,7 +201,7 @@ impl AvailabilityIndex {
         }
         let (root, path) = Self::resolve_refs(key);
         let arc = self.insert_or_get_entry(root, path);
-        arc.lock_sync().insert(range);
+        arc.lock().insert(range);
         self.inner.dirty.store(true, Ordering::Release);
     }
 
@@ -295,7 +295,7 @@ impl AvailabilityObserver for ScopedAvailabilityObserver {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use kithara_platform::{CancellationToken, time::Duration};
+    use kithara_platform::{CancelToken, time::Duration};
     use kithara_storage::{Atomic, MmapOptions, MmapResource, OpenMode, Resource};
     use kithara_test_utils::kithara;
     use tempfile::TempDir;
@@ -427,7 +427,7 @@ mod tests {
     fn index_snapshot_and_seed_roundtrip() {
         let dir = TempDir::new().unwrap();
         let res: MmapResource = Resource::open(
-            CancellationToken::default(),
+            CancelToken::never(),
             MmapOptions::for_path(dir.path().join("availability.bin"))
                 .initial_len(4096)
                 .mode(OpenMode::ReadWrite)
@@ -439,9 +439,18 @@ mod tests {
         let idx1 = AvailabilityIndex::new();
         let k1 = ResourceKey::relative("test_asset", "file1");
         let k2 = ResourceKey::relative("test_asset", "file2");
+        let k3 = ResourceKey::relative("test_asset", "file3");
 
+        // k1: written then committed — a committed range round-trips.
         idx1.record_write(&k1, 0..10);
+        idx1.record_commit(&k1, 10);
+        // k2: committed via final length — round-trips.
         idx1.record_commit(&k2, 50);
+        // k3: written but NEVER committed — the snapshot is a committed-only
+        // crash-recovery contract, so an uncommitted partial write must NOT
+        // round-trip (it would otherwise resurrect a partial segment whose
+        // `.tmp` was never renamed).
+        idx1.record_write(&k3, 0..10);
 
         idx1.persist_to(&atomic).unwrap();
 
@@ -450,13 +459,18 @@ mod tests {
 
         assert!(idx2.contains_range(&k1, 0..10));
         assert_eq!(idx2.final_len(&k2), Some(50));
+        assert!(
+            !idx2.contains_range(&k3, 0..10),
+            "uncommitted partial write must not persist into the snapshot"
+        );
+        assert_eq!(idx2.final_len(&k3), None);
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn schema_empty_resource_loads_empty() {
         let dir = TempDir::new().unwrap();
         let res: MmapResource = Resource::open(
-            CancellationToken::default(),
+            CancelToken::never(),
             MmapOptions::for_path(dir.path().join("availability.bin"))
                 .mode(OpenMode::ReadWrite)
                 .build(),
@@ -473,7 +487,7 @@ mod tests {
     fn schema_corrupt_payload_loads_empty() {
         let dir = TempDir::new().unwrap();
         let res: MmapResource = Resource::open(
-            CancellationToken::default(),
+            CancelToken::never(),
             MmapOptions::for_path(dir.path().join("availability.bin"))
                 .initial_len(4096)
                 .mode(OpenMode::ReadWrite)

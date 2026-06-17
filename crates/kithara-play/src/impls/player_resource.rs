@@ -1,7 +1,8 @@
-use std::{num::NonZeroU32, ops::Range, sync::Arc, time::Duration};
+use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
 use kithara_audio::ServiceClass;
 use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_platform::time::Duration;
 use tracing::warn;
 
 #[rustfmt::skip]
@@ -59,7 +60,7 @@ impl PlayerResource {
     pub fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
         let spec = resource.spec();
         let channels = spec.channels as usize;
-        let buffer_len = (spec.sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
+        let buffer_len = (spec.sample_rate.get() as usize / Self::BUFFER_DURATION_DIVISOR)
             * channels.max(Self::STEREO_CHANNELS);
 
         let channel_buffers = std::array::from_fn(|_| {

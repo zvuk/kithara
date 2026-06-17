@@ -6,9 +6,15 @@ use kithara::{
     events::{Event, EventReceiver, TrackId},
     prelude::ResourceConfig,
 };
-use kithara_platform::{CancellationToken, sync::Mutex};
+use kithara_platform::{
+    CancelToken,
+    sync::Mutex,
+    tokio::{
+        self,
+        sync::{broadcast::error::RecvError, watch},
+    },
+};
 use kithara_queue::{Queue, QueueEvent, TrackSource};
-use tokio::sync::{broadcast::error::RecvError, watch};
 
 use crate::{
     config::AppConfig,
@@ -29,7 +35,7 @@ pub(crate) async fn listen(
     queue: Arc<Queue>,
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     mut rx: EventReceiver,
 ) {
     let mut driver = AnalysisController::new(&cancel, Some(Arc::clone(&config.file_asset_store)));
@@ -91,7 +97,7 @@ impl AnalysisController {
     /// `cancel` must be a child of the app master so analysis stops on app
     /// shutdown; `store` is the shared file store whose per-track asset
     /// scopes hold the durable analysis blobs.
-    pub(crate) fn new(cancel: &CancellationToken, store: Option<Arc<AssetStore>>) -> Self {
+    pub(crate) fn new(cancel: &CancelToken, store: Option<Arc<AssetStore>>) -> Self {
         Self {
             runner: TrackAnalysisRunner::new(cancel, WAVEFORM_BUCKETS),
             cache: TrackAnalysisCache::new(store, analysis_fingerprint()),
@@ -158,7 +164,7 @@ impl AnalysisController {
         config: &AppConfig,
     ) {
         {
-            let st = state.lock_sync();
+            let st = state.lock();
             let ids: Vec<TrackId> = st.tracks.iter().map(|entry| entry.id).collect();
             self.pending = pending_order(&ids, st.current_track_index);
         }
@@ -195,7 +201,7 @@ impl AnalysisController {
                 Plan::Skip => {}
                 Plan::Serve(analysis) => {
                     if is_current {
-                        state.lock_sync().analysis = Some(analysis);
+                        state.lock().analysis = Some(analysis);
                         self.displayed = key;
                     }
                 }
@@ -211,7 +217,7 @@ impl AnalysisController {
                     };
 
                     if is_current {
-                        state.lock_sync().analysis = None;
+                        state.lock().analysis = None;
                         self.displayed = None;
                     }
 
@@ -239,7 +245,7 @@ impl AnalysisController {
             self.cache.put(key, analysis.clone());
         }
 
-        let mut st = state.lock_sync();
+        let mut st = state.lock();
         let still_current = st
             .current_track_index
             .and_then(|i| st.tracks.get(i))
@@ -309,7 +315,7 @@ fn pending_order(ids: &[TrackId], current: Option<usize>) -> VecDeque<TrackId> {
 }
 
 fn current_track_id(state: &Mutex<UiState>) -> Option<TrackId> {
-    let st = state.lock_sync();
+    let st = state.lock();
     st.current_track_index
         .and_then(|i| st.tracks.get(i))
         .map(|entry| entry.id)
@@ -337,7 +343,7 @@ mod tests {
 
     fn one_bucket_wave() -> Waveform {
         // version 1 + one bucket of three 0.5 band heights (0.5 = 0x3F000000).
-        Waveform::from_bytes(&[1, 0, 0, 0, 0, 0, 0, 63, 0, 0, 0, 63, 0, 0, 0, 63])
+        Waveform::try_from([1, 0, 0, 0, 0, 0, 0, 63, 0, 0, 0, 63, 0, 0, 0, 63].as_slice())
             .expect("hand-built blob is valid")
     }
 

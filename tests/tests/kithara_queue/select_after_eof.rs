@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::sync::Arc;
+use std::{num::NonZero, sync::Arc};
 
 use kithara_decode::PcmSpec;
 use kithara_events::TrackStatus;
@@ -22,7 +22,7 @@ const BLOCK_BUDGET: usize = 256;
 fn make_resource(label: &str, secs: f64, value: f32) -> Resource {
     let spec = PcmSpec {
         channels: CHANNELS,
-        sample_rate: SAMPLE_RATE,
+        sample_rate: NonZero::new(SAMPLE_RATE).unwrap(),
     };
     resource_from_reader_with_src(
         TestPcmReader::with_value(spec, secs, value),

@@ -11,7 +11,7 @@ use kithara_integration_tests::{
     },
     temp_dir,
 };
-use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_platform::time::{self, Duration, Instant};
 use kithara_play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig};
 use kithara_stream::AudioCodec;
 
@@ -565,7 +565,7 @@ async fn create_resource_with_encoding(
     let mut resource = Resource::new(config)
         .await
         .expect("open HLS resource for gapless e2e fixture");
-    resource.preload().await;
+    let _ = resource.preload().await;
     (resource, item_id)
 }
 
@@ -636,7 +636,7 @@ async fn render_until_item_end(
             Instant::now() <= deadline,
             "timed out waiting for {terminal_item_id} to finish; events={events:?}"
         );
-        sleep(Duration::from_millis(5)).await;
+        time::sleep(Duration::from_millis(5)).await;
     }
 }
 

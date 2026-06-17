@@ -5,9 +5,9 @@ use syn::{Attribute, Ident};
 use super::{
     parse::TestArgs,
     shared::{
-        finalize_body, make_dedicated_worker_config, make_env_setup, make_runtime_builder,
-        make_selenium_attrs, make_serial_attr, make_tracing_init, wrap_with_soft_fail,
-        wrap_with_timeout,
+        finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_env_setup,
+        make_runtime_builder, make_selenium_attrs, make_serial_attr, make_tracing_init,
+        wrap_with_soft_fail, wrap_with_timeout,
     },
 };
 
@@ -30,6 +30,7 @@ pub(crate) fn emit_async_runtime_test(
     let env_setup = make_env_setup(&args.env_vars);
     let selenium_attr = make_selenium_attrs(args);
     let runtime_builder = make_runtime_builder(args);
+    let flash = args.flash.unwrap_or(true);
     let inner_body = if !args.soft_fail_patterns.is_empty() {
         wrap_with_soft_fail(
             &quote! { { #body } },
@@ -53,8 +54,30 @@ pub(crate) fn emit_async_runtime_test(
             let __probe_install_id =
                 ::kithara_test_utils::probe::bump_install_id();
             __rt.block_on(
-                ::kithara_test_utils::probe::OWNED_INSTALL_ID
-                    .scope(__probe_install_id, async #inner_body),
+                // Wrap the root task in the quiescence poll-wrapper so the test
+                // driver counts as a running participant while polled (identity
+                // off the sim path). Without this the virtual clock would race
+                // past the driver's own work between awaits — the worker's idle
+                // timer advances the clock while the driver is between polls, so
+                // a `sleep`/`read` loop times out on a deadline that already
+                // jumped. Mirrors `emit_async_timeout_test`.
+                kithara_platform::flash::participate(
+                    ::kithara_test_utils::probe::OWNED_INSTALL_ID
+                        .scope(__probe_install_id,
+                            // `with_ambient` is the SOLE ambient holder of the
+                            // async-native body: it re-asserts FLASH_AMBIENT
+                            // around every poll, so a worker-thread resume
+                            // after `.await` keeps the right ambient and a
+                            // `spawn_blocking` from the body cannot capture the
+                            // wrong one (lost wake). A body-held scope is
+                            // forbidden here: its cancel-drop on a timeout
+                            // `Elapsed` is a non-LIFO mode restore (stale
+                            // ambient resurrect). Identity off the feature.
+                            kithara_platform::flash::with_ambient(#flash, async {
+                                #inner_body
+                            })),
+                    ::core::panic::Location::caller(),
+                ),
             )
         }
     }
@@ -133,6 +156,7 @@ pub(crate) fn emit_async_timeout_test(
     let env_setup = make_env_setup(&args.env_vars);
     let selenium_attr = make_selenium_attrs(args);
     let runtime_builder = make_runtime_builder(args);
+    let flash = args.flash.unwrap_or(true);
 
     quote! {
         #(#remaining_attrs)*
@@ -161,6 +185,7 @@ pub(crate) fn emit_async_timeout_test(
                              (runtime shutdown blocked). Aborting process.\n",
                             __fn, __timeout_dur,
                         );
+                        ::kithara_test_utils::kithara_platform::flash::dump_to_stderr("hard-timeout");
                         ::std::process::abort();
                     }
                 });
@@ -180,18 +205,47 @@ pub(crate) fn emit_async_timeout_test(
             let __result = ::std::panic::catch_unwind(
                 ::std::panic::AssertUnwindSafe(|| {
                     __rt.block_on(
-                        ::kithara_test_utils::probe::OWNED_INSTALL_ID.scope(
-                            __probe_install_id,
-                            async {
-                                kithara_platform::time::timeout(__timeout_dur, async {
-                                    #inner_body
-                                })
-                                .await
-                                .unwrap_or_else(|_| panic!(
-                                    "test `{}` timed out after {:?}",
-                                    #fn_name_str, __timeout_dur,
-                                ))
-                            },
+                        // Wrap the root task in the quiescence poll-wrapper so the
+                        // test driver counts as a running participant while polled
+                        // (identity off the sim path). Without this the virtual
+                        // clock would race past the driver's own work between awaits.
+                        kithara_platform::flash::participate(
+                            ::kithara_test_utils::probe::OWNED_INSTALL_ID.scope(
+                                __probe_install_id,
+                                async {
+                                    // Wall-clock safety net: must fire on REAL
+                                    // time even under `flash` (a hung test
+                                    // hangs real time too).
+                                    kithara_platform::time::timeout(
+                                        __timeout_dur,
+                                        // `with_ambient` is the SOLE ambient holder
+                                        // of the async-native body: it re-asserts
+                                        // FLASH_AMBIENT around every poll, so a
+                                        // worker-thread resume after `.await` keeps
+                                        // the right ambient (a `spawn_blocking`
+                                        // cannot capture the wrong one — lost wake).
+                                        // A body-held scope is forbidden here: its
+                                        // cancel-drop on `Elapsed` is a non-LIFO
+                                        // mode restore (stale ambient resurrect).
+                                        // `timeout` itself stays REAL (gates on
+                                        // FLASH_ACTIVE, untouched here).
+                                        kithara_platform::flash::with_ambient(#flash, async {
+                                            #inner_body
+                                        }),
+                                    )
+                                    .await
+                                    .unwrap_or_else(|_| {
+                                        ::kithara_test_utils::kithara_platform::flash::dump_to_stderr(
+                                            "virtual-timeout",
+                                        );
+                                        panic!(
+                                            "test `{}` timed out after {:?}",
+                                            #fn_name_str, __timeout_dur,
+                                        )
+                                    })
+                                },
+                            ),
+                            ::core::panic::Location::caller(),
                         ),
                     )
                 })
@@ -227,10 +281,14 @@ pub(crate) fn emit_browser_test(
 
     output.extend(make_dedicated_worker_config());
 
+    // wasm emission: no per-poll `with_ambient`, the body-held scope is the
+    // sole ambient writer — KEEP it (same for the native sync branch below).
+    let ambient = make_ambient_stmt(args);
     let wasm_body = quote! {
         #tracing_init
         kithara_platform::tokio::ensure_thread_pool().await;
         #preamble
+        #ambient
         #(#body_stmts)*
     };
     let wasm_with_timeout = wrap_with_timeout(&wasm_body, &args.timeout, true, fn_name);
@@ -244,6 +302,8 @@ pub(crate) fn emit_browser_test(
 
     if !browser_only {
         let native_is_async = is_async || args.is_tokio;
+        // Plain body for the async-native branches: their sole ambient holder
+        // is the per-poll `with_ambient` inside the emitted runtime wrapper.
         let native_body = quote! { #tracing_init #preamble #(#body_stmts)* };
 
         if native_is_async && args.timeout.is_some() {
@@ -267,8 +327,9 @@ pub(crate) fn emit_browser_test(
                 &serial_attr,
             ));
         } else {
+            let native_body_held = quote! { #tracing_init #preamble #ambient #(#body_stmts)* };
             let native_with_timeout =
-                wrap_with_timeout(&native_body, &args.timeout, false, fn_name);
+                wrap_with_timeout(&native_body_held, &args.timeout, false, fn_name);
             let native_wrapped = finalize_body(&native_with_timeout, args, fn_name, false);
             output.extend(quote! {
                 #(#remaining_attrs)*

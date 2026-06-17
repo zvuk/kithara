@@ -11,13 +11,20 @@ use std::{
 };
 
 use kithara_platform::{
-    MaybeSend, MaybeSync,
-    thread::{park_timeout, yield_now},
-    time::{Duration, Instant},
+    maybe_send::{MaybeSend, MaybeSync},
+    time::Duration,
     tokio::task,
 };
 use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
+
+use crate::{
+    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor,
+    error::{SourceError, StreamError, StreamResult},
+    playhead::PlayheadWrite,
+    seek_state::{Activity, SeekControl, SeekObserve},
+    source::{NotReadyCause, PendingReason, ReadOutcome, Source, VariantControl},
+};
 
 /// Real error from [`Stream::try_read`] — the underlying source
 /// surfaced an I/O failure.
@@ -37,8 +44,8 @@ pub enum StreamReadError {
 ///
 /// Mirrors the [`ReadOutcome`] shape from
 /// [`Source::read_at`](crate::Source::read_at), but extends each variant
-/// with the authoritative `byte_position` from the stream's
-/// [`Timeline`] for callers that don't want to read it back themselves.
+/// with the authoritative `byte_position` from the source cursor for
+/// callers that don't want to read it back themselves.
 /// `Bytes` carries a [`NonZeroUsize`] count — the type system
 /// guarantees forward progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,12 +167,6 @@ impl fmt::Display for VariantChangeError {
 
 impl StdError for VariantChangeError {}
 
-use crate::{
-    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor, Timeline,
-    error::{SourceError, StreamError},
-    source::{NotReadyCause, PendingReason, ReadOutcome, Source},
-};
-
 /// Defines a stream type and how to create it.
 ///
 /// This trait is implemented by marker types (`Hls`, `File`) in their respective crates.
@@ -242,7 +243,8 @@ impl<T: StreamType> Stream<T> {
         position: Duration,
     ) -> Result<Option<SourceSeekAnchor>, io::Error> {
         self.source
-            .seek_time_anchor(position)
+            .byte_map()
+            .map_or(Ok(None), |m| m.anchor_at_time(position))
             .map_err(|e| IoError::other(e.to_string()))
     }
 
@@ -251,9 +253,28 @@ impl<T: StreamType> Stream<T> {
         &self.source
     }
 
-    /// Get stream timeline.
-    pub fn timeline(&self) -> Timeline {
-        self.source.timeline()
+    /// Narrow mutating playhead handle — position + duration.
+    #[must_use]
+    pub fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        self.source.playhead_write()
+    }
+
+    /// Narrow seek-control handle — begin / complete / `mark_pending`.
+    #[must_use]
+    pub fn seek_control(&self) -> Arc<dyn SeekControl> {
+        self.source.seek_control()
+    }
+
+    /// Narrow seek-observe handle — read seek state without mutation.
+    #[must_use]
+    pub fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        self.source.seek_observe()
+    }
+
+    /// Narrow activity handle — set/query the `PLAYING` flag.
+    #[must_use]
+    pub fn activity(&self) -> Arc<dyn Activity> {
+        self.source.activity()
     }
 
     delegate::delegate! {
@@ -266,144 +287,183 @@ impl<T: StreamType> Stream<T> {
             pub fn media_info(&self) -> Option<MediaInfo>;
             /// Runtime ABR handle — `Some` for adaptive sources (HLS).
             pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
-            /// Current variant metadata — `Some` for adaptive sources (HLS).
-            pub fn current_variant(&self) -> Option<kithara_events::VariantInfo>;
             /// Get total length if known.
             pub fn len(&self) -> Option<u64>;
-            /// Get current segment byte range (for segmented sources like HLS).
-            /// Transitional — removed in Plan 06.
-            pub fn current_segment_range(&self) -> Option<Range<u64>>;
-            /// Header byte range for decoder recreate after a format change.
-            /// Transitional — removed in Plan 06.
-            ///
-            /// # Errors
-            ///
-            /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS
-            /// sources or HLS variants activated with `served_from > 0`
-            /// (init prefix unreachable via Stream reads).
-            pub fn format_change_segment_range(&self) -> crate::error::StreamResult<Range<u64>>;
-            /// Clear variant fence, allowing reads from the next variant.
-            pub fn clear_variant_fence(&mut self);
-            /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
-            /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
-            pub fn has_variant_change_pending(&self) -> bool;
             /// The reader→peer wake handle — `Some` for segmented sources (HLS)
             /// that push a downloader peer, `None` otherwise.
             pub fn peer_wake(&self) -> Option<Arc<DeferredWake>>;
-            /// Commit the actual post-seek landing after `decoder.seek(...)`.
-            pub fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>);
-            /// Build a fresh reader-side hooks instance from the inner source.
-            pub fn take_reader_hooks(&mut self) -> Option<crate::BoxedHooks>;
-            /// Optional segment-layout handle for segment-aware decoders.
-            pub fn as_segment_layout(&self) -> Option<Arc<dyn crate::SegmentLayout>>;
+            /// Install the audio worker's data-arrival wake. Segmented sources
+            /// fire it from their off-RT write/commit sites; no-op otherwise.
+            pub fn set_worker_wake(&self, wake: Arc<dyn crate::WorkerWake>);
+            /// Build a fresh reader-side event-sink instance from the inner source.
+            pub fn take_reader_event_sink(&mut self) -> Option<crate::BoxedEventSink>;
+            /// Optional byte-map handle for segment-aware decoders.
+            pub fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>>;
             /// Absolute byte-position set — used by [`Stream::seek`] callers
             /// and audio FSM landings. Forwards to the source's atomic cursor.
             pub fn set_position(&self, pos: u64);
         }
     }
+
+    /// Optional HLS-only variant-coordination handle — `Some` for adaptive
+    /// sources (HLS), `None` otherwise.
+    #[must_use]
+    pub fn variant_control(&self) -> Option<Arc<dyn VariantControl>> {
+        self.source.variant_control()
+    }
+
+    /// Clear the variant fence, allowing reads from the next variant.
+    /// No-op for non-adaptive sources.
+    pub fn clear_variant_fence(&mut self) {
+        if let Some(vc) = self.source.variant_control() {
+            vc.clear_variant_fence();
+        }
+    }
+
+    /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
+    /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
+    #[must_use]
+    pub fn has_variant_change_pending(&self) -> bool {
+        self.source
+            .variant_control()
+            .is_some_and(|vc| vc.has_variant_change_pending())
+    }
+
+    /// Target variant index of the pending fence, `None` when no fence
+    /// is up (or the source is non-adaptive).
+    #[must_use]
+    pub fn variant_change_target(&self) -> Option<usize> {
+        self.source
+            .variant_control()
+            .and_then(|vc| vc.variant_change_target())
+    }
+
+    /// Header byte range for decoder recreate after a format change.
+    ///
+    /// # Errors
+    ///
+    /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS sources
+    /// or HLS variants activated with `served_from > 0` (init prefix
+    /// unreachable via Stream reads).
+    pub fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        self.source.variant_control().map_or(
+            Err(StreamError::Source(SourceError::FormatChangeNotApplicable)),
+            |vc| vc.format_change_segment_range(),
+        )
+    }
+}
+
+/// Per-probe wait policy threaded into [`Stream::try_read_with`]. Internal
+/// plumbing, NOT a public knob — it selects the `Source::wait_range` timeout
+/// from the caller's statically-known context.
+#[derive(Clone, Copy)]
+enum WaitMode {
+    /// RT / cooperative-yield probe (`probe_read`): bounded
+    /// `Some(WAIT_RANGE_TIMEOUT)`, returns without blocking.
+    Probe,
+    /// Off-RT consumer (`impl Read`): `None` — the source parks event-driven
+    /// until the range resolves (no wall-clock poll at this layer).
+    Block,
+}
+
+impl WaitMode {
+    fn timeout(self, probe: Duration) -> Option<Duration> {
+        match self {
+            Self::Probe => Some(probe),
+            Self::Block => None,
+        }
+    }
 }
 
 impl<T: StreamType> Stream<T> {
-    /// Bounded wall-clock budget for the seek-priming `wait_range` spin.
-    /// `Seek` re-probes `wait_range(new_pos..new_pos+1)` to prime metadata
-    /// (so `source.len()` answers before the seek-past-EOF check). Each
-    /// probe returns immediately under the non-blocking-pull contract, so
-    /// the spin yields between probes and is capped by elapsed time rather
-    /// than an internal sleep: a broken downloader cannot hang the seek,
-    /// and on the happy path local metadata resolves well under this
-    /// budget. This is consumer-thread work, not the real-time worker
-    /// read path.
-    const SEEK_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
-
-    /// Per-probe hint passed to [`Source::wait_range`] on the worker read
-    /// path. Non-blocking-pull sources (HLS) treat `wait_range` as a single
-    /// readiness probe and ignore this hint; the backoff between probes
-    /// lives in the audio scheduler's `Waiting` park (10ms). The value
-    /// still names the worker's re-poll cadence: one PCM chunk at 44100Hz
-    /// stereo / 4096 samples lasts ~46ms, so a 10ms re-check refills the
-    /// ringbuf with margin while staying fair to other tracks.
+    /// Per-probe hint passed to [`Source::wait_range`] on the RT worker read
+    /// path (`probe_read` → [`WaitMode::Probe`]). Non-blocking-pull sources
+    /// (HLS) ignore the value and answer with a single readiness probe; the
+    /// backoff between probes lives in the audio scheduler's `Waiting` park
+    /// (10ms). The off-RT [`Read`] path passes `None` ([`WaitMode::Block`])
+    /// instead and parks event-driven until the range resolves.
     const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
 
-    /// Wall-clock budget for the blocking [`Read::read`] adapter that
-    /// direct `Read + Seek` consumers use. `try_read` is a single
-    /// non-blocking probe; the blocking interface retries it across this
-    /// budget so a `read` issued right after a `seek` waits for the
-    /// seeked bytes to download instead of erroring on the first
-    /// not-ready probe. This is the consumer-thread interface, never the
-    /// real-time worker path (the worker uses [`Self::probe_read`]).
-    const BLOCKING_READ_TIMEOUT: Duration = Duration::from_millis(500);
-
-    /// Per-spin park between blocking [`Read::read`] probes. Bounds the
-    /// re-check cadence while the seeked range downloads; small enough to
-    /// return promptly once bytes land, large enough to avoid a busy
-    /// spin. Off-RT consumer interface only.
-    const BLOCKING_READ_BACKOFF: Duration = Duration::from_millis(10);
-
-    /// Prime metadata for a seek target by re-probing the non-blocking
-    /// [`Source::wait_range`] until the range resolves (`Ready`/`Eof`),
-    /// the source reports an error, or the [`Self::SEEK_WAIT_TIMEOUT`]
-    /// wall-clock budget elapses. Runs on the consumer/seek thread — not
-    /// the real-time worker read path — so a bounded yield-spin is the
-    /// permitted backoff: `wait_range` returns immediately under the
-    /// non-blocking-pull contract, so the elapsed-time cap (not an
-    /// internal sleep) bounds a broken downloader. The outcome is
-    /// advisory; `seek` re-checks `source.len()` afterwards.
+    /// Prime metadata for a seek target by blocking on
+    /// [`Source::wait_range`]`(range, None)` until the range resolves
+    /// (`Ready`/`Eof`), a segment fails, or the source's cancel fires —
+    /// event-driven, **no** wall-clock budget. Runs on the consumer/seek
+    /// thread, never the RT worker. The one-time peer wake re-aims the
+    /// prefetch window at the new cursor so the awaited range starts
+    /// downloading; give-up authority lives lower in the stack (the
+    /// downloader's per-fetch inactivity timeout / the cancel hierarchy),
+    /// which is why a timer here would only fire on a legitimately in-flight
+    /// fetch. The outcome is advisory; `seek` re-checks `source.len()`
+    /// afterwards.
+    #[kithara::flash(true)]
     fn prime_seek_range(&mut self, range: Range<u64>) {
-        let deadline = Instant::now() + Self::SEEK_WAIT_TIMEOUT;
-        loop {
-            let outcome = self
-                .source
-                .wait_range(range.clone(), Some(Self::WAIT_RANGE_TIMEOUT));
-            let budget_exceeded = matches!(
-                &outcome,
-                Err(StreamError::Source(SourceError::WaitBudgetExceeded))
-            );
-            // Consumer seek-prime path: a not-ready range means the peer must
-            // fetch it. Off the produce core, wake immediately so the prime is
-            // not gated on the worker's next pass.
-            if budget_exceeded && let Some(wake) = self.source.peer_wake() {
-                wake.notify_now();
-            }
-            let not_ready = budget_exceeded || matches!(&outcome, Ok(WaitOutcome::Interrupted));
-            if !not_ready || Instant::now() >= deadline {
-                return;
-            }
-            yield_now();
+        // Cache-hit fast path: a non-blocking phase probe. A re-seek into
+        // already-resident bytes needs no fetch and no wait — skip the peer
+        // wake so a burst of random seeks over a warm cache does not fire one
+        // cross-thread `notify_one` (and downloader re-plan) per seek.
+        if matches!(
+            self.source.phase_at(range.clone()),
+            SourcePhase::Ready | SourcePhase::Eof
+        ) {
+            return;
         }
+        // Not resident: wake the peer once so it re-aims its prefetch at the
+        // new cursor, then block on the source's event-driven wait.
+        if let Some(wake) = self.source.peer_wake() {
+            wake.notify_now();
+        }
+        let _ = self.source.wait_range(range, None);
     }
 
     /// Typed read — returns a [`StreamReadOutcome`] discriminating
     /// progress (`Bytes` with [`NonZeroUsize`]) from non-progress
     /// (`Pending` with a typed [`PendingReason`]) and natural EOF.
-    /// Only genuine source I/O failures surface as
-    /// [`StreamReadError::Source`]. `impl Read for Stream` wraps this
-    /// outcome for `std::io::Read` consumers.
+    /// `impl Read for Stream` wraps this outcome for `std::io::Read`
+    /// consumers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StreamReadError::Source`] only when the underlying source
+    /// reports a genuine I/O failure. Backpressure, seek-pending, and a
+    /// variant fence are non-errors — they surface as `Ok(Pending(..))`.
+    pub fn try_read(&mut self, buf: &mut [u8]) -> Result<StreamReadOutcome, StreamReadError> {
+        self.try_read_with(buf, WaitMode::Probe)
+    }
+
     #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara::hang_watchdog]
-    pub fn try_read(&mut self, buf: &mut [u8]) -> Result<StreamReadOutcome, StreamReadError> {
+    fn try_read_with(
+        &mut self,
+        buf: &mut [u8],
+        wait: WaitMode,
+    ) -> Result<StreamReadOutcome, StreamReadError> {
         if buf.is_empty() {
             return Ok(StreamReadOutcome::Eof {
                 byte_position: self.source.position(),
             });
         }
 
+        let variant_control = self.source.variant_control();
+        let seek_obs = self.source.seek_observe();
         loop {
-            let timeline = self.source.timeline();
-            let read_epoch = timeline.seek_epoch();
+            let read_epoch = seek_obs.epoch();
             let pos = self.source.position();
             let range = pos..pos.saturating_add(buf.len() as u64);
 
-            if self.source.has_variant_change_pending() {
+            if variant_control
+                .as_ref()
+                .is_some_and(|vc| vc.has_variant_change_pending())
+            {
                 return Ok(StreamReadOutcome::Pending(PendingReason::VariantChange));
             }
 
             let wait_result = self
                 .source
-                .wait_range(range, Some(Self::WAIT_RANGE_TIMEOUT));
+                .wait_range(range, wait.timeout(Self::WAIT_RANGE_TIMEOUT));
             let wait_outcome = match wait_result {
                 Ok(outcome) => outcome,
                 Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
-                    if timeline.is_flushing() || timeline.seek_epoch() != read_epoch {
+                    if seek_obs.is_flushing() || seek_obs.epoch() != read_epoch {
                         return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
                     return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
@@ -420,7 +480,7 @@ impl<T: StreamType> Stream<T> {
                     return Ok(StreamReadOutcome::Eof { byte_position: pos });
                 }
                 WaitOutcome::Interrupted => {
-                    if timeline.is_flushing() {
+                    if seek_obs.is_flushing() {
                         return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
                     return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
@@ -429,7 +489,7 @@ impl<T: StreamType> Stream<T> {
                 }
             }
 
-            if timeline.seek_epoch() != read_epoch {
+            if seek_obs.epoch() != read_epoch {
                 return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
             }
 
@@ -439,11 +499,10 @@ impl<T: StreamType> Stream<T> {
                 .map_err(|e| StreamReadError::Source(IoError::other(e.to_string())))?
             {
                 ReadOutcome::Bytes(count) => {
-                    if timeline.seek_epoch() != read_epoch {
+                    if seek_obs.epoch() != read_epoch {
                         return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
                     hang_reset!();
-                    timeline.set_segment_position(pos);
                     self.source.advance(count.get() as u64);
                     let new_pos = self.source.position();
                     return Ok(StreamReadOutcome::Bytes {
@@ -455,8 +514,15 @@ impl<T: StreamType> Stream<T> {
                     return Ok(StreamReadOutcome::Eof { byte_position: pos });
                 }
                 ReadOutcome::Pending(PendingReason::Retry) => {
+                    // Resource evicted between `wait_range` (Ready) and `read_at`:
+                    // re-acquire on the next loop. This is active progress, not a
+                    // wait, so re-loop tightly — the reader stays counted and keeps
+                    // the virtual clock pinned until it re-acquires. Yielding here
+                    // would cede the clock to a peer's watchdog deadline mid-progress
+                    // (under flash the yield jumps the clock to that deadline, firing
+                    // a false hang before the re-acquire completes). The watchdog
+                    // tick still bounds a genuine eviction storm in real time.
                     hang_tick!();
-                    yield_now();
                     continue;
                 }
                 ReadOutcome::Pending(reason) => {
@@ -588,32 +654,45 @@ impl<T: StreamType> Stream<T> {
 impl<T: StreamType> Read for Stream<T> {
     /// Blocking `std::io::Read` for direct `Read + Seek` consumers.
     ///
-    /// `try_read` is a single non-blocking probe; this adapter retries it
-    /// across [`Self::BLOCKING_READ_TIMEOUT`] so a `read` issued right
-    /// after a `seek` waits for the seeked bytes to download instead of
-    /// erroring on the first not-ready probe. Only the transient
-    /// "data not ready" pending (`NotReady`/`Retry`) is waited on; a
-    /// seek that flushes mid-read (`SeekPending`), a variant boundary, a
-    /// natural EOF, and genuine source errors all return immediately.
-    /// This is the off-RT consumer interface — the real-time worker uses
-    /// [`Self::probe_read`] and never blocks here.
+    /// `try_read` is a single non-blocking probe; this adapter waits across
+    /// repeated probes so a `read` issued right after stream open or a seek
+    /// blocks until the awaited bytes download, instead of erroring on the
+    /// first not-ready probe. The wait is **not** bounded by a wall-clock
+    /// budget here: give-up authority lives lower in the stack, where it can
+    /// tell a slow-but-live transfer from a genuine stall. A fixed budget at
+    /// this layer would fire while a fetch is legitimately in flight and
+    /// surface as `Interrupted` — which decoders misread as a seek.
+    ///
+    /// The loop terminates on a terminal outcome:
+    /// - `Bytes`/`Eof` — data delivered or natural end of stream;
+    /// - `SeekPending` — a seek flushed mid-read (`Interrupted`);
+    /// - `VariantChange` — a variant boundary;
+    /// - a source `Err` — the downloader's per-chunk inactivity timeout
+    ///   failed the fetch, or the cancel hierarchy fired on teardown
+    ///   (`HlsCoord::wait_range` / the storage wait surface both as a
+    ///   terminal error).
+    ///
+    /// The blocking wait lives inside [`try_read_with`](Self::try_read_with)'s
+    /// `wait_range(_, None)` (event-driven — the source parks until the range
+    /// resolves, no wall-clock poll at this layer). The `NotReady`/`Retry`
+    /// re-loop is therefore reached only on an eviction `Retry` or a spurious
+    /// wake, and the next probe parks again at once — never a busy spin. A
+    /// genuine wedge (no signal site ever fires) is caught by the source's hang
+    /// watchdog rather than masked here. This is the off-RT consumer interface —
+    /// the real-time worker uses [`Self::probe_read`] and never blocks here.
+    #[kithara::flash(true)]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let deadline = Instant::now() + Self::BLOCKING_READ_TIMEOUT;
         loop {
-            match self.try_read(buf) {
+            match self.try_read_with(buf, WaitMode::Block) {
                 Ok(StreamReadOutcome::Bytes { count, .. }) => return Ok(count.get()),
                 Ok(StreamReadOutcome::Eof { .. }) => return Ok(0),
                 Ok(StreamReadOutcome::Pending(
-                    reason @ (PendingReason::NotReady(_) | PendingReason::Retry),
+                    PendingReason::NotReady(_) | PendingReason::Retry,
                 )) => {
+                    // Wake the peer (an evicted `Retry` range must be re-fetched),
+                    // then re-loop — the next `try_read_with` parks in the
+                    // event-driven `wait_range(_, None)`.
                     self.notify_peer_wake();
-                    if Instant::now() >= deadline {
-                        return Err(IoError::new(
-                            ErrorKind::Interrupted,
-                            self.snapshot_pending(reason, buf.len()),
-                        ));
-                    }
-                    park_timeout(Self::BLOCKING_READ_BACKOFF);
                 }
                 Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
                     self.notify_peer_wake();
@@ -640,16 +719,19 @@ impl<T: StreamType> Stream<T> {
         let pos = self.source.position();
         let len = self.source.len();
         let phase = self.source.phase_at(pos..pos.saturating_add(want as u64));
-        let timeline = self.source.timeline();
+        let seek_obs = self.source.seek_observe();
         StreamPending {
             reason,
             pos,
             want,
             len,
             phase,
-            epoch: timeline.seek_epoch(),
-            flushing: timeline.is_flushing(),
-            variant_fence: self.source.has_variant_change_pending(),
+            epoch: seek_obs.epoch(),
+            flushing: seek_obs.is_flushing(),
+            variant_fence: self
+                .source
+                .variant_control()
+                .is_some_and(|vc| vc.has_variant_change_pending()),
         }
     }
 }
@@ -666,7 +748,7 @@ impl<T: StreamType> Seek for Stream<T> {
         }
         let new_pos = self.resolve_seek_target(pos, self.source.len())?;
 
-        let wait_range = match self.source.format_change_segment_range() {
+        let wait_range = match self.format_change_segment_range() {
             Ok(range) if range.start == new_pos => range,
             _ => new_pos..new_pos.saturating_add(1),
         };
@@ -704,11 +786,11 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{ReadOutcome, Source, SourcePhase};
+    use crate::{PlayheadRead, PlayheadState, ReadOutcome, SeekState, Source, SourcePhase};
 
     /// Test helper — script entry that maps to either `Bytes(N)` (with
     /// the source slicing actual `data`) or a terminal `Eof`. Pending
-    /// causes are exercised through the timeline (`initiate_seek`) and
+    /// causes are exercised through the seek state (`begin`) and
     /// the wait-outcome script, not the read script.
     #[derive(Clone, Copy)]
     enum ScriptRead {
@@ -725,7 +807,8 @@ mod tests {
     struct ScriptSource {
         position: Arc<AtomicU64>,
         anchor: Option<SourceSeekAnchor>,
-        timeline: Timeline,
+        seek: Arc<SeekState>,
+        playhead: Arc<PlayheadState>,
         data: Vec<u8>,
         reads: VecDeque<ScriptRead>,
         waits: VecDeque<WaitOutcome>,
@@ -734,13 +817,14 @@ mod tests {
 
     impl ScriptSource {
         fn new(
-            timeline: Timeline,
+            seek: Arc<SeekState>,
             waits: impl IntoIterator<Item = WaitOutcome>,
             reads: impl IntoIterator<Item = ScriptRead>,
             data: Vec<u8>,
         ) -> Self {
             Self {
-                timeline,
+                seek,
+                playhead: Arc::new(PlayheadState::new()),
                 data,
                 position: Arc::new(AtomicU64::new(0)),
                 anchor: None,
@@ -773,7 +857,7 @@ mod tests {
             self.position.load(Ordering::Acquire)
         }
 
-        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
+        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
             let step = self.reads.pop_front().unwrap_or(ScriptRead::Eof);
             match step {
                 ScriptRead::Eof => Ok(ReadOutcome::Eof),
@@ -792,31 +876,78 @@ mod tests {
             }
         }
 
-        fn seek_time_anchor(
-            &mut self,
-            _position: Duration,
-        ) -> crate::StreamResult<Option<SourceSeekAnchor>> {
-            Ok(self.anchor)
+        fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>> {
+            Some(Arc::new(ScriptByteMap {
+                anchor: self.anchor,
+                len: self.data.len() as u64,
+            }))
         }
 
         fn set_position(&self, pos: u64) {
             self.position.store(pos, Ordering::Release);
         }
 
-        fn timeline(&self) -> Timeline {
-            self.timeline.clone()
+        fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+        }
+
+        fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+        }
+
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+        }
+
+        fn seek_control(&self) -> Arc<dyn SeekControl> {
+            Arc::clone(&self.seek) as Arc<dyn SeekControl>
+        }
+
+        fn activity(&self) -> Arc<dyn Activity> {
+            Arc::clone(&self.seek) as Arc<dyn Activity>
         }
 
         fn wait_range(
             &mut self,
             _range: Range<u64>,
             _timeout: Option<Duration>,
-        ) -> crate::StreamResult<WaitOutcome> {
+        ) -> StreamResult<WaitOutcome> {
             Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
         }
 
         fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
             self.peer_wake.clone()
+        }
+    }
+
+    struct ScriptByteMap {
+        anchor: Option<SourceSeekAnchor>,
+        len: u64,
+    }
+
+    impl crate::ByteMap for ScriptByteMap {
+        fn anchor_at_time(&self, _position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
+            Ok(self.anchor)
+        }
+
+        fn init_segment_range(&self) -> Range<u64> {
+            0..0
+        }
+
+        fn len(&self) -> Option<u64> {
+            Some(self.len)
+        }
+
+        fn segment_after_byte(&self, _byte_offset: u64) -> Option<crate::SegmentDescriptor> {
+            None
+        }
+
+        fn segment_at_time(&self, _t: Duration) -> Option<crate::SegmentDescriptor> {
+            None
+        }
+
+        fn segment_count(&self) -> Option<u32> {
+            None
         }
     }
 
@@ -846,7 +977,8 @@ mod tests {
 
     struct SeekDuringWaitSource {
         position: Arc<AtomicU64>,
-        timeline: Timeline,
+        seek: Arc<SeekState>,
+        playhead: Arc<PlayheadState>,
         read_calls: usize,
     }
 
@@ -867,7 +999,7 @@ mod tests {
             self.position.load(Ordering::Acquire)
         }
 
-        fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
+        fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> StreamResult<ReadOutcome> {
             self.read_calls += 1;
             Ok(bytes(4))
         }
@@ -876,16 +1008,32 @@ mod tests {
             self.position.store(pos, Ordering::Release);
         }
 
-        fn timeline(&self) -> Timeline {
-            self.timeline.clone()
+        fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+        }
+
+        fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+            Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+        }
+
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+        }
+
+        fn seek_control(&self) -> Arc<dyn SeekControl> {
+            Arc::clone(&self.seek) as Arc<dyn SeekControl>
+        }
+
+        fn activity(&self) -> Arc<dyn Activity> {
+            Arc::clone(&self.seek) as Arc<dyn Activity>
         }
 
         fn wait_range(
             &mut self,
             _range: Range<u64>,
             _timeout: Option<Duration>,
-        ) -> crate::StreamResult<WaitOutcome> {
-            let _ = self.timeline.initiate_seek(Duration::from_millis(10));
+        ) -> StreamResult<WaitOutcome> {
+            let _ = SeekControl::begin(&*self.seek, Duration::from_millis(10));
             Ok(WaitOutcome::Ready)
         }
     }
@@ -898,7 +1046,7 @@ mod tests {
         // it off the forbid path.
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
-            Timeline::new(),
+            Arc::new(SeekState::new()),
             [WaitOutcome::Interrupted],
             [],
             vec![0u8; 8],
@@ -927,7 +1075,7 @@ mod tests {
         // armed — the distinguishing signal from the worker's deferred arm.
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
-            Timeline::new(),
+            Arc::new(SeekState::new()),
             [WaitOutcome::Interrupted, WaitOutcome::Ready],
             [ScriptRead::Data(4)],
             b"ABCD".to_vec(),
@@ -954,7 +1102,7 @@ mod tests {
         // the target range is not ready (the wait script is never consulted).
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
-            Timeline::new(),
+            Arc::new(SeekState::new()),
             [WaitOutcome::Interrupted, WaitOutcome::Interrupted],
             [],
             vec![0u8; 100],
@@ -982,9 +1130,8 @@ mod tests {
 
     #[kithara::test]
     fn try_read_yields_not_ready_on_interrupted_then_recovers_next_probe() {
-        let timeline = Timeline::new();
         let source = ScriptSource::new(
-            timeline.clone(),
+            Arc::new(SeekState::new()),
             [WaitOutcome::Interrupted, WaitOutcome::Ready],
             [ScriptRead::Data(4)],
             b"ABCD".to_vec(),
@@ -1009,9 +1156,9 @@ mod tests {
 
     #[kithara::test]
     fn try_read_returns_seek_pending_when_flushing() {
-        let timeline = Timeline::new();
-        let _ = timeline.initiate_seek(Duration::from_millis(10));
-        let source = ScriptSource::new(timeline.clone(), [WaitOutcome::Interrupted], [], vec![]);
+        let seek = Arc::new(SeekState::new());
+        let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
+        let source = ScriptSource::new(Arc::clone(&seek), [WaitOutcome::Interrupted], [], vec![]);
         let mut stream = Stream::<DummyType> { source };
         let mut buf = [0u8; 4];
 
@@ -1026,9 +1173,9 @@ mod tests {
 
     #[kithara::test]
     fn try_read_returns_seek_pending_when_epoch_changes_after_wait() {
-        let timeline = Timeline::new();
         let source = SeekDuringWaitSource {
-            timeline: timeline.clone(),
+            seek: Arc::new(SeekState::new()),
+            playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             read_calls: 0,
         };
@@ -1049,8 +1196,7 @@ mod tests {
 
     #[kithara::test]
     fn seek_updates_position() {
-        let timeline = Timeline::new();
-        let source = ScriptSource::new(timeline.clone(), [], [], b"ABCDE".to_vec());
+        let source = ScriptSource::new(Arc::new(SeekState::new()), [], [], b"ABCDE".to_vec());
         let mut stream = Stream::<DummyType> { source };
 
         let pos = stream
@@ -1063,8 +1209,7 @@ mod tests {
 
     #[kithara::test]
     fn seek_time_anchor_does_not_move_position() {
-        let timeline = Timeline::new();
-        let mut source = ScriptSource::new(timeline.clone(), [], [], b"ABCDE".to_vec());
+        let mut source = ScriptSource::new(Arc::new(SeekState::new()), [], [], b"ABCDE".to_vec());
         source.set_position(11);
         source.anchor = Some(SourceSeekAnchor {
             byte_offset: 3,

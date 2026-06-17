@@ -42,7 +42,7 @@ impl TestPcmReader {
     /// verify which track a rendered PCM window belongs to.
     #[must_use]
     pub fn with_value(spec: PcmSpec, duration_secs: f64, value: f32) -> Self {
-        let total_frames = (f64::from(spec.sample_rate) * duration_secs) as u64;
+        let total_frames = (f64::from(spec.sample_rate.get()) * duration_secs) as u64;
         Self {
             spec,
             total_frames,
@@ -73,10 +73,7 @@ impl TestPcmReader {
     }
 
     fn frames_to_duration(&self, frames: u64) -> Duration {
-        if self.spec.sample_rate == 0 {
-            return Duration::from_secs(0);
-        }
-        Duration::from_secs_f64(frames as f64 / f64::from(self.spec.sample_rate))
+        Duration::from_secs_f64(frames as f64 / f64::from(self.spec.sample_rate.get()))
     }
 }
 
@@ -174,7 +171,7 @@ impl PcmReader for TestPcmReader {
 
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let target = position;
-        let frame = (position.as_secs_f64() * f64::from(self.spec.sample_rate)) as u64;
+        let frame = (position.as_secs_f64() * f64::from(self.spec.sample_rate.get())) as u64;
         self.position_frames = frame.min(self.total_frames);
         let landed_at = self.frames_to_duration(self.position_frames);
         if let Some(duration) = self.duration()

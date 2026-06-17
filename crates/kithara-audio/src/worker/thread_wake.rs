@@ -10,30 +10,30 @@ pub(crate) struct ThreadWake {
 
 impl ThreadWake {
     pub(crate) fn register_current(&self) {
-        *self.waiter.lock_sync() = Some(thread::current());
+        *self.waiter.lock() = Some(thread::current());
     }
 }
 
 impl crate::runtime::WakeSignal for ThreadWake {
     fn wake(&self) {
-        let waiter = self.waiter.lock_sync().as_ref().cloned();
+        let waiter = self.waiter.lock().as_ref().cloned();
         if let Some(waiter) = waiter {
-            waiter.unpark();
+            thread::unpark(&waiter);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        },
-        time::Duration,
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
     };
 
-    use kithara_platform::thread::{park_timeout, sleep, spawn};
+    use kithara_platform::{
+        thread::{self, park_timeout, spawn},
+        time::Duration,
+    };
     use kithara_test_utils::kithara;
 
     use super::ThreadWake;
@@ -54,7 +54,7 @@ mod tests {
                 worker_done.store(true, Ordering::Release);
             });
 
-            sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(10)); // M5: real pacing, replace with teardown signal
             wake.wake();
             join.join().expect("wake test thread");
             assert!(done.load(Ordering::Acquire));

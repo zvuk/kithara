@@ -6,7 +6,7 @@
 //! needs **before** it starts dispatching segment fetches:
 //!
 //! - [`PlaylistCache`] — master/media playlist fetch + parse + dedup
-//! - [`KeyManager`] — DRM key fetch + processor invocation + sync
+//! - [`KeyStore`] — DRM key fetch + processor invocation + sync
 //!   [`DecryptContext`](kithara_drm::DecryptContext) derivation
 //! - [`atomic_fetch::fetch_atomic_body`] — shared cache→download
 //!   helper used by both
@@ -20,5 +20,5 @@ pub(crate) mod atomic_fetch;
 pub(crate) mod keys;
 pub(crate) mod playlist_cache;
 pub(crate) mod size_estimation;
-pub use keys::KeyManager;
+pub use keys::KeyStore;
 pub use playlist_cache::PlaylistCache;

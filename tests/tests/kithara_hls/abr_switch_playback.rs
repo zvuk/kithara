@@ -10,14 +10,15 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, auto,
     fixture_protocol::{DelayRule, PcmPattern},
+    flash_pace::virtual_pace,
     offline::{OfflinePlayer, resource_from_reader},
     temp_dir,
 };
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant, sleep},
+    tokio::task::spawn_blocking,
 };
-use tokio::time::timeout;
 use tracing::info;
 
 use crate::continuity::{
@@ -126,46 +127,53 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .block_on_underrun(true)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    let _ = audio.preload();
+    spawn_blocking(move || {
+        let _ = audio.preload();
+        let mut buf = vec![0f32; 4096];
+        let mut total_samples = 0u64;
 
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let mut buf = vec![0f32; 4096];
-    let mut total_samples = 0u64;
-
-    let mut saw_eof = false;
-    while Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(10)).await;
+        let mut saw_eof = false;
+        loop {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => {
+                    virtual_pace(Duration::from_millis(10));
+                }
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    total_samples += count.get() as u64;
+                    if total_samples >= 100_000 {
+                        break;
+                    }
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_eof = true;
+                    break;
+                }
+                Err(e) => panic!("decode error: {e}"),
             }
-            Ok(ReadOutcome::Frames { count, .. }) => {
-                total_samples += count.get() as u64;
-            }
-            Ok(ReadOutcome::Eof { .. }) => {
-                saw_eof = true;
-                break;
-            }
-            Err(e) => panic!("decode error: {e}"),
         }
-    }
 
-    let _ = saw_eof;
-    info!(total_samples, "playback completed without hang");
-    assert!(
-        total_samples > 1000,
-        "expected sustained playback, got only {total_samples} samples"
-    );
+        let _ = saw_eof;
+        info!(total_samples, "playback completed without hang");
+        assert!(
+            total_samples > 1000,
+            "expected sustained playback, got only {total_samples} samples"
+        );
+    })
+    .await
+    .expect("read phase join");
 }
 
 /// Packaged ABR HLS must switch variants without losing continuity.
@@ -188,6 +196,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
 
     let bus = EventBus::new(64);
     let mut hls_rx = bus.subscribe();
+    let mut wake_rx = bus.subscribe();
     let mut progress_audio = open_packaged_hls_audio(
         &url,
         store.clone(),
@@ -230,7 +239,12 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         }
 
         if read == 0 {
-            sleep(Duration::from_millis(10)).await;
+            // Read is Pending: wait until the worker emits the next event
+            // (decode progress / segment read / variant applied) rather than
+            // sleeping on a timer. The dedicated wake receiver does not consume
+            // from hls_rx / progress_rx, so no switch or progress event is lost.
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let _ = time::timeout(remaining, wake_rx.recv()).await;
             progress_probe.observe_idle();
             continue;
         }
@@ -273,10 +287,57 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         progress_probe.max_gap_between_events
     );
 
+    // Offline render below pulls PCM on the real-time graph thread, which
+    // CANNOT block: a worker underrun there is zero-filled to silence (see
+    // `PlayerResource::fill_scratch`). Under flash the only clock advance
+    // during `render_offline_window` is its own per-block virtual sleep, so a
+    // network stall at the ABR seam (the V0 segment delay rule) would drop the
+    // worker behind the real-time render pace and produce a long silent run.
+    // Prime the shared store with EVERY segment of BOTH variants FIRST, on the
+    // blocking pool with `block_on_underrun(true)` so each `read()` parks on the
+    // worker (engine-aware, drives the virtual clock). Forcing each variant with
+    // a manual mode guarantees full coverage regardless of which path the
+    // offline render's `auto(0)` ABR then takes — after this the offline render
+    // is a decode-from-cache path with no network stall to fall behind on.
+    for variant in [0usize, 1usize] {
+        let warm_config = AudioConfig::<Hls>::for_stream(
+            HlsConfig::for_url(url.clone())
+                .store(store.clone())
+                .initial_abr_mode(AbrMode::manual(variant))
+                .download_batch_size(1)
+                .build(),
+        )
+        .block_on_underrun(true)
+        .build();
+        let mut warm_audio = Audio::<Stream<Hls>>::new(warm_config)
+            .await
+            .unwrap_or_else(|e| panic!("packaged ABR warm audio (v{variant}) must open: {e}"));
+        let warmed = spawn_blocking(move || {
+            let _ = warm_audio.preload();
+            let mut buf = vec![0f32; 4096];
+            let mut total = 0u64;
+            loop {
+                match warm_audio.read(&mut buf) {
+                    Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
+                    Ok(ReadOutcome::Pending { .. }) => {}
+                    Ok(ReadOutcome::Eof { .. }) => break,
+                    Err(e) => panic!("packaged ABR warm decode error (v{variant}): {e}"),
+                }
+            }
+            total
+        })
+        .await
+        .expect("packaged ABR warm read join");
+        assert!(
+            warmed > 0,
+            "packaged ABR warm pass (v{variant}) must decode the variant into the shared store"
+        );
+    }
+
     let decode_audio =
         open_packaged_hls_audio(&url, store, forced_downswitch_abr_options(), None).await;
     let mut resource = resource_from_reader(decode_audio);
-    let _ = timeout(Duration::from_secs(5), resource.preload())
+    let _ = time::timeout(Duration::from_secs(5), resource.preload())
         .await
         .expect("packaged ABR preload must complete");
     let mut player = OfflinePlayer::new(CONTINUITY_SAMPLE_RATE);
@@ -352,7 +413,7 @@ async fn stream_continues_after_seek(
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
 
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let abr_mode = if abr_auto {
         auto(0)
     } else {
@@ -366,64 +427,74 @@ async fn stream_continues_after_seek(
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .decoder_backend(backend)
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    let _ = audio.preload();
+    // The blocking read phase must NOT run on the test runtime thread: with
+    // block_on_underrun the read parks the thread, and on the current-thread
+    // runtime that starves the HLS drive/fetch tasks that feed it. preload()
+    // primes through the same parking recv, so it belongs here too.
+    spawn_blocking(move || {
+        let _ = audio.preload();
+        let mut buf = vec![0f32; 4096];
 
-    let mut buf = vec![0f32; 4096];
+        let mut warmup_samples = 0u64;
+        while warmup_samples < 17_640 {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
+                Ok(ReadOutcome::Pending { .. }) => virtual_pace(Duration::from_millis(5)),
+                Ok(ReadOutcome::Eof { .. }) => panic!("[{path}] unexpected EOF during warmup"),
+                Err(e) => panic!("decode error during warmup: {e}"),
+            }
+        }
 
-    let warmup = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < warmup {
-        let _ = audio.read(&mut buf);
-        sleep(Duration::from_millis(5)).await;
-    }
+        let samples_per_seek: u64 = 48000 * 2;
+        for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
+            audio
+                .seek(Duration::from_secs_f64(target_secs))
+                .expect("seek");
 
-    let samples_per_seek: u64 = 48000 * 2;
-    for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
-        audio
-            .seek(Duration::from_secs_f64(target_secs))
-            .expect("seek");
+            let mut samples = 0u64;
+            while samples < samples_per_seek {
+                match audio.read(&mut buf) {
+                    Ok(ReadOutcome::Pending { .. }) => {
+                        virtual_pace(Duration::from_millis(10));
+                    }
+                    Ok(ReadOutcome::Frames { count, .. }) => {
+                        samples += count.get() as u64;
+                    }
+                    Ok(ReadOutcome::Eof { .. }) => break,
+                    Err(e) => panic!("decode error: {e}"),
+                }
+            }
+            assert!(
+                samples > 0,
+                "[{path}] seek to {target_secs}s must produce samples, got 0"
+            );
+        }
 
-        let mut samples = 0u64;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while samples < samples_per_seek && Instant::now() < deadline {
+        let mut post_seek_samples = 0u64;
+        while post_seek_samples < samples_per_seek {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => {
-                    sleep(Duration::from_millis(10)).await;
+                    virtual_pace(Duration::from_millis(10));
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
-                    samples += count.get() as u64;
+                    post_seek_samples += count.get() as u64;
                 }
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("decode error: {e}"),
             }
         }
         assert!(
-            samples > 0,
-            "[{path}] seek to {target_secs}s must produce samples, got 0"
+            post_seek_samples > 0,
+            "[{path}] playback after seeks must continue, got 0 samples"
         );
-    }
-
-    let mut post_seek_samples = 0u64;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while post_seek_samples < samples_per_seek && Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(10)).await;
-            }
-            Ok(ReadOutcome::Frames { count, .. }) => {
-                post_seek_samples += count.get() as u64;
-            }
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error: {e}"),
-        }
-    }
-    assert!(
-        post_seek_samples > 0,
-        "[{path}] playback after seeks must continue, got 0 samples"
-    );
+    })
+    .await
+    .expect("read phase join");
 }
 
 /// Same test but without ABR (fixed variant 0) — baseline.
@@ -438,40 +509,47 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .block_on_underrun(true)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    let _ = audio.preload();
+    spawn_blocking(move || {
+        let _ = audio.preload();
+        let mut buf = vec![0f32; 4096];
+        let mut total_samples = 0u64;
 
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut buf = vec![0f32; 4096];
-    let mut total_samples = 0u64;
-
-    while Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(10)).await;
+        loop {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => {
+                    virtual_pace(Duration::from_millis(10));
+                }
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    total_samples += count.get() as u64;
+                    if total_samples >= 100_000 {
+                        break;
+                    }
+                }
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("decode error: {e}"),
             }
-            Ok(ReadOutcome::Frames { count, .. }) => {
-                total_samples += count.get() as u64;
-            }
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error: {e}"),
         }
-    }
 
-    assert!(
-        total_samples > 1000,
-        "baseline: expected sustained playback, got only {total_samples} samples"
-    );
+        assert!(
+            total_samples > 1000,
+            "baseline: expected sustained playback, got only {total_samples} samples"
+        );
+    })
+    .await
+    .expect("read phase join");
 }
 
 /// Seek after decode-to-EOF in mmap (non-ephemeral) DRM mode must produce samples.
@@ -493,7 +571,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
 
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel)
@@ -502,49 +580,56 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .decoder_backend(DecoderBackend::Symphonia)
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    let _ = audio.preload();
+    spawn_blocking(move || {
+        let _ = audio.preload();
+        let mut buf = vec![0f32; 4096];
 
-    let mut buf = vec![0f32; 4096];
-
-    let warmup = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < warmup {
-        let _ = audio.read(&mut buf);
-        sleep(Duration::from_millis(5)).await;
-    }
-
-    let seek_targets = [
-        50.0, 120.0, 5.0, 80.0, 150.0, 30.0, 100.0, 60.0, 140.0, 20.0, 90.0, 10.0, 70.0, 130.0,
-        40.0, 110.0,
-    ];
-    let samples_per_seek: u64 = 48000 * 2;
-    for (idx, &target_secs) in seek_targets.iter().enumerate() {
-        audio
-            .seek(Duration::from_secs_f64(target_secs))
-            .unwrap_or_else(|e| panic!("[{path}] seek #{idx} to {target_secs}s failed: {e}"));
-
-        let mut samples = 0u64;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while samples < samples_per_seek && Instant::now() < deadline {
+        let mut warmup_samples = 0u64;
+        while warmup_samples < 17_640 {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => {
-                    sleep(Duration::from_millis(10)).await;
-                }
-                Ok(ReadOutcome::Frames { count, .. }) => {
-                    samples += count.get() as u64;
-                }
-                Ok(ReadOutcome::Eof { .. }) => break,
-                Err(e) => panic!("decode error: {e}"),
+                Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
+                Ok(ReadOutcome::Pending { .. }) => virtual_pace(Duration::from_millis(5)),
+                Ok(ReadOutcome::Eof { .. }) => panic!("[{path}] unexpected EOF during warmup"),
+                Err(e) => panic!("decode error during warmup: {e}"),
             }
         }
-        assert!(
-            samples > 0,
-            "[{path}] seek #{idx} to {target_secs}s must produce samples, got 0"
-        );
-    }
+
+        let seek_targets = [
+            50.0, 120.0, 5.0, 80.0, 150.0, 30.0, 100.0, 60.0, 140.0, 20.0, 90.0, 10.0, 70.0, 130.0,
+            40.0, 110.0,
+        ];
+        let samples_per_seek: u64 = 48000 * 2;
+        for (idx, &target_secs) in seek_targets.iter().enumerate() {
+            audio
+                .seek(Duration::from_secs_f64(target_secs))
+                .unwrap_or_else(|e| panic!("[{path}] seek #{idx} to {target_secs}s failed: {e}"));
+
+            let mut samples = 0u64;
+            while samples < samples_per_seek {
+                match audio.read(&mut buf) {
+                    Ok(ReadOutcome::Pending { .. }) => {
+                        virtual_pace(Duration::from_millis(10));
+                    }
+                    Ok(ReadOutcome::Frames { count, .. }) => {
+                        samples += count.get() as u64;
+                    }
+                    Ok(ReadOutcome::Eof { .. }) => break,
+                    Err(e) => panic!("decode error: {e}"),
+                }
+            }
+            assert!(
+                samples > 0,
+                "[{path}] seek #{idx} to {target_secs}s must produce samples, got 0"
+            );
+        }
+    })
+    .await
+    .expect("read phase join");
 }
 
 /// MP3 progressive file must continue producing chunks after seek sequence.
@@ -567,64 +652,70 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
         .hint(("mp3").to_string())
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<File>>::new(config)
         .await
         .expect("create audio");
-    let _ = audio.preload();
+    spawn_blocking(move || {
+        let _ = audio.preload();
+        let mut buf = vec![0f32; 4096];
 
-    let mut buf = vec![0f32; 4096];
+        let mut warmup_samples = 0u64;
+        while warmup_samples < 17_640 {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
+                Ok(ReadOutcome::Pending { .. }) => virtual_pace(Duration::from_millis(5)),
+                Ok(ReadOutcome::Eof { .. }) => panic!("[mp3] unexpected EOF during warmup"),
+                Err(e) => panic!("decode error during warmup: {e}"),
+            }
+        }
 
-    let warmup = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < warmup {
-        let _ = audio.read(&mut buf);
-        sleep(Duration::from_millis(5)).await;
-    }
+        let samples_per_seek: u64 = 48000 * 2;
+        for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
+            audio
+                .seek(Duration::from_secs_f64(target_secs))
+                .expect("seek");
 
-    let samples_per_seek: u64 = 48000 * 2;
-    for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
-        audio
-            .seek(Duration::from_secs_f64(target_secs))
-            .expect("seek");
+            let mut samples = 0u64;
+            while samples < samples_per_seek {
+                match audio.read(&mut buf) {
+                    Ok(ReadOutcome::Pending { .. }) => {
+                        virtual_pace(Duration::from_millis(10));
+                    }
+                    Ok(ReadOutcome::Frames { count, .. }) => {
+                        samples += count.get() as u64;
+                    }
+                    Ok(ReadOutcome::Eof { .. }) => break,
+                    Err(e) => panic!("decode error: {e}"),
+                }
+            }
+            assert!(
+                samples > 0,
+                "[mp3] seek to {target_secs}s must produce samples, got 0"
+            );
+        }
 
-        let mut samples = 0u64;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while samples < samples_per_seek && Instant::now() < deadline {
+        let mut post_seek_samples = 0u64;
+        while post_seek_samples < samples_per_seek {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => {
-                    sleep(Duration::from_millis(10)).await;
+                    virtual_pace(Duration::from_millis(10));
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
-                    samples += count.get() as u64;
+                    post_seek_samples += count.get() as u64;
                 }
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("decode error: {e}"),
             }
         }
         assert!(
-            samples > 0,
-            "[mp3] seek to {target_secs}s must produce samples, got 0"
+            post_seek_samples > 0,
+            "[mp3] playback after seeks must continue, got 0 samples"
         );
-    }
-
-    let mut post_seek_samples = 0u64;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while post_seek_samples < samples_per_seek && Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(10)).await;
-            }
-            Ok(ReadOutcome::Frames { count, .. }) => {
-                post_seek_samples += count.get() as u64;
-            }
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error: {e}"),
-        }
-    }
-    assert!(
-        post_seek_samples > 0,
-        "[mp3] playback after seeks must continue, got 0 samples"
-    );
+    })
+    .await
+    .expect("read phase join");
 }
 
 /// ABR must be frozen during seek and resume afterwards.
@@ -657,8 +748,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .expect("audio creation");
     let _ = audio.preload();
 
-    async fn next_chunk(audio: &mut Audio<Stream<Hls>>, timeout_ms: u64) -> Option<PcmChunk> {
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    async fn next_chunk(audio: &mut Audio<Stream<Hls>>) -> Option<PcmChunk> {
         loop {
             let _ = audio.preload();
             match PcmReader::next_chunk(audio) {
@@ -667,36 +757,30 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
                 Ok(ChunkOutcome::Pending { .. }) => {}
                 Err(e) => panic!("decode error in next_chunk: {e}"),
             }
-            if Instant::now() > deadline {
-                return None;
-            }
-            sleep(Duration::from_millis(2)).await;
+            // Yield so the worker runs and (under flash) the virtual clock
+            // advances; wait on the *fact* of a chunk / EOF, never a
+            // wall-clock window. A genuine stall trips `KITHARA_HANG_TIMEOUT_SECS`.
+            time::sleep(Duration::from_millis(2)).await;
         }
     }
 
     info!("Phase 1: warmup until ABR switches from variant 0");
     let mut initial_variant = None;
-    let warmup_deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < warmup_deadline {
-        let Some(chunk) = next_chunk(&mut audio, 500).await else {
-            continue;
-        };
+    let mut current_variant = None;
+    // Consume chunks until ABR actually switches off the initial variant (the
+    // fact we need) or the track ends — no wall-clock warmup window. Under
+    // flash the whole track decodes far faster than real time, so a timed
+    // window would either skip the switch or wedge; `next_chunk` parks on each
+    // chunk and the hang watchdog bounds a genuine stall.
+    while let Some(chunk) = next_chunk(&mut audio).await {
         let v = chunk.meta.variant_index;
         if initial_variant.is_none() {
             initial_variant = v;
         }
-        if v != initial_variant && v.is_some() {
+        if v.is_some() && v != initial_variant {
+            current_variant = v;
             info!(?initial_variant, switched_to = ?v, "ABR switched");
             break;
-        }
-    }
-    let mut current_variant = None;
-    for _ in 0..3 {
-        if let Some(chunk) = next_chunk(&mut audio, 1_000).await {
-            current_variant = chunk.meta.variant_index;
-            if current_variant.is_some() && current_variant != initial_variant {
-                break;
-            }
         }
     }
     if current_variant.is_none() || current_variant == initial_variant {
@@ -715,10 +799,10 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .expect("seek must not fail");
     let _ = audio.preload();
 
-    let post_seek_chunk = next_chunk(&mut audio, 500).await;
+    let post_seek_chunk = next_chunk(&mut audio).await;
     assert!(
         post_seek_chunk.is_some(),
-        "seek must produce a chunk within 500ms"
+        "seek must produce a chunk (stream ended before resuming)"
     );
     let variant_after_seek = post_seek_chunk.unwrap().meta.variant_index;
     assert_eq!(
@@ -727,14 +811,12 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     );
 
     info!("Phase 3: verify ABR still works post-seek");
-    let resume_deadline = Instant::now() + Duration::from_secs(8);
     let mut resume_chunks = 0u32;
-    while Instant::now() < resume_deadline {
-        if next_chunk(&mut audio, 200).await.is_some() {
+    while resume_chunks < 4 {
+        if next_chunk(&mut audio).await.is_some() {
             resume_chunks += 1;
-            if resume_chunks >= 4 {
-                break;
-            }
+        } else {
+            break; // natural EOF
         }
     }
     assert!(
@@ -778,9 +860,8 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let cancel = CancellationToken::default();
-    let bus = EventBus::new(256);
-    let mut hls_rx = bus.subscribe();
+    let cancel = CancelToken::never();
+    let bus = EventBus::new(8192);
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
@@ -789,32 +870,54 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
+    // `block_on_underrun(true)` makes every `read()` park on the worker via
+    // `recv_outcome_blocking` (`#[kithara::flash(true)]` → `park_timeout` on the
+    // virtual clock) rather than zero-filling on underrun. The park is what
+    // advances virtual time, so the worker keeps delivering real decoded chunks
+    // and the post-switch window accumulates true FLAC frames. A genuine
+    // post-switch decoder stall then parks forever, the virtual clock cannot
+    // pass the hang budget, and the `KITHARA_HANG_TIMEOUT_SECS=5` watchdog fires
+    // — the flash-correct enforcement of the "no >5 s stall" contract.
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus.clone())
+        .block_on_underrun(true)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    let _ = audio.preload();
+
+    // Subscribe before any switch so `VariantApplied{to:3}` cannot be missed.
+    // The post-switch read owns this receiver and drains it inline.
+    let mut hls_rx = bus.subscribe();
 
     // Phase 1 — AAC warmup. Read until we have at least 200 ms of audio
-    // (44_100 × 2 × 0.2 = 17_640 frames) so AAC decoder is fully primed.
-    let mut buf = vec![0f32; 4096];
-    let mut pre_samples = 0u64;
-    let warmup_deadline = Instant::now() + Duration::from_secs(8);
-    while Instant::now() < warmup_deadline && pre_samples < 17_640 {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => pre_samples += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) => sleep(Duration::from_millis(20)).await,
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error during AAC warmup: {e}"),
+    // (44_100 × 2 × 0.2 = 17_640 frames) so AAC decoder is fully primed. The
+    // blocking read must run off the test runtime thread: parking it here would
+    // starve the HLS drive/fetch tasks that feed the worker.
+    let (mut audio, pre_samples) = spawn_blocking(move || {
+        let _ = audio.preload();
+        let mut buf = vec![0f32; 4096];
+        let mut pre = 0u64;
+        while pre < 17_640 {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => pre += count.get() as u64,
+                Ok(ReadOutcome::Pending { .. }) => {}
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("decode error during AAC warmup: {e}"),
+            }
         }
-    }
+        (audio, pre)
+    })
+    .await
+    .expect("AAC warmup join");
     assert!(
         pre_samples >= 17_640,
         "AAC warmup must produce ≥17_640 frames before the cross-codec flip; \
          got {pre_samples}"
     );
 
-    // Phase 2 — trigger cross-codec Manual switch to FLAC.
+    // Phase 2 — trigger cross-codec Manual switch to FLAC. Runs on the runtime
+    // thread between the blocking read phases.
     let handle = audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
@@ -822,40 +925,61 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
         .set_mode(AbrMode::manual(3))
         .expect("Manual(3) (FLAC) target must be valid");
 
-    // Phase 3 — sustained post-switch playback. Read for 15 s; collect
-    // VariantApplied events alongside.
-    let post_deadline = Instant::now() + Duration::from_secs(15);
-    let mut post_samples = 0u64;
-    let mut applied_targets: Vec<usize> = Vec::new();
-    let mut last_progress = Instant::now();
-    let mut max_stall_ms = 0u128;
-    while Instant::now() < post_deadline {
-        while let Ok(ev) = hls_rx.try_recv() {
-            if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_targets.push(to.get());
-            }
-        }
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => {
-                let frames = count.get() as u64;
-                post_samples += frames;
-                if frames > 0 {
-                    last_progress = Instant::now();
+    // Phase 3 — sustained post-switch playback. Bound by a SAMPLE TARGET, not a
+    // wall clock: under flash a parked read collapses real time to ~zero, so a
+    // `Instant::now() + 15 s` loop would drain the whole 148 s tail and hit a
+    // legitimate end-of-track EOF before any real time elapsed. Reading the
+    // ≥660_000-frame target proves sustained FLAC throughput; `saw_eof` records
+    // a PREMATURE end (the prod stall surfaces as a false EOS), and the read
+    // owns `hls_rx` to capture every `VariantApplied` without broadcast lag.
+    let post_target: u64 = 660_000;
+    let (post_samples, applied_targets, max_stall_ms, saw_eof) = spawn_blocking(move || {
+        let mut buf = vec![0f32; 4096];
+        let mut post = 0u64;
+        let mut applied: Vec<usize> = Vec::new();
+        let mut last_progress = Instant::now();
+        let mut max_stall = 0u128;
+        let mut eof = false;
+        while post < post_target {
+            while let Ok(ev) = hls_rx.try_recv() {
+                if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
+                    applied.push(to.get());
                 }
             }
-            Ok(ReadOutcome::Pending { .. }) => sleep(Duration::from_millis(20)).await,
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error post-switch: {e}"),
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    post += count.get() as u64;
+                    last_progress = Instant::now();
+                }
+                Ok(ReadOutcome::Pending { .. }) => {}
+                Ok(ReadOutcome::Eof { .. }) => {
+                    eof = true;
+                    break;
+                }
+                Err(e) => panic!("decode error post-switch: {e}"),
+            }
+            let stalled = Instant::now().duration_since(last_progress).as_millis();
+            if stalled > max_stall {
+                max_stall = stalled;
+            }
         }
-        let stalled = Instant::now().duration_since(last_progress).as_millis();
-        if stalled > max_stall_ms {
-            max_stall_ms = stalled;
+        while let Ok(ev) = hls_rx.try_recv() {
+            if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
+                applied.push(to.get());
+            }
         }
-    }
+        (post, applied, max_stall, eof)
+    })
+    .await
+    .expect("sustained post-switch read join");
 
     info!(
         ?applied_targets,
-        pre_samples, post_samples, max_stall_ms, "Phase P.0: cross-codec switch sustained playback"
+        pre_samples,
+        post_samples,
+        max_stall_ms,
+        saw_eof,
+        "Phase P.0: cross-codec switch sustained playback"
     );
 
     assert!(
@@ -864,9 +988,15 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
          applied_targets={applied_targets:?}"
     );
     assert!(
+        !saw_eof,
+        "FLAC playback after the cross-codec flip ended prematurely (false EOS) \
+         before the ≥660_000-frame target; got {post_samples}. \
+         Prod symptom: decoder stalls / dies after the switch."
+    );
+    assert!(
         post_samples >= 660_000,
         "sustained FLAC playback after cross-codec flip must produce \
-         ≥660_000 frames in 15 s (≈50 % nominal 44.1 kHz × 15 s × 2 ch); \
+         ≥660_000 frames (≈50 % nominal 44.1 kHz × 15 s × 2 ch); \
          got {post_samples}. Prod symptom: decoder stalls after the switch."
     );
     assert!(

@@ -24,11 +24,23 @@ ignores:
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
+  # The platform crate OWNS the timer impl that lib crates consume; its native
+  # backend legitimately calls std::thread::sleep/park_timeout (the real impl).
+  - "crates/kithara-platform/src/native/**"
+# ast-grep is purely syntactic (no name resolution), so the bare
+# `thread::sleep(_)` form cannot be told apart from
+# `kithara_platform::thread::sleep(_)` (the sanctioned platform sleep) once
+# `thread` is imported — it false-positives on every legal platform call.
+# Pin the banned origins precisely instead: fully-qualified std/tokio calls
+# plus their `use` imports. (`use std::thread` alone is not flagged — it is
+# also used for `spawn`; only the sleep/park imports are.)
 rule:
   any:
     - pattern: std::thread::sleep($_)
-    - pattern: thread::sleep($_)
     - pattern: tokio::time::sleep($_)
     - pattern: tokio::time::sleep_until($_)
     - pattern: std::thread::park_timeout($_)
-    - pattern: thread::park_timeout($_)
+    - pattern: use std::thread::sleep
+    - pattern: use std::thread::park_timeout
+    - pattern: use tokio::time::sleep
+    - pattern: use tokio::time::sleep_until

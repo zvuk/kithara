@@ -192,7 +192,7 @@ pub(crate) mod params {
         HlsFixtureBuilder,
         fixture_protocol::{DelayRule, PackagedSignal},
     };
-    use kithara_platform::CancellationToken;
+    use kithara_platform::CancelToken;
     use kithara_stream::AudioCodec;
 
     use super::Consts;
@@ -268,7 +268,7 @@ pub(crate) mod params {
         backend: DecoderBackend,
         prefetch_count: usize,
     ) -> Audio<Stream<Hls>> {
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         let hls_config = HlsConfig::for_url(url.clone())
             .store(store)
             .cancel(cancel)

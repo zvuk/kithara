@@ -22,7 +22,7 @@ use crate::{HlsError, HlsResult};
 /// decryption) through a [`KeyProcessorRegistry`] — each key URL's
 /// host is looked up in the registry to pick the matching rule.
 #[derive(Clone)]
-pub struct KeyManager {
+pub struct KeyStore {
     /// In-memory hot-path cache of decrypted keys for rule-matched URLs.
     ///
     /// `get_cached_key` reads from here under a synchronous segment
@@ -44,7 +44,7 @@ pub struct KeyManager {
     downloader: PeerHandle,
 }
 
-impl KeyManager {
+impl KeyStore {
     /// AES-128 key / IV length in bytes.
     const AES_KEY_LEN: usize = 16;
 

@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use portable_atomic::{AtomicF64, AtomicU32};
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
@@ -18,11 +18,11 @@ pub struct SharedPlayerState {
     pub playing: AtomicBool,
     /// Last observed total duration snapshot in seconds.
     ///
-    /// Source of truth is the per-track `Timeline` in the audio pipeline.
+    /// Source of truth is the per-track `PlayheadState` in the audio pipeline.
     pub duration: AtomicF64,
     /// Last observed playback position snapshot in seconds.
     ///
-    /// Source of truth is the per-track `Timeline` in the audio pipeline.
+    /// Source of truth is the per-track `PlayheadState` in the audio pipeline.
     pub position: AtomicF64,
     /// Current sample rate from the audio stream.
     pub sample_rate: AtomicU32,
@@ -88,13 +88,13 @@ impl SharedPlayerState {
     /// freed by the main thread, never on the audio thread. If the channel is
     /// full the track drops here as a bounded degraded path.
     pub(crate) fn discard_track(&self, track: PlayerTrack) {
-        let _ = self.trash_tx.lock_sync().try_push(track);
+        let _ = self.trash_tx.lock().try_push(track);
     }
 
     /// Drop every track queued for deferred destruction. Called from the
     /// main-thread notification drain, never from the audio thread.
     pub(crate) fn drain_trash(&self) {
-        let mut rx = self.trash_rx.lock_sync();
+        let mut rx = self.trash_rx.lock();
         while rx.try_pop().is_some() {}
     }
 
@@ -136,13 +136,13 @@ mod tests {
         let state = SharedPlayerState::new();
         let sent = state
             .notification_tx
-            .lock_sync()
+            .lock()
             .try_push(PlayerNotification::Loaded {
                 src: Arc::from("a.mp3"),
             });
         assert!(sent.is_ok());
 
-        let received = state.notification_rx.lock_sync().try_pop();
+        let received = state.notification_rx.lock().try_pop();
         let Some(PlayerNotification::Loaded { src }) = received else {
             panic!("expected Loaded notification, got {received:?}");
         };

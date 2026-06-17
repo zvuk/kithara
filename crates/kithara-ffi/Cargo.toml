@@ -70,7 +70,7 @@ dev = []
 # Exposes JNI entrypoints that render through the offline firewheel
 # backend and write WAV output, bypassing cpal/AAudio. Never ship in a
 # release AAR.
-test = ["kithara/probe", "kithara-play/probe", "dep:tokio", "dep:cpal"]
+test = ["kithara/probe", "kithara-play/probe", "dep:cpal"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # `default-features = false` on kithara/kithara-queue: their defaults pull
@@ -92,7 +92,6 @@ unimock = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 uniffi = { workspace = true, optional = true, features = ["cli"] }
-tokio = { workspace = true, optional = true, features = ["macros", "rt-multi-thread"] }
 # Pulled in by firewheel-cpal transitively; surfaced as a direct dep under
 # `test` so the probe JNI can enumerate host/device configs without
 # touching the production firewheel backend types.

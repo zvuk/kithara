@@ -1,8 +1,9 @@
-use std::{collections::VecDeque, num::NonZeroU32, sync::Arc, time::Duration};
+use std::{collections::VecDeque, num::NonZeroU32, sync::Arc};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{DecodeError, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
+use kithara_platform::time::Duration;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -16,7 +17,7 @@ const CH: u16 = 2;
 fn spec() -> PcmSpec {
     PcmSpec {
         channels: CH,
-        sample_rate: SR,
+        sample_rate: NonZeroU32::new(SR).unwrap(),
     }
 }
 
@@ -159,7 +160,7 @@ impl PcmReader for FakeReader {
 mod run {
     use std::sync::Arc;
 
-    use kithara_platform::{CancellationToken, sync::Mutex};
+    use kithara_platform::{CancelToken, sync::Mutex};
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
@@ -187,19 +188,19 @@ mod run {
         let want = direct.finalize(BUCKETS);
 
         let mut reader = FakeReader::chunked(&samples, 4);
-        let out = analyze_reader(&mut reader, &waveform_only(), &CancellationToken::default())
+        let out = analyze_reader(&mut reader, &waveform_only(), &CancelToken::root())
             .expect("stream with data analyses");
         let got = out.waveform.expect("waveform analyzer fills its slot");
         assert_eq!(
-            got.to_bytes(),
-            want.to_bytes(),
+            Vec::<u8>::from(&got),
+            Vec::<u8>::from(&want),
             "worker path must reproduce the direct analyzer output"
         );
     }
 
     #[kithara::test]
     fn cancelled_token_yields_none() {
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::root();
         cancel.cancel();
         let mut reader = FakeReader::chunked(&sine(4096), 2);
         assert!(analyze_reader(&mut reader, &waveform_only(), &cancel).is_none());
@@ -208,14 +209,14 @@ mod run {
     #[kithara::test]
     fn decode_error_yields_none() {
         let mut reader = FakeReader::failing();
-        let out = analyze_reader(&mut reader, &waveform_only(), &CancellationToken::default());
+        let out = analyze_reader(&mut reader, &waveform_only(), &CancelToken::root());
         assert!(out.is_none());
     }
 
     #[kithara::test]
     fn empty_stream_yields_none() {
         let mut reader = FakeReader::empty();
-        let out = analyze_reader(&mut reader, &waveform_only(), &CancellationToken::default());
+        let out = analyze_reader(&mut reader, &waveform_only(), &CancelToken::root());
         assert!(out.is_none(), "EOF with no chunks is not an analysis");
     }
 
@@ -236,7 +237,7 @@ mod run {
             AnalyzerBuilder::default().with_beat_detector(detector, GridParams::default());
 
         let mut reader = FakeReader::chunked(&sine(8192), 3);
-        let out = analyze_reader(&mut reader, &builder, &CancellationToken::default())
+        let out = analyze_reader(&mut reader, &builder, &CancelToken::root())
             .expect("stream with data analyses");
         let grid = out.beat.expect("beat slot fills its slot");
         assert!(
@@ -251,14 +252,14 @@ mod run {
     fn pending_is_tolerated_mid_stream() {
         let samples = sine(8192);
         let mut reader = FakeReader::chunked_with_pending(&samples, 2);
-        let out = analyze_reader(&mut reader, &waveform_only(), &CancellationToken::default());
+        let out = analyze_reader(&mut reader, &waveform_only(), &CancelToken::root());
         assert!(out.is_some_and(|a| a.waveform.is_some()));
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 mod worker {
-    use kithara_platform::CancellationToken;
+    use kithara_platform::CancelToken;
     use kithara_test_utils::kithara;
 
     use super::{
@@ -272,11 +273,11 @@ mod worker {
 
     #[kithara::test(tokio)]
     async fn delivers_result_on_its_own_thread() {
-        let master = CancellationToken::default();
+        let master = CancelToken::root();
         let worker = AnalysisWorker::new(&master, waveform_only());
         let mut rx = worker.analyze(
             Box::new(FakeReader::chunked(&sine(8192), 3)),
-            master.child_token(),
+            master.child(),
         );
         rx.changed().await.expect("worker sends a result");
         assert!(rx.borrow().as_ref().is_some_and(|a| a.waveform.is_some()));
@@ -284,16 +285,16 @@ mod worker {
 
     #[kithara::test(tokio)]
     async fn preempted_job_sends_nothing_and_next_job_runs() {
-        let master = CancellationToken::default();
+        let master = CancelToken::root();
         let worker = AnalysisWorker::new(&master, waveform_only());
 
-        let stale = master.child_token();
+        let stale = master.child();
         stale.cancel();
         let mut stale_rx = worker.analyze(Box::new(FakeReader::chunked(&sine(8192), 3)), stale);
 
         let mut live_rx = worker.analyze(
             Box::new(FakeReader::chunked(&sine(8192), 3)),
-            master.child_token(),
+            master.child(),
         );
         live_rx.changed().await.expect("live job completes");
         assert!(live_rx.borrow().is_some());

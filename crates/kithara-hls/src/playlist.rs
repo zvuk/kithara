@@ -1,4 +1,4 @@
-use kithara_platform::{RwLock, time::Duration};
+use kithara_platform::{sync::RwLock, time::Duration};
 use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;
 
@@ -9,8 +9,8 @@ use crate::ids::{SegmentIndex, VariantIndex};
 pub struct SegmentState {
     /// Duration of the segment.
     pub duration: Duration,
-    /// Segment index within the variant's media playlist.
-    pub index: SegmentIndex,
+    /// Bounded segment index within the variant's media playlist.
+    pub(crate) index: SegmentIndex,
     /// Absolute URL of the segment.
     pub url: Url,
 }
@@ -99,19 +99,21 @@ impl PlaylistState {
                     .as_ref()
                     .and_then(|init| media_url.join(&init.uri).ok());
 
+                let num_segments = playlist.segments.len();
                 let segments: Vec<SegmentState> = playlist
                     .segments
                     .iter()
                     .enumerate()
-                    .map(|(index, seg)| {
+                    .filter_map(|(idx, seg)| {
+                        let index = SegmentIndex::try_new(idx, num_segments)?;
                         let url = media_url
                             .join(&seg.uri)
                             .unwrap_or_else(|_| media_url.clone());
-                        SegmentState {
+                        Some(SegmentState {
                             index,
                             url,
                             duration: seg.duration,
-                        }
+                        })
                     })
                     .collect();
 
@@ -132,7 +134,7 @@ impl PlaylistState {
     #[must_use]
     pub fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         Some(state.segments.len())
     }
 
@@ -146,14 +148,14 @@ impl PlaylistState {
     #[must_use]
     pub fn segment_sizes(&self, variant: VariantIndex) -> Option<Vec<u64>> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.size_map.as_ref().map(|sm| sm.segment_sizes.clone())
     }
 
     /// Set the size map for a variant (after HEAD requests or first download).
     pub fn set_size_map(&self, variant: VariantIndex, size_map: VariantSizeMap) {
         if let Some(lock) = self.variants.get(variant) {
-            let mut state = lock.lock_sync_write();
+            let mut state = lock.write();
             state.size_map = Some(size_map);
         }
     }
@@ -167,7 +169,7 @@ impl PlaylistState {
         self.variants
             .iter()
             .map(|lock| {
-                let state = lock.lock_sync_read();
+                let state = lock.read();
                 state.segments.iter().fold(Duration::ZERO, |acc, segment| {
                     acc.saturating_add(segment.duration)
                 })
@@ -185,18 +187,18 @@ pub(crate) trait PlaylistAccess: Send + Sync {
         &self,
         variant: VariantIndex,
         target: Duration,
-    ) -> Option<(SegmentIndex, Duration, Duration)>;
+    ) -> Option<(usize, Duration, Duration)>;
 
     fn has_size_map(&self, variant: VariantIndex) -> bool;
     fn init_size(&self, variant: VariantIndex) -> u64;
     fn init_url(&self, variant: VariantIndex) -> Option<Url>;
-    fn segment_byte_offset(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64>;
+    fn segment_byte_offset(&self, variant: VariantIndex, index: usize) -> Option<u64>;
     fn segment_decode_range(
         &self,
         variant: VariantIndex,
-        index: SegmentIndex,
+        index: usize,
     ) -> Option<(Duration, Duration)>;
-    fn segment_url(&self, variant: VariantIndex, index: SegmentIndex) -> Option<Url>;
+    fn segment_url(&self, variant: VariantIndex, index: usize) -> Option<Url>;
     fn total_variant_size(&self, variant: VariantIndex) -> Option<u64>;
 }
 
@@ -205,9 +207,9 @@ impl PlaylistAccess for PlaylistState {
         &self,
         variant: VariantIndex,
         target: Duration,
-    ) -> Option<(SegmentIndex, Duration, Duration)> {
+    ) -> Option<(usize, Duration, Duration)> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         if state.segments.is_empty() {
             return None;
         }
@@ -219,7 +221,7 @@ impl PlaylistAccess for PlaylistState {
                 let segment_start = elapsed;
                 let segment_end = segment_start.saturating_add(segment.duration);
                 if target < segment_end {
-                    found = Some((segment.index, segment_start, segment_end));
+                    found = Some((segment.index.into_inner(), segment_start, segment_end));
                     break;
                 }
                 elapsed = segment_end;
@@ -227,7 +229,7 @@ impl PlaylistAccess for PlaylistState {
             found.or_else(|| {
                 state.segments.last().map(|tail| {
                     let tail_start = elapsed.saturating_sub(tail.duration);
-                    (tail.index, tail_start, elapsed)
+                    (tail.index.into_inner(), tail_start, elapsed)
                 })
             })
         };
@@ -239,7 +241,7 @@ impl PlaylistAccess for PlaylistState {
         let Some(lock) = self.variants.get(variant) else {
             return false;
         };
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.size_map.is_some()
     }
 
@@ -247,29 +249,29 @@ impl PlaylistAccess for PlaylistState {
         let Some(lock) = self.variants.get(variant) else {
             return 0;
         };
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.size_map.as_ref().map_or(0, |sm| sm.init_size)
     }
 
     fn init_url(&self, variant: VariantIndex) -> Option<Url> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.init_url.clone()
     }
 
-    fn segment_byte_offset(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64> {
+    fn segment_byte_offset(&self, variant: VariantIndex, index: usize) -> Option<u64> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.size_map.as_ref()?.offsets.get(index).copied()
     }
 
     fn segment_decode_range(
         &self,
         variant: VariantIndex,
-        index: SegmentIndex,
+        index: usize,
     ) -> Option<(Duration, Duration)> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         if index >= state.segments.len() {
             return None;
         }
@@ -287,15 +289,15 @@ impl PlaylistAccess for PlaylistState {
         result
     }
 
-    fn segment_url(&self, variant: VariantIndex, index: SegmentIndex) -> Option<Url> {
+    fn segment_url(&self, variant: VariantIndex, index: usize) -> Option<Url> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.segments.get(index).map(|s| s.url.clone())
     }
 
     fn total_variant_size(&self, variant: VariantIndex) -> Option<u64> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.size_map.as_ref().map(|sm| sm.total)
     }
 }
@@ -304,14 +306,14 @@ impl PlaylistState {
     /// Audio codec for a variant.
     pub(crate) fn variant_codec(&self, variant: VariantIndex) -> Option<AudioCodec> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.codec
     }
 
     /// Container format for a variant.
     pub(crate) fn variant_container(&self, variant: VariantIndex) -> Option<ContainerFormat> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         state.container
     }
 }
@@ -319,9 +321,9 @@ impl PlaylistState {
 #[cfg(test)]
 impl PlaylistState {
     /// Find which segment contains the given byte offset (binary search on offsets).
-    fn find_segment_at_offset(&self, variant: VariantIndex, offset: u64) -> Option<SegmentIndex> {
+    fn find_segment_at_offset(&self, variant: VariantIndex, offset: u64) -> Option<usize> {
         let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
+        let state = lock.read();
         let result = state.size_map.as_ref().and_then(|size_map| {
             if size_map.offsets.is_empty() || offset >= size_map.total {
                 return None;
@@ -353,9 +355,9 @@ mod tests {
         Url::parse(raw).expect("valid test URL")
     }
 
-    fn make_segment(index: usize) -> SegmentState {
+    fn make_segment(index: usize, num_segments: usize) -> SegmentState {
         SegmentState {
-            index,
+            index: SegmentIndex::try_new(index, num_segments).expect("in-bounds segment index"),
             url: base_url()
                 .join(&format!("segment-{index}.m4s"))
                 .expect("valid segment URL"),
@@ -364,7 +366,9 @@ mod tests {
     }
 
     fn make_variant(_id: usize, num_segments: usize) -> VariantState {
-        let segments: Vec<SegmentState> = (0..num_segments).map(make_segment).collect();
+        let segments: Vec<SegmentState> = (0..num_segments)
+            .map(|i| make_segment(i, num_segments))
+            .collect();
         VariantState {
             segments,
             codec: Some(AudioCodec::AacLc),

@@ -8,8 +8,13 @@ use kithara::{
     },
     prelude::{Resource, ResourceConfig},
 };
-use kithara_platform::CancellationToken;
-use tokio::{sync::watch, task::JoinHandle};
+use kithara_platform::{
+    CancelToken,
+    tokio::{
+        sync::watch,
+        task::{self, JoinHandle},
+    },
+};
 use tracing::warn;
 
 /// App-side handle over the shared [`AnalysisWorker`]: opens the resource
@@ -17,7 +22,7 @@ use tracing::warn;
 /// and keeps at most one run in flight. Dropping it cancels the run and
 /// stops the worker.
 pub struct TrackAnalysisRunner {
-    cancel: CancellationToken,
+    cancel: CancelToken,
     worker: Arc<AnalysisWorker>,
     current: Option<RunHandle>,
     /// Whether any analyzer is compiled in; without one a decode pass would
@@ -29,7 +34,7 @@ pub struct TrackAnalysisRunner {
 /// Teardown is cooperative — cancelling the token exits the worker's decode
 /// loop at its next per-chunk check.
 struct RunHandle {
-    cancel: CancellationToken,
+    cancel: CancelToken,
     task: JoinHandle<()>,
 }
 
@@ -38,8 +43,8 @@ impl TrackAnalysisRunner {
     /// and every run scope live under it. `buckets` is the waveform
     /// resolution registered with the worker.
     #[must_use]
-    pub fn new(master: &CancellationToken, buckets: usize) -> Self {
-        let cancel = master.child_token();
+    pub fn new(master: &CancelToken, buckets: usize) -> Self {
+        let cancel = master.child();
         let builder = AnalyzerBuilder::default()
             .with_waveform(buckets)
             .with_beat();
@@ -69,9 +74,9 @@ impl TrackAnalysisRunner {
     pub fn analyze(&mut self, config: ResourceConfig) -> watch::Receiver<Option<TrackAnalysis>> {
         self.clear();
 
-        let run = self.cancel.child_token();
+        let run = self.cancel.child();
         let (tx, rx) = watch::channel(None);
-        let task = tokio::spawn(run_analysis(
+        let task = task::spawn(run_analysis(
             Arc::clone(&self.worker),
             config,
             run.clone(),
@@ -103,7 +108,7 @@ impl Drop for TrackAnalysisRunner {
 async fn run_analysis(
     worker: Arc<AnalysisWorker>,
     config: ResourceConfig,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     tx: watch::Sender<Option<TrackAnalysis>>,
 ) {
     let Some(reader) = open_reader(config, &cancel).await else {
@@ -125,12 +130,12 @@ async fn run_analysis(
 /// reader for the analysis worker.
 async fn open_reader(
     mut config: ResourceConfig,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
 ) -> Option<Box<dyn PcmReader>> {
     if cancel.is_cancelled() {
         return None;
     }
-    config.cancel = Some(cancel.child_token());
+    config.cancel = Some(cancel.child());
     let mut resource = match Resource::new(config).await {
         Ok(r) => r,
         Err(e) => {
@@ -142,5 +147,5 @@ async fn open_reader(
         warn!(?e, "analysis: preload failed");
         return None;
     }
-    Some(resource.into_reader())
+    Some(resource.into())
 }

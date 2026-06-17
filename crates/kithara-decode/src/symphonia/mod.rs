@@ -20,4 +20,4 @@ pub(crate) mod registry;
 
 pub(crate) use codec::SymphoniaCodec;
 pub(crate) use config::SymphoniaConfig;
-pub(crate) use demuxer::SymphoniaDemuxer;
+pub(crate) use demuxer::{FileOpen, SymphoniaDemuxer};

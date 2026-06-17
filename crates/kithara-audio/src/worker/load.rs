@@ -41,20 +41,15 @@ pub struct EngineLoad {
 
 impl Default for EngineLoad {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl EngineLoad {
-    #[must_use]
-    pub fn new() -> Self {
         Self {
             realtime: AtomicF32::new(0.0),
             load: AtomicF32::new(0.0),
             ms: AtomicF32::new(0.0),
         }
     }
+}
 
+impl EngineLoad {
     /// Fold one produced chunk's cost into the EWMA (worker thread).
     ///
     /// `busy` is the wall time the tick spent producing `frames` output
@@ -118,7 +113,7 @@ mod tests {
 
     #[kithara::test]
     fn record_populates_snapshot_and_skips_empty() {
-        let meter = EngineLoad::new();
+        let meter = EngineLoad::default();
         assert!(!meter.snapshot().is_active(), "idle before any record");
 
         // Empty chunk records nothing.

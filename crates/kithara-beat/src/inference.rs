@@ -7,12 +7,17 @@ use crate::{
     runtime::{RtenModel, Tensor},
 };
 
-/// Frames per chunk (30 seconds at 50 fps)
-const CHUNK_SIZE: i64 = 1500;
-/// Frames discarded from each edge of predictions.
-const BORDER_SIZE: i64 = 6;
-/// Effective step between chunks.
-const STRIDE: i64 = CHUNK_SIZE - 2 * BORDER_SIZE;
+/// Chunking geometry for beat prediction.
+struct Consts;
+
+impl Consts {
+    /// Frames per chunk (30 seconds at 50 fps).
+    const CHUNK_SIZE: i64 = 1500;
+    /// Frames discarded from each edge of predictions.
+    const BORDER_SIZE: i64 = 6;
+    /// Effective step between chunks.
+    const STRIDE: i64 = Self::CHUNK_SIZE - 2 * Self::BORDER_SIZE;
+}
 
 fn as_i64(x: usize) -> i64 {
     x.to_i64().unwrap_or(i64::MAX)
@@ -30,14 +35,18 @@ pub(crate) struct BeatPredictor {
     model: RtenModel,
 }
 
-impl BeatPredictor {
-    /// Load the beat model from ONNX bytes.
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, BeatError> {
+/// Load the beat model from ONNX bytes.
+impl TryFrom<&[u8]> for BeatPredictor {
+    type Error = BeatError;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, BeatError> {
         Ok(Self {
-            model: RtenModel::from_bytes("beat", bytes)?,
+            model: RtenModel::try_from(("beat", bytes))?,
         })
     }
+}
 
+impl BeatPredictor {
     /// Predict beats from a full mel spectrogram `[1, T, 128]`.
     ///
     /// Returns `(beat_logits, downbeat_logits)`, each of length T.
@@ -50,7 +59,7 @@ impl BeatPredictor {
 
         let full_time = mel.shape[1];
         let starts = generate_starts(full_time);
-        let border = as_usize(BORDER_SIZE);
+        let border = as_usize(Consts::BORDER_SIZE);
 
         // Sentinel init; every frame is overwritten by some chunk.
         let mut beat_logits = vec![-1000.0f32; full_time];
@@ -71,7 +80,7 @@ impl BeatPredictor {
             let valid_downbeat = &downbeat.data[border..chunk_time - border];
 
             // start >= -BORDER_SIZE, so this is non-negative.
-            let write_start = as_usize(start + BORDER_SIZE);
+            let write_start = as_usize(start + Consts::BORDER_SIZE);
             for (i, (&b, &d)) in valid_beat.iter().zip(valid_downbeat.iter()).enumerate() {
                 let dest = write_start + i;
                 if dest < full_time {
@@ -112,18 +121,18 @@ fn extract_output(
 fn generate_starts(full_time: usize) -> Vec<i64> {
     let full_time = as_i64(full_time);
     let mut starts = Vec::new();
-    let mut pos = -BORDER_SIZE;
-    let limit = full_time - BORDER_SIZE;
+    let mut pos = -Consts::BORDER_SIZE;
+    let limit = full_time - Consts::BORDER_SIZE;
 
     while pos < limit {
         starts.push(pos);
-        pos += STRIDE;
+        pos += Consts::STRIDE;
     }
 
-    if full_time > STRIDE
+    if full_time > Consts::STRIDE
         && let Some(last) = starts.last_mut()
     {
-        *last = full_time - (CHUNK_SIZE - BORDER_SIZE);
+        *last = full_time - (Consts::CHUNK_SIZE - Consts::BORDER_SIZE);
     }
 
     starts
@@ -139,11 +148,12 @@ fn extract_chunk(mel: &Tensor, start: i64) -> Tensor {
     let full_time_i = as_i64(full_time);
 
     let actual_start = as_usize(start.max(0));
-    let actual_end = as_usize((start + CHUNK_SIZE).min(full_time_i));
+    let actual_end = as_usize((start + Consts::CHUNK_SIZE).min(full_time_i));
     let pad_left = as_usize((-start).max(0));
     let n_frames = actual_end - actual_start;
 
-    let pad_right = as_usize(0.max((start + CHUNK_SIZE - full_time_i).min(BORDER_SIZE)));
+    let pad_right =
+        as_usize(0.max((start + Consts::CHUNK_SIZE - full_time_i).min(Consts::BORDER_SIZE)));
 
     let chunk_time = pad_left + n_frames + pad_right;
     let mut data = vec![0.0f32; chunk_time * n_mels];
@@ -212,13 +222,15 @@ mod tests {
             let mut covered = vec![false; full_time];
             for &start in &starts {
                 let pad_left = (-start).max(0);
-                let actual_end = (start + CHUNK_SIZE).min(full_time_i);
+                let actual_end = (start + Consts::CHUNK_SIZE).min(full_time_i);
                 let actual_start = start.max(0);
                 let n_frames = actual_end - actual_start;
-                let pad_right = 0.max((start + CHUNK_SIZE - full_time_i).min(BORDER_SIZE));
+                let pad_right =
+                    0.max((start + Consts::CHUNK_SIZE - full_time_i).min(Consts::BORDER_SIZE));
                 let chunk_time = pad_left + n_frames + pad_right;
-                let write_start = as_usize((start + BORDER_SIZE).max(0));
-                let write_end = as_usize((start + chunk_time - BORDER_SIZE).min(full_time_i));
+                let write_start = as_usize((start + Consts::BORDER_SIZE).max(0));
+                let write_end =
+                    as_usize((start + chunk_time - Consts::BORDER_SIZE).min(full_time_i));
                 for c in &mut covered[write_start..write_end] {
                     *c = true;
                 }
@@ -272,7 +284,7 @@ mod tests {
         };
 
         let chunk = extract_chunk(&mel, -6);
-        assert_eq!(chunk.shape, vec![1, as_usize(CHUNK_SIZE), n_mels]);
+        assert_eq!(chunk.shape, vec![1, as_usize(Consts::CHUNK_SIZE), n_mels]);
 
         for t in 0..6 {
             assert_eq!(chunk.data[t * n_mels], 0.0);
@@ -290,7 +302,7 @@ mod tests {
         };
 
         let chunk = extract_chunk(&mel, 100);
-        assert_eq!(chunk.shape, vec![1, as_usize(CHUNK_SIZE), n_mels]);
+        assert_eq!(chunk.shape, vec![1, as_usize(Consts::CHUNK_SIZE), n_mels]);
         assert!(chunk.data.iter().all(|&v| v == 1.0));
     }
 }

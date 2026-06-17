@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use kithara_events::TrackId;
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use uuid::Uuid;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -145,11 +145,11 @@ impl AudioPlayerItem {
             id,
             uuid,
             #[cfg(not(target_arch = "wasm32"))]
-            event_bridge: Mutex::new(None),
-            observer: Mutex::new(None),
+            event_bridge: Mutex::default(),
+            observer: Mutex::default(),
             #[cfg(not(target_arch = "wasm32"))]
-            bus: Mutex::new(None),
-            inserted: Mutex::new(false),
+            bus: Mutex::default(),
+            inserted: Mutex::default(),
             state: Arc::new(Mutex::new(ItemView::new(live))),
         })
     }
@@ -165,14 +165,14 @@ impl AudioPlayerItem {
     /// Cached item duration in seconds. Defaults to `0.0` until the
     /// underlying resource emits a duration update.
     pub fn duration_sec(&self) -> f64 {
-        self.state.lock_sync().duration_sec()
+        self.state.lock().duration_sec()
     }
 
     /// Whether this item represents a live HLS feed. The flag is set
     /// from [`FfiItemConfig::is_live_stream`] at construction; in the
     /// future this getter will also surface auto-detected live streams.
     pub fn is_live_stream(&self) -> bool {
-        self.state.lock_sync().is_live_stream
+        self.state.lock().is_live_stream
     }
 
     /// Whether the item is playable at `progress` (seconds) given the
@@ -212,8 +212,8 @@ impl AudioPlayerItem {
         )
     )]
     pub fn load(&self, callback: Arc<dyn ItemLoadCallback>) {
-        let inserted = *self.inserted.lock_sync();
-        let snapshot = *self.state.lock_sync();
+        let inserted = *self.inserted.lock();
+        let snapshot = *self.state.lock();
         let result = if inserted {
             FfiItemLoadResult {
                 has_protected_content: snapshot.has_protected_content,
@@ -237,7 +237,7 @@ impl AudioPlayerItem {
     }
 
     pub fn set_observer(&self, observer: Arc<dyn ItemObserver>) {
-        *self.observer.lock_sync() = Some(observer);
+        *self.observer.lock() = Some(observer);
         self.restart_bridge();
     }
 
@@ -276,7 +276,7 @@ impl AudioPlayerItem {
     }
 
     pub(crate) fn observer(&self) -> Option<Arc<dyn ItemObserver>> {
-        self.observer.lock_sync().clone()
+        self.observer.lock().clone()
     }
 
     /// (Re)subscribe the bridge to the currently-attached scoped bus.
@@ -285,11 +285,11 @@ impl AudioPlayerItem {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn restart_bridge(&self) {
         let Some(observer) = self.observer() else {
-            *self.event_bridge.lock_sync() = None;
+            *self.event_bridge.lock() = None;
             return;
         };
-        let Some(bus) = self.bus.lock_sync().clone() else {
-            *self.event_bridge.lock_sync() = None;
+        let Some(bus) = self.bus.lock().clone() else {
+            *self.event_bridge.lock() = None;
             return;
         };
         let bridge = ItemEventBridge::spawn(
@@ -297,9 +297,9 @@ impl AudioPlayerItem {
             observer,
             None,
             Arc::clone(&self.state),
-            kithara_platform::CancellationToken::default(), // kithara:cancel:bridge
+            kithara_platform::CancelToken::never(),
         );
-        *self.event_bridge.lock_sync() = Some(bridge);
+        *self.event_bridge.lock() = Some(bridge);
     }
 
     /// Wasm has no long-lived per-item bus bridge — the worker owns the
@@ -315,7 +315,7 @@ impl AudioPlayerItem {
         let Some(observer) = self.observer() else {
             return;
         };
-        let snapshot = *self.state.lock_sync();
+        let snapshot = *self.state.lock();
         match snapshot.loading {
             LoadingState::Failed => {
                 observer.on_event(crate::types::FfiItemEvent::StatusChanged {
@@ -422,7 +422,7 @@ mod tests {
     #[kithara::test]
     fn inserted_flag_initially_false() {
         let item = item_for("https://example.com/a.mp3");
-        assert!(!*item.inserted.lock_sync());
+        assert!(!*item.inserted.lock());
     }
 
     #[kithara::test]

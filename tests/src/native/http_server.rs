@@ -1,10 +1,10 @@
-use std::{io, sync::Arc, time::Duration};
+use std::{io, sync::Arc};
 
 use axum::Router;
+use kithara_platform::time::{Duration, sleep as tokio_sleep};
 use tokio::{
     net::TcpListener,
     sync::{oneshot, watch},
-    time::sleep as tokio_sleep,
 };
 use url::Url;
 

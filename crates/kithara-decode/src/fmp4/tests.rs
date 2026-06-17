@@ -9,12 +9,12 @@ use std::{
 
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_platform::time::Duration;
-use kithara_stream::{SegmentDescriptor, SegmentLayout};
+use kithara_stream::{ByteMap, SegmentDescriptor};
 use kithara_test_utils::kithara;
 
 use crate::{
     codec::{CodecPriming, FrameCodec},
-    composed::ComposedDecoder,
+    composed::{ComposedDecoder, DecoderRuntime},
     demuxer::{Demuxer, TrackInfo},
     fmp4::{
         Fmp4SegmentDemuxer,
@@ -59,7 +59,7 @@ struct FakeSegmented {
     init_range: Range<u64>,
 }
 
-impl SegmentLayout for FakeSegmented {
+impl ByteMap for FakeSegmented {
     fn init_segment_range(&self) -> Range<u64> {
         self.init_range.clone()
     }
@@ -155,12 +155,12 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
         reads: Arc::clone(&reads),
         record: Arc::clone(&record),
     });
-    let layout: Arc<dyn SegmentLayout> = Arc::new(segmented);
+    let layout: Arc<dyn ByteMap> = Arc::new(segmented);
     let demuxer =
         Fmp4SegmentDemuxer::open(source, layout, BytePool::default()).expect("BUG: build demuxer");
     let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
         .expect("BUG: open codec");
-    let decoder = ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
+    let decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
     (decoder, reads, record)
 }
 
@@ -182,7 +182,7 @@ fn next_chunk_yields_pcm_from_init_plus_segment_zero() {
     }
     let chunk = got_chunk.expect("BUG: at least one PCM chunk from segment 0");
     assert!(chunk.frames() > 0);
-    assert!(chunk.spec().sample_rate >= 8_000);
+    assert!(chunk.spec().sample_rate.get() >= 8_000);
     assert!(chunk.spec().channels >= 1);
 }
 
@@ -230,7 +230,7 @@ fn red_open_always_starts_at_layout_seg_0() {
 }
 
 /// RED scaffold (cursor freshness): `SegmentCursor::read.byte_range` is
-/// frozen at `ensure_cursor`/`seek` time. If `SegmentLayout` updates the
+/// frozen at `ensure_cursor`/`seek` time. If `ByteMap` updates the
 /// descriptor before `fill_segment_buffer` (HEAD estimate → committed size,
 /// or pre- → post-DRM), the cursor fills against the stale range and
 /// `parse_segment_frames` panics ("sample byte range past segment end").
@@ -373,7 +373,7 @@ fn build_test_layout_flac(num_segments: usize) -> (Vec<u8>, FakeSegmented) {
 fn seek_emits_notneeded_for_first_segment_flac() {
     let (blob, segmented) = build_test_layout_flac(3);
     let source: BoxedSource = Box::new(Cursor::new(blob));
-    let layout: Arc<dyn SegmentLayout> = Arc::new(segmented);
+    let layout: Arc<dyn ByteMap> = Arc::new(segmented);
     let mut demuxer = Fmp4SegmentDemuxer::open(source, layout, BytePool::default())
         .expect("BUG: build FLAC demuxer");
 

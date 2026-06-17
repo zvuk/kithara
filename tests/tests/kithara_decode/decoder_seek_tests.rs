@@ -7,7 +7,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
-use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_platform::time::{self, Duration};
 
 #[kithara::fixture]
 async fn server() -> TestServerHelper {
@@ -36,9 +36,14 @@ async fn open_test_mp3(
     Audio::<Stream<File>>::new(config).await.unwrap()
 }
 
+/// Nonblocking re-poll loop: these tests are browser-portable (async body,
+/// shared current-thread runtime), so the consumer must never park the
+/// runtime thread — `block_on_underrun` is deliberately NOT used here.
+/// A genuine stall is caught by the per-test timeout, not a hand-rolled
+/// deadline. `flash(true)` keeps the re-poll sleep on the virtual clock
+/// when called from a flash test.
+#[kithara::flash(true)]
 async fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-
     loop {
         match PcmReader::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(_)) => return,
@@ -48,13 +53,9 @@ async fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) {
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("decode error at {stage}: {e}"),
         }
-        assert!(
-            Instant::now() <= deadline,
-            "timed out waiting for decoded PCM at stage={stage}",
-        );
 
         audio.preload().expect("preload must succeed");
-        sleep(Duration::from_millis(10)).await;
+        time::sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -73,7 +74,7 @@ async fn decoder_file_creates_successfully(
     let decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     let spec = decoder.spec();
-    assert!(spec.sample_rate > 0);
+    assert!(spec.sample_rate.get() > 0);
     assert!(spec.channels > 0);
 }
 
@@ -113,7 +114,7 @@ async fn decoder_file_single_seek(
     let mut decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     let spec = decoder.spec();
-    assert!(spec.sample_rate > 0 && spec.channels > 0);
+    assert!(spec.sample_rate.get() > 0 && spec.channels > 0);
 
     next_chunk(&mut decoder, "before seek").await;
 
@@ -200,7 +201,6 @@ async fn decoder_file_seek_emits_events(#[future] server: TestServerHelper, temp
     let mut got_seek = false;
     let mut buf = [0.0_f32; 1024];
 
-    let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         while let Ok(ev) = events_rx.try_recv() {
             match ev {
@@ -218,16 +218,11 @@ async fn decoder_file_seek_emits_events(#[future] server: TestServerHelper, temp
             break;
         }
 
-        assert!(
-            Instant::now() <= deadline,
-            "timed out waiting for FormatDetected/SeekComplete events",
-        );
-
         use kithara::audio::ReadOutcome;
         match decoder.read(&mut buf) {
             Ok(ReadOutcome::Pending { .. }) => {
                 decoder.preload().expect("preload must succeed");
-                sleep(Duration::from_millis(10)).await;
+                time::sleep(Duration::from_millis(10)).await;
             }
             Ok(ReadOutcome::Frames { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {

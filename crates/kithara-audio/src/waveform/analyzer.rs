@@ -205,14 +205,14 @@ impl WaveformAnalyzer {
             self.flush_partial();
         }
         if buckets == 0 || self.raw_bands.is_empty() {
-            return Waveform::from_buckets(Vec::new());
+            return Waveform::from(Vec::new());
         }
 
         let max = |a: [f32; 3], b: [f32; 3]| [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])];
         let energy = bucketize(&self.raw_bands, buckets, [0.0; 3], max);
         let bands = normalize_bands(energy, self.params.band_gain);
 
-        let out = bands
+        let out: Vec<Bucket> = bands
             .into_iter()
             .map(|b| Bucket {
                 low: b[0],
@@ -220,7 +220,7 @@ impl WaveformAnalyzer {
                 high: b[2],
             })
             .collect();
-        Waveform::from_buckets(out)
+        Waveform::from(out)
     }
 }
 
@@ -284,11 +284,15 @@ mod tests {
     use super::{AnalysisParams, WaveformAnalyzer};
     use crate::waveform::bucket::Bucket;
 
-    const SR: u32 = 44_100;
-    const EPS: f32 = 1e-6;
+    struct Consts;
+
+    impl Consts {
+        const SR: u32 = 44_100;
+        const EPS: f32 = 1e-6;
+    }
 
     fn approx(a: f32, b: f32) -> bool {
-        (a - b).abs() <= EPS
+        (a - b).abs() <= Consts::EPS
     }
 
     /// Tallest band of a bucket (the outer hull height).
@@ -297,7 +301,7 @@ mod tests {
     }
 
     fn analyzer(params: AnalysisParams) -> WaveformAnalyzer {
-        WaveformAnalyzer::new(SR, params)
+        WaveformAnalyzer::new(Consts::SR, params)
     }
 
     /// Unity gain so normalization/routing tests aren't coupled to the
@@ -310,7 +314,7 @@ mod tests {
     }
 
     fn sine(freq: f32, samples: usize) -> Vec<f32> {
-        let step = std::f32::consts::TAU * freq / SR.to_f32().unwrap_or(1.0);
+        let step = std::f32::consts::TAU * freq / Consts::SR.to_f32().unwrap_or(1.0);
         (0..samples)
             .map(|n| (step * n.to_f32().unwrap_or(0.0)).sin())
             .collect()
@@ -451,8 +455,8 @@ mod tests {
         // Regression for a band series coarser than the bucket count, which left
         // columns with no bar. Every column of a full-spectrum track must carry
         // at least one nonzero band.
-        let sr = SR.to_f32().unwrap_or(1.0);
-        let frames = 45 * SR.to_usize().unwrap_or(0);
+        let sr = Consts::SR.to_f32().unwrap_or(1.0);
+        let frames = 45 * Consts::SR.to_usize().unwrap_or(0);
         let l = std::f32::consts::TAU * 80.0 / sr;
         let m = std::f32::consts::TAU * 1_000.0 / sr;
         let h = std::f32::consts::TAU * 10_000.0 / sr;

@@ -22,8 +22,8 @@ use kithara_assets::{
 };
 use kithara_hls::{Hls, HlsConfig};
 use kithara_platform::{
-    time::{Duration, Instant},
-    tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn, time as tokio_time},
+    time::{Duration, Instant, sleep},
+    tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
 };
 use kithara_stream::Stream;
 use kithara_test_utils::kithara;
@@ -217,7 +217,7 @@ async fn wait_committed(store: &AssetStore, keys: &[(ResourceKey, u64)]) {
             Instant::now() < deadline,
             "timed out waiting for resources to commit"
         );
-        tokio_time::sleep(COMMIT_POLL).await;
+        sleep(COMMIT_POLL).await;
     }
 }
 

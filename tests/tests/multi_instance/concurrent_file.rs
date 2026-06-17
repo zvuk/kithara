@@ -6,11 +6,12 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
-use kithara_integration_tests::{TestServerHelper, TestTempDir};
+use kithara_integration_tests::{
+    TestServerHelper, TestTempDir,
+    reads::{ReadLimit, read_for_concurrency_check},
+};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
-
-use crate::common::reader_helpers::{ReadLimit, read_for_concurrency_check};
 
 /// Create an `Audio<Stream<File>>` for a remote MP3 URL.
 async fn create_file_audio(url: url::Url, cache_dir: &Path) -> Audio<Stream<File>> {

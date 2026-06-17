@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
-
 use kithara::{
     assets::StoreOptions,
     play::{Resource, ResourceConfig},
@@ -11,8 +9,10 @@ use kithara_integration_tests::{
     PackagedTestServer, fixture_protocol::DelayRule, offline::OfflinePlayer, temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
-use tokio::time::sleep;
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, sleep},
+};
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -21,24 +21,15 @@ impl Consts {
     const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
     const BLOCK_FRAMES: usize = Shared::OFFLINE_BLOCK_FRAMES;
     const PRE_SEEK_RENDER_SECS: f64 = 1.5;
-    /// Seconds of audio we expect the decoder to produce after the
-    /// seek lands. Independent of wall time — the test paces the
-    /// render loop so wall time scales with `delay_ms`.
+    /// Minimum seconds of audio the render loop pumps after the seek
+    /// before checking the landing. The loop returns on the actual
+    /// position state, not wall time, so the delayed segment fetch is
+    /// awaited regardless of `delay_ms`.
     const POST_SEEK_AUDIO_SECS: f64 = 2.0;
     /// Target inside segment 2 (8–12 s); guarantees a cold fetch
     /// because the warmup only covers segments 0–1.
     const SEEK_TARGET_SECS: f64 = 9.0;
     const MIN_POSITION_ADVANCE_POST_SEEK_SECS: f64 = 1.0;
-    /// Wall-time slack on top of `delay_ms` so the post-seek render
-    /// loop has time to actually consume the delivered bytes.
-    const POST_SEEK_WALL_SLACK_MS: u64 = 4_000;
-    /// fMP4 needs multiple Range fetches per segment (sidx, then one
-    /// or more fragment ranges). Each fetch is independently delayed
-    /// by the fixture, so the post-seek wall budget must cover
-    /// `MAX_FETCHES_PER_SEGMENT × delay_ms` plus slack. Empirically
-    /// 4 covers the AAC-fMP4 test fixture; raise if a larger fixture
-    /// surfaces more ranges.
-    const MAX_FETCHES_PER_SEGMENT: u64 = 4;
 }
 
 fn blocks_for_seconds(secs: f64) -> u32 {
@@ -52,22 +43,28 @@ fn blocks_for_seconds(secs: f64) -> u32 {
     result
 }
 
-/// Pace the render loop so total wall time is at least
-/// `min_wall_ms`. Each batch of [`BATCH`] blocks sleeps long enough
-/// to reach the budget; the runtime can make progress on HLS fetches
-/// between batches.
-async fn render_burst_paced(player: &mut OfflinePlayer, blocks: u32, min_wall_ms: u64) {
+/// Render at least `min_blocks` blocks and return only once
+/// `player.position() >= until_position`. Between batches it yields a
+/// single virtual tick so the async HLS engine can fetch + decode the
+/// delayed segment; under the flash clock that tick advances virtual
+/// time without burning real wall time. The loop has no internal wall
+/// budget — the `#[kithara::test(... timeout(90s))]` attribute is the
+/// only safety bound, so the success path is always the real state
+/// (position) being reached rather than a collapsed timer expiring.
+async fn render_until_position(player: &mut OfflinePlayer, min_blocks: u32, until_position: f64) {
     const BATCH: u32 = 16;
-    let batches = blocks.div_ceil(BATCH).max(1);
-    let per_batch_ms = min_wall_ms.div_ceil(u64::from(batches)).max(1);
-    let mut remaining = blocks;
-    while remaining > 0 {
-        let this = remaining.min(BATCH);
+    const TICK_MS: u64 = 25;
+    let mut rendered = 0u32;
+    loop {
+        let this = min_blocks.saturating_sub(rendered).clamp(1, BATCH);
         for _ in 0..this {
             let _ = player.render(Consts::BLOCK_FRAMES);
         }
-        remaining -= this;
-        sleep(Duration::from_millis(per_batch_ms)).await;
+        rendered = rendered.saturating_add(this);
+        if player.position() >= until_position && rendered >= min_blocks {
+            return;
+        }
+        sleep(Duration::from_millis(TICK_MS)).await;
     }
 }
 
@@ -94,11 +91,8 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] delay_ms:
     let temp = temp_dir();
     let store = StoreOptions::new(temp.path());
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
 
     let cfg = ResourceConfig::for_src(master.as_str())
@@ -115,10 +109,11 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] delay_ms:
     let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
     player.load_and_fadein(resource, "t0");
 
-    render_burst_paced(
+    let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
+    render_until_position(
         &mut player,
         blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS),
-        1_500,
+        warmup_target,
     )
     .await;
     let pos_before_seek = player.position();
@@ -135,12 +130,11 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] delay_ms:
         Consts::SEEK_TARGET_SECS
     );
 
-    let post_seek_wall_ms =
-        delay_ms.saturating_mul(Consts::MAX_FETCHES_PER_SEGMENT) + Consts::POST_SEEK_WALL_SLACK_MS;
-    render_burst_paced(
+    let post_target = Consts::SEEK_TARGET_SECS + Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS;
+    render_until_position(
         &mut player,
         blocks_for_seconds(Consts::POST_SEEK_AUDIO_SECS),
-        post_seek_wall_ms,
+        post_target,
     )
     .await;
     let pos_after = player.position();

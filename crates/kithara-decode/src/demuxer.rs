@@ -2,7 +2,7 @@ use kithara_platform::time::Duration;
 pub(crate) use kithara_stream::PrerollHint;
 use kithara_stream::{AudioCodec, PendingReason};
 
-use crate::{codec::CodecPriming, error::DecodeResult};
+use crate::{InputRequirement, codec::CodecPriming, error::DecodeResult};
 
 /// Container-side demuxer trait.
 ///
@@ -57,6 +57,18 @@ pub(crate) trait Demuxer: Send {
 
     /// Track-level metadata exposed by the container.
     fn track_info(&self) -> &TrackInfo;
+
+    /// The *shape* of bytes that must be Ready before this demuxer can be
+    /// constructed, for the kithara-audio readiness gate. Defaults to
+    /// [`InputRequirement::Incremental`]; init-bearing demuxers (fMP4) MUST
+    /// override to [`InputRequirement::InitOnly`]. See the crate `README.md`
+    /// "Decoder input contract".
+    fn required_input() -> InputRequirement
+    where
+        Self: Sized,
+    {
+        InputRequirement::Incremental
+    }
 }
 
 /// Track-level metadata produced by [`Demuxer::track_info`].

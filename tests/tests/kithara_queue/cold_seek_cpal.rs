@@ -1,20 +1,19 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::sync::Arc;
 
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_integration_tests::{kithara, temp_dir};
+use kithara_integration_tests::{kithara, temp_dir, waits::wait_for_position_at_least};
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, Instant, sleep, timeout},
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::time::sleep;
 
 fn install_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
@@ -42,7 +41,7 @@ async fn wait_for_status(
     }
     let start = Instant::now();
     while start.elapsed() < deadline {
-        match tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
+        match timeout(Duration::from_millis(500), rx.recv()).await {
             Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
                 if tid == id =>
             {
@@ -57,26 +56,6 @@ async fn wait_for_status(
         }
     }
     Err("timeout".into())
-}
-
-async fn wait_for_position_at_least(
-    queue: &Queue,
-    min_secs: f64,
-    deadline: Duration,
-) -> Result<f64, String> {
-    let start = Instant::now();
-    while start.elapsed() < deadline {
-        if let Some(pos) = queue.position_seconds()
-            && pos >= min_secs
-        {
-            return Ok(pos);
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-    Err(format!(
-        "position never reached {min_secs:.2}s (last={:?})",
-        queue.position_seconds()
-    ))
 }
 
 /// Real-network reproduction against silvercomet's HLS — the exact
@@ -113,7 +92,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
         DownloaderConfig::builder()
-            .client(HttpClient::new(net, CancellationToken::default()))
+            .client(HttpClient::new(net, CancelToken::never()))
             .build(),
     );
 

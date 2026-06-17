@@ -1,10 +1,12 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use iced::{
     Event as IcedEvent, Subscription, Task, Theme, event,
+    event::Status,
     keyboard::{Event as KeyboardEvent, Key, key::Named},
     time as iced_time, window,
 };
+use kithara_platform::time::Duration;
 
 use super::{
     dj::DjView,
@@ -89,7 +91,7 @@ impl Kithara {
                 IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
                     key: Key::Named(Named::Delete | Named::Backspace),
                     ..
-                }) if status == event::Status::Ignored => Some(Message::DeleteTrack),
+                }) if status == Status::Ignored => Some(Message::DeleteTrack),
                 _ => None,
             }));
         }

@@ -26,19 +26,23 @@ pub struct BeatThis {
     picker: PeakPicker,
 }
 
-impl BeatThis {
-    /// Models from bytes.
-    ///
-    /// # Errors
-    /// [`BeatError::ModelLoad`] when either model fails to parse.
-    pub fn from_model_bytes(mel: &[u8], beat: &[u8]) -> Result<Self, BeatError> {
+/// Models from `(mel, beat)` ONNX bytes.
+///
+/// # Errors
+/// [`BeatError::ModelLoad`] when either model fails to parse.
+impl TryFrom<(&[u8], &[u8])> for BeatThis {
+    type Error = BeatError;
+
+    fn try_from((mel, beat): (&[u8], &[u8])) -> Result<Self, BeatError> {
         Ok(Self {
-            mel: MelExtractor::from_bytes(mel)?,
-            predictor: BeatPredictor::from_bytes(beat)?,
+            mel: MelExtractor::try_from(mel)?,
+            predictor: BeatPredictor::try_from(beat)?,
             picker: PeakPicker::default(),
         })
     }
+}
 
+impl BeatThis {
     /// Input: whole-track mono f32 at `22_050` Hz. Output: seconds.
     ///
     /// # Errors

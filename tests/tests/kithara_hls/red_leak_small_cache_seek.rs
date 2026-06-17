@@ -13,12 +13,44 @@ use kithara::{
 };
 use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
 use kithara_platform::{
-    CancellationToken,
-    time::{Duration, sleep},
+    CancelToken,
+    thread::active_named_thread_count,
+    time::{self, Duration, Instant},
     tokio::task::spawn_blocking,
 };
 
 use crate::common::test_defaults::Consts as Shared;
+
+/// Wait until kithara's per-stream background work has quiesced after a stream
+/// drop+cancel — i.e. `active_named_thread_count()` stops decreasing across a
+/// short settle window. This is a state-wait, not a timer pace: the loop
+/// condition checks the runtime-internal named-thread counter, which is
+/// decremented when each spawned thread function returns and so flips under the
+/// flash clock (unlike `live_thread_count()`'s `ps -M` / `/proc/self/task`
+/// read, which tracks OS reap that lags real time and cannot be satisfied by
+/// virtual-clock advance alone). The inner `time::sleep` is only the poll
+/// cadence (mirrors `settle_thread_count` in the sibling DRM leak test). The
+/// `budget` bounds a hang via a real wall deadline; it does not pace progress.
+async fn wait_thread_count_quiesced(settle_window: usize, budget: Duration) -> usize {
+    const POLL: Duration = Duration::from_millis(25);
+    let deadline = Instant::now() + budget;
+    let mut last = active_named_thread_count();
+    let mut stable = 0usize;
+    loop {
+        time::sleep(POLL).await;
+        let now = active_named_thread_count();
+        if now < last {
+            // teardown still in progress — named-thread count is still dropping
+            stable = 0;
+        } else {
+            stable += 1;
+        }
+        last = now;
+        if stable >= settle_window || Instant::now() >= deadline {
+            return now;
+        }
+    }
+}
 
 struct Consts;
 impl Consts {
@@ -30,7 +62,7 @@ impl Consts {
 async fn build_small_cache_stream(
     server: &TestServer,
     temp_path: &std::path::Path,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) -> Stream<Hls> {
     let url = server.url("/master.m3u8");
     let store = StoreOptions::builder()
@@ -77,29 +109,35 @@ async fn red_small_cache_seek_stress_does_not_leak_threads(
     let server = TestServer::new().await;
 
     {
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         let stream = build_small_cache_stream(&server, temp_dir.path(), cancel.clone()).await;
         spawn_blocking(move || exercise_stream_blocking(stream))
             .await
             .expect("warmup blocking join");
         cancel.cancel();
-        sleep(Duration::from_millis(400)).await;
+        // Wait until warmup-stream reaping quiesces before sampling the
+        // baseline, instead of sleeping a fixed pace and assuming it settled.
+        wait_thread_count_quiesced(4, Duration::from_secs(5)).await;
     }
 
     let threads_baseline = live_thread_count();
 
     for i in 0..Consts::STREAM_ITERATIONS {
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         let stream = build_small_cache_stream(&server, temp_dir.path(), cancel.clone()).await;
         spawn_blocking(move || exercise_stream_blocking(stream))
             .await
             .expect("iteration blocking join");
         cancel.cancel();
-        sleep(Duration::from_millis(150)).await;
-        tracing::info!(iter = i, threads = live_thread_count(), "post-drop");
+        // Wait until this iteration's per-stream tasks are reaped (thread count
+        // stops dropping) before logging — not a fixed pacing delay.
+        let threads = wait_thread_count_quiesced(4, Duration::from_secs(5)).await;
+        tracing::info!(iter = i, threads, "post-drop");
     }
 
-    sleep(Duration::from_millis(300)).await;
+    // Final settle: wait until reaping has fully quiesced before the leak
+    // assertion samples the thread count.
+    wait_thread_count_quiesced(6, Duration::from_secs(5)).await;
     let threads_after = live_thread_count();
     let growth = threads_after.saturating_sub(threads_baseline);
 

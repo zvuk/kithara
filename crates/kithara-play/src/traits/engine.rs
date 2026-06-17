@@ -1,5 +1,5 @@
 use kithara_events::EventReceiver;
-use kithara_platform::{MaybeSend, MaybeSync};
+use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 
 #[rustfmt::skip]
 use crate::traits::dj::crossfade::CrossfadeConfig;

@@ -44,11 +44,6 @@ impl<C> Fetch<C> {
         }
     }
 
-    /// Get the epoch.
-    pub fn epoch(&self) -> u64 {
-        self.epoch
-    }
-
     /// Explicit failure marker (distinct from natural EOF).
     pub fn failure(data: C, epoch: u64) -> Self {
         Self {

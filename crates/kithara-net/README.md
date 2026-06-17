@@ -18,9 +18,9 @@ HTTP client with retry, timeout, and streaming. Wraps reqwest behind the `Net` t
 
 ```rust
 use kithara_net::{HttpClient, Net, NetOptions};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancelToken;
 
-let client = HttpClient::new(NetOptions::default(), CancellationToken::new());
+let client = HttpClient::new(NetOptions::default(), CancelToken::never());
 let bytes = client.get_bytes(url, None).await?;        // None = no extra headers
 let stream = client.stream(url, None).await?;
 ```
@@ -33,10 +33,10 @@ Decorators compose via the `NetExt` extension trait:
 ```rust
 use kithara_net::{HttpClient, Net, NetExt, NetOptions, RetryPolicy};
 use std::time::Duration;
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancelToken;
 
-let client = HttpClient::new(NetOptions::default(), CancellationToken::new())
-    .with_retry(RetryPolicy::default(), CancellationToken::new())
+let client = HttpClient::new(NetOptions::default(), CancelToken::never())
+    .with_retry(RetryPolicy::default(), CancelToken::never())
     .with_timeout(Duration::from_secs(30));
 ```
 

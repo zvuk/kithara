@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
-
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
@@ -10,7 +8,7 @@ use kithara::{
 };
 use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{HlsFixtureBuilder, TestServerHelper, TestTempDir, temp_dir};
-use kithara_platform::tokio::task::spawn_blocking;
+use kithara_platform::{thread, time::Duration, tokio::task::spawn_blocking};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -42,8 +40,11 @@ async fn aac_he_v2_hls_produces_pcm(temp_dir: TestTempDir, #[case] backend: Deco
     let hls_config = HlsConfig::for_url(created.master_url())
         .store(StoreOptions::new(temp_dir.path()))
         .build();
+    // Park on ring underrun instead of spinning on Pending, so the read
+    // loop needs no wall-clock iteration cap.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .decoder_backend(backend)
+        .block_on_underrun(true)
         .build();
 
     let mut audio = Audio::<Stream<Hls>>::new(config)
@@ -54,7 +55,7 @@ async fn aac_he_v2_hls_produces_pcm(temp_dir: TestTempDir, #[case] backend: Deco
         let target_samples = SAMPLE_RATE as usize * CHANNELS as usize;
         let mut collected: Vec<f32> = Vec::with_capacity(target_samples);
         let mut buf = vec![0f32; 16384];
-        for _ in 0..2000 {
+        loop {
             if collected.len() >= target_samples {
                 break;
             }
@@ -63,7 +64,7 @@ async fn aac_he_v2_hls_produces_pcm(temp_dir: TestTempDir, #[case] backend: Deco
                     collected.extend_from_slice(&buf[..count.get()]);
                 }
                 Ok(ReadOutcome::Pending { .. }) => {
-                    std::thread::sleep(Duration::from_millis(5));
+                    thread::sleep(Duration::from_millis(5));
                 }
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("HE-AAC v2 decode error: {e}"),

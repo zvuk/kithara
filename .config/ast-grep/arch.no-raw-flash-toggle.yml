@@ -1,0 +1,41 @@
+id: arch.no-raw-flash-toggle
+message: |
+  Direct use of the flash dynamic-mode toggle. `flash::enter_dynamic` /
+  `flash::dynamic` are the PRIVATE expansion of the `#[kithara::flash(bool)]`
+  guard macro — never call them by hand.
+
+  To make a NON-test-body region (a shared test helper, a harness task, a prod
+  function) follow the test's flash mode, annotate the FUNCTION with
+  `#[kithara::flash(true)]` (or `false` / `io`). The macro emits the guard
+  correctly (sync RAII guard / async per-poll combinator), respects ambient (a
+  no-op under `flash(false)` and off the `flash` feature), and keeps the raw
+  toggle in exactly one audited place. For a deliberate virtual-time pace from a
+  shared helper use `kithara_integration_tests::flash_pace::virtual_pace`.
+
+  To DISABLE flash for a whole test use the test macro:
+  `#[kithara::test(.., flash(false))]`.
+
+  See kithara-platform `flash/api.rs` and kithara-test-macros `flash.rs`.
+
+  This is an ERROR gate covering ALL workspace Rust — production AND tests.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+ignores:
+  # The definitions, the FlashScope/FlashDynamic impls and the flash unit tests
+  # legitimately name these — they ARE the primitive.
+  - "crates/kithara-platform/src/flash/**"
+  # The off-feature inert mirror: no-op stubs of the same API when `flash` is off.
+  - "crates/kithara-platform/src/common/flash_inert.rs"
+  # The `#[kithara::flash]` macro emits these calls as its expansion.
+  - "crates/kithara-test-macros/src/**"
+rule:
+  any:
+    - kind: identifier
+      regex: '^enter_dynamic$'
+    - pattern: flash::dynamic($$$)
+    - pattern: kithara_platform::flash::dynamic($$$)
+    - pattern: use kithara_platform::flash::dynamic
+    - pattern: use kithara_platform::flash::enter_dynamic

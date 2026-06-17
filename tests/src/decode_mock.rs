@@ -4,7 +4,6 @@ use std::{
         Arc, Mutex as StdMutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
 use kithara_bufpool::PcmPool;
@@ -12,6 +11,7 @@ use kithara_decode::{
     DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, DecoderTrackInfo, PcmChunk,
     PcmMeta, PcmSpec, mock::DecoderMock,
 };
+use kithara_platform::time::Duration;
 use unimock::{MockFn, Unimock, matching};
 
 /// Minimal mutex wrapper with infallible `lock()` for tests.

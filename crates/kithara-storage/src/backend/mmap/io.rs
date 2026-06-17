@@ -20,7 +20,7 @@ use crate::{
 
 impl DriverIo for MmapDriver {
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        let mut mmap_guard = self.mmap.lock_sync();
+        let mut mmap_guard = self.mmap.lock();
 
         // A re-download (`reactivate`) wrote the new generation to a temp file so
         // it never aliased the still-published committed snapshot. Detect that
@@ -117,7 +117,7 @@ impl DriverIo for MmapDriver {
     }
 
     fn reactivate(&self) -> StorageResult<()> {
-        let mut mmap_guard = self.mmap.lock_sync();
+        let mut mmap_guard = self.mmap.lock();
 
         match &*mmap_guard {
             // Already active (initial download in flight) — nothing to do.
@@ -144,7 +144,7 @@ impl DriverIo for MmapDriver {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         {
-            let mmap_guard = self.mmap.lock_sync();
+            let mmap_guard = self.mmap.lock();
             if let Some(mmap) = mmap_guard.as_readable() {
                 mmap.read_into(offset, buf)?;
             }
@@ -179,7 +179,7 @@ impl DriverIo for MmapDriver {
     }
 
     fn storage_len(&self) -> u64 {
-        let mmap_guard = self.mmap.lock_sync();
+        let mmap_guard = self.mmap.lock();
         mmap_guard.len()
     }
 
@@ -191,7 +191,7 @@ impl DriverIo for MmapDriver {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn write_at(&self, offset: u64, data: &[u8], committed: bool) -> StorageResult<()> {
         let end = offset + data.len() as u64;
-        let mut mmap_guard = self.mmap.lock_sync();
+        let mut mmap_guard = self.mmap.lock();
 
         if committed {
             match (&*mmap_guard, self.mode) {

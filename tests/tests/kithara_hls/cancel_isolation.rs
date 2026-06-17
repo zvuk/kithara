@@ -14,10 +14,7 @@ use kithara::{
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
 };
-use kithara_platform::{
-    CancellationToken,
-    time::{Duration, Instant},
-};
+use kithara_platform::{CancelToken, thread, time::Duration};
 use tokio::task;
 
 struct Consts;
@@ -92,7 +89,7 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
         delivery: Delivery::Normal,
     });
 
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let store = StoreOptions::new(temp_dir.path());
     let config = HlsConfig::for_url(master.url())
         .store(store)
@@ -116,7 +113,7 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
             let _ = stream.seek(SeekFrom::Start(offset));
             let _ = stream.read(&mut buf);
             while handle.request_count() == 0 && Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(20));
+                thread::sleep(Duration::from_millis(20));
             }
         }
     })

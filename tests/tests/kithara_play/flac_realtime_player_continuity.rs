@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::time::{Duration, Instant};
-
 use kithara::{
     abr::AbrMode,
     assets::StoreOptions,
@@ -14,9 +12,11 @@ use kithara_integration_tests::{
     offline::OfflinePlayer,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, Instant, sleep},
+};
 use kithara_stream::AudioCodec;
-use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::phase_continuity::common::{
@@ -119,11 +119,8 @@ async fn run_case(
     let temp = TestTempDir::new();
     let store = StoreOptions::new(temp.path());
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
 
     let initial_mode = match scenario {

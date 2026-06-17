@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
-
 use kithara::{
     assets::StoreOptions,
     events::{DownloaderEvent, Event, EventBus, FileEvent},
@@ -12,9 +10,8 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
 };
 use kithara_platform::{
-    CancellationToken,
-    time::Instant,
-    tokio::time::{sleep, timeout},
+    CancelToken,
+    time::{Duration, Instant, timeout},
 };
 
 const CAPTIVE_PORTAL_HTML: &str = "<html><body>VPN required to access this resource</body></html>";
@@ -88,7 +85,7 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
 
     let bus = EventBus::new(64);
     let mut rx = bus.subscribe();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let config = FileConfig::for_src(handle.url().into())
         .events(bus.clone())
         .store(StoreOptions::new(temp_dir.path()))
@@ -103,8 +100,11 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
         "expected DownloadError on html response within 5 s",
     );
 
-    sleep(Duration::from_millis(200)).await;
-
+    // The failure-path cleanup (LeaseResource::Drop → remove_resource) runs
+    // synchronously on the download-failure path, before the terminal
+    // DownloadError event the wait above already observed — so the cache is
+    // drained by now. Assert directly: the terminal event IS the cleanup-done
+    // signal; no extra wait (and no busy-poll).
     let leftover = collect_cache_files(temp_dir.path());
     assert!(
         leftover.is_empty(),
@@ -130,7 +130,7 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
 
     let bus = EventBus::new(64);
     let mut rx = bus.subscribe();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let config = FileConfig::for_src(handle.url().into())
         .events(bus.clone())
         .store(StoreOptions::new(temp_dir.path()))
@@ -141,16 +141,28 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     let _ = wait_for_download_terminal(&mut rx, Duration::from_secs(5)).await;
 
     let baseline = handle.request_count();
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline {
-        sleep(Duration::from_millis(100)).await;
-    }
+    // A retry storm surfaces as a NEW `RequestStarted` after the terminal
+    // failure. Wait for one rather than sleeping a fixed window: under flash the
+    // retry backoff collapses, so a real storm fires within the (virtual)
+    // timeout; its absence (timeout elapses with no `RequestStarted`) proves the
+    // failed resource scheduled no retry.
+    let retried = time::timeout(Duration::from_secs(3), async {
+        loop {
+            match rx.recv().await {
+                Ok(Event::Downloader(DownloaderEvent::RequestStarted { .. })) => break true,
+                Ok(_) => {}
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
     let after = handle.request_count();
 
     assert!(
-        after - baseline <= 1,
+        !retried && after - baseline <= 1,
         "retry storm detected while Stream<File> held a failed resource: \
-         {baseline} → {after} hits over 3 s",
+         {baseline} → {after} hits (retried={retried})",
     );
 
     drop(stream);

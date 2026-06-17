@@ -5,7 +5,7 @@ use kithara_assets::{
     EvictConfig, ProcessChunkFn, ReadSide, WriteSide,
 };
 use kithara_integration_tests::{asset_fixture::PinsIndex, assets_ext::AssetStoreTestExt};
-use kithara_platform::{CancellationToken, time::Duration};
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 
@@ -26,7 +26,7 @@ fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
 }
 
 fn load_pins(root_dir: &Path) -> HashSet<String> {
-    let disk = DiskAssetStore::new(root_dir, CancellationToken::default(), &BytePool::default());
+    let disk = DiskAssetStore::new(root_dir, CancelToken::never(), &BytePool::default());
     PinsIndex::open(&disk, &BytePool::default())
         .and_then(|index| index.load())
         .unwrap_or_default()

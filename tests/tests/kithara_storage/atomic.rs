@@ -9,18 +9,14 @@ use kithara::{
 use kithara_integration_tests::{TestTempDir, cancel_token, cancel_token_cancelled, temp_dir};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread;
-use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 
 #[cfg(not(target_arch = "wasm32"))]
 type TestResource = MmapResource;
 #[cfg(target_arch = "wasm32")]
 type TestResource = MemResource;
 
-fn open_test_resource(
-    temp_dir: &TestTempDir,
-    name: &str,
-    cancel: CancellationToken,
-) -> TestResource {
+fn open_test_resource(temp_dir: &TestTempDir, name: &str, cancel: CancelToken) -> TestResource {
     #[cfg(not(target_arch = "wasm32"))]
     {
         open_mmap_at(temp_dir.path().join(name), cancel)
@@ -33,7 +29,7 @@ fn open_test_resource(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn open_mmap_at(path: std::path::PathBuf, cancel: CancellationToken) -> MmapResource {
+fn open_mmap_at(path: std::path::PathBuf, cancel: CancelToken) -> MmapResource {
     Resource::open(cancel, MmapOptions::new(path)).expect("open should succeed")
 }
 
@@ -42,7 +38,7 @@ fn open_mmap_at(path: std::path::PathBuf, cancel: CancellationToken) -> MmapReso
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-fn atomic_resource_path_method(temp_dir: TestTempDir, cancel_token: CancellationToken) {
+fn atomic_resource_path_method(temp_dir: TestTempDir, cancel_token: CancelToken) {
     let file_path = temp_dir.path().join("test.dat");
     let atomic = open_mmap_at(file_path.clone(), cancel_token);
 
@@ -60,7 +56,7 @@ fn atomic_resource_path_method(temp_dir: TestTempDir, cancel_token: Cancellation
 #[case("large data", &[0x42; 1024 * 1024])]
 fn atomic_resource_write_read_success(
     temp_dir: TestTempDir,
-    cancel_token: CancellationToken,
+    cancel_token: CancelToken,
     #[case] test_name: &str,
     #[case] test_data: &[u8],
 ) {
@@ -74,7 +70,7 @@ fn atomic_resource_write_read_success(
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn atomic_resource_empty_write_read(temp_dir: TestTempDir, cancel_token: CancellationToken) {
+fn atomic_resource_empty_write_read(temp_dir: TestTempDir, cancel_token: CancelToken) {
     let atomic = open_test_resource(&temp_dir, "empty.dat", cancel_token);
 
     let atomic = atomic.write_all(b"").expect("write should succeed");
@@ -93,7 +89,7 @@ fn atomic_resource_empty_write_read(temp_dir: TestTempDir, cancel_token: Cancell
 #[case(false)]
 fn atomic_resource_read_missing_file(
     temp_dir: TestTempDir,
-    cancel_token: CancellationToken,
+    cancel_token: CancelToken,
     #[case] create_file_first: bool,
 ) {
     let file_path = temp_dir.path().join("missing.dat");
@@ -118,7 +114,7 @@ fn atomic_resource_read_missing_file(
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn atomic_resource_cancelled_operations(
     temp_dir: TestTempDir,
-    cancel_token_cancelled: CancellationToken,
+    cancel_token_cancelled: CancelToken,
 ) {
     let atomic = open_test_resource(&temp_dir, "cancelled.dat", cancel_token_cancelled);
     let reader = atomic.reader();
@@ -138,7 +134,7 @@ fn atomic_resource_cancelled_operations(
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn atomic_resource_fail_propagation(temp_dir: TestTempDir, cancel_token: CancellationToken) {
+fn atomic_resource_fail_propagation(temp_dir: TestTempDir, cancel_token: CancelToken) {
     let atomic = open_test_resource(&temp_dir, "failed.dat", cancel_token);
     let reader = atomic.reader();
 
@@ -163,7 +159,7 @@ fn atomic_resource_fail_propagation(temp_dir: TestTempDir, cancel_token: Cancell
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn atomic_resource_concurrent_writes(temp_dir: TestTempDir, cancel_token: CancellationToken) {
+async fn atomic_resource_concurrent_writes(temp_dir: TestTempDir, cancel_token: CancelToken) {
     let atomic = StorageResource::from(open_test_resource(
         &temp_dir,
         "concurrent.dat",
@@ -194,7 +190,7 @@ async fn atomic_resource_concurrent_writes(temp_dir: TestTempDir, cancel_token: 
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-fn atomic_resource_invalid_path(temp_dir: TestTempDir, cancel_token: CancellationToken) {
+fn atomic_resource_invalid_path(temp_dir: TestTempDir, cancel_token: CancelToken) {
     let invalid_path = temp_dir.path().join("nonexistent").join("file.dat");
     let atomic = open_mmap_at(invalid_path, cancel_token);
 
@@ -210,7 +206,7 @@ fn atomic_resource_invalid_path(temp_dir: TestTempDir, cancel_token: Cancellatio
 fn atomic_resource_large_file_operations() {
     let temp_dir = TestTempDir::new();
     let file_path = temp_dir.path().join("large.dat");
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let atomic = open_mmap_at(file_path, cancel_token);
 
@@ -232,7 +228,7 @@ fn atomic_resource_large_file_operations() {
 #[case::empty("persist_empty", b"")]
 fn atomic_resource_persists_across_reopen(
     temp_dir: TestTempDir,
-    cancel_token: CancellationToken,
+    cancel_token: CancelToken,
     #[case] name: &str,
     #[case] payload: &[u8],
 ) {

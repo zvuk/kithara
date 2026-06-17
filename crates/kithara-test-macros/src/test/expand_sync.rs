@@ -5,7 +5,9 @@ use syn::{Attribute, Ident};
 use super::{
     expand_async::{emit_async_runtime_test, emit_async_timeout_test},
     parse::TestArgs,
-    shared::{finalize_body, make_serial_attr, make_tracing_init, wrap_with_timeout},
+    shared::{
+        finalize_body, make_ambient_stmt, make_serial_attr, make_tracing_init, wrap_with_timeout,
+    },
 };
 
 #[expect(clippy::too_many_arguments)]
@@ -21,7 +23,13 @@ pub(crate) fn emit_one_test(
     args: &TestArgs,
 ) -> TokenStream2 {
     let tracing_init = make_tracing_init(args);
-    let full = quote! { #tracing_init #preamble #(#body_stmts)* };
+    let ambient = make_ambient_stmt(args);
+    // Plain body for the async-NATIVE emissions (their sole ambient holder is
+    // the per-poll `with_ambient`; a body-held scope there tears down non-LIFO
+    // on a timeout cancel); held body for the wasm and sync emissions, where
+    // the body-head `ambient_scope` is the sole ambient writer.
+    let full_plain = quote! { #tracing_init #preamble #(#body_stmts)* };
+    let full_held = quote! { #tracing_init #preamble #ambient #(#body_stmts)* };
     let serial_attr = make_serial_attr(args);
 
     if is_async && args.timeout.is_some() {
@@ -30,11 +38,11 @@ pub(crate) fn emit_one_test(
             vis,
             ret_type,
             remaining_attrs,
-            &full,
+            &full_plain,
             args,
             &serial_attr,
         );
-        let wasm_timeout = wrap_with_timeout(&full, &args.timeout, true, fn_name);
+        let wasm_timeout = wrap_with_timeout(&full_held, &args.timeout, true, fn_name);
         let wasm_wrapped = finalize_body(&wasm_timeout, args, fn_name, true);
         output.extend(quote! {
             #(#remaining_attrs)*
@@ -51,11 +59,11 @@ pub(crate) fn emit_one_test(
             vis,
             ret_type,
             remaining_attrs,
-            &full,
+            &full_plain,
             args,
             &serial_attr,
         );
-        let braced = quote! { { #full } };
+        let braced = quote! { { #full_held } };
         let wasm_wrapped = finalize_body(&braced, args, fn_name, true);
         output.extend(quote! {
             #(#remaining_attrs)*
@@ -66,7 +74,7 @@ pub(crate) fn emit_one_test(
         return output;
     }
 
-    let with_timeout = wrap_with_timeout(&full, &args.timeout, false, fn_name);
+    let with_timeout = wrap_with_timeout(&full_held, &args.timeout, false, fn_name);
     let wrapped = finalize_body(&with_timeout, args, fn_name, false);
 
     quote! {
@@ -77,10 +85,14 @@ pub(crate) fn emit_one_test(
     }
 }
 
+/// `full_plain` feeds the async branches (per-poll `with_ambient` is the sole
+/// ambient holder there); `full_held` (body-head `ambient_scope`) feeds the
+/// sync branch.
 pub(crate) fn emit_native_only_one(
     ctx: &super::entry::GenCtx<'_>,
     name: &Ident,
-    full: &TokenStream2,
+    full_plain: &TokenStream2,
+    full_held: &TokenStream2,
     serial_attr: &TokenStream2,
     native_is_async: bool,
 ) -> TokenStream2 {
@@ -95,7 +107,7 @@ pub(crate) fn emit_native_only_one(
             vis,
             ret_type,
             remaining_attrs,
-            full,
+            full_plain,
             args,
             serial_attr,
         );
@@ -106,12 +118,12 @@ pub(crate) fn emit_native_only_one(
             vis,
             ret_type,
             remaining_attrs,
-            full,
+            full_plain,
             args,
             serial_attr,
         );
     }
-    let with_timeout = wrap_with_timeout(full, &args.timeout, false, name);
+    let with_timeout = wrap_with_timeout(full_held, &args.timeout, false, name);
     let wrapped = finalize_body(&with_timeout, args, name, false);
     quote! {
         #(#remaining_attrs)*

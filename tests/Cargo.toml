@@ -153,18 +153,18 @@ perf = [
     "hotpath/hotpath",
     "kithara/perf",
 ]
-# Cross-decoder protocol/factory tests gate on the underlying
-# `kithara-decode` backends. Declare them locally so `--check-cfg`
-# does not flag `#[cfg(feature = "apple"/"symphonia")]` in
-# `tests/tests/kithara_decode/*`.
-apple = ["kithara/apple", "kithara-audio/apple"]
-symphonia = ["kithara/symphonia", "kithara-audio/symphonia"]
 # End-to-end tests that require real networks and real audio hardware.
 # Gated off by default so `just test` never compiles `suite_e2e`.
 e2e = []
 # Selenium-driven WebDriver tests. Gated off by default so `just test`
 # doesn't try to spin up trunk + chromedriver. Run via `just test-selenium`.
 selenium = []
+# Deterministic virtual-clock test mode. Routes the platform's blocking waits
+# (`thread::park_timeout`, `sync::Condvar`) onto the quiescence engine so timed
+# waits collapse to virtual time. Off by default; enabling it compiles every
+# path-dep against the virtual `kithara_platform::time::Instant`. Used by the
+# phase-continuity equivalence proof.
+flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
 
 [[bin]]
 name = "test_server"

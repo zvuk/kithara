@@ -1,7 +1,7 @@
 use bon::Builder;
 use kithara_abr::AbrSettings;
 use kithara_net::HttpClient;
-use kithara_platform::{CancellationToken, time::Duration, tokio::runtime::Handle};
+use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle};
 
 /// Configuration for [`Downloader`](super::Downloader).
 #[derive(Clone, Builder)]
@@ -10,9 +10,10 @@ pub struct DownloaderConfig {
     /// Settings for the shared ABR controller owned by the Downloader.
     #[builder(default)]
     pub abr_settings: AbrSettings,
-    /// Cancellation token — when cancelled, the download loop exits.
-    #[builder(default = CancellationToken::default())] // kithara:cancel:owner
-    pub cancel: CancellationToken,
+    /// Optional parent cancel. `Some` → the download loop's scope is a child
+    /// of it (composed); `None` → the Downloader owns a standalone scope. The
+    /// `CancelScope` seam lives in [`Downloader::new`](super::Downloader::new).
+    pub cancel: Option<CancelToken>,
     /// Throttle delay for demand (low-priority) processing.
     /// Gives urgent work a chance to preempt before demand batch runs.
     #[builder(default = Duration::ZERO)]

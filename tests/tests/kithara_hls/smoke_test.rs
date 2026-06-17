@@ -12,8 +12,8 @@ use kithara_integration_tests::{
     TestTempDir, hls_fixture::HlsStreamBuilder, hls_server::TestServer, temp_dir,
 };
 use kithara_platform::{
-    CancellationToken,
-    time::{Duration, sleep, timeout},
+    CancelToken,
+    time::Duration,
     tokio::{sync::oneshot, task::spawn},
 };
 use tracing::info;
@@ -37,7 +37,7 @@ async fn test_hls_session_creation(
 
     let config = HlsConfig::for_url(test_stream_url.clone())
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         .events(bus)
         .build();
 
@@ -47,16 +47,17 @@ async fn test_hls_session_creation(
     let (events_sender, events_receiver) = oneshot::channel::<u64>();
 
     spawn(async move {
+        // State-wait: block until session creation actually publishes its first
+        // event (no idle-timeout drain). One delivered event proves events flow.
         let mut event_count = 0;
-        while let Ok(Ok(event)) = timeout(Duration::from_millis(100), events_rx.recv()).await {
+        if let Ok(event) = events_rx.recv().await {
             event_count += 1;
-            if event_count <= 3 {
-                info!("Event {}: {:?}", event_count, event);
-            }
+            info!("Event {}: {:?}", event_count, event);
         }
         let _ = events_sender.send(event_count);
     });
 
+    // The enclosing `timeout(5s)` test attribute bounds this state wait.
     let event_count = events_receiver.await?;
     info!("Total events received: {}", event_count);
 
@@ -85,7 +86,7 @@ async fn test_hls_stream_creation(
     };
 
     let _stream = builder
-        .build(&server, temp_dir.path(), CancellationToken::default())
+        .build(&server, temp_dir.path(), CancelToken::never())
         .await;
 
     info!("HLS stream created successfully (init={})", with_init);
@@ -110,24 +111,22 @@ async fn test_hls_session_events_consumption(
 
     let config = HlsConfig::for_url(test_stream_url)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         .events(bus)
         .build();
 
     let _stream = Stream::<Hls>::new(config).await?;
 
-    let wait = Duration::from_millis(500);
-    let event_result = timeout(wait, events_rx.recv()).await;
-
-    match event_result {
-        Ok(Ok(event)) => {
+    // State-wait: block on the first published event instead of a fixed 500ms
+    // pacing window. Session creation publishes events; `recv()` returns when one
+    // lands (or `Err` if the bus closes). The `timeout(5s)` test attribute bounds
+    // this so a real hang still fails fast.
+    match events_rx.recv().await {
+        Ok(event) => {
             info!("Received event: {:?}", event);
         }
-        Ok(Err(_)) => {
-            info!("Event channel closed");
-        }
         Err(_) => {
-            info!("No events received within timeout (expected for some streams)");
+            info!("Event channel closed");
         }
     }
 
@@ -149,7 +148,7 @@ async fn test_hls_invalid_url_handling(
     if let Ok(url) = url_result {
         let config = HlsConfig::for_url(url)
             .store(StoreOptions::new(temp_dir.path()))
-            .cancel(CancellationToken::default())
+            .cancel(CancelToken::never())
             .build();
 
         let result = Stream::<Hls>::new(config).await;
@@ -174,11 +173,12 @@ async fn test_hls_session_drop_cleanup(
     info!("Testing HLS session drop cleanup");
 
     let stream = HlsStreamBuilder::new()
-        .build(&server, temp_dir.path(), CancellationToken::default())
+        .build(&server, temp_dir.path(), CancelToken::never())
         .await;
+    // `drop` runs the stream's synchronous teardown before it returns; nothing
+    // here asserts on background cleanup, so there is no state to wait on and no
+    // pacing sleep is needed (the completed `drop` is the done signal).
     drop(stream);
-
-    sleep(Duration::from_millis(100)).await;
 
     info!("HLS session dropped without issues");
     Ok(())

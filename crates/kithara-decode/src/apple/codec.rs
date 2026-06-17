@@ -1,8 +1,9 @@
 #![allow(unsafe_code)]
 
-use std::{ffi::c_void, ptr, time::Duration};
+use std::{ffi::c_void, ptr};
 
 use kithara_bufpool::PcmBuf;
+use kithara_platform::time::Duration;
 use kithara_stream::AudioCodec;
 
 use super::{
@@ -113,10 +114,7 @@ impl AppleCodec {
             }
         }
 
-        let spec = PcmSpec {
-            channels: track.channels,
-            sample_rate: track.sample_rate,
-        };
+        let spec = PcmSpec::checked(track.channels, track.sample_rate, "apple.codec.open")?;
 
         Ok(Self {
             converter,

@@ -13,6 +13,7 @@ workspace = true
 
 [features]
 default = ["hang"]
+flash = ["kithara-platform/flash"]
 hang = ["dep:serde", "dep:serde_json"]
 mock = ["dep:unimock"]
 probe = ["dep:usdt"]

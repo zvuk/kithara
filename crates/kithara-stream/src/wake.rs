@@ -5,7 +5,10 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use kithara_platform::tokio::sync::Notify;
+use kithara_platform::{
+    maybe_send::{MaybeSend, MaybeSync},
+    sync::Notify,
+};
 
 /// Reader→peer wake split into an off-core *arm* and an off-core *flush*, so a
 /// cross-thread `tokio::Notify` wake never fires on the real-time audio produce
@@ -62,6 +65,26 @@ impl DeferredWake {
     pub fn notified(&self) -> impl Future<Output = ()> + '_ {
         self.notify.notified()
     }
+}
+
+/// Data-arrival → audio-worker wake. The inverse direction of
+/// [`DeferredWake`]: where `DeferredWake` is the reader→peer nudge (the audio
+/// produce core asking the downloader for more), this is the producer→worker
+/// nudge — the downloader, having just written/committed segment bytes,
+/// re-ticks an underran audio worker the instant its data lands instead of
+/// leaving it to rediscover the bytes on its next wall-clock poll.
+///
+/// The implementor (the audio worker's scheduler wake) MUST make [`wake`] a
+/// wait-free, syscall-bounded signal (an atomic bump + `thread::unpark`), since
+/// it is called cross-thread from the downloader's write/settle path. It is
+/// NOT called from the real-time produce core, so it carries no
+/// forbid-blocking constraint — but it must not block the downloader either.
+///
+/// Segmented sources (HLS) hold an optional handle and fire it from their
+/// off-RT write/commit sites only; non-segmented sources never set one.
+pub trait WorkerWake: MaybeSend + MaybeSync {
+    /// Wake the audio worker so it re-ticks the decoder now that data landed.
+    fn wake(&self);
 }
 
 #[cfg(test)]

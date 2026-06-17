@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara::{
     assets::StoreOptions,
@@ -13,7 +13,7 @@ use kithara_integration_tests::{
     phase_distance, phase_from_f32,
     signal_pcm::signal,
 };
-use kithara_platform::{CancellationToken, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -47,13 +47,7 @@ impl Consts {
 ///    - Level 2: continuity (consecutive frames follow a pattern)
 ///    - Level 3: position (decoded phase ≈ expected phase)
 /// 6. Final seek near the end → read to EOF
-#[kithara::test(
-    tokio,
-    native,
-    serial,
-    timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(30)))]
 #[case::symphonia_ephemeral(true, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -96,7 +90,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool, #[case] backend: Dec
     info!(%url, segments = Consts::SEGMENT_COUNT, "HLS server ready");
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
@@ -115,6 +109,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool, #[case] backend: Dec
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .media_info(wav_info)
         .decoder_backend(backend)
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -139,7 +134,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool, #[case] backend: Dec
     let result = spawn_blocking(move || {
         let chunk_duration_secs = 0.05;
         let chunk_samples =
-            (chunk_duration_secs * f64::from(spec.sample_rate) * f64::from(spec.channels)) as usize;
+            (chunk_duration_secs * f64::from(spec.sample_rate.get()) * f64::from(spec.channels)) as usize;
         info!(chunk_duration_secs, chunk_samples, "Read chunk size");
 
         let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
@@ -231,7 +226,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool, #[case] backend: Dec
                 }
             }
 
-            let expected_frame_idx = (pos_secs * f64::from(spec.sample_rate)).round() as usize;
+            let expected_frame_idx = (pos_secs * f64::from(spec.sample_rate.get())).round() as usize;
             let expected_phase = expected_frame_idx % SawWav::SAW_PERIOD;
             let actual_phase = phase_from_f32(buf[0]);
             let dist = phase_distance(actual_phase, expected_phase);
@@ -314,7 +309,9 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool, #[case] backend: Dec
         let mut saw_eof = false;
         loop {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => break,
+                Ok(ReadOutcome::Pending { .. }) => {
+                    panic!("final tail read returned Pending with block_on_underrun");
+                }
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     remaining_samples += count.get() as u64;
                     for &sample in &buf[..count.get()] {

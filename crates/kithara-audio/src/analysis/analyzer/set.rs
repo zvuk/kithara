@@ -88,9 +88,9 @@ impl AnalyzerBuilder {
         TrackAnalyzers {
             waveform: self
                 .waveform_buckets
-                .map(|buckets| WaveformPass::new(spec.sample_rate, buckets)),
+                .map(|buckets| WaveformPass::new(spec.sample_rate.get(), buckets)),
             beat: self.beat.as_ref().map(|(detector, params)| {
-                BeatPass::new(spec.sample_rate, params.clone(), Arc::clone(detector))
+                BeatPass::new(spec.sample_rate.get(), params.clone(), Arc::clone(detector))
             }),
         }
     }

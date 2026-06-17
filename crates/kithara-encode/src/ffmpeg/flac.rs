@@ -10,7 +10,7 @@ use ffmpeg_next as ffmpeg;
 use kithara_stream::{AudioCodec, ContainerFormat};
 
 use super::{
-    build_direct_filter,
+    RebaseRates, build_direct_filter,
     bytes::encode_bytes_audio,
     ensure_ffmpeg_initialized,
     pcm::{
@@ -156,8 +156,10 @@ impl PacketCollectingEncoder {
         drain_filtered_frames(&mut self.filter, &mut self.encoder, |encoder| {
             collect_encoded_packets(
                 encoder,
-                encoder_time_base,
-                target_time_base,
+                RebaseRates {
+                    encoder: encoder_time_base,
+                    target: target_time_base,
+                },
                 timestamp_origin,
                 units,
             );
@@ -168,8 +170,10 @@ impl PacketCollectingEncoder {
     fn receive_and_collect_packets(&mut self) {
         collect_encoded_packets(
             &mut self.encoder,
-            self.encoder_time_base,
-            self.target_time_base,
+            RebaseRates {
+                encoder: self.encoder_time_base,
+                target: self.target_time_base,
+            },
             &mut self.timestamp_origin,
             &mut self.units,
         );
@@ -272,11 +276,14 @@ fn parse_flac_metadata_block(raw: &[u8]) -> Option<&[u8]> {
 
 fn collect_encoded_packets(
     encoder: &mut AudioEncoder,
-    encoder_time_base: Rational,
-    target_time_base: Rational,
+    rates: RebaseRates,
     timestamp_origin: &mut Option<i64>,
     units: &mut Vec<EncodedAccessUnit>,
 ) {
+    let RebaseRates {
+        encoder: encoder_time_base,
+        target: target_time_base,
+    } = rates;
     let mut encoded = Packet::empty();
     while encoder.receive_packet(&mut encoded).is_ok() {
         if encoded.size() == 0 {

@@ -13,7 +13,6 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Duration,
 };
 
 use axum::{Router, body::Body, extract::State, http::header, response::Response, routing::get};
@@ -24,7 +23,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::TestHttpServer;
-use kithara_platform::tokio::task::spawn_blocking;
+use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 
 /// Deterministic 60-byte body served in one response.
 const BODY: &[u8] = b"0123456789abcdefghijABCDEFGHIJ0123456789abcdefghijABCDEFGHIJ";

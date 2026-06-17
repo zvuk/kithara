@@ -9,14 +9,18 @@ pub(crate) struct MelExtractor {
     model: RtenModel,
 }
 
-impl MelExtractor {
-    /// Load the mel model from ONNX bytes.
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, BeatError> {
+/// Load the mel model from ONNX bytes.
+impl TryFrom<&[u8]> for MelExtractor {
+    type Error = BeatError;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, BeatError> {
         Ok(Self {
-            model: RtenModel::from_bytes("mel", bytes)?,
+            model: RtenModel::try_from(("mel", bytes))?,
         })
     }
+}
 
+impl MelExtractor {
     /// Extract a mel spectrogram from mono PCM samples at 22 050 Hz.
     ///
     /// Output shape `[1, T, 128]`, `T ≈ samples.len() / 441` (hop 441 = 50 fps).

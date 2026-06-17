@@ -174,11 +174,11 @@ unimock = { version = "0.6", features = ["std"] }
 backtrace = "0.3"
 tokio = { version = "1.52.3", default-features = false, features = ["sync", "macros", "rt", "time"] }
 tokio_with_wasm = { version = "0.9", features = ["full"] }
-tokio-util = { version = "0.7.18", default-features = false }
 tokio-stream = "0.1.18"
 futures = "0.3.32"
 wasm_safe_thread = "0.1.1"
 parking_lot = "0.12"
+pin-project-lite = "0.2"
 arc-swap = "1.9"
 bytes = "1.11.1"
 ringbuf = "0.5.0"
@@ -341,6 +341,16 @@ opt-level = 2
 [profile.dev.package.symphonia-bundle-flac]
 opt-level = 2
 [profile.dev.package.symphonia-format-isomp4]
+opt-level = 2
+# `kithara-audio` monomorphises rubato's sinc resampler in `ResamplerProcessor`
+# and `kithara-decode` drives the per-frame demux/decode loop — both are as
+# debug-slow as the upstream codecs above when left at opt-0 (~100s of ms per
+# chunk). Harmless under real-time playback (decode overlaps the real download),
+# but under `flash` the decode sits on the critical path (the virtual clock
+# waits for it), so the debug cost dominates wall-clock and stalls tests.
+[profile.dev.package.kithara-audio]
+opt-level = 2
+[profile.dev.package.kithara-decode]
 opt-level = 2
 [profile.dev.package.kithara-workspace-hack]
 opt-level = 2

@@ -2,7 +2,7 @@
 
 use std::{path::Path, sync::OnceLock};
 
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 use kithara_storage::{
     Atomic, MmapDriver, MmapOptions, MmapResource, OpenMode, Resource, StorageError,
 };
@@ -14,7 +14,7 @@ use crate::error::{AssetsError, AssetsResult};
 /// Open an existing on-disk index file in read-write mode without
 /// resizing it. Used when a file is detected on construction so its
 /// contents can be hydrated.
-pub(super) fn open_existing(path: &Path, cancel: &CancellationToken) -> AssetsResult<MmapResource> {
+pub(super) fn open_existing(path: &Path, cancel: &CancelToken) -> AssetsResult<MmapResource> {
     let res: MmapResource = Resource::open(
         cancel.clone(),
         MmapOptions::for_path(path.to_path_buf())
@@ -27,10 +27,7 @@ pub(super) fn open_existing(path: &Path, cancel: &CancellationToken) -> AssetsRe
 /// Open or create an on-disk index file in read-write mode with the
 /// canonical `INITIAL_LEN` sparse footprint. Used on first flush
 /// when no pre-existing file was hydrated.
-pub(super) fn open_for_write(
-    path: &Path,
-    cancel: &CancellationToken,
-) -> AssetsResult<MmapResource> {
+pub(super) fn open_for_write(path: &Path, cancel: &CancelToken) -> AssetsResult<MmapResource> {
     /// Same as the historical `Atomic` default — large enough to hold a
     /// few thousand entries before a remap, small enough that the sparse
     /// file footprint is trivial when the cache is idle.
@@ -54,7 +51,7 @@ pub(super) fn open_for_write(
 pub(super) fn init_atomic<'a>(
     cell: &'a OnceLock<Atomic<MmapDriver>>,
     path: &Path,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
 ) -> AssetsResult<&'a Atomic<MmapDriver>> {
     if let Some(a) = cell.get() {
         return Ok(a);

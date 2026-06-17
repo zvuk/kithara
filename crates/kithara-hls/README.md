@@ -37,7 +37,7 @@ flowchart LR
 
     subgraph Loading["loading/"]
         PC["PlaylistCache"]
-        KM["KeyManager"]
+        KM["KeyStore"]
         AF["atomic_fetch"]
         SE["size_estimation"]
     end
@@ -65,7 +65,7 @@ The crate's public surface is `Hls`, `HlsConfig`, `HlsSource`, the playlist pars
 <tr><td><code>HlsSource</code></td><td>struct</td><td><code>Source</code> implementation backed by <code>HlsCoord</code>; what <code>Stream&lt;Hls&gt;</code> wraps</td></tr>
 <tr><td><code>HlsError</code> / <code>HlsResult</code></td><td>enum / alias</td><td>Crate-level error type and result alias</td></tr>
 <tr><td><code>VariantIndex</code></td><td>type</td><td>Position of a variant in the master playlist</td></tr>
-<tr><td><code>KeyManager</code></td><td>struct</td><td>Coordinates AES-128 key fetches and caches resolved keys</td></tr>
+<tr><td><code>KeyStore</code></td><td>struct</td><td>Coordinates AES-128 key fetches and caches resolved keys</td></tr>
 <tr><td><code>PlaylistCache</code></td><td>struct</td><td>In-memory cache of parsed playlists keyed by URL</td></tr>
 <tr><td><code>MasterPlaylist</code>, <code>MediaPlaylist</code>, <code>VariantStream</code>, <code>VariantId</code></td><td>types</td><td>Parsed playlist representations from <code>parsing</code></td></tr>
 <tr><td><code>parse_master_playlist</code>, <code>parse_media_playlist</code>, <code>variant_info_from_master</code></td><td>fns</td><td>Standalone playlist parsers usable without the rest of the stack</td></tr>
@@ -87,6 +87,17 @@ On a post-ABR switch into mid-playback, `rebuild_with_decoder_probe` rebuilds th
 
 `seg 0` is required even when the variant advertises a separate init (CMAF `EXT-X-MAP`): the init covers only a small header, but the probe scans further into the first media chunk. After the probe succeeds, `decoder_seek_safe(target_time)` jumps the decoder forward, so segments `1..from_seg` are never fetched — only `seg 0`. This adds at most one extra segment per switch; if `seg 0` is already cached the scheduler skips the fetch and the queue entry resolves via `committed_final_len` in `dispatch`.
 
+### Variant init
+
+`VariantInit` (in `variant.rs`) records whether a variant carries a *separately fetched* init segment. The discriminant is keyed on the playlist `#EXT-X-MAP` URL — a static fact — **not** on the init HEAD size:
+
+- `NotApplicable` — no separate init fetch: no `#EXT-X-MAP` URL, or a byte-range-embedded init (the init lives inside segment 0's byte range, so there is no separate init URL). Carries no resource, so `rebuild` never enqueues `PlannedFetch::Init` and every init query reads as 0.
+- `Pending(InitEntry)` — a real `#EXT-X-MAP` init. Always has a real URL; its size starts at the HEAD estimate, which **may be 0** when the init HEAD failed or was absent (e.g. under load). Enqueued at the front of the fetch queue so the demuxer has the container header before any media segment.
+
+Existence is keyed on the URL, not the HEAD size, because a failed init HEAD does **not** mean the init is absent — `#EXT-X-MAP` still declares it and it must be fetched (its commit sets the real size). Keying on the HEAD size misclassifies a failed-HEAD init as `NotApplicable` and drops it: the offset table then seeds segment 0 at offset 0, and `read_at(0)` serves segment 0's container where the demuxer expects the init's `ftyp` (`re_mp4: ftyp not found`), or the reader wedges with no progress.
+
+While a `Pending` init is declared but not yet sized (`init_size() == 0` — a failed/absent HEAD, or the pre-commit window), `read_at` on the fresh-activation frame (`served_from() == 0`) holds reads pending: the init prefix `[0, init_size)` is reserved for the init, not for media, until the init's commit sizes it (after which `init_descriptor_at` routes offset 0 to the init). A terminally failed init (`init_failed`) releases the reservation so the read surfaces an error instead of waiting forever. The discriminant itself stays frozen at construction — the `#EXT-X-MAP` URL never appears or disappears — so matching on `VariantInit` needs no runtime flag; a `Pending` init's size may now cross `0 → positive` on commit (failed-HEAD estimate → committed `final_len`) as well as shrink (encrypted HEAD estimate → post-PKCS7 `final_len`).
+
 ### Format-change header byte range
 
 `header_byte_range` returns the byte range a demuxer reads to re-establish container state after a format change (variant flip or codec change). It returns `Ok(range)` only when recovery is applicable:
@@ -98,7 +109,7 @@ It returns `Err(FormatChangeNotApplicable)` when the variant was activated by `a
 
 ## Encryption (AES-128-CBC)
 
-Encrypted segments parse `#EXT-X-KEY` from the media playlist; `KeyManager` resolves the key URL (with `KeyProcessorRule`-driven rewriting if configured) and the asset store decrypts on read. URIs in `#EXT-X-KEY` are resolved relative to the **segment** URL, not the media-playlist URL.
+Encrypted segments parse `#EXT-X-KEY` from the media playlist; `KeyStore` resolves the key URL (with `KeyProcessorRule`-driven rewriting if configured) and the asset store decrypts on read. URIs in `#EXT-X-KEY` are resolved relative to the **segment** URL, not the media-playlist URL.
 
 ## Caching
 
@@ -106,10 +117,14 @@ Each segment is stored as its own `AssetResource` via `AssetStore` (`kithara-ass
 
 ## Seek and wait_range Contract
 
-- `Source::wait_range(start..end)` is a single non-blocking readiness probe: it returns `Ready` only when the requested bytes are readable in the current virtual layout owned by `HlsCoord`, `Interrupted` while the timeline is flushing, `Eof` past total bytes, and otherwise wakes the peer downloader and returns `WaitBudgetExceeded` immediately. It never sleeps — the worker decode path stays off any blocking syscall, and the backoff between probes lives in the audio scheduler's `Waiting` park.
+- `Source::wait_range(start..end, timeout)` has two modes, selected by `timeout`:
+  - **`Some(_)` — wake-free probe** (the RT worker / `Stream::probe_read`): a single non-blocking readiness check. Returns `Ready` only when the requested bytes are readable in the current virtual layout owned by `HlsCoord`, `Interrupted` while the timeline is flushing, `Eof` past total bytes, a terminal `Err` when a covering segment failed, and otherwise `WaitBudgetExceeded` immediately. It never sleeps — the worker decode path stays off any blocking syscall, and the backoff between probes lives in the audio scheduler's `Waiting` park. `HlsVariant::wait_range` ignores the timeout value (the probe is the same regardless); pinned by `variant::tests::wait_range_probes_without_sleeping` / `_flush_short_circuits_without_sleeping`.
+  - **`None` — event-driven blocking wait** (the off-RT `Stream::read` / `prime_seek_range`): `HlsCoord` parks on a shared readiness gate (`kithara_platform::sync::CondvarGate<u64>`, the unified condvar gate) until the probe resolves (`Ready`/`Eof`/`Interrupted`), a covering segment fails, or cancel fires. **No wall-clock poll** — the prior `park_timeout` spin (a 500ms seek-prime deadline + a 10ms read backoff) accumulated under heavy load into spurious timeouts; the gate wakes the reader the instant its range fills. See "Event-driven read wait" below.
+- **Event-driven read wait.** Every transition that can flip the wake-free probe `signal()`s the gate so a parked `wait_range(_, None)` re-probes: each **segment byte write** (the `FetchSlot` writer wrapper) and **settle** (commit/fail/cancel) on the fetch path; **fence raise/clear** (`commit_variant_switch` / `clear_variant_fence`) and **seek reset** (`reset_for_seek`) on the coord; and **cancel** via a `CancelToken::on_cancel` waker registered for the wait's lifetime (the one transition with no producer-side signal, mirroring `kithara-storage` `wait_range_inner`). The reader snapshots the gate counter **before** probing and parks only if it is unchanged — a seqlock guard that closes the lost-wakeup window even though the probe predicate (the `kithara-assets` availability index) and the gate sit under different locks. A genuine wedge (no signal site ever fires) trips the `#[kithara::hang_watchdog]` on the wait rather than parking forever. The probe path stays wake-free; only the off-RT `None` caller blocks.
+- **Event-driven audio-worker wake.** The wake-free probe path above means the RT decoder's worker, when it underruns on a not-yet-arrived segment, parks on the audio scheduler's `Waiting` timer (`kithara-audio` `WAITING_TIMEOUT` = 10 ms) and rediscovers data only on the next poll. Under heavy load that park stretches (OS deschedule) and accumulates — across the hundreds of seeks in the live DRM/HLS stress tests — into the same spurious-timeout flake the off-RT gate fixed for raw reads (flash-masked, since virtual time collapses the park). So the `FetchSlot` also fires a `kithara_stream::WorkerWake` (installed by the audio worker via `Source::set_worker_wake`, bridged to `AudioWorkerHandle::wake`) right after `ready.signal()` at its **two downloader-thread sites only** — per-chunk **write** (plaintext bytes land) and **settle** (commit, where the DRM decrypt gate opens). The worker re-ticks the decoder the instant bytes land instead of on its 10 ms poll; the timeout stays as a backstop. The coord's fence/seek `ready.signal()`s deliberately do **not** fire it: `clear_variant_fence` runs on the `#[rtsan_forbid_blocking]` produce core where a cross-thread unpark is illegal, and a seek already wakes the worker directly. Wait-free (atomic bump + `unpark`), always off-RT from the downloader.
 - On a seek miss, the source enqueues an explicit on-demand segment fetch for the active variant and seek epoch.
 - On a mid-stream ABR switch, stale metadata offsets are discarded — the source wakes the sequential downloader rather than trusting old offsets.
-- `Eof` is returned only when the timeline is marked EOF and the requested range starts at or after the effective total bytes.
+- `Eof` is returned **only** when the requested range starts at or after the variant layout's effective total bytes (`HlsVariant::total_bytes()`) **and every served segment's byte size is known** (`HlsVariant::sizes_complete()`). It is never inferred for an in-range segment whose body has not yet arrived, **nor while any served segment's size estimate is still missing** — either case yields `WaitBudgetExceeded` (→ `Pending`/need-data) so the reader holds rather than terminating. This is the EOF contract that prevents the production "silent auto-advance" cascade: segment sizes are normally learned up-front (`#EXT-X-BYTERANGE` or HEAD `Content-Length`, see `loading::size_estimation`), but on an **immediate seek before size-estimation completes** a served segment is still size-`0` (unknown), which under-counts `total_bytes()` and makes an in-range offset look past-the-end → a premature `Eof` would latch the audio consumer into `AtEof` and the queue would skip the track. Gating the three byte-EOF mints (`phase_at` / `read_at` / `wait_range`) on `sizes_complete()` closes that window: while incomplete, `total_bytes()` is treated as a lower bound, not the stream end. `sizes_complete` is republished lock-free alongside `total_bytes` on every layout mutation (one `FrameSnapshot`, so the two never tear). Pinned by `tests/tests/kithara_queue/early_seek_size_withheld_advance.rs` (`immediate_seek_size_and_body_withheld`).
 
 ## Features
 

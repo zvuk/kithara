@@ -137,16 +137,50 @@ exempt_crates = [
     "kithara-probe-macros",
 ]
 
-[cancel_hierarchy]
+[cancel_root_sites]
 # Crates whose production *is* test scaffolding (helpers, mocks): their
-# hard-coded `CancellationToken::new()` calls are indistinguishable from
-# test fixtures and don't violate the cancel-hierarchy contract.
+# hard-coded `CancelToken::root()` / `CancelToken::never()` calls are
+# indistinguishable from test fixtures and don't root an orphan tree.
 exempt_crates = [
     "kithara-test-utils",
     "kithara-test-macros",
     "kithara-probe-macros",
     "xtask",
 ]
+# Files where minting a fresh cancel root is sanctioned: consumer-crate owner
+# tops (App / FFI), FFI bridges that outlive the player, `CancelScope`'s
+# standalone root, and the dedicated never-cancelled sentinel / latch sites
+# (`kithara-stream` batch placeholder, `kithara-hls` peer `wake_signal`).
+allowed_files = [
+    "crates/kithara-app/src/main.rs",
+    "crates/kithara-ffi/src/native/inner.rs",
+    "crates/kithara-ffi/src/core/item.rs",
+    "crates/kithara-platform/src/common/cancel/scope.rs",
+    "crates/kithara-stream/src/dl/batch.rs",
+    "crates/kithara-hls/src/peer.rs",
+]
+
+[tokio_dep_quarantine]
+# Crates whose direct tokio dependency is never flagged. `kithara-platform` is
+# the quarantine OWNER (it wraps tokio behind `kithara_platform::{tokio,time,
+# sync}`). `kithara-workspace-hack` is the feature-unification shim that must
+# name every transitive dep. The test-support crates carry tokio purely as test
+# scaffolding (runtime + macros for fixtures), not production coupling.
+exempt_crates = [
+    "kithara-platform",
+    "kithara-workspace-hack",
+    "kithara-test-utils",
+    "kithara-integration-tests",
+]
+# Crates whose *production* tokio coupling is NOT yet migrated to the platform
+# re-exports — outstanding W6 quarantine debt. Now empty: `kithara-app`,
+# `kithara-ffi`, and `kithara-queue` were migrated to the
+# `kithara_platform::{tokio,time,sync}` re-exports and their direct production
+# tokio deps dropped (their remaining tokio is dev-only test scaffolding, which
+# the guard ignores). Any NEW crate adding a direct production tokio dep fails
+# the gate. (`kithara-net`'s tokio is dev-only — an axum fixture server — so it
+# is already clean and not listed here.)
+allowed_crates = []
 
 [shared_state]
 warn = 3

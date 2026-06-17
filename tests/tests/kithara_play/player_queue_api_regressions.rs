@@ -6,7 +6,7 @@ use kithara_assets::StoreOptions;
 use kithara_integration_tests::{
     SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara, temp_dir,
 };
-use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_platform::time::Duration;
 use kithara_play::{PlayerConfig, PlayerEvent, PlayerImpl, Resource, ResourceConfig};
 
 use super::offline_player_harness::OfflinePlayerHarness;
@@ -85,7 +85,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
             break;
         }
 
-        sleep(Duration::from_millis(5)).await;
+        time::sleep(Duration::from_millis(5)).await;
     }
 
     let first_item_finished = first_item_finished.unwrap_or_else(|| {

@@ -242,12 +242,18 @@ fn read_track_format(fmt: NonNull<ffi::AMediaFormat>) -> DecodeResult<TrackForma
         Vec::new()
     };
 
+    let raw_rate = u32::try_from(sample_rate_i.max(0)).unwrap_or(0);
+    if raw_rate == 0 {
+        return Err(DecodeError::InvalidSampleRate {
+            resource: "android.extractor",
+        });
+    }
     Ok(TrackFormatInfo {
         mime,
         duration_us,
         csd_0,
         channels: u16::try_from(channels_i.max(0)).unwrap_or(2),
-        sample_rate: u32::try_from(sample_rate_i.max(0)).unwrap_or(0),
+        sample_rate: raw_rate,
     })
 }
 

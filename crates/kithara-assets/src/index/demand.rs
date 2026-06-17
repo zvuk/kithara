@@ -15,7 +15,10 @@ use std::sync::{
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
-use kithara_platform::{CancellationToken, Mutex, tokio::sync::Notify};
+use kithara_platform::{
+    CancelToken,
+    sync::{Mutex, Notify},
+};
 
 use crate::key::ResourceKey;
 
@@ -56,20 +59,20 @@ pub(crate) struct DemandCell {
     producer_spawned: AtomicBool,
     /// Cancelled when the last consumer detaches. Child of the store
     /// cancel, so a store/master shutdown also cascades here.
-    producer_cancel: CancellationToken,
+    producer_cancel: CancelToken,
     /// Woken on attach and on consumer read-advance so the producer
     /// re-checks the aggregate watermark.
     notify: Notify,
 }
 
 impl DemandCell {
-    fn new(producer_cancel: CancellationToken) -> Self {
+    fn new(producer_cancel: CancelToken) -> Self {
         Self {
-            entries: Mutex::new(Vec::new()),
+            entries: Mutex::default(),
             refcount: AtomicUsize::new(0),
             producer_spawned: AtomicBool::new(false),
             producer_cancel,
-            notify: Notify::new(),
+            notify: Notify::default(),
         }
     }
 
@@ -77,7 +80,7 @@ impl DemandCell {
     /// Zero when no consumer is attached.
     fn max_watermark(&self) -> u64 {
         self.entries
-            .lock_sync()
+            .lock()
             .iter()
             .map(|e| e.watermark())
             .max()
@@ -112,7 +115,7 @@ impl ProducerHandle {
 
     /// Producer cancel token (fires when the last consumer detaches).
     #[must_use]
-    pub fn producer_cancel(&self) -> CancellationToken {
+    pub fn producer_cancel(&self) -> CancelToken {
         self.slot.producer_cancel.clone()
     }
 }
@@ -166,7 +169,7 @@ impl DemandLease {
     }
 
     #[cfg(test)]
-    pub(crate) fn producer_cancel_for_test(&self) -> CancellationToken {
+    pub(crate) fn producer_cancel_for_test(&self) -> CancelToken {
         self.slot.producer_cancel.clone()
     }
 }
@@ -176,9 +179,7 @@ impl Drop for DemandLease {
         // Serialize with attach through the per-key shard lock.
         if let Entry::Occupied(occupied) = self.inner.slots.entry(self.key.clone()) {
             let slot = occupied.get();
-            slot.entries
-                .lock_sync()
-                .retain(|e| !Arc::ptr_eq(e, &self.entry));
+            slot.entries.lock().retain(|e| !Arc::ptr_eq(e, &self.entry));
             let prev = slot.refcount.fetch_sub(1, Ordering::AcqRel);
             if prev <= 1 {
                 slot.producer_cancel.cancel();
@@ -193,7 +194,7 @@ impl Drop for DemandLease {
 struct DemandInner {
     slots: DashMap<ResourceKey, Arc<DemandCell>>,
     /// Parent of every slot's `producer_cancel` (the store cancel).
-    cancel: CancellationToken,
+    cancel: CancelToken,
 }
 
 /// Opaque handle to the per-resource consumer demand index.
@@ -212,7 +213,7 @@ pub struct DemandIndex {
 impl DemandIndex {
     /// Create an empty index. `cancel` is the store cancel; each slot's
     /// `producer_cancel` is a child of it.
-    pub(crate) fn new(cancel: CancellationToken) -> Self {
+    pub(crate) fn new(cancel: CancelToken) -> Self {
         Self {
             inner: Arc::new(DemandInner {
                 slots: DashMap::new(),
@@ -233,13 +234,13 @@ impl DemandIndex {
         let slot = match self.inner.slots.entry(key.clone()) {
             Entry::Occupied(occupied) => {
                 let slot = Arc::clone(occupied.get());
-                slot.entries.lock_sync().push(Arc::clone(&entry));
+                slot.entries.lock().push(Arc::clone(&entry));
                 slot.refcount.fetch_add(1, Ordering::AcqRel);
                 slot
             }
             Entry::Vacant(vacant) => {
-                let slot = Arc::new(DemandCell::new(self.inner.cancel.child_token()));
-                slot.entries.lock_sync().push(Arc::clone(&entry));
+                let slot = Arc::new(DemandCell::new(self.inner.cancel.child()));
+                slot.entries.lock().push(Arc::clone(&entry));
                 slot.refcount.store(1, Ordering::Release);
                 vacant.insert(Arc::clone(&slot));
                 slot
@@ -287,7 +288,7 @@ mod tests {
         atomic::{AtomicU64, AtomicUsize, Ordering},
     };
 
-    use kithara_platform::{CancellationToken, time::Duration};
+    use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -302,7 +303,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn attach_refcount_and_single_producer_election() {
-        let index = DemandIndex::new(CancellationToken::default());
+        let index = DemandIndex::new(CancelToken::never());
         let key = ResourceKey::relative("asset", "file");
 
         let attach_count = AtomicUsize::new(0);
@@ -347,7 +348,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn watermark_is_max_over_entries() {
-        let index = DemandIndex::new(CancellationToken::default());
+        let index = DemandIndex::new(CancelToken::never());
         let key = ResourceKey::relative("asset", "file");
 
         // Bounded entry: read_pos 10 + look_ahead 50 = 60.
@@ -363,7 +364,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn watermark_tracks_read_pos_advance() {
-        let index = DemandIndex::new(CancellationToken::default());
+        let index = DemandIndex::new(CancelToken::never());
         let key = ResourceKey::relative("asset", "file");
         let read_pos = Arc::new(AtomicU64::new(0));
 
@@ -381,7 +382,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn detach_one_of_two_keeps_slot_and_producer() {
-        let index = DemandIndex::new(CancellationToken::default());
+        let index = DemandIndex::new(CancelToken::never());
         let key = ResourceKey::relative("asset", "file");
 
         let (l1, producer) = index.attach_demand(&key, entry(0, Some(10)));
@@ -402,7 +403,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn reattach_after_last_detach_wins_producer_election() {
-        let index = DemandIndex::new(CancellationToken::default());
+        let index = DemandIndex::new(CancelToken::never());
         let key = ResourceKey::relative("asset", "file");
 
         let (l1, _producer) = index.attach_demand(&key, entry(0, None));
@@ -430,7 +431,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn dropping_producer_lets_a_survivor_take_over() {
-        let index = DemandIndex::new(CancellationToken::default());
+        let index = DemandIndex::new(CancelToken::never());
         let key = ResourceKey::relative("asset", "file");
 
         let (winner_lease, producer) = index.attach_demand(&key, entry(0, None));

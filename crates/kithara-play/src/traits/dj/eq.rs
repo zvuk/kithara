@@ -1,4 +1,4 @@
-use kithara_platform::{MaybeSend, MaybeSync};
+use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 
 use crate::error::PlayError;
 

@@ -62,6 +62,29 @@ match an unrelated codec (e.g. an MP3 frame sync inside raw AAC-in-fMP4
 bytes) and drive the rest of the pipeline off a codec the decoder never
 actually decoded — so the recreate path never probes.
 
+## Decoder input contract
+
+Each demuxer declares the *shape* of input it needs to be constructed via
+`Demuxer::required_input() -> InputRequirement` (default `Incremental`;
+`Fmp4SegmentDemuxer` overrides it). The value is a reading *discipline*, not a
+byte window — the concrete init range is resolved by the byte-space owner (the
+stream layer), which alone knows the ABR virtual-space byte shift.
+
+- `InitOnly` — segment-aware fMP4: the init header (moov/esds/STREAMINFO) must
+  be buffered before construction; the landing media segment is read later by the
+  first `next_frame` and pends until it arrives, so it is not a build
+  prerequisite (gating on it would invert build-then-pend into a circular
+  dependency). Both backends gate identically because both wrap
+  `Fmp4SegmentDemuxer`.
+- `Incremental` — single-file MP3/FLAC/Ogg, Apple `AudioFile`, Android
+  `MediaExtractor`: self-framing, no separate init, so nothing is gated up front;
+  the demuxer reads and pends as bytes arrive.
+
+`DecoderFactory::input_requirement(media_info, byte_map)` is the bridge to the
+kithara-audio readiness gate: it returns the contract of the demuxer the factory
+*would* build (mirroring `should_use_segment_aware`), which the gate then
+resolves to concrete bytes in its own virtual coordinate space.
+
 ## Gapless playback
 
 `DecoderConfig::gapless` is enabled by default. Decoders report engine-level trim
@@ -138,6 +161,33 @@ Current metadata sources:
 - Apple AudioToolbox captures `AudioConverterPrimeInfo` when available.
 - Android MediaCodec reads `encoder-delay`/`encoder-padding` from `MediaFormat`
   and falls back to the MP4 probe for AAC MP4 containers.
+
+## Read-ahead strand
+
+When the source is an HLS `Stream`, a `next_frame` read can be interrupted at a
+not-yet-downloaded segment boundary. Symphonia's `MediaSourceStream` (MSS)
+buffers read-ahead in a ring and consumes bytes from that ring into a packet
+buffer *before* it knows whether the read can complete. If a later internal
+`fetch` then hits the not-ready boundary and returns `Interrupted`, the
+half-read packet is discarded but MSS's read position has already advanced past
+the consumed bytes — they are **stranded**. On resume, byte-position-quantised
+readers (WAV/PCM, whose packet pts is derived from the stream position) compute
+the next packet's pts from the advanced position and silently skip the stranded
+bytes (~one packet of decoded PCM).
+
+`MSS` exposes no per-call rewind through the `FormatReader` trait, so
+`SymphoniaDemuxer` makes the **decoder's timestamp authoritative across a
+`Pending`**: it tracks `resume_ts` (native timebase units — `actual_ts` on seek,
+`pts + dur` after each emitted packet) and, on any interrupted read, sets
+`needs_resume`. The next `next_frame` re-seeks the reader to `resume_ts` before
+reading, so the interrupted packet is re-read from its start instead of skipped.
+The re-seek is a bare position restore — no pre-roll back-off and no codec flush
+(that is the user-seek path) — and is idempotent when no strand occurred (the
+read position already sits at `resume_ts`). `resume_ts` is kept in native units,
+not `Duration`, because a `Duration` round-trip loses sub-frame precision and
+snaps the re-seek one packet early (re-emitting a packet instead of continuing).
+This keeps the strand contained in the decode layer: it never reaches into the
+`Stream`/`wait_range` contract.
 
 ## Feature Flags
 

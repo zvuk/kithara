@@ -3,10 +3,10 @@ use std::sync::Arc;
 use kithara::{
     assets::{AssetScope, AssetStore, AssetStoreBuilder, ProcessChunkFn},
     drm::{DecryptContext, aes128_cbc_process_chunk},
-    hls::{KeyManager, PlaylistCache},
+    hls::{KeyStore, PlaylistCache},
     net::{HttpClient, NetOptions},
 };
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 use kithara_stream::dl::{Downloader, DownloaderConfig, Peer, PeerHandle};
 
 use crate::TestTempDir;
@@ -54,7 +54,7 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
         .process_fn(drm_process_fn())
         .root_dir(temp_dir.path().to_path_buf())
         .evict_config(EvictConfig::default())
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         .build();
 
     TestAssets {
@@ -69,7 +69,7 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     let assets = AssetStoreBuilder::new()
         .process_fn(drm_process_fn())
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         .build();
 
     TestAssets {
@@ -80,7 +80,7 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 
 /// Create test HTTP client with default options
 pub fn create_test_net() -> HttpClient {
-    HttpClient::new(NetOptions::default(), CancellationToken::default())
+    HttpClient::new(NetOptions::default(), CancelToken::never())
 }
 
 /// Create a private test [`Downloader`] with a fresh cancel token.
@@ -93,10 +93,10 @@ fn create_test_peer_handle() -> PeerHandle {
     struct TestPeer;
     impl kithara::abr::Abr for TestPeer {}
     impl Peer for TestPeer {}
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let dl = Downloader::new(
         DownloaderConfig::for_client(create_test_net())
-            .cancel(cancel.child_token())
+            .cancel(cancel.child())
             .build(),
     );
     dl.register(Arc::new(TestPeer))
@@ -112,14 +112,14 @@ pub fn test_playlist_cache(assets: &TestAssets, _net: HttpClient) -> PlaylistCac
     )
 }
 
-/// Build a test [`KeyManager`] backed by a fresh [`PeerHandle`] and
+/// Build a test [`KeyStore`] backed by a fresh [`PeerHandle`] and
 /// the supplied [`TestAssets`]. Mirrors the production constructor in
 /// `Hls::create` so integration tests exercise the same wiring.
-pub fn test_key_manager(
+pub fn test_key_store(
     assets: &TestAssets,
     key_registry: Option<kithara_drm::KeyProcessorRegistry>,
-) -> KeyManager {
-    KeyManager::new(
+) -> KeyStore {
+    KeyStore::new(
         create_test_peer_handle(),
         assets.scope(),
         None,

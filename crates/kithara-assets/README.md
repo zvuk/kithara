@@ -125,7 +125,7 @@ Three index types are persisted under `_index/` for crash recovery:
 <tr><td>Availability</td><td><code>_index/availability.bin</code></td><td>Per-resource byte ranges and committed final length — the aggregate snapshot of <code>AvailabilityIndex</code> (see below)</td></tr>
 </table>
 
-All indices use `postcard` serialization with `Atomic<R>` for crash-safe writes. The availability index is **explicit only** — persisted via `AssetStore::checkpoint()`, never from a `Drop` hook or background timer.
+All indices use `Atomic<R>` for crash-safe writes. **Availability persistence is two-tier**: the background flush worker writes `availability.bin` best-effort and **non-durable** (atomic rename, no `sync_data`) shortly after commits — giving other instances sharing the store fast visibility of committed bytes and speeding crash-recovery hydration after an abnormal exit — while `AssetStore::checkpoint()` performs the **durable** (`sync_data`), authoritative write. Neither write is a correctness dependency: a missing, stale, or corrupt `availability.bin` is recovered by the slow path (rebuild from the committed segment files) plus the one-shot cold-miss fallback to `resource_state`. Pins and the LRU index instead flush eagerly on every boundary mutation.
 
 ### Pins index
 
@@ -150,7 +150,7 @@ Internally these sit on top of an aggregate `AvailabilityIndex` keyed by `(asset
 
 - **Updated** by a `ScopedAvailabilityObserver` attached to every `Resource` opened through `DiskAssetStore` / `MemAssetStore`. Each `Resource::write_at` fires `on_write(range)` and each successful `Resource::commit(Some(len))` fires `on_commit(len)`. Opening a pre-existing committed file also seeds `0..final_len`.
 - **Queried** with a fast path first (`DashMap::get → Arc::clone → Mutex::lock`, with the shard guard released before the inner lock). A cold miss on `Disk` falls back once to `resource_state` so pre-existing committed files on disk are still discoverable before the observer has ever fired.
-- **Persisted** on demand via `AssetStore::checkpoint()` to `_index/availability.bin`. Missing / corrupt / wrong-version files are silently treated as an empty seed on rebuild.
+- **Persisted** in two tiers (see the index table above): the background flush worker writes `availability.bin` non-durably soon after commits (best-effort, for cross-instance visibility and crash-recovery speed), and `AssetStore::checkpoint()` writes it durably. Missing / corrupt / wrong-version files are silently treated as an empty seed on rebuild — the slow path then re-derives availability from the committed segment files.
 
 `Resource<D>::CommonState.available` remains the per-resource byte map inside `kithara-storage`, but it is an implementation detail — consumers outside `kithara-storage` must query through `AssetStore`, not through `resource.contains_range()` on an ad-hoc `open_resource` call.
 

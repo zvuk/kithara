@@ -1,7 +1,8 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use kithara_bufpool::BytePool;
-use kithara_stream::{AudioCodec, SegmentLayout};
+use kithara_platform::time::Duration;
+use kithara_stream::{AudioCodec, ByteMap};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -9,6 +10,7 @@ use super::{
     source_io::{FillStatus, LiveRange, SegmentReadState, fill_segment_buffer},
 };
 use crate::{
+    InputRequirement,
     codec::{CodecPriming, access_unit_frames},
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PrerollHint, TrackInfo},
     error::{DecodeError, DecodeResult},
@@ -29,7 +31,7 @@ struct DecodedFrames {
 
 /// fMP4 segment-aware demuxer.
 pub(crate) struct Fmp4SegmentDemuxer {
-    segments: Arc<dyn SegmentLayout>,
+    segments: Arc<dyn ByteMap>,
     source: BoxedSource,
     init: Fmp4InitInfo,
     cursor: Option<SegmentCursor>,
@@ -96,7 +98,7 @@ impl Fmp4SegmentDemuxer {
     ///
     /// `source` is the byte-level Read/Seek cursor; `segments` is the
     /// segment-layout handle (typically obtained from
-    /// [`kithara_stream::Source::as_segment_layout`]) — the demuxer
+    /// [`kithara_stream::Source::byte_map`]) — the demuxer
     /// queries it for `init_segment_range` / `segment_at_time` /
     /// `segment_after_byte`.
     ///
@@ -110,7 +112,7 @@ impl Fmp4SegmentDemuxer {
     /// becomes ready.
     pub(crate) fn open(
         mut source: BoxedSource,
-        segments: Arc<dyn SegmentLayout>,
+        segments: Arc<dyn ByteMap>,
         byte_pool: BytePool,
     ) -> DecodeResult<Self> {
         let init_range = segments.init_segment_range();
@@ -231,9 +233,11 @@ impl Demuxer for Fmp4SegmentDemuxer {
         self.next_segment_index = segment_index.saturating_add(1);
         let variant_index = desc.variant_index;
         let preroll = match compute_preroll_byte(
-            target,
-            landed_at,
-            segment_index,
+            &PrerollProbe {
+                target,
+                landed_at,
+                segment_index,
+            },
             self.segments.as_ref(),
             &priming,
         ) {
@@ -258,6 +262,13 @@ impl Demuxer for Fmp4SegmentDemuxer {
     fn track_info(&self) -> &TrackInfo {
         &self.track_info
     }
+
+    /// fMP4 construction reads only the init segment (moov/esds/STREAMINFO); the
+    /// landing media segment is read later by the first `next_frame`, so it is
+    /// not a construction prerequisite.
+    fn required_input() -> InputRequirement {
+        InputRequirement::InitOnly
+    }
 }
 
 /// Seek warm-up back-off duration for `codec` at `sample_rate`, derived
@@ -277,20 +288,27 @@ fn warmup_backoff(codec: AudioCodec, sample_rate: u32, priming: &CodecPriming) -
     ))
 }
 
-fn compute_preroll_byte(
+/// Where a seek landed relative to its target: the requested `target`
+/// time, the `landed_at` time actually reached, and the `segment_index`
+/// it landed in. Inputs to [`compute_preroll_byte`].
+struct PrerollProbe {
     target: Duration,
     landed_at: Duration,
     segment_index: u32,
-    layout: &dyn SegmentLayout,
+}
+
+fn compute_preroll_byte(
+    probe: &PrerollProbe,
+    layout: &dyn ByteMap,
     priming: &CodecPriming,
 ) -> Option<u64> {
     if priming.byte_margin == 0 {
         return None;
     }
-    if landed_at < target {
+    if probe.landed_at < probe.target {
         return None;
     }
-    let prev_index = segment_index.checked_sub(1)?;
+    let prev_index = probe.segment_index.checked_sub(1)?;
     let prev = layout.segment_at_index(prev_index)?;
     Some(prev.byte_range.start)
 }
@@ -309,7 +327,7 @@ fn build_track_info(init: &Fmp4InitInfo, duration: Option<Duration>) -> TrackInf
     }
 }
 
-fn compute_duration(segments: &Arc<dyn SegmentLayout>) -> Option<Duration> {
+fn compute_duration(segments: &Arc<dyn ByteMap>) -> Option<Duration> {
     let last = segments.segment_at_time(Duration::from_secs(u64::MAX / 2))?;
     Some(last.decode_time.saturating_add(last.duration))
 }

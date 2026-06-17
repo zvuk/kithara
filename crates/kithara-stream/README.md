@@ -64,9 +64,9 @@ flowchart LR
 <tr><td><code>dl::Downloader</code></td><td>struct</td><td>Shared HTTP pool; <code>register(peer)</code> attaches a peer; spawns one async fetch task per active <code>FetchCmd</code></td></tr>
 <tr><td><code>dl::Peer</code></td><td>trait</td><td>Pull-driven per-track API: <code>poll_next() -&gt; Poll&lt;Option&lt;Vec&lt;FetchCmd&gt;&gt;&gt;</code>, plus ABR-driven decisions</td></tr>
 <tr><td><code>dl::PeerHandle</code></td><td>struct</td><td>Handle returned by <code>Downloader::register(peer)</code> for canceling and inspecting a peer's state</td></tr>
-<tr><td><code>dl::FetchCmd</code></td><td>struct</td><td>HTTP GET/Head command with self-contained <code>writer</code> + <code>on_complete</code> closures and a <code>CancellationToken</code></td></tr>
+<tr><td><code>dl::FetchCmd</code></td><td>struct</td><td>HTTP GET/Head command with self-contained <code>writer</code> + <code>on_complete</code> closures and a <code>CancelToken</code></td></tr>
 <tr><td><code>dl::DownloaderConfig</code></td><td>struct (bon-builder)</td><td>Pool sizing, retry, timeouts, cancel-token wiring</td></tr>
-<tr><td><code>DecoderHooks</code> / <code>BoxedHooks</code></td><td>trait / alias</td><td>Single-owner reader-side signal hooks (<code>ReaderChunkSignal</code>, <code>ReaderSeekSignal</code>); the decoder owns the <code>Box&lt;dyn DecoderHooks&gt;</code> and invokes it lock-free via <code>&amp;mut</code></td></tr>
+<tr><td><code>ReaderEventSink</code> / <code>BoxedEventSink</code></td><td>trait / alias</td><td>Single-owner reader-side event sink (<code>ReaderChunkSignal</code>, <code>ReaderSeekSignal</code>); the decoder owns the <code>Box&lt;dyn ReaderEventSink&gt;</code> and invokes it lock-free via <code>&amp;mut</code></td></tr>
 <tr><td><code>Timeline</code> / <code>ChunkPosition</code></td><td>structs</td><td>Position bookkeeping consumed by the player and ABR</td></tr>
 </table>
 
@@ -85,6 +85,15 @@ Defined here as the single source of truth and re-exported by other crates:
 3. The sync reader inside `Stream<T>` calls `Source::wait_range(range)` as a single non-blocking readiness probe: it returns `Ready`/`Eof`/`Interrupted` immediately, and on a not-yet-available range returns `WaitBudgetExceeded`, which `try_read` maps to `Pending(NotReady)` without sleeping. The backoff between probes lives in the audio scheduler's `Waiting` park (10ms), so the worker decode path never blocks on a syscall. (The consumer-thread `Seek` path re-probes `wait_range` under a bounded `SEEK_WAIT_TIMEOUT` wall-clock budget to prime metadata.)
 4. `Source::read_at(offset, buf)` performs the actual sync copy once the range is present.
 5. Cancellation flows top-down through the cancel-token hierarchy described in `crates/kithara-play/README.md`.
+
+### End-of-stream contract
+
+`Stream::try_read` surfaces `StreamReadOutcome::Eof` only from a `Source` that proves the end is genuinely reached — `WaitOutcome::Eof` from `wait_range` or `ReadOutcome::Eof` from `read_at`. A `Source` must **never** mint `Eof` for an in-range range whose bytes have not yet arrived; that case is `WaitBudgetExceeded`/`Pending(NotReady)` so the reader holds at need-data. Per source:
+
+- File (`FileSource`): EOF keys off the **committed** length (`AssetReader::len()`, `None` while downloading), never the announced `Content-Length`.
+- HLS (`HlsVariant`): EOF keys off the variant layout's published `total_bytes()` **gated by `sizes_complete()`** (every served segment's size known). While any served size is still unknown, `total_bytes()` is a lower bound and the gate holds `Pending`, not `Eof`. See `crates/kithara-hls/README.md` "Seek and wait_range Contract".
+
+A premature `Eof` for a withheld in-range segment latches the audio consumer into `AtEof` and drives the queue's silent auto-advance; the empty-buffer (`buf.is_empty()`) zero-length return is a distinct, non-terminal case. Pinned by `tests/tests/kithara_queue/early_seek_size_withheld_advance.rs` (`immediate_seek_size_and_body_withheld`).
 
 ## Features
 

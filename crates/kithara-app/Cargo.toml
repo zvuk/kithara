@@ -29,6 +29,7 @@ kithara = { workspace = true, features = ["file", "hls"] }
 kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-queue = { workspace = true, features = ["backend-cpal"] }
+kithara-test-utils = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 bytes = { workspace = true }
@@ -43,7 +44,6 @@ obfstr = { workspace = true }
 rand = { workspace = true }
 ratatui = { workspace = true, optional = true }
 sha2 = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
@@ -65,6 +65,7 @@ kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 futures = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [build-dependencies]
 serde = { workspace = true }

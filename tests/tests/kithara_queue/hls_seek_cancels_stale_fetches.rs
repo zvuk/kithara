@@ -4,23 +4,24 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::{Duration, Instant},
 };
 
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
-use kithara_events::{AbrMode, DownloaderEvent, Event, HlsEvent, RequestId, TrackId, TrackStatus};
+use kithara_events::{AbrMode, AudioEvent, DownloaderEvent, Event, HlsEvent, RequestId};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
-    offline::OfflineSession, temp_dir,
+    offline::OfflineSession, temp_dir, waits::wait_for_loader_done,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancelToken,
+    time::{self, Duration, Instant, sleep},
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::probe::capture as probe_capture;
-use tokio::time::sleep;
 use url::Url;
 
 struct Consts;
@@ -37,19 +38,12 @@ impl Consts {
     /// Tightens the Downloader to a small concurrency so the
     /// stale-fetch starvation is observable. Production default is 5.
     const MAX_CONCURRENT: usize = 3;
-    /// Brief warmup so the player is in steady playback when the seek
-    /// fires.
-    const WARMUP_MS: u64 = 100;
     /// Loader settle deadline.
     const LOAD_DEADLINE: Duration = Duration::from_secs(20);
     /// Window for collecting post-seek events. Four delay windows is
     /// generous: enough for the reader to actually start consuming
     /// the target segment if the seek path works.
     const POST_SEEK_OBSERVATION: Duration = Duration::from_millis(Self::SEGMENT_DELAY_MS * 4);
-    /// Deadline for target's `RequestStarted.wait_in_queue`. With a
-    /// working seek path the target starts immediately; without — it
-    /// waits for at least one full delay window.
-    const TARGET_START_DEADLINE: Duration = Duration::from_millis(Self::SEGMENT_DELAY_MS / 2);
     /// Allow 1 segment of slack between the nominal target and the
     /// observed value (warmup vs `seek_at` race).
     const WARMUP_TOLERANCE: usize = 1;
@@ -84,6 +78,22 @@ async fn build_hls_with_delay(helper: &TestServerHelper) -> Url {
         .master_url()
 }
 
+/// Queue tick driver, flash-coherent: spawned through the platform chokepoint
+/// (participant + ambient propagation) with `#[kithara::flash(true)]` so the
+/// 50ms cadence rides the VIRTUAL clock under flash. A raw `tokio::spawn` plus
+/// a bare `sleep` runs invisible to the engine — the spawned task never parks
+/// on the virtual clock, so the scheduler poll loop never cycles to observe the
+/// seek-epoch bump and `kithara_hls_probe::seek_epoch_reset` never fires.
+#[kithara::flash(true)]
+async fn drive_queue_ticks(queue: Arc<Queue>) {
+    loop {
+        sleep(Duration::from_millis(50)).await;
+        if queue.tick().is_err() {
+            break;
+        }
+    }
+}
+
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
@@ -91,7 +101,7 @@ fn build_queue_with_tick(
     Arc<PlayerImpl>,
     Downloader,
     StoreOptions,
-    tokio::task::JoinHandle<()>,
+    kithara_platform::tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
@@ -101,56 +111,21 @@ fn build_queue_with_tick(
     let queue = Arc::new(Queue::new(
         QueueConfig::default().with_player(Arc::clone(&player)),
     ));
-    let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = kithara_platform::tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .max_concurrent(Consts::MAX_CONCURRENT)
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .max_concurrent(Consts::MAX_CONCURRENT)
+            .build(),
     );
     let store = StoreOptions::new(temp_dir.path());
     (queue, player, downloader, store, tick_handle)
-}
-
-async fn wait_for_loader_done(
-    queue: &Queue,
-    track_id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    let start = Instant::now();
-    loop {
-        if let Some(entry) = queue.track(track_id) {
-            match &entry.status {
-                TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
-                TrackStatus::Failed(err) => return Err(format!("loader failed: {err}")),
-                _ => {}
-            }
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "loader timeout {deadline:?} (last={:?})",
-                queue.track(track_id).map(|e| e.status)
-            ));
-        }
-        sleep(Duration::from_millis(40)).await;
-    }
 }
 
 #[derive(Debug, Default)]
 struct PostSeekObservation {
     /// First `ReaderSeek` event after `seek_at`. Confirms the decoder
     /// actually called `Seek::seek` on the stream (not just that
-    /// `Timeline::initiate_seek` ran).
+    /// `SeekControl::begin` ran).
     reader_seek: Option<Event>,
     /// First `SegmentReadStart` after `seek_at`. The discriminating
     /// signal: a healthy seek path emits this with `segment_index ≈
@@ -161,9 +136,13 @@ struct PostSeekObservation {
     /// resolves to a prefix segment (`segment_index < target -
     /// WARMUP_TOLERANCE`). Hard cap.
     prefix_enqueued_after_seek: HashSet<RequestId>,
-    /// `wait_in_queue` for the first `RequestStarted` after `seek_at`
-    /// whose `RequestId` was Enqueued strictly after `seek_at`. Slot-
-    /// pressure metric.
+    /// Whether a new-epoch (`RequestId` Enqueued after `seek_at`) fetch was
+    /// observed to `RequestStarted` within the observation window, plus its
+    /// `wait_in_queue` (kept for the diagnostic message only — NOT asserted on,
+    /// because `wait_in_queue` is timed on the platform clock, virtual under
+    /// flash, while the real HTTP contention runs on real time, so a duration
+    /// deadline on it is incommensurate and flaky). The event-driven contract
+    /// asserts the *presence* of this start, not its timing.
     target_started_wait: Option<Duration>,
 }
 
@@ -202,16 +181,59 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
         .await
         .expect("loader settled");
 
-    sleep(Duration::from_millis(Consts::WARMUP_MS)).await;
-
     let mut pre_seek_enqueued: HashSet<RequestId> = HashSet::new();
+
+    // Warmup = wait until the player is in *steady processor playback*, i.e.
+    // the offline render loop has actually committed PCM for this track and
+    // emitted `AudioEvent::PlaybackProgress` with a non-zero position. This
+    // is the discriminating gate: `HlsEvent::SegmentReadStart` only proves
+    // the stream layer is reading (it can fire during the up-front blocking
+    // build in `Audio::new`, before the processor has the track in a playing
+    // state). The seek path runs through the processor —
+    // `apply_seek` only forwards `track.seek` for tracks in
+    // `FadingIn`/`Playing`, and only that path reaches `Audio::seek ->
+    // SeekControl::begin`, which bumps the stream seek epoch the HLS
+    // scheduler observes as `seek_epoch_reset`. Seeking before the track is
+    // actually rendering means `apply_seek` finds no eligible track, drops
+    // the seek silently, the epoch never bumps, and the scheduler never sees
+    // a new epoch (even while it stays busy emitting other probes). Gating on
+    // `PlaybackProgress` removes that race. We keep recording every
+    // `RequestEnqueued` seen on the way so the pre-seek baseline stays
+    // complete. The `time::timeout` is a safety deadline bounding a hang, not
+    // a pacing wait; under flash the `rx.recv().await` parks on the virtual
+    // clock so the render cadence (and scheduler) advance between events.
+    let _ = time::timeout(Consts::LOAD_DEADLINE, async {
+        loop {
+            match rx.recv().await {
+                Ok(Event::Downloader(DownloaderEvent::RequestEnqueued { request_id, .. })) => {
+                    pre_seek_enqueued.insert(request_id);
+                }
+                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))
+                    if position_ms > 0 =>
+                {
+                    break;
+                }
+                Ok(_) => {}
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    continue;
+                }
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    })
+    .await;
+
+    // Drain any events still buffered after steady playback so the pre-seek
+    // enqueued baseline is complete before the seek fires.
     loop {
         match rx.try_recv() {
             Ok(Event::Downloader(DownloaderEvent::RequestEnqueued { request_id, .. })) => {
                 pre_seek_enqueued.insert(request_id);
             }
             Ok(_) => {}
-            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(kithara_platform::tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                continue;
+            }
             Err(_) => break,
         }
     }
@@ -221,10 +243,43 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
 
     let nominal_target_segment = Consts::SEGMENT_COUNT.saturating_sub(1);
 
+    // Partition probe firings into pre- vs post-seek by the process-wide
+    // monotonic `seq` counter, NOT by `Instant` timestamps. Under flash the
+    // probe's `at` is stamped on the HLS scheduler's poll thread while
+    // `seek_at` is read in the (virtual-clock) test body; those two clocks are
+    // not comparable, so `e.at >= seek_at` would drop the legitimately-fired
+    // `seek_epoch_reset`. `seq` is incremented causally at each probe firing,
+    // so a firing after `queue.seek` always has `seq > pre_seek_seq`.
+    let pre_seek_seq = probe_recorder
+        .snapshot()
+        .iter()
+        .filter_map(|e| e.seq())
+        .max()
+        .unwrap_or(0);
+
     let seek_at = Instant::now();
     queue.seek(target_seconds).expect("seek");
 
-    let observation = observe_post_seek(&mut rx, seek_at, &pre_seek_enqueued).await;
+    // Observe post-seek bus events AND wait for the scheduler to record the
+    // epoch reset, concurrently. `wait_for_probe_async` parks on the virtual
+    // clock between probe-snapshot polls, which lets the flash engine advance
+    // virtual time so the (flash-coherent) tick driver cycles the HLS
+    // scheduler — that poll cycle is what fires
+    // `kithara_hls_probe::seek_epoch_reset`. Without this parking the
+    // scheduler never observes the new epoch under flash. The budget is a
+    // virtual hang ceiling, not a pacing wait; the probe-fired assertion
+    // below is unchanged.
+    let (observation, _reset_evt) = tokio::join!(
+        observe_post_seek(&mut rx, seek_at, &pre_seek_enqueued),
+        probe_recorder.wait_for_probe_async(
+            |e| {
+                e.seq().is_some_and(|s| s > pre_seek_seq)
+                    && e.target == "kithara_hls_probe"
+                    && e.probe_name() == Some("seek_epoch_reset")
+            },
+            Consts::POST_SEEK_OBSERVATION,
+        ),
+    );
 
     tick_handle.abort();
 
@@ -238,7 +293,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
 
     let post_seek_resets: Vec<_> = probe_events
         .iter()
-        .filter(|e| e.at >= seek_at)
+        .filter(|e| e.seq().is_some_and(|s| s > pre_seek_seq))
         .filter(|e| e.target == "kithara_hls_probe" && e.probe_name() == Some("seek_epoch_reset"))
         .collect();
     assert!(
@@ -254,7 +309,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
 
     let post_seek_prefix_emissions: Vec<_> = probe_events
         .iter()
-        .filter(|e| e.at >= seek_at)
+        .filter(|e| e.seq().is_some_and(|s| s > pre_seek_seq))
         .filter(|e| e.target == "kithara_hls_probe" && e.probe_name() == Some("emit_fetch_cmd"))
         .filter(|e| e.u64("seek_epoch") == Some(new_epoch))
         .filter(|e| {
@@ -280,7 +335,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
 
     let target_emissions: Vec<_> = probe_events
         .iter()
-        .filter(|e| e.at >= seek_at)
+        .filter(|e| e.seq().is_some_and(|s| s > pre_seek_seq))
         .filter(|e| e.target == "kithara_hls_probe" && e.probe_name() == Some("emit_fetch_cmd"))
         .filter(|e| e.u64("seek_epoch") == Some(new_epoch))
         .filter(|e| {
@@ -348,26 +403,29 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
         Consts::MAX_CONCURRENT,
     );
 
-    let wait = observation.target_started_wait.unwrap_or_else(|| {
-        panic!(
-            "[{backend:?}] no RequestStarted observed for any post-seek \
-             RequestEnqueued — new epoch never started a fetch within {:?}",
-            Consts::POST_SEEK_OBSERVATION,
-        )
-    });
+    // Event-driven progress contract: the new epoch must START a download
+    // (`RequestStarted`) within the bounded observation window. A seek that
+    // dropped silently, or a target left permanently starved behind stale
+    // fetches that never free a slot, would never start one. Asserting the
+    // START *event* (presence) rather than a `wait_in_queue` duration is
+    // clock-independent — `wait_in_queue` is timed on the platform clock
+    // (virtual under flash) while the real HTTP contention runs on real time,
+    // so a duration deadline is incommensurate and flaky. The "don't re-fetch
+    // the prefix on a near-end seek" half of the contract is enforced by the
+    // probe-level prefix-walk + `prefix_enqueued_after_seek` checks above; this
+    // assertion only proves the target itself made forward progress.
     assert!(
-        wait <= Consts::TARGET_START_DEADLINE,
-        "[{backend:?}] target's wait_in_queue = {wait:?} (deadline {:?}) — \
-         slot starvation: stale fetches still hold {}/{} slots",
-        Consts::TARGET_START_DEADLINE,
-        observation.prefix_enqueued_after_seek.len(),
-        Consts::MAX_CONCURRENT,
+        observation.target_started_wait.is_some(),
+        "[{backend:?}] no RequestStarted observed for any post-seek \
+         RequestEnqueued within {:?} — the new epoch never started a fetch \
+         (seek dropped silently, or the target starved behind stale fetches)",
+        Consts::POST_SEEK_OBSERVATION,
     );
 }
 
 async fn observe_post_seek(
     rx: &mut kithara_events::EventReceiver,
-    seek_at: Instant,
+    _seek_at: Instant,
     pre_seek_enqueued: &HashSet<RequestId>,
 ) -> PostSeekObservation {
     let mut obs = PostSeekObservation::default();
@@ -375,50 +433,73 @@ async fn observe_post_seek(
     let mut enqueue_url: HashMap<RequestId, String> = HashMap::new();
     let mut target_segment: Option<usize> = None;
 
-    let deadline = seek_at + Consts::POST_SEEK_OBSERVATION;
-    while Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
-            Ok(Ok(ev)) => match &ev {
-                Event::Hls(HlsEvent::ReaderSeek { segment_index, .. }) => {
-                    if obs.reader_seek.is_none() {
-                        target_segment = *segment_index;
-                        obs.reader_seek = Some(ev.clone());
-                    }
-                }
-                Event::Hls(HlsEvent::SegmentReadStart { .. }) => {
-                    if obs.reader_seek.is_some() && obs.first_segment_read_start.is_none() {
-                        obs.first_segment_read_start = Some(ev.clone());
-                    }
-                }
-                Event::Downloader(DownloaderEvent::RequestEnqueued {
-                    request_id, url, ..
-                }) => {
-                    if !pre_seek_enqueued.contains(request_id) {
-                        new_epoch_enqueued.insert(*request_id);
-                        enqueue_url.insert(*request_id, url.to_string());
-                        if let (Some(target), Some((_v, seg_idx))) =
-                            (target_segment, parse_segment_url(url.as_str()))
-                            && seg_idx + Consts::WARMUP_TOLERANCE < target
-                        {
-                            obs.prefix_enqueued_after_seek.insert(*request_id);
+    // Collect until the three discriminating facts are observed — ReaderSeek,
+    // the first post-seek SegmentReadStart, and the first post-seek
+    // RequestStarted — then exit immediately. `POST_SEEK_OBSERVATION` is a
+    // bounded *virtual* give-up budget (via `time::timeout`, which collapses on
+    // the flash clock), NOT a real-wall window: `rx.recv().await` parks on the
+    // virtual clock between events so the engine advances and delivers them. A
+    // genuinely broken seek that never populates a field still terminates here
+    // with a partial `obs`; the discriminating panics live in the caller and
+    // fire on the missing field, so this give-up never silently passes an
+    // assertion. Previously this loop spun on `Instant::now() < deadline`
+    // (real wall time), incommensurable with the virtual event delivery.
+    let _ = time::timeout(Consts::POST_SEEK_OBSERVATION, async {
+        loop {
+            match rx.recv().await {
+                Ok(ev) => match &ev {
+                    Event::Hls(HlsEvent::ReaderSeek { segment_index, .. }) => {
+                        if obs.reader_seek.is_none() {
+                            target_segment = *segment_index;
+                            obs.reader_seek = Some(ev.clone());
                         }
                     }
-                }
-                Event::Downloader(DownloaderEvent::RequestStarted {
-                    request_id,
-                    wait_in_queue,
-                }) => {
-                    if obs.target_started_wait.is_none() && new_epoch_enqueued.contains(request_id)
-                    {
-                        obs.target_started_wait = Some(*wait_in_queue);
+                    Event::Hls(HlsEvent::SegmentReadStart { .. }) => {
+                        if obs.reader_seek.is_some() && obs.first_segment_read_start.is_none() {
+                            obs.first_segment_read_start = Some(ev.clone());
+                        }
                     }
+                    Event::Downloader(DownloaderEvent::RequestEnqueued {
+                        request_id, url, ..
+                    }) => {
+                        if !pre_seek_enqueued.contains(request_id) {
+                            new_epoch_enqueued.insert(*request_id);
+                            enqueue_url.insert(*request_id, url.to_string());
+                            if let (Some(target), Some((_v, seg_idx))) =
+                                (target_segment, parse_segment_url(url.as_str()))
+                                && seg_idx + Consts::WARMUP_TOLERANCE < target
+                            {
+                                obs.prefix_enqueued_after_seek.insert(*request_id);
+                            }
+                        }
+                    }
+                    Event::Downloader(DownloaderEvent::RequestStarted {
+                        request_id,
+                        wait_in_queue,
+                    }) => {
+                        if obs.target_started_wait.is_none()
+                            && new_epoch_enqueued.contains(request_id)
+                        {
+                            obs.target_started_wait = Some(*wait_in_queue);
+                        }
+                    }
+                    _ => {}
+                },
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    continue;
                 }
-                _ => {}
-            },
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
-            Err(_) => continue,
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+
+            if obs.reader_seek.is_some()
+                && obs.first_segment_read_start.is_some()
+                && obs.target_started_wait.is_some()
+            {
+                break;
+            }
         }
-    }
+    })
+    .await;
+
     obs
 }

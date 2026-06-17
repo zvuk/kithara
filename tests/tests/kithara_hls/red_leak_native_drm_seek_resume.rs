@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{error::Error as StdError, num::NonZeroUsize, time::Duration};
+use std::{error::Error as StdError, num::NonZeroUsize};
 
 use kithara::{
     assets::StoreOptions,
@@ -8,9 +8,14 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
+use kithara_integration_tests::{
+    TestServerHelper, TestTempDir, auto, temp_dir, waits::wait_thread_count_quiesced,
+};
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{CancellationToken, thread::active_named_thread_count, time::sleep};
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, sleep},
+};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tracing::info;
 
@@ -18,11 +23,10 @@ struct Consts;
 impl Consts {
     const ITERATIONS: usize = 4;
     const SEEK_TARGETS_SECS: &'static [f64] = &[30.0, 60.0, 10.0];
-    const SETTLE_MS: u64 = 250;
 }
 
 async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let deadline = kithara_platform::time::Instant::now() + Duration::from_secs(3);
     loop {
         match PcmReader::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => return,
@@ -30,7 +34,7 @@ async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
             Err(e) => panic!("next_chunk decode error at `{label}`: {e}"),
         }
         assert!(
-            std::time::Instant::now() <= deadline,
+            kithara_platform::time::Instant::now() <= deadline,
             "next_chunk timeout at `{label}`"
         );
         sleep(Duration::from_micros(200)).await;
@@ -103,27 +107,22 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServerHelper::new().await;
-    let shared_worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
+    let shared_worker = AudioWorkerHandle::with_cancel(CancelToken::never());
 
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .cancel(CancellationToken::default())
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .cancel(CancelToken::never())
+            .build(),
     );
 
     run_drm_seek_resume_cycle(&server, &temp_dir, &downloader, &shared_worker, 0).await;
-    sleep(Duration::from_millis(Consts::SETTLE_MS)).await;
+    let threads_baseline = wait_thread_count_quiesced(Duration::from_secs(30)).await;
 
-    let threads_baseline = active_named_thread_count();
     info!(threads_baseline, "baseline after warmup DRM seek cycle");
 
     for i in 1..=Consts::ITERATIONS {
         run_drm_seek_resume_cycle(&server, &temp_dir, &downloader, &shared_worker, i).await;
-        sleep(Duration::from_millis(Consts::SETTLE_MS)).await;
-        let now = active_named_thread_count();
+        let now = wait_thread_count_quiesced(Duration::from_secs(30)).await;
         info!(
             iter = i,
             threads = now,
@@ -132,16 +131,14 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
         );
     }
 
-    sleep(Duration::from_millis(500)).await;
-
-    let threads_after = active_named_thread_count();
+    let threads_after = wait_thread_count_quiesced(Duration::from_secs(30)).await;
     let growth = threads_after.saturating_sub(threads_baseline);
 
     assert!(
         growth <= 1,
         "DRM seek cycle leaked kithara threads: growth={} over {} iterations \
          (baseline={}, after={}). One or more DRM-specific resources \
-         (HlsPeer, KeyManager cache, ProcessedResource, decoder state) \
+         (HlsPeer, KeyStore cache, ProcessedResource, decoder state) \
          are not released on Audio::drop.",
         growth,
         Consts::ITERATIONS,

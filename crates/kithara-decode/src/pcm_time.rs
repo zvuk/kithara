@@ -1,4 +1,4 @@
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
 
@@ -31,8 +31,7 @@ pub fn frames_for_duration(sample_rate: u32, duration: Duration) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
     use super::*;

@@ -9,20 +9,22 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara_assets::StoreOptions;
 use kithara_events::{AbrMode, TrackId, TrackStatus};
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession, temp_dir,
+    offline::OfflineSession, temp_dir, waits::wait_for_loader_done,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, sleep},
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::time::sleep;
 use url::Url;
 
 struct Consts;
@@ -107,11 +109,8 @@ fn build_queue_with_tick(
         }
     });
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
     let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
@@ -125,7 +124,7 @@ fn is_loading(queue: &Queue, id: TrackId) -> bool {
 }
 
 async fn wait_until_loading(queue: &Queue, id: TrackId, deadline: Duration) -> Result<(), String> {
-    let start = std::time::Instant::now();
+    let start = kithara_platform::time::Instant::now();
     loop {
         if is_loading(queue, id) {
             return Ok(());
@@ -134,30 +133,6 @@ async fn wait_until_loading(queue: &Queue, id: TrackId, deadline: Duration) -> R
             return Err(format!(
                 "track {id:?} never reached Loading within {deadline:?} (last={:?})",
                 queue.track(id).map(|e| e.status)
-            ));
-        }
-        sleep(Consts::POLL_INTERVAL).await;
-    }
-}
-
-async fn wait_for_loader_done(
-    queue: &Queue,
-    track_id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    let start = std::time::Instant::now();
-    loop {
-        if let Some(entry) = queue.track(track_id) {
-            match &entry.status {
-                TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
-                TrackStatus::Failed(err) => return Err(format!("track entered Failed: {err}")),
-                _ => {}
-            }
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "timeout after {deadline:?} (last status: {:?})",
-                queue.track(track_id).map(|e| e.status)
             ));
         }
         sleep(Consts::POLL_INTERVAL).await;

@@ -7,7 +7,7 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::sync::Arc;
+use std::{num::NonZeroU32, sync::Arc};
 
 use kithara_audio::{DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome};
 use kithara_bufpool::PcmPool;
@@ -22,10 +22,7 @@ use kithara_play::{
 use kithara_test_utils::kithara;
 
 fn mock_spec() -> PcmSpec {
-    PcmSpec {
-        channels: 2,
-        sample_rate: 44100,
-    }
+    PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
 }
 
 fn make_player_resource(seconds: f64) -> PlayerResource {
@@ -109,7 +106,7 @@ struct PositionReader {
 impl PositionReader {
     fn new(seconds: f64) -> Self {
         let spec = mock_spec();
-        let total_frames = (seconds * spec.sample_rate as f64) as u64;
+        let total_frames = (seconds * spec.sample_rate.get() as f64) as u64;
         Self {
             bus: EventBus::default(),
             meta: TrackMetadata::default(),
@@ -168,7 +165,7 @@ impl PcmReader for PositionReader {
     }
 
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        let frame = (position.as_secs_f64() * self.spec.sample_rate as f64) as u64;
+        let frame = (position.as_secs_f64() * self.spec.sample_rate.get() as f64) as u64;
         self.frame_idx = frame.min(self.total_frames);
         Ok(SeekOutcome::Landed {
             target: position,
@@ -181,12 +178,12 @@ impl PcmReader for PositionReader {
     }
 
     fn position(&self) -> Duration {
-        Duration::from_secs_f64(self.frame_idx as f64 / self.spec.sample_rate as f64)
+        Duration::from_secs_f64(self.frame_idx as f64 / self.spec.sample_rate.get() as f64)
     }
 
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs_f64(
-            self.total_frames as f64 / self.spec.sample_rate as f64,
+            self.total_frames as f64 / self.spec.sample_rate.get() as f64,
         ))
     }
 

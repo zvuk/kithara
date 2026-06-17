@@ -18,13 +18,17 @@ use url::Url;
 
 use crate::waveform::TrackAnalysis;
 
-/// Cap on the in-memory tier; past it the oldest entries fall back to disk.
-const MAX_MEM_ENTRIES: usize = 64;
-const ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0002;
+/// Tunables for the analysis cache, grouped to keep the module surface small.
+struct Consts;
 
-/// Analysis artifact resource under the track's asset scope. One blob per
-/// track: the active config fingerprint is checked inside it.
-const ANALYSIS_REL_PATH: &str = "analysis/track.analysis";
+impl Consts {
+    /// Cap on the in-memory tier; past it the oldest entries fall back to disk.
+    const MAX_MEM_ENTRIES: usize = 64;
+    const ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0002;
+    /// Analysis artifact resource under the track's asset scope. One blob per
+    /// track: the active config fingerprint is checked inside it.
+    const ANALYSIS_REL_PATH: &str = "analysis/track.analysis";
+}
 
 /// Cache key for a track's analysis.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -89,7 +93,7 @@ impl TrackAnalysisCache {
         }
     }
 
-    /// Look up a cached analysis: memory first, then the scope resource. 
+    /// Look up a cached analysis: memory first, then the scope resource.
     /// `None` on a miss or an unreadable blob.
     pub(crate) fn get(&mut self, key: &AnalysisKey) -> Option<TrackAnalysis> {
         if let Some(analysis) = self.mem.get(key) {
@@ -112,12 +116,12 @@ impl TrackAnalysisCache {
     }
 
     /// Insert into the bounded memory tier, evicting the oldest entry past
-    /// [`MAX_MEM_ENTRIES`]. Evicted entries are still served from disk.
+    /// [`Consts::MAX_MEM_ENTRIES`]. Evicted entries are still served from disk.
     fn remember(&mut self, key: AnalysisKey, analysis: TrackAnalysis) {
         if self.mem.insert(key.clone(), analysis).is_none() {
             self.order.push_back(key);
         }
-        while self.order.len() > MAX_MEM_ENTRIES {
+        while self.order.len() > Consts::MAX_MEM_ENTRIES {
             if let Some(old) = self.order.pop_front() {
                 self.mem.remove(&old);
             }
@@ -125,7 +129,9 @@ impl TrackAnalysisCache {
     }
 
     fn resource_key(store: &AssetStore, key: &AnalysisKey) -> ResourceKey {
-        store.scope(key.asset_root.as_str()).key(ANALYSIS_REL_PATH)
+        store
+            .scope(key.asset_root.as_str())
+            .key(Consts::ANALYSIS_REL_PATH)
     }
 
     fn load_disk(&self, key: &AnalysisKey) -> Option<TrackAnalysis> {
@@ -216,16 +222,16 @@ fn analysis_to_bytes(
     let waveform = analysis
         .waveform
         .as_ref()
-        .map(Waveform::to_bytes)
+        .map(Vec::<u8>::from)
         .unwrap_or_default();
     let beat = analysis
         .beat
         .as_ref()
-        .map(BeatGrid::to_bytes)
+        .map(Vec::<u8>::from)
         .unwrap_or_default();
     let mut out =
         Vec::with_capacity(4 + 4 + fingerprint.len() + 8 + waveform.len() + 8 + beat.len());
-    out.extend_from_slice(&ANALYSIS_BYTES_VERSION.to_le_bytes());
+    out.extend_from_slice(&Consts::ANALYSIS_BYTES_VERSION.to_le_bytes());
     let fingerprint_len =
         u32::try_from(fingerprint.len()).map_err(|_| AnalysisBytesError::TooLarge)?;
     out.extend_from_slice(&fingerprint_len.to_le_bytes());
@@ -241,10 +247,10 @@ fn analysis_from_bytes(
 ) -> Result<TrackAnalysis, AnalysisBytesError> {
     let mut cursor = 0usize;
     let version = read_u32(bytes, &mut cursor)?;
-    if version != ANALYSIS_BYTES_VERSION {
+    if version != Consts::ANALYSIS_BYTES_VERSION {
         return Err(AnalysisBytesError::Version {
             found: version,
-            expected: ANALYSIS_BYTES_VERSION,
+            expected: Consts::ANALYSIS_BYTES_VERSION,
         });
     }
     let fingerprint_len =
@@ -262,11 +268,11 @@ fn analysis_from_bytes(
     let mut analysis = TrackAnalysis::default();
     if !waveform_bytes.is_empty() {
         analysis.waveform =
-            Some(Waveform::from_bytes(waveform_bytes).map_err(|_| AnalysisBytesError::Corrupt)?);
+            Some(Waveform::try_from(waveform_bytes).map_err(|_| AnalysisBytesError::Corrupt)?);
     }
     if !beat_bytes.is_empty() {
         analysis.beat =
-            Some(BeatGrid::from_bytes(beat_bytes).map_err(|_| AnalysisBytesError::Corrupt)?);
+            Some(BeatGrid::try_from(beat_bytes).map_err(|_| AnalysisBytesError::Corrupt)?);
     }
     Ok(analysis)
 }
@@ -330,8 +336,8 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        ANALYSIS_REL_PATH, AnalysisBytesError, AnalysisKey, TrackAnalysisCache,
-        analysis_from_bytes, analysis_to_bytes, source_key,
+        AnalysisBytesError, AnalysisKey, Consts, TrackAnalysisCache, analysis_from_bytes,
+        analysis_to_bytes, source_key,
     };
     use crate::waveform::TrackAnalysis;
 
@@ -339,7 +345,7 @@ mod tests {
 
     fn wave() -> Waveform {
         // version 1 + one bucket of three 0.5 band heights (0.5 = 0x3F000000).
-        Waveform::from_bytes(&[1, 0, 0, 0, 0, 0, 0, 63, 0, 0, 0, 63, 0, 0, 0, 63])
+        Waveform::try_from([1, 0, 0, 0, 0, 0, 0, 63, 0, 0, 0, 63, 0, 0, 0, 63].as_slice())
             .expect("hand-built blob is valid")
     }
 
@@ -483,11 +489,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = store_in(dir.path());
         let mut cache = cache_over(&store);
-        for i in 0..=super::MAX_MEM_ENTRIES {
+        for i in 0..=Consts::MAX_MEM_ENTRIES {
             cache.put(AnalysisKey::new(format!("root_{i}")), full_analysis());
         }
         assert!(
-            cache.mem.len() <= super::MAX_MEM_ENTRIES,
+            cache.mem.len() <= Consts::MAX_MEM_ENTRIES,
             "memory tier stays bounded under a whole-library sweep"
         );
         let oldest = AnalysisKey::new("root_0");
@@ -523,7 +529,7 @@ mod tests {
 
         // The artifact is a resource of the track's scope...
         let scope = store.scope("track_root");
-        let resource = scope.key(ANALYSIS_REL_PATH);
+        let resource = scope.key(Consts::ANALYSIS_REL_PATH);
         assert!(
             matches!(
                 store.resource_state(&resource),

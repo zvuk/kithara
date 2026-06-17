@@ -106,6 +106,20 @@ built-in linear handler, then drives transitions from
   brings `NavigationState::current_index` in line with the player and
   emits `QueueEvent::QueueEnded` if no further track is reachable.
 
+Auto-advance is gated on the user pause state (`Queue::is_paused`, i.e.
+the player's live rate is `0.0`): a paused queue never auto-advances or
+arms a crossfade. The advance path resumes playback (`autoplay: true`),
+so firing it while paused would silently un-pause and let the committed
+position run on — the user paused, the head must freeze. The event
+handlers (`ItemDidPlayToEnd`, `ItemDidFail`, `maybe_arm_crossfade`)
+therefore no-op while paused. The gate reads the rate, not
+`is_playing()`: a natural end-of-track drops `is_playing()` to `false`
+once the arena drains, and gating on that would wrongly block the
+genuine end-of-track advance; the rate stays `> 0` through EOF and only
+drops to `0.0` on a deliberate `pause`. Explicit user navigation
+(`select`, `advance_to_next`, `play`) is unaffected — only the
+automatic, event-driven transitions are gated.
+
 `set_repeat`, `set_shuffle`, `Queue::remove`, and `Queue::clear` call
 `PlayerImpl::unarm_next` so a stale arm cannot survive a navigation /
 queue mutation. The previous `Queue::tick`-based polling
@@ -139,6 +153,24 @@ Re-selecting a `Consumed` track respawns the load.
 The Queue never starts playback on its own: there is no autoplay. The
 caller drives the first `select` / `play` explicitly so playback order
 is deterministic and independent of which load finishes first.
+
+## Selection serialization
+
+`Queue::select` and a track's `spawn_apply_after_load` completion both mutate the
+same selection state — `pending_select`, the navigation cursor, the current item,
+and the `TrackStatus::Cancelled` supersede marker. They are serialized by an
+internal `select_apply` lock, held only across each side's **synchronous**
+critical section (never across an `.await`).
+
+This closes a barge-in race: superseding a still-loading selection works by
+marking the prior pending track `Cancelled` (`override_pending_select` /
+`cancel_stale_pending`), which the completion path reads to skip its
+`select_item`. Without serialization a completion could observe "not cancelled",
+consume `pending_select`, and then run its `select_item` *after* a later
+`select` had already committed — letting the superseded track barge in over the
+new current. The lock makes the completion's cancelled-check and `select_item` a
+single critical section, mutually exclusive with `select`. Pinned by
+`tests/.../track_switch_race.rs`.
 
 ## Minimal Usage
 

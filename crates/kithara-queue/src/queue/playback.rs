@@ -1,7 +1,7 @@
 use std::sync::PoisonError;
 
 use kithara_events::{Event, PlayerEvent, QueueEvent, TrackStatus};
-use tokio::sync::broadcast::error::TryRecvError;
+use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
 use tracing::debug;
 
 use super::{
@@ -11,6 +11,18 @@ use super::{
 use crate::error::QueueError;
 
 impl Queue {
+    /// Whether the user has paused playback.
+    ///
+    /// Reads the player's live rate: `pause()` (and a no-autoplay select)
+    /// stores `0.0`, while `play` / `set_rate` keep it `>= MIN_PLAYBACK_RATE`.
+    /// A natural end-of-track leaves the rate untouched, so this stays
+    /// distinct from `is_playing()` (which drops to `false` once the arena
+    /// drains at EOF). Auto-advance gates on this so a paused head freezes
+    /// without blocking the genuine end-of-track advance.
+    fn is_paused(&self) -> bool {
+        self.player.rate() <= 0.0
+    }
+
     /// If an advance was already armed from `tick()`, consume it and
     /// return `true` — the engine's trailing `ItemDidPlayToEnd` for
     /// the same track must not advance again.
@@ -63,6 +75,10 @@ impl Queue {
         let pos = self.player.position_seconds().unwrap_or(0.0);
         let dur = self.player.duration_seconds().unwrap_or(0.0);
         debug!(%src, pos, dur, "ItemDidFail received — track aborted mid-stream");
+        if self.is_paused() {
+            debug!(%src, "paused: not auto-advancing on ItemDidFail");
+            return;
+        }
         if self.consume_armed_advance(pos, dur) {
             return;
         }
@@ -86,6 +102,10 @@ impl Queue {
         let pos = self.player.position_seconds().unwrap_or(0.0);
         let dur = self.player.duration_seconds().unwrap_or(0.0);
         debug!(%src, pos, dur, "ItemDidPlayToEnd received");
+        if self.is_paused() {
+            debug!(%src, pos, dur, "paused: not auto-advancing on ItemDidPlayToEnd");
+            return;
+        }
         if self.consume_armed_advance(pos, dur) {
             return;
         }
@@ -102,6 +122,9 @@ impl Queue {
     /// fires after the first track is already silent — too late for a
     /// real crossfade.
     fn maybe_arm_crossfade(&self) {
+        if self.is_paused() {
+            return;
+        }
         let crossfade = self.player.crossfade_duration();
         let (Some(dur), Some(pos), Some(entry)) = (
             self.player.duration_seconds(),
@@ -182,6 +205,22 @@ impl Queue {
     /// # Errors
     /// Returns [`QueueError::Play`] if the player reports a seek failure.
     pub fn seek(&self, seconds: f64) -> Result<kithara_play::SeekOutcome, QueueError> {
+        // Superpowered-style resume after end-of-queue: once the last track
+        // played to natural EOF the nav cursor ran off the end (`current()` is
+        // `None`) but the player keeps that track warm and `current_index()`
+        // stays parked on it. Re-park the cursor to the played-out item and
+        // re-announce it (`CurrentTrackChanged`) so `current()` and every
+        // event-mirrored consumer (wasm/FFI/app "now playing") un-latch from
+        // the ended state before the seek revives playback. During normal
+        // mid-track playback `current()` is `Some`, so this is a no-op and the
+        // seek passes straight through.
+        if self.current().is_none() {
+            let idx = self.player.current_index();
+            if idx < self.len() {
+                self.lock_navigation_mut().select(idx);
+                self.handle_current_item_changed();
+            }
+        }
         self.player.seek_seconds(seconds).map_err(QueueError::from)
     }
 

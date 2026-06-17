@@ -12,7 +12,9 @@ use bon::Builder;
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
-use kithara_platform::{CancellationToken, Mutex, tokio::runtime::Handle as RuntimeHandle};
+use kithara_platform::{
+    CancelScope, CancelToken, sync::Mutex, tokio::runtime::Handle as RuntimeHandle,
+};
 use portable_atomic::AtomicF32;
 use ringbuf::{HeapProd, traits::Producer};
 use tracing::{debug, info, warn};
@@ -40,9 +42,9 @@ use crate::{
 #[non_exhaustive]
 pub struct EngineConfig {
     /// Master cancel token for the engine. The worker scheduler derives a
-    /// `child_token()` so its produce-core's lock-free `is_cancelled()` read
+    /// `child()` so its produce-core's lock-free `is_cancelled()` read
     /// observes a master cancel.
-    pub cancel: Option<CancellationToken>,
+    pub cancel: Option<CancelToken>,
     /// PCM buffer pool for audio-thread scratch buffers.
     pub pcm_pool: Option<PcmPool>,
     /// Pre-built audio session dispatcher.
@@ -99,6 +101,13 @@ pub struct EngineImpl {
     /// Whether this engine/player instance is currently running.
     running: AtomicBool,
 
+    /// Serialises [`Engine::start`]'s check-then-act on `running`, so two
+    /// concurrent starters cannot both pass the `!running` gate and
+    /// double-dispatch `session.start_player`. The loser observes
+    /// `running == true` under the lock and returns `EngineAlreadyRunning`.
+    /// See `README.md` "Engine start".
+    start_lock: Mutex<()>,
+
     /// Master output volume for this player instance (linear 0.0 ..= 1.0).
     master_volume: AtomicF32,
 
@@ -150,7 +159,7 @@ impl EngineImpl {
     }
 
     fn ensure_player_id(&self) -> Result<PlayerId, PlayError> {
-        let mut player_id = self.player_id.lock_sync();
+        let mut player_id = self.player_id.lock();
         if let Some(id) = *player_id {
             return Ok(id);
         }
@@ -175,7 +184,7 @@ impl EngineImpl {
     }
 
     pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
-        let mut slot_registry = self.slot_registry.lock_sync();
+        let mut slot_registry = self.slot_registry.lock();
         let result = match slot_registry.get_mut(&slot) {
             Some(handle) => handle
                 .cmd_tx
@@ -200,7 +209,7 @@ impl EngineImpl {
     }
 
     pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
         self.session.set_player_eq_gain(player_id, band, gain_db)
     }
 
@@ -210,21 +219,18 @@ impl EngineImpl {
     }
 
     pub(crate) fn set_slot_volume(&self, slot: SlotId, volume: f32) -> Result<(), PlayError> {
-        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
         self.session
             .set_player_slot_volume(player_id, slot, volume.clamp(0.0, 1.0))
     }
 
     pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq> {
-        self.slot_registry
-            .lock_sync()
-            .get(&slot)
-            .map(|h| h.eq.clone())
+        self.slot_registry.lock().get(&slot).map(|h| h.eq.clone())
     }
 
     pub(crate) fn slot_shared_state(&self, slot: SlotId) -> Option<Arc<SharedPlayerState>> {
         self.slot_registry
-            .lock_sync()
+            .lock()
             .get(&slot)
             .map(|h| Arc::clone(&h.shared_state))
     }
@@ -243,17 +249,18 @@ impl EngineImpl {
             .pcm_pool
             .clone()
             .unwrap_or_else(|| PcmPool::default().clone());
-        let worker_cancel = config.cancel.clone().unwrap_or_default().child_token();
+        let worker_cancel = CancelScope::new(config.cancel.clone()).token();
 
         Self {
             config,
             bus,
             session,
-            active_slots: Mutex::new(Vec::new()),
+            active_slots: Mutex::default(),
             master_volume: AtomicF32::new(1.0),
             pcm_pool: resolved_pool,
-            player_id: Mutex::new(None),
+            player_id: Mutex::default(),
             running: AtomicBool::new(false),
+            start_lock: Mutex::new(()),
             slot_registry: Mutex::new(ArenaRegistry::with_capacity(max_slots)),
             worker: AudioWorkerHandle::with_cancel(worker_cancel),
             runtime: RuntimeHandle::try_current().ok(),
@@ -272,7 +279,7 @@ impl EngineImpl {
 
 impl Drop for EngineImpl {
     fn drop(&mut self) {
-        let player_id = *self.player_id.lock_sync();
+        let player_id = *self.player_id.lock();
         if let Some(player_id) = player_id
             && let Err(err) = self.session.unregister_player(player_id)
         {
@@ -288,7 +295,7 @@ impl Drop for EngineImpl {
 
 impl Engine for EngineImpl {
     fn active_slots(&self) -> Vec<SlotId> {
-        self.active_slots.lock_sync().clone()
+        self.active_slots.lock().clone()
     }
 
     fn allocate_slot(&self) -> Result<SlotId, PlayError> {
@@ -297,17 +304,17 @@ impl Engine for EngineImpl {
         }
 
         {
-            let slots = self.active_slots.lock_sync();
+            let slots = self.active_slots.lock();
             if slots.len() >= self.config.max_slots {
                 return Err(PlayError::ArenaFull);
             }
         }
 
-        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
         let (slot_id, cmd_tx, shared_state, eq) = self.session.allocate_slot(player_id)?;
 
-        self.active_slots.lock_sync().push(slot_id);
-        self.slot_registry.lock_sync().insert(
+        self.active_slots.lock().push(slot_id);
+        self.slot_registry.lock().insert(
             slot_id,
             SlotHandle {
                 shared_state,
@@ -364,17 +371,17 @@ impl Engine for EngineImpl {
         }
 
         {
-            let slots = self.active_slots.lock_sync();
+            let slots = self.active_slots.lock();
             if !slots.contains(&slot) {
                 return Err(PlayError::SlotNotFound(slot));
             }
         }
 
-        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
         self.session.release_slot(player_id, slot)?;
 
-        self.active_slots.lock_sync().retain(|s| *s != slot);
-        let _ = self.slot_registry.lock_sync().remove(&slot);
+        self.active_slots.lock().retain(|s| *s != slot);
+        let _ = self.slot_registry.lock().remove(&slot);
 
         debug!(?slot, player_id, "slot released");
         self.emit(EngineEvent::SlotReleased { slot });
@@ -386,7 +393,7 @@ impl Engine for EngineImpl {
         self.master_volume.store(clamped, Ordering::Relaxed);
 
         if self.running.load(Ordering::Acquire)
-            && let Some(player_id) = *self.player_id.lock_sync()
+            && let Some(player_id) = *self.player_id.lock()
             && let Err(err) = self.session.set_player_master_volume(player_id, clamped)
         {
             warn!(
@@ -401,10 +408,17 @@ impl Engine for EngineImpl {
     }
 
     fn slot_count(&self) -> usize {
-        self.active_slots.lock_sync().len()
+        self.active_slots.lock().len()
     }
 
     fn start(&self) -> Result<(), PlayError> {
+        // Hold across the whole check-then-act: `running` flips to `true`
+        // only after `start_player` has fully succeeded, so a concurrent
+        // starter either blocks here and then observes `running == true`
+        // (and returns `EngineAlreadyRunning`) or sees a fully-started
+        // engine — never a half-started one, and never a second
+        // `start_player` dispatch.
+        let _start = self.start_lock.lock();
         if self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineAlreadyRunning);
         }
@@ -432,11 +446,11 @@ impl Engine for EngineImpl {
             return Err(PlayError::EngineNotRunning);
         }
 
-        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
         self.session.stop_player(player_id)?;
 
-        self.active_slots.lock_sync().clear();
-        self.slot_registry.lock_sync().clear();
+        self.active_slots.lock().clear();
+        self.slot_registry.lock().clear();
 
         self.running.store(false, Ordering::Release);
         info!(player_id, "engine stopped");

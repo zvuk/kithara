@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{num::NonZero, sync::Arc};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
@@ -49,7 +49,7 @@ fn seg(start: usize, end: usize, ratio: f64) -> GridSegment {
 fn spec() -> PcmSpec {
     PcmSpec {
         channels: u16::try_from(CH).unwrap_or(2),
-        sample_rate: SR,
+        sample_rate: NonZero::new(SR).unwrap(),
     }
 }
 
@@ -110,12 +110,12 @@ fn render(speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
     for data in source.chunks(4096 * CH) {
         let frames = data.len() / CH;
         if let Some(o) = fx.process(chunk(data, offset)) {
-            out.extend_from_slice(o.samples());
+            out.extend_from_slice(&o.samples);
         }
         offset += u64_of(frames);
     }
     while let Some(o) = fx.flush() {
-        out.extend_from_slice(o.samples());
+        out.extend_from_slice(&o.samples);
     }
     out
 }

@@ -50,6 +50,20 @@ pub(crate) fn make_runtime_builder(args: &TestArgs) -> TokenStream2 {
     }
 }
 
+/// Body-held flash ambient holder — ONLY for emit paths without a per-poll
+/// `with_ambient` wrapper (native sync, wasm), where it is the sole ambient
+/// writer of the body. The async-native emissions must NOT carry it: a second
+/// holder living in the async body's state inside the cancellable timeout
+/// tears down non-LIFO on `Elapsed` (stale ambient resurrect, caught by the
+/// platform's `restore_mode` guard).
+pub(crate) fn make_ambient_stmt(args: &TestArgs) -> TokenStream2 {
+    let flash = args.flash.unwrap_or(true);
+    quote! {
+        let __flash_ambient =
+            ::kithara_test_utils::kithara_platform::flash::ambient_scope(#flash);
+    }
+}
+
 pub(crate) fn make_tracing_init(args: &TestArgs) -> TokenStream2 {
     if let Some(filter) = &args.tracing_filter {
         quote! {
@@ -100,6 +114,8 @@ pub(crate) fn wrap_with_timeout(
             {
                 let __timeout_dur: ::std::time::Duration = #dur;
                 let __body = async { #body };
+                // Wall-clock safety net: must fire on REAL time even under
+                // `flash` (a hung test hangs real time too).
                 kithara_platform::time::timeout(__timeout_dur, __body)
                     .await
                     .unwrap_or_else(|_| panic!(
@@ -228,7 +244,7 @@ pub(crate) fn make_env_setup(env_vars: &[(String, String)]) -> TokenStream2 {
                 }
             }
 
-            let __lock = kithara_platform::env_mutation_lock()
+            let __lock = kithara_platform::env::mutation_lock()
                 .lock()
                 .unwrap_or_else(|err| err.into_inner());
 

@@ -8,10 +8,7 @@ use std::{
 
 use kithara_abr::Abr;
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancellationToken, Mutex,
-    time::{Duration, sleep},
-};
+use kithara_platform::{CancelToken, sync::Mutex, time::Duration};
 use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer, PeerHandle};
 
 /// Peer that stashes its own `PeerHandle` clone after registration —
@@ -32,14 +29,14 @@ impl SelfReferencingPeer {
     }
 
     fn stash_handle(&self, handle: PeerHandle) {
-        *self.inner_handle.lock_sync() = Some(handle);
+        *self.inner_handle.lock() = Some(handle);
     }
 
     /// Mirror of `HlsPeer::teardown`: release the stashed `PeerHandle`
     /// clone so `PeerInner.cancel` can fire when the external handle
     /// drops, letting the Registry unregister this peer.
     fn teardown(&self) {
-        *self.inner_handle.lock_sync() = None;
+        *self.inner_handle.lock() = None;
     }
 }
 
@@ -69,14 +66,11 @@ impl Peer for SelfReferencingPeer {
 )]
 async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .cancel(cancel.clone())
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .cancel(cancel.clone())
+            .build(),
     );
 
     let peer: Arc<SelfReferencingPeer> = Arc::new(SelfReferencingPeer::new());
@@ -89,7 +83,7 @@ async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
     drop(external_handle);
 
     for _ in 0..40 {
-        sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
         if Arc::strong_count(&peer) == 1 {
             break;
         }
@@ -116,14 +110,11 @@ async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
 )]
 async fn registry_leaks_peer_without_teardown_when_handle_is_self_stored()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .cancel(cancel.clone())
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .cancel(cancel.clone())
+            .build(),
     );
 
     let peer: Arc<SelfReferencingPeer> = Arc::new(SelfReferencingPeer::new());
@@ -134,7 +125,7 @@ async fn registry_leaks_peer_without_teardown_when_handle_is_self_stored()
     drop(external_handle);
 
     for _ in 0..10 {
-        sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
         if Arc::strong_count(&peer) == 1 {
             break;
         }

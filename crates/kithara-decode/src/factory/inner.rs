@@ -5,14 +5,14 @@ use std::{
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_stream::{AudioCodec, BoxedHooks, ContainerFormat, MediaInfo, SegmentLayout};
+use kithara_stream::{AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo};
 
 use super::probe::{
     ProbeHint, codec_from_mp4_fourcc, container_from_extension, probe_codec,
     resolve_codec_container,
 };
 use crate::{
-    Decoder,
+    Decoder, InputRequirement,
     error::{DecodeError, DecodeResult},
     mp4::sniff_mp4_codec,
     traits::BoxedSource,
@@ -110,12 +110,12 @@ pub struct DecoderConfig {
     pub hint: Option<String>,
     /// Reader-side observer hooks. Single-owner; moved into
     /// [`ComposedDecoder`] by the chosen backend path.
-    pub hooks: Option<BoxedHooks>,
+    pub hooks: Option<BoxedEventSink>,
     /// PCM buffer pool, propagated from the host. `None` falls back to
     /// `PcmPool::default()`.
     pub pcm_pool: Option<PcmPool>,
-    /// Optional segment-layout handle over the underlying source.
-    pub segment_layout: Option<Arc<dyn SegmentLayout>>,
+    /// Optional byte-map handle over the underlying source.
+    pub byte_map: Option<Arc<dyn ByteMap>>,
     /// Enable gapless trim wiring through the per-backend codec.
     #[builder(default = true)]
     pub gapless: bool,
@@ -240,6 +240,27 @@ impl DecoderFactory {
             DecoderBackend::Symphonia => create_symphonia(source, codec, container, config),
         }
     }
+
+    /// Input contract of the demuxer this factory would build for `media_info`,
+    /// for the kithara-audio readiness gate. Mirrors [`should_use_segment_aware`]:
+    /// only the segment-aware fMP4 path is `InitOnly`. See the crate `README.md`
+    /// "Decoder input contract".
+    #[must_use]
+    pub fn input_requirement(
+        media_info: &MediaInfo,
+        byte_map: Option<&dyn ByteMap>,
+    ) -> InputRequirement {
+        match byte_map {
+            Some(_)
+                if media_info
+                    .codec
+                    .is_some_and(|codec| segment_aware_container(codec, media_info.container)) =>
+            {
+                <crate::fmp4::Fmp4SegmentDemuxer as crate::demuxer::Demuxer>::required_input()
+            }
+            _ => InputRequirement::Incremental,
+        }
+    }
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
@@ -252,7 +273,7 @@ fn create_apple(
     use crate::apple::AppleCodec;
 
     if should_use_segment_aware(codec, container, &config)
-        && let Some(layout) = config.segment_layout.clone()
+        && let Some(layout) = config.byte_map.clone()
     {
         if AppleCodec::supports(codec) {
             tracing::debug!(
@@ -305,7 +326,7 @@ fn build_apple_standalone_decoder(
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
         apple::{AppleAudioFileDemuxer, AppleCodec},
-        composed::ComposedDecoder,
+        composed::{ComposedDecoder, DecoderRuntime},
         demuxer::Demuxer,
         gapless::scoped_probe,
     };
@@ -326,10 +347,12 @@ fn build_apple_standalone_decoder(
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
-        pool,
-        config.epoch,
-        config.byte_len_handle.clone(),
-        config.hooks,
+        DecoderRuntime {
+            pool,
+            epoch: config.epoch,
+            byte_len_handle: config.byte_len_handle.clone(),
+            hooks: config.hooks,
+        },
     );
     Ok(Box::new(decoder))
 }
@@ -344,7 +367,7 @@ fn create_android(
     use crate::android::AndroidCodec;
 
     if should_use_segment_aware(codec, container, &config)
-        && let Some(layout) = config.segment_layout.clone()
+        && let Some(layout) = config.byte_map.clone()
     {
         if AndroidCodec::supports(codec) {
             tracing::debug!(
@@ -401,7 +424,7 @@ fn build_android_standalone_decoder(
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
         android::{AndroidCodec, AndroidMediaExtractorDemuxer},
-        composed::ComposedDecoder,
+        composed::{ComposedDecoder, DecoderRuntime},
         demuxer::Demuxer,
     };
     let demuxer = match (codec, container) {
@@ -424,10 +447,12 @@ fn build_android_standalone_decoder(
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
-        pool,
-        config.epoch,
-        config.byte_len_handle.clone(),
-        config.hooks,
+        DecoderRuntime {
+            pool,
+            epoch: config.epoch,
+            byte_len_handle: config.byte_len_handle.clone(),
+            hooks: config.hooks,
+        },
     );
     Ok(Box::new(decoder))
 }
@@ -440,7 +465,7 @@ fn create_symphonia(
     config: DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     if should_use_segment_aware(codec, container, &config)
-        && let Some(layout) = config.segment_layout.clone()
+        && let Some(layout) = config.byte_map.clone()
     {
         return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
@@ -455,10 +480,10 @@ fn create_file_symphonia_universal(
     config: DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
-        composed::ComposedDecoder,
+        composed::{ComposedDecoder, DecoderRuntime},
         demuxer::Demuxer,
         gapless::scoped_probe,
-        symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
+        symphonia::{FileOpen, SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
     };
 
     tracing::debug!(
@@ -475,10 +500,12 @@ fn create_file_symphonia_universal(
 
     let (mut demuxer, _byte_len) = SymphoniaDemuxer::open_file(
         source,
-        config.hint.clone(),
-        container,
-        config.byte_len_handle.clone(),
-        config.segment_layout.clone(),
+        FileOpen {
+            hint: config.hint.clone(),
+            container,
+            byte_len_handle: config.byte_len_handle.clone(),
+            byte_map: config.byte_map.clone(),
+        },
     )?;
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
@@ -499,10 +526,12 @@ fn create_file_symphonia_universal(
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
-        pool,
-        config.epoch,
-        config.byte_len_handle.clone(),
-        config.hooks,
+        DecoderRuntime {
+            pool,
+            epoch: config.epoch,
+            byte_len_handle: config.byte_len_handle.clone(),
+            hooks: config.hooks,
+        },
     );
     Ok(Box::new(decoder))
 }
@@ -516,18 +545,25 @@ fn should_use_segment_aware(
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
 ) -> bool {
+    segment_aware_container(codec, container) && config.byte_map.is_some()
+}
+
+/// Codec+container half of the segment-aware fMP4 decision, factored out of
+/// [`should_use_segment_aware`] so [`DecoderFactory::input_requirement`] can
+/// ask the same question without a [`DecoderConfig`]. AAC / FLAC in fMP4 is
+/// the only segment-aware path; everything else reads incrementally.
+fn segment_aware_container(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
     matches!(
         codec,
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac
     ) && matches!(container, Some(ContainerFormat::Fmp4))
-        && config.segment_layout.is_some()
 }
 
 #[cfg(feature = "symphonia")]
 fn create_fmp4_segment_symphonia(
     source: BoxedSource,
     codec: AudioCodec,
-    layout: Arc<dyn SegmentLayout>,
+    layout: Arc<dyn ByteMap>,
     config: DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::symphonia::{SymphoniaCodec, SymphoniaConfig};
@@ -556,7 +592,7 @@ fn create_fmp4_segment_symphonia(
 /// single closure that opens the codec from `TrackInfo`.
 fn build_fmp4_segment_decoder<C, F>(
     source: BoxedSource,
-    layout: Arc<dyn SegmentLayout>,
+    layout: Arc<dyn ByteMap>,
     config: DecoderConfig,
     open_codec: F,
 ) -> DecodeResult<Box<dyn Decoder>>
@@ -564,7 +600,11 @@ where
     C: crate::codec::FrameCodec + 'static,
     F: FnOnce(&crate::demuxer::TrackInfo) -> DecodeResult<C>,
 {
-    use crate::{composed::ComposedDecoder, demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer};
+    use crate::{
+        composed::{ComposedDecoder, DecoderRuntime},
+        demuxer::Demuxer,
+        fmp4::Fmp4SegmentDemuxer,
+    };
 
     let demuxer =
         Fmp4SegmentDemuxer::open(source, layout, config.byte_pool.clone().unwrap_or_default())?;
@@ -576,10 +616,12 @@ where
     let decoder = ComposedDecoder::new(
         demuxer,
         codec,
-        pool,
-        config.epoch,
-        config.byte_len_handle.clone(),
-        config.hooks,
+        DecoderRuntime {
+            pool,
+            epoch: config.epoch,
+            byte_len_handle: config.byte_len_handle.clone(),
+            hooks: config.hooks,
+        },
     );
     Ok(Box::new(decoder))
 }

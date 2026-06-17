@@ -238,7 +238,7 @@ fn candidate_variant(
 #[derive(Clone, Copy)]
 struct SwitchContext<'a> {
     settings: &'a AbrSettings,
-    buffer_ahead: Option<std::time::Duration>,
+    buffer_ahead: Option<kithara_platform::time::Duration>,
     adjusted_bps: f64,
     candidate_bw: u64,
     current_bw: u64,

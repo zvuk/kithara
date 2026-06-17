@@ -832,8 +832,8 @@ mod tests {
     fn category_configured_custom_marker_ok() {
         // A project-specific marker is config-driven: flagged with the
         // default markers, accepted once the project adds it to the
-        // allowed list (here, the cancel-hierarchy marker).
-        let src = "fn f() {\n    let _ = 1; // kithara:cancel:owner\n}\n";
+        // allowed list (here, a neutral example marker prefix).
+        let src = "fn f() {\n    let _ = 1; // project:owned-singleton\n}\n";
         let file = parse(src);
 
         let mut default_out = Vec::new();
@@ -843,7 +843,7 @@ mod tests {
         let mut cfg_custom = cfg();
         cfg_custom
             .allowed_inline_markers
-            .push("kithara:".to_owned());
+            .push("project:".to_owned());
         let mut custom_out = Vec::new();
         scan_file(&cfg_custom, "fixture.rs", src, &file, &mut custom_out);
         assert!(custom_out.is_empty(), "got: {custom_out:?}");

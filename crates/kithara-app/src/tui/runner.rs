@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
 use kithara::{
@@ -6,8 +6,12 @@ use kithara::{
     events::{AppEvent, Event},
     play::StretchControls,
 };
+use kithara_platform::{
+    time::Duration,
+    tokio,
+    tokio::{sync::broadcast::error::TryRecvError, task},
+};
 use kithara_queue::{Queue, QueueEvent, TrackId, Transition};
-use tokio::{sync::broadcast::error::TryRecvError, task};
 
 use super::{
     dashboard::{Dashboard, Tab},
@@ -52,7 +56,7 @@ pub(super) async fn run_tui(
         Arc::clone(&queue),
         timestretch,
         config.clone(),
-        config.shutdown.child_token(),
+        config.shutdown.child(),
     ));
 
     let mut ui_handle = task::spawn_blocking(move || run_ui_loop(&controller, &palette));
@@ -175,12 +179,14 @@ fn run_ui_loop(controller: &Arc<StateController>, palette: &tui::TuiPalette) -> 
                         ControlOutcome::SwitchTrack(index) => {
                             if let Some(id) = controller.queue().tracks().get(index).map(|t| t.id) {
                                 switch_to_id(
-                                    controller,
-                                    id,
-                                    index,
+                                    SwitchCtx {
+                                        controller,
+                                        id,
+                                        index,
+                                        state: &state,
+                                    },
                                     &mut ui,
                                     &mut auto_advanced_index,
-                                    &state,
                                 )?;
                             }
                         }
@@ -464,14 +470,27 @@ fn apply_volume(controller: &StateController, delta: f32) {
     });
 }
 
-fn switch_to_id(
-    controller: &StateController,
+/// Read-only context for an immediate track switch: the controller, target
+/// track id and 0-based index, and the current UI snapshot for logging.
+#[derive(Clone, Copy)]
+struct SwitchCtx<'a> {
+    controller: &'a StateController,
     id: TrackId,
     index: usize,
+    state: &'a UiState,
+}
+
+fn switch_to_id(
+    ctx: SwitchCtx<'_>,
     ui: &mut UiSession,
     auto_advanced_index: &mut Option<usize>,
-    state: &UiState,
 ) -> RunnerResult {
+    let SwitchCtx {
+        controller,
+        id,
+        index,
+        state,
+    } = ctx;
     match controller.queue().select(id, Transition::None) {
         Ok(()) => {
             *auto_advanced_index = None;

@@ -7,10 +7,15 @@ use std::{
 
 use kithara_abr::AbrPeerId;
 use kithara_events::{DownloaderEvent, EventBus, RequestId, RequestPriority};
-use kithara_platform::{CancelGroup, CancellationToken, RwLock, tokio, tokio::sync::mpsc};
+use kithara_platform::{
+    CancelGroup, CancelToken,
+    sync::{Notify, RwLock},
+    time::Instant,
+    tokio,
+    tokio::sync::mpsc,
+};
 use kithara_test_utils::kithara;
 use thunderdome::{Arena, Index};
-use tokio::sync::Notify;
 
 use super::{
     batch::BatchGroup,
@@ -112,7 +117,7 @@ struct PeerEntry {
     /// immediately.
     bus: Arc<RwLock<Option<EventBus>>>,
     peer: Arc<dyn Peer>,
-    peer_cancel: CancellationToken,
+    peer_cancel: CancelToken,
     cmd_rx: mpsc::Receiver<InternalCmd>,
     peer_done: bool,
 }
@@ -202,18 +207,18 @@ impl Registry {
             match entry.peer.poll_next(cx) {
                 Poll::Ready(Some(batch)) => {
                     let peer_prio = entry.peer.priority();
-                    let bus = entry.bus.lock_sync_read().clone();
+                    let bus = entry.bus.read().clone();
                     let batch_had_cmds = !batch.is_empty();
                     for cmd in batch {
                         let epoch_cancel = cmd.cancel.clone();
                         let cancel = match epoch_cancel {
                             Some(epoch) => CancelGroup::new(vec![entry.peer_cancel.clone(), epoch]),
-                            None => CancelGroup::new(vec![entry.peer_cancel.child_token()]),
+                            None => CancelGroup::new(vec![entry.peer_cancel.child()]),
                         };
                         let cmd_prio = RequestPriority::Low;
                         let slot = slot_index(peer_prio, cmd_prio);
                         let request_id = inner.next_request_id();
-                        let enqueued_at = kithara_platform::time::Instant::now();
+                        let enqueued_at = Instant::now();
                         let internal = InternalCmd {
                             cmd,
                             cancel,
@@ -353,7 +358,7 @@ impl Registry {
 
         if !inner.demand_throttle.is_zero() {
             let preempted_by_urgent = tokio::select! {
-                () = tokio::time::sleep(inner.demand_throttle) => false,
+                () = kithara_platform::time::sleep(inner.demand_throttle) => false,
                 () = self.urgent_notify.notified() => true,
             };
             if preempted_by_urgent {

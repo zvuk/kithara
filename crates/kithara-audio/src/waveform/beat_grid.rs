@@ -31,20 +31,24 @@ impl BeatGrid {
             segments,
         }
     }
+}
 
-    /// Serialize to a versioned little-endian blob: `u32` version, `f64`
-    /// bpm, then the three length-prefixed position/segment lists.
-    #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        blob::to_bytes(self)
+/// Serialize to a versioned little-endian blob: `u32` version, `f64`
+/// bpm, then the three length-prefixed position/segment lists.
+impl From<&BeatGrid> for Vec<u8> {
+    fn from(grid: &BeatGrid) -> Self {
+        blob::to_bytes(grid)
     }
+}
 
-    /// Parse a blob produced by [`Self::to_bytes`].
-    ///
-    /// # Errors
-    /// [`BlobError::Version`] on a stale header, [`BlobError::Corrupt`] on a
-    /// malformed body.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, BlobError> {
+/// Parse a blob produced by `Vec::<u8>::from(&BeatGrid)`.
+///
+/// Yields [`BlobError::Version`] on a stale header, [`BlobError::Corrupt`] on a
+/// malformed body.
+impl TryFrom<&[u8]> for BeatGrid {
+    type Error = BlobError;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, BlobError> {
         blob::from_bytes(bytes)
     }
 }
@@ -151,7 +155,8 @@ mod bytes_tests {
     #[kithara::test]
     fn round_trips() {
         let grid = sample();
-        let back = BeatGrid::from_bytes(&grid.to_bytes()).expect("valid blob round-trips");
+        let bytes = Vec::<u8>::from(&grid);
+        let back = BeatGrid::try_from(bytes.as_slice()).expect("valid blob round-trips");
         assert_eq!(back, grid);
     }
 
@@ -163,30 +168,31 @@ mod bytes_tests {
             downbeats: Vec::new(),
             segments: Vec::new(),
         };
-        let back = BeatGrid::from_bytes(&grid.to_bytes()).expect("empty blob round-trips");
+        let bytes = Vec::<u8>::from(&grid);
+        let back = BeatGrid::try_from(bytes.as_slice()).expect("empty blob round-trips");
         assert_eq!(back, grid);
     }
 
     #[kithara::test]
     fn rejects_wrong_version() {
-        let mut bytes = sample().to_bytes();
+        let mut bytes = Vec::<u8>::from(&sample());
         bytes[0] = bytes[0].wrapping_add(1);
         assert!(matches!(
-            BeatGrid::from_bytes(&bytes),
+            BeatGrid::try_from(bytes.as_slice()),
             Err(BlobError::Version { .. })
         ));
     }
 
     #[kithara::test]
     fn rejects_corrupt_blobs() {
-        let corrupt = |bytes: &[u8]| matches!(BeatGrid::from_bytes(bytes), Err(BlobError::Corrupt));
+        let corrupt = |bytes: &[u8]| matches!(BeatGrid::try_from(bytes), Err(BlobError::Corrupt));
         assert!(corrupt(&[0, 0]), "shorter than the version header");
 
-        let mut truncated = sample().to_bytes();
+        let mut truncated = Vec::<u8>::from(&sample());
         truncated.pop();
         assert!(corrupt(&truncated), "truncated body");
 
-        let mut trailing = sample().to_bytes();
+        let mut trailing = Vec::<u8>::from(&sample());
         trailing.push(0);
         assert!(corrupt(&trailing), "trailing garbage");
     }

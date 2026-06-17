@@ -34,3 +34,11 @@ paths = [
     "crates/kithara-fuzz/**",
 ]
 modules = []
+# Hard-correctness rules that must scan the FULL tree (tests included),
+# bypassing the `paths` exclusions above. Each runs in a second ast-grep pass
+# with no exclude globs; the rule's own `files:`/`ignores:` scope it.
+scan_all_rules = [
+    "arch.no-direct-time",
+    "arch.no-direct-thread-wait",
+    "arch.no-flash-time-hacks",
+]

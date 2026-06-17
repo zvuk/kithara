@@ -26,10 +26,23 @@ ignores:
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
+  # The platform crate OWNS the clock impl that lib crates consume; its native
+  # backend legitimately touches the real wall clock.
+  - "crates/kithara-platform/src/native/**"
+# ast-grep is purely syntactic (no name resolution), so it cannot tell
+# `use kithara_platform::time::Instant; Instant::now()` (the sanctioned
+# platform clock) from `use std::time::Instant; Instant::now()` (banned).
+# Flagging the bare `Instant::now()` form therefore false-positives on every
+# legal platform-clock call. Instead we pin the banned origins precisely:
+# the fully-qualified std/tokio calls, plus the std/tokio `use` imports that
+# would let a bare call resolve to them. Platform-clock calls are never
+# matched. (Grouped/aliased std imports are a residual blind spot, accepted
+# because lib code uses the platform clock exclusively today.)
 rule:
   any:
-    - pattern: Instant::now()
     - pattern: std::time::Instant::now()
-    - pattern: SystemTime::now()
     - pattern: std::time::SystemTime::now()
     - pattern: tokio::time::Instant::now()
+    - pattern: use std::time::Instant
+    - pattern: use std::time::SystemTime
+    - pattern: use tokio::time::Instant

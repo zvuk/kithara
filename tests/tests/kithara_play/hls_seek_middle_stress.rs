@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::time::{Duration, Instant};
-
 use kithara::{
     assets::StoreOptions,
     play::{Resource, ResourceConfig},
@@ -10,10 +8,10 @@ use kithara::{
 use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
     PackagedTestServer, fixture_protocol::DelayRule, offline::OfflinePlayer, temp_dir,
+    waits::render_until_position,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
-use tokio::time::sleep;
+use kithara_platform::{CancelToken, time::Duration};
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -49,40 +47,6 @@ fn blocks_for_seconds(secs: f64) -> u32 {
     result
 }
 
-/// Render up to `max_blocks`, paced so the network has time to deliver
-/// data. Returns as soon as `player.position() >= until_position`
-/// (i.e. the player has actually played past the expected mark) — or
-/// when the wall budget is exhausted. `min_wall_ms` is an upper
-/// budget, not a floor, so a fast network does not artificially slow
-/// the test. Callers pass `until_position = pre_pos + target_advance`
-/// for warmup and `until_position = seek_target + min_advance` for
-/// post-seek to discriminate seek-jump from render-driven progress.
-async fn render_until_position(
-    player: &mut OfflinePlayer,
-    max_blocks: u32,
-    until_position: f64,
-    min_wall_ms: u64,
-) {
-    const BATCH: u32 = 16;
-    const TICK_MS: u64 = 25;
-    let deadline = Instant::now() + Duration::from_millis(min_wall_ms);
-    let mut rendered = 0u32;
-    loop {
-        let this = max_blocks.saturating_sub(rendered).min(BATCH).max(1);
-        for _ in 0..this {
-            let _ = player.render(Consts::BLOCK_FRAMES);
-        }
-        rendered = rendered.saturating_add(this);
-        if player.position() >= until_position && rendered >= max_blocks {
-            return;
-        }
-        if Instant::now() >= deadline {
-            return;
-        }
-        sleep(Duration::from_millis(TICK_MS)).await;
-    }
-}
-
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::quick_symphonia(1, DecoderBackend::Symphonia)]
 #[cfg_attr(
@@ -109,11 +73,8 @@ async fn hls_seek_middle_repeated_seeks_stress(
     let temp = temp_dir();
     let store = StoreOptions::new(temp.path());
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
 
     let cfg = ResourceConfig::for_src(master.as_str())
@@ -136,6 +97,7 @@ async fn hls_seek_middle_repeated_seeks_stress(
         &mut player,
         blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS),
         warmup_target,
+        Consts::BLOCK_FRAMES,
         1_500,
     )
     .await;
@@ -154,6 +116,7 @@ async fn hls_seek_middle_repeated_seeks_stress(
             &mut player,
             blocks_for_seconds(Consts::POST_SEEK_AUDIO_SECS),
             post_target,
+            Consts::BLOCK_FRAMES,
             post_seek_wall_ms,
         )
         .await;

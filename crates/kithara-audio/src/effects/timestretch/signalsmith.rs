@@ -21,7 +21,7 @@ impl SignalsmithBackend {
     pub(crate) fn new(spec: PcmSpec) -> Self {
         let channels = usize::from(spec.channels.max(1));
         let inner =
-            Stretch::preset_default(u32::from(spec.channels.max(1)), spec.sample_rate.max(1));
+            Stretch::preset_default(u32::from(spec.channels.max(1)), spec.sample_rate.get());
         Self {
             inner,
             channels,

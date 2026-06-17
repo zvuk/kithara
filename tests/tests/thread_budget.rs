@@ -1,19 +1,23 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::time::{Duration, Instant};
-
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_audio::{Audio, AudioConfig, AudioWorkerHandle};
 use kithara_hls::{AbrMode, Hls, HlsConfig};
-use kithara_integration_tests::{TestServerHelper, TestTempDir, kithara, temp_dir};
-use kithara_platform::{CancellationToken, thread::active_named_thread_count};
+use kithara_integration_tests::{
+    TestServerHelper, TestTempDir, kithara, temp_dir, waits::wait_thread_count_quiesced,
+};
+use kithara_platform::{
+    CancelToken,
+    thread::{active_named_thread_count, sleep as thread_sleep},
+    time::{Duration, Instant},
+};
 use kithara_stream::Stream;
 use tracing::info;
 
-/// Wait for spawned threads to register with the OS.
-fn settle() {
-    std::thread::sleep(Duration::from_millis(1500));
-}
+/// Real-time watchdog for the lib `wait_thread_count_quiesced` helper. Bounds
+/// only genuine non-progress (the counter never stops moving); a hit PANICS, it
+/// never returns a mid-teardown reading so an assertion cannot pass on timeout.
+const QUIESCE_WATCHDOG: Duration = Duration::from_secs(30);
 
 fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
     let deadline = Instant::now() + timeout;
@@ -21,7 +25,7 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
     loop {
         let last_count = active_named_thread_count();
         if last_count == target {
-            std::thread::sleep(Duration::from_millis(200));
+            thread_sleep(Duration::from_millis(200));
             let stable_count = active_named_thread_count();
             if stable_count == target {
                 return stable_count;
@@ -32,20 +36,25 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
             return last_count;
         }
 
-        std::thread::sleep(Duration::from_millis(100));
+        thread_sleep(Duration::from_millis(100));
     }
 }
 
 #[kithara::test(serial)]
 fn thread_budget_audio_worker_is_one_thread() {
     let before = active_named_thread_count();
-    let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
-    settle();
+    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
+    // The named-thread increment is eager/synchronous (it runs at the spawn
+    // call site, before the child runs), so `after` is already correct the
+    // moment `with_cancel()` returns — no settle needed on the spawn side.
     let after = active_named_thread_count();
 
     let delta = after.saturating_sub(before);
     worker.shutdown();
-    settle();
+    // Teardown gate: wait until the worker thread's closure has actually
+    // returned and decremented the counter back to baseline, leaving a clean
+    // state for the next serial test (state-driven, not a fixed sleep).
+    wait_for_named_threads(before, Duration::from_secs(30));
     assert_eq!(
         delta, 1,
         "AudioWorkerHandle must spawn exactly 1 thread (got delta={delta}, before={before}, after={after})"
@@ -62,7 +71,7 @@ fn thread_budget_audio_worker_is_one_thread() {
 )]
 async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
 
     let before = active_named_thread_count();
 
@@ -76,15 +85,18 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
         .await
         .expect("create hls audio");
     audio.preload().expect("preload must succeed");
-    settle();
-
+    // Spawn side: the named-thread increment is eager/synchronous at each
+    // `spawn_named` call site, so once `preload()` returns the count already
+    // reflects every thread this pipeline started — no settle needed.
     let after = active_named_thread_count();
     let delta = after.saturating_sub(before);
     info!(before, after, delta, "single HLS pipeline");
 
     drop(audio);
     cancel.cancel();
-    settle();
+    // Teardown gate: wait until the pipeline's threads have actually returned
+    // and the counter has quiesced (state-driven), not a fixed sleep.
+    wait_thread_count_quiesced(QUIESCE_WATCHDOG).await;
 
     assert!(
         delta <= 2,
@@ -103,17 +115,18 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
 )]
 async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let cancel = CancellationToken::default();
-    let shared_worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
-    let shared_hub = FlushHub::new(cancel.child_token(), FlushPolicy::default());
+    let cancel = CancelToken::never();
+    let shared_worker = AudioWorkerHandle::with_cancel(CancelToken::never());
+    let shared_hub = FlushHub::new(cancel.child(), FlushPolicy::default());
     let shared_store = || {
         let mut opts = StoreOptions::new(temp_dir.path());
         opts.flush_hub = Some(shared_hub.clone());
         opts
     };
 
-    settle();
-    let before = active_named_thread_count();
+    // Baseline gate: measure `before` only once the shared worker's eager
+    // increment and any prior teardown have quiesced (state-driven).
+    let before = wait_thread_count_quiesced(QUIESCE_WATCHDOG).await;
 
     let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
         .store(shared_store())
@@ -158,8 +171,10 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         a.preload().expect("preload must succeed");
         audios.push(Box::new(a));
     }
-    settle();
-
+    // Spawn side: the flush-hub worker starts lazily on the first store
+    // registration (during `new()`/`preload()`), and its named-thread increment
+    // is eager/synchronous at the spawn call site — so once the preloads return
+    // the count already reflects it. No settle needed.
     let after = active_named_thread_count();
     let delta = after.saturating_sub(before);
     info!(
@@ -174,7 +189,9 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     cancel.cancel();
     shared_worker.shutdown();
     drop(shared_hub);
-    settle();
+    // Teardown gate: wait until every torn-down thread's closure has returned
+    // and the counter has quiesced (state-driven), not a fixed sleep.
+    wait_thread_count_quiesced(QUIESCE_WATCHDOG).await;
 
     assert_eq!(
         delta, 1,

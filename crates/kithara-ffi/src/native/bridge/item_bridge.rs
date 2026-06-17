@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use kithara::abr::AbrMode;
 use kithara_events::{AbrEvent, AudioEvent, DownloaderEvent, Event, FileEvent, HlsEvent};
-use kithara_platform::{CancellationToken, Mutex, tokio, tokio::sync::broadcast};
+use kithara_platform::{CancelToken, sync::Mutex, tokio, tokio::sync::broadcast};
 
 use crate::{
     item::ItemView,
@@ -11,7 +11,7 @@ use crate::{
 };
 
 pub(crate) struct ItemEventBridge {
-    cancel: CancellationToken,
+    cancel: CancelToken,
 }
 
 impl ItemEventBridge {
@@ -56,7 +56,7 @@ impl ItemEventBridge {
                 .is_none_or(|current| (current - duration).abs() > Self::UPDATE_THRESHOLD)
         {
             *duration_seconds = Some(duration);
-            state.lock_sync().resolve_duration(duration);
+            state.lock().resolve_duration(duration);
             observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
         }
 
@@ -79,7 +79,7 @@ impl ItemEventBridge {
         Self::dispatch_variant_events(observer, event, variants);
 
         if let Some(error) = Self::error_from_event(event) {
-            state.lock_sync().mark_failed();
+            state.lock().mark_failed();
             observer.on_event(FfiItemEvent::StatusChanged {
                 status: FfiItemStatus::Failed,
             });
@@ -220,10 +220,10 @@ impl ItemEventBridge {
         observer: Arc<dyn ItemObserver>,
         duration_seconds: Option<f64>,
         state: Arc<Mutex<ItemView>>,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> Self {
         if let Some(duration) = duration_seconds {
-            state.lock_sync().resolve_duration(duration);
+            state.lock().resolve_duration(duration);
             observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
         }
         Self::spawn_event_task(rx, observer, duration_seconds, state, cancel.clone());
@@ -235,7 +235,7 @@ impl ItemEventBridge {
         observer: Arc<dyn ItemObserver>,
         mut duration_seconds: Option<f64>,
         state: Arc<Mutex<ItemView>>,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) {
         crate::FFI_RUNTIME.spawn(async move {
             let mut last_buffered = None;

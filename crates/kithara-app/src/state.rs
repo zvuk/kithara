@@ -7,7 +7,7 @@ use kithara::{
     prelude::EngineLoadSnapshot,
     stream::AudioCodec,
 };
-use kithara_platform::{CancellationToken, sync::Mutex};
+use kithara_platform::{CancelToken, sync::Mutex, tokio::task};
 use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry};
 
 use crate::{config::AppConfig, waveform::TrackAnalysis};
@@ -93,7 +93,7 @@ pub struct StateController {
     /// Per-deck time-stretch handle.
     timestretch: Arc<StretchControls>,
     state: Arc<Mutex<UiState>>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 }
 
 impl StateController {
@@ -108,7 +108,7 @@ impl StateController {
         queue: Arc<Queue>,
         timestretch: Arc<StretchControls>,
         config: AppConfig,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> Self {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
 
@@ -134,7 +134,7 @@ impl StateController {
     where
         F: FnOnce(&mut UiState) -> R,
     {
-        let mut st = self.state.lock_sync();
+        let mut st = self.state.lock();
         f(&mut st)
     }
 
@@ -159,7 +159,7 @@ impl StateController {
         let current_variant = abr.as_ref().and_then(AbrHandle::current_variant);
         let variants = abr.as_ref().map(AbrHandle::variants).unwrap_or_default();
         let mode = abr.as_ref().and_then(AbrHandle::mode);
-        let mut st = self.state.lock_sync();
+        let mut st = self.state.lock();
         st.playing = self.queue.is_playing();
         st.shuffle_enabled = self.queue.is_shuffle_enabled();
         st.repeat_mode = self.queue.repeat_mode();
@@ -188,7 +188,7 @@ impl StateController {
     /// per frame and render off the snapshot.
     #[must_use]
     pub fn snapshot(&self) -> UiState {
-        self.state.lock_sync().clone()
+        self.state.lock().clone()
     }
 }
 
@@ -202,10 +202,10 @@ fn spawn_listener(
     queue: Arc<Queue>,
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) {
     let rx = queue.subscribe();
-    tokio::spawn(crate::analysis::listen(queue, state, config, cancel, rx));
+    task::spawn(crate::analysis::listen(queue, state, config, cancel, rx));
 }
 
 /// Push the desired EQ gains down to the engine. Calls for bands with no
@@ -221,7 +221,7 @@ pub(crate) fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
             let eq_bands = {
-                let mut st = state.lock_sync();
+                let mut st = state.lock();
                 st.current_track_index = current_index;
                 st.track_name = current_index
                     .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
@@ -234,7 +234,7 @@ pub(crate) fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
         }
         Event::Player(PlayerEvent::RateChanged { rate }) => {
             let started = rate > 0.0;
-            let mut st = state.lock_sync();
+            let mut st = state.lock();
             st.playing = started;
             let eq_bands = started.then(|| st.eq_bands.clone());
             drop(st);
@@ -246,11 +246,11 @@ pub(crate) fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
         }
         Event::Player(PlayerEvent::VolumeChanged { volume })
         | Event::Engine(EngineEvent::MasterVolumeChanged { volume }) => {
-            let mut st = state.lock_sync();
+            let mut st = state.lock();
             st.volume = volume;
         }
         Event::App(AppEvent::Note(note)) => {
-            state.lock_sync().status_note = Some(note);
+            state.lock().status_note = Some(note);
         }
         Event::Queue(
             QueueEvent::TrackAdded { .. }
@@ -258,7 +258,7 @@ pub(crate) fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
             | QueueEvent::TrackStatusChanged { .. },
         ) => {
             let tracks = queue.tracks();
-            let mut st = state.lock_sync();
+            let mut st = state.lock();
             st.tracks = tracks;
             if let Some(idx) = st.current_track_index
                 && let Some(track) = st.tracks.get(idx)

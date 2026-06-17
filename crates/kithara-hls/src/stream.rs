@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use dashmap::DashMap;
 use kithara_assets::{
@@ -9,18 +9,20 @@ use kithara_assets::{
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::EventBus;
-use kithara_platform::{CancellationToken, tokio::sync::mpsc};
+use kithara_net::HttpClient;
+use kithara_platform::{CancelScope, CancelToken, sync::CondvarGate, tokio::sync::mpsc};
 use kithara_stream::{
-    SourceError, StreamType, Timeline,
+    Activity, PlayheadState, PlayheadWrite, SeekObserve, SeekState, SourceError, StreamType,
     dl::{Downloader, DownloaderConfig, Peer},
 };
+use url::Url;
 
 use crate::{
     config::HlsConfig,
     coord::{HlsCoord, HlsCoordEnv},
     invalidation::{HlsInvalidationGuard, HlsInvalidationRegistry, HlsStore},
-    loading::{KeyManager, PlaylistCache},
-    parsing::{MediaPlaylist, variant_info_from_master},
+    loading::{KeyStore, PlaylistCache},
+    parsing::{MediaPlaylist, VariantStream, variant_info_from_master},
     peer::HlsPeer,
     playlist::PlaylistState,
     source::HlsSource,
@@ -50,24 +52,17 @@ impl StreamType for Hls {
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
         let asset_root = asset_root_for_url(&config.url, config.name.as_deref());
         let asset_root_arc: Arc<str> = Arc::from(asset_root.as_str());
-        let cancel = config.cancel.clone().unwrap_or_default();
+        let cancel = CancelScope::new(config.cancel.clone()).token();
 
         let bus = config
             .bus
             .clone()
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
-        let downloader = config.downloader.clone().unwrap_or_else(|| {
-            let dl_cancel = cancel.child_token();
-            let client = kithara_net::HttpClient::new(
-                kithara_net::NetOptions::default(),
-                dl_cancel.child_token(),
-            );
-            let dl_config = DownloaderConfig::for_client(client)
-                .cancel(dl_cancel)
-                .build();
-            Downloader::new(dl_config)
-        });
+        let downloader = config
+            .downloader
+            .clone()
+            .unwrap_or_else(|| default_downloader(&config, &cancel));
 
         let (evict_tx, evict_rx) = mpsc::unbounded_channel::<ResourceKey>();
         // App-wide shared store: reuse the injected backend and register
@@ -94,8 +89,14 @@ impl StreamType for Hls {
             .clone()
             .unwrap_or_else(|| BytePool::default().clone());
 
-        let timeline = Timeline::new();
-        let hls_peer = Arc::new(HlsPeer::new(timeline.clone(), config.initial_abr_mode));
+        let playhead = Arc::new(PlayheadState::new());
+        let seek = Arc::new(SeekState::new());
+        let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
+        let hls_peer = Arc::new(HlsPeer::new(
+            Arc::clone(&seek_obs),
+            Arc::clone(&seek) as Arc<dyn Activity>,
+            config.initial_abr_mode,
+        ));
         let peer_handle = downloader
             .register(Arc::clone(&hls_peer) as Arc<dyn Peer>)
             .with_bus(bus.clone());
@@ -106,7 +107,7 @@ impl StreamType for Hls {
         playlist_cache.set_base_url(config.base_url.clone());
         playlist_cache.set_headers(config.headers.clone());
 
-        let key_manager = KeyManager::with_options(
+        let key_store = KeyStore::with_options(
             peer_handle.clone(),
             scope.clone(),
             config.headers.clone(),
@@ -116,20 +117,14 @@ impl StreamType for Hls {
 
         let master = playlist_cache.master_playlist(&config.url).await?;
 
-        let mut media_playlists: Vec<MediaPlaylist> = Vec::new();
-        for variant in &master.variants {
-            let media_url = playlist_cache.resolve_url(&config.url, &variant.uri)?;
-            let playlist = playlist_cache
-                .media_playlist(&media_url, crate::parsing::VariantId(variant.id.0))
-                .await?;
-            media_playlists.push(playlist);
-        }
+        let media_playlists =
+            fetch_media_playlists(&playlist_cache, &config.url, &master.variants).await?;
 
         let playlist_state = Arc::new(PlaylistState::assemble(&master.variants, &media_playlists));
 
         hls_peer.set_abr_variants(variant_info_from_master(&master, &media_playlists));
 
-        key_manager
+        key_store
             .prefetch_aes128_keys(&media_playlists)
             .await
             .map_err(SourceError::from)?;
@@ -146,37 +141,48 @@ impl StreamType for Hls {
         .estimate()
         .await;
         let media_playlists = estimation.media_playlists;
-        for (variant, map) in estimation.size_maps.into_iter().enumerate() {
-            if !map.is_empty() {
-                playlist_state.set_size_map(variant, map);
-            }
-        }
+        estimation
+            .size_maps
+            .into_iter()
+            .enumerate()
+            .filter(|(_, map)| !map.is_empty())
+            .for_each(|(variant, map)| playlist_state.set_size_map(variant, map));
 
-        timeline.set_total_duration(playlist_state.track_duration());
+        playhead.set_duration(playlist_state.track_duration());
+
+        // Shared readiness gate for the off-RT `wait_range(_, None)` park (README).
+        let ready = Arc::new(CondvarGate::<u64>::default());
+        // Late-bound audio-worker wake, filled by `HlsSource::set_worker_wake`
+        // once the worker exists; fired alongside `ready` on the two
+        // downloader write/settle sites so the RT decoder re-ticks on data
+        // arrival, not on its 10 ms scheduler poll. `None` until set.
+        let worker_wake = Arc::new(OnceLock::new());
 
         let plan_ctx = PlanCtx {
             master_cancel: cancel.clone(),
             scope: scope.clone(),
             headers: config.headers.clone(),
             prefetch_budget: config.download_batch_size.max(1),
-            seek_epoch: timeline.seek_epoch(),
+            seek_epoch: seek_obs.epoch(),
             look_ahead_bytes: Some(
                 config
                     .look_ahead_bytes
                     .unwrap_or(HlsConfig::DEFAULT_LOOK_AHEAD_BYTES),
             ),
+            ready: Arc::clone(&ready),
+            worker_wake: Arc::clone(&worker_wake),
         };
 
         let variants: Vec<Arc<HlsVariant>> = media_playlists
             .iter()
             .enumerate()
             .map(|(idx, mp)| {
-                let init_decrypt_ctx = key_manager.resolve_init_decrypt_ctx(mp);
-                let decrypt_contexts = key_manager.resolve_variant_decrypt_contexts(mp);
+                let init_decrypt_ctx = key_store.resolve_init_decrypt_ctx(mp);
+                let decrypt_contexts = key_store.resolve_variant_decrypt_contexts(mp);
                 HlsVariant::new(
                     idx,
                     &playlist_state,
-                    &timeline,
+                    Arc::clone(&seek_obs),
                     init_decrypt_ctx,
                     &decrypt_contexts,
                     &plan_ctx,
@@ -190,8 +196,11 @@ impl StreamType for Hls {
                 cancel: cancel.clone(),
                 scope: scope.clone(),
                 headers: config.headers.clone(),
+                ready,
+                worker_wake,
             },
-            timeline,
+            playhead,
+            seek,
             peer_handle.abr().clone(),
             Arc::clone(&variants),
             Arc::clone(&playlist_state),
@@ -222,9 +231,37 @@ impl StreamType for Hls {
     }
 }
 
+/// Fetch each variant's media playlist for `master`, in master order.
+async fn fetch_media_playlists(
+    cache: &PlaylistCache,
+    master_url: &Url,
+    variants: &[VariantStream],
+) -> Result<Vec<MediaPlaylist>, SourceError> {
+    let mut playlists = Vec::with_capacity(variants.len());
+    for variant in variants {
+        let media_url = cache.resolve_url(master_url, &variant.uri)?;
+        let playlist = cache
+            .media_playlist(&media_url, crate::parsing::VariantId(variant.id.0))
+            .await?;
+        playlists.push(playlist);
+    }
+    Ok(playlists)
+}
+
+/// Default transport when the caller injects none: a private `Downloader`
+/// rooted at a child of the stream's cancel token.
+fn default_downloader(config: &HlsConfig, cancel: &CancelToken) -> Downloader {
+    let dl_cancel = cancel.child();
+    let client = HttpClient::new(config.net_options.clone(), dl_cancel.child());
+    let dl_config = DownloaderConfig::for_client(client)
+        .cancel(dl_cancel)
+        .build();
+    Downloader::new(dl_config)
+}
+
 fn build_asset_store(
     config: &HlsConfig,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     evict_tx: mpsc::UnboundedSender<ResourceKey>,
 ) -> AssetStore<DecryptContext> {
     let drm_process_fn: ProcessChunkFn<DecryptContext> =
@@ -262,7 +299,7 @@ fn build_asset_store(
 pub fn build_shared_asset_store(
     store: &StoreOptions,
     pool: Option<BytePool>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) -> HlsStore {
     let registry: HlsInvalidationRegistry = Arc::new(DashMap::new());
     let drm_process_fn: ProcessChunkFn<DecryptContext> =

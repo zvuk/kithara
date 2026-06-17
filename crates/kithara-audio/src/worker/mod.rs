@@ -1,6 +1,6 @@
 //! Shared audio worker — cooperative multi-track scheduler on a dedicated OS thread.
 
-pub(crate) mod decoder_node;
+pub(crate) mod decoder;
 pub(crate) mod handle;
 pub(crate) mod hang_observer;
 mod load;

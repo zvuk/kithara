@@ -1,11 +1,13 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     sync::{Arc, OnceLock, atomic::Ordering},
 };
 
-use kithara_platform::{CancellationToken, Mutex};
+use dashmap::DashMap;
+use kithara_platform::{CancelToken, sync::Mutex};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
 
 use super::core::{Availability, AvailabilityIndex, InnerIndex};
@@ -18,7 +20,7 @@ use crate::{
 };
 
 pub(super) struct AvailabilityPersist {
-    cancel: CancellationToken,
+    cancel: CancelToken,
     res: OnceLock<Atomic<MmapDriver>>,
     path: PathBuf,
 }
@@ -32,7 +34,7 @@ impl AvailabilityIndex {
     /// Failures (open, load) collapse silently — the aggregate
     /// stays empty and the persist resource is materialised lazily
     /// on first flush.
-    pub(crate) fn enable_persistence(&self, path: PathBuf, cancel: CancellationToken) {
+    pub(crate) fn enable_persistence(&self, path: PathBuf, cancel: CancelToken) {
         let opened = if path.exists() {
             match persist::open_existing(&path, &cancel) {
                 Ok(res) => {
@@ -82,7 +84,7 @@ impl AvailabilityIndex {
 
         for (root, asset_record) in archived.assets.iter() {
             let root_str = root.as_str().to_string();
-            let asset_map = Arc::new(dashmap::DashMap::new());
+            let asset_map = Arc::new(DashMap::new());
 
             for (path, res_record) in asset_record.resources.iter() {
                 let mut avail = Availability::default();
@@ -137,23 +139,38 @@ fn write_aggregate(
     let assets = inner
         .assets
         .iter()
-        .map(|entry| {
-            let resources = entry
+        .filter_map(|entry| {
+            let resources: BTreeMap<String, ResourceAvailabilityFile> = entry
                 .value()
                 .iter()
-                .map(|res_entry| {
+                .filter_map(|res_entry| {
                     let record = {
-                        let avail = res_entry.value().lock_sync();
+                        let avail = res_entry.value().lock();
+                        // The crash-recovery snapshot is a COMMITTED-only
+                        // contract: an uncommitted partial write (whose `.tmp`
+                        // was never renamed) must be invisible after a rebuild,
+                        // exactly as the slow path reports it Missing. Persisting
+                        // its in-flight ranges would let a flush that races the
+                        // writer's cleanup resurrect a partial segment on the
+                        // next open — corrupting availability and a real crash
+                        // recovery alike. The live in-memory ranges still serve
+                        // in-flight readers; only the persisted snapshot filters.
+                        if !avail.committed {
+                            return None;
+                        }
                         ResourceAvailabilityFile {
                             ranges: avail.ranges.iter().map(|r| (r.start, r.end)).collect(),
                             final_len: avail.final_len,
                             is_committed: avail.committed,
                         }
                     };
-                    (res_entry.key().clone(), record)
+                    Some((res_entry.key().clone(), record))
                 })
                 .collect();
-            (entry.key().clone(), AssetAvailabilityFile { resources })
+            if resources.is_empty() {
+                return None;
+            }
+            Some((entry.key().clone(), AssetAvailabilityFile { resources }))
         })
         .collect();
     let file = AvailabilityFile { assets, version: 1 };

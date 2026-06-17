@@ -4,7 +4,6 @@ use std::{
     fs::File,
     io::{Seek, SeekFrom, Write},
     path::PathBuf,
-    time::{Duration, Instant},
 };
 
 use jni::{
@@ -17,7 +16,11 @@ use kithara::{
     file::{File as FileSource, FileConfig, FileSrc},
     stream::Stream,
 };
-use tokio::{runtime::Builder, time::sleep};
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, Instant, sleep},
+    tokio::runtime::Builder,
+};
 use tracing::{error, info};
 
 struct Consts;
@@ -122,7 +125,7 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
     );
 
     let file_cfg = FileConfig::new(FileSrc::Local(input));
-    let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
+    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
     let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
         .hint("mp3".to_string())
         .worker(worker)

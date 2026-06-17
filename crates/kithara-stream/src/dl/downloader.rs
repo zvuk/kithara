@@ -1,11 +1,18 @@
-use std::sync::{Arc, atomic::AtomicUsize};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+};
 
 use futures::task::AtomicWaker;
 use kithara_abr::{Abr, AbrController, AbrPeerId};
-use kithara_events::EventBus;
+use kithara_events::{EventBus, RequestId};
 use kithara_net::HttpClient;
 use kithara_platform::{
-    CancellationToken, Mutex, RwLock, time::Duration, tokio, tokio::sync::mpsc,
+    CancelScope, CancelToken,
+    sync::{Mutex, RwLock},
+    time::Duration,
+    tokio,
+    tokio::{sync::mpsc, task},
 };
 use kithara_test_utils::kithara;
 
@@ -46,7 +53,7 @@ pub(super) struct RegisteredPeerEntry {
     /// Handle's cancel token. Fires from `PeerInner::Drop` when the last
     /// `PeerHandle` clone is released, letting the [`Registry`] drop the
     /// peer entry (and its `Arc<dyn Peer>`).
-    pub(super) cancel: CancellationToken,
+    pub(super) cancel: CancelToken,
     pub(super) cmd_rx: mpsc::Receiver<super::peer::InternalCmd>,
 }
 
@@ -65,8 +72,7 @@ pub(super) struct DownloaderInner {
     /// Global in-flight fetch counter. Limits total concurrent HTTP
     /// connections across all peers and command types.
     pub(super) inflight: Arc<AtomicUsize>,
-    pub(super) cancel: CancellationToken,
-    pub(super) chunk_timeout: Duration,
+    pub(super) cancel: CancelToken,
     pub(super) demand_throttle: Duration,
     pub(super) soft_timeout: Duration,
     pub(super) client: HttpClient,
@@ -80,18 +86,16 @@ pub(super) struct DownloaderInner {
     /// Monotonic source of [`kithara_events::RequestId`]s assigned to
     /// every command this Downloader accepts. Starts at 1 (`NonZero`
     /// invariant); never wraps in practice (`u64`).
-    next_request_id: std::sync::atomic::AtomicU64,
+    next_request_id: AtomicU64,
 }
 
 impl DownloaderInner {
     /// Allocate a fresh [`kithara_events::RequestId`].
-    pub(super) fn next_request_id(&self) -> kithara_events::RequestId {
-        let raw = self
-            .next_request_id
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    pub(super) fn next_request_id(&self) -> RequestId {
+        let raw = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let nz = std::num::NonZeroU64::new(raw.max(1))
             .expect("BUG: next_request_id starts at 1; fetch_add never yields 0");
-        kithara_events::RequestId::new(nz)
+        RequestId::new(nz)
     }
 }
 
@@ -108,27 +112,28 @@ impl Downloader {
     #[must_use]
     pub fn new(config: super::DownloaderConfig) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let chunk_timeout = config.client.options().inactivity_timeout;
         let soft_timeout = config.soft_timeout;
         #[cfg(not(target_arch = "wasm32"))]
         let runtime = config.runtime;
-        let abr = AbrController::new(config.abr_settings);
+        // Composed/standalone seam: `Some` parent → child of it; `None` → own
+        // root. The loop, peers, and ABR controller all derive from this token.
+        let cancel = CancelScope::new(config.cancel).token();
+        let abr = AbrController::new(config.abr_settings, cancel.child());
         Self {
             inner: Arc::new(DownloaderInner {
-                chunk_timeout,
                 soft_timeout,
                 #[cfg(not(target_arch = "wasm32"))]
                 runtime,
                 abr,
                 client: config.client,
-                cancel: config.cancel,
+                cancel,
                 max_concurrent: config.max_concurrent,
                 demand_throttle: config.demand_throttle,
                 inflight: Arc::new(AtomicUsize::new(0)),
                 fetch_waker: Arc::new(AtomicWaker::new()),
                 register_tx: tx,
                 register_rx: Mutex::new(Some(rx)),
-                next_request_id: std::sync::atomic::AtomicU64::new(1),
+                next_request_id: AtomicU64::new(1),
             }),
         }
     }
@@ -136,7 +141,7 @@ impl Downloader {
     /// Ensure the download loop is running (lazy spawn on first register
     /// in an async-capable context).
     fn ensure_spawned(&self) {
-        let Some(rx) = self.inner.register_rx.lock_sync().take() else {
+        let Some(rx) = self.inner.register_rx.lock().take() else {
             return;
         };
         let this = self.clone();
@@ -152,9 +157,9 @@ impl Downloader {
         /// Capacity of the per-peer bounded command channel.
         const PEER_CMD_CHANNEL_CAPACITY: usize = 32;
         self.ensure_spawned();
-        let cancel = self.inner.cancel.child_token();
+        let cancel = self.inner.cancel.child();
         let (cmd_tx, cmd_rx) = mpsc::channel(PEER_CMD_CHANNEL_CAPACITY);
-        let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::new(None));
+        let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
 
         let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;
         let abr_handle = self.inner.abr.register(&abr_peer);
@@ -229,7 +234,7 @@ impl Downloader {
         else {
             return;
         };
-        handle.spawn(async move { this.run(rx).await });
+        task::spawn_on(&handle, async move { this.run(rx).await });
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -249,7 +254,7 @@ impl Downloader {
         // the worker's event loop pumping for the page's lifetime.
         kithara_platform::thread::spawn(move || {
             kithara_platform::thread::keep_worker_alive();
-            drop(tokio::task::spawn(async move {
+            drop(task::spawn(async move {
                 this.run(rx).await;
             }));
         });

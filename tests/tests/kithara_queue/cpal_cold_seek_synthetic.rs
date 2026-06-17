@@ -1,67 +1,23 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::sync::Arc;
 
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
+use kithara_events::{AudioEvent, Event};
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, fixture_protocol::DelayRule, kithara,
-    offline::OfflineSession, temp_dir,
+    HlsFixtureBuilder, TestServerHelper,
+    fixture_protocol::DelayRule,
+    kithara,
+    offline::OfflineSession,
+    temp_dir,
+    waits::{wait_for_loader_done, wait_for_position_at_least},
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::time::sleep;
-
-async fn wait_for_loader_done(
-    queue: &Queue,
-    track_id: kithara_events::TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    use kithara_events::TrackStatus;
-    let start = Instant::now();
-    loop {
-        if let Some(entry) = queue.track(track_id) {
-            match &entry.status {
-                TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
-                TrackStatus::Failed(err) => return Err(format!("track failed: {err}")),
-                _ => {}
-            }
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "timeout after {deadline:?} (last={:?})",
-                queue.track(track_id).map(|e| e.status)
-            ));
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-}
-
-async fn wait_for_position_at_least(
-    queue: &Queue,
-    min_secs: f64,
-    deadline: Duration,
-) -> Result<f64, String> {
-    let start = Instant::now();
-    while start.elapsed() < deadline {
-        if let Some(pos) = queue.position_seconds()
-            && pos >= min_secs
-        {
-            return Ok(pos);
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-    Err(format!(
-        "position never reached {min_secs:.2}s (last={:?})",
-        queue.position_seconds()
-    ))
-}
 
 /// Cold-cache seek into a far segment over the offline backend.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
@@ -95,11 +51,8 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     let temp = temp_dir();
     let store = StoreOptions::new(temp.path());
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
 
     let player = Arc::new(PlayerImpl::new(
@@ -112,7 +65,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::spawn(async move {
         loop {
-            sleep(Duration::from_millis(16)).await;
+            time::sleep(Duration::from_millis(16)).await;
             if queue_for_tick.tick().is_err() {
                 break;
             }
@@ -140,23 +93,32 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
         .expect("track never played past 1.5s");
     eprintln!("[offline] pre-seek pos={pos_before:.3}s");
 
+    // Subscribe before seeking so no post-seek playback-progress event is missed.
+    let mut events = queue.subscribe();
+
     let seek_target = 120.0;
     queue.seek(seek_target).expect("seek accepted");
     eprintln!("[offline] seek issued target={seek_target:.1}s (of 160s)");
 
-    let observation_deadline = Instant::now() + Duration::from_secs(60);
+    // Wait on the real playback-progress state: the audio pipeline emits
+    // `PlaybackProgress { position_ms }` as committed PCM output advances. The
+    // seek landed once that committed position passes the target. The tick task
+    // pumps `position_seconds`; if it panics (hang reproduced) the watchdog
+    // branch below reports it. `time::timeout` is only a safety deadline here.
     let mut confirmed = false;
-    while Instant::now() < observation_deadline {
-        if let Some(pos) = queue.position_seconds()
-            && pos > seek_target + 0.5
-        {
-            confirmed = true;
-            break;
+    while !tick_handle.is_finished() {
+        match time::timeout(Duration::from_secs(60), events.recv()).await {
+            Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
+                let pos_secs = position_ms as f64 / 1000.0;
+                if pos_secs > seek_target + 0.5 {
+                    confirmed = true;
+                    break;
+                }
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) => break,
+            Err(_) => break,
         }
-        if tick_handle.is_finished() {
-            break;
-        }
-        sleep(Duration::from_millis(200)).await;
     }
 
     if tick_handle.is_finished() {

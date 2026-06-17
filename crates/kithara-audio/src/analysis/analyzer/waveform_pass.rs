@@ -24,7 +24,7 @@ impl Analyzer for WaveformPass {
 
     fn push(&mut self, chunk: &PcmChunk) {
         let channels = usize::from(chunk.spec().channels.max(1));
-        self.inner.push_interleaved(&chunk.pcm[..], channels);
+        self.inner.push_interleaved(&chunk.samples[..], channels);
     }
 
     fn finish(self) -> Waveform {

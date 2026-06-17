@@ -21,7 +21,7 @@ pub use ids::VariantIndex;
 pub use invalidation::HlsStore;
 pub use kithara_abr::AbrMode;
 pub use kithara_drm::{KeyProcessor, KeyProcessorRegistry, KeyProcessorRule};
-pub use loading::{KeyManager, PlaylistCache};
+pub use loading::{KeyStore, PlaylistCache};
 pub use parsing::{
     MasterPlaylist, MediaPlaylist, VariantId, VariantStream, parse_master_playlist,
     parse_media_playlist, variant_info_from_master,

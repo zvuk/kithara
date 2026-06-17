@@ -14,7 +14,7 @@ use std::{
 
 use kithara_bufpool::BytePool;
 use kithara_platform::{
-    Condvar, Mutex,
+    sync::CondvarGate,
     time::{Duration, Instant},
 };
 use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};
@@ -56,29 +56,27 @@ impl Consts {
 pub type ProcessChunkFn<Ctx> =
     Arc<dyn Fn(&[u8], &mut [u8], &mut Ctx, bool) -> Result<usize, String> + Send + Sync>;
 
-/// Pairs a `processed` flag with a [`Condvar`] so readers can block
-/// until [`ProcessedWriter::commit`] drains the processor.
+/// Pairs a `processed` flag with the shared [`CondvarGate`] so readers can
+/// block until [`ProcessedWriter::commit`] drains the processor.
 ///
-/// Splitting this out keeps the locking discipline explicit: the
-/// guard is only ever held inside [`ReadinessGate::wait_until_ready`]
+/// The gate guards the `processed` bool directly (single-lock event-driven
+/// wait); the guard is only ever held inside [`ReadinessGate::wait_until_ready`]
 /// or the brief flip in [`ReadinessGate::mark_ready`].
 struct ReadinessGate {
-    cv: Condvar,
-    processed: Mutex<bool>,
+    gate: CondvarGate<bool>,
     failed: AtomicBool,
 }
 
 impl ReadinessGate {
     fn new(initial: bool) -> Self {
         Self {
-            processed: Mutex::new(initial),
-            cv: Condvar::new(),
+            gate: CondvarGate::new(initial),
             failed: AtomicBool::new(false),
         }
     }
 
     fn is_ready(&self) -> bool {
-        *self.processed.lock_sync()
+        *self.gate.lock()
     }
 
     fn is_failed(&self) -> bool {
@@ -92,13 +90,13 @@ impl ReadinessGate {
     /// committed) resource must not read as valid via `read_at`.
     fn fail(&self) {
         self.failed.store(true, Ordering::Release);
-        self.cv.notify_all();
+        self.gate.notify_all();
     }
 
     /// Mark the gate ready and wake every waiter.
     fn mark_ready(&self) {
-        *self.processed.lock_sync() = true;
-        self.cv.notify_all();
+        *self.gate.lock() = true;
+        self.gate.notify_all();
     }
 
     /// Block the caller until `processed` becomes `true` or
@@ -115,12 +113,12 @@ impl ReadinessGate {
                 return false;
             }
             let ready = {
-                let guard = self.processed.lock_sync();
+                let guard = self.gate.lock();
                 if *guard {
                     return !self.is_failed();
                 }
                 let deadline = Instant::now() + Duration::from_millis(COND_WAIT_MS);
-                let next = self.cv.wait_sync_timeout(guard, deadline);
+                let next = self.gate.wait_until(guard, deadline);
                 *next
             };
             if ready {
@@ -170,17 +168,29 @@ impl Drop for GateGuard {
 /// [`WriteSide::read_inflight_at`] — the writer's own in-flight working storage,
 /// never a committed snapshot kept published for concurrent readers during a
 /// re-download (which would feed the processor the prior generation's bytes).
-fn run_process<W, Ctx>(
-    inner: &W,
-    ctx: &Ctx,
-    process: &ProcessChunkFn<Ctx>,
-    pool: &BytePool,
+/// Borrowed inputs for [`run_process`]: the `inner` write side, the
+/// `ctx` to clone per call, the `process` chunk fn, the byte `pool`, and
+/// the `final_len` to process up to.
+struct ProcessArgs<'a, W, Ctx> {
+    inner: &'a W,
+    ctx: &'a Ctx,
+    process: &'a ProcessChunkFn<Ctx>,
+    pool: &'a BytePool,
     final_len: u64,
-) -> StorageResult<u64>
+}
+
+fn run_process<W, Ctx>(args: &ProcessArgs<'_, W, Ctx>) -> StorageResult<u64>
 where
     W: WriteSide,
     Ctx: Clone,
 {
+    let &ProcessArgs {
+        inner,
+        ctx,
+        process,
+        pool,
+        final_len,
+    } = args;
     let mut ctx = ctx.clone();
     let raw = inner.reader();
 
@@ -339,13 +349,13 @@ where
     fn commit(mut self, final_len: Option<u64>) -> StorageResult<ProcessedReader<W::Reader, Ctx>> {
         let needs_processing = self.ctx.is_some() && !self.guard.readiness.is_ready();
         let actual_len = match (needs_processing, final_len, self.ctx.as_ref()) {
-            (true, Some(len), Some(ctx)) if len > 0 => Some(run_process(
-                &self.inner,
+            (true, Some(len), Some(ctx)) if len > 0 => Some(run_process(&ProcessArgs {
+                inner: &self.inner,
                 ctx,
-                &self.process,
-                &self.pool,
-                len,
-            )?),
+                process: &self.process,
+                pool: &self.pool,
+                final_len: len,
+            })?),
             _ => final_len,
         };
 
@@ -507,11 +517,6 @@ where
         }
     }
 
-    #[must_use]
-    pub fn inner(&self) -> &A {
-        &self.inner
-    }
-
     fn wrap_ready(
         &self,
         inner: A::ReadyRes,
@@ -576,7 +581,7 @@ where
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use kithara_platform::CancellationToken;
+    use kithara_platform::{CancelToken, thread};
     use kithara_storage::{
         MemOptions, MemResource, MmapOptions, MmapResource, Resource, StorageResource,
     };
@@ -598,7 +603,7 @@ mod tests {
     fn mock_writer(content: &[u8]) -> (BaseWriter, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test.bin");
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
 
         let res: MmapResource = Resource::open(cancel, MmapOptions::new(path)).unwrap();
         res.write_at(0, content).unwrap();
@@ -607,7 +612,7 @@ mod tests {
 
     /// Mem-backed mock writer, mirroring [`mock_writer`] for the ephemeral path.
     fn mock_writer_mem(content: &[u8]) -> BaseWriter {
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         let res: MemResource = Resource::open(
             cancel,
             MemOptions {
@@ -725,7 +730,7 @@ mod tests {
             buf
         });
 
-        std::thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50)); // M5: real pacing, replace with teardown signal
         assert_eq!(
             call_count.load(Ordering::SeqCst),
             0,
@@ -745,7 +750,7 @@ mod tests {
 
         let dir = tempdir().unwrap();
         let path = dir.path().join("cancel.bin");
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         let resource: MmapResource =
             Resource::open(cancel.clone(), MmapOptions::new(path)).unwrap();
         resource.write_at(0, &[1u8; 16]).unwrap();
@@ -760,7 +765,7 @@ mod tests {
 
         let handle = std::thread::spawn(move || reader.wait_range(0..16));
 
-        std::thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50)); // M5: real pacing, replace with teardown signal
         cancel.cancel();
 
         let outcome = handle
@@ -886,7 +891,7 @@ mod tests {
         let reader_probe = reader.clone();
 
         let handle = std::thread::spawn(move || reader.wait_range(0..16));
-        std::thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50)); // M5: real pacing, replace with teardown signal
         drop(writer);
 
         let outcome = handle
@@ -922,7 +927,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("reopen.bin");
         let res: MmapResource =
-            Resource::open(CancellationToken::default(), MmapOptions::new(path)).unwrap();
+            Resource::open(CancelToken::never(), MmapOptions::new(path)).unwrap();
         res.write_at(0, &already_processed).unwrap();
         let storage = StorageResource::from(res);
         storage

@@ -53,6 +53,18 @@ pub enum SourceError {
     #[error("wait_range budget exceeded")]
     WaitBudgetExceeded,
 
+    /// The data a reader is waiting on is permanently unavailable: the
+    /// downloader exhausted its retry budget on a stall or a fatal fetch
+    /// error, so the byte range will never arrive. Distinct from
+    /// [`WaitBudgetExceeded`](Self::WaitBudgetExceeded) (cooperative,
+    /// transient — the reader retries) — this is terminal, so the reader
+    /// stops with an error instead of spinning. The message is fixed and
+    /// carries no transport detail (the typed cause is logged at the
+    /// settle site) so it never conflates "broken" with a synthetic
+    /// timeout.
+    #[error("segment data not ready")]
+    SegmentUnavailable,
+
     /// `format_change_segment_range` not applicable in the current
     /// state. Reasons (all expected steady states, not bugs):
     /// - source has no init-bearing format-change concept (file

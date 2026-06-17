@@ -1,9 +1,7 @@
-use std::{
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara_platform::time::sleep;
+use kithara_platform::time::{Duration, sleep};
+use kithara_test_utils::kithara;
 
 /// Decoupled startup gate between the worker thread and the async app task.
 ///
@@ -50,6 +48,7 @@ impl PreloadGate {
     /// until then the awaiter parks on its own runtime timer. A `signal()`
     /// landing during a sleep is observed on the next poll (worst-case
     /// latency one [`POLL_INTERVAL`](Self::POLL_INTERVAL)).
+    #[kithara::flash(true)]
     pub async fn wait(&self) {
         while !self.is_ready() {
             sleep(Self::POLL_INTERVAL).await;
@@ -59,9 +58,9 @@ impl PreloadGate {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
 
-    use kithara_platform::time::timeout;
+    use kithara_platform::{thread, time::Duration};
     use kithara_test_utils::kithara;
 
     use super::PreloadGate;
@@ -72,12 +71,16 @@ mod tests {
         assert!(!gate.is_ready());
 
         let signaller = Arc::clone(&gate);
-        let join = kithara_platform::thread::spawn(move || {
-            kithara_platform::thread::sleep(Duration::from_millis(5));
+        // spawn_named: the signaller must be engine-visible under flash — a bare
+        // spawn sleeps in REAL time while the waiter's poll loop and the timeout
+        // run on the virtual clock, so the virtual 1s can elapse before the real
+        // 5ms signal lands (mixed-clock race).
+        let join = thread::spawn_named("preload-signal", move || {
+            thread::sleep(Duration::from_millis(5));
             signaller.signal();
         });
 
-        timeout(Duration::from_secs(1), gate.wait())
+        time::timeout(Duration::from_secs(1), gate.wait())
             .await
             .expect("signal must open the gate");
         assert!(gate.is_ready());
@@ -94,12 +97,13 @@ mod tests {
         assert!(!gate.is_ready());
 
         let re_signaller = Arc::clone(&gate);
-        let join = kithara_platform::thread::spawn(move || {
-            kithara_platform::thread::sleep(Duration::from_millis(5));
+        // spawn_named for the same mixed-clock reason as wait_resolves_after_signal.
+        let join = thread::spawn_named("preload-resignal", move || {
+            thread::sleep(Duration::from_millis(5));
             re_signaller.signal();
         });
 
-        timeout(Duration::from_secs(1), gate.wait())
+        time::timeout(Duration::from_secs(1), gate.wait())
             .await
             .expect("re-armed gate must reopen on the next signal");
         join.join().expect("re-signaller thread");

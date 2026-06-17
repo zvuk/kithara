@@ -2,7 +2,10 @@
 
 use std::{ops::Range, path::Path, sync::Arc};
 
-use kithara_platform::{CancellationToken, MaybeSend, MaybeSync};
+use kithara_platform::{
+    CancelToken,
+    maybe_send::{MaybeSend, MaybeSync},
+};
 use tracing::warn;
 
 use super::state::ResourceCore;
@@ -101,7 +104,7 @@ impl<D: Driver> Resource<Active, D> {
     ///
     /// # Errors
     /// Returns error if `D::open(opts)` fails.
-    pub fn open(cancel: CancellationToken, opts: D::Options) -> StorageResult<Self> {
+    pub fn open(cancel: CancelToken, opts: D::Options) -> StorageResult<Self> {
         Ok(Self {
             data: WriteGuard {
                 core: ResourceCore::open(cancel, opts)?,
@@ -114,7 +117,7 @@ impl<D: Driver> Resource<Active, D> {
     /// # Errors
     /// Returns error if `D::open(opts)` fails.
     pub fn open_with_observer(
-        cancel: CancellationToken,
+        cancel: CancelToken,
         opts: D::Options,
         observer: Option<Arc<dyn AvailabilityObserver>>,
     ) -> StorageResult<Self> {

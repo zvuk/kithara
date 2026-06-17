@@ -47,14 +47,30 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
                     #timeout_expr,
                 );
             #dump_dir_setup
+            // `file!()`/`line!()` expand at the `hang_tick!`/`hang_reset!`
+            // invocation site (built-in span behaviour through `macro_rules!`),
+            // so a fired watchdog reports the exact spinning/last-progress line
+            // rather than just the watched function.
             #[allow(unused_macros)]
             macro_rules! hang_tick {
-                () => { __hang_detector.tick(); };
-                ($ctx:expr) => { __hang_detector.tick_with($ctx); };
+                () => { __hang_detector.tick_from(file!(), line!()); };
+                ($ctx:expr) => { __hang_detector.tick_with_from($ctx, file!(), line!()); };
             }
             #[allow(unused_macros)]
             macro_rules! hang_reset {
-                () => { __hang_detector.reset(); };
+                () => { __hang_detector.reset_from(file!(), line!()); };
+            }
+            // Event-driven wait bounded by the liveness budget. `$wait_for` is a
+            // `FnOnce(Duration)` that parks the current thread for at most that
+            // long (woken early by its event): progress wakes it before the
+            // deadline; a genuine stall releases it at the deadline so `tick()`
+            // fires. Replaces the `hang_tick!() + small park_timeout` busy-poll.
+            #[allow(unused_macros)]
+            macro_rules! hang_park {
+                ($wait_for:expr) => {{
+                    ($wait_for)(__hang_detector.remaining());
+                    __hang_detector.tick_from(file!(), line!());
+                }};
             }
             #(#stmts)*
         }

@@ -109,7 +109,12 @@ impl AppleAudioFileDemuxer {
 
         let channels = u16::try_from(asbd.mChannelsPerFrame).unwrap_or(2);
         let sample_rate = sample_rate_from_asbd(asbd.mSampleRate);
-        let duration = if sample_rate > 0 && total_packets > 0 {
+        if sample_rate == 0 {
+            return Err(DecodeError::InvalidSampleRate {
+                resource: "apple.audio_file",
+            });
+        }
+        let duration = if total_packets > 0 {
             let frames = total_packets.saturating_mul(u64::from(frames_per_packet));
             Some(duration_for_frames(sample_rate, frames))
         } else {
@@ -200,7 +205,7 @@ impl Demuxer for AppleAudioFileDemuxer {
             return Ok(DemuxOutcome::Eof);
         }
 
-        let sample_rate = self.track_info.sample_rate.max(1);
+        let sample_rate = self.track_info.sample_rate;
         let start_packet = self.next_packet;
         let frame_idx = start_packet.saturating_mul(u64::from(self.frames_per_packet));
         let pts = duration_for_frames(sample_rate, frame_idx);
@@ -209,9 +214,24 @@ impl Demuxer for AppleAudioFileDemuxer {
             let remaining =
                 u32::try_from(self.total_packets.saturating_sub(start_packet)).unwrap_or(u32::MAX);
             let want = batch_packets.min(remaining);
+            // Contract: "data not ready" surfaces as `Pending`, never `Err` —
+            // an `Err` classifies as `Interrupted` upstream and the decode
+            // loop retries it hot instead of parking the worker. The packet
+            // cursor was not advanced, so the next call re-reads the same
+            // packets once the range lands.
             let (bytes, packets_read) =
-                self.file
-                    .read_packets_cbr(start_packet, want, &mut self.read_buf)?;
+                match self
+                    .file
+                    .read_packets_cbr(start_packet, want, &mut self.read_buf)
+                {
+                    Ok(read) => read,
+                    Err(e) => {
+                        if let Some(reason) = e.pending_reason() {
+                            return Ok(DemuxOutcome::Pending(reason));
+                        }
+                        return Err(e);
+                    }
+                };
             if packets_read == 0 {
                 return Ok(DemuxOutcome::Eof);
             }
@@ -228,7 +248,16 @@ impl Demuxer for AppleAudioFileDemuxer {
             }));
         }
 
-        let Some((bytes, desc)) = self.file.read_packet(start_packet, &mut self.read_buf)? else {
+        let read = match self.file.read_packet(start_packet, &mut self.read_buf) {
+            Ok(read) => read,
+            Err(e) => {
+                if let Some(reason) = e.pending_reason() {
+                    return Ok(DemuxOutcome::Pending(reason));
+                }
+                return Err(e);
+            }
+        };
+        let Some((bytes, desc)) = read else {
             return Ok(DemuxOutcome::Eof);
         };
 
@@ -261,7 +290,7 @@ impl Demuxer for AppleAudioFileDemuxer {
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
-        let sample_rate = self.track_info.sample_rate.max(1);
+        let sample_rate = self.track_info.sample_rate;
         let total_frames = self
             .total_packets
             .saturating_mul(u64::from(self.frames_per_packet));
@@ -306,9 +335,11 @@ fn serialize_asbd(asbd: &AudioStreamBasicDescription) -> Vec<u8> {
 #[cfg(test)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod tests {
-    use std::io::Cursor;
+    use std::io::{self, Cursor, Error, ErrorKind, Read, Seek, SeekFrom};
 
-    use kithara_stream::{AudioCodec, ContainerFormat};
+    use kithara_stream::{
+        AudioCodec, ContainerFormat, NotReadyCause, PendingReason, SourcePhase, StreamPending,
+    };
     use kithara_test_utils::kithara;
 
     use super::AppleAudioFileDemuxer;
@@ -343,6 +374,75 @@ mod tests {
         match dx.next_frame().expect("next_frame ok") {
             DemuxOutcome::Frame(frame) => assert!(!frame.data.is_empty()),
             other => panic!("expected Frame, got {other:?}"),
+        }
+    }
+
+    /// Streamed source: bytes past `ready` are not delivered yet. Mirrors
+    /// `Stream::probe_read` — a read at/past the boundary fails with an
+    /// `Interrupted` `io::Error` carrying a typed [`StreamPending`] payload.
+    struct NotReadyAfter {
+        inner: Cursor<Vec<u8>>,
+        ready: u64,
+    }
+
+    impl Read for NotReadyAfter {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let pos = self.inner.position();
+            let total = self.inner.get_ref().len() as u64;
+            // `probe_read` waits on the WHOLE requested range — a request
+            // crossing the delivery boundary fails outright, it is never
+            // satisfied partially.
+            if pos.saturating_add(buf.len() as u64) > self.ready {
+                return Err(Error::new(
+                    ErrorKind::Interrupted,
+                    StreamPending {
+                        reason: PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted),
+                        pos,
+                        want: buf.len(),
+                        len: Some(total),
+                        phase: SourcePhase::Waiting,
+                        epoch: 0,
+                        flushing: false,
+                        variant_fence: false,
+                    },
+                ));
+            }
+            self.inner.read(buf)
+        }
+    }
+
+    impl Seek for NotReadyAfter {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    /// Contract pin (#110): "data not ready" from the source must surface
+    /// as `DemuxOutcome::Pending`, never as `Err`. An `Err` here is
+    /// classified `Interrupted` by the decode loop, which retries
+    /// immediately — a hot spin that burns a core for as long as the
+    /// stall lasts instead of parking the worker.
+    #[kithara::test]
+    fn next_frame_surfaces_not_ready_as_pending_not_err() {
+        let bytes = read_asset("silence_1s.wav");
+        let ready = (bytes.len() / 2) as u64;
+        let mut dx = AppleAudioFileDemuxer::open_for(
+            Box::new(NotReadyAfter {
+                inner: Cursor::new(bytes),
+                ready,
+            }),
+            AudioCodec::Pcm,
+            Some(ContainerFormat::Wav),
+        )
+        .expect("open_for must succeed with the header prefix available");
+
+        loop {
+            match dx.next_frame() {
+                Ok(DemuxOutcome::Frame(_)) => {}
+                Ok(DemuxOutcome::Pending(PendingReason::NotReady(_))) => return,
+                Ok(other) => panic!("unexpected outcome before the not-ready boundary: {other:?}"),
+                Err(e) => panic!("data-not-ready must surface as Pending, got Err: {e}"),
+            }
         }
     }
 }

@@ -3,7 +3,7 @@ use std::future::Future;
 use async_trait::async_trait;
 use bytes::Bytes;
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, sleep},
     tokio,
 };
@@ -44,13 +44,13 @@ impl DefaultRetryPolicy {
 
 /// Retry decorator for Net implementations
 pub struct RetryNet<N, P> {
-    cancel: CancellationToken,
+    cancel: CancelToken,
     inner: N,
     retry_policy: P,
 }
 
 impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
-    pub fn new(inner: N, retry_policy: P, cancel: CancellationToken) -> Self {
+    pub fn new(inner: N, retry_policy: P, cancel: CancelToken) -> Self {
         Self {
             cancel,
             inner,
@@ -63,33 +63,45 @@ impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T, NetError>>,
     {
-        let mut last_error = None;
-
-        for attempt in 0..=self.retry_policy.max_attempts() {
-            match op().await {
+        let max = self.retry_policy.max_attempts();
+        for attempt in 0..=max {
+            let error = match op().await {
                 Ok(value) => return Ok(value),
-                Err(error) => {
-                    if !self.retry_policy.should_retry(&error, attempt) {
-                        return Err(error);
-                    }
-                    last_error = Some(error.clone());
-
-                    if attempt < self.retry_policy.max_attempts() {
-                        let delay = self.retry_policy.delay_for_attempt(attempt);
-                        tokio::select! {
-                            biased;
-                            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
-                            () = sleep(delay) => {}
-                        }
-                    }
+                Err(error) => error,
+            };
+            if self.retry_policy.should_retry(&error, attempt) {
+                let delay = self.retry_policy.delay_for_attempt(attempt);
+                tokio::select! {
+                    biased;
+                    () = self.cancel.cancelled() => return Err(NetError::Cancelled),
+                    () = sleep(delay) => {}
                 }
+                continue;
             }
+            // Not retrying. A transient error after a NON-ZERO budget was
+            // spent is promoted to a terminal `RetryExhausted` (Fatal) so
+            // downstream (HLS settle, readers) treats it as a give-up, not a
+            // transient retry signal. A genuinely fatal error (4xx, decode,
+            // cancel) surfaces as-is; so does a transient error under
+            // `max_retries == 0`, where the decorator is a deliberate
+            // pass-through (no retries were promised, none were exhausted).
+            return Err(
+                if max > 0 && error.retryability() == Retryability::Transient {
+                    NetError::RetryExhausted {
+                        max_retries: max,
+                        source: Box::new(error),
+                    }
+                } else {
+                    error
+                },
+            );
         }
-
-        Err(last_error.unwrap_or_else(|| NetError::RetryExhausted {
-            max_retries: self.retry_policy.max_attempts(),
+        // The `0..=max` loop always returns on its final iteration; this is an
+        // unreachable terminal safety net.
+        Err(NetError::RetryExhausted {
+            max_retries: max,
             source: Box::new(NetError::Unimplemented),
-        }))
+        })
     }
 }
 
@@ -155,8 +167,8 @@ mod tests {
 
     use std::num::NonZeroU16;
 
-    use ::tokio::time::timeout;
     use futures::stream;
+    use kithara_platform::time::timeout;
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
@@ -187,11 +199,7 @@ mod tests {
     }
 
     fn retry_net(mock: Unimock, policy: RetryPolicy) -> RetryNet<Unimock, DefaultRetryPolicy> {
-        RetryNet::new(
-            mock,
-            DefaultRetryPolicy::new(policy),
-            CancellationToken::default(),
-        )
+        RetryNet::new(mock, DefaultRetryPolicy::new(policy), CancelToken::never())
     }
 
     fn retry_net_default(mock: Unimock) -> RetryNet<Unimock, DefaultRetryPolicy> {
@@ -448,7 +456,10 @@ mod tests {
         assert_eq!(retry_policy.delay_for_attempt(1), Duration::from_millis(50));
     }
 
-    #[kithara::test(tokio)]
+    // Real-clock: the body drives a raw `tokio::spawn` task (invisible to
+    // flash ambient propagation) and bounds it with wall-time waits; flip
+    // together with the raw-tokio migration (#86).
+    #[kithara::test(tokio, flash(false))]
     async fn test_retry_net_cancel_interrupts_sleep() {
         let mock = Unimock::new(
             NetMock::get_bytes
@@ -460,11 +471,11 @@ mod tests {
             max_delay: Duration::from_secs(10),
             max_retries: 3,
         };
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy), cancel.clone());
 
         let url = test_url();
-        let handle = tokio::spawn(async move { retry_net.get_bytes(url, None).await });
+        let handle = tokio::task::spawn(async move { retry_net.get_bytes(url, None).await });
 
         sleep(Duration::from_millis(50)).await;
         cancel.cancel();

@@ -26,7 +26,7 @@ pub(crate) struct BungeeBackend {
 impl BungeeBackend {
     pub(crate) fn new(spec: PcmSpec) -> Self {
         let channels = usize::from(spec.channels.max(1));
-        let sample_rate = usize::try_from(spec.sample_rate.max(1)).unwrap_or(1);
+        let sample_rate: usize = spec.sample_rate.get().as_();
         let inner = match Stream::new(sample_rate, channels, MAX_INPUT_FRAMES) {
             Ok(stream) => Some(stream),
             Err(e) => {

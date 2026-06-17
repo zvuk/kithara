@@ -1,5 +1,5 @@
 use std::io::Cursor;
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use std::sync::{Arc, atomic::AtomicU64};
 
 use kithara_decode::{DecodeError, DecoderBackend, DecoderConfig, DecoderFactory};
@@ -15,7 +15,7 @@ fn decoder_config_default_uses_symphonia_backend() {
     assert!(config.byte_len_handle.is_none());
 }
 
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[kithara::test]
 fn decoder_config_custom_apple_backend_preserves_fields() {
     let handle = Arc::new(AtomicU64::new(1000));
@@ -38,7 +38,6 @@ fn create_with_probe_without_hint_fails_with_probe_failed() {
     assert!(matches!(result, Err(DecodeError::ProbeFailed)));
 }
 
-#[cfg(feature = "symphonia")]
 #[kithara::test]
 fn create_with_probe_with_mp3_hint_succeeds() {
     let decoder = DecoderFactory::create_with_probe(
@@ -50,10 +49,9 @@ fn create_with_probe_with_mp3_hint_succeeds() {
 
     let spec = decoder.spec();
     assert!(spec.channels > 0);
-    assert!(spec.sample_rate > 0);
+    assert!(spec.sample_rate.get() > 0);
 }
 
-#[cfg(feature = "symphonia")]
 #[kithara::test]
 fn create_from_media_info_surfaces_error_without_native_probe_fallback() {
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};

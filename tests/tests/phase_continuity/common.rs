@@ -1,7 +1,6 @@
 use std::{
     f64::consts::{PI, TAU},
     fmt,
-    time::Duration,
 };
 
 use kithara::{
@@ -10,6 +9,7 @@ use kithara::{
     stream::{Stream, StreamType},
 };
 use kithara_integration_tests::Xorshift64;
+use kithara_platform::{thread::sleep, time::Duration};
 use tracing::{info, warn};
 
 pub(crate) const SAMPLE_RATE: u32 = 44_100;
@@ -305,6 +305,7 @@ pub(crate) fn scripted_phase_scan<T, S, F>(
     sine: SinePhaseSpec,
     total_frames_truth: u64,
     scenario: &[(S, f64)],
+    pace: Option<Duration>,
     mut switch: F,
 ) -> Vec<PhaseDrift>
 where
@@ -345,6 +346,9 @@ where
             let Some(n) = read_block(audio, &mut buf, &label) else {
                 break;
             };
+            if let Some(p) = pace {
+                sleep(p);
+            }
             let frames_this_read = (n / chan) as u64;
             if consumed >= next_scan_at {
                 if let Some(drift) =

@@ -1,4 +1,6 @@
-use std::{collections::HashMap, time::Instant};
+use std::collections::HashMap;
+
+use kithara_platform::time::Instant;
 
 /// One recorded probe event.
 #[derive(Clone)]

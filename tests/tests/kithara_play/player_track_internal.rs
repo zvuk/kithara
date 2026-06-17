@@ -13,7 +13,7 @@ use firewheel::dsp::fade::FadeCurve;
 use kithara_bufpool::PcmPool;
 use kithara_decode::PcmSpec;
 use kithara_integration_tests::audio_mock::TestPcmReader;
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use kithara_play::{
     Resource,
     impls::{
@@ -38,10 +38,7 @@ enum TrackStateScenario {
 }
 
 fn mock_spec() -> PcmSpec {
-    PcmSpec {
-        channels: 2,
-        sample_rate: 44100,
-    }
+    PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
 }
 
 fn make_track_with(duration_secs: f64, item_id: Option<Arc<str>>) -> PlayerTrack {

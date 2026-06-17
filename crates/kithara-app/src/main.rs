@@ -20,8 +20,8 @@ use kithara_app::gui;
 use kithara_app::gui::GuiFrontend;
 #[cfg(feature = "tui")]
 use kithara_app::tui::TuiFrontend;
-use kithara_app::{config::AppConfig, frontend::Frontend, tracing_init::init_tracing};
-use kithara_platform::CancellationToken;
+use kithara_app::{baked, config::AppConfig, frontend::Frontend, tracing_init::init_tracing};
+use kithara_platform::CancelToken;
 use kithara_queue::{Queue, QueueConfig};
 
 /// Kithara — audio player application.
@@ -99,22 +99,26 @@ fn main() -> AppResult {
 
     init_tracing_for_mode(mode)?;
 
-    let app_cancel = CancellationToken::default(); // kithara:cancel:owner
+    // App master root held for the whole process: it goes into `AppConfig` and
+    // every subsystem derives from `shutdown.child()`, so a frontend
+    // `config.shutdown.cancel()` propagates down the shutdown subtree to all of
+    // them.
+    let shutdown = CancelToken::root();
     let net = NetOptions::builder()
-        .is_insecure(args.insecure || kithara_app::baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)
-        .compression(kithara_app::baked::BAKED_COMPRESSION)
+        .is_insecure(args.insecure || baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)
+        .compression(baked::BAKED_COMPRESSION)
         .build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, app_cancel.child_token())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, shutdown.child())).build(),
     );
-    let flush_hub = FlushHub::new(app_cancel.child_token(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, app_cancel.clone())
+    let flush_hub = FlushHub::new(shutdown.child(), FlushPolicy::default());
+    let config = AppConfig::new(downloader, flush_hub, shutdown.clone())
         .with_tracks(args.tracks)
         .with_should_accept_invalid_certs(args.insecure);
 
     let timestretch = StretchControls::new(1.0);
     let player_config = PlayerConfig::builder()
-        .cancel(app_cancel.child_token())
+        .cancel(shutdown.child())
         .crossfade_duration(config.crossfade_seconds)
         .eq_layout(generate_log_spaced_bands(config.eq_band_count))
         .timestretch(Arc::clone(&timestretch))
@@ -122,7 +126,7 @@ fn main() -> AppResult {
     let player = Arc::new(PlayerImpl::new(player_config));
     let queue_config = QueueConfig::default()
         .with_player(player)
-        .with_cancel(app_cancel.child_token());
+        .with_cancel(shutdown.child());
 
     let queue = Arc::new(Queue::new(queue_config));
 

@@ -4,8 +4,9 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::OnceLock,
-    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+use kithara_platform::time::{Duration, SystemTime};
 
 use super::shared::HangDump;
 
@@ -29,7 +30,7 @@ impl Consts {
 
 fn now_ms() -> u128 {
     SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+        .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis())
 }
 
@@ -44,7 +45,7 @@ pub(crate) fn resolve_dump_dir(explicit: Option<&Path>) -> PathBuf {
     env::temp_dir()
 }
 
-pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>) {
+pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>, diag: &str) {
     let payload = ctx.dump_json();
     let ts = now_ms();
     let pid = std::process::id();
@@ -57,8 +58,8 @@ pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>) 
         Ok(()) => format!("dump={}", file.display()),
         Err(err) => format!("dump-write-failed={err}"),
     };
-    kithara_platform::log_error(&format!(
-        "[kithara_hang_detector] hang detected: {label} ts_ms={ts} pid={pid} {dump} — {payload}"
+    kithara_platform::logging::log_error(&format!(
+        "[kithara_hang_detector] hang detected: {label} ts_ms={ts} pid={pid} {dump} [{diag}] — {payload}"
     ));
 }
 

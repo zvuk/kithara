@@ -1,22 +1,26 @@
 use std::{
-    io::{Error as IoError, Read, Seek, SeekFrom},
+    io::{Error as IoError, Seek, SeekFrom},
     marker::PhantomData,
     num::{NonZeroU32, NonZeroUsize},
     sync::{
         Arc,
         atomic::{AtomicU32, AtomicU64, Ordering},
     },
-    time::Duration,
 };
 
+use delegate::delegate;
 use fast_interleave::deinterleave_variable;
-use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
+use kithara_bufpool::{BytePool, PcmBuf, PcmPool};
+use kithara_decode::{DecoderConfig, DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, DeferredBus, EventBus, SeekLifecycleStage, SegmentLocation};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
-use kithara_platform::{CancellationToken, thread::park_timeout, tokio::task::spawn_blocking};
-use kithara_stream::{MediaInfo, Stream, StreamType, Timeline};
+use kithara_platform::{
+    CancelScope, CancelToken, thread::park_timeout, time::Duration, tokio::task::spawn_blocking,
+};
+use kithara_stream::{
+    ChunkPosition, MediaInfo, PlayheadWrite, SeekControl, SeekObserve, Stream, StreamType,
+};
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
 use tracing::{debug, info, trace, warn};
@@ -26,14 +30,14 @@ use crate::{
     pipeline::{
         config::{AudioConfig, create_effects, expected_output_spec},
         fetch::{EpochValidator, Fetch, FetchKind},
-        source::{OffsetReader, SharedStream, StreamAudioSource},
+        source::{DecodeInit, OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
     runtime::AtomicServiceClass,
     traits::{ChunkOutcome, DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome},
     worker::{
         PreloadGate,
-        handle::{AudioWorkerHandle, TrackRegistration},
+        handle::{AudioWorkerHandle, TrackRegistration, WorkerWakeBridge},
         thread_wake::ThreadWake,
         types::{ServiceClass, TrackId},
     },
@@ -89,17 +93,19 @@ pub struct Audio<S> {
     /// Current audio specification (updated from chunks).
     pub(crate) spec: PcmSpec,
 
-    /// Shared stream timeline for committed playback position.
-    pub(crate) timeline: Timeline,
+    /// Narrow mutating playhead handle — committed position and total duration.
+    pub(crate) playhead: Arc<dyn PlayheadWrite>,
+
+    /// Narrow seek-control handle — initiates and marks seek epochs.
+    pub(crate) seek: Arc<dyn SeekControl>,
+
+    /// Narrow seek-observe handle — reads seek state (pending epoch, etc.).
+    pub(crate) seek_obs: Arc<dyn SeekObserve>,
 
     /// How many frames of `current_chunk` have been served to the
     /// caller. Local consumer cursor — reset to 0 on every new chunk
     /// (`fill_buffer`) and after seek (the next `fill_buffer` after
-    /// `commit_seek_landed` issues a fresh chunk). Avoids reloading
-    /// `committed_frame_end` from the timeline inside `Audio::read`'s
-    /// per-slice loop, which used to issue an atomic load + 3 atomic
-    /// stores on every slice and serialised the audio hot path on
-    /// the timeline counters.
+    /// `commit_seek_landed` issues a fresh chunk).
     pub(crate) current_chunk_consumed_frames: u64,
 
     /// Shared epoch counter with worker (kept alive for `Arc` shared ownership).
@@ -139,7 +145,7 @@ pub struct Audio<S> {
     abr_handle: Option<kithara_abr::AbrHandle>,
 
     /// Cancellation token for graceful shutdown.
-    cancel: Option<CancellationToken>,
+    cancel: Option<CancelToken>,
 
     /// Interleaved scratch for `read_planar`, drawn from `pcm_pool` once and
     /// pre-sized off the audio thread in `new` so the real-time path never
@@ -177,6 +183,10 @@ pub struct Audio<S> {
     /// Whether `preload()` has been called (enables non-blocking mode).
     preloaded: bool,
 
+    /// Offline-consumer opt-in: a ring underrun blocks (engine-aware park)
+    /// instead of returning an empty outcome. Never set on real-time hosts.
+    block_on_underrun: bool,
+
     /// `(seek_epoch, position_ms)` of the last emitted `PlaybackProgress`.
     /// Throttles high-frequency progress telemetry within an epoch so it
     /// cannot starve low-frequency control events on the shared bounded bus;
@@ -185,34 +195,10 @@ pub struct Audio<S> {
 }
 
 impl<S> Audio<S> {
-    /// Probe buffer size in bytes for initial stream detection.
-    const PROBE_BUFFER_SIZE: usize = 1024;
-
-    /// Wall-clock budget for the construction-time blocking warm-read.
-    ///
-    /// The non-blocking-pull read path makes `Stream::read` return
-    /// `Interrupted`/`NotReady` immediately when the first segment has not
-    /// arrived yet (the worker decode loop tolerates this by parking and
-    /// re-ticking). Decoder construction, however, runs once on a
-    /// `spawn_blocking` thread and has no re-tick loop — it must read the
-    /// container prefix synchronously. This budget bounds how long the
-    /// off-RT probe waits for that prefix to download before giving up; a
-    /// broken downloader cannot hang construction, and on the happy path
-    /// the prefix resolves well under it.
-    const PROBE_WARM_TIMEOUT: Duration = Duration::from_secs(5);
-
-    /// Backoff between construction-time warm-read retries while the
-    /// prefix is still downloading. Off-RT (construction only), so a short
-    /// sleep is the permitted backoff.
-    const PROBE_WARM_BACKOFF: Duration = Duration::from_millis(2);
-
     /// Minimum playback-position advance (ms) between `PlaybackProgress`
     /// emissions. Caps progress telemetry to ~10/s so it cannot flood the
     /// shared bounded event bus and drop control events.
     const PROGRESS_EMIT_MIN_DELTA_MS: u64 = 100;
-
-    /// Backoff duration between receive attempts.
-    const RECV_BACKOFF: Duration = Duration::from_micros(100);
 
     /// Per-buffer frame capacity used to pre-warm the PCM pool for the decode
     /// worker's per-packet buffers. Covers the largest decoder packet across
@@ -238,7 +224,7 @@ impl<S> Audio<S> {
     /// reallocating on the real-time path.
     fn alloc_interleaved_scratch(pool: &PcmPool, spec: PcmSpec) -> PcmBuf {
         let channels = usize::from(spec.channels).max(2);
-        let sample_rate = usize::try_from(spec.sample_rate).unwrap_or(usize::MAX);
+        let sample_rate = usize::try_from(spec.sample_rate.get()).unwrap_or(usize::MAX);
         let capacity = sample_rate.saturating_mul(channels);
         pool.get_with(|buf| {
             buf.clear();
@@ -283,7 +269,7 @@ impl<S> Audio<S> {
     /// Returns `None` for streaming sources where duration is unknown.
     #[must_use]
     pub fn duration(&self) -> Option<Duration> {
-        self.timeline.total_duration()
+        self.playhead.duration()
     }
 
     fn emit_audio_event(&self, event: AudioEvent) {
@@ -302,8 +288,8 @@ impl<S> Audio<S> {
         self.last_progress_emit = Some((epoch, position_ms));
 
         let total_ms = self
-            .timeline
-            .total_duration()
+            .playhead
+            .duration()
             .map(|duration| clamp_u128_to_u64_millis(duration.as_millis()));
 
         self.emit_audio_event(AudioEvent::PlaybackProgress {
@@ -314,7 +300,7 @@ impl<S> Audio<S> {
     }
 
     fn emit_post_seek_output_commit(&mut self, meta: Option<PcmMeta>) {
-        let Some(seek_epoch) = self.timeline.pending_seek_epoch() else {
+        let Some(seek_epoch) = self.seek_obs.pending_epoch() else {
             return;
         };
         if seek_epoch != self.validator.epoch {
@@ -334,7 +320,7 @@ impl<S> Audio<S> {
             seek_epoch,
             position: (*self).position(),
         });
-        let _ = self.timeline.did_clear_pending_seek_epoch(seek_epoch);
+        let _ = self.seek_obs.clear_pending_epoch(seek_epoch);
     }
 
     /// Receive next chunk and store it as `current_chunk`.
@@ -376,7 +362,7 @@ impl<S> Audio<S> {
     /// Calculated from samples read since last seek plus the seek base.
     #[must_use]
     pub fn position(&self) -> Duration {
-        self.timeline.committed_position()
+        self.playhead.position()
     }
 
     /// Enable non-blocking mode for `read()` and prime the first chunk.
@@ -495,7 +481,7 @@ impl<S> Audio<S> {
                 let start_sample = frames_to_samples(consumed_frames_in_chunk, channels)?;
                 let take_samples = frames_to_samples(take_frames, channels)?;
                 buf[written..written + take_samples]
-                    .copy_from_slice(&chunk.pcm[start_sample..start_sample + take_samples]);
+                    .copy_from_slice(&chunk.samples[start_sample..start_sample + take_samples]);
                 last_output_meta = Some(chunk.meta);
                 written += take_samples;
 
@@ -504,8 +490,7 @@ impl<S> Audio<S> {
                 self.current_chunk_consumed_frames = consumed_total;
 
                 if final_segment {
-                    self.timeline
-                        .advance_committed_chunk(&kithara_stream::ChunkPosition::from(&chunk.meta));
+                    self.playhead.advance(&ChunkPosition::from(&chunk.meta));
                     self.recycle_current_chunk();
                 } else {
                     let total_frames = chunk_total_frames.max(1);
@@ -518,8 +503,8 @@ impl<S> Audio<S> {
                         span_ns * u128::from(consumed_total) / u128::from(total_frames);
                     let interpolated = u128::from(start_ns).saturating_add(consumed_ns_offset);
                     let interpolated_ns = u64::try_from(interpolated).unwrap_or(u64::MAX);
-                    self.timeline
-                        .set_committed_position(Duration::from_nanos(interpolated_ns));
+                    self.playhead
+                        .set_position(Duration::from_nanos(interpolated_ns));
                 }
             }
 
@@ -543,11 +528,9 @@ impl<S> Audio<S> {
             self.emit_playback_progress();
             let position = self.position();
             debug_assert!(
-                self.timeline
-                    .total_duration()
-                    .is_none_or(|dur| position <= dur),
+                self.playhead.duration().is_none_or(|dur| position <= dur),
                 "Audio::read Frames contract: position={position:?} > duration={:?}",
-                self.timeline.total_duration(),
+                self.playhead.duration(),
             );
             return Ok(ReadOutcome::Frames { count, position });
         }
@@ -581,6 +564,7 @@ impl<S> Audio<S> {
         self.recv_outcome_blocking()
     }
 
+    #[kithara::flash(true)]
     #[kithara::hang_watchdog]
     fn recv_outcome_blocking(&mut self) -> RecvOutcome {
         loop {
@@ -589,11 +573,7 @@ impl<S> Audio<S> {
                 self.wake_worker();
                 return RecvOutcome::Item(fetch);
             }
-            if self
-                .cancel
-                .as_ref()
-                .is_some_and(CancellationToken::is_cancelled)
-            {
+            if self.cancel.as_ref().is_some_and(CancelToken::is_cancelled) {
                 hang_reset!();
                 return RecvOutcome::Closed;
             }
@@ -604,16 +584,11 @@ impl<S> Audio<S> {
                 self.wake_worker();
                 return RecvOutcome::Item(fetch);
             }
-            if self
-                .cancel
-                .as_ref()
-                .is_some_and(CancellationToken::is_cancelled)
-            {
+            if self.cancel.as_ref().is_some_and(CancelToken::is_cancelled) {
                 hang_reset!();
                 return RecvOutcome::Closed;
             }
-            hang_tick!();
-            Self::wait_for_fetch();
+            hang_park!(Self::wait_for_fetch);
         }
     }
 
@@ -654,8 +629,9 @@ impl<S> Audio<S> {
     /// Seek to position in the audio stream.
     ///
     /// This method never blocks. Seek coordination flows entirely through
-    /// Timeline atomics (`FLUSH_START`/`FLUSH_STOP` pattern). The worker thread reads
-    /// the seek target and epoch from Timeline and applies the seek.
+    /// the shared seek-state atomics (`FLUSH_START`/`FLUSH_STOP` pattern). The
+    /// worker thread reads the seek target and epoch from the seek state and
+    /// applies the seek.
     ///
     /// Returns [`SeekOutcome::Landed`] when the reader is now parked
     /// at `position`; [`SeekOutcome::PastEof`] when the target is
@@ -669,8 +645,8 @@ impl<S> Audio<S> {
     /// `read()` / `next_chunk()`).
     #[kithara::hang_watchdog]
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        let epoch = self.timeline.initiate_seek(position);
-        self.timeline.mark_pending_seek_epoch(epoch);
+        let epoch = self.seek.begin(position);
+        self.seek.mark_pending(epoch);
         self.validator.epoch = epoch;
         self.recycle_current_chunk();
         self.current_chunk_consumed_frames = 0;
@@ -685,8 +661,8 @@ impl<S> Audio<S> {
             worker.wake();
         }
 
-        trace!(?position, epoch, "seek initiated via Timeline");
-        match self.timeline.total_duration() {
+        trace!(?position, epoch, "seek initiated via seek state");
+        match self.playhead.duration() {
             Some(duration) if position >= duration => {
                 debug_assert!(
                     position >= duration,
@@ -699,11 +675,9 @@ impl<S> Audio<S> {
             }
             _ => {
                 debug_assert!(
-                    self.timeline
-                        .total_duration()
-                        .is_none_or(|dur| position <= dur),
+                    self.playhead.duration().is_none_or(|dur| position <= dur),
                     "Audio::seek Landed contract: landed_at={position:?} > duration={:?}",
-                    self.timeline.total_duration(),
+                    self.playhead.duration(),
                 );
                 Ok(SeekOutcome::Landed {
                     target: position,
@@ -730,22 +704,26 @@ impl<S> Audio<S> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.is_preloaded()
+            self.is_preloaded() && !self.block_on_underrun
         }
     }
 
-    fn wait_for_fetch() {
+    /// Park the reader for at most `timeout`, woken early when the worker
+    /// signals `reader_wake`. `timeout` is the watchdog's remaining liveness
+    /// budget (see `hang_park!`): a genuine stall releases the park at the
+    /// deadline so the watchdog fires; progress unparks it first.
+    fn wait_for_fetch(timeout: Duration) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            park_timeout(Self::RECV_BACKOFF);
+            park_timeout(timeout);
         }
 
         #[cfg(target_arch = "wasm32")]
         {
             if is_worker_thread() {
-                park_timeout(Self::RECV_BACKOFF);
+                park_timeout(timeout);
             } else {
-                thread_sleep(Self::RECV_BACKOFF);
+                thread_sleep(timeout);
             }
         }
     }
@@ -782,7 +760,17 @@ impl<S> Audio<S> {
 }
 
 /// Specialized impl for Stream-based audio pipelines.
-///
+/// Host-threaded decoder construction deps shared by
+/// [`Audio::create_initial_decoder`] and [`Audio::create_decoder_factory`]:
+/// the decoder `backend` plus the host's `pcm_pool` / `byte_pool`. All
+/// required — the host's configured pools must reach the decoder, never a
+/// silent process-global fallback.
+struct DecoderDeps {
+    backend: kithara_decode::DecoderBackend,
+    pcm_pool: PcmPool,
+    byte_pool: BytePool,
+}
+
 /// Provides async constructor that creates Stream internally.
 /// Uses `StreamAudioSource` for automatic format change detection on ABR switch.
 impl<T> Audio<Stream<T>>
@@ -819,6 +807,7 @@ where
             engine_load: config_engine_load,
             decoder_backend,
             preload_chunks,
+            block_on_underrun,
             resampler_quality,
             stream: stream_config,
             bus: config_bus,
@@ -827,14 +816,16 @@ where
             gapless_mode: config_gapless_mode,
             cancel: config_cancel,
         } = config;
-        let cancel = config_cancel.unwrap_or_default();
+        let cancel = CancelScope::new(config_cancel).token();
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
-        let byte_pool = byte_pool.unwrap_or_else(|| kithara_bufpool::BytePool::default().clone());
+        let byte_pool = byte_pool.unwrap_or_else(|| BytePool::default().clone());
         let stream = Self::create_stream_with_probe(stream_config, byte_pool.clone()).await?;
 
         let initial_byte_len = stream.len().unwrap_or(0);
-        let timeline = stream.timeline();
+        let playhead = stream.playhead_write();
+        let seek = stream.seek_control();
+        let seek_obs = stream.seek_observe();
         let initial_media_info =
             merge_user_and_stream_media_info(user_media_info, stream.media_info());
         debug!(?initial_media_info, "Initial MediaInfo from stream");
@@ -848,19 +839,29 @@ where
             .and_then(|info| info.channels)
             .map_or(2, usize::from);
         Self::warm_pcm_pool(pool, warm_channels, pcm_buffer_chunks);
+        // The single up-front build reads through the blocking off-RT
+        // `Stream::read` adapter (waits for residual init lateness, cancel-
+        // bounded), then we disarm before the RT worker is registered so the
+        // decode loop the worker drives reads non-blocking via `probe_read`.
+        shared_stream.set_blocking(true);
+        let decoder_deps = DecoderDeps {
+            backend: decoder_backend,
+            pcm_pool: pool.clone(),
+            byte_pool: byte_pool.clone(),
+        };
         let decoder = Self::create_initial_decoder(
             shared_stream.clone(),
             initial_media_info.clone(),
             hint.clone(),
-            pool.clone(),
-            byte_pool.clone(),
-            decoder_backend,
+            &decoder_deps,
         )
-        .await?;
+        .await;
+        shared_stream.set_blocking(false);
+        let decoder = decoder?;
 
         let initial_spec = decoder.spec();
-        let total_duration = decoder.duration().or_else(|| timeline.total_duration());
-        timeline.set_total_duration(total_duration);
+        let total_duration = decoder.duration().or_else(|| playhead.duration());
+        playhead.set_duration(total_duration);
         let metadata = decoder.metadata();
 
         let epoch = Arc::new(AtomicU64::new(0));
@@ -883,23 +884,23 @@ where
         let interleaved = Self::alloc_interleaved_scratch(pool, output_spec);
 
         let emit = Self::create_emit(&bus);
-        let decoder_factory = Self::create_decoder_factory(
-            decoder_backend,
-            &epoch,
-            &byte_len_handle,
-            pool,
-            &byte_pool,
-        );
+        let decoder_factory = Self::create_decoder_factory(&decoder_deps, &epoch, &byte_len_handle);
         let initial_variant = initial_media_info.as_ref().and_then(|i| i.variant_index);
         let abr_handle = shared_stream.abr_handle();
+        // Retain a handle to inject the worker wake after the worker exists —
+        // `shared_stream` itself is moved into the source below. `SharedStream`
+        // is `Arc`-backed, so the clone shares the same inner stream/coord.
+        let wake_stream = shared_stream.clone();
         let audio_source = StreamAudioSource::new(
             shared_stream,
-            decoder,
-            decoder_factory,
-            initial_media_info,
+            DecodeInit {
+                decoder,
+                decoder_factory,
+                media_info: initial_media_info,
+                gapless_mode: config_gapless_mode,
+            },
             Arc::clone(&epoch),
             effects,
-            config_gapless_mode,
         )
         .with_emit(emit);
 
@@ -914,7 +915,7 @@ where
         let (trash_tx, trash_inlet) = Self::create_trash_channel(pcm_buffer_chunks);
 
         let (worker, is_standalone) = config_worker.map_or_else(
-            || (AudioWorkerHandle::with_cancel(cancel.child_token()), true),
+            || (AudioWorkerHandle::with_cancel(cancel.child()), true),
             |w| (w, false),
         );
 
@@ -930,8 +931,16 @@ where
             engine_load: config_engine_load,
         });
 
+        // Now that the worker exists, wire its data-arrival wake into the
+        // source: a segmented (HLS) source re-ticks the worker the instant
+        // segment bytes are written/committed, off the 10 ms scheduler poll.
+        // No-op for non-segmented sources (the default `set_worker_wake`).
+        wake_stream.set_worker_wake(Arc::new(WorkerWakeBridge(worker.clone())));
+
         Ok(Self {
-            timeline,
+            playhead,
+            seek,
+            seek_obs,
             metadata,
             bus,
             host_sample_rate,
@@ -953,6 +962,7 @@ where
             interleaved: Some(interleaved),
             pcm_pool: pool.clone(),
             preloaded: false,
+            block_on_underrun,
             last_progress_emit: None,
             track_id: Some(track_id),
             worker: Some(worker),
@@ -972,29 +982,28 @@ where
     }
 
     fn create_decoder_factory(
-        decoder_backend: kithara_decode::DecoderBackend,
+        deps: &DecoderDeps,
         epoch: &Arc<AtomicU64>,
         byte_len_handle: &Arc<AtomicU64>,
-        pool: &PcmPool,
-        byte_pool: &kithara_bufpool::BytePool,
     ) -> crate::pipeline::source::DecoderFactory<T> {
+        let decoder_backend = deps.backend;
         let factory_epoch = Arc::clone(epoch);
         let factory_byte_len = Arc::clone(byte_len_handle);
-        let factory_pool = pool.clone();
-        let factory_byte_pool = byte_pool.clone();
+        let factory_pool = deps.pcm_pool.clone();
+        let factory_byte_pool = deps.byte_pool.clone();
         Box::new(move |stream, info, base_offset| {
             let byte_len = stream
                 .len()
                 .map_or(0, |len| len.saturating_sub(base_offset));
             factory_byte_len.store(byte_len, Ordering::Release);
-            let config = kithara_decode::DecoderConfig::builder()
+            let config = DecoderConfig::builder()
                 .backend(decoder_backend)
                 .byte_len_handle(Arc::clone(&factory_byte_len))
                 .pcm_pool(factory_pool.clone())
                 .byte_pool(factory_byte_pool.clone())
                 .epoch(factory_epoch.load(Ordering::Acquire))
-                .maybe_segment_layout(stream.as_segment_layout())
-                .maybe_hooks(stream.take_reader_hooks())
+                .maybe_byte_map(stream.byte_map())
+                .maybe_hooks(stream.take_reader_event_sink())
                 .build();
             let source = OffsetReader::new(stream.clone(), base_offset);
             match DecoderFactory::create_from_media_info(source, info, config) {
@@ -1020,23 +1029,35 @@ where
         DeferredBus::new(bus.clone(), AUDIO_EVENT_CAPACITY)
     }
 
+    /// Build the initial decoder EXACTLY ONCE on a `spawn_blocking` thread
+    /// (off the real-time produce core). The construction read is a single
+    /// plain read through the source's blocking off-RT `Read` adapter
+    /// (`SharedStream` in blocking mode → [`Stream::read`]): the active
+    /// variant's init body has already been prefetched-and-committed by
+    /// `Hls::create`, so the build reads committed bytes; the blocking adapter
+    /// is the cancel-bounded safety net for residual lateness. There is NO
+    /// retry loop and NO readiness gate — a genuine terminal comes from the
+    /// stream layer (`Stream::read` → source `io::Error` / typed
+    /// `StreamPending`), never minted here. A `VariantChange`/`SeekPending` at
+    /// construction is a stream-state bug (the variant is settled before this
+    /// build; construction never calls `clear_variant_fence`), not a rebuild
+    /// trigger; a concurrent user seek is applied by the post-construction
+    /// seek path. See the crate `README.md` "Construction reads".
     async fn create_initial_decoder(
         shared_stream: SharedStream<T>,
         initial_media_info: Option<MediaInfo>,
         hint: Option<String>,
-        pcm_pool: PcmPool,
-        byte_pool: kithara_bufpool::BytePool,
-        decoder_backend: kithara_decode::DecoderBackend,
+        deps: &DecoderDeps,
     ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
-        let decoder_config = kithara_decode::DecoderConfig::builder()
-            .backend(decoder_backend)
+        let decoder_config = DecoderConfig::builder()
+            .backend(deps.backend)
             .byte_len_handle(byte_len_handle)
-            .pcm_pool(pcm_pool)
-            .byte_pool(byte_pool)
-            .maybe_segment_layout(shared_stream.as_segment_layout())
-            .maybe_hooks(shared_stream.take_reader_hooks())
+            .pcm_pool(deps.pcm_pool.clone())
+            .byte_pool(deps.byte_pool.clone())
+            .maybe_byte_map(shared_stream.byte_map())
+            .maybe_hooks(shared_stream.take_reader_event_sink())
             .maybe_hint(hint.clone())
             .build();
         let hint_for_decoder = hint;
@@ -1053,14 +1074,16 @@ where
             }
         })
         .await
-        .map_err(|e| DecodeError::Io(IoError::other(format!("decoder task panicked: {e}"))))??;
-        debug!("Audio::new — decoder created");
-        Ok(decoder)
+        .map_err(|e| DecodeError::Io(IoError::other(format!("decoder task panicked: {e}"))))?;
+        if decoder.is_ok() {
+            debug!("Audio::new — decoder created");
+        }
+        decoder
     }
 
     async fn create_stream_with_probe(
         stream_config: T::Config,
-        byte_pool: kithara_bufpool::BytePool,
+        byte_pool: BytePool,
     ) -> Result<Stream<T>, DecodeError> {
         let stream = Self::open_stream(stream_config).await?;
         Self::spawn_probe(stream, byte_pool).await
@@ -1121,51 +1144,15 @@ where
 
     fn probe_stream_blocking(
         mut stream: Stream<T>,
-        byte_pool: &kithara_bufpool::BytePool,
+        _byte_pool: &BytePool,
     ) -> Result<Stream<T>, DecodeError> {
-        let mut probe_buf = byte_pool.get_with(|b| b.resize(Self::PROBE_BUFFER_SIZE, 0));
-        Self::warm_probe_prefix(&mut stream, &mut probe_buf);
+        // No up-front warm read here: the single decoder build reads through
+        // the blocking off-RT `Stream::read` adapter (`SharedStream` in
+        // blocking mode), which waits for a slow prefix and surfaces a genuine
+        // source error (e.g. 503) directly. Reset the cursor to 0 so the build
+        // probes the container header from the start.
         stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
         Ok(stream)
-    }
-
-    /// Block (off-RT, on the `spawn_blocking` probe task) until the first
-    /// probe read succeeds, hits a hard error, or [`Self::PROBE_WARM_TIMEOUT`]
-    /// elapses.
-    ///
-    /// The read path is non-blocking-pull: a not-yet-downloaded range
-    /// surfaces as `ErrorKind::Interrupted`/`WouldBlock` immediately, and
-    /// each read attempt nudges the downloader (via `wait_range`'s
-    /// `wake_peer`). This mirrors the single warming read the blocking probe
-    /// performed before the non-blocking-pull conversion — it reads exactly
-    /// one probe buffer at offset 0, retrying with a short backoff until the
-    /// bytes land, then returns. It deliberately does NOT read forward past
-    /// the first buffer: advancing the cursor across a segment boundary here
-    /// would drive an ABR commit mid-construction. The caller seeks back to
-    /// 0 and the decoder probe reads the now-cached prefix.
-    fn warm_probe_prefix(stream: &mut Stream<T>, probe_buf: &mut [u8]) {
-        let deadline = kithara_platform::time::Instant::now() + Self::PROBE_WARM_TIMEOUT;
-        loop {
-            match stream.read(probe_buf) {
-                Ok(_) => return,
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
-                    ) =>
-                {
-                    if kithara_platform::time::Instant::now() >= deadline {
-                        tracing::debug!(?e, "warm_probe_prefix: timed out waiting for prefix");
-                        return;
-                    }
-                    park_timeout(Self::PROBE_WARM_BACKOFF);
-                }
-                Err(e) => {
-                    tracing::debug!(?e, "warm_probe_prefix: probe read failed");
-                    return;
-                }
-            }
-        }
     }
 
     fn resolve_event_bus(stream_config: &T::Config, config_bus: Option<EventBus>) -> EventBus {
@@ -1175,10 +1162,7 @@ where
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    async fn spawn_probe(
-        stream: Stream<T>,
-        byte_pool: kithara_bufpool::BytePool,
-    ) -> Result<Stream<T>, DecodeError> {
+    async fn spawn_probe(stream: Stream<T>, byte_pool: BytePool) -> Result<Stream<T>, DecodeError> {
         debug!("Audio::new — spawning probe task...");
         let result = spawn_blocking(move || Self::probe_stream_blocking(stream, &byte_pool))
             .await
@@ -1192,10 +1176,7 @@ where
     /// `!Send` because it holds JS-backed network streams. Probe runs
     /// inline on the calling task.
     #[cfg(target_arch = "wasm32")]
-    async fn spawn_probe(
-        stream: Stream<T>,
-        byte_pool: kithara_bufpool::BytePool,
-    ) -> Result<Stream<T>, DecodeError> {
+    async fn spawn_probe(stream: Stream<T>, byte_pool: BytePool) -> Result<Stream<T>, DecodeError> {
         debug!("Audio::new — running probe inline (wasm)...");
         let result = Self::probe_stream_blocking(stream, &byte_pool)?;
         debug!("Audio::new — probe done");
@@ -1258,13 +1239,15 @@ impl<S> Drop for Audio<S> {
     }
 }
 
-impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
+impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
     fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.abr_handle.clone()
     }
 
-    fn duration(&self) -> Option<Duration> {
-        Self::duration(self)
+    delegate! {
+        to self.playhead {
+            fn duration(&self) -> Option<Duration>;
+        }
     }
 
     fn event_bus(&self) -> &EventBus {
@@ -1307,13 +1290,14 @@ impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
             self.consumer_phase = ConsumerPhase::Playing;
         }
 
-        self.timeline
-            .advance_committed_chunk(&kithara_stream::ChunkPosition::from(&chunk.meta));
+        self.playhead.advance(&ChunkPosition::from(&chunk.meta));
         Ok(ChunkOutcome::Chunk(chunk))
     }
 
-    fn position(&self) -> Duration {
-        Self::position(self)
+    delegate! {
+        to self.playhead {
+            fn position(&self) -> Duration;
+        }
     }
 
     fn preload(&mut self) -> Result<(), DecodeError> {
@@ -1430,6 +1414,7 @@ mod tests {
         },
     };
 
+    use kithara_stream::{PlayheadState, SeekState};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -1437,18 +1422,22 @@ mod tests {
     fn empty_audio() -> Audio<()> {
         let (_data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(1, None);
         let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
+        let playhead = Arc::new(PlayheadState::new());
+        let seek = Arc::new(SeekState::new());
 
         Audio {
             pcm_rx,
             trash_tx,
             _epoch: Arc::new(AtomicU64::new(0)),
             validator: EpochValidator::default(),
-            spec: PcmSpec::default(),
+            spec: PcmMeta::default().spec,
             stretch: None,
             current_chunk: None,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
-            timeline: Timeline::new(),
+            playhead: Arc::clone(&playhead) as Arc<dyn PlayheadWrite>,
+            seek: Arc::clone(&seek) as Arc<dyn SeekControl>,
+            seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,
@@ -1458,6 +1447,7 @@ mod tests {
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             preload_gate: Arc::new(PreloadGate::default()),
             preloaded: false,
+            block_on_underrun: false,
             last_progress_emit: None,
             track_id: None,
             worker: None,
@@ -1481,7 +1471,7 @@ mod tests {
     #[kithara::test]
     fn blocking_recv_returns_closed_after_cancel() {
         let mut audio = empty_audio();
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         cancel.cancel();
         audio.cancel = Some(cancel);
 
@@ -1499,18 +1489,22 @@ mod tests {
     fn audio_with_channel() -> (Audio<()>, crate::runtime::Outlet<Fetch<PcmChunk>>) {
         let (data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(4, None);
         let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
+        let playhead = Arc::new(PlayheadState::new());
+        let seek = Arc::new(SeekState::new());
 
         let audio = Audio {
             pcm_rx,
             trash_tx,
             _epoch: Arc::new(AtomicU64::new(0)),
             validator: EpochValidator::default(),
-            spec: PcmSpec::default(),
+            spec: PcmMeta::default().spec,
             stretch: None,
             current_chunk: None,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
-            timeline: Timeline::new(),
+            playhead: Arc::clone(&playhead) as Arc<dyn PlayheadWrite>,
+            seek: Arc::clone(&seek) as Arc<dyn SeekControl>,
+            seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,
@@ -1520,6 +1514,7 @@ mod tests {
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             preload_gate: Arc::new(PreloadGate::default()),
             preloaded: true,
+            block_on_underrun: false,
             last_progress_emit: None,
             track_id: None,
             worker: None,
@@ -1534,8 +1529,8 @@ mod tests {
 
     fn make_chunk(samples: &[f32]) -> PcmChunk {
         let mut chunk = PcmChunk::default();
-        chunk.pcm.clear();
-        chunk.pcm.extend_from_slice(samples);
+        chunk.samples.clear();
+        chunk.samples.extend_from_slice(samples);
         chunk
     }
 
@@ -1598,7 +1593,7 @@ mod tests {
     #[kithara::test]
     fn consumer_phase_failed_on_channel_close() {
         let (mut audio, _tx) = audio_with_channel();
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         cancel.cancel();
         audio.cancel = Some(cancel);
         audio.preloaded = false;

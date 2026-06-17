@@ -10,12 +10,13 @@ use bon::Builder;
 use dashmap::DashMap;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
 use kithara_platform::{
-    Mutex, RwLock,
+    CancelToken,
+    sync::{Mutex, RwLock},
     time::{Duration, Instant},
 };
 use kithara_test_utils::kithara;
 
-use super::{peer::PeerEntry, throttle::EventThrottleCache};
+use super::peer::PeerEntry;
 use crate::{
     abr::Abr,
     estimator::{Estimator, ThroughputEstimator},
@@ -99,6 +100,10 @@ pub struct AbrController {
     pub(super) settings: AbrSettings,
     pub(super) estimator: Arc<dyn Estimator>,
     pub(super) self_weak: Weak<Self>,
+    /// Parent cancel gating this controller's background watches. Per-watch
+    /// incoherence tokens derive from it (`parent_cancel.child()`), so a parent
+    /// cancel (player/downloader teardown) gates every in-flight watch.
+    pub(super) parent_cancel: CancelToken,
     next_peer_id: AtomicU64,
     peers: DashMap<AbrPeerId, Arc<PeerEntry>>,
 }
@@ -108,9 +113,12 @@ impl AbrController {
     pub(super) const MIN_THROUGHPUT_SAMPLE_INTERVAL: Duration = Duration::from_millis(200);
 
     /// Create a new controller with the default [`ThroughputEstimator`].
+    ///
+    /// `cancel` is the parent token whose subtree gates this controller's
+    /// background incoherence watches.
     #[must_use]
-    pub fn new(settings: AbrSettings) -> Arc<Self> {
-        Self::with_estimator(settings, Arc::new(ThroughputEstimator::new()))
+    pub fn new(settings: AbrSettings, cancel: CancelToken) -> Arc<Self> {
+        Self::with_estimator(settings, Arc::new(ThroughputEstimator::new()), cancel)
     }
 
     pub(super) fn allocate_peer_id(&self) -> AbrPeerId {
@@ -170,15 +178,15 @@ impl AbrController {
         let id = self.allocate_peer_id();
         let state = peer.state();
         let peer_weak = Arc::downgrade(peer);
-        let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::new(None));
+        let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
         let entry = Arc::new(PeerEntry {
             peer_weak,
             bus: Arc::clone(&bus),
             variants_registered_published: AtomicBool::new(false),
             bytes_downloaded: AtomicU64::new(0),
-            incoherence_cancel: Mutex::new(None),
-            last_variant_switch: Mutex::new(None),
-            throttle: Mutex::new(EventThrottleCache::default()),
+            incoherence_cancel: Mutex::default(),
+            last_variant_switch: Mutex::default(),
+            throttle: Mutex::default(),
             state: state.clone(),
         });
         self.peers.insert(id, entry);
@@ -200,7 +208,7 @@ impl AbrController {
     /// Called from [`AbrHandle::drop`].
     pub(crate) fn unregister(&self, id: AbrPeerId) {
         if let Some((_, entry)) = self.peers.remove(&id)
-            && let Some(token) = entry.incoherence_cancel.lock_sync().take()
+            && let Some(token) = entry.incoherence_cancel.lock().take()
         {
             token.cancel();
         }
@@ -209,12 +217,17 @@ impl AbrController {
     /// Create a new controller with a custom estimator. Used in tests to
     /// inject a mock.
     #[must_use]
-    pub fn with_estimator(settings: AbrSettings, estimator: Arc<dyn Estimator>) -> Arc<Self> {
+    pub fn with_estimator(
+        settings: AbrSettings,
+        estimator: Arc<dyn Estimator>,
+        cancel: CancelToken,
+    ) -> Arc<Self> {
         Self::seed_estimator(&settings, &estimator);
         Arc::new_cyclic(|weak| Self {
             settings,
             estimator,
             self_weak: weak.clone(),
+            parent_cancel: cancel,
             next_peer_id: AtomicU64::new(0),
             peers: DashMap::new(),
         })

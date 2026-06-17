@@ -20,9 +20,11 @@ pub(crate) struct RtenModel {
     output_ids: Vec<NodeId>,
 }
 
-impl RtenModel {
-    /// Load a model from ONNX bytes; `name` tags load errors.
-    pub(crate) fn from_bytes(name: &'static str, bytes: &[u8]) -> Result<Self, BeatError> {
+/// Load a model from ONNX bytes; `name` tags load errors.
+impl TryFrom<(&'static str, &[u8])> for RtenModel {
+    type Error = BeatError;
+
+    fn try_from((name, bytes): (&'static str, &[u8])) -> Result<Self, BeatError> {
         let model = RtenGraph::load(bytes.to_vec()).map_err(|e| BeatError::ModelLoad {
             model: name,
             reason: e.to_string(),
@@ -57,7 +59,9 @@ impl RtenModel {
             output_ids,
         })
     }
+}
 
+impl RtenModel {
     /// Run inference with named inputs, return named outputs.
     pub(crate) fn run(
         &mut self,

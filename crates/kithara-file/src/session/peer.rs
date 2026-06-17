@@ -1,5 +1,6 @@
 use std::{
     io,
+    io::Error,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -11,7 +12,7 @@ use kithara_abr::Abr;
 use kithara_assets::{ProducerHandle, ReadSide, WriteSide};
 use kithara_events::{FileError, FileEvent};
 use kithara_net::{Headers, NetError, RangeSpec, Retryability};
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use kithara_storage::ResourceStatus;
 use kithara_stream::{
     MediaInfo,
@@ -62,7 +63,7 @@ impl FilePeer {
         let Some(lease) = self.inner.demand_lease.as_ref() else {
             return true;
         };
-        let mut producer = self.producer.lock_sync();
+        let mut producer = self.producer.lock();
         if producer.is_some() {
             return true;
         }
@@ -86,11 +87,11 @@ impl FilePeer {
         let writer = Box::new(move |chunk: &[u8]| -> io::Result<()> {
             let pos = writer_offset.fetch_add(chunk.len() as u64, Ordering::Relaxed);
             let Some(raw) = raw.as_ref() else {
-                return Err(io::Error::other(
+                return Err(Error::other(
                     "file resource has no writer (already committed or read-only)",
                 ));
             };
-            raw.write_at(pos, chunk).map_err(io::Error::other)?;
+            raw.write_at(pos, chunk).map_err(Error::other)?;
             coord_writer.set_download_pos(pos + chunk.len() as u64);
             Ok(())
         });
@@ -161,7 +162,7 @@ impl Peer for FilePeer {
     }
 
     fn priority(&self) -> RequestPriority {
-        if self.inner.source.coord.timeline().is_playing() {
+        if self.inner.source.coord.activity().is_playing() {
             RequestPriority::High
         } else {
             RequestPriority::Low

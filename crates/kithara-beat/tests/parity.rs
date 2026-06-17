@@ -50,8 +50,8 @@ fn report(kind: &str, s: &Score) {
 #[test]
 fn python_parity_small_model() {
     let pcm = load_pcm_fixture();
-    let mut bt = BeatThis::from_model_bytes(MEL_MODEL_BYTES, BEAT_MODEL_BYTES)
-        .unwrap_or_else(|e| panic!("from_model_bytes failed: {e}"));
+    let mut bt = BeatThis::try_from((MEL_MODEL_BYTES, BEAT_MODEL_BYTES))
+        .unwrap_or_else(|e| panic!("BeatThis::try_from failed: {e}"));
     let raw = bt
         .analyze(&pcm)
         .unwrap_or_else(|e| panic!("analyze failed: {e}"));

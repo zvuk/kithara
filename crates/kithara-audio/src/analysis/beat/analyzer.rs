@@ -17,13 +17,6 @@ use crate::{analysis::analyzer::Analyzer, waveform::BeatGrid};
 /// paid once at registration, the worker runs one analysis at a time.
 pub(crate) type SharedBeatDetector = Arc<Mutex<Box<dyn BeatDetector>>>;
 
-/// The detector's contractual input rate (`BeatDetector::detect`).
-const TARGET_RATE: u32 = 22_050;
-
-/// Input frames per resampler block. Off-line analysis: latency-free, so a
-/// comfortable block keeps FFT overhead low.
-const BLOCK_FRAMES: usize = 1024;
-
 /// Streaming front-end for beat detection: downmixes interleaved PCM to
 /// mono and incrementally resamples it to the detector's 22 050 Hz input
 /// rate. `finalize` flushes the resampler tail, runs the detector, and
@@ -43,9 +36,16 @@ enum MonoFeed {
 }
 
 impl BeatAnalyzer {
+    /// The detector's contractual input rate (`BeatDetector::detect`).
+    const TARGET_RATE: u32 = 22_050;
+
+    /// Input frames per resampler block. Off-line analysis: latency-free, so a
+    /// comfortable block keeps FFT overhead low.
+    const BLOCK_FRAMES: usize = 1024;
+
     #[must_use]
     pub(crate) fn new(source_rate: u32, params: GridParams) -> Self {
-        let feed = if source_rate == TARGET_RATE {
+        let feed = if source_rate == Self::TARGET_RATE {
             MonoFeed::Pass(Vec::new())
         } else {
             MonoResampler::new(source_rate).map_or(MonoFeed::Broken, MonoFeed::Resample)
@@ -122,8 +122,8 @@ impl MonoResampler {
     fn new(source_rate: u32) -> Option<Self> {
         let fft = Fft::<f32>::new(
             source_rate.to_usize()?,
-            TARGET_RATE.to_usize()?,
-            BLOCK_FRAMES,
+            BeatAnalyzer::TARGET_RATE.to_usize()?,
+            BeatAnalyzer::BLOCK_FRAMES,
             2,
             1,
             FixedSync::Input,
@@ -140,7 +140,7 @@ impl MonoResampler {
 
         Some(Self {
             fft: Box::new(fft),
-            ratio: f64::from(TARGET_RATE) / f64::from(source_rate),
+            ratio: f64::from(BeatAnalyzer::TARGET_RATE) / f64::from(source_rate),
             delay,
             pending: Vec::new(),
             input_block: vec![Vec::new()],
@@ -244,11 +244,11 @@ impl Analyzer for BeatPass {
 
     fn push(&mut self, chunk: &PcmChunk) {
         let channels = usize::from(chunk.spec().channels.max(1));
-        self.analyzer.push_interleaved(&chunk.pcm[..], channels);
+        self.analyzer.push_interleaved(&chunk.samples[..], channels);
     }
 
     fn finish(self) -> Option<BeatGrid> {
-        let mut detector = self.detector.lock_sync();
+        let mut detector = self.detector.lock();
         match self.analyzer.finalize(detector.as_mut()) {
             Ok(grid) => Some(grid),
             Err(e) => {
@@ -273,8 +273,12 @@ mod tests {
     };
     use crate::analysis::beat::GridParams;
 
-    const SRC: u32 = 44_100;
-    const TARGET: usize = 22_050;
+    struct Consts;
+
+    impl Consts {
+        const SRC: u32 = 44_100;
+        const TARGET: usize = 22_050;
+    }
 
     fn empty_raw() -> RawBeats {
         RawBeats {
@@ -328,13 +332,13 @@ mod tests {
             let t: f32 = n.as_();
             0.5 * (step * t).sin()
         });
-        let mut analyzer = BeatAnalyzer::new(SRC, GridParams::default());
+        let mut analyzer = BeatAnalyzer::new(Consts::SRC, GridParams::default());
         push_chunked(&mut analyzer, &pcm, 1000);
 
         let mut detector = detector(|mono| {
             assert_eq!(
                 mono.len(),
-                2 * TARGET,
+                2 * Consts::TARGET,
                 "every input frame must reach the detector at 22 050 Hz"
             );
             let whole = rms(mono);
@@ -357,16 +361,16 @@ mod tests {
         // 1 s silence then 1 s of DC 0.5: the step must sit at output
         // sample ~22050. An untrimmed resampler delay shifts it late.
         let pcm = stereo(2 * 44_100, |n| if n < 44_100 { 0.0 } else { 0.5 });
-        let mut analyzer = BeatAnalyzer::new(SRC, GridParams::default());
+        let mut analyzer = BeatAnalyzer::new(Consts::SRC, GridParams::default());
         push_chunked(&mut analyzer, &pcm, 4096);
 
         let mut detector = detector(|mono| {
-            assert_eq!(mono.len(), 2 * TARGET);
+            assert_eq!(mono.len(), 2 * Consts::TARGET);
             let crossing = mono
                 .iter()
                 .position(|s| s.abs() > 0.25)
                 .expect("the step must appear in the output");
-            let expected = TARGET;
+            let expected = Consts::TARGET;
             assert!(
                 crossing.abs_diff(expected) <= 64,
                 "step must stay at its source position: got {crossing}, want ~{expected}"
@@ -384,11 +388,11 @@ mod tests {
             pcm.push(0.8);
             pcm.push(-0.8);
         }
-        let mut analyzer = BeatAnalyzer::new(SRC, GridParams::default());
+        let mut analyzer = BeatAnalyzer::new(Consts::SRC, GridParams::default());
         analyzer.push_interleaved(&pcm, 2);
 
         let mut detector = detector(|mono| {
-            assert_eq!(mono.len(), TARGET);
+            assert_eq!(mono.len(), Consts::TARGET);
             let peak = mono.iter().fold(0.0_f32, |a, s| a.max(s.abs()));
             assert!(peak < 0.05, "cancelling stereo must downmix to ~0: {peak}");
             empty_raw()
@@ -451,7 +455,7 @@ mod tests {
 
     #[kithara::test]
     fn detector_failure_propagates() {
-        let mut analyzer = BeatAnalyzer::new(SRC, GridParams::default());
+        let mut analyzer = BeatAnalyzer::new(Consts::SRC, GridParams::default());
         analyzer.push_interleaved(&stereo(4096, |_| 0.1), 2);
         let mut detector =
             Unimock::new(BeatDetectorMock.next_call(matching!(_)).answers(&|_, _| {

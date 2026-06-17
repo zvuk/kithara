@@ -1,5 +1,5 @@
 use iced::{
-    Alignment, Background, Border, Element, Length, Theme,
+    Alignment, Background, Border, Color, Element, Length, Theme,
     font::Weight,
     widget::{
         Row, Space, button,
@@ -101,10 +101,12 @@ fn fader_cell(index: usize, total: usize, value: f32, p: GuiPalette) -> Element<
                 .color(p.text_dim),
             widgets::vfader(
                 index,
-                value,
-                EQ_MIN_DB,
-                EQ_MAX_DB,
-                studio_size::FADER_HEIGHT,
+                widgets::VFaderParams {
+                    value,
+                    min: EQ_MIN_DB,
+                    max: EQ_MAX_DB,
+                    height: studio_size::FADER_HEIGHT,
+                },
                 p,
             ),
             text(eq_band_label(index, total))
@@ -261,7 +263,7 @@ fn transport_secondary_style(p: GuiPalette, status: ButtonStatus) -> ButtonStyle
         ButtonStatus::Hovered => Some(Background::Color(with_alpha(p.bg_panel_2, 0.6))),
         ButtonStatus::Pressed => Some(Background::Color(with_alpha(p.bg_panel_2, 0.45))),
         ButtonStatus::Active | ButtonStatus::Disabled => {
-            Some(Background::Color(iced::Color::TRANSPARENT))
+            Some(Background::Color(Color::TRANSPARENT))
         }
     };
 

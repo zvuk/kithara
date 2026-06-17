@@ -7,8 +7,8 @@ use kithara_abr::AbrMode;
 use kithara_assets::{BytePool, StoreOptions};
 use kithara_drm::KeyProcessorRegistry;
 use kithara_events::EventBus;
-use kithara_net::Headers;
-use kithara_platform::CancellationToken;
+use kithara_net::{Headers, NetOptions};
+use kithara_platform::CancelToken;
 use kithara_stream::dl::Downloader;
 use url::Url;
 
@@ -78,14 +78,25 @@ pub struct HlsConfig {
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
     pub bus: Option<EventBus>,
-    /// Cancellation token for graceful shutdown. The master `CancellationToken` whose
+    /// Cancellation token for graceful shutdown. The master `CancelToken` whose
     /// shared atomic mirror reaches [`HlsCoord`](crate::coord::HlsCoord)'s
     /// lock-free `is_cancelled()` read on the produce-core; the async-only
     /// downloader / net / asset paths derive children from its inner
-    /// [`CancellationToken`](kithara_platform::CancellationToken).
-    pub cancel: Option<CancellationToken>,
+    /// [`CancelToken`](kithara_platform::CancelToken).
+    pub cancel: Option<CancelToken>,
     /// Shared downloader (created lazily if not provided).
     pub downloader: Option<Downloader>,
+    /// Net options (idle/stall `inactivity_timeout`, `retry_policy`,
+    /// compression) for the HTTP client built when no [`downloader`] is
+    /// injected. Ignored when [`downloader`] is provided — the injected
+    /// downloader already carries its own client. Defaults to
+    /// [`NetOptions::default`]; lower the `inactivity_timeout` to bound a
+    /// withheld-body fetch sooner (the net resilient body owns the stall
+    /// and retries, then settles the segment terminally).
+    ///
+    /// [`downloader`]: Self::downloader
+    #[builder(default)]
+    pub net_options: NetOptions,
     /// Additional HTTP headers to include in all requests.
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
@@ -152,6 +163,7 @@ impl fmt::Debug for HlsConfig {
                 &self.head_estimation_concurrency,
             )
             .field("size_probe_method", &self.size_probe_method)
+            .field("net_options", &self.net_options)
             .finish_non_exhaustive()
     }
 }

@@ -12,7 +12,7 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
     rt_cancel, temp_dir,
 };
-use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -47,10 +47,7 @@ impl Consts {
     env(KITHARA_HANG_TIMEOUT_SECS = "1"),
     tracing("kithara_hls=debug,kithara_stream=debug,kithara_decode=debug")
 )]
-async fn seek_beyond_head_total_within_actual_total(
-    temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
-) {
+async fn seek_beyond_head_total_within_actual_total(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
         segments_per_variant: Consts::NUM_SEGMENTS,

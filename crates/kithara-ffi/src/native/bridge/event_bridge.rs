@@ -1,9 +1,14 @@
 use std::sync::Arc;
 
-use kithara::play::PlayerEvent;
-use kithara_events::{Event, EventReceiver, QueueEvent, TrackStatus};
+use kithara::play::{PlayerEvent, TimeControlStatus};
+use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_platform::{
-    CancellationToken, Duration, JoinHandle, Mutex, sleep, spawn, tokio, tokio::sync::broadcast,
+    CancelToken,
+    sync::Mutex,
+    thread::{JoinHandle, sleep, spawn},
+    time::Duration,
+    tokio,
+    tokio::sync::broadcast,
 };
 use kithara_queue::Queue;
 
@@ -14,7 +19,7 @@ use crate::{
 };
 
 pub(crate) struct EventBridge {
-    cancel: CancellationToken,
+    cancel: CancelToken,
     time_thread: Option<JoinHandle<()>>,
 }
 
@@ -29,7 +34,7 @@ impl EventBridge {
         observer: &Arc<dyn PlayerObserver>,
         queue: &Arc<Queue>,
         items: &Arc<Mutex<ItemRegistry>>,
-        last_current: &Mutex<Option<kithara_events::TrackId>>,
+        last_current: &Mutex<Option<TrackId>>,
         event: &Event,
     ) {
         match event {
@@ -42,7 +47,7 @@ impl EventBridge {
             }
             Event::Queue(qe) => {
                 if let QueueEvent::CurrentTrackChanged { id } = qe {
-                    let mut prev = last_current.lock_sync();
+                    let mut prev = last_current.lock();
                     *prev = *id;
                 }
                 Self::dispatch_queue_event(observer, items, qe);
@@ -58,11 +63,11 @@ impl EventBridge {
     ) {
         match event {
             QueueEvent::CurrentTrackChanged { id } => {
-                let item_id = id.and_then(|tid| items.lock_sync().get(&tid).map(|i| i.audio_id()));
+                let item_id = id.and_then(|tid| items.lock().get(&tid).map(|i| i.audio_id()));
                 observer.on_event(FfiPlayerEvent::CurrentItemChanged { item_id });
             }
             QueueEvent::TrackStatusChanged { id, status } => {
-                let Some(item) = items.lock_sync().get(id).cloned() else {
+                let Some(item) = items.lock().get(id).cloned() else {
                     return;
                 };
                 let item_id = item.audio_id();
@@ -128,7 +133,7 @@ impl EventBridge {
                 item_id: item_id
                     .as_ref()
                     .and_then(|s| s.parse::<u64>().ok())
-                    .map(kithara_events::TrackId::from),
+                    .map(TrackId::from),
             },
             _ => return None,
         })
@@ -142,21 +147,21 @@ impl EventBridge {
     fn route_player_event_to_item(
         items: &Arc<Mutex<ItemRegistry>>,
         queue: &Arc<Queue>,
-        last_current: &Mutex<Option<kithara_events::TrackId>>,
+        last_current: &Mutex<Option<TrackId>>,
         event: &PlayerEvent,
     ) {
         let target = match event {
             PlayerEvent::ItemDidPlayToEnd { .. } | PlayerEvent::ItemDidFail { .. } => {
-                *last_current.lock_sync()
+                *last_current.lock()
             }
             PlayerEvent::TimeControlStatusChanged {
-                status: kithara::play::TimeControlStatus::WaitingToPlay,
+                status: TimeControlStatus::WaitingToPlay,
                 ..
             } => queue.current().map(|entry| entry.id),
             _ => return,
         };
         let Some(track_id) = target else { return };
-        let Some(item) = items.lock_sync().get(&track_id).cloned() else {
+        let Some(item) = items.lock().get(&track_id).cloned() else {
             return;
         };
         let Some(item_obs) = item.observer() else {
@@ -201,7 +206,7 @@ impl EventBridge {
         observer: Arc<dyn PlayerObserver>,
         queue: Arc<Queue>,
         items: &Arc<Mutex<ItemRegistry>>,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> Self {
         let last_current = Arc::new(Mutex::new(None));
         Self::spawn_event_task(
@@ -225,8 +230,8 @@ impl EventBridge {
         observer: Arc<dyn PlayerObserver>,
         queue: Arc<Queue>,
         items: Arc<Mutex<ItemRegistry>>,
-        last_current: Arc<Mutex<Option<kithara_events::TrackId>>>,
-        cancel: CancellationToken,
+        last_current: Arc<Mutex<Option<TrackId>>>,
+        cancel: CancelToken,
     ) {
         crate::FFI_RUNTIME.spawn(async move {
             loop {
@@ -257,7 +262,7 @@ impl EventBridge {
     fn spawn_time_thread(
         queue: Arc<Queue>,
         observer: Arc<dyn PlayerObserver>,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> JoinHandle<()> {
         spawn(move || {
             let interval = Duration::from_millis(Self::TIME_POLL_INTERVAL_MS);

@@ -1,0 +1,63 @@
+id: arch.no-direct-time
+message: |
+  Direct use of a non-platform clock/timer. All time must go through
+  `kithara_platform::time` — it is the single time chokepoint, and routing
+  every clock/duration/sleep/timeout through it is what lets the platform
+  crate (and only it) substitute a virtual clock for deterministic, fast
+  tests, while keeping wasm32 building.
+
+  Banned roots and their replacements:
+  - `std::time::{Instant, Duration}`  → `kithara_platform::time::{Instant, Duration}`
+    (`std::time::Instant::now()` panics on wasm32 — no monotonic clock via std).
+  - `web_time::{Instant, ...}`        → `kithara_platform::time::Instant`
+    (`web_time` is the wasm backing of the platform clock; platform-internal only).
+  - `tokio::time::{sleep, timeout, Instant, interval, ...}` → `kithara_platform::time::{sleep, timeout, Instant}`
+    (a direct tokio timer is a second, un-virtualizable clock; the platform
+    delegates to tokio on native, so this is a behaviour-preserving swap).
+
+      // ❌  use std::{sync::Arc, time::Duration};   use tokio::time::sleep;
+      // ✅  use std::sync::Arc;  use kithara_platform::time::{Duration, sleep};
+
+  Blocking thread waits (`std::thread::{sleep, park_timeout}`) are a sibling
+  ban — see `arch.no-direct-thread-wait`.
+
+  This matches GROUPED imports too (`use std::{..., time::Duration}`), which a
+  plain `std::time::Duration` pattern misses — that blind spot is exactly how
+  these leaks survived a prior migration.
+
+  This is an ERROR gate covering ALL workspace Rust — production AND tests.
+  Tests are NOT exempt: they are exactly the consumers that need the virtual
+  clock.
+
+  Suppress with `// ast-grep-ignore: arch.no-direct-time` ONLY when an
+  external API explicitly requires the foreign type (e.g. a trait signature
+  taking `std::time::Duration`, or `tokio::time::interval` with no platform
+  equivalent on a native-only path).
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+ignores:
+  # The platform crate OWNS the time primitive — it is the one place allowed
+  # to reference std::time / web_time / tokio::time directly so it can bind
+  # the single `kithara_platform::time` API to a real or virtual clock.
+  - crates/kithara-platform/**
+  # The test-macro crate names these only in doc comments and inside `quote!`
+  # token streams it emits (hygienic `::std::time::Duration`); rewriting those
+  # would force a kithara-platform dependency onto every macro consumer.
+  - crates/kithara-test-macros/**
+rule:
+  any:
+    # Imports (flat OR grouped/multi-line) pulling a `time` segment from a
+    # foreign root. `\btime\b` ignores `runtime`; the `std|tokio` anchor
+    # ignores `kithara_platform::time` re-exports.
+    - kind: use_declaration
+      regex: '\b(std|tokio)::(time\b|\{[\s\S]*\btime\b)'
+    # Any `web_time` import (the wasm backing — platform-internal only).
+    - kind: use_declaration
+      regex: '\bweb_time\b'
+    # Qualified usages in expression/type position (contiguous paths).
+    - pattern: std::time::$$$REST
+    - pattern: tokio::time::$$$REST
+    - pattern: web_time::$$$REST

@@ -16,8 +16,8 @@ use kithara_decode::{DecodeError, DecoderBackend};
 use kithara_events::EventBus;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::{HlsConfig, HlsStore, KeyOptions, SizeProbeMethod};
-use kithara_net::Headers;
-use kithara_platform::CancellationToken;
+use kithara_net::{Headers, HttpClient};
+use kithara_platform::{CancelScope, CancelToken};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use portable_atomic::AtomicF32;
 use url::Url;
@@ -98,11 +98,11 @@ pub struct ResourceConfig {
     pub bus: Option<EventBus>,
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
-    /// Cancellation token for graceful shutdown. The master `CancellationToken` whose
-    /// shared atomic mirror reaches the HLS coord's lock-free `is_cancelled()`
-    /// read; the async-only downloader / file / decode paths take its inner
-    /// `CancellationToken` via [`CancellationToken::token`].
-    pub cancel: Option<CancellationToken>,
+    /// Per-track parent cancel. The atomic flag reaches the HLS coord's
+    /// lock-free `is_cancelled()` read; downloader / file / decode paths derive
+    /// children via [`CancelToken::child`]. `None` lets each subsystem own a
+    /// standalone scope (see [`CancelScope::new`](kithara_platform::CancelScope)).
+    pub cancel: Option<CancelToken>,
     /// Shared downloader instance.
     pub downloader: Option<Downloader>,
     /// Shared flush coordinator for `AssetStore` on-disk indexes.
@@ -195,14 +195,8 @@ impl ResourceConfig {
             )
             .build();
         let downloader = self.downloader.clone().unwrap_or_else(|| {
-            let dl_cancel = self
-                .cancel
-                .as_ref()
-                .map_or_else(CancellationToken::default, CancellationToken::child_token);
-            let client = kithara_net::HttpClient::new(
-                kithara_net::NetOptions::default(),
-                dl_cancel.child_token(),
-            );
+            let dl_cancel = CancelScope::new(self.cancel.clone()).token();
+            let client = HttpClient::new(kithara_net::NetOptions::default(), dl_cancel.child());
             Downloader::new(
                 DownloaderConfig::for_client(client)
                     .cancel(dl_cancel)
@@ -473,7 +467,7 @@ mod tests {
 
     #[kithara::test]
     fn config_with_worker_sets_field() {
-        let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
         let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
             .worker(worker.clone())
@@ -484,7 +478,7 @@ mod tests {
 
     #[kithara::test]
     fn config_worker_propagates_to_file_config() {
-        let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
         let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
             .worker(worker.clone())
@@ -496,7 +490,7 @@ mod tests {
 
     #[kithara::test]
     fn config_worker_propagates_to_hls_config() {
-        let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
         let config = ResourceConfig::for_src("https://example.com/live.m3u8")
             .unwrap()
             .worker(worker.clone())

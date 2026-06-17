@@ -5,10 +5,15 @@ use kithara_assets::{
     ReadSide, ResourceKey, StoreOptions, WriteSide, asset_root_for_url,
 };
 use kithara_events::EventBus;
-use kithara_platform::{CancellationToken, Mutex, time::Duration, tokio};
+use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::{
+    CancelScope, CancelToken,
+    sync::Mutex,
+    time::{Duration, sleep},
+};
 use kithara_storage::StorageError;
 use kithara_stream::{
-    AudioCodec, SourceError as StreamSourceError, StreamType, Timeline,
+    AudioCodec, PlayheadState, SeekState, SourceError as StreamSourceError, StreamType,
     dl::{Downloader, DownloaderConfig},
 };
 use kithara_test_utils::kithara;
@@ -31,7 +36,7 @@ impl StreamType for File {
     type Source = FileSource;
 
     async fn create(config: Self::Config) -> Result<Self::Source, StreamSourceError> {
-        let cancel = config.cancel.clone().unwrap_or_default();
+        let cancel = CancelScope::new(config.cancel.clone()).token();
         let src = config.src.clone();
 
         match src {
@@ -52,7 +57,7 @@ impl File {
     fn create_local(
         path: PathBuf,
         config: FileConfig,
-        cancel: &CancellationToken,
+        cancel: &CancelToken,
     ) -> Result<FileSource, SourceError> {
         if !path.exists() {
             return Err(SourceError::InvalidPath(format!(
@@ -73,8 +78,10 @@ impl File {
             .bus
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
-        let timeline = Timeline::new();
-        let coord = Arc::new(FileCoord::new(timeline));
+        let coord = Arc::new(FileCoord::new(
+            Arc::new(PlayheadState::new()),
+            Arc::new(SeekState::new()),
+        ));
         coord.set_total_bytes(len);
         let total = len.unwrap_or(0);
         coord.set_download_pos(total);
@@ -87,7 +94,7 @@ impl File {
             bus,
             store,
             key,
-            cancel.child_token(),
+            cancel.child(),
             cached_codec,
         ))
     }
@@ -101,7 +108,7 @@ impl File {
     fn create_remote(
         url: url::Url,
         config: FileConfig,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> Result<FileSource, SourceError> {
         let from_config = config.name.as_deref();
         let from_query = url.query();
@@ -109,11 +116,8 @@ impl File {
         let asset_root = asset_root_for_url(&url, name_or_query);
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
-            let cancel_for_dl = cancel.child_token();
-            let client = kithara_net::HttpClient::new(
-                kithara_net::NetOptions::default(),
-                cancel_for_dl.child_token(),
-            );
+            let cancel_for_dl = cancel.child();
+            let client = HttpClient::new(NetOptions::default(), cancel_for_dl.child());
             Downloader::new(
                 DownloaderConfig::for_client(client)
                     .cancel(cancel_for_dl)
@@ -139,8 +143,10 @@ impl File {
             config.event_channel_capacity,
         )?;
 
-        let timeline = Timeline::new();
-        let coord = Arc::new(FileCoord::new(timeline));
+        let coord = Arc::new(FileCoord::new(
+            Arc::new(PlayheadState::new()),
+            Arc::new(SeekState::new()),
+        ));
 
         // `Ready` means the file is already committed in the cache — no
         // download. `Pending` hands the single non-Clone commit owner to the
@@ -158,7 +164,7 @@ impl File {
                     bus,
                     backend,
                     key,
-                    cancel.child_token(),
+                    cancel.child(),
                     cached_codec,
                 ));
             }
@@ -225,7 +231,7 @@ impl File {
     async fn create_remote_wait_for_claim(
         url: url::Url,
         config: FileConfig,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> Result<FileSource, StreamSourceError> {
         /// Bounded poll interval while a sibling `AssetStore` instance holds
         /// the atomic-chunked tmp for the same canonical path. Short enough
@@ -248,7 +254,7 @@ impl File {
                         last_len = len;
                         hang_reset!();
                     }
-                    tokio::time::sleep(TMP_CLAIMED_POLL_INTERVAL).await;
+                    sleep(TMP_CLAIMED_POLL_INTERVAL).await;
                 }
                 Err(e) => return Err(StreamSourceError::from(e)),
             }
@@ -264,10 +270,7 @@ impl File {
 /// master so a shutdown cascades through the store. Also the standalone
 /// fallback when no store is injected (single consumer).
 #[must_use]
-pub fn build_shared_asset_store(
-    store: &StoreOptions,
-    cancel: CancellationToken,
-) -> Arc<AssetStore<()>> {
+pub fn build_shared_asset_store(store: &StoreOptions, cancel: CancelToken) -> Arc<AssetStore<()>> {
     let mut builder = AssetStoreBuilder::new()
         .cancel(cancel)
         .root_dir(&store.cache_dir)

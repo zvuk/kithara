@@ -9,7 +9,7 @@ use kithara_assets::{
 };
 use kithara_events::EventBus;
 use kithara_net::Headers;
-use kithara_platform::{CancellationToken, Mutex};
+use kithara_platform::{CancelToken, sync::Mutex};
 use kithara_stream::MediaInfo;
 use url::Url;
 
@@ -63,7 +63,7 @@ pub(crate) enum FilePhase {
 /// Control-plane handles shared between the source and the download driver.
 pub(crate) struct FileSourceCtx {
     pub(crate) coord: Arc<FileCoord>,
-    pub(crate) cancel: CancellationToken,
+    pub(crate) cancel: CancelToken,
     pub(crate) bus: EventBus,
 }
 
@@ -148,7 +148,7 @@ impl FileInner {
     /// Take the single commit-owning writer, if this is a download path and it
     /// has not been consumed yet.
     pub(crate) fn take_writer(&self) -> Option<AssetWriter> {
-        self.asset.writer.lock_sync().take()
+        self.asset.writer.lock().take()
     }
 
     /// Mark the resource failed and evict the pre-allocated cache file.
@@ -166,7 +166,7 @@ impl FileInner {
     }
 
     /// Lock-free FSM transition. The one-shot fragmented-mp4 parse runs
-    /// on the `Complete` edge so the hot-path `as_segment_layout` audit
+    /// on the `Complete` edge so the hot-path `byte_map` audit
     /// can short-circuit on `segment_index.get()` without re-reading the
     /// file each tick.
     pub(crate) fn set_phase(&self, phase: FilePhase) {
@@ -179,7 +179,7 @@ impl FileInner {
     /// One-shot fragmented-mp4 parse from the fully cached file bytes.
     /// Idempotent: a second call is a `OnceLock::get` fast-path no-op.
     /// Called from `set_phase(Complete)` (and from `new` for files
-    /// constructed already-complete) so the hot-path `as_segment_layout`
+    /// constructed already-complete) so the hot-path `byte_map`
     /// audit only ever reads the cached result.
     fn try_build_segment_index(&self) {
         if self.segment_index.get().is_some() {

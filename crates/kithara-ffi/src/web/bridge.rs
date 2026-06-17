@@ -42,7 +42,7 @@ impl WorkerBridge {
     const NO_CURRENT_TRACK: i64 = -1;
 
     fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
-        self.cmd_tx.lock_sync()
+        self.cmd_tx.lock()
     }
 
     /// Live playback position (seconds) read from the worker's audio
@@ -83,7 +83,7 @@ impl WorkerBridge {
             return;
         }
 
-        let _start_guard = self.start_lock.lock_sync();
+        let _start_guard = self.start_lock.lock();
         if self.lock_cmd_tx().is_some() {
             return;
         }
@@ -100,7 +100,7 @@ impl WorkerBridge {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);
 
-        let worker = kithara_platform::spawn(move || {
+        let worker = kithara_platform::thread::spawn(move || {
             crate::web::worker::worker_main(cmd_rx);
         });
         std::mem::forget(worker);
@@ -120,7 +120,7 @@ impl WorkerBridge {
             .as_ref()
             .cloned()
             .ok_or_else(|| JsValue::from_str("command channel not ready"))?;
-        if tx.send_sync(cmd.clone()).is_ok() {
+        if tx.send(cmd.clone()).is_ok() {
             return Ok(());
         }
 
@@ -131,7 +131,7 @@ impl WorkerBridge {
             .as_ref()
             .cloned()
             .ok_or_else(|| JsValue::from_str("command channel not ready"))?;
-        tx.send_sync(cmd)
+        tx.send(cmd)
             .map_err(|_| JsValue::from_str("worker channel closed"))
     }
 }
