@@ -15,6 +15,7 @@ pub(crate) struct ProjectConfig {
     pub(crate) project: ProjectIdentity,
     pub(crate) health: HealthConfig,
     pub(crate) publish: PublishConfig,
+    pub(crate) release: ReleaseConfig,
     pub(crate) lint_exclude: LintExcludeConfig,
 }
 
@@ -51,6 +52,21 @@ pub(crate) struct HealthConfig {
     pub(crate) feature_powerset_exclude: Vec<String>,
     /// Crates excluded from whole-workspace stages (semver, nextest, doc-test).
     pub(crate) workspace_exclude: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ReleaseConfig {
+    /// GitHub repo (`owner/name`) that hosts the canonical releases.
+    pub(crate) github_repo: String,
+    /// Self-hosted `GitLab` instance that mirrors release artifacts.
+    pub(crate) gitlab_host: String,
+    /// `GitLab` project: numeric id or `group/name` path.
+    pub(crate) gitlab_project: String,
+    /// Generic package name in the `GitLab` registry.
+    pub(crate) gitlab_package: String,
+    /// Release asset file name (the `XCFramework` zip).
+    pub(crate) asset: String,
 }
 
 #[derive(Debug, Default, Deserialize)]

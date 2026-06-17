@@ -14,6 +14,7 @@ mod orphans;
 mod perf_compare;
 mod publish;
 mod quality;
+mod release;
 mod scope;
 mod similarity;
 mod style;
@@ -30,6 +31,7 @@ use lint::LintArgs;
 use orphans::OrphansArgs;
 use publish::PublishArgs;
 use quality::QualityCommand;
+use release::ReleaseArgs;
 use scope::ScopeArgs;
 use similarity::SimilarityArgs;
 use typos::TyposArgs;
@@ -94,6 +96,9 @@ enum Command {
     },
     /// Publish all public crates to crates.io in dependency order.
     Publish(PublishArgs),
+    /// Apple release flow: prepare (stamp Package.swift) and publish
+    /// (GitHub release + `GitLab` mirror).
+    Release(ReleaseArgs),
     /// Translate scope tokens to tool-specific flags (used by `just audit`).
     Scope(ScopeArgs),
     /// Thin wrapper around `ast-grep scan` that bakes in the policy filter list.
@@ -125,6 +130,7 @@ fn main() -> anyhow::Result<()> {
         Command::Apple { command } => apple::run(command),
         Command::Wasm { command } => wasm::run(command),
         Command::Publish(ref args) => publish::run(args),
+        Command::Release(ref args) => release::run(args),
         Command::Scope(ref args) => scope::run(args),
         Command::AstGrep(ref args) => ast_grep::run(args),
         Command::Typos(ref args) => typos::run(args),

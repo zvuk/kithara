@@ -15,6 +15,14 @@ workspace_exclude = ["kithara-fuzz"]
 workspace_hack_crate = "kithara-workspace-hack"
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
 
+[release]
+# Apple release flow (cargo xtask release prepare|publish).
+github_repo = "zvuk/kithara"
+gitlab_host = "gitlab.zvq.me"
+gitlab_project = "disrupt/kithara"
+gitlab_package = "kithara"
+asset = "KitharaFFIInternal.xcframework.zip"
+
 [lint_exclude]
 # Test code dropped from EVERY lint namespace (arch, style, idioms) so baselines
 # show production debt only. `#[cfg(test)]` blocks (inline `mod tests {}`, test
