@@ -19,7 +19,7 @@ pub enum StretchBackendError {
 /// timeline plumbing so each library adapter stays tiny. Tempo
 /// ([`set_ratio`](Self::set_ratio)) and pitch
 /// ([`set_pitch`](Self::set_pitch)) are independent — that decoupling is
-/// what makes keylock real. See `crates/kithara-audio/README.md`.
+/// what makes keylock real. See `crates/kithara-audio/CONTEXT.md`.
 pub trait StretchBackend: Send + 'static {
     /// Drain the buffered tail at end of stream. One-shot: once the tail is
     /// drained, further calls (until the next `process` or `reset`) must

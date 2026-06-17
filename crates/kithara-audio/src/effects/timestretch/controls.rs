@@ -22,7 +22,7 @@ use {
 ///
 /// All fields are read each chunk by the effect chain and may be written at
 /// any time from the control thread; updates take effect on the next
-/// processed chunk. See the crate `README.md` ("Live stretch controls")
+/// processed chunk. See the crate `CONTEXT.md` ("Live stretch controls")
 /// for the speed-routing contract.
 #[derive(Debug)]
 #[non_exhaustive]

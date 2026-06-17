@@ -167,7 +167,7 @@ pub(crate) struct NativeInner {
     /// asset store, HLS peer, and per-track resources all derive
     /// children of this token. The facade's `Drop` fires
     /// `cancel.cancel()` so the shutdown pulse reaches subsystems before
-    /// structural Arc teardown unwinds. See `kithara-play/README.md`
+    /// structural Arc teardown unwinds. See `kithara-play/CONTEXT.md`
     /// "Cancel Hierarchy". The chain flag reaches the audio worker and HLS
     /// coord lock-free `is_cancelled()` reads; every subsystem derives its
     /// own [`CancelToken::child`] from this consumer-top master.
@@ -624,7 +624,7 @@ impl Drop for NativeInner {
     /// Fire the master cancel pulse so the shutdown signal reaches
     /// subsystems before structural Arc teardown unwinds. The facade
     /// owns `NativeInner` by value, so this runs exactly when the
-    /// `AudioPlayer` is dropped. See `kithara-play/README.md`
+    /// `AudioPlayer` is dropped. See `kithara-play/CONTEXT.md`
     /// "Cancel Hierarchy".
     fn drop(&mut self) {
         self.shutdown.cancel();

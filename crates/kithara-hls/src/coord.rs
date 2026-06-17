@@ -47,7 +47,7 @@ pub(crate) struct HlsCoordEnv {
     /// reader's `wait_range` predicate (segment write/commit/fail, fence
     /// raise/clear, seek reset, cancel) `signal`s it; the off-RT
     /// `wait_range(_, None)` parks on it instead of polling a wall-clock
-    /// timer. See `README.md` "Event-driven read wait".
+    /// timer. See `CONTEXT.md` "Event-driven read wait".
     pub(crate) ready: Arc<CondvarGate<u64>>,
     pub(crate) scope: AssetScope<DecryptContext>,
     pub(crate) cancel: CancelToken,

@@ -79,7 +79,7 @@ impl StretchBackend for BungeeBackend {
         let Some(stream) = inner.as_mut() else {
             // Stream::new failed at construction (already warned once); emit
             // nothing rather than erroring per chunk. Unreachable for a valid
-            // spec — see the bungee note in the crate README.
+            // spec — see the bungee note in the crate CONTEXT.md.
             return Ok(());
         };
         let ch = *channels;

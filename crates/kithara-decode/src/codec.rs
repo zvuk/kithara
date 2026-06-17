@@ -38,7 +38,7 @@ pub(crate) trait FrameCodec: Send + 'static {
     /// packet that produced no PCM (warm-up / backpressure). `pts` is the
     /// demuxer presentation time (diagnostics only). `packet_desc` carries
     /// opaque per-packet VBR metadata (Apple MP3/ALAC serialize an
-    /// `AudioStreamPacketDescription`); empty for CBR. See README
+    /// `AudioStreamPacketDescription`); empty for CBR. See CONTEXT.md
     /// "Module layout" / `FrameCodec` contract.
     ///
     /// # Errors

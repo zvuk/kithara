@@ -78,7 +78,7 @@ pub struct Queue {
     /// single serialization point the completion can observe-not-cancelled
     /// then `select_item` *after* the superseding select committed, so the
     /// superseded track barges in. Held only across the synchronous apply
-    /// critical section — never across an `.await`. See the crate `README.md`
+    /// critical section — never across an `.await`. See the crate `CONTEXT.md`
     /// "Selection serialization".
     pub(super) select_apply: Arc<Mutex<()>>,
     pub(super) player: Arc<PlayerImpl>,

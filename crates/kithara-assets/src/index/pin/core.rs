@@ -16,7 +16,7 @@ use crate::{
 /// In-memory + best-effort disk-backed index of pinned `asset_root`s.
 ///
 /// Refcounted per root, lazily persisted, flushed only on 0→1 / 1→0
-/// transitions. See the crate `README.md` "Pins index" for the contract.
+/// transitions. See the crate `CONTEXT.md` "Pins index" for the contract.
 #[derive(Clone)]
 pub struct PinsIndex {
     pub(super) inner: Arc<PinsInner>,

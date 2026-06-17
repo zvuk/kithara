@@ -123,7 +123,7 @@ most often get wrong.
   that master. `CancelScope::new(Option<CancelToken>)` is the canonical seam.
   Hard-coded `root()`/`never()` are forbidden outside a small allowlist. The full
   contract and enforcement (`cargo xtask lint arch` → `cancel_root_sites`) are in
-  [`AGENTS.md`](AGENTS.md) and `crates/kithara-play/README.md`.
+  [`AGENTS.md`](AGENTS.md) and [`crates/kithara-play/CONTEXT.md`](crates/kithara-play/CONTEXT.md).
 - **Coordinate / state spaces.** Position lives in several spaces — byte offsets,
   committed layout, virtual-reader, decode-frame index, playback time/samples —
   and values must cross an **explicit translation boundary**, never be copied

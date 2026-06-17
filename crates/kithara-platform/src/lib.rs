@@ -4,7 +4,7 @@
 //! selected by the gated glob re-exports below; the backends mirror one
 //! public module tree 1:1 (`sync`, `thread`, `time`, `tokio`, …) and
 //! 100% cross-platform code lives in `common`. All crate cfg lives in this
-//! file. See the crate `README.md` for per-target backends.
+//! file. See the crate `CONTEXT.md` for per-target backends.
 
 // In the flash-ON lane the inert control surface (`common::flash_inert`) and
 // the real-clock arms it aliases compile but are intentionally unwired (the

@@ -3,7 +3,7 @@
 //! Persistent disk assets store for Kithara.
 //!
 //! The public contract is the unified [`AssetStore`] type. See the crate
-//! `README.md` for key mapping, lease/pin semantics, and the global index.
+//! `CONTEXT.md` for key mapping, lease/pin semantics, and the global index.
 
 mod acquisition;
 mod base;

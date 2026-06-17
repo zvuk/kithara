@@ -480,7 +480,7 @@ fn build_aac_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
         });
     }
 
-    // WHY: first byte 0x03 = full ESDS body (M4A cookie), else raw ASC to wrap (README "Apple AAC input format (ESDS rationale)").
+    // WHY: first byte 0x03 = full ESDS body (M4A cookie), else raw ASC to wrap (CONTEXT.md "Apple AAC input format (ESDS rationale)").
     let esds = if track.extra_data.first() == Some(&0x03) {
         track.extra_data.clone()
     } else {
@@ -585,7 +585,7 @@ fn derive_aac_asbd_from_esds(
 /// Wrap a raw `AudioSpecificConfig` in the minimum ISO/IEC 14496-1
 /// ESDS descriptor chain Apple's `AudioFormat` / `AudioConverter`
 /// APIs accept as a magic cookie. Layout documented in
-/// `kithara-decode/README.md` "Apple AAC input format (ESDS rationale)".
+/// `kithara-decode/CONTEXT.md` "Apple AAC input format (ESDS rationale)".
 fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
     let too_long = |scope: &str, n: usize| {
         DecodeError::InvalidData(format!(
@@ -605,7 +605,7 @@ fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
         .try_into()
         .map_err(|_| too_long("ES_Descriptor", esd_body_len))?;
 
-    // NOTE: ES_Descriptor chain; field-by-field layout in README "Apple AAC input format".
+    // NOTE: ES_Descriptor chain; field-by-field layout in CONTEXT.md "Apple AAC input format".
     let header: [u8; 22] = [
         0x03, esd_body, 0x00, 0x00, 0x00, 0x04, dcd_body, 0x40, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, dsi_body,

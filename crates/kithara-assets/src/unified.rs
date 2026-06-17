@@ -110,7 +110,7 @@ where
     /// file as fast as possible. Returns a [`DemandLease`] the consumer
     /// must hold for the lifetime of its demand, plus a
     /// [`ProducerHandle`] to the single CAS-winning attacher only -- the
-    /// winner drives the shared download task. See `README.md`
+    /// winner drives the shared download task. See `CONTEXT.md`
     /// "Consumer Demand".
     pub fn attach_demand(
         &self,

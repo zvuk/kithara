@@ -31,7 +31,7 @@ use crate::traits::AudioEffect;
 /// It owns the speed split: each chunk it writes the resampler's rate atomic
 /// (`1.0` when key-locked, else `speed`). Both effects run sequentially on the
 /// same worker thread, so the resampler always reads the value written for the
-/// current chunk. See the crate `README.md` ("Live stretch controls").
+/// current chunk. See the crate `CONTEXT.md` ("Live stretch controls").
 pub struct TimeStretchProcessor {
     controls: Arc<StretchControls>,
     /// Resampler rate atomic this slot drives. Shared with the resampler that

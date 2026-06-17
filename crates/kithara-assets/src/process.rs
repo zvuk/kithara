@@ -236,7 +236,7 @@ where
 /// [`ReadinessGate`]. Has **no read methods**, so reading a not-yet-committed
 /// handle is a compile error. [`commit`](WriteSide::commit) consumes the writer
 /// into a [`ProcessedReader`]; dropping without `commit`/`fail` fails the gate
-/// so a waiting reader cannot deadlock. See the crate `README.md`.
+/// so a waiting reader cannot deadlock. See the crate `CONTEXT.md`.
 pub struct ProcessedWriter<W, Ctx> {
     pool: BytePool,
     guard: GateGuard,

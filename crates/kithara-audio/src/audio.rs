@@ -1042,7 +1042,7 @@ where
     /// construction is a stream-state bug (the variant is settled before this
     /// build; construction never calls `clear_variant_fence`), not a rebuild
     /// trigger; a concurrent user seek is applied by the post-construction
-    /// seek path. See the crate `README.md` "Construction reads".
+    /// seek path. See the crate `CONTEXT.md` "Construction reads".
     async fn create_initial_decoder(
         shared_stream: SharedStream<T>,
         initial_media_info: Option<MediaInfo>,

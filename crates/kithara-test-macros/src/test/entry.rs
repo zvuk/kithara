@@ -26,7 +26,7 @@ use super::{
 /// Flags (`tokio`, `wasm`, `native`, `browser`, `timeout`, `env`,
 /// `tracing`, `soft_fail`, `serial`, `multi_thread`, `selenium`) can be
 /// combined and support `#[case]` parameterization plus fixture injection.
-/// See the crate `README.md` "`#[kithara::test]` flags".
+/// See the crate `CONTEXT.md` "`#[kithara::test]` flags".
 pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as TestArgs);
     let func = parse_macro_input!(item as ItemFn);

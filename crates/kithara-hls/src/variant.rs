@@ -381,7 +381,7 @@ pub(crate) struct InitEntry {
 /// ([`needs_init_fetch`](SegmentStore::needs_init_fetch)), and `read_at` holds
 /// the prefix pending until the commit sizes it — keying existence on the HEAD
 /// size instead would drop the init and serve segment 0's container where the
-/// demuxer expects `ftyp`. See the crate `README.md` "Variant init".
+/// demuxer expects `ftyp`. See the crate `CONTEXT.md` "Variant init".
 #[derive(Debug)]
 pub(crate) enum VariantInit {
     /// No separate init fetch (no `#EXT-X-MAP`, or a byte-range-embedded init).
@@ -1119,7 +1119,7 @@ impl HlsVariant {
     ///
     /// `Ok(init_range)` for `served_from() == 0`, else
     /// `Err(FormatChangeNotApplicable)` for byte-shifted same-codec
-    /// commits. See the crate `README.md` "Format-change header byte range".
+    /// commits. See the crate `CONTEXT.md` "Format-change header byte range".
     pub(crate) fn header_byte_range(&self) -> StreamResult<Range<u64>> {
         if self.served_from() != 0 {
             return Err(StreamError::Source(SourceError::FormatChangeNotApplicable));
@@ -1496,7 +1496,7 @@ impl HlsVariant {
 
     /// Same as [`Self::rebuild`] but also enqueues `seg 0` when
     /// `from_seg > 0`, so the decoder factory's probe has the container
-    /// header to construct the codec. See the crate `README.md`
+    /// header to construct the codec. See the crate `CONTEXT.md`
     /// "Decoder-probe rebuild".
     #[kithara::probe(
         variant = self.variant as u64,

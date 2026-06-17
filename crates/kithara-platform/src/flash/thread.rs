@@ -134,7 +134,7 @@ pub fn paced_backoff(duration: Duration) {
 /// until the engine crosses that deadline OR a peer [`unpark`]s this thread.
 /// The wait consumes no real wall-clock: when every participant is parked the
 /// engine jumps the virtual clock to the earliest deadline. See
-/// `crate::flash` and the crate README.
+/// `crate::flash` and the crate CONTEXT.md.
 #[inline]
 pub fn park_timeout(duration: Duration) {
     if crate::flash::flash_enabled() {

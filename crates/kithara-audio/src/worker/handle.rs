@@ -27,7 +27,7 @@ pub(crate) struct TrackRegistration {
     /// Spent-chunk return ring: the real-time consumer ([`crate::Audio`])
     /// hands every consumed `PcmChunk` here instead of dropping it, so the
     /// pooled buffer is freed/recycled on the worker thread rather than on
-    /// the audio thread. See `crates/kithara-audio/README.md`.
+    /// the audio thread. See `crates/kithara-audio/CONTEXT.md`.
     pub(crate) trash_inlet: crate::runtime::Inlet<PcmChunk>,
     pub(crate) engine_load: Option<Arc<EngineLoad>>,
     pub(crate) outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,

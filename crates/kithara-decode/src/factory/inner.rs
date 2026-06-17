@@ -243,7 +243,7 @@ impl DecoderFactory {
 
     /// Input contract of the demuxer this factory would build for `media_info`,
     /// for the kithara-audio readiness gate. Mirrors [`should_use_segment_aware`]:
-    /// only the segment-aware fMP4 path is `InitOnly`. See the crate `README.md`
+    /// only the segment-aware fMP4 path is `InitOnly`. See the crate `CONTEXT.md`
     /// "Decoder input contract".
     #[must_use]
     pub fn input_requirement(

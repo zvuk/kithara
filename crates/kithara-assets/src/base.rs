@@ -39,7 +39,7 @@ bitflags::bitflags! {
 /// resource is already committed. `open_resource*` always returns a `Ready`
 /// reader. The decrypt-readiness gate is carried in these types, not behind a
 /// runtime `is_readable()` probe; storage lifecycle `status()` stays a runtime
-/// facade on the reader. See crate `README.md` for the asset / resource /
+/// facade on the reader. See crate `CONTEXT.md` for the asset / resource /
 /// identity model.
 pub trait Assets: Clone + Send + Sync + 'static {
     /// Writer (Pending) phase returned by `acquire_resource*`.

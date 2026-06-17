@@ -255,7 +255,7 @@ impl Demuxer for SymphoniaDemuxer {
         // not-ready boundary (it consumed ring bytes into a packet that was
         // then discarded, advancing its read position). Re-seek to the last
         // authoritative timestamp so the stranded packet is re-read from its
-        // start instead of being skipped (README "Read-ahead strand").
+        // start instead of being skipped (CONTEXT.md "Read-ahead strand").
         if self.needs_resume {
             self.needs_resume = false;
             self.reseek_to_resume()?;
@@ -320,7 +320,7 @@ impl Demuxer for SymphoniaDemuxer {
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
-        // WHY: park before target by max(priming warmup, one codec packet) so the trim guard lands on a packet boundary (README "Seek pre-roll and trim").
+        // WHY: park before target by max(priming warmup, one codec packet) so the trim guard lands on a packet boundary (CONTEXT.md "Seek pre-roll and trim").
         let sr = f64::from(self.track_info.sample_rate.max(1));
         let priming_secs = f64::from(u32::try_from(priming.frames).unwrap_or(u32::MAX)) / sr;
         let packet_secs = f64::from(mdct_packet_frames(self.track_info.codec)) / sr;

@@ -41,7 +41,7 @@ pub(crate) trait Demuxer: Send {
     /// The *shape* of bytes that must be Ready before this demuxer can be
     /// constructed, for the kithara-audio readiness gate. Defaults to
     /// [`InputRequirement::Incremental`]; init-bearing demuxers (fMP4) MUST
-    /// override to [`InputRequirement::InitOnly`]. See the crate `README.md`
+    /// override to [`InputRequirement::InitOnly`]. See the crate `CONTEXT.md`
     /// "Decoder input contract".
     fn required_input() -> InputRequirement
     where
@@ -140,7 +140,7 @@ pub(crate) enum DemuxSeekOutcome {
     Landed {
         landed_at: Duration,
         landed_byte: Option<u64>,
-        /// Codec priming hint. See `kithara-decode` README §Seek priming.
+        /// Codec priming hint. See `kithara-decode` CONTEXT.md "Seek pre-roll and trim".
         preroll: PrerollHint,
     },
     /// The seek target lies past the stream's end; `duration` is the

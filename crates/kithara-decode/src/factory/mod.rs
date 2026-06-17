@@ -4,7 +4,7 @@
 //! selects the backend via [`DecoderConfig::backend`]; a backend not
 //! compiled in returns `DecodeError::BackendUnavailable`, one that rejects
 //! the codec/container returns `DecodeError::UnsupportedCodec`, both
-//! terminal. See README "Decoder recreate strategy" and "Initialization Paths".
+//! terminal. See CONTEXT.md "Decoder recreate strategy" and "Initialization Paths".
 
 mod inner;
 mod probe;

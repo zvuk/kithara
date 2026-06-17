@@ -54,7 +54,7 @@ pub(crate) struct SharedStream<T: StreamType> {
     /// prefetched, the build read normally hits committed bytes; the blocking
     /// adapter is the bounded safety net for residual lateness) and disarms it
     /// before the worker is registered, so the RT decode loop the worker then
-    /// drives always uses `probe_read`. See the crate `README.md`
+    /// drives always uses `probe_read`. See the crate `CONTEXT.md`
     /// "Construction reads".
     blocking: Arc<AtomicBool>,
     inner: Arc<Mutex<Stream<T>>>,
@@ -904,7 +904,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// `format_change_segment_range`. `NoChange` when it does not apply.
     #[kithara::probe]
     fn detect_format_change(&self) -> FormatChangeDetection {
-        // NOTE: seek-epoch suppression (see README "Decoder recreate policy").
+        // NOTE: seek-epoch suppression (see CONTEXT.md "Decoder recreate policy").
         if self.seek_obs.is_pending()
             && self.session.installed_at_seek_epoch == self.seek_obs.epoch()
         {
@@ -1109,7 +1109,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// Splits by [`DecodeError`] variant: [`DecodeError::SeekOutOfRange`]
     /// fails the seek (no recreate), anything else recreates at the
     /// init/offset range. Always returns `false`. See the crate
-    /// `README.md` "Seek error recovery".
+    /// `CONTEXT.md` "Seek error recovery".
     fn recover_from_decoder_seek_error(&mut self, attempt: SeekAttempt, err: DecodeError) -> bool {
         let SeekAttempt {
             request,
@@ -1835,7 +1835,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// byte-shifted same-codec commit (init no longer addressable) and an
     /// oversized init both degrade to the `[offset..offset+READ_AHEAD)` window.
     /// An incremental recreate gates on that window directly. See the crate
-    /// `README.md` "Recreate readiness gating".
+    /// `CONTEXT.md` "Recreate readiness gating".
     ///
     /// [`format_change_segment_range`]: kithara_stream::Stream::format_change_segment_range
     fn recreate_ready_range(&self, recreate: &RecreateState) -> Range<u64> {
@@ -1960,7 +1960,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// the decoder is actually blocked on the (withheld) next segment. The
     /// `WaitContext::Playback` wait path gates on this wider window so the
     /// gate and the decoder's real read never disagree (a mismatch hot-spins
-    /// the worker; see crate `README.md` "Playback readiness gating").
+    /// the worker; see crate `CONTEXT.md` "Playback readiness gating").
     fn source_phase_forward(&self) -> SourcePhase {
         let pos = self.shared_stream.position();
         let end = pos.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES);

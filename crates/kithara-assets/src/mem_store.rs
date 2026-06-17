@@ -28,7 +28,7 @@ use crate::{
 /// Identity is part of the key so distinct request identities under the
 /// same resource key yield distinct inflight handles. The `ResourceKey`
 /// already carries the asset namespace. See the inflight sharing
-/// contract in `README.md`.
+/// contract in `CONTEXT.md`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct MemCacheKey {
     identity: Option<RequestIdentity>,

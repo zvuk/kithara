@@ -127,7 +127,7 @@ pub struct EngineImpl {
     /// concurrent starters cannot both pass the `!running` gate and
     /// double-dispatch `session.start_player`. The loser observes
     /// `running == true` under the lock and returns `EngineAlreadyRunning`.
-    /// See `README.md` "Engine start".
+    /// See `CONTEXT.md` "Engine start".
     start_lock: Mutex<()>,
 
     runtime: Option<RuntimeHandle>,

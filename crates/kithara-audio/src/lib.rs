@@ -5,7 +5,7 @@
 //! - [`ResamplerQuality`] — sample rate conversion quality
 //! - `Audio` also implements `rodio::Source` directly (requires `rodio` feature)
 //!
-//! See the crate `README.md` for usage, threading model, and architecture.
+//! See the crate `README.md` for usage and `CONTEXT.md` for threading model and architecture.
 
 #![forbid(unsafe_code)]
 #![cfg_attr(rtsan, feature(sanitize))]

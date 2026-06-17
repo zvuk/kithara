@@ -2,7 +2,7 @@
 //!
 //! Records every `tracing::event!` whose target ends with `_probe` into a
 //! process-wide `Vec` so a test can snapshot the sequence and assert on it.
-//! See the crate `README.md` "Probe capture" for the subscriber and
+//! See the crate `CONTEXT.md` "Probe capture" for the subscriber and
 //! activation contract.
 
 mod event;

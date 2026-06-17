@@ -233,7 +233,7 @@ impl AacDecoder {
     /// drop and re-create it. Without this, the first access unit decoded
     /// after a seek inherits the pre-seek overlap-add tail and emits
     /// contaminated PCM (a ~2-AU phase shift at seek seams). See the
-    /// `kithara-decode` README "Seek pre-roll and trim".
+    /// `kithara-decode` CONTEXT.md "Seek pre-roll and trim".
     fn build_decoder(transport: Transport, params: &AudioCodecParameters) -> Result<Decoder> {
         let mut decoder = Decoder::new(transport);
         if matches!(transport, Transport::Raw)

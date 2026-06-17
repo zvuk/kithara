@@ -150,7 +150,7 @@ impl StreamType for Hls {
 
         playhead.set_duration(playlist_state.track_duration());
 
-        // Shared readiness gate for the off-RT `wait_range(_, None)` park (README).
+        // Shared readiness gate for the off-RT `wait_range(_, None)` park (CONTEXT.md "Seek and wait_range Contract").
         let ready = Arc::new(CondvarGate::<u64>::default());
         // Late-bound audio-worker wake, filled by `HlsSource::set_worker_wake`
         // once the worker exists; fired alongside `ready` on the two

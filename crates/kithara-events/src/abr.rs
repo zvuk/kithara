@@ -12,7 +12,7 @@ const ABR_MODE_AUTO_THRESHOLD: usize = usize::MAX / 2;
 /// segment index, or an index into a different variant list. Construct via
 /// [`VariantIndex::try_new`] at trust boundaries (FFI, UI), or
 /// [`VariantIndex::new`] when validity is already structurally guaranteed
-/// (atomic reload, playlist parse). See `kithara-abr/README.md`.
+/// (atomic reload, playlist parse). See `kithara-abr/CONTEXT.md`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
 pub struct VariantIndex(usize);

@@ -125,7 +125,7 @@ pub(crate) struct PlayerCore {
     pub(crate) last_announced_index: AtomicUsize,
     /// Master cancel token. Drop fires `cancel.cancel()` so subsystems
     /// observe the pulse before structural Arc teardown unwinds. See
-    /// `crates/kithara-play/README.md` "Cancel hierarchy" section.
+    /// `crates/kithara-play/CONTEXT.md` "Cancel hierarchy" section.
     pub(crate) cancel: CancelToken,
     /// Engine drops last — worker shutdown happens after all tracks
     /// unregister and after `items` releases their resources.

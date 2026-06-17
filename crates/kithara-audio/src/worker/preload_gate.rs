@@ -13,7 +13,7 @@ use kithara_test_utils::kithara;
 /// does not drive the wakeup.
 ///
 /// The contract (signal sites, rearm on seek) lives in
-/// `crates/kithara-audio/README.md`.
+/// `crates/kithara-audio/CONTEXT.md`.
 #[derive(Default)]
 pub struct PreloadGate {
     ready: AtomicBool,

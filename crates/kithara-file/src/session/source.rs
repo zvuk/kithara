@@ -41,7 +41,7 @@ impl FileSource {
     ///
     /// `cancel` is a child of the file config master so a track drop
     /// pulse interrupts any in-flight reads — see
-    /// `kithara-play/README.md` "Cancel Hierarchy".
+    /// `kithara-play/CONTEXT.md` "Cancel Hierarchy".
     pub(crate) fn local(
         reader: AssetReader,
         coord: Arc<FileCoord>,

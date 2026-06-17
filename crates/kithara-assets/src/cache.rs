@@ -165,7 +165,7 @@ type CacheItem<A> = (
 
 /// A decorator that caches opened resources in memory with LRU eviction.
 ///
-/// See crate `README.md` for the cache contract. Cache key is
+/// See crate `CONTEXT.md` for the cache contract. Cache key is
 /// `(ResourceKey, Option<RequestIdentity>, Option<Ctx>)`; the
 /// `ResourceKey` carries its own asset namespace. Absolute keys bypass
 /// caching (capability gate or absolute-key bypass).

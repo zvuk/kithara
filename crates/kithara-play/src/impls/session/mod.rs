@@ -1,6 +1,6 @@
 //! Session hosting: cross-platform state + dispatch trait + platform-specific clients.
 //!
-//! See `crates/kithara-play/README.md` "Session Hosting" for the platform
+//! See `crates/kithara-play/CONTEXT.md` "Session Hosting" for the platform
 //! asymmetry boundary — this `mod.rs` is the only place in `kithara-play`
 //! with `#[cfg(target_arch = ...)]` gates, and they live on the two
 //! `mod host_*;` declarations below.
