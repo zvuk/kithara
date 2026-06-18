@@ -78,7 +78,7 @@ non-exhaustive seam) is in-memory-only by capability, not a fallback.
 
 Invalidation is by `ANALYSIS_BYTES_VERSION` (kithara-app): bump it whenever
 the blob encoding, BPM analysis parameters, waveform encoding, or
-`WAVEFORM_BUCKETS` change. The
+`WAVEFORM_MAX_BUCKETS` change. The
 filename is a sha256 of the key — a `std` hasher is not stable across toolchain
 versions and would orphan every blob. Because the key is the source location
 and not the bytes, a file overwritten in place keeps its key until the version

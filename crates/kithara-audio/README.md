@@ -138,8 +138,8 @@ the band -> color mapping and orchestration live in the consumer crates.
   track position `[0, 1]`, never wall-clock seconds. `bucketize` is the single
   home of that `[0, 1]` mapping: bucket `b` folds the raw range
   `[b*R/N, (b+1)*R/N)`. A bucket whose range is empty (tracks shorter than the
-  bucket count) is filled with the supplied `empty` value, so the output length
-  always equals the requested bucket count.
+  bucket count) is filled with the supplied `empty` value, so `bucketize`'s
+  output length always equals its requested count.
 - **Source-only invariant**: analysis runs on the decoded SOURCE signal, never
   the post-EQ / post-timestretch / post-resample output. The waveform is the
   track's identity; playback-rate and mixer transforms remap only the time axis

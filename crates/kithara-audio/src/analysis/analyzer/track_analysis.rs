@@ -22,4 +22,6 @@ pub struct TrackAnalysis {
     pub waveform: Option<Waveform>,
     /// Cleaned beat grid (source frames).
     pub beat: Option<BeatGrid>,
+    /// Total decoded source frames: the denominator for `BeatGrid` frame → fraction.
+    pub source_frames: u64,
 }

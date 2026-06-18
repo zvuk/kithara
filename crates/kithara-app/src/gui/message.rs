@@ -11,6 +11,8 @@ pub(crate) enum Message {
     SeekChanged(f64),
     /// Seek slider released — commit the seek.
     SeekReleased,
+    /// One-shot seek to an absolute position (seconds) — a waveform click.
+    SeekTo(f64),
     /// Volume slider changed (0.0 – 1.0).
     VolumeChanged(f32),
     /// EQ band gain changed (band index, dB value).

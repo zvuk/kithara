@@ -1,12 +1,13 @@
 use iced::{
-    Alignment, Background, Border, Element, Length, Theme,
+    Alignment, Background, Border, Element, Length, Padding, Theme,
+    alignment::{Horizontal, Vertical},
     font::Weight,
     widget::{
         Row, Space, button,
         button::{Status as ButtonStatus, Style as ButtonStyle},
         column, container,
         container::Style as ContainerStyle,
-        row, text,
+        row, stack, text,
     },
 };
 use num_traits::cast::AsPrimitive;
@@ -18,12 +19,14 @@ use super::{
 use crate::{
     gui::{
         app::Kithara,
+        dj::DjMsg,
         fonts,
         icons::Icon,
         message::Message,
         tokens::gap,
         view::{eq_band_label, format_time, track_subtitle, with_alpha},
         widgets,
+        widgets::WaveMsg,
     },
     theme::gui::GuiPalette,
 };
@@ -157,30 +160,49 @@ fn waveform_cluster(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
     let total = format_time(duration);
     let progress = playhead_progress(head_position, duration);
 
-    let canvas: Element<'_, Message> = match state
+    let wave = state
         .ui_state
         .analysis
         .as_ref()
         .and_then(|analysis| analysis.waveform.as_ref())
-    {
-        Some(wave) if !wave.is_empty() => widgets::waveform(
-            wave.clone(),
-            progress,
-            duration,
-            studio_size::WAVEFORM_HEIGHT,
-            p,
-        ),
-        _ => Space::new()
-            .width(Length::Fill)
-            .height(Length::Fixed(studio_size::WAVEFORM_HEIGHT))
-            .into(),
+        .filter(|wave| !wave.is_empty());
+
+    let canvas: Element<'_, Message> = wave.map_or_else(
+        || {
+            Space::new()
+                .width(Length::Fill)
+                .height(Length::Fixed(studio_size::WAVEFORM_HEIGHT))
+                .into()
+        },
+        |wave| {
+            widgets::waveform(
+                wave.clone(),
+                widgets::BeatMarks {
+                    beats: state.ui_state.beat_marks.clone(),
+                    downbeats: state.ui_state.downbeat_marks.clone(),
+                },
+                progress,
+                duration,
+                state.dj.wave,
+                studio_size::WAVEFORM_HEIGHT,
+                p,
+            )
+        },
+    );
+
+    let wave_box = container(canvas)
+        .width(Length::Fill)
+        .height(Length::Fixed(studio_size::WAVEFORM_HEIGHT))
+        .style(waveform_style(p));
+    
+    let wave_layer: Element<'_, Message> = if wave.is_some() {
+        stack![wave_box, zoom_control(state.dj.wave.zoom(), p)].into()
+    } else {
+        wave_box.into()
     };
 
     column![
-        container(canvas)
-            .width(Length::Fill)
-            .height(Length::Fixed(studio_size::WAVEFORM_HEIGHT))
-            .style(waveform_style(p)),
+        wave_layer,
         row![
             text(current)
                 .size(studio_type::MONO_SM)
@@ -205,6 +227,73 @@ fn playhead_progress(position: f64, duration: f64) -> f32 {
     }
     let progress: f32 = (position / duration).clamp(0.0, 1.0).as_();
     progress
+}
+
+fn zoom_control(zoom: f32, p: GuiPalette) -> Element<'static, Message> {
+    let control = row![
+        zoom_button("\u{2212}", WaveMsg::Zoom(1.0 / widgets::ZOOM_STEP), p),
+        text(format!("{zoom:.1}\u{00d7}"))
+            .size(studio_type::MONO_SM)
+            .font(fonts::MONO)
+            .color(p.text_dim),
+        zoom_button("+", WaveMsg::Zoom(widgets::ZOOM_STEP), p),
+    ]
+    .spacing(gap::INLINE_TIGHT)
+    .align_y(Alignment::Center);
+
+    container(container(control).padding([2.0, 6.0]).style(zoom_pill_style(p)))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Horizontal::Right)
+        .align_y(Vertical::Top)
+        .padding(Padding::from(8.0))
+        .into()
+}
+
+fn zoom_button(label: &'static str, msg: WaveMsg, p: GuiPalette) -> Element<'static, Message> {
+    const SIZE: f32 = 20.0;
+
+    button(
+        container(text(label).size(studio_type::BODY_MD).color(p.text))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .width(Length::Fixed(SIZE))
+    .height(Length::Fixed(SIZE))
+    .padding(0)
+    .style(move |_theme: &Theme, status| zoom_button_style(p, status))
+    .on_press(Message::Dj(DjMsg::Wave(msg)))
+    .into()
+}
+
+fn zoom_pill_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
+    move |_theme| {
+        ContainerStyle::default()
+            .background(Background::Color(with_alpha(p.bg_deep, 0.7)))
+            .border(
+                Border::default()
+                    .rounded(studio_radius::SM)
+                    .width(1.0)
+                    .color(p.line),
+            )
+    }
+}
+
+fn zoom_button_style(p: GuiPalette, status: ButtonStatus) -> ButtonStyle {
+    let background = match status {
+        ButtonStatus::Hovered => Some(Background::Color(with_alpha(p.bg_panel_2, 0.7))),
+        ButtonStatus::Pressed => Some(Background::Color(with_alpha(p.bg_panel_2, 0.5))),
+        ButtonStatus::Active | ButtonStatus::Disabled => {
+            Some(Background::Color(iced::Color::TRANSPARENT))
+        }
+    };
+
+    ButtonStyle {
+        background,
+        text_color: p.text,
+        border: Border::default().rounded(studio_radius::SM),
+        ..ButtonStyle::default()
+    }
 }
 
 /// Transport (prev / play / next) on the left, a divider, then the EQ fader
