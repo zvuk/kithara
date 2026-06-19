@@ -33,6 +33,7 @@ pub(crate) struct PendingNext {
     pub(crate) src: Arc<str>,
     pub(crate) state: PendingNextState,
     pub(crate) index: usize,
+    pub(crate) duration_seconds: f64,
 }
 
 /// Discriminant for [`PlayerPhase`] without its payload.

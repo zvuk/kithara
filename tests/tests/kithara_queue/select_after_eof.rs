@@ -64,6 +64,17 @@ fn make_fixture() -> (OfflinePlayerHarness, Queue) {
     (harness, queue)
 }
 
+#[kithara::test]
+fn seek_updates_cached_position_optimistically() {
+    let (_harness, queue) = make_fixture();
+    let id = queue.insert_loaded_for_test(make_resource("seek", 120.0, 0.10));
+    queue.select(id, Transition::None).expect("select track");
+
+    queue.seek(54.689_879_542).expect("seek must land");
+
+    assert_eq!(queue.position_seconds(), Some(54.689_879_542));
+}
+
 /// Track A plays to natural EOF while B is stuck loading, so auto-advance
 /// only stashes a pending select. Re-selecting A must restart it: the old
 /// `rate() > 0` guard kept reporting "playing" after EOF and swallowed it.

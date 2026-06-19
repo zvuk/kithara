@@ -85,6 +85,10 @@ impl SegmentSlotState {
         self.0.load(Ordering::Acquire) == Self::FAILED
     }
 
+    fn is_downloading(&self) -> bool {
+        self.0.load(Ordering::Acquire) == Self::DOWNLOADING
+    }
+
     fn is_loaded(&self) -> bool {
         self.0.load(Ordering::Acquire) == Self::LOADED
     }
@@ -686,6 +690,8 @@ impl HlsVariant {
                         handle.into_loaded_no_apply();
                     }
                 }
+                ready.signal();
+                wake_worker(&worker_wake);
                 return None;
             }
             _ => {
@@ -873,8 +879,15 @@ impl HlsVariant {
 
     #[kithara::probe(variant = self.variant as u64, byte)]
     pub(crate) fn descriptor_at_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
-        let (idx, _, _) = self.find_at_offset(byte)?;
-        self.descriptor(idx as usize)
+        let (idx, off, size) = self.find_at_offset(byte)?;
+        let entry = self.store.segments().get(idx as usize)?;
+        Some(SegmentDescriptor::new(
+            off..off + size,
+            entry.decode_time,
+            entry.duration,
+            idx,
+            self.variant,
+        ))
     }
 
     #[kithara::probe(variant = self.variant as u64)]
@@ -943,6 +956,8 @@ impl HlsVariant {
                     };
                     if let Some(actual) = self.store.committed_final_len(&init.resource_id) {
                         handle.into_loaded(actual);
+                        ctx.ready.signal();
+                        wake_worker(&ctx.worker_wake);
                         continue;
                     }
                     let Some(cmd) = self.build_init_cmd(ctx, handle) else {
@@ -977,6 +992,8 @@ impl HlsVariant {
                     };
                     if let Some(actual) = self.store.committed_final_len(&entry.resource_id) {
                         handle.into_loaded(actual);
+                        ctx.ready.signal();
+                        wake_worker(&ctx.worker_wake);
                         continue;
                     }
                     let Some(cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle) else {
@@ -1265,7 +1282,7 @@ impl HlsVariant {
         if self.reader.is_flushing() {
             return SourcePhase::Seeking;
         }
-        SourcePhase::Waiting
+        self.range_wait_phase(&range)
     }
 
     pub(crate) fn prefetch_anchor(&self) -> u64 {
@@ -1308,6 +1325,78 @@ impl HlsVariant {
             cursor = (seg_off + seg_size).max(cursor + 1);
         }
         false
+    }
+
+    fn range_wait_phase(&self, range: &Range<u64>) -> SourcePhase {
+        let total = self.total_bytes();
+        if total > 0 && range.start >= total && !self.sizes_complete() {
+            let head = self.store.download_head();
+            return if self.store.segment_downloading(head) {
+                SourcePhase::WaitingDemand
+            } else {
+                SourcePhase::Waiting
+            };
+        }
+
+        let end = if total > 0 {
+            range.end.min(total)
+        } else {
+            range.end
+        };
+        if range.start >= end {
+            return SourcePhase::Waiting;
+        }
+
+        let mut waiting_on_demand = false;
+        let mut cursor = range.start;
+        while let Some((ref key, init_range)) = self.init_descriptor_at(cursor) {
+            if cursor >= init_range.end {
+                break;
+            }
+            let slice_end = end.min(init_range.end);
+            let local_start = cursor - init_range.start;
+            let local_end = slice_end - init_range.start;
+            if !self.store.contains_range(key, local_start..local_end) {
+                if !self.store.init_downloading() {
+                    return SourcePhase::Waiting;
+                }
+                waiting_on_demand = true;
+            }
+            cursor = slice_end;
+            if cursor >= end {
+                return if waiting_on_demand {
+                    SourcePhase::WaitingDemand
+                } else {
+                    SourcePhase::Waiting
+                };
+            }
+        }
+
+        while cursor < end {
+            let Some((seg_idx, seg_off, seg_size)) = self.find_at_offset(cursor) else {
+                return SourcePhase::Waiting;
+            };
+            let Some(key) = self.store.segment_resource(seg_idx) else {
+                return SourcePhase::Waiting;
+            };
+            let seg_end = seg_off + seg_size;
+            let slice_end = end.min(seg_end);
+            let local_start = cursor - seg_off;
+            let local_end = slice_end - seg_off;
+            if !self.store.contains_range(&key, local_start..local_end) {
+                if !self.store.segment_downloading(seg_idx) {
+                    return SourcePhase::Waiting;
+                }
+                waiting_on_demand = true;
+            }
+            cursor = slice_end;
+        }
+
+        if waiting_on_demand {
+            SourcePhase::WaitingDemand
+        } else {
+            SourcePhase::Waiting
+        }
     }
 
     pub(crate) fn range_ready(&self, range: &Range<u64>) -> bool {

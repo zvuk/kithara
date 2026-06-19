@@ -19,7 +19,8 @@ use kithara_platform::{
     CancelScope, CancelToken, thread::park_timeout, time::Duration, tokio::task::spawn_blocking,
 };
 use kithara_stream::{
-    ChunkPosition, MediaInfo, PlayheadWrite, SeekControl, SeekObserve, Stream, StreamType,
+    ChunkPosition, DeferredWake, MediaInfo, PlayheadWrite, SeekControl, SeekObserve, Stream,
+    StreamType,
 };
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
@@ -138,6 +139,11 @@ pub struct Audio<S> {
     /// Runtime ABR handle snapshot taken at construction — cloned from the
     /// underlying stream's source. `None` for non-adaptive sources.
     abr_handle: Option<kithara_abr::AbrHandle>,
+
+    /// Off-core reader→peer wake for segmented sources. `Audio::seek`
+    /// can notify it after publishing the seek target; non-segmented
+    /// sources keep `None`.
+    peer_wake: Option<Arc<DeferredWake>>,
 
     /// Cancellation token for graceful shutdown.
     cancel: Option<CancelToken>,
@@ -647,6 +653,15 @@ impl<S> Audio<S> {
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let epoch = self.seek.begin(position);
         self.seek.mark_pending(epoch);
+        self.emit_audio_event(AudioEvent::SeekLifecycle {
+            seek_epoch: epoch,
+            stage: SeekLifecycleStage::SeekRequest,
+            location: SegmentLocation::default(),
+        });
+        if let Some(wake) = self.peer_wake.as_ref() {
+            wake.notify_now();
+        }
+        self.preload_gate.rearm();
         self.validator.epoch = epoch;
         self.recycle_current_chunk();
         self.current_chunk_consumed_frames = 0;
@@ -887,6 +902,7 @@ where
         let decoder_factory = Self::create_decoder_factory(&decoder_deps, &epoch, &byte_len_handle);
         let initial_variant = initial_media_info.as_ref().and_then(|i| i.variant_index);
         let abr_handle = shared_stream.abr_handle();
+        let peer_wake = shared_stream.peer_wake();
         // Retain a handle to inject the worker wake after the worker exists —
         // `shared_stream` itself is moved into the source below. `SharedStream`
         // is `Arc`-backed, so the clone shares the same inner stream/coord.
@@ -948,6 +964,7 @@ where
             preload_gate,
             reader_wake,
             abr_handle,
+            peer_wake,
             trash_tx,
             service_class,
             block_on_underrun,
@@ -1296,6 +1313,10 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
         Some(self.preload_gate.clone())
     }
 
+    fn preload_epoch(&self) -> u64 {
+        self.seek_obs.epoch()
+    }
+
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         Self::read(self, buf)
     }
@@ -1455,6 +1476,7 @@ mod tests {
             reader_wake: Arc::new(ThreadWake::default()),
             is_standalone_worker: false,
             abr_handle: None,
+            peer_wake: None,
             _marker: PhantomData,
         }
     }
@@ -1484,6 +1506,19 @@ mod tests {
         audio.preload().expect("preload");
 
         assert!(matches!(audio.recv_outcome(), RecvOutcome::Empty));
+    }
+
+    #[kithara::test]
+    fn seek_rearms_preload_gate_before_worker_refill() {
+        let mut audio = empty_audio();
+        audio.preload_gate.signal_epoch(0);
+        assert!(audio.preload_gate.is_ready());
+
+        audio
+            .seek(Duration::from_millis(250))
+            .expect("seek should arm epoch");
+
+        assert!(!audio.preload_gate.is_ready());
     }
 
     fn audio_with_channel() -> (Audio<()>, crate::runtime::Outlet<Fetch<PcmChunk>>) {
@@ -1522,6 +1557,7 @@ mod tests {
             reader_wake: Arc::new(ThreadWake::default()),
             is_standalone_worker: false,
             abr_handle: None,
+            peer_wake: None,
             _marker: PhantomData,
         };
         (audio, data_tx)

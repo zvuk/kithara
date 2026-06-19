@@ -10,7 +10,7 @@ use kithara_assets::{
 use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Mutex};
-use kithara_stream::MediaInfo;
+use kithara_stream::{MediaInfo, WorkerWake};
 use url::Url;
 
 use super::segments::FileSegmentIndex;
@@ -107,6 +107,11 @@ pub(crate) struct FileInner {
     /// already-cached sources that never download.
     pub(crate) demand_lease: Option<DemandLease>,
 
+    /// Late-bound audio-worker wake. Remote file sources can underrun while
+    /// HTTP bytes are still arriving, so each write wakes the worker that
+    /// previously parked on a non-blocking readiness probe.
+    worker_wake: OnceLock<Arc<dyn WorkerWake>>,
+
     /// FSM phase as `FilePhase as u8`. Lock-free transitions.
     phase: AtomicU8,
 }
@@ -124,12 +129,23 @@ impl FileInner {
             demand_lease,
             content_type_info: OnceLock::new(),
             segment_index: OnceLock::new(),
+            worker_wake: OnceLock::new(),
             phase: AtomicU8::new(initial_phase as u8),
         };
         if matches!(initial_phase, FilePhase::Complete) {
             inner.try_build_segment_index();
         }
         inner
+    }
+
+    pub(crate) fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
+        let _ = self.worker_wake.set(wake);
+    }
+
+    pub(crate) fn wake_worker(&self) {
+        if let Some(wake) = self.worker_wake.get() {
+            wake.wake();
+        }
     }
 
     /// Read the fully cached file bytes and parse a fragmented-mp4 index,

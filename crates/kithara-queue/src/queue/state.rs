@@ -227,8 +227,8 @@ impl Queue {
         self.tracks.set_status(id, status);
     }
 
-    pub(super) fn take_armed_for(&self) -> CrossfadeArm {
-        self.crossfade_armed_for.take()
+    pub(super) fn take_armed_for_if_matches(&self, id: TrackId) -> bool {
+        self.crossfade_armed_for.take_if_matches(id)
     }
 
     pub(super) fn write_armed_for(&self, arm: CrossfadeArm) {
@@ -292,15 +292,17 @@ pub(super) mod tests {
     }
 
     #[kithara::test]
-    fn crossfade_arm_take_round_trips_then_disarms() {
+    fn crossfade_arm_take_only_disarms_matching_track() {
         let queue = make_queue();
         queue.write_armed_for(CrossfadeArm::armed(TrackId(9)));
+        assert!(!queue.take_armed_for_if_matches(TrackId(10)));
         assert_eq!(
-            queue.take_armed_for(),
+            queue.read_armed_for(),
             CrossfadeArm::Armed {
                 for_track: TrackId(9),
             }
         );
+        assert!(queue.take_armed_for_if_matches(TrackId(9)));
         assert_eq!(queue.read_armed_for(), CrossfadeArm::Disarmed);
     }
 

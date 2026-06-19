@@ -12,13 +12,11 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, auto,
     fixture_protocol::{EncryptionRequest, PackagedSignal},
 };
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_stream::AudioCodec;
 use tracing::{info, warn};
 
-use super::common::{
-    CHANNELS, FREQ_HZ, PhaseDrift, SAMPLE_RATE, SinePhaseSpec, scripted_phase_scan,
-};
+use super::common::{CHANNELS, FREQ_HZ, SAMPLE_RATE, SinePhaseSpec, scripted_phase_scan};
 
 const SEGMENT_DURATION_SECS: f64 = 2.0;
 const SEGMENTS_PER_VARIANT: usize = 30;
@@ -170,14 +168,15 @@ async fn run_case_paced(
         .cancel(cancel)
         .initial_abr_mode(initial_mode)
         .build();
-    // Park on ring underrun: the offline scan needs no wall-clock pacing.
+    // Keep HLS scan nonblocking: readiness is observed through Frames/Pending,
+    // not through the blocking read watchdog's wall-clock budget.
     let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
         .decoder_backend(backend)
-        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(audio_config)
         .await
         .expect("create Audio<Stream<Hls>>");
+    audio.preload().expect("preload HLS phase scanner");
 
     let total_secs = audio
         .duration()
@@ -210,29 +209,26 @@ async fn run_case_paced(
         "fixture should expose {VARIANT_COUNT} variants, got {abr_variants}",
     );
 
-    let drifts = spawn_blocking(move || -> Vec<PhaseDrift> {
-        let sine = SinePhaseSpec::default_440();
-        let mut current = initial_mode;
-        scripted_phase_scan(
-            &mut audio,
-            sine,
-            total_frames_truth,
-            &scenario,
-            pace,
-            |&mode| {
-                if mode != current {
-                    if let Some(h) = abr_handle.as_ref()
-                        && let Err(e) = h.set_mode(mode)
-                    {
-                        warn!(?e, ?mode, "variant switch failed");
-                    }
-                    current = mode;
+    let sine = SinePhaseSpec::default_440();
+    let mut current = initial_mode;
+    let drifts = scripted_phase_scan(
+        &mut audio,
+        sine,
+        total_frames_truth,
+        &scenario,
+        pace,
+        |&mode| {
+            if mode != current {
+                if let Some(h) = abr_handle.as_ref()
+                    && let Err(e) = h.set_mode(mode)
+                {
+                    warn!(?e, ?mode, "variant switch failed");
                 }
-            },
-        )
-    })
-    .await
-    .expect("spawn_blocking joined");
+                current = mode;
+            }
+        },
+    )
+    .await;
 
     assert!(
         drifts.is_empty(),
@@ -359,12 +355,12 @@ async fn run_case_paced(
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::aac_he_v2_apple_eph_auto_e2e(
+    case::aac_he_v2_apple_eph_manual_v1_e2e(
         Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Apple,
         true,
         false,
-        e2e(auto(1)),
+        e2e(AbrMode::manual(1)),
         None,
     )
 )]

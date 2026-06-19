@@ -16,6 +16,7 @@ use crate::{
         player_processor::PlayerCmd,
         player_resource::PlayerResource,
     },
+    traits::engine::Engine,
 };
 
 /// Outcome of resolving an arm request under the short phase lock, acted on
@@ -27,10 +28,15 @@ enum ArmDecision {
     Clear(Option<Arc<str>>),
 }
 
+struct ActivatedPending {
+    src: Arc<str>,
+    duration_seconds: f64,
+}
+
 impl PlayerImpl {
     /// Mark the armed-next slot at `index` activated under a short lock,
     /// returning its src. `Ok(None)` when it was already activated.
-    fn activate_pending(&self, index: usize) -> Result<Option<Arc<str>>, PlayError> {
+    fn activate_pending(&self, index: usize) -> Result<Option<ActivatedPending>, PlayError> {
         let mut phase = self.phase.lock();
         let pending = phase
             .pending_mut()
@@ -46,8 +52,12 @@ impl PlayerImpl {
             None
         } else {
             let src = Arc::clone(&pending.src);
+            let duration_seconds = pending.duration_seconds;
             pending.state = PendingNextState::ActivatedReady;
-            Some(src)
+            Some(ActivatedPending {
+                src,
+                duration_seconds,
+            })
         };
         drop(phase);
         Ok(outcome)
@@ -96,12 +106,13 @@ impl PlayerImpl {
             let _ = self.send_to_slot(PlayerCmd::UnloadTrack { src: prev_src });
         }
 
-        let src = self.enqueue_to_processor(index)?;
+        let (src, duration_seconds) = self.enqueue_to_processor(index)?;
         if let Some(pending_slot) = self.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
                 index,
                 src: Arc::clone(&src),
                 state: PendingNextState::Armed,
+                duration_seconds,
             });
         }
         Some(src)
@@ -129,11 +140,12 @@ impl PlayerImpl {
     ///   [`Self::armed_next`].
     pub fn commit_next(&self, index: usize) -> Result<(), PlayError> {
         // `None` ⇒ the slot was already activated (idempotent no-op).
-        let Some(src) = self.activate_pending(index)? else {
+        let Some(activated) = self.activate_pending(index)? else {
             return Ok(());
         };
 
-        self.start_playback(src);
+        self.start_playback(activated.src);
+        self.publish_current_track_snapshot(activated.duration_seconds);
         let current_index = self.core.current_index.load(Ordering::Relaxed);
         if index != current_index {
             self.core.current_index.store(index, Ordering::Relaxed);
@@ -170,24 +182,22 @@ impl PlayerImpl {
         }
     }
 
-    /// Drain audio-thread notifications for the active slot.
+    /// Drain audio-thread notifications for every active slot.
     pub fn drain_notifications(&self) -> Vec<String> {
-        let Some(slot_id) = self.slot() else {
-            return Vec::new();
-        };
-        let Some(state) = self.core.engine.slot_shared_state(slot_id) else {
-            return Vec::new();
-        };
-
         let mut out = Vec::new();
-        while let Some(notification) = state.notification_rx.lock().try_pop() {
-            out.push(format!("{notification:?}"));
+        for slot_id in self.core.engine.active_slots() {
+            let Some(state) = self.core.engine.slot_shared_state(slot_id) else {
+                continue;
+            };
+            while let Some(notification) = state.notification_rx.lock().try_pop() {
+                out.push(format!("{notification:?}"));
+            }
+            state.drain_trash();
         }
-        state.drain_trash();
         out
     }
 
-    pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<Arc<str>> {
+    pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<(Arc<str>, f64)> {
         let mut items = self.core.items.lock();
         if index >= items.len() {
             return None;
@@ -196,6 +206,9 @@ impl PlayerImpl {
         let queued = items[index].take()?;
         let (item_id, resource) = (queued.item_id, queued.resource);
 
+        let duration_seconds = resource
+            .duration()
+            .map_or(0.0, |duration| duration.as_secs_f64());
         let abr_handle = resource.abr_handle();
         self.phase.lock().set_abr_handle(abr_handle);
 
@@ -218,7 +231,20 @@ impl PlayerImpl {
             src: Arc::clone(&src),
         });
 
-        Some(src)
+        Some((src, duration_seconds))
+    }
+
+    pub(crate) fn publish_current_track_snapshot(&self, duration_seconds: f64) {
+        let Some(slot_id) = self.slot() else {
+            return;
+        };
+        let Some(shared_state) = self.core.engine.slot_shared_state(slot_id) else {
+            return;
+        };
+        shared_state.position.store(0.0, Ordering::Relaxed);
+        shared_state
+            .duration
+            .store(duration_seconds.max(0.0), Ordering::Relaxed);
     }
 
     /// Promote the armed slot to current after an audio-thread handover.
@@ -245,6 +271,7 @@ impl PlayerImpl {
             return;
         }
         let index = pending.index;
+        self.publish_current_track_snapshot(pending.duration_seconds);
         self.core.current_index.store(index, Ordering::Relaxed);
         self.announce_current_item(index);
     }
@@ -282,20 +309,18 @@ impl PlayerImpl {
     /// Process audio-thread notifications, emitting `ItemDidPlayToEnd`
     /// only when a track finishes via natural EOF.
     pub fn process_notifications(&self) {
-        let Some(slot_id) = self.slot() else {
-            tracing::trace!("process_notifications: no current slot");
-            return;
-        };
-        let Some(state) = self.core.engine.slot_shared_state(slot_id) else {
-            tracing::warn!(?slot_id, "process_notifications: slot has no shared state");
-            return;
-        };
-
         let mut notifications = Vec::new();
-        while let Some(notification) = state.notification_rx.lock().try_pop() {
-            notifications.push(notification);
+        for slot_id in self.core.engine.active_slots() {
+            let Some(state) = self.core.engine.slot_shared_state(slot_id) else {
+                tracing::warn!(?slot_id, "process_notifications: slot has no shared state");
+                continue;
+            };
+
+            while let Some(notification) = state.notification_rx.lock().try_pop() {
+                notifications.push(notification);
+            }
+            state.drain_trash();
         }
-        state.drain_trash();
 
         if !notifications.is_empty() {
             tracing::debug!(
@@ -372,6 +397,7 @@ pub(crate) fn player_event_from_notification(
 mod tests {
     use std::sync::Arc;
 
+    use kithara_events::Event;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -405,5 +431,32 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         let err = player.commit_next(1).expect_err("must error");
         assert!(matches!(err, PlayError::NotReady));
+    }
+
+    #[kithara::test]
+    fn commit_next_publishes_snapshot_before_current_item_changed() {
+        let player = PlayerImpl::new(PlayerConfig::default());
+        player
+            .ensure_engine_started()
+            .expect("engine start must succeed");
+        player.ensure_slot().expect("slot allocation must succeed");
+        let mut rx = player.subscribe();
+
+        if let Some(pending_slot) = player.phase.lock().pending_mut() {
+            *pending_slot = Some(PendingNext {
+                src: Arc::from("next.mp3"),
+                state: PendingNextState::Armed,
+                index: 1,
+                duration_seconds: 162.0,
+            });
+        }
+
+        player.commit_next(1).expect("commit_next must succeed");
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Event::Player(PlayerEvent::CurrentItemChanged))
+        ));
+        assert_eq!(player.duration_seconds(), Some(162.0));
     }
 }

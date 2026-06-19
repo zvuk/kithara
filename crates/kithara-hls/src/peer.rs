@@ -190,6 +190,26 @@ impl HlsPeer {
         });
     }
 
+    fn commit_manual_switch_locked(state: Option<&mut HlsTrackState>) {
+        let Some(state) = state else {
+            return;
+        };
+        if !matches!(state.coord.abr.mode(), Some(AbrMode::Manual(_))) {
+            return;
+        }
+        let coord = Arc::clone(&state.coord);
+        if coord.cancel.is_cancelled() {
+            return;
+        }
+        let ctx = state.plan_ctx();
+        state.apply_seek_change(&coord, &ctx);
+        state.apply_boundary_crossing(&coord, &ctx);
+    }
+
+    fn commit_manual_switch_now(&self) {
+        Self::commit_manual_switch_locked(self.state.lock().as_mut());
+    }
+
     /// Shared wake handle the `Source` clones to resume `poll_next` after a
     /// reader progress event. The reader drivers arm/notify it; this micro-task
     /// awaits [`DeferredWake::notified`].
@@ -255,9 +275,19 @@ impl Abr for HlsPeer {
     }
 
     fn wake(&self) {
-        // The ABR controller runs on the downloader runtime (off the RT produce
-        // core), so wake the peer immediately rather than deferring.
+        self.commit_manual_switch_now();
+        let waker = self
+            .state
+            .lock()
+            .as_ref()
+            .and_then(|state| state.waker.clone())
+            .or_else(|| self.pending_waker.lock().clone());
+        // The ABR controller is off the RT produce core: an explicit mode
+        // change must re-poll the producer without waiting for reader motion.
         self.reader_advanced.notify_now();
+        if let Some(waker) = waker {
+            waker.wake();
+        }
     }
 }
 
@@ -399,7 +429,7 @@ impl HlsTrackState {
             // the seek-no-switch freeze contract is untouched; a single-variant
             // `Manual(N)` with no pending decision is a no-op.
             if matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_))) {
-                coord.commit_variant_switch(ctx, floor);
+                coord.commit_variant_switch_at_segment(ctx, floor);
             }
             if found.is_some_and(|(idx, _, _)| idx >= floor) {
                 self.seek_settle_floor = None;

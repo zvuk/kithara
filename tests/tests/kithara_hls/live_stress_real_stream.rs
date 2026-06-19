@@ -678,7 +678,7 @@ async fn live_real_stream_fixed_seek_window_regression(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(120)),
+    timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]

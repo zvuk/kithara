@@ -60,17 +60,25 @@ impl FilePeer {
 
         let raw = self.inner.asset.raw.clone();
         let coord_writer = Arc::clone(&self.inner.source.coord);
+        let inner_for_write = Arc::clone(&self.inner);
         let offset = Arc::new(AtomicU64::new(resume_from));
         let writer_offset = Arc::clone(&offset);
         let writer = Box::new(move |chunk: &[u8]| -> io::Result<()> {
-            let pos = writer_offset.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            let chunk_len = u64::try_from(chunk.len()).map_err(|err| {
+                Error::other(format!("file chunk length does not fit u64: {err}"))
+            })?;
+            let pos = writer_offset.fetch_add(chunk_len, Ordering::Relaxed);
+            let end = pos
+                .checked_add(chunk_len)
+                .ok_or_else(|| Error::other("file download offset overflow"))?;
             let Some(raw) = raw.as_ref() else {
                 return Err(Error::other(
                     "file resource has no writer (already committed or read-only)",
                 ));
             };
             raw.write_at(pos, chunk).map_err(Error::other)?;
-            coord_writer.set_download_pos(pos + chunk.len() as u64);
+            coord_writer.set_download_pos(end);
+            inner_for_write.wake_worker();
             Ok(())
         });
 

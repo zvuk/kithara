@@ -159,9 +159,9 @@ fn resource_config_no_hint(
     resource_config(url, store, backend, None, None)
 }
 
-// Park on ring underrun instead of spinning on Pending, so the warmup loops
-// need no wall-clock deadline (a genuine stall trips the harness timeout).
-// `flash(true)`: the residual poll cadence rides the virtual clock under flash.
+// Keep this warmup nonblocking: under full-suite load a blocking underrun arms
+// the consumer hang watchdog before the HLS producer necessarily gets scheduled.
+// The loop already drives preload and handles Pending explicitly.
 #[kithara::flash(true)]
 async fn warm_hls_worker(
     url: &url::Url,
@@ -175,7 +175,6 @@ async fn warm_hls_worker(
         .media_info(wav_info)
         .worker(worker)
         .decoder_backend(backend)
-        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -215,7 +214,7 @@ async fn warm_hls_worker(
     }
 }
 
-// Same parked-read contract as `warm_hls_worker` (no wall-clock deadline).
+// Same nonblocking warmup contract as `warm_hls_worker`.
 #[kithara::flash(true)]
 async fn warm_hls_worker_without_seek(
     url: &url::Url,
@@ -229,7 +228,6 @@ async fn warm_hls_worker_without_seek(
         .media_info(wav_info)
         .worker(worker)
         .decoder_backend(backend)
-        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await

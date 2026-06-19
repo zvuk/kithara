@@ -28,7 +28,11 @@ pub struct PlayerResource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadOutcome {
     /// The requested range was filled completely.
-    Full,
+    ///
+    /// `frames` counts real PCM frames copied out of the wrapped reader or
+    /// scratch buffer. The remainder may be zero-filled during a non-terminal
+    /// underrun and must not advance playback position.
+    Full { frames: usize },
     /// A strict prefix of the requested range was written.
     ///
     /// The payload is the number of written frames. This outcome is reserved
@@ -187,14 +191,18 @@ impl PlayerResource {
             }
 
             if frames_to_write == frames_to_read {
-                ReadOutcome::Full
+                ReadOutcome::Full {
+                    frames: frames_to_write,
+                }
             } else if eof_reached {
                 ReadOutcome::Partial(frames_to_write)
             } else {
                 for ch in output.iter_mut() {
                     ch[frames_to_write..frames_to_read].fill(0.0);
                 }
-                ReadOutcome::Full
+                ReadOutcome::Full {
+                    frames: frames_to_write,
+                }
             }
         } else if eof_reached {
             ReadOutcome::Eof
@@ -203,7 +211,7 @@ impl PlayerResource {
             for ch in output.iter_mut() {
                 ch[..range_len].fill(0.0);
             }
-            ReadOutcome::Full
+            ReadOutcome::Full { frames: 0 }
         }
     }
 

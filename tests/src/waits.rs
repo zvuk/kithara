@@ -92,11 +92,9 @@ pub async fn wait_for_position_at_least(
 /// advances and position grows.
 ///
 /// Returns the sink-truth position (seconds) observed at the moment the bound is
-/// met — sourced from the event, NOT the tick-cached `position_seconds()`, which
-/// is refreshed by the real-clock background tick loop and therefore goes stale
-/// once an event-driven wait collapses real time under flash. A
-/// `position_seconds()` fast-path and `Lagged` re-read keep it robust against an
-/// already-past target or a dropped event.
+/// met. The bus event is the primary sink-truth signal; `position_seconds()` is
+/// re-checked on the same virtual poll cadence so a dropped / delayed broadcast
+/// receiver cannot turn already-reached playback state into a timeout.
 pub async fn wait_for_position_event(
     rx: &mut EventReceiver,
     queue: &Queue,
@@ -111,21 +109,19 @@ pub async fn wait_for_position_event(
     let min_ms = (min_secs * 1000.0) as u64;
     timeout(deadline, async {
         loop {
-            match rx.recv().await {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+            if let Some(pos) = queue.position_seconds()
+                && pos >= min_secs
+            {
+                return Ok(pos);
+            }
+            match timeout(POLL_TICK, rx.recv()).await {
+                Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
                     if position_ms >= min_ms {
                         return Ok(position_ms as f64 / 1000.0);
                     }
                 }
-                Ok(_) => {}
-                Err(RecvError::Lagged(_)) => {
-                    if let Some(pos) = queue.position_seconds()
-                        && pos >= min_secs
-                    {
-                        return Ok(pos);
-                    }
-                }
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
+                Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) | Err(_) => {}
+                Ok(Err(RecvError::Closed)) => return Err("event stream closed".to_string()),
             }
         }
     })
@@ -169,8 +165,9 @@ pub async fn wait_for_position_near(
 
 /// Event-driven [`wait_for_position_near`]: resolves the moment sink-truth
 /// `PlaybackProgress` or `SeekComplete` lands within `tolerance` of `target`,
-/// returning that position. A fast-path and `Lagged` re-read guard against an
-/// already-near position or a dropped event.
+/// returning that position. The queue state is re-checked on the same virtual
+/// poll cadence so a dropped / delayed broadcast receiver cannot hide an
+/// already-near position.
 pub async fn wait_for_position_near_event(
     rx: &mut EventReceiver,
     queue: &Queue,
@@ -185,28 +182,26 @@ pub async fn wait_for_position_near_event(
     }
     timeout(deadline, async {
         loop {
-            match rx.recv().await {
-                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+            if let Some(pos) = queue.position_seconds()
+                && (pos - target).abs() < tolerance
+            {
+                return Ok(pos);
+            }
+            match timeout(POLL_TICK, rx.recv()).await {
+                Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
                     let pos = position_ms as f64 / 1000.0;
                     if (pos - target).abs() < tolerance {
                         return Ok(pos);
                     }
                 }
-                Ok(Event::Audio(AudioEvent::SeekComplete { position, .. })) => {
+                Ok(Ok(Event::Audio(AudioEvent::SeekComplete { position, .. }))) => {
                     let pos = position.as_secs_f64();
                     if (pos - target).abs() < tolerance {
                         return Ok(pos);
                     }
                 }
-                Ok(_) => {}
-                Err(RecvError::Lagged(_)) => {
-                    if let Some(pos) = queue.position_seconds()
-                        && (pos - target).abs() < tolerance
-                    {
-                        return Ok(pos);
-                    }
-                }
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
+                Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) | Err(_) => {}
+                Ok(Err(RecvError::Closed)) => return Err("event stream closed".to_string()),
             }
         }
     })

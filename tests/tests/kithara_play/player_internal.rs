@@ -13,7 +13,8 @@ use kithara_decode::PcmSpec;
 use kithara_events::{Event, EventBus, EventReceiver};
 use kithara_integration_tests::{audio_mock::TestPcmReader, offline::OfflineSession};
 use kithara_play::{
-    PlayError, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Resource, SessionDispatcher,
+    PlayError, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Resource, SeekOutcome,
+    SessionDispatcher,
 };
 use kithara_test_utils::kithara;
 
@@ -414,6 +415,18 @@ fn arm_next_loads_item_and_returns_src() {
             .any(|n| { n.contains("Loaded") && n.contains(src.as_ref()) }),
         "TrackLoaded must reach the audio thread; got {notifications:?}"
     );
+}
+
+#[kithara::test]
+fn seek_seconds_updates_position_optimistically() {
+    let (player, _session) = make_offline_player(0.0);
+    player.ensure_engine_started().unwrap();
+    player.ensure_slot().unwrap();
+
+    let outcome = player.seek_seconds(54.689_879_542).expect("seek must land");
+
+    assert!(matches!(outcome, SeekOutcome::Landed { .. }));
+    assert_eq!(player.position_seconds(), Some(54.689_879_542));
 }
 
 #[kithara::test]

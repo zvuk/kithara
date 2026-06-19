@@ -7,7 +7,9 @@ use kithara_assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, ProcessCh
 use kithara_drm::DecryptContext;
 use kithara_platform::{CancelToken, sync::CondvarGate, time::Duration};
 use kithara_storage::WaitOutcome;
-use kithara_stream::{ReadOutcome, SeekControl, SeekObserve, SeekState, SourceError, StreamError};
+use kithara_stream::{
+    ReadOutcome, SeekControl, SeekObserve, SeekState, SourceError, SourcePhase, StreamError,
+};
 use kithara_test_utils::kithara;
 use url::Url;
 
@@ -196,6 +198,61 @@ fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
         v.get_position(),
         reader_pos,
         "position must follow the requested reader_pos"
+    );
+}
+
+#[kithara::test]
+fn descriptor_at_byte_uses_virtual_shifted_range() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
+
+    v.activate_at_segment_with_shift(
+        &ctx,
+        SegmentActivateParams {
+            from_seg: 2,
+            reader_pos: 1_500,
+            seg_boundary: 1_500,
+        },
+    );
+
+    let descriptor = v
+        .descriptor_at_byte(1_550)
+        .expect("shifted segment 2 resolves");
+
+    assert_eq!(descriptor.segment_index, 2);
+    assert_eq!(
+        descriptor.byte_range,
+        1_500..1_900,
+        "ByteMap descriptors must use the same virtual coordinates as \
+         find_at_offset/read_at/phase_at"
+    );
+}
+
+#[kithara::test]
+fn reset_to_full_range_uses_live_init_size_after_shifted_activation() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 600, &[400, 400], &ctx);
+
+    v.activate_at_segment_with_shift(
+        &ctx,
+        SegmentActivateParams {
+            from_seg: 1,
+            reader_pos: 1_000,
+            seg_boundary: 1_000,
+        },
+    );
+    v.layout.apply_commit(v.store.segments(), || {
+        v.store.apply_loaded_size(PlannedFetch::Init, 588);
+        v.store.init_size()
+    });
+
+    v.reset_to_full_range();
+
+    assert_eq!(
+        v.segment_byte_offset(0),
+        Some(588),
+        "full-range reset must leave shifted/frozen init geometry and use \
+         the committed live init length"
     );
 }
 
@@ -739,6 +796,21 @@ fn dispatch_requeues_orphaned_downloading_segment() {
         1,
         "seg 1 (orphaned -> Missing) must be re-dispatched, not lost from the queue"
     );
+}
+
+#[kithara::test]
+fn phase_at_reports_waiting_demand_for_claimed_segment() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    let claim = v.store.segments()[0]
+        .state
+        .try_claim(PlannedFetch::Segment(0), Arc::downgrade(&v))
+        .expect("segment claim");
+
+    assert_eq!(v.phase_at(0..16), SourcePhase::WaitingDemand);
+
+    claim.into_missing();
+    assert_eq!(v.phase_at(0..16), SourcePhase::Waiting);
 }
 
 #[kithara::test]

@@ -313,15 +313,14 @@ pub(crate) struct DecodeInit<T: StreamType> {
 }
 
 /// The seek that failed inside [`StreamAudioSource::recover_from_decoder_seek_error`]:
-/// the `request`, the target `position`, its seek `epoch`, the
-/// `recreate_offset` to rebuild the decoder at, and the `seek_mode`
-/// (direct vs anchor). The triggering `DecodeError` is passed separately.
+/// the `request`, the target `position`, the `recreate_offset` to rebuild the
+/// decoder at, and the `seek_mode` (direct vs anchor). The triggering
+/// `DecodeError` is passed separately.
 #[derive(Clone, Copy)]
 struct SeekAttempt {
     position: Duration,
     seek_mode: SeekMode,
     request: SeekRequest,
-    epoch: u64,
     recreate_offset: u64,
 }
 
@@ -427,6 +426,8 @@ impl<T: StreamType> StreamAudioSource<T> {
 
         let codec_changed =
             matches!((current_codec, target_codec), (Some(from), Some(to)) if from != to);
+        let same_codec =
+            matches!((current_codec, target_codec), (Some(from), Some(to)) if from == to);
         let variant_changed =
             matches!((current_variant, target_variant), (Some(from), Some(to)) if from != to);
         let target_container = stream_info
@@ -438,7 +439,8 @@ impl<T: StreamType> StreamAudioSource<T> {
                     .as_ref()
                     .and_then(|info| info.container)
             });
-        let needs_recreation = codec_changed || variant_changed;
+        let needs_recreation = codec_changed
+            || variant_requires_format_boundary(variant_changed, same_codec, target_container);
         let recreate_offset = resolve_recreate_offset(
             &self.shared_stream,
             target_container,
@@ -452,6 +454,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             ?target_variant,
             anchor_variant = ?anchor.variant_index,
             codec_changed,
+            same_codec,
             variant_changed,
             needs_recreation,
             ?target_container,
@@ -467,7 +470,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             self.fail_seek(
                 request,
                 DecodeError::InvalidData(format!(
-                    "seek anchor alignment: {target_container:?} variant switch has \
+                    "seek anchor alignment: {target_container:?} decoder recreate has \
                      no init segment range"
                 )),
                 "seek anchor alignment: no init segment range",
@@ -502,7 +505,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             media_info: target_info,
             next: RecreateNext::Seek(request),
             offset: recreate_offset,
-            attempt: request.attempt,
         });
         false
     }
@@ -567,13 +569,14 @@ impl<T: StreamType> StreamAudioSource<T> {
         epoch: u64,
         position: Duration,
         location: SegmentLocation,
-        anchor_offset: Option<u64>,
+        anchor: Option<SourceSeekAnchor>,
     ) {
         self.reset_effect_chain();
         self.resume_target = Some((epoch, position));
         self.emit_seek_lifecycle(SeekLifecycleStage::SeekApplied, epoch, location);
         self.update_state(CurrentFsm::awaiting_resume(ResumeState {
-            anchor_offset,
+            anchor_offset: anchor.map(|anchor| anchor.byte_offset),
+            anchor_variant_index: anchor.and_then(|anchor| anchor.variant_index),
             seek: SeekContext {
                 epoch,
                 target: position,
@@ -589,7 +592,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         debug!(
             ?position,
             epoch,
-            attempt = request.attempt,
+            emit_request = request.emit_request,
             stream_pos,
             committed_position = ?self.playhead.position(),
             variant = ?self
@@ -616,7 +619,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 media_info: new_info,
                 next: RecreateNext::ApplySeek(request),
                 offset: target_offset,
-                attempt: request.attempt,
             });
             return false;
         }
@@ -637,7 +639,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 SeekAttempt {
                     request,
                     position,
-                    epoch,
                     recreate_offset: self.session.base_offset,
                     seek_mode: SeekMode::Direct {
                         target_byte: self.estimate_target_byte(position),
@@ -718,7 +719,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         debug!(
             ?position,
             epoch,
-            attempt = request.attempt,
+            emit_request = request.emit_request,
             anchor_start = ?anchor.segment_start,
             anchor_byte_offset = anchor.byte_offset,
             anchor_variant = ?anchor.variant_index,
@@ -735,7 +736,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 SeekAttempt {
                     request,
                     position,
-                    epoch,
                     recreate_offset: anchor.byte_offset,
                     seek_mode: SeekMode::Anchor(anchor),
                 },
@@ -749,12 +749,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             "seek anchor path: exact decoder seek succeeded"
         );
 
-        self.apply_seek_applied(
-            epoch,
-            position,
-            self.seek_context(),
-            Some(anchor.byte_offset),
-        );
+        self.apply_seek_applied(epoch, position, self.seek_context(), Some(anchor));
         true
     }
 
@@ -890,15 +885,17 @@ impl<T: StreamType> StreamAudioSource<T> {
         outcome
     }
 
-    /// Detect `media_info` change and return the recovery anchor.
+    /// Detect a decoder format boundary and return the recovery anchor.
     ///
-    /// Triggers on variant-index change. Codec/container are NOT
-    /// re-derived from `current_info`: the source's `media_info()` may
-    /// return a declarative container (e.g. `Fmp4` inferred from an
-    /// `EXT-X-MAP` URL extension) that disagrees with the bytes the
-    /// decoder is actually reading. The cached `session.media_info`
-    /// reflects what was probed and built successfully — that's the
-    /// authoritative decoder type.
+    /// Same-codec variant-index changes are byte-continuity only for containers
+    /// that can be decoded from a packet boundary. Init-bearing containers
+    /// still need a decoder boundary even when the codec is unchanged.
+    /// Codec/container are NOT re-derived from `current_info`: the source's
+    /// `media_info()` may return a declarative container (e.g. `Fmp4` inferred
+    /// from an `EXT-X-MAP` URL extension) that disagrees with the bytes the
+    /// decoder is actually reading. The cached `session.media_info` reflects
+    /// what was probed and built successfully — that's the authoritative
+    /// decoder type.
     ///
     /// Recovery anchor: cross-codec init-segment offset via
     /// `format_change_segment_range`. `NoChange` when it does not apply.
@@ -990,13 +987,11 @@ impl<T: StreamType> StreamAudioSource<T> {
             ?err,
             epoch = request.seek.epoch,
             ?request.seek.target,
-            attempts = request.attempt.saturating_add(1),
             "{context}"
         );
         self.emit_event(AudioEvent::SeekRejected {
             epoch: request.seek.epoch,
             target: request.seek.target,
-            attempts: request.attempt.saturating_add(1),
         });
         self.finalize_seek_pending(request.seek.epoch);
         self.update_state(CurrentFsm::failed(TrackFailure::Decode(err)));
@@ -1110,17 +1105,17 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// fails the seek (no recreate), anything else recreates at the
     /// init/offset range. Always returns `false`. See the crate
     /// `CONTEXT.md` "Seek error recovery".
-    fn recover_from_decoder_seek_error(&mut self, attempt: SeekAttempt, err: DecodeError) -> bool {
+    fn recover_from_decoder_seek_error(&mut self, failed: SeekAttempt, err: DecodeError) -> bool {
         let SeekAttempt {
             request,
             position,
-            epoch,
             recreate_offset,
             seek_mode,
-        } = attempt;
+        } = failed;
+        let epoch = request.seek.epoch;
         let (warn_msg, fail_ctx) = match seek_mode {
             SeekMode::Direct { .. } => (
-                "seek: decoder.seek failed, recreating decoder and retrying",
+                "seek: decoder.seek failed, rebuilding decoder for deterministic recovery",
                 "seek: decoder.seek failed",
             ),
             SeekMode::Anchor(_) => (
@@ -1128,14 +1123,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 "seek anchor path: exact decoder seek failed",
             ),
         };
-        warn!(
-            ?err,
-            epoch,
-            ?position,
-            recreate_offset,
-            attempts = request.attempt.saturating_add(1),
-            "{warn_msg}"
-        );
+        warn!(?err, epoch, ?position, recreate_offset, "{warn_msg}");
 
         if matches!(err, DecodeError::SeekOutOfRange(_)) {
             self.reject_seek(request, &err, fail_ctx);
@@ -1148,7 +1136,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 mode: seek_mode,
             };
             let phase = self.source_phase_for_wait_context(&WaitContext::ApplySeek(applying));
-            let reason = map_source_phase(phase).unwrap_or(WaitingReason::Waiting);
+            let reason = self.source_park(phase).unwrap_or(WaitingReason::Waiting);
             self.update_state(CurrentFsm::waiting(
                 WaitContext::ApplySeek(applying),
                 reason,
@@ -1182,7 +1170,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             media_info: info,
             next: RecreateNext::ApplySeek(request),
             offset: recreate_offset,
-            attempt: request.attempt.saturating_add(1),
         });
         false
     }
@@ -1218,14 +1205,14 @@ impl<T: StreamType> StreamAudioSource<T> {
         Ok(())
     }
 
-    /// Soft seek rejection: the seek attempt cannot be honoured
+    /// Soft seek rejection: the seek cannot be honoured
     /// (target out-of-range, decoder.seek failed after a fresh
     /// recreate, etc.) but the existing decoder is still alive —
     /// the track keeps playing from its current position. Emits
     /// `SeekRejected`, clears the pending epoch, and parks the FSM
     /// back in `Decoding`. Used for both caller-side errors
     /// (`SeekOutOfRange`) and post-recreate seek failures, where a
-    /// further recreate-and-retry would form a loop. The previous
+    /// another recreate cycle would form a loop. The previous
     /// code marked the track `Failed` for these and broke
     /// auto-advance, seek-after-near-end, and stress reproducers.
     fn reject_seek(&mut self, request: SeekRequest, err: &DecodeError, context: &'static str) {
@@ -1233,13 +1220,11 @@ impl<T: StreamType> StreamAudioSource<T> {
             ?err,
             epoch = request.seek.epoch,
             ?request.seek.target,
-            attempts = request.attempt.saturating_add(1),
             "{context}"
         );
         self.emit_event(AudioEvent::SeekRejected {
             epoch: request.seek.epoch,
             target: request.seek.target,
-            attempts: request.attempt.saturating_add(1),
         });
         self.epoch.store(request.seek.epoch, Ordering::Release);
         self.finalize_seek_pending(request.seek.epoch);
@@ -1290,7 +1275,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             codec = ?state.media_info.codec,
             container = ?state.media_info.container,
             target_offset = state.offset,
-            attempt = state.attempt,
             next = ?std::mem::discriminant(&state.next),
             ?pending_seek_target,
             committed_position = ?self.playhead.position(),
@@ -1412,7 +1396,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 media_info: new_info,
                 next: RecreateNext::Decode,
                 offset: target_offset,
-                attempt: 0,
             });
             return DecodeAction::Yield;
         }
@@ -1515,7 +1498,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                     media_info: target_info,
                     next: RecreateNext::Decode,
                     offset: range.start,
-                    attempt: 0,
                 });
                 return DecodeAction::Yield;
             }
@@ -1523,15 +1505,15 @@ impl<T: StreamType> StreamAudioSource<T> {
             // after `decode_next_chunk`'s loop-top `is_seek_pending` check
             // (seek-epoch suppression), or the commit fence closed before
             // `abr.apply_decision` published the new metadata. Both windows
-            // are synchronous (no await between the stores), so retry the
+            // are synchronous (no await between the stores), so recheck the
             // loop (`Interrupted`) instead of killing the producer; a
-            // genuinely never-observable transition surfaces as a watchdog
+            // genuinely never-observable transition surfaces as a watchdog.
             if !self.seek_obs.is_pending() {
                 warn!(
                     ?no_change_err,
                     chunks = self.chunks_decoded,
                     samples = self.total_samples,
-                    "variant change without observable format transition yet — retrying"
+                    "variant change without observable format transition yet — rechecking"
                 );
             }
             return DecodeAction::Return(Err(DecodeError::Interrupted));
@@ -1547,7 +1529,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             media_info: new_info,
             next: RecreateNext::Decode,
             offset: target_offset,
-            attempt: 0,
         });
         DecodeAction::Yield
     }
@@ -1636,13 +1617,13 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// Apply a pending seek from the shared seek state.
     ///
     /// Reads epoch/target from the seek state and resolves the seek mode.
-    fn apply_seek_from_timeline(&mut self, request: SeekRequest) {
+    fn apply_seek_from_timeline(&mut self, mut request: SeekRequest) {
         let epoch = request.seek.epoch;
         let position = request.seek.target;
         debug!(
             ?position,
             epoch,
-            attempt = request.attempt,
+            emit_request = request.emit_request,
             current_epoch = self.epoch.load(Ordering::Acquire),
             timeline_seek_target = ?self.seek_obs.target(),
             stream_pos = self.shared_stream.position(),
@@ -1690,8 +1671,9 @@ impl<T: StreamType> StreamAudioSource<T> {
             return;
         }
 
-        if request.attempt == 0 {
+        if request.emit_request {
             self.emit_seek_lifecycle(SeekLifecycleStage::SeekRequest, epoch, self.seek_context());
+            request.emit_request = false;
         }
 
         let anchor_result = self.shared_stream.seek_time_anchor(position);
@@ -1937,7 +1919,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 SeekMode::Direct { target_byte: None } => self.shared_stream.phase(),
             },
             WaitContext::Recreation(recreate) => self.recreate_phase(recreate),
-            WaitContext::PostSeek(resume) => resume.anchor_offset.map_or_else(
+            WaitContext::PostSeek(resume) => self.post_seek_anchor_offset(resume).map_or_else(
                 || self.shared_stream.phase(),
                 |byte| self.source_phase_for_boundary(byte),
             ),
@@ -1968,18 +1950,60 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.shared_stream.phase_at(pos..end)
     }
 
+    fn source_park(&self, phase: SourcePhase) -> Option<WaitingReason> {
+        let reason = map_source_phase(phase)?;
+        self.arm_peer_wake();
+        Some(reason)
+    }
+
     fn source_ready_for_range(&self, range: Range<u64>) -> bool {
+        let phase = self.shared_stream.phase_at(range);
+        if self.source_park(phase).is_some() {
+            return false;
+        }
         matches!(
-            self.shared_stream.phase_at(range),
+            phase,
             SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
         )
     }
 
     fn source_ready_for_recreate(&self, recreate: &RecreateState) -> bool {
+        let phase = self.recreate_phase(recreate);
+        if self.source_park(phase).is_some() {
+            return false;
+        }
         matches!(
-            self.recreate_phase(recreate),
+            phase,
             SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
         )
+    }
+
+    fn post_seek_anchor_offset(&self, resume: &ResumeState) -> Option<u64> {
+        let offset = resume.anchor_offset?;
+        let Some(anchor_variant) = resume.anchor_variant_index else {
+            return Some(offset);
+        };
+        let current_variant = self
+            .shared_stream
+            .abr_handle()
+            .and_then(|handle| handle.current_variant_index());
+        match current_variant {
+            Some(current) if current == anchor_variant => Some(offset),
+            _ => None,
+        }
+    }
+
+    fn seek_anchor_stale(&self, mode: SeekMode) -> bool {
+        let SeekMode::Anchor(anchor) = mode else {
+            return false;
+        };
+        let Some(anchor_variant) = anchor.variant_index else {
+            return false;
+        };
+        self.shared_stream
+            .abr_handle()
+            .and_then(|handle| handle.current_variant_index())
+            .is_some_and(|current| current != anchor_variant)
     }
 }
 
@@ -2018,7 +2042,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// Returns `Some(RecreateOutcome::Done)` on success,
     /// `Some(RecreateOutcome::SoftFailed)` on hard failure (caller marks track failed),
     /// `Some(RecreateOutcome::NeedsSourceWait)` on transient `ErrorClass::Interrupted`
-    /// (caller routes to `wait_for_source_on_recreate` for retry once the source
+    /// (caller routes to `wait_for_source_on_recreate` to re-enter once the source
     /// has buffered the probe window), or `None` when the track was already
     /// terminated inside this helper (e.g. stream seek error).
     fn execute_recreation(&mut self, recreate: &RecreateState) -> Option<RecreateOutcome> {
@@ -2112,7 +2136,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         debug!(
             target = ?request.seek.target,
             epoch = request.seek.epoch,
-            attempt = request.attempt,
+            emit_request = request.emit_request,
             committed_position = ?self.playhead.position(),
             stream_pos = self.shared_stream.position(),
             "finish_apply_seek_after_recreate: enter"
@@ -2146,7 +2170,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// (moved out of the FSM by the caller) — no `self.state` re-read.
     fn wait_for_source_on_recreate(&mut self, recreate: RecreateState) -> TrackStep<PcmChunk> {
         let phase = self.recreate_phase(&recreate);
-        if let Some(reason) = map_source_phase(phase) {
+        if let Some(reason) = self.source_park(phase) {
             self.update_state(CurrentFsm::waiting(
                 WaitContext::Recreation(recreate),
                 reason,
@@ -2165,9 +2189,21 @@ impl<T: StreamType> StreamAudioSource<T> {
 impl Track<ApplyingSeek> {
     fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
         let applying = self.into_inner();
+        if src.seek_anchor_stale(applying.mode) {
+            trace!(
+                ?applying,
+                current_variant = ?src
+                    .shared_stream
+                    .abr_handle()
+                    .and_then(|handle| handle.current_variant_index()),
+                "apply seek anchor belongs to inactive variant; re-resolving"
+            );
+            src.update_state(CurrentFsm::seek_requested(applying.request));
+            return TrackStep::StateChanged;
+        }
         if !src.source_is_ready_for_apply_seek(applying) {
             let phase = src.source_phase_for_wait_context(&WaitContext::ApplySeek(applying));
-            if let Some(reason) = map_source_phase(phase) {
+            if let Some(reason) = src.source_park(phase) {
                 src.update_state(CurrentFsm::waiting(
                     WaitContext::ApplySeek(applying),
                     reason,
@@ -2198,17 +2234,17 @@ impl Track<ApplyingSeek> {
 impl Track<AwaitingResume> {
     fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
         let resume = self.into_inner();
-        let anchor_offset = resume.anchor_offset;
-        let ready = anchor_offset.map_or_else(
+        let post_seek_offset = src.post_seek_anchor_offset(&resume);
+        let ready = post_seek_offset.map_or_else(
             || src.source_is_ready(),
             |byte| src.source_is_ready_for_boundary(byte),
         );
         if !ready {
-            let phase = anchor_offset.map_or_else(
+            let phase = post_seek_offset.map_or_else(
                 || src.shared_stream.phase(),
                 |byte| src.source_phase_for_boundary(byte),
             );
-            if let Some(reason) = map_source_phase(phase) {
+            if let Some(reason) = src.source_park(phase) {
                 src.update_state(CurrentFsm::waiting(WaitContext::PostSeek(resume), reason));
                 return TrackStep::Blocked(reason);
             }
@@ -2241,12 +2277,11 @@ impl Track<Decoding> {
                     media_info: new_info,
                     next: RecreateNext::Decode,
                     offset: target_offset,
-                    attempt: 0,
                 });
                 return TrackStep::StateChanged;
             }
             let phase = src.shared_stream.phase();
-            if let Some(reason) = map_source_phase(phase) {
+            if let Some(reason) = src.source_park(phase) {
                 src.update_state(CurrentFsm::waiting(WaitContext::Playback, reason));
                 return TrackStep::Blocked(reason);
             }
@@ -2307,7 +2342,7 @@ impl Track<SeekRequested> {
         let request = self.into_inner();
         if !src.source_is_ready() {
             let phase = src.shared_stream.phase();
-            if let Some(reason) = map_source_phase(phase) {
+            if let Some(reason) = src.source_park(phase) {
                 src.update_state(CurrentFsm::waiting(WaitContext::Seek(request), reason));
                 return TrackStep::Blocked(reason);
             }
@@ -2323,9 +2358,23 @@ impl Track<WaitingForSource> {
             context,
             reason: stored_reason,
         } = self.into_inner();
+        if let WaitContext::ApplySeek(applying) = context
+            && src.seek_anchor_stale(applying.mode)
+        {
+            trace!(
+                ?applying,
+                current_variant = ?src
+                    .shared_stream
+                    .abr_handle()
+                    .and_then(|handle| handle.current_variant_index()),
+                "waiting apply seek anchor belongs to inactive variant; re-resolving"
+            );
+            src.update_state(CurrentFsm::seek_requested(applying.request));
+            return TrackStep::StateChanged;
+        }
         let phase = src.source_phase_for_wait_context(&context);
 
-        if let Some(reason) = map_source_phase(phase) {
+        if let Some(reason) = src.source_park(phase) {
             // Still waiting — restore the phase with its stored reason.
             src.update_state(CurrentFsm::waiting(context, stored_reason));
             return TrackStep::Blocked(reason);
@@ -2414,7 +2463,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     target,
                     epoch: self.seek_obs.epoch(),
                 },
-                ..Default::default()
+                emit_request: false,
             }));
             self.reset_effect_chain();
             self.gapless.notify_seek();
@@ -2487,11 +2536,14 @@ fn emit_failure_log(failure: &TrackFailure) {
 
 /// Build the recreate target `MediaInfo` for a format boundary.
 ///
-/// Returns `None` when there is no boundary to act on. A boundary
-/// triggers on either:
-/// - variant-index change (ABR switched to a different variant), or
-/// - explicit codec change with both sides specified (rare cross-codec
-///   transitions where the source has actually probed a new codec).
+/// Returns `None` when there is no boundary to act on. A boundary triggers on
+/// either:
+/// - explicit codec change with both sides specified, or
+/// - variant-index change where codec continuity is not known.
+///
+/// A known same-codec variant switch is byte-continuity only when the cached
+/// container can be decoded from a packet boundary. Init-bearing containers need
+/// a decoder boundary even when the codec is unchanged.
 ///
 /// The returned target preserves cached `container` (the decoder's
 /// truth — see below) and updates `variant_index` from `current`.
@@ -2517,7 +2569,16 @@ fn resolve_format_change_target(
         (cached.and_then(|c| c.codec), current.codec),
         (Some(a), Some(b)) if a != b
     );
-    if !variant_changed && !codec_changed {
+    let same_codec = matches!(
+        (cached.and_then(|c| c.codec), current.codec),
+        (Some(a), Some(b)) if a == b
+    );
+    let container = current
+        .container
+        .or_else(|| cached.and_then(|c| c.container));
+    let variant_requires_boundary =
+        variant_requires_format_boundary(variant_changed, same_codec, container);
+    if !variant_requires_boundary && !codec_changed {
         return None;
     }
     let target = cached.map_or_else(
@@ -2535,6 +2596,18 @@ fn resolve_format_change_target(
         },
     );
     Some(target)
+}
+
+fn variant_requires_format_boundary(
+    variant_changed: bool,
+    same_codec: bool,
+    container: Option<ContainerFormat>,
+) -> bool {
+    variant_changed && (!same_codec || same_codec_variant_requires_boundary(container))
+}
+
+fn same_codec_variant_requires_boundary(container: Option<ContainerFormat>) -> bool {
+    container.is_some_and(|c| c != ContainerFormat::Wav && container_needs_init_range(c))
 }
 
 /// Whether the container requires an init header (ftyp/moov/RIFF/EBML…)
@@ -2572,9 +2645,9 @@ fn container_needs_init_range(container: ContainerFormat) -> bool {
 ///   codec's first packet is the cleanest resync point — but fall back
 ///   to `anchor_byte_offset` so legacy flows (no `format_change_range`
 ///   yet committed) keep working.
-/// - Variant-only change with a non-init-bearing container: return
-///   `anchor_byte_offset` — mid-stream resync is valid for
-///   MPEG-ES/ADTS/FLAC/Ogg/MPEG-TS.
+/// - Variant-only change whose codec continuity is unknown and whose
+///   container is non-init-bearing: return `anchor_byte_offset` — mid-stream
+///   resync is valid for MPEG-ES/ADTS/FLAC/Ogg/MPEG-TS.
 fn resolve_recreate_offset<T: StreamType>(
     shared: &SharedStream<T>,
     target_container: Option<ContainerFormat>,
@@ -2635,7 +2708,6 @@ mod playing_flag_tests {
             WaitingReason::Waiting,
         )));
         assert!(playing_for_state(&CurrentFsm::recreating(RecreateState {
-            attempt: 0,
             cause: RecreateCause::FormatBoundary,
             media_info: MediaInfo::default(),
             next: RecreateNext::Decode,
@@ -2681,7 +2753,6 @@ mod playing_flag_tests {
             ),
             (
                 CurrentFsm::recreating(RecreateState {
-                    attempt: 0,
                     cause: RecreateCause::VariantSwitch,
                     media_info: MediaInfo::default(),
                     next: RecreateNext::Decode,
@@ -2744,6 +2815,32 @@ mod resolve_format_change_target_tests {
             Some(ContainerFormat::Fmp4),
             Some(0),
         );
+        assert!(resolve_format_change_target(Some(&cached), &current).is_none());
+    }
+
+    #[kithara::test]
+    fn same_codec_fmp4_variant_change_recreates_boundary() {
+        let cached = info(
+            Some(AudioCodec::AacLc),
+            Some(ContainerFormat::Fmp4),
+            Some(0),
+        );
+        let current = info(
+            Some(AudioCodec::AacLc),
+            Some(ContainerFormat::Fmp4),
+            Some(1),
+        );
+        let target = resolve_format_change_target(Some(&cached), &current)
+            .expect("same-codec fMP4 variant change must re-prime the demuxer");
+        assert_eq!(target.variant_index, Some(1));
+        assert_eq!(target.codec, Some(AudioCodec::AacLc));
+        assert_eq!(target.container, Some(ContainerFormat::Fmp4));
+    }
+
+    #[kithara::test]
+    fn same_codec_wav_variant_change_is_byte_continuity() {
+        let cached = info(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav), Some(0));
+        let current = info(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav), Some(1));
         assert!(resolve_format_change_target(Some(&cached), &current).is_none());
     }
 

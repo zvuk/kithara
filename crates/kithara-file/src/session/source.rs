@@ -6,7 +6,8 @@ use kithara_platform::{CancelToken, sync::Mutex, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, AudioCodec, MediaInfo, PlayheadRead, PlayheadWrite, ReadOutcome, SeekControl,
-    SeekObserve, SegmentDescriptor, SourcePhase, StreamError, dl::PeerHandle,
+    SeekObserve, SegmentDescriptor, SourceError as StreamSourceError, SourcePhase, StreamError,
+    WorkerWake, dl::PeerHandle,
 };
 use tracing::trace;
 use url::Url;
@@ -100,6 +101,31 @@ impl FileSource {
             peer_handle: None,
         }
     }
+
+    fn update_read_demand(&self, read_pos: u64) {
+        if read_pos > self.coord.read_pos() {
+            self.coord.set_read_pos(read_pos);
+            if let Some(lease) = self.inner.demand_lease.as_ref() {
+                lease.note_progress();
+            }
+        }
+    }
+
+    fn known_len(&self) -> Option<u64> {
+        self.coord
+            .total_bytes()
+            .or_else(|| self.inner.asset.reader.len())
+    }
+
+    fn readable_part(&self, range: Range<u64>) -> Option<Range<u64>> {
+        let Some(total) = self.known_len() else {
+            return Some(range);
+        };
+        if total > 0 && range.start >= total {
+            return None;
+        }
+        Some(range.start..range.end.min(total))
+    }
 }
 
 impl kithara_stream::Source for FileSource {
@@ -119,9 +145,7 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn len(&self) -> Option<u64> {
-        let from_coord = self.coord.total_bytes();
-        let from_res = self.inner.asset.reader.len();
-        from_coord.or(from_res)
+        self.known_len()
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
@@ -134,22 +158,16 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        let contains = self.inner.asset.reader.contains_range(range.clone());
+        let Some(readable) = self.readable_part(range.clone()) else {
+            return SourcePhase::Eof;
+        };
+        let contains = readable.is_empty() || self.inner.asset.reader.contains_range(readable);
         if contains {
             return SourcePhase::Ready;
         }
 
-        let from_coord = self.coord.total_bytes();
-        let from_res = self.inner.asset.reader.len();
-        let past_eof = from_coord
-            .or(from_res)
-            .is_some_and(|total| total > 0 && range.start >= total);
-
         if self.coord.seek_obs().is_flushing() {
             return SourcePhase::Seeking;
-        }
-        if past_eof {
-            return SourcePhase::Eof;
         }
         SourcePhase::Waiting
     }
@@ -200,6 +218,10 @@ impl kithara_stream::Source for FileSource {
         self.coord.set_position(pos);
     }
 
+    fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
+        self.inner.set_worker_wake(wake);
+    }
+
     fn take_reader_event_sink(&mut self) -> Option<kithara_stream::BoxedEventSink> {
         let hooks = super::reader::FileReaderEventSink::new(
             self.inner.source.bus.clone(),
@@ -215,8 +237,6 @@ impl kithara_stream::Source for FileSource {
         range: Range<u64>,
         timeout: Option<Duration>,
     ) -> kithara_stream::StreamResult<WaitOutcome> {
-        let _ = timeout;
-
         match self.phase_at(range.clone()) {
             SourcePhase::Seeking => return Ok(WaitOutcome::Interrupted),
             SourcePhase::Eof => return Ok(WaitOutcome::Eof),
@@ -224,8 +244,10 @@ impl kithara_stream::Source for FileSource {
             _ => {}
         }
 
-        if range.start > self.coord.read_pos() {
-            self.coord.set_read_pos(range.start);
+        self.update_read_demand(range.start);
+
+        if timeout.is_some() {
+            return Err(StreamError::Source(StreamSourceError::WaitBudgetExceeded));
         }
 
         self.inner

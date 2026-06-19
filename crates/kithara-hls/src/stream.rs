@@ -52,7 +52,8 @@ impl StreamType for Hls {
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
         let asset_root = asset_root_for_url(&config.url, config.name.as_deref());
         let asset_root_arc: Arc<str> = Arc::from(asset_root.as_str());
-        let cancel = CancelScope::new(config.cancel.clone()).token();
+        let stream_scope = CancelScope::new(config.cancel.clone());
+        let cancel = stream_scope.token();
 
         let bus = config
             .bus
@@ -206,7 +207,7 @@ impl StreamType for Hls {
             Arc::clone(&playlist_state),
         ));
 
-        let mut source = HlsSource::new(Arc::clone(&coord), bus.clone());
+        let mut source = HlsSource::new(Arc::clone(&coord), bus.clone(), stream_scope);
 
         hls_peer.activate(
             coord,

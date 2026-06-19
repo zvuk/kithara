@@ -466,10 +466,10 @@ mod tests {
             .expect("initial preload gate must open");
         assert!(preload_gate.is_ready());
 
-        let _ = seek.begin(Duration::from_secs(1));
+        let epoch = seek.begin(Duration::from_secs(1));
         handle.wake();
 
-        platform_timeout(Duration::from_secs(1), preload_gate.wait())
+        platform_timeout(Duration::from_secs(1), preload_gate.wait_for_epoch(epoch))
             .await
             .expect("re-armed preload gate must reopen after the seek refills");
 
@@ -503,25 +503,17 @@ mod tests {
         let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(100), 4, 0);
-        let class_a = Arc::clone(&reg_a.service_class);
+        reg_a.service_class.store(ServiceClass::Idle);
         let _id_a = handle.register_track(reg_a);
 
         let (reg_b, mut rx_b, _) = make_registration(MockSource::new(100), 4, 0);
-        let class_b = Arc::clone(&reg_b.service_class);
+        reg_b.service_class.store(ServiceClass::Audible);
         let _id_b = handle.register_track(reg_b);
 
-        // Demote A to Idle, promote B to Audible; the worker picks the change up
-        // on its next pass (atomic service class, no command round-trip).
-        class_a.store(ServiceClass::Idle);
-        class_b.store(ServiceClass::Audible);
         handle.wake();
 
-        // Warm up until the Audible track (B) is clearly being served, which
-        // proves the priority reorder has taken effect, then clear BOTH rings.
-        // A pass already in flight when the class flipped produces in the OLD
-        // order and can hand the Idle track (A) a one-chunk head start that the
-        // count never recovers; draining after the reorder settles discards it
-        // so the measurement window starts from a clean, steady-state slate.
+        // Warm up until the Audible track (B) is clearly being served, then
+        // clear both rings so the measurement starts from steady state.
         // (Under flash this `wait_for_chunks` cannot false-time-out: the virtual
         // clock is frozen while the worker is actively producing, so its budget
         // only accrues during genuine worker-idle time.)

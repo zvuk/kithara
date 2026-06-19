@@ -4,7 +4,7 @@ use std::{ops::Range, sync::Arc};
 
 use delegate::delegate;
 use kithara_events::EventBus;
-use kithara_platform::time::Duration;
+use kithara_platform::{CancelScope, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, BoxedEventSink, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadWrite,
@@ -27,6 +27,7 @@ use crate::{
 /// drop and for the ABR handle the audio FSM consumes).
 pub struct HlsSource {
     coord: Arc<HlsCoord>,
+    stream_scope: CancelScope,
     /// Event bus the track was created against. Forwarded to
     /// [`HlsReaderEventSink`] in [`Source::take_reader_event_sink`] so
     /// the decoder's per-seek / per-chunk signals reach test subscribers
@@ -47,9 +48,10 @@ pub struct HlsSource {
 }
 
 impl HlsSource {
-    pub(crate) fn new(coord: Arc<HlsCoord>, bus: EventBus) -> Self {
+    pub(crate) fn new(coord: Arc<HlsCoord>, bus: EventBus, stream_scope: CancelScope) -> Self {
         Self {
             coord,
+            stream_scope,
             bus,
             hls_peer: None,
             peer_handle: None,
@@ -76,6 +78,7 @@ impl HlsSource {
 
 impl Drop for HlsSource {
     fn drop(&mut self) {
+        self.stream_scope.cancel();
         if let Some(ref peer) = self.hls_peer {
             peer.teardown();
         }

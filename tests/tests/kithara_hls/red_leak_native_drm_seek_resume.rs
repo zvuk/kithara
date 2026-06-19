@@ -14,7 +14,7 @@ use kithara_integration_tests::{
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
-    time::{Duration, sleep},
+    time::{self, Duration},
 };
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tracing::info;
@@ -26,7 +26,7 @@ impl Consts {
 }
 
 async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
-    let deadline = kithara_platform::time::Instant::now() + Duration::from_secs(3);
+    let deadline = time::Instant::now() + Duration::from_secs(3);
     loop {
         match PcmReader::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => return,
@@ -34,11 +34,21 @@ async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
             Err(e) => panic!("next_chunk decode error at `{label}`: {e}"),
         }
         assert!(
-            kithara_platform::time::Instant::now() <= deadline,
+            time::Instant::now() <= deadline,
             "next_chunk timeout at `{label}`"
         );
-        sleep(Duration::from_micros(200)).await;
+        time::sleep(Duration::from_micros(200)).await;
     }
+}
+
+async fn preload_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
+    if let Some(gate) = PcmReader::preload_gate(audio) {
+        time::timeout(Duration::from_secs(3), gate.wait())
+            .await
+            .unwrap_or_else(|_| panic!("preload timeout at `{label}`"));
+    }
+
+    PcmReader::preload(audio).unwrap_or_else(|err| panic!("preload failed at `{label}`: {err}"));
 }
 
 async fn run_drm_seek_resume_cycle(
@@ -68,7 +78,7 @@ async fn run_drm_seek_resume_cycle(
     )
     .await
     .expect("audio creation");
-    let _ = audio.preload();
+    preload_or_timeout(&mut audio, &format!("iter_{iter_idx}_preload")).await;
 
     for w in 0..4 {
         next_chunk_or_timeout(&mut audio, &format!("iter_{iter_idx}_warmup_{w}")).await;
@@ -78,7 +88,11 @@ async fn run_drm_seek_resume_cycle(
         audio
             .seek(Duration::from_secs_f64(seek_secs))
             .expect("seek must succeed");
-        let _ = audio.preload();
+        preload_or_timeout(
+            &mut audio,
+            &format!("iter_{iter_idx}_seek_{seek_idx}_preload"),
+        )
+        .await;
 
         for c in 0..3 {
             next_chunk_or_timeout(

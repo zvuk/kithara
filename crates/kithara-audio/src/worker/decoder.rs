@@ -9,7 +9,10 @@ use super::{
     AudioWorkerSource, EngineLoad, PreloadGate, handle::TrackRegistration, types::ServiceClass,
 };
 use crate::{
-    pipeline::{fetch::Fetch, track_fsm::TrackStep},
+    pipeline::{
+        fetch::Fetch,
+        track_fsm::{TrackStep, WaitingReason},
+    },
     runtime::{AtomicServiceClass, Inlet, Node, Outlet, TickResult},
 };
 
@@ -58,7 +61,7 @@ pub(crate) struct DecoderNode {
 impl DecoderNode {
     fn complete_preload(&mut self) {
         if !self.runtime.preloaded {
-            self.preload_gate.signal();
+            self.preload_gate.signal_epoch(self.runtime.seek_epoch);
             self.runtime.preloaded = true;
         }
     }
@@ -180,7 +183,10 @@ impl Node for DecoderNode {
 
             TrackStep::Blocked(reason) => {
                 trace!(?reason, "track blocked");
-                TickResult::Waiting
+                match reason {
+                    WaitingReason::WaitingDemand => TickResult::UpstreamPending,
+                    WaitingReason::Waiting | WaitingReason::WaitingMetadata => TickResult::Waiting,
+                }
             }
 
             TrackStep::Eof if self.runtime.eof_sent => TickResult::Backpressured,
@@ -482,9 +488,7 @@ mod tests {
                 ))),
             MockAudioWorkerSource::step_track
                 .next_call(matching!())
-                .returns(TrackStep::Blocked(
-                    crate::pipeline::track_fsm::WaitingReason::Waiting,
-                )),
+                .returns(TrackStep::Blocked(WaitingReason::Waiting)),
         )));
 
         let mut node = test_node(
@@ -508,6 +512,27 @@ mod tests {
         assert_eq!(node.tick(), TickResult::Waiting);
         assert!(node.runtime.preloaded);
         assert!(gate.is_ready());
+    }
+
+    #[kithara::test]
+    fn decoder_node_live_upstream_demand_does_not_tick_hang_wait() {
+        let gate = Arc::new(PreloadGate::default());
+        let (outlet, _inlet) = connect::<Fetch<PcmChunk>>(2, None);
+
+        let source = Box::new(Unimock::new(
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Blocked(WaitingReason::WaitingDemand)),
+        ));
+
+        let mut node = test_node(
+            source,
+            outlet,
+            gate,
+            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        );
+
+        assert_eq!(node.tick(), TickResult::UpstreamPending);
     }
 
     #[kithara::test]
@@ -549,7 +574,7 @@ mod tests {
         assert!(node.runtime.preloaded);
         assert!(gate.is_ready(), "first chunk opens the gate");
 
-        let _ = SeekControl::begin(&*seek_state, Duration::from_secs(1));
+        let epoch = SeekControl::begin(&*seek_state, Duration::from_secs(1));
 
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(!node.runtime.preloaded, "seek resets the preload runtime");
@@ -560,5 +585,9 @@ mod tests {
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(node.runtime.preloaded);
         assert!(gate.is_ready(), "post-seek refill reopens the gate");
+        assert!(
+            gate.is_ready_for_epoch(epoch),
+            "post-seek refill must open the new seek epoch",
+        );
     }
 }

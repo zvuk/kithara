@@ -203,6 +203,16 @@ pub trait PcmReader: kithara_platform::maybe_send::MaybeSend {
         None
     }
 
+    /// Decoder epoch whose preload gate should be observed by async callers.
+    ///
+    /// Readers without epoch-based seek invalidation keep the default initial
+    /// epoch (`0`). Worker-backed [`Audio`](crate::audio::Audio) readers return
+    /// the current seek epoch so a stale pre-seek signal cannot release a
+    /// post-seek preload wait.
+    fn preload_epoch(&self) -> u64 {
+        0
+    }
+
     /// Read interleaved PCM samples.
     ///
     /// After `preload()`, returns immediately from buffered data

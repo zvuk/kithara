@@ -10,9 +10,11 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
-    events::{AbrEvent, DownloaderEvent, Event, EventBus, EventReceiver, HlsEvent, RequestId},
+    events::{
+        AbrEvent, AudioEvent, DownloaderEvent, Event, EventBus, EventReceiver, HlsEvent, RequestId,
+    },
     hls::{AbrMode, Hls, HlsConfig},
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, auto,
@@ -100,6 +102,8 @@ struct EventCollector {
     network_fetches: Mutex<HashSet<(usize, usize)>>,
     /// Reader-side reads (segment boundaries crossed in `read_at`).
     reader_segments: Mutex<Vec<(usize, usize)>>,
+    applied_targets: Mutex<Vec<usize>>,
+    audio_trace: Mutex<Vec<String>>,
     switch_count: AtomicUsize,
 }
 
@@ -110,7 +114,16 @@ impl EventCollector {
             request_map: Mutex::new(HashMap::new()),
             network_fetches: Mutex::new(HashSet::new()),
             reader_segments: Mutex::new(Vec::new()),
+            applied_targets: Mutex::new(Vec::new()),
+            audio_trace: Mutex::new(Vec::new()),
             switch_count: AtomicUsize::new(0),
+        }
+    }
+
+    fn push_audio_trace(&self, entry: String) {
+        let mut trace = self.audio_trace.lock();
+        if trace.len() < 64 {
+            trace.push(entry);
         }
     }
 
@@ -148,7 +161,36 @@ impl EventCollector {
                 }
                 Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
                     info!(to = to.get(), ?reason, "VariantApplied");
+                    self.applied_targets.lock().push(to.get());
                     self.switch_count.fetch_add(1, Ordering::Release);
+                }
+                Event::Audio(AudioEvent::SeekLifecycle {
+                    stage,
+                    seek_epoch,
+                    location,
+                }) => {
+                    self.push_audio_trace(format!(
+                        "SeekLifecycle({stage:?}, epoch={seek_epoch:?}, location={location:?})"
+                    ));
+                }
+                Event::Audio(AudioEvent::SeekComplete {
+                    position,
+                    seek_epoch,
+                }) => {
+                    self.push_audio_trace(format!(
+                        "SeekComplete(epoch={seek_epoch:?}, position={position:?})"
+                    ));
+                }
+                Event::Audio(AudioEvent::DecoderReady {
+                    base_offset,
+                    variant,
+                }) => {
+                    self.push_audio_trace(format!(
+                        "DecoderReady(base_offset={base_offset}, variant={variant:?})"
+                    ));
+                }
+                Event::Audio(AudioEvent::EndOfStream) => {
+                    self.push_audio_trace("EndOfStream".to_owned());
                 }
                 _ => {}
             }
@@ -192,6 +234,69 @@ impl EventCollector {
         self.drain();
         self.switch_count.load(Ordering::Acquire)
     }
+
+    fn applied_targets(&self) -> Vec<usize> {
+        self.drain();
+        self.applied_targets.lock().clone()
+    }
+
+    fn audio_trace(&self) -> Vec<String> {
+        self.drain();
+        self.audio_trace.lock().clone()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PhaseReadStats {
+    samples: u64,
+    pending: u64,
+    saw_eof: bool,
+}
+
+fn read_phase_until_samples<S: StreamType>(
+    audio: &mut Audio<Stream<S>>,
+    target_samples: u64,
+    label: &str,
+) -> PhaseReadStats {
+    let mut buf = vec![0f32; 4096 * 2];
+    let mut stats = PhaseReadStats {
+        samples: 0,
+        pending: 0,
+        saw_eof: false,
+    };
+
+    while stats.samples < target_samples {
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                let n = count.get();
+                for &sample in &buf[..n] {
+                    assert!(
+                        sample.is_finite(),
+                        "{label}: non-finite sample after {} samples",
+                        stats.samples
+                    );
+                }
+                let n64 = u64::try_from(n)
+                    .unwrap_or_else(|err| panic!("{label}: read count does not fit u64: {err}"));
+                stats.samples += n64;
+            }
+            Ok(ReadOutcome::Pending { .. }) => {
+                stats.pending += 1;
+            }
+            Ok(ReadOutcome::Eof { .. }) => {
+                stats.saw_eof = true;
+                break;
+            }
+            Err(err) => {
+                panic!(
+                    "{label}: decode error after {} samples and {} pending reads: {err}",
+                    stats.samples, stats.pending
+                );
+            }
+        }
+    }
+
+    stats
 }
 
 /// Wait until every v0 media segment has been network-fetched (the all-cached
@@ -858,23 +963,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     let bus = EventBus::new(8192);
     // EventCollector's segment URL parser is HlsTestServer-specific; for
     // real-asset URLs we capture VariantApplied targets directly.
-    let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
-    let applied_bg = Arc::clone(&applied_targets);
-    let mut applied_rx = bus.subscribe();
-    spawn(async move {
-        loop {
-            let ev = match applied_rx.recv().await {
-                Ok(ev) => ev,
-                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    continue;
-                }
-                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
-            };
-            if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock().push(to.get());
-            }
-        }
-    });
+    let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
@@ -913,7 +1002,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         .await
         .expect("read");
 
-    let targets = applied_targets.lock().clone();
+    let targets = collector.applied_targets();
     let saw_flac = targets.contains(&3);
 
     info!(
@@ -1375,23 +1464,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
 
-    let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
-    let applied_bg = Arc::clone(&applied_targets);
-    let mut applied_rx = bus.subscribe();
-    spawn(async move {
-        loop {
-            let ev = match applied_rx.recv().await {
-                Ok(ev) => ev,
-                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    continue;
-                }
-                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
-            };
-            if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock().push(to.get());
-            }
-        }
-    });
+    let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
@@ -1441,7 +1514,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
         .await
         .expect("read");
 
-    let targets = applied_targets.lock().clone();
+    let targets = collector.applied_targets();
     info!(?targets, warmup_total, post_total, "S.3 result");
 
     // We must see both switches applied through the ABR contract.
@@ -1516,24 +1589,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
-
-    let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
-    let applied_bg = Arc::clone(&applied_targets);
-    let mut applied_rx = bus.subscribe();
-    spawn(async move {
-        loop {
-            let ev = match applied_rx.recv().await {
-                Ok(ev) => ev,
-                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    continue;
-                }
-                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
-            };
-            if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock().push(to.get());
-            }
-        }
-    });
+    let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
@@ -1550,52 +1606,26 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
         .await
         .expect("create audio");
 
-    // Reader cadence is driven by SAMPLE TARGETS, not a wall clock. Each
-    // phase pumps until it has accumulated the decoded frames it needs and
-    // then hands control back to switch / seek. The mid-segment landing the
-    // production bug needs comes from where the sample target stops, not from
-    // a real-time sleep between reads: a real `thread::sleep` does not park on
-    // the virtual clock, so under flash it burns real wall-clock while the
-    // engine cannot advance — minutes of real sleep for 180 s of audio, which
-    // trips the harness timeout and eventually closes the pcm channel.
-    //
-    // Each read loop runs on the tokio BLOCKING pool: `audio.read()` parks in
-    // `recv_outcome_blocking` (`#[kithara::flash(true)]` → `park_timeout` on
-    // the virtual clock) while it waits for the worker. That park is what
-    // advances virtual time, so the worker delivers frames and the sample
-    // target is reached in negligible real time. Parking on the blocking pool
-    // also keeps the Downloader runnable on the runtime thread; the worker
-    // wakes the blocking read via `reader_wake`. Control ops (seek, set_mode)
-    // run back on the runtime thread between the blocking phases. Mirrors
-    // `seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang`.
-    // The `Instant::now()` deadlines below stay as real-time backstops only;
-    // they never fire because the parked reads keep real wall-clock near zero.
-    let buf_frames = 4096usize;
+    // Reader cadence is driven by decoded sample targets, not wall-clock
+    // deadlines. Slower scheduling may add `Pending` and delay the outer test
+    // timeout, but it must not change which state transition wins.
 
     // Phase 1 — play near end. Track ≈ 220 s; pump 180 s of decoded
     // audio so the seek-back step targets a position well before the
     // current playback head.
-    let (mut audio, samples_phase1) = spawn_blocking(move || {
-        let mut buf = vec![0f32; buf_frames * 2];
+    let (mut audio, phase1) = spawn_blocking(move || {
         let target_samples_phase1: u64 = 180 * 44_100;
-        let mut samples = 0u64;
-        let deadline = Instant::now() + Duration::from_secs(40);
-        while samples < target_samples_phase1 && Instant::now() < deadline {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count, .. }) => samples += count.get() as u64,
-                Ok(ReadOutcome::Pending { .. }) => {}
-                Ok(ReadOutcome::Eof { .. }) => break,
-                Err(e) => panic!("phase 1 decode error: {e}"),
-            }
-        }
-        (audio, samples)
+        let stats = read_phase_until_samples(&mut audio, target_samples_phase1, "phase 1");
+        (audio, stats)
     })
     .await
     .expect("phase 1 join");
-    info!(samples_phase1, "phase 1 done");
+    info!(?phase1, "phase 1 done");
     assert!(
-        samples_phase1 > 4 * 44_100,
-        "phase 1 must produce at least a few seconds of audio, got {samples_phase1}"
+        phase1.samples > 4 * 44_100,
+        "phase 1 must produce at least a few seconds of audio, \
+         stats={phase1:?}, audio_trace={:?}",
+        collector.audio_trace()
     );
 
     // Phase 2 — seek backwards to ~25 % of the track (~55 s).
@@ -1605,25 +1635,20 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
 
     // Pump some samples so the post-seek decoder lands mid-segment
     // before the downswitch fires.
-    let (mut audio, samples_phase2) = spawn_blocking(move || {
-        let mut buf = vec![0f32; buf_frames * 2];
-        let mut samples = 0u64;
-        let deadline = Instant::now() + Duration::from_secs(8);
-        while samples < 2 * 44_100 && Instant::now() < deadline {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count, .. }) => samples += count.get() as u64,
-                Ok(ReadOutcome::Pending { .. }) => {}
-                Ok(ReadOutcome::Eof { .. }) => {
-                    panic!("unexpected EOF during phase 2 post-seek read")
-                }
-                Err(e) => panic!("phase 2 decode error: {e}"),
-            }
-        }
-        (audio, samples)
+    let (mut audio, phase2) = spawn_blocking(move || {
+        let stats = read_phase_until_samples(&mut audio, 2 * 44_100, "phase 2");
+        (audio, stats)
     })
     .await
     .expect("phase 2 join");
-    info!(samples_phase2, "phase 2 done");
+    info!(?phase2, "phase 2 done");
+    assert!(
+        !phase2.saw_eof,
+        "unexpected EOF during phase 2 post-seek read, stats={phase2:?}, \
+         targets={:?}, audio_trace={:?}",
+        collector.applied_targets(),
+        collector.audio_trace()
+    );
 
     // Phase 3 — same-codec downswitch shq (v=2, 270 kbps) → slq
     // (v=0, 66 kbps). Both are mp4a.40.2, no cross-codec fence, no
@@ -1647,36 +1672,26 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     // true tail: any `Eof` before the cap is the premature/false EOS the
     // contract guards against, and is still recorded in `saw_eof`.
     let phase4_target: u64 = 500_000;
-    let (samples_phase4, saw_eof_phase4) = spawn_blocking(move || {
-        let mut buf = vec![0f32; buf_frames * 2];
-        let mut samples = 0u64;
-        let mut saw_eof = false;
-        let deadline = Instant::now() + Duration::from_secs(15);
-        while samples < phase4_target && Instant::now() < deadline {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count, .. }) => samples += count.get() as u64,
-                Ok(ReadOutcome::Pending { .. }) => {}
-                Ok(ReadOutcome::Eof { .. }) => {
-                    saw_eof = true;
-                    break;
-                }
-                Err(e) => panic!("phase 4 decode error: {e}"),
-            }
-        }
-        (samples, saw_eof)
-    })
-    .await
-    .expect("phase 4 join");
+    let phase4 =
+        spawn_blocking(move || read_phase_until_samples(&mut audio, phase4_target, "phase 4"))
+            .await
+            .expect("phase 4 join");
 
-    let targets = applied_targets.lock().clone();
+    let targets = collector.applied_targets();
+    let audio_trace = collector.audio_trace();
     info!(
         ?targets,
-        samples_phase1, samples_phase2, samples_phase4, saw_eof_phase4, "repro result"
+        ?audio_trace,
+        ?phase1,
+        ?phase2,
+        ?phase4,
+        "repro result"
     );
 
     assert!(
         targets.contains(&0),
-        "Manual(0) (slq AAC) must publish VariantApplied, saw: {targets:?}"
+        "Manual(0) (slq AAC) must publish VariantApplied, saw: {targets:?}, \
+         audio_trace={audio_trace:?}"
     );
 
     // Bug surfaces as samples_phase4 ≪ expected. 10 s @ 44.1 kHz
@@ -1685,14 +1700,16 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     // after the switch then EOS; threshold above that exposes the
     // regression.
     assert!(
-        !saw_eof_phase4,
+        !phase4.saw_eof,
         "phase 4 EOF after same-codec downswitch — false EOS bug \
-         (app.log 2026-05-16 09:42:28). samples_phase4={samples_phase4}"
+         (app.log 2026-05-16 09:42:28). stats={phase4:?}, \
+         targets={targets:?}, audio_trace={audio_trace:?}"
     );
     assert!(
-        samples_phase4 > 300_000,
+        phase4.samples > 300_000,
         "phase 4 (post same-codec downswitch) must yield sustained \
-         playback. samples_phase4={samples_phase4}"
+         playback. stats={phase4:?}, targets={targets:?}, \
+         audio_trace={audio_trace:?}"
     );
 }
 

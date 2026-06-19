@@ -127,9 +127,10 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
     /// Threshold for warning about slow `tick` calls.
     const SLOW_TICK_THRESHOLD: Duration = Duration::from_millis(10);
     /// Park budget used after `PassOutcome::Waiting` /
-    /// `PassOutcome::Backpressured` — at least one slot is alive and
-    /// likely to make progress shortly (source becomes ready,
-    /// consumer drains the PCM ring), so re-check more aggressively.
+    /// `PassOutcome::UpstreamPending` / `PassOutcome::Backpressured` —
+    /// at least one slot is alive and likely to make progress shortly
+    /// (source becomes ready, consumer drains the PCM ring), so re-check
+    /// more aggressively.
     const WAITING_TIMEOUT: Duration = Duration::from_millis(10);
 
     /// Spawn a new scheduler thread and return a handle.
@@ -251,6 +252,7 @@ fn report_outcome<O: SchedulerObserver>(observer: &mut O, outcome: PassOutcome) 
     match outcome {
         PassOutcome::Produced => observer.on_event(SchedulerEvent::Progress),
         PassOutcome::Waiting => observer.on_event(SchedulerEvent::Waiting),
+        PassOutcome::UpstreamPending => observer.on_event(SchedulerEvent::UpstreamPending),
         PassOutcome::Backpressured => observer.on_event(SchedulerEvent::Backpressured),
         PassOutcome::Idle => observer.on_event(SchedulerEvent::Idle),
     }
@@ -269,7 +271,7 @@ fn park_after_outcome<N: Node, O: SchedulerObserver>(
                 yield_now();
             }
         }
-        PassOutcome::Waiting | PassOutcome::Backpressured => {
+        PassOutcome::Waiting | PassOutcome::UpstreamPending | PassOutcome::Backpressured => {
             *produced_streak = 0;
             wake.wait_timeout(Scheduler::<N, O>::WAITING_TIMEOUT);
         }
@@ -344,6 +346,9 @@ fn produce_pass<N: Node, O: SchedulerObserver>(
         best = match (best, result) {
             (TickResult::Progress, _) | (_, TickResult::Progress) => TickResult::Progress,
             (TickResult::Waiting, _) | (_, TickResult::Waiting) => TickResult::Waiting,
+            (TickResult::UpstreamPending, _) | (_, TickResult::UpstreamPending) => {
+                TickResult::UpstreamPending
+            }
             (TickResult::Backpressured, _) | (_, TickResult::Backpressured) => {
                 TickResult::Backpressured
             }
@@ -354,6 +359,7 @@ fn produce_pass<N: Node, O: SchedulerObserver>(
     match best {
         TickResult::Progress => PassOutcome::Produced,
         TickResult::Waiting => PassOutcome::Waiting,
+        TickResult::UpstreamPending => PassOutcome::UpstreamPending,
         TickResult::Backpressured => PassOutcome::Backpressured,
         TickResult::Done => PassOutcome::Idle,
     }
@@ -553,6 +559,23 @@ mod tests {
         }
     }
 
+    struct FixedNode(TickResult);
+
+    impl Node for FixedNode {
+        fn tick(&mut self) -> TickResult {
+            self.0
+        }
+    }
+
+    fn fixed_slot(id: SlotId, result: TickResult) -> Slot<FixedNode> {
+        Slot {
+            id,
+            node: FixedNode(result),
+            service_class: ServiceClass::Audible,
+            is_terminal: false,
+        }
+    }
+
     #[kithara::test]
     fn scheduler_creates_and_drops_cleanly() {
         let handle = Scheduler::<DummyNode, TestObserver>::start(
@@ -663,6 +686,28 @@ mod tests {
         recompute_slots_order(&slots, &mut slots_order);
 
         assert_eq!(slots_order, vec![1, 2, 0]);
+    }
+
+    #[kithara::test]
+    fn produce_pass_keeps_live_upstream_demand_out_of_hang_wait() {
+        let mut observer = TestObserver;
+        let order = vec![0usize];
+        let mut pending = vec![fixed_slot(1, TickResult::UpstreamPending)];
+        assert_eq!(
+            produce_pass(&mut pending, &order, &mut observer),
+            PassOutcome::UpstreamPending
+        );
+
+        let mut mixed = vec![
+            fixed_slot(1, TickResult::UpstreamPending),
+            fixed_slot(2, TickResult::Waiting),
+        ];
+        let order = vec![0usize, 1usize];
+        assert_eq!(
+            produce_pass(&mut mixed, &order, &mut observer),
+            PassOutcome::Waiting,
+            "a real dead upstream wait must still tick the hang detector"
+        );
     }
 
     #[kithara::test]

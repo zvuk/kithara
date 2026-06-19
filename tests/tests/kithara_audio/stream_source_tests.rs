@@ -131,20 +131,10 @@ async fn rapid_seeks_via_timeline_all_complete() {
         .expect("audio construction");
     let mut events = audio.event_bus().subscribe();
 
-    // The read-poll settles below are INLINED into the test body (not factored
-    // into `wait_for_frames`) on purpose: only direct `time::sleep` /
-    // `Instant::now` calls in the body are retargeted onto the virtual clock by
-    // the `#[kithara::test]` rewriter — a call inside a helper fn (or a
-    // `macro_rules!` invocation, whose tokens the syn rewriter never descends
-    // into) stays REAL. The read-poll MUST run on the virtual clock here:
-    // the worker emits `SeekRequest` and reading drives the consumer-side
-    // `SeekComplete` / `PlaybackProgress` (emitted from `read()`, never by the
-    // worker). On a real-clock settle the body's reads are paced on real time
-    // while the worker advances on collapsed virtual time, decoupling the two
-    // clocks — across rapid seeks the next `seek()`'s `begin()` bumps the shared
-    // epoch before the worker has emitted the prior seek's `SeekRequest`, so that
-    // epoch is coalesced away and never observed (the line-155 `None`). Keeping
-    // every wait virtual locks the body and worker to one clock.
+    // Keep the settle reads inline so the flash rewriter retargets these
+    // sleeps onto the virtual clock. `Audio::seek()` publishes SeekRequest
+    // synchronously; SeekComplete / PlaybackProgress still require reads to
+    // commit post-seek output.
 
     // Prime: read until the first decoded frames arrive.
     {

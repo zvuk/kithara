@@ -50,7 +50,8 @@ impl PlayerImpl {
     /// in `PlayerResource`, and sends `LoadTrack` + `FadeIn` to the processor.
     fn load_current_item(&self) {
         let index = self.core.current_index.load(Ordering::Relaxed);
-        if let Some(src) = self.enqueue_to_processor(index) {
+        if let Some((src, duration_seconds)) = self.enqueue_to_processor(index) {
+            self.publish_current_track_snapshot(duration_seconds);
             self.start_playback(src);
         }
     }
@@ -115,13 +116,7 @@ impl PlayerImpl {
 
         let target_secs = seconds.max(0.0);
         let target = Duration::from_secs_f64(target_secs);
-
-        self.send_to_slot(PlayerCmd::Seek {
-            seek_epoch,
-            seconds: target_secs,
-        })?;
-
-        Ok(match self.duration_seconds() {
+        let outcome = match self.duration_seconds() {
             Some(dur) if target_secs >= dur => SeekOutcome::PastEof {
                 target,
                 duration: Duration::from_secs_f64(dur),
@@ -130,7 +125,18 @@ impl PlayerImpl {
                 target,
                 landed_at: target,
             },
-        })
+        };
+
+        self.send_to_slot(PlayerCmd::Seek {
+            seek_epoch,
+            seconds: target_secs,
+        })?;
+
+        if matches!(outcome, SeekOutcome::Landed { .. }) {
+            shared_state.position.store(target_secs, Ordering::Relaxed);
+        }
+
+        Ok(outcome)
     }
 
     /// Select and load a queue item by index, using the configured
@@ -215,8 +221,8 @@ impl PlayerImpl {
         } else if !reselecting_current {
             self.unarm_next_internal(Some(index));
             self.core.current_index.store(index, Ordering::Relaxed);
-            self.announce_current_item(index);
             self.load_current_item();
+            self.announce_current_item(index);
         }
 
         self.apply_autoplay(autoplay);

@@ -100,12 +100,8 @@ pub enum AudioEvent {
         position: Duration,
         seek_epoch: SeekEpoch,
     },
-    /// Seek abandoned after exhausting retry budget.
-    SeekRejected {
-        epoch: SeekEpoch,
-        target: Duration,
-        attempts: u8,
-    },
+    /// Seek could not be applied and playback continues from the current decoder position.
+    SeekRejected { epoch: SeekEpoch, target: Duration },
     /// Decoder initialized or recreated (ABR switch, format boundary, recovery).
     DecoderReady {
         base_offset: u64,

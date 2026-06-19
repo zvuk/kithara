@@ -119,6 +119,12 @@ impl SegmentStore {
         self.init.pending().is_some_and(|e| e.state.is_failed())
     }
 
+    pub(super) fn init_downloading(&self) -> bool {
+        self.init
+            .pending()
+            .is_some_and(|e| e.state.is_downloading())
+    }
+
     /// Resource key for the variant's init segment — `None` when the
     /// variant has no separately fetched init (raw TS/AAC, or byte-range
     /// embedded).
@@ -201,6 +207,12 @@ impl SegmentStore {
         self.segments
             .get(seg_idx as usize)
             .is_some_and(|e| e.state.is_failed())
+    }
+
+    pub(super) fn segment_downloading(&self, seg_idx: u32) -> bool {
+        self.segments
+            .get(seg_idx as usize)
+            .is_some_and(|e| e.state.is_downloading())
     }
 
     pub(super) fn segment_resource(&self, seg_idx: u32) -> Option<ResourceKey> {

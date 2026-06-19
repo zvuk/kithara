@@ -1,9 +1,9 @@
 use std::{error::Error as StdError, io, io::ErrorKind, num::TryFromIntError};
 
 use kithara_bufpool::BudgetExhausted;
-use kithara_stream::{
-    AudioCodec, ContainerFormat, NotReadyCause, PendingReason, StreamPending, VariantChangeError,
-};
+use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, VariantChangeError};
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+use kithara_stream::{NotReadyCause, StreamPending};
 use thiserror::Error;
 
 /// Errors that can occur during audio decoding.
@@ -196,6 +196,7 @@ impl DecodeError {
     /// never `Err`. Mirrors the Symphonia demuxer's not-ready guard
     /// (including the bare-`Interrupted` → `SourcePending` default).
     #[must_use]
+    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
     pub(crate) fn pending_reason(&self) -> Option<PendingReason> {
         let io_err = match self {
             Self::Io(e) => e,

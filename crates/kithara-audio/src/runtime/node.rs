@@ -74,6 +74,12 @@ pub(crate) enum TickResult {
     /// `Audio` handle from panicking after the watchdog budget
     /// expires (the symptom that prompted bug #1).
     Backpressured,
+    /// Node is alive and the upstream source has an active demand/fetch
+    /// for the blocked range. The scheduler parks briefly and relies on
+    /// the source/downloader's own terminal timeout/cancel contract
+    /// instead of ticking the audio-worker hang detector as if no demand
+    /// existed.
+    UpstreamPending,
     /// Node has finished its work (EOF, failed, terminal).
     Done,
 }

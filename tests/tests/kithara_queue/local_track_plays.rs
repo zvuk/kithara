@@ -398,6 +398,27 @@ where
     .unwrap_or(None)
 }
 
+fn playlist_snapshot(queue: &Queue, ids: &[TrackId]) -> String {
+    let current = queue.current().map(|entry| (entry.id, entry.status));
+    let statuses: Vec<String> = ids
+        .iter()
+        .map(|id| {
+            let status = queue.track(*id).map_or_else(
+                || "missing".to_string(),
+                |entry| format!("{:?}", entry.status),
+            );
+            format!("{}:{status}", id.as_u64())
+        })
+        .collect();
+    format!(
+        "current={current:?}, player_index={:?}, pos={:?}, dur={:?}, statuses=[{}]",
+        queue.current_index(),
+        queue.position_seconds(),
+        queue.duration_seconds(),
+        statuses.join(", ")
+    )
+}
+
 /// Mirror of `real_playlist::queue_playlist_behavior` against local fixtures.
 ///
 /// Five-track playlist (mp3 → hls aac → hls aes → hls aac → mp3) drives
@@ -419,7 +440,7 @@ where
 /// collapses real time. `wait_for_loader_done` accepts `Loaded |
 /// Consumed` (the loader flips straight to `Consumed` when a
 /// `pending_select` was queued for the same track).
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(45)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -469,30 +490,19 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     wait_for_loader_done_event(&mut rx, &queue, ids[0], Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("first track load [{}]: {e}", urls[0]));
-    wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(15))
+    wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(5))
         .await
         .expect("first track position");
 
     queue.pause();
-    // Let the pause take effect on the same (virtual) clock as playback:
-    // the render worker may emit one more `PlaybackProgress` after the
-    // pause command is queued, so settle a virtual window and THEN read a
-    // quiescent baseline from the events. The contract — "position does
-    // not change across the observed pause window" — is kept: both
-    // endpoints are event-sourced and bracket a body-virtualized sleep.
+    // Let the pause take effect on the same (virtual) clock as playback.
+    // Raw `PlaybackProgress` carries no track id, so in a crossfade/preload
+    // playlist the queue-visible pause position must come from the queue
+    // snapshot, not from whichever track emitted the last audio event.
     time::sleep(Duration::from_secs(1)).await;
-    // While PAUSED no `PlaybackProgress` fires, so the event drain is
-    // empty by design — fall back to the frozen `Queue::position_seconds()`,
-    // which is the only truthful snapshot of "where the head sits across
-    // the pause" (it is not advancing, so the usual stale-cache concern
-    // does not apply here).
-    let before_pause = drain_latest_position(&mut rx)
-        .or_else(|| queue.position_seconds())
-        .unwrap_or(0.0);
+    let before_pause = queue.position_seconds().unwrap_or(0.0);
     time::sleep(Duration::from_secs(2)).await;
-    let during_pause = drain_latest_position(&mut rx)
-        .or_else(|| queue.position_seconds())
-        .unwrap_or(0.0);
+    let during_pause = queue.position_seconds().unwrap_or(0.0);
     assert!(
         (during_pause - before_pause).abs() < 0.5,
         "position drifted during pause: {before_pause:.2} → {during_pause:.2}"
@@ -556,7 +566,7 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
                 wait_for_loader_done_event(&mut rx, &queue, ids[i], Duration::from_secs(30))
                     .await
                     .map_err(|e| format!("load: {e}"))?;
-                wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(15))
+                wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(5))
                     .await
                     .map_err(|e| format!("play: {e}"))?;
 
@@ -572,10 +582,15 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
                         ev,
                         QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == ids[i + 1]
                     ),
-                    Duration::from_secs(20),
+                    Duration::from_secs(5),
                 )
                 .await
-                .ok_or_else(|| "timeout on auto-advance".to_string())?;
+                .ok_or_else(|| {
+                    format!(
+                        "timeout on auto-advance; {}",
+                        playlist_snapshot(&queue, &ids)
+                    )
+                })?;
                 }
                 Ok(())
             }
@@ -593,10 +608,10 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         wait_for_queue_event(
             &mut rx,
             |ev| matches!(ev, QueueEvent::QueueEnded),
-            Duration::from_secs(15),
+            Duration::from_secs(5),
         )
         .await
-        .ok_or_else(|| "timeout on QueueEnded".to_string())?;
+        .ok_or_else(|| format!("timeout on QueueEnded; {}", playlist_snapshot(&queue, &ids)))?;
         Ok(())
     }
     .await;

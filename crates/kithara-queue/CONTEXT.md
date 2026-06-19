@@ -140,6 +140,22 @@ new current. The lock makes the completion's cancelled-check and `select_item` a
 single critical section, mutually exclusive with `select`. Pinned by
 `tests/.../track_switch_race.rs`.
 
+## Advance Commit Ownership
+
+`Queue::advance_to_next` resolves the next selectable entry from a read-only
+navigation snapshot. It must not mutate `NavigationState` before the player
+selection commits. A `Loaded` entry commits synchronously inside `select`; a
+`Pending` / `Loading` / `Consumed` entry commits later in
+`spawn_apply_after_load` after the resource has been planted and
+`select_item_with_crossfade` succeeds. If navigation moves before that commit,
+repeated EOF / handover notifications can run ahead of the audible player and
+exhaust the queue while the player still points at the old track.
+
+After `QueueEnded`, a later `Queue::seek` reparks navigation from the last
+navigation-owned index, not from `PlayerImpl::current_index`. The queue owns item
+identity; the player cursor is only an engine slot cursor and may be stale after
+EOF/drain.
+
 ## Migration From kithara-app
 
 The previous `kithara-app::{playlist, controls}` combination collapses

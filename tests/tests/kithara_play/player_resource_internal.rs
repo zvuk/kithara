@@ -209,7 +209,7 @@ async fn read_returns_constant_samples_full() {
     let mut right = vec![0.0f32; 128];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
     let result = pr.read(&mut output, 0..128);
-    assert!(matches!(result, BlockReadOutcome::Full));
+    assert!(matches!(result, BlockReadOutcome::Full { frames: 128 }));
     for &s in &left[..128] {
         assert!((s - 0.5).abs() < f32::EPSILON);
     }
@@ -255,7 +255,7 @@ async fn zero_read_without_eof_is_not_error() {
     let mut right = vec![0.0f32; 128];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
     let result = pr.read(&mut output, 0..128);
-    assert!(matches!(result, BlockReadOutcome::Full));
+    assert!(matches!(result, BlockReadOutcome::Full { frames: 0 }));
 }
 
 /// When the reader returns 0 frames and is NOT at EOF (e.g. async seek
@@ -274,7 +274,7 @@ async fn read_zeroes_output_when_no_data_available() {
         let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
         let result = pr.read(&mut output, 0..128);
         assert!(
-            matches!(result, BlockReadOutcome::Full),
+            matches!(result, BlockReadOutcome::Full { frames: 0 }),
             "zero-read without EOF must not error"
         );
     }
@@ -299,7 +299,7 @@ async fn full_read_prefetches_buffered_eof() {
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
     let result = pr.read(&mut output, 0..512);
 
-    assert!(matches!(result, BlockReadOutcome::Full));
+    assert!(matches!(result, BlockReadOutcome::Full { frames: 512 }));
     let remaining = pr
         .frames_until_eof()
         .expect("BUG: EOF should be known after prefetch");
@@ -414,7 +414,7 @@ async fn read_returns_failed_not_eof_on_decoder_error() {
             "decoder Err must NOT be conflated with natural EOF — got {result:?}; \
              this is the false-EOF bug from app.log"
         ),
-        BlockReadOutcome::Full => {
+        BlockReadOutcome::Full { .. } => {
             panic!("decoder Err must surface as Failed, not Full silence — got {result:?}")
         }
     }
@@ -438,7 +438,7 @@ async fn read_returns_eof_when_already_drained() {
     loop {
         let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
         match pr.read(&mut output, 0..4096) {
-            BlockReadOutcome::Full | BlockReadOutcome::Partial(_) => {}
+            BlockReadOutcome::Full { .. } | BlockReadOutcome::Partial(_) => {}
             BlockReadOutcome::Eof => break,
             BlockReadOutcome::Failed => panic!("unexpected Failed in EOF test"),
         }

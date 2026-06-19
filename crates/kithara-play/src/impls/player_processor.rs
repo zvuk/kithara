@@ -402,6 +402,7 @@ impl PlayerNodeProcessor {
 
         self.tracks_transitions.push_back(transition);
 
+        let shared_state = Arc::clone(&self.shared_state);
         self.tracks_transitions.retain(|transition| {
             let track_src = match transition {
                 TrackTransition::FadeIn(src) | TrackTransition::FadeOut(src) => Arc::clone(src),
@@ -413,6 +414,12 @@ impl PlayerNodeProcessor {
                             track.seek(0.0);
                         }
                         track.fade_in();
+                        shared_state
+                            .position
+                            .store(track.position(), Ordering::Relaxed);
+                        shared_state
+                            .duration
+                            .store(track.duration(), Ordering::Relaxed);
                     }
                     TrackTransition::FadeOut(_) => {
                         track.fade_out();
@@ -860,16 +867,22 @@ mod tests {
         spec: PcmSpec,
         recorded_host_rate: TestArc<AtomicU32>,
         meta: TrackMetadata,
+        duration: Duration,
     }
 
     impl SampleRateTrackingReader {
         fn new(spec: PcmSpec) -> (Self, TestArc<AtomicU32>) {
+            Self::with_duration(spec, Duration::from_secs(60))
+        }
+
+        fn with_duration(spec: PcmSpec, duration: Duration) -> (Self, TestArc<AtomicU32>) {
             let recorded = TestArc::new(AtomicU32::new(0));
             let reader = Self {
                 spec,
                 meta: TrackMetadata::default(),
                 bus: EventBus::default(),
                 recorded_host_rate: TestArc::clone(&recorded),
+                duration,
             };
             (reader, recorded)
         }
@@ -877,7 +890,7 @@ mod tests {
 
     impl PcmReader for SampleRateTrackingReader {
         fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs(60))
+            Some(self.duration)
         }
 
         fn event_bus(&self) -> &EventBus {
@@ -1050,6 +1063,72 @@ mod tests {
         assert_eq!(processor.shared_state.position.load(Ordering::Relaxed), 0.0);
         assert_eq!(processor.shared_state.duration.load(Ordering::Relaxed), 0.0);
         assert!(!processor.shared_state.playing.load(Ordering::SeqCst));
+    }
+
+    fn create_duration_player_resource(
+        src: &str,
+        duration: Duration,
+    ) -> Arc<PlatformMutex<PlayerResource>> {
+        let (reader, _recorded) = SampleRateTrackingReader::with_duration(
+            PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate")),
+            duration,
+        );
+        let resource = Resource::from_reader(reader, None);
+        Arc::new(PlatformMutex::new(PlayerResource::new(
+            resource,
+            Arc::from(src),
+            &PcmPool::default(),
+        )))
+    }
+
+    #[kithara::test(tokio)]
+    async fn fade_in_switches_public_snapshot_without_render() {
+        let (mut processor, mut tx) = make_processor();
+        let first_src: Arc<str> = Arc::from("first.mp3");
+        let second_src: Arc<str> = Arc::from("second.mp3");
+
+        tx.try_push(PlayerCmd::LoadTrack {
+            resource: create_duration_player_resource(&first_src, Duration::from_secs(64)),
+            item_id: None,
+            src: Arc::clone(&first_src),
+        })
+        .ok();
+        tx.try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
+            &first_src,
+        ))))
+        .ok();
+        processor.drain_commands();
+
+        assert_eq!(
+            processor.shared_state.duration.load(Ordering::Relaxed),
+            64.0
+        );
+
+        tx.try_push(PlayerCmd::LoadTrack {
+            resource: create_duration_player_resource(&second_src, Duration::from_secs(162)),
+            item_id: None,
+            src: Arc::clone(&second_src),
+        })
+        .ok();
+        processor.drain_commands();
+
+        assert_eq!(
+            processor.shared_state.duration.load(Ordering::Relaxed),
+            64.0,
+            "preload must not publish the next track duration"
+        );
+
+        tx.try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
+            &second_src,
+        ))))
+        .ok();
+        processor.drain_commands();
+
+        assert_eq!(processor.shared_state.position.load(Ordering::Relaxed), 0.0);
+        assert_eq!(
+            processor.shared_state.duration.load(Ordering::Relaxed),
+            162.0
+        );
     }
 
     fn create_tracking_player_resource(

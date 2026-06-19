@@ -28,7 +28,7 @@ use kithara_test_utils::kithara;
 
 use crate::{
     playlist::{PlaylistAccess, PlaylistState},
-    variant::{HlsVariant, PlanCtx, SegmentActivateParams, WorkerWakeCell},
+    variant::{HlsVariant, PlanCtx, SegmentActivateParams, WorkerWakeCell, wake_worker},
 };
 
 /// Watchdog timeout for the off-RT blocking `wait_range(_, None)`: must exceed
@@ -96,13 +96,12 @@ pub(crate) struct HlsCoord {
     /// generation here.
     fence_at: AtomicU64,
     /// Monotonic counter bumped by [`Self::commit_variant_switch`] on
-    /// every structured-container switch (same-codec included — the
-    /// target variant is reset and repositioned, so the decoder must
-    /// re-align). `read_at` / `wait_range` compare against
-    /// [`Self::fence_at`] and short-circuit with `Pending(VariantChange)`
-    /// / `Interrupted` until the audio FSM acks via
-    /// [`Self::clear_variant_fence`]. Only the WAV byte-continuity
-    /// branch switches without a fence.
+    /// every decoder-recreate switch. Same-codec switches use byte
+    /// continuity and do not raise this fence. `read_at` / `wait_range`
+    /// compare against [`Self::fence_at`] and short-circuit with
+    /// `Pending(VariantChange)` / `Interrupted` until the audio FSM acks via
+    /// [`Self::clear_variant_fence`]. Byte-continuity switches do not raise
+    /// a fence.
     variant_generation: AtomicU64,
     /// Target variant index of the in-flight fence. Stored (`Release`)
     /// BEFORE [`Self::variant_generation`] is bumped, so an observer of
@@ -221,23 +220,32 @@ impl HlsCoord {
     /// Commit any ABR pending decision at the reader's segment boundary.
     /// Returns `true` when a switch landed.
     ///
-    /// Two branches, selected by the new variant's container:
+    /// Two branches, selected by codec continuity:
     ///
-    /// - **Byte-continuity containers** (raw PCM in RIFF — `WAV`): the
-    ///   decoder cannot be recreated mid-track (must read the header
-    ///   at byte 0 and then consume PCM sequentially). Activate
-    ///   `v_new` at the boundary segment with `byte_shift` so the
-    ///   existing decoder keeps reading aligned bytes from the new
-    ///   variant. No fence, no recreate.
-    /// - **Structured containers** (fMP4, MPEG-TS, FLAC, …): hard
-    ///   reset on `v_new` via [`HlsVariant::reset_to_full_range`],
-    ///   reader position seeded to the segment covering the current
-    ///   timeline position, and `variant_generation` bumped — the
-    ///   next [`Self::read_at`] / [`Self::wait_range`]
-    ///   short-circuits with `Pending(VariantChange)` /
-    ///   `Interrupted` until the audio FSM recreates the decoder and
-    ///   acks via [`Self::clear_variant_fence`].
+    /// - **Byte-continuity switches** (same codec, plus raw PCM/WAV):
+    ///   activate `v_new` at the boundary segment with `byte_shift` so the
+    ///   existing decoder keeps reading aligned bytes from the new variant.
+    ///   No fence, no recreate.
+    /// - **Decoder-recreate switches** (known cross-codec, or codec
+    ///   unknown): hard reset on `v_new` via [`HlsVariant::reset_to_full_range`],
+    ///   reader position seeded to the segment covering the current timeline
+    ///   position, and `variant_generation` bumped — the next [`Self::read_at`]
+    ///   / [`Self::wait_range`] short-circuits with `Pending(VariantChange)` /
+    ///   `Interrupted` until the audio FSM recreates the decoder and acks via
+    ///   [`Self::clear_variant_fence`].
     pub(crate) fn commit_variant_switch(&self, ctx: &PlanCtx, from_seg: u32) -> bool {
+        self.commit_variant_switch_starting_at(ctx, from_seg.saturating_add(1))
+    }
+
+    /// Commit a pending ABR switch whose first target-variant segment is
+    /// `switch_at`. The seek-settle floor already names the target segment;
+    /// unlike steady boundary crossing it is not the old segment before the
+    /// boundary.
+    pub(crate) fn commit_variant_switch_at_segment(&self, ctx: &PlanCtx, switch_at: u32) -> bool {
+        self.commit_variant_switch_starting_at(ctx, switch_at)
+    }
+
+    fn commit_variant_switch_starting_at(&self, ctx: &PlanCtx, switch_at: u32) -> bool {
         let current_before = self.variant_index();
         let Some(decision) = self.abr.peek_pending_decision() else {
             return false;
@@ -247,12 +255,16 @@ impl HlsCoord {
             return false;
         };
         let v_old = self.variants.get(current_before);
-        let needs_byte_continuity = matches!(
+        let old_codec = v_old.and_then(|_| self.playlist_state.variant_codec(current_before));
+        let new_codec = self.playlist_state.variant_codec(new_v);
+        let same_codec = matches!((old_codec, new_codec), (Some(a), Some(b)) if a == b);
+        let is_cross_codec = matches!((old_codec, new_codec), (Some(a), Some(b)) if a != b);
+        let needs_byte_continuity = variant_switch_uses_byte_continuity(
+            same_codec,
             self.playlist_state.variant_container(new_v),
-            Some(ContainerFormat::Wav)
         );
         if needs_byte_continuity {
-            let switch_at = from_seg.saturating_add(1).min(v_new.num_segments());
+            let switch_at = switch_at.min(v_new.num_segments());
             let reader_pos = self.position();
             let seg_boundary = v_old
                 .and_then(|v| v.segment_byte_offset(switch_at))
@@ -271,12 +283,6 @@ impl HlsCoord {
             );
             self.abr.apply_decision(&decision, Instant::now());
         } else {
-            let old_codec = v_old.and_then(|_| self.playlist_state.variant_codec(current_before));
-            let new_codec = self.playlist_state.variant_codec(new_v);
-            let is_cross_codec = match (old_codec, new_codec) {
-                (Some(a), Some(b)) => a != b,
-                _ => false,
-            };
             if let Some(v_old) = v_old {
                 v_old.cancel();
             }
@@ -284,10 +290,8 @@ impl HlsCoord {
             if is_cross_codec {
                 v_new.invalidate_init();
             }
-            let target_time = self
-                .seek_obs
-                .target()
-                .unwrap_or_else(|| self.playhead_read.position());
+            let target_time =
+                variant_switch_target_time(self.seek_obs.as_ref(), self.playhead_read.as_ref());
             let target_seg: u32 = self
                 .playlist_state
                 .find_seek_point_for_time(new_v, target_time)
@@ -307,6 +311,7 @@ impl HlsCoord {
         // a byte-continuity reactivation): wake a parked reader to re-probe /
         // observe the new `Interrupted`(VariantChange) gate.
         self.ready.signal();
+        wake_worker(&ctx.worker_wake);
         true
     }
 
@@ -653,6 +658,41 @@ impl HlsCoord {
     }
 }
 
+fn variant_switch_target_time(
+    seek_obs: &dyn SeekObserve,
+    playhead_read: &dyn PlayheadRead,
+) -> Duration {
+    if seek_obs.is_pending() || seek_obs.is_flushing() {
+        return seek_obs
+            .target()
+            .unwrap_or_else(|| playhead_read.position());
+    }
+    playhead_read.position()
+}
+
+fn variant_switch_uses_byte_continuity(
+    same_codec: bool,
+    container: Option<ContainerFormat>,
+) -> bool {
+    match container {
+        Some(ContainerFormat::Wav) => true,
+        Some(
+            ContainerFormat::Adts
+            | ContainerFormat::Flac
+            | ContainerFormat::MpegAudio
+            | ContainerFormat::MpegTs
+            | ContainerFormat::Ogg,
+        ) => same_codec,
+        Some(
+            ContainerFormat::Caf
+            | ContainerFormat::Fmp4
+            | ContainerFormat::Mkv
+            | ContainerFormat::Mp4,
+        )
+        | None => false,
+    }
+}
+
 /// `VariantControl` exposes the cross-variant fence/format-change surface
 /// to the stream layer. The bodies are the coord's existing inherent
 /// methods — non-adaptive sources vend `None` instead of implementing
@@ -680,6 +720,7 @@ impl VariantControl for HlsCoord {
 /// implement the trait here instead of a separate view wrapper.
 impl ByteMap for HlsCoord {
     fn anchor_at_time(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
+        self.reset_for_seek();
         self.seek_time_anchor(position)
     }
 
@@ -709,5 +750,73 @@ impl ByteMap for HlsCoord {
 
     fn segment_count(&self) -> Option<u32> {
         Some(self.active()?.num_segments())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_stream::{PlayheadWrite, SeekControl};
+
+    use super::*;
+
+    #[kithara::test]
+    fn variant_switch_target_uses_active_seek_target() {
+        let seek = SeekState::new();
+        let playhead = PlayheadState::new();
+        playhead.set_position(Duration::from_secs(9));
+
+        let _epoch = seek.begin(Duration::from_secs(5));
+
+        assert_eq!(
+            variant_switch_target_time(&seek, &playhead),
+            Duration::from_secs(5)
+        );
+    }
+
+    #[kithara::test]
+    fn variant_switch_target_keeps_flushing_seek_target_after_decoder_applies() {
+        let seek = SeekState::new();
+        let playhead = PlayheadState::new();
+        playhead.set_position(Duration::from_secs(9));
+
+        let epoch = seek.begin(Duration::from_secs(5));
+        seek.clear_pending(epoch);
+
+        assert_eq!(
+            variant_switch_target_time(&seek, &playhead),
+            Duration::from_secs(5)
+        );
+    }
+
+    #[kithara::test]
+    fn variant_switch_target_ignores_completed_seek_target() {
+        let seek = SeekState::new();
+        let playhead = PlayheadState::new();
+
+        let epoch = seek.begin(Duration::from_secs(5));
+        seek.clear_pending(epoch);
+        seek.complete(epoch);
+        playhead.set_position(Duration::from_secs(9));
+
+        assert_eq!(
+            variant_switch_target_time(&seek, &playhead),
+            Duration::from_secs(9)
+        );
+    }
+
+    #[kithara::test]
+    fn same_codec_fmp4_switch_recreates_decoder_boundary() {
+        assert!(!variant_switch_uses_byte_continuity(
+            true,
+            Some(ContainerFormat::Fmp4)
+        ));
+    }
+
+    #[kithara::test]
+    fn same_codec_wav_switch_uses_byte_continuity() {
+        assert!(variant_switch_uses_byte_continuity(
+            true,
+            Some(ContainerFormat::Wav)
+        ));
     }
 }

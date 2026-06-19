@@ -194,7 +194,7 @@ impl Resource {
     /// failure.
     pub async fn preload(&mut self) -> Result<(), DecodeError> {
         if let Some(gate) = self.inner.preload_gate() {
-            gate.wait().await;
+            gate.wait_for_epoch(self.inner.preload_epoch()).await;
         }
         self.inner.preload()
     }

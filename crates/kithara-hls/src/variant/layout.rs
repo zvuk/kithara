@@ -327,6 +327,7 @@ impl Layout {
         frame.byte_shift = 0;
         frame.served_from = 0;
         frame.served_until = num;
+        frame.init_seed = 0;
         frame.recompute(init_size, segments);
         let snapshot = frame.snapshot(segments, init_size);
         drop(frame);

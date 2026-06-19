@@ -66,6 +66,10 @@ pub enum TrackReadOutcome {
         /// mixed into the output for this track. Returned for diagnostic
         /// and unit-test inspection.
         position: f64,
+        /// Real PCM frames copied from the underlying resource/scratch buffer.
+        /// The destination block may include additional zero-filled underrun
+        /// frames, which do not count as playback progress.
+        frames: usize,
         /// Visible (post-gapless-trim) duration snapshot in seconds.
         duration: f64,
         /// Exact remaining buffered frames when the resource has already
@@ -137,6 +141,26 @@ pub struct PlayerTrack {
 }
 
 impl PlayerTrack {
+    fn seek_frame_index(seconds: f64, sample_rate: u32, duration: f64) -> u64 {
+        let sample_rate = sample_rate.max(1);
+        let target_seconds = if seconds.is_nan() {
+            0.0
+        } else if seconds.is_finite() {
+            seconds.max(0.0)
+        } else if seconds.is_sign_positive() {
+            duration.max(0.0)
+        } else {
+            0.0
+        };
+        let bounded_seconds = if duration > 0.0 {
+            target_seconds.min(duration)
+        } else {
+            target_seconds
+        };
+        let frames = bounded_seconds * f64::from(sample_rate);
+        ToPrimitive::to_u64(&frames).unwrap_or(0)
+    }
+
     /// Create a new track in the `Preloading` state.
     ///
     /// The `MixDSP` starts at `FULLY_WET` (silent) so that an explicit
@@ -427,6 +451,7 @@ impl PlayerTrack {
                 return TrackReadOutcome::Full {
                     position: self.position(),
                     duration: self.observed_duration,
+                    frames: 0,
                     frames_until_eof: None,
                 };
             };
@@ -437,12 +462,13 @@ impl PlayerTrack {
             ];
 
             match guard.read(&mut scratch_window, 0..range.len()) {
-                ReadOutcome::Full => {
+                ReadOutcome::Full { frames } => {
                     let duration = guard.duration();
                     let frames_until_eof = guard.frames_until_eof();
                     drop(guard);
                     TrackReadOutcome::Full {
                         duration,
+                        frames,
                         frames_until_eof,
                         position: 0.0,
                     }
@@ -463,10 +489,12 @@ impl PlayerTrack {
         match read_outcome {
             TrackReadOutcome::Full {
                 duration,
+                frames,
                 frames_until_eof,
                 ..
             } => {
-                self.advance_served_frames(range.len() as u64);
+                let produced_frames = frames.to_u64().unwrap_or(0);
+                self.advance_served_frames(produced_frames);
                 self.observed_duration = duration;
                 if let Some(remaining_frames) = frames_until_eof {
                     let sample_rate = self.sample_rate.max(1);
@@ -508,6 +536,7 @@ impl PlayerTrack {
                 TrackReadOutcome::Full {
                     position,
                     duration,
+                    frames,
                     frames_until_eof,
                 }
             }
@@ -563,9 +592,7 @@ impl PlayerTrack {
         if let Ok(mut resource) = self.resource.try_lock() {
             resource.seek(seconds);
         }
-        let sample_rate = self.sample_rate.max(1);
-        let frames =
-            ToPrimitive::to_u64(&(seconds.max(0.0) * f64::from(sample_rate))).unwrap_or(u64::MAX);
+        let frames = Self::seek_frame_index(seconds, self.sample_rate, self.observed_duration);
         self.served_frames = frames;
         self.notified_track_requested = false;
         self.notified_prefetch_requested = false;
@@ -679,6 +706,16 @@ mod tests {
 
     fn mock_spec() -> PcmSpec {
         PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
+    }
+
+    #[kithara::test]
+    fn seek_frame_index_clamps_unrepresentable_targets() {
+        assert_eq!(
+            PlayerTrack::seek_frame_index(f64::INFINITY, 44_100, 10.0),
+            441_000
+        );
+        assert_eq!(PlayerTrack::seek_frame_index(f64::INFINITY, 44_100, 0.0), 0);
+        assert_eq!(PlayerTrack::seek_frame_index(f64::NAN, 44_100, 10.0), 0);
     }
 
     fn make_track_from_resource(

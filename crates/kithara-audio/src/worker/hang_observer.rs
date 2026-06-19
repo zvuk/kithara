@@ -19,9 +19,10 @@ impl HangWatchdogObserver {
 impl SchedulerObserver for HangWatchdogObserver {
     fn on_event(&mut self, event: SchedulerEvent) {
         match event {
-            SchedulerEvent::Progress | SchedulerEvent::Idle | SchedulerEvent::Backpressured => {
-                self.detector.reset();
-            }
+            SchedulerEvent::Progress
+            | SchedulerEvent::Idle
+            | SchedulerEvent::UpstreamPending
+            | SchedulerEvent::Backpressured => self.detector.reset(),
             SchedulerEvent::Waiting => {
                 self.detector.tick();
             }

@@ -306,8 +306,8 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// fire it from their off-RT write/commit sites so an underran worker
     /// re-ticks the instant bytes land, instead of polling. Set once, after
     /// the worker exists; the default is a no-op for sources whose data is
-    /// always resident (File, mock), where the worker never underruns on a
-    /// download.
+    /// always resident (local files, mocks), where the worker never underruns
+    /// on a download.
     fn set_worker_wake(&self, _wake: Arc<dyn WorkerWake>) {}
 
     /// Build a fresh reader-side event-sink instance.

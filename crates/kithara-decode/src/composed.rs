@@ -548,6 +548,26 @@ mod smoke_tests {
 }
 
 #[cfg(test)]
+fn write_silent_test_frame(
+    spec: PcmSpec,
+    frames_per_call: u32,
+    out: &mut PcmBuf,
+) -> DecodeResult<u32> {
+    let frames = usize::try_from(frames_per_call)?;
+    let samples = frames
+        .checked_mul(usize::from(spec.channels))
+        .ok_or_else(|| {
+            crate::error::DecodeError::InvalidData("test frame sample count overflow".to_string())
+        })?;
+    out.ensure_len(samples)?;
+    for slot in out.iter_mut() {
+        *slot = 0.0;
+    }
+    out.truncate(samples);
+    Ok(frames_per_call)
+}
+
+#[cfg(test)]
 mod test_stub_codec {
 
     use kithara_bufpool::PcmBuf;
@@ -577,13 +597,7 @@ mod test_stub_codec {
             _packet_desc: &[u8],
             out: &mut PcmBuf,
         ) -> DecodeResult<u32> {
-            let samples = self.frames_per_call as usize * self.spec.channels as usize;
-            out.ensure_len(samples)?;
-            for slot in out.iter_mut() {
-                *slot = 0.0;
-            }
-            out.truncate(samples);
-            Ok(self.frames_per_call)
+            super::write_silent_test_frame(self.spec, self.frames_per_call, out)
         }
 
         fn flush(&mut self) -> DecodeResult<()> {
@@ -636,13 +650,7 @@ mod test_counting_codec {
             out: &mut PcmBuf,
         ) -> DecodeResult<u32> {
             self.decode_calls.fetch_add(1, Ordering::SeqCst);
-            let samples = self.frames_per_call as usize * self.spec.channels as usize;
-            out.ensure_len(samples)?;
-            for slot in out.iter_mut() {
-                *slot = 0.0;
-            }
-            out.truncate(samples);
-            Ok(self.frames_per_call)
+            super::write_silent_test_frame(self.spec, self.frames_per_call, out)
         }
 
         fn flush(&mut self) -> DecodeResult<()> {

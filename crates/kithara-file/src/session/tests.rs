@@ -4,7 +4,10 @@ use kithara_assets::{AcquisitionResult, AssetReader, AssetStoreBuilder, WriteSid
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_storage::WaitOutcome;
-use kithara_stream::{PlayheadState, ReadOutcome, SeekState, Source, SourcePhase};
+use kithara_stream::{
+    PlayheadState, ReadOutcome, SeekState, Source, SourceError as StreamSourceError, SourcePhase,
+    StreamError,
+};
 use kithara_test_utils::kithara;
 
 use super::source::FileSource;
@@ -77,6 +80,20 @@ fn create_committed_resource(data: &[u8]) -> AssetReader {
     };
     writer.write_at(0, data).unwrap();
     writer.commit(Some(data.len() as u64)).unwrap()
+}
+
+fn create_active_resource(data: &[u8]) -> (AssetReader, kithara_assets::AssetWriter) {
+    let store = AssetStoreBuilder::new()
+        .ephemeral(true)
+        .cancel(CancelToken::never())
+        .build();
+
+    let key = store.scope("test").key("active.dat");
+    let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
+        panic!("fresh acquire must be Pending");
+    };
+    writer.write_at(0, data).unwrap();
+    (writer.reader(), writer)
 }
 
 #[kithara::test]
@@ -195,6 +212,37 @@ fn file_source_wait_range_returns_interrupted_while_flushing() {
 
     let result = Source::wait_range(&mut source, 50..60, Some(Duration::from_secs(1)));
     assert_eq!(result.unwrap(), WaitOutcome::Interrupted);
+}
+
+#[kithara::test]
+fn file_source_probe_wait_range_does_not_block_on_missing_bytes() {
+    let (res, _writer) = create_active_resource(b"hello");
+    let coord = make_coord();
+    let bus = EventBus::new(16);
+    coord.set_total_bytes(Some(100));
+    let mut source = make_source(res, coord, bus);
+
+    let result = Source::wait_range(&mut source, 0..10, Some(Duration::from_secs(1)));
+
+    assert!(matches!(
+        result,
+        Err(StreamError::Source(StreamSourceError::WaitBudgetExceeded))
+    ));
+}
+
+#[kithara::test]
+fn file_source_probe_wait_range_clamps_read_ahead_at_known_eof() {
+    let data = b"hello";
+    let res = create_committed_resource(data);
+    let coord = make_coord();
+    let bus = EventBus::new(16);
+    let total = u64::try_from(data.len()).expect("test data length fits u64");
+    coord.set_total_bytes(Some(total));
+    let mut source = make_source(res, coord, bus);
+
+    let result = Source::wait_range(&mut source, 0..1024, Some(Duration::from_secs(1)));
+
+    assert_eq!(result.unwrap(), WaitOutcome::Ready);
 }
 
 #[kithara::test]
