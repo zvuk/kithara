@@ -739,6 +739,7 @@ android MODE="build" *ARGS:
 # Apple tasks.
 #   just apple                          # build XCFramework (default)
 #   just apple xcframework --profile debug
+#   just apple single                   # build single binary Kithara.xcframework
 #   just apple demo                     # XCFramework + run KitharaDemo
 #   just apple xcode                    # XCFramework + open xcodeproj
 #   just apple ios SCHEME [DESTINATION] # build for iOS Simulator
@@ -750,6 +751,9 @@ apple MODE="xcframework" *ARGS:
     case "{{MODE}}" in
       xcframework)
         cargo xtask apple build {{ARGS}}
+        ;;
+      single)
+        cargo xtask apple single {{ARGS}}
         ;;
       demo)
         just apple xcframework --profile debug
@@ -789,12 +793,14 @@ apple MODE="xcframework" *ARGS:
         # Symbol audit: fail fast if a software-backend dep leaked
         # into the apple xcframework. Apple HW must own decode on iOS.
         cargo xtask apple audit apple/KitharaFFIInternal.xcframework
+        just apple single
         cd apple && zip -ry /tmp/KitharaFFIInternal.xcframework.zip KitharaFFIInternal.xcframework
+        cd apple/dist && zip -ry /tmp/Kithara.xcframework.zip Kithara.xcframework
         swift package compute-checksum /tmp/KitharaFFIInternal.xcframework.zip \
             | tee /tmp/KitharaFFIInternal.xcframework.zip.sha256
         ;;
       *)
-        echo "unknown apple mode: {{MODE}} (use xcframework|demo|xcode|ios|doc|release)"
+        echo "unknown apple mode: {{MODE}} (use xcframework|single|demo|xcode|ios|doc|release)"
         exit 2
         ;;
     esac

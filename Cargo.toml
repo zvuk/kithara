@@ -125,6 +125,23 @@ approx_constant = "warn"
 [workspace.metadata.kithara]
 tools = { rustfmt = "rustfmt.toml", clippy = "clippy.toml", deny = "deny.toml" }
 
+# Drives `cargo xtask apple single` (one self-contained xcframework for the
+# CocoaPods / manual drag-in channels). Project-agnostic: point these at a
+# different module/bundle to reuse the packaging tooling in another
+# UniFFI + Swift workspace — the xtask reads them, nothing is hard-coded.
+[workspace.metadata.apple]
+framework-name = "Kithara"
+bundle-id = "io.zvuk.Kithara"
+short-version = "0.0.1"
+deployment-target = "16.0"
+autolink-frameworks = [
+    "AudioToolbox",
+    "CoreAudio",
+    "AVFoundation",
+    "Security",
+    "SystemConfiguration",
+]
+
 [workspace.package]
 version = "0.0.1-alpha2"
 edition = "2024"
@@ -323,6 +340,7 @@ crossterm = "0.29"
 cargo_metadata = "0.23"
 anyhow = "1"
 regex = "1"
+plist = "1"
 
 # Optimise CPU-heavy audio dependencies in debug builds so the audio
 # worker thread can keep up with real-time playback.  Without this,

@@ -12,6 +12,7 @@ cargo_metadata = { workspace = true }
 anyhow = { workspace = true }
 glob = { workspace = true }
 regex = { workspace = true }
+plist = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

@@ -94,6 +94,31 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
     }
     fs::copy(zip, &cached).with_context(|| format!("cache zip to {}", cached.display()))?;
     println!("Cached artifact: {}", cached.display());
+
+    let tag = tag_of(version);
+    if !cfg.single_asset.is_empty() {
+        let built = env::temp_dir().join(&cfg.single_asset);
+        if built.is_file() {
+            let dest = cache_named(&tag, &cfg.single_asset)?;
+            fs::copy(&built, &dest)
+                .with_context(|| format!("cache {} to {}", cfg.single_asset, dest.display()))?;
+            println!("Cached artifact: {}", dest.display());
+        } else {
+            println!(
+                "Note: {} not at {} — single-framework channel skipped (omit --zip to build it)",
+                cfg.single_asset,
+                built.display()
+            );
+        }
+    }
+    if !cfg.podspec.is_empty() {
+        let content =
+            fs::read_to_string(&cfg.podspec).with_context(|| format!("read {}", cfg.podspec))?;
+        let stamped = stamp_podspec(&content, version)?;
+        fs::write(&cfg.podspec, stamped).with_context(|| format!("write {}", cfg.podspec))?;
+        println!("Stamped {}: version={version}", cfg.podspec);
+    }
+
     println!();
     println!("Next steps:");
     println!("  1. Commit {MANIFEST} in the release PR.");
@@ -130,6 +155,7 @@ fn publish(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
 
     publish_github(cfg, &tag, &sha, &checksum, zip.as_deref())?;
     publish_gitlab(cfg, &tag, &sha, &checksum, zip.as_deref())?;
+    publish_extras(cfg, &tag, &sha)?;
 
     println!();
     println!("Release {tag} published:");
@@ -285,6 +311,75 @@ fn publish_gitlab(
         other => bail!("gitlab release lookup failed (HTTP {other})"),
     }
     Ok(())
+}
+
+/// Publish the secondary channels: the single self-contained framework zip
+/// (`CocoaPods` + manual drag-in) and the `CocoaPods` podspec. Both are uploaded
+/// to the GitHub release and mirrored to the `GitLab` generic registry (so
+/// internal builds resolve them via `KITHARA_BINARY_BASE_URL`); the podspec
+/// is also pushed to the public `CocoaPods` trunk.
+fn publish_extras(cfg: &ReleaseConfig, tag: &str, sha: &str) -> Result<()> {
+    if !cfg.single_asset.is_empty() {
+        let zip = cache_named(tag, &cfg.single_asset)?;
+        if !zip.is_file() {
+            bail!(
+                "cached {} not found at {}; re-run `cargo xtask release prepare`",
+                cfg.single_asset,
+                zip.display()
+            );
+        }
+        upload_github_asset(&cfg.github_repo, tag, &zip)?;
+        upload_gitlab_asset(cfg, tag, &cfg.single_asset, &zip)?;
+    }
+    if !cfg.podspec.is_empty() {
+        let content = git_capture(&["show", &format!("{sha}:{}", cfg.podspec)])?;
+        let tmp = env::temp_dir().join(&cfg.podspec);
+        fs::write(&tmp, content).with_context(|| format!("write {}", tmp.display()))?;
+        upload_github_asset(&cfg.github_repo, tag, &tmp)?;
+        upload_gitlab_asset(cfg, tag, &cfg.podspec, &tmp)?;
+        cocoapods_push(&tmp)?;
+    }
+    Ok(())
+}
+
+/// Upload (or replace) one asset on an existing GitHub release.
+fn upload_github_asset(repo: &str, tag: &str, file: &Path) -> Result<()> {
+    let name = file
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    println!("[github] uploading {name}...");
+    run_step(
+        Command::new("gh")
+            .args(["release", "upload", tag, "--repo", repo, "--clobber"])
+            .arg(file),
+        "gh release upload",
+    )
+}
+
+/// Mirror one asset to the `GitLab` generic package registry under the tag.
+fn upload_gitlab_asset(cfg: &ReleaseConfig, tag: &str, name: &str, file: &Path) -> Result<()> {
+    let token = gitlab_token()?;
+    let api = GitlabApi::new(cfg, &token);
+    let path = format!("packages/generic/{}/{tag}/{name}", cfg.gitlab_package);
+    println!("[gitlab] uploading {name} to package registry...");
+    let (code, body) = api.upload(&path, file)?;
+    if code != 200 && code != 201 {
+        bail!("gitlab upload of {name} failed (HTTP {code}): {body}");
+    }
+    Ok(())
+}
+
+/// Push the podspec to the public `CocoaPods` trunk.
+fn cocoapods_push(podspec: &Path) -> Result<()> {
+    check_tool("pod", &["--version"], "sudo gem install cocoapods")?;
+    println!("[cocoapods] pod trunk push {}...", podspec.display());
+    run_step(
+        Command::new("pod")
+            .args(["trunk", "push", "--allow-warnings"])
+            .arg(podspec),
+        "pod trunk push",
+    )
 }
 
 struct GitlabApi {
@@ -475,11 +570,16 @@ fn tag_of(version: &str) -> String {
 }
 
 fn cache_path(cfg: &ReleaseConfig, tag: &str) -> Result<PathBuf> {
+    cache_named(tag, &cfg.asset)
+}
+
+/// Cache path for an arbitrary release artifact (per tag + file name).
+fn cache_named(tag: &str, name: &str) -> Result<PathBuf> {
     let home = env::var_os("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home)
         .join("Library/Caches/kithara/releases")
         .join(tag)
-        .join(&cfg.asset))
+        .join(name))
 }
 
 fn zip_required<'a>(zip: Option<&'a Path>, cfg: &ReleaseConfig, tag: &str) -> Result<&'a Path> {
@@ -512,6 +612,27 @@ fn stamp_manifest(manifest: &str, version: &str, checksum: &str) -> Result<Strin
     }
     if !seen_version || !seen_checksum {
         bail!("Package.swift is missing the `let version` / `let checksum` lines");
+    }
+    Ok(out)
+}
+
+/// Replace the podspec `s.version = '...'` line. Bails when the line is
+/// missing so a refactor cannot silently ship an unstamped podspec.
+fn stamp_podspec(content: &str, version: &str) -> Result<String> {
+    let mut out = String::with_capacity(content.len());
+    let mut seen = false;
+    for line in content.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("s.version") {
+            let indent = &line[..line.len() - trimmed.len()];
+            out.push_str(&format!("{indent}s.version = '{version}'\n"));
+            seen = true;
+        } else {
+            out.push_str(line);
+        }
+    }
+    if !seen {
+        bail!("podspec is missing the `s.version` line");
     }
     Ok(out)
 }
@@ -641,6 +762,15 @@ mod tests {
     }
 
     #[test]
+    fn stamp_podspec_replaces_version() {
+        let src = "Pod::Spec.new do |s|\n  s.name = 'Kithara'\n  s.version = '0.0.1-alpha2'\nend\n";
+        let out = stamp_podspec(src, "0.0.2").unwrap();
+        assert!(out.contains("  s.version = '0.0.2'\n"), "{out}");
+        assert!(!out.contains("0.0.1-alpha2"), "{out}");
+        assert!(stamp_podspec("s.name = 'x'\n", "0.0.2").is_err());
+    }
+
+    #[test]
     fn release_notes_mention_both_hosts() {
         let cfg = ReleaseConfig {
             github_repo: "zvuk/kithara".into(),
@@ -648,6 +778,8 @@ mod tests {
             gitlab_project: "disrupt/kithara".into(),
             gitlab_package: "kithara".into(),
             asset: "KitharaFFIInternal.xcframework.zip".into(),
+            single_asset: "Kithara.xcframework.zip".into(),
+            podspec: "Kithara.podspec".into(),
         };
         let notes = release_notes(&cfg, "v0.0.2", "deadbeef");
         assert!(notes.contains("deadbeef"));

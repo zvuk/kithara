@@ -1,11 +1,13 @@
 use std::{
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
+use regex::Regex;
 
 /// Module constants for `cargo xtask apple run`. Grouped per the
 /// `style.multiple-private-module-consts` lint.
@@ -47,6 +49,67 @@ impl Consts {
     ];
 }
 
+/// Project-agnostic single-framework packaging config, read from
+/// `[workspace.metadata.apple]`. Nothing here is hard-coded in the build
+/// logic, so the `apple single` tooling lifts into any `UniFFI` + Swift
+/// workspace by editing that metadata table.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct SingleFrameworkSpec {
+    /// Swift module + framework name (e.g. `Kithara`).
+    framework_name: String,
+    /// `CFBundleIdentifier` for the generated framework.
+    bundle_id: String,
+    /// `CFBundleShortVersionString` (must be numeric for the plist).
+    short_version: String,
+    /// `MinimumOSVersion` / build target (e.g. `16.0`).
+    deployment_target: String,
+    /// System frameworks the Rust core needs autolinked into the static
+    /// framework (e.g. `AudioToolbox`, `CoreAudio`).
+    autolink_frameworks: Vec<String>,
+    /// `CFBundleVersion` build number; defaults to `1`.
+    #[serde(default = "default_bundle_version")]
+    bundle_version: String,
+}
+
+fn default_bundle_version() -> String {
+    "1".to_string()
+}
+
+/// `Info.plist` keys for a single-platform `.framework`, serialized via the
+/// `plist` crate (no hand-written XML).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct FrameworkInfoPlist {
+    #[serde(rename = "CFBundleExecutable")]
+    executable: String,
+    #[serde(rename = "CFBundleIdentifier")]
+    identifier: String,
+    #[serde(rename = "CFBundleInfoDictionaryVersion")]
+    info_dictionary_version: String,
+    #[serde(rename = "CFBundleName")]
+    name: String,
+    #[serde(rename = "CFBundlePackageType")]
+    package_type: String,
+    #[serde(rename = "CFBundleShortVersionString")]
+    short_version: String,
+    #[serde(rename = "CFBundleVersion")]
+    bundle_version: String,
+    #[serde(rename = "MinimumOSVersion")]
+    minimum_os: String,
+    #[serde(rename = "CFBundleSupportedPlatforms")]
+    supported_platforms: Vec<String>,
+}
+
+/// Load the single-framework spec from `[workspace.metadata.apple]`.
+fn load_spec(metadata: &cargo_metadata::Metadata) -> Result<SingleFrameworkSpec> {
+    let value = metadata
+        .workspace_metadata
+        .get("apple")
+        .context("missing [workspace.metadata.apple] table in the workspace Cargo.toml")?;
+    serde_json::from_value(value.clone()).context("invalid [workspace.metadata.apple] table")
+}
+
 /// Recursively copy `src` directory to `dst`.
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
@@ -65,11 +128,48 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+struct TempWorkDir {
+    path: PathBuf,
+}
+
+impl TempWorkDir {
+    fn create(prefix: &str) -> Result<Self> {
+        let epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system clock is before UNIX_EPOCH")?;
+        let path = env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            epoch.as_nanos()
+        ));
+        fs::create_dir_all(&path).with_context(|| format!("create {}", path.display()))?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempWorkDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 #[derive(Clone, Debug, clap::Subcommand)]
 pub(crate) enum AppleCommand {
     /// Build `XCFramework` for Apple platforms.
     Build {
         /// Build profile.
+        #[arg(long, default_value_t = crate::BuildProfile::Release)]
+        profile: crate::BuildProfile,
+    },
+    /// Build ONE self-contained `Kithara.xcframework` (Swift API + `UniFFI`
+    /// binding + Rust core merged into a single module) for drag-in /
+    /// `CocoaPods` consumers. See `apple/README.md` "Distribution channels".
+    Single {
+        /// Build profile for the underlying Rust `XCFramework`.
         #[arg(long, default_value_t = crate::BuildProfile::Release)]
         profile: crate::BuildProfile,
     },
@@ -109,6 +209,7 @@ pub(crate) enum AppleCommand {
 pub(crate) fn run(cmd: AppleCommand) -> Result<()> {
     match cmd {
         AppleCommand::Build { profile } => run_build(profile),
+        AppleCommand::Single { profile } => run_single(profile),
         AppleCommand::Run {
             simulator,
             scheme,
@@ -270,6 +371,574 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     println!("To build and test:");
     println!("  cd {} && swift build && swift test", apple_dir.display());
 
+    Ok(())
+}
+
+/// Per-arch inputs for one slice of the single-framework build.
+struct ArchBuild<'a> {
+    module: &'a str,
+    triple: &'a str,
+    sdk: &'a Path,
+    module_map: &'a Path,
+    rust_lib: &'a Path,
+    out: &'a Path,
+    module_triple: &'a str,
+    rx_out: &'a Path,
+}
+
+/// Build ONE self-contained `Kithara.xcframework`.
+///
+/// The three Swift layers (`KitharaFFI` generated binding, `Kithara` API,
+/// `KitharaRx`) are merged into a single module and the Rust static lib is
+/// merged into the framework binary, so a drag-in / `CocoaPods` consumer needs
+/// no extra modules or flags. See `apple/README.md` for why the merge +
+/// `internal import` post-pass is necessary (`UniFFI` leaks `RustBuffer`).
+fn run_single(profile: crate::BuildProfile) -> Result<()> {
+    let metadata = MetadataCommand::new()
+        .exec()
+        .context("failed to read cargo metadata")?;
+    let spec = load_spec(&metadata)?;
+    let root = metadata.workspace_root.as_std_path().to_path_buf();
+    let apple_dir = root.join("apple");
+    let internal = apple_dir.join("KitharaFFIInternal.xcframework");
+
+    if !internal.exists() {
+        println!("==> KitharaFFIInternal.xcframework not found — building it first");
+        run_build(profile)?;
+    }
+    require_dir(&internal)?;
+
+    let rx_src = resolve_rxswift(&root)?;
+    println!("==> RxSwift source: {}", rx_src.display());
+
+    let temp = TempWorkDir::create("kithara-apple-single")?;
+    let work = temp.path().to_path_buf();
+    let merged = work.join("merged");
+    fs::create_dir_all(&merged)?;
+
+    println!("==> Merging the Swift layers into one module");
+    merge_sources(&apple_dir, &merged, &spec.autolink_frameworks)?;
+
+    let dist = apple_dir.join("dist");
+    fs::create_dir_all(&dist)?;
+    let out = dist.join(format!("{}.xcframework", spec.framework_name));
+    if out.exists() {
+        fs::remove_dir_all(&out).with_context(|| format!("remove {}", out.display()))?;
+    }
+
+    build_single_xcframework(&merged, &internal, &rx_src, &work, &out, &spec)?;
+    verify_single(&out)?;
+
+    println!("==> Done!");
+    println!("==> Single XCFramework: {}", out.display());
+    Ok(())
+}
+
+/// Resolve the pinned `RxSwift` checkout via `SwiftPM` (the merged module imports
+/// `RxSwift`, so its module must exist at compile time).
+fn resolve_rxswift(root: &Path) -> Result<PathBuf> {
+    println!("==> Resolving RxSwift via SwiftPM");
+    let status = Command::new("swift")
+        .args(["package", "resolve"])
+        .current_dir(root)
+        .env("KITHARA_LOCAL_DEV", "1")
+        .status()
+        .context("failed to run swift package resolve")?;
+    if !status.success() {
+        bail!("swift package resolve failed");
+    }
+    let rx = root.join(".build/checkouts/RxSwift/Sources/RxSwift");
+    if !rx.is_dir() {
+        bail!("RxSwift sources not found at {}", rx.display());
+    }
+    Ok(rx)
+}
+
+/// Copy + transform the three Swift layers into one single-module directory.
+fn merge_sources(apple_dir: &Path, merged: &Path, autolink: &[String]) -> Result<()> {
+    let ffi = apple_dir.join("Sources/KitharaFFI/KitharaFFI.swift");
+    let content = fs::read_to_string(&ffi).with_context(|| format!("read {}", ffi.display()))?;
+    fs::write(merged.join("KitharaFFI.swift"), transform_ffi(&content)?)?;
+
+    for layer in ["Sources/Kithara", "Sources/KitharaRx"] {
+        let dir = apple_dir.join(layer);
+        for f in swift_files(&dir)? {
+            let content =
+                fs::read_to_string(&f).with_context(|| format!("read {}", f.display()))?;
+            let name = f.file_name().context("layer source without a file name")?;
+            fs::write(merged.join(Path::new(name)), transform_layer(&content)?)?;
+        }
+    }
+
+    // Autolink stub: importing these system frameworks makes the static
+    // framework carry `-framework` directives, so a consumer resolves the
+    // Rust core's symbols with no extra link flags.
+    let system_link = autolink
+        .iter()
+        .map(|fw| format!("import {fw}\n"))
+        .collect::<String>();
+    fs::write(merged.join("_SystemLink.swift"), system_link)?;
+    Ok(())
+}
+
+/// Generated-binding transforms: hide the C module behind `internal import`,
+/// demote the `UniFFI` scaffolding that publicly exposes `RustBuffer`, and
+/// rename the two generated protocols that clash with the high-level ones.
+fn transform_ffi(src: &str) -> Result<String> {
+    const CONVERTER_PREFIXES: &[&str] = &[
+        "public func FfiConverter",
+        "public struct FfiConverter",
+        "public enum FfiConverter",
+        "public final class FfiConverter",
+        "public class FfiConverter",
+        "public var FfiConverter",
+        "public let FfiConverter",
+    ];
+    let mut out = String::with_capacity(src.len());
+    for line in src.lines() {
+        if line == "import KitharaFFIInternal" {
+            out.push_str("internal import KitharaFFIInternal\n");
+            continue;
+        }
+        let demote = CONVERTER_PREFIXES.iter().any(|p| line.starts_with(p))
+            || line.starts_with("public func uniffi")
+            || line.starts_with("public func ffi_");
+        if demote {
+            if let Some(stripped) = line.strip_prefix("public ") {
+                out.push_str(stripped);
+            } else {
+                out.push_str(line);
+            }
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    let item_protocol = Regex::new(r"\bAudioPlayerItemProtocol\b")
+        .context("compile AudioPlayerItemProtocol rename regex")?;
+    let player_protocol = Regex::new(r"\bAudioPlayerProtocol\b")
+        .context("compile AudioPlayerProtocol rename regex")?;
+    let out = item_protocol
+        .replace_all(&out, "FfiAudioPlayerItemProtocol")
+        .into_owned();
+    Ok(player_protocol
+        .replace_all(&out, "FfiAudioPlayerProtocol")
+        .into_owned())
+}
+
+/// High-level layer transforms: drop now-intra-module imports, drop the
+/// re-export typealiases (self-referential after merge), strip the qualifier.
+fn transform_layer(src: &str) -> Result<String> {
+    let typealias_re = Regex::new(r"^\s*public typealias \w+ = KitharaFFI\.")
+        .context("compile KitharaFFI typealias regex")?;
+    let mut out = String::with_capacity(src.len());
+    for line in src.lines() {
+        if line == "import KitharaFFI" || line == "import Kithara" {
+            continue;
+        }
+        if typealias_re.is_match(line) {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    Ok(out.replace("KitharaFFI.", ""))
+}
+
+/// Compile the merged module per arch, merge the Rust slice in, and assemble
+/// the final `XCFramework`.
+fn build_single_xcframework(
+    merged: &Path,
+    internal: &Path,
+    rx_src: &Path,
+    work: &Path,
+    out: &Path,
+    spec: &SingleFrameworkSpec,
+) -> Result<()> {
+    let ios_sdk = sdk_path("iphoneos")?;
+    let sim_sdk = sdk_path("iphonesimulator")?;
+
+    let mm_dev = internal.join("ios-arm64/Headers/KitharaFFIInternal");
+    let mm_sim = internal.join("ios-arm64_x86_64-simulator/Headers/KitharaFFIInternal");
+    let rust_dev = internal.join("ios-arm64/libkithara_ffi.a");
+    let rust_sim_fat = internal.join("ios-arm64_x86_64-simulator/libkithara_ffi.a");
+    require_file(&mm_dev.join("module.modulemap"))?;
+    require_file(&mm_sim.join("module.modulemap"))?;
+    require_file(&rust_dev)?;
+    require_file(&rust_sim_fat)?;
+
+    let rust_sim_arm = work.join("rust-sim-arm64.a");
+    let rust_sim_x86 = work.join("rust-sim-x86_64.a");
+    lipo_thin(&rust_sim_fat, "arm64", &rust_sim_arm)?;
+    lipo_thin(&rust_sim_fat, "x86_64", &rust_sim_x86)?;
+
+    let msrc = swift_files(merged)?;
+    let rx_files = swift_files_recursive(rx_src)?;
+
+    let dev_out = work.join("dev");
+    let sim_a_out = work.join("sim-a");
+    let sim_x_out = work.join("sim-x");
+    let rx_dev_out = work.join("rx/dev");
+    let rx_sim_a_out = work.join("rx/sim-a");
+    let rx_sim_x_out = work.join("rx/sim-x");
+
+    let dt = &spec.deployment_target;
+    let triple_dev = format!("arm64-apple-ios{dt}");
+    let triple_sim_a = format!("arm64-apple-ios{dt}-simulator");
+    let triple_sim_x = format!("x86_64-apple-ios{dt}-simulator");
+
+    let slices = [
+        ArchBuild {
+            module: &spec.framework_name,
+            triple: &triple_dev,
+            sdk: &ios_sdk,
+            module_map: &mm_dev,
+            rust_lib: &rust_dev,
+            out: &dev_out,
+            module_triple: "arm64-apple-ios",
+            rx_out: &rx_dev_out,
+        },
+        ArchBuild {
+            module: &spec.framework_name,
+            triple: &triple_sim_a,
+            sdk: &sim_sdk,
+            module_map: &mm_sim,
+            rust_lib: &rust_sim_arm,
+            out: &sim_a_out,
+            module_triple: "arm64-apple-ios-simulator",
+            rx_out: &rx_sim_a_out,
+        },
+        ArchBuild {
+            module: &spec.framework_name,
+            triple: &triple_sim_x,
+            sdk: &sim_sdk,
+            module_map: &mm_sim,
+            rust_lib: &rust_sim_x86,
+            out: &sim_x_out,
+            module_triple: "x86_64-apple-ios-simulator",
+            rx_out: &rx_sim_x_out,
+        },
+    ];
+    for slice in &slices {
+        build_arch(slice, &msrc, &rx_files)?;
+    }
+
+    let fw_ios = work.join("fw/ios");
+    let fw_sim = work.join("fw/sim");
+    assemble_framework(&fw_ios, "iPhoneOS", &[&dev_out], spec)?;
+    assemble_framework(&fw_sim, "iPhoneSimulator", &[&sim_a_out, &sim_x_out], spec)?;
+
+    let framework = format!("{}.framework", spec.framework_name);
+    create_xcframework(&[&fw_ios.join(&framework), &fw_sim.join(&framework)], out)
+}
+
+/// Build one arch slice: temp `RxSwift` module, merged module, libtool merge.
+fn build_arch(arch: &ArchBuild, msrc: &[PathBuf], rx_files: &[PathBuf]) -> Result<()> {
+    fs::create_dir_all(arch.rx_out)?;
+    fs::create_dir_all(arch.out)?;
+    println!("==> Compiling {} ({})", arch.module, arch.module_triple);
+    build_rxswift(arch.triple, arch.sdk, rx_files, arch.rx_out)?;
+    build_merged(arch, msrc)?;
+    libtool_merge(
+        &arch.out.join(format!("lib{}Swift.a", arch.module)),
+        arch.rust_lib,
+        &arch.out.join(format!("{}.a", arch.module)),
+    )
+}
+
+/// Build a temporary `RxSwift` static module for one arch (the consumer ships
+/// its own `RxSwift`; this only resolves the module at compile time).
+fn build_rxswift(triple: &str, sdk: &Path, rx_files: &[PathBuf], rx_out: &Path) -> Result<()> {
+    let mut cmd = Command::new("xcrun");
+    cmd.args([
+        "swiftc",
+        "-emit-module",
+        "-emit-library",
+        "-static",
+        "-module-name",
+        "RxSwift",
+        "-emit-module-path",
+    ])
+    .arg(rx_out.join("RxSwift.swiftmodule"))
+    .arg("-target")
+    .arg(triple)
+    .arg("-sdk")
+    .arg(sdk);
+    for f in rx_files {
+        cmd.arg(f);
+    }
+    cmd.arg("-o").arg(rx_out.join("libRxSwift.a"));
+    run_quiet(&mut cmd, "build RxSwift module")
+}
+
+/// Compile the merged single module with library evolution, emitting a
+/// canonically-named `.swiftinterface`.
+fn build_merged(arch: &ArchBuild, msrc: &[PathBuf]) -> Result<()> {
+    let mut cmd = Command::new("xcrun");
+    cmd.args([
+        "swiftc",
+        "-emit-module",
+        "-emit-library",
+        "-static",
+        "-enable-library-evolution",
+        "-module-name",
+        arch.module,
+        "-emit-module-path",
+    ])
+    .arg(arch.out.join(format!("{}.swiftmodule", arch.module)))
+    .arg("-emit-module-interface-path")
+    .arg(
+        arch.out
+            .join(format!("{}.swiftinterface", arch.module_triple)),
+    )
+    .arg("-target")
+    .arg(arch.triple)
+    .arg("-sdk")
+    .arg(arch.sdk)
+    .arg("-Xcc")
+    .arg(format!(
+        "-fmodule-map-file={}",
+        arch.module_map.join("module.modulemap").display()
+    ))
+    .arg("-I")
+    .arg(arch.module_map)
+    .arg("-I")
+    .arg(arch.rx_out);
+    for f in msrc {
+        cmd.arg(f);
+    }
+    cmd.arg("-o")
+        .arg(arch.out.join(format!("lib{}Swift.a", arch.module)));
+    run_quiet(&mut cmd, "compile merged module")
+}
+
+/// Merge the Swift static lib and the Rust static lib into one archive.
+fn libtool_merge(swift_lib: &Path, rust_lib: &Path, out_lib: &Path) -> Result<()> {
+    let mut cmd = Command::new("libtool");
+    cmd.arg("-static")
+        .arg("-o")
+        .arg(out_lib)
+        .arg(swift_lib)
+        .arg(rust_lib);
+    run_quiet(&mut cmd, "libtool merge")
+}
+
+/// Assemble a `.framework` for one platform from one or more arch slices.
+fn assemble_framework(
+    fw_dir: &Path,
+    platform: &str,
+    slices: &[&Path],
+    spec: &SingleFrameworkSpec,
+) -> Result<()> {
+    let name = &spec.framework_name;
+    let fw = fw_dir.join(format!("{name}.framework"));
+    if fw.exists() {
+        fs::remove_dir_all(&fw)?;
+    }
+    let modules = fw.join(format!("Modules/{name}.swiftmodule"));
+    fs::create_dir_all(&modules)?;
+
+    let mut lipo = Command::new("lipo");
+    lipo.arg("-create");
+    for slice in slices {
+        lipo.arg(slice.join(format!("{name}.a")));
+    }
+    lipo.arg("-output").arg(fw.join(name));
+    run_quiet(&mut lipo, "lipo framework binary")?;
+
+    for slice in slices {
+        let mut module_triple = None;
+        for entry in fs::read_dir(slice)? {
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("swiftinterface") {
+                let file_name = path.file_name().context("interface without a name")?;
+                fs::copy(&path, modules.join(file_name))?;
+                let file_name_str = file_name.to_string_lossy();
+                if !file_name_str.contains(".private.") {
+                    let stem = path
+                        .file_stem()
+                        .context("interface without a stem")?
+                        .to_string_lossy()
+                        .into_owned();
+                    module_triple = Some(stem);
+                }
+            }
+        }
+        let module_triple = module_triple
+            .with_context(|| format!("no public swiftinterface found in {}", slice.display()))?;
+        fs::copy(
+            slice.join(format!("{name}.swiftmodule")),
+            modules.join(format!("{module_triple}.swiftmodule")),
+        )?;
+    }
+
+    write_info_plist(&fw.join("Info.plist"), platform, spec)
+}
+
+/// Bundle the per-platform `.framework`s into the final `XCFramework`.
+fn create_xcframework(frameworks: &[&Path], out: &Path) -> Result<()> {
+    let mut cmd = Command::new("xcodebuild");
+    cmd.arg("-create-xcframework");
+    for fw in frameworks {
+        cmd.arg("-framework").arg(fw);
+    }
+    cmd.arg("-output").arg(out);
+    run_quiet(&mut cmd, "create-xcframework")
+}
+
+/// Fail unless the shipped public interface is clean and inheritance is on.
+///
+/// Project-agnostic invariants: the `UniFFI` runtime type `RustBuffer` must
+/// not appear in any public `.swiftinterface` (proof the C-module scaffolding
+/// was fully demoted), and at least one `open class` must be present (proof
+/// the single-module build kept subclassable types).
+fn verify_single(out: &Path) -> Result<()> {
+    let interfaces = public_swiftinterfaces(out)?;
+    if interfaces.is_empty() {
+        bail!("no public swiftinterfaces found under {}", out.display());
+    }
+    let mut leak_refs = 0;
+    let mut has_open_class = false;
+    for iface in &interfaces {
+        let content =
+            fs::read_to_string(iface).with_context(|| format!("read {}", iface.display()))?;
+        leak_refs += content.matches("RustBuffer").count();
+        has_open_class |= content.contains("open class ");
+    }
+    if leak_refs > 0 {
+        bail!(
+            "public interface leaks {leak_refs} RustBuffer reference(s) — UniFFI scaffolding not fully demoted"
+        );
+    }
+    if !has_open_class {
+        bail!("public interface has no `open class` — inheritance not enabled");
+    }
+    println!("==> Verified: 0 RustBuffer leaks; open classes present in public interface");
+    Ok(())
+}
+
+/// `xcrun --sdk <sdk> --show-sdk-path`.
+fn sdk_path(sdk: &str) -> Result<PathBuf> {
+    let output = Command::new("xcrun")
+        .args(["--sdk", sdk, "--show-sdk-path"])
+        .output()
+        .with_context(|| format!("xcrun --show-sdk-path {sdk}"))?;
+    if !output.status.success() {
+        bail!("xcrun --show-sdk-path {sdk} failed");
+    }
+    Ok(PathBuf::from(
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    ))
+}
+
+/// Extract a single arch from a fat static lib.
+fn lipo_thin(fat: &Path, arch: &str, out: &Path) -> Result<()> {
+    let mut cmd = Command::new("lipo");
+    cmd.arg(fat).arg("-thin").arg(arch).arg("-output").arg(out);
+    run_quiet(&mut cmd, "lipo thin")
+}
+
+fn require_dir(path: &Path) -> Result<()> {
+    if !path.is_dir() {
+        bail!("required directory is missing: {}", path.display());
+    }
+    Ok(())
+}
+
+fn require_file(path: &Path) -> Result<()> {
+    if !path.is_file() {
+        bail!("required file is missing: {}", path.display());
+    }
+    Ok(())
+}
+
+/// Top-level `.swift` files in `dir`, sorted.
+fn swift_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("swift") {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+/// All `.swift` files under `dir` (recursive), sorted.
+fn swift_files_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    collect_swift(dir, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn public_swiftinterfaces(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    collect_public_swiftinterfaces(dir, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn collect_swift(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_swift(&path, files)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("swift") {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn collect_public_swiftinterfaces(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_public_swiftinterfaces(&path, files)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("swiftinterface") {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .context("swiftinterface without UTF-8 file name")?;
+            if !name.contains(".private.") {
+                files.push(path);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Write the single-platform `.framework` `Info.plist` via the `plist`
+/// crate (typed struct -> XML), driven entirely by the spec.
+fn write_info_plist(path: &Path, platform: &str, spec: &SingleFrameworkSpec) -> Result<()> {
+    let info = FrameworkInfoPlist {
+        executable: spec.framework_name.clone(),
+        identifier: spec.bundle_id.clone(),
+        info_dictionary_version: "6.0".to_string(),
+        name: spec.framework_name.clone(),
+        package_type: "FMWK".to_string(),
+        short_version: spec.short_version.clone(),
+        bundle_version: spec.bundle_version.clone(),
+        minimum_os: spec.deployment_target.clone(),
+        supported_platforms: vec![platform.to_string()],
+    };
+    plist::to_file_xml(path, &info)
+        .with_context(|| format!("write Info.plist to {}", path.display()))?;
+    Ok(())
+}
+
+/// Run a command, surfacing captured output only on failure.
+fn run_quiet(cmd: &mut Command, what: &str) -> Result<()> {
+    let output = cmd.output().with_context(|| format!("spawn {what}"))?;
+    if !output.status.success() {
+        bail!(
+            "{what} failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     Ok(())
 }
 
