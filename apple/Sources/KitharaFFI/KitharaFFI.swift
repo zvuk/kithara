@@ -4934,22 +4934,20 @@ public func initLogging(level: UInt8)  {try! rustCall() {
 }
 }
 /**
- * Generate the zvuk.com production DRM salt required by the WAF:
- * exactly 8 lowercase-hex characters.
+ * Generate a 16-character ASCII alphanumeric DRM salt.
  */
-public func drmProdSalt() -> String  {
+public func drmAsciiAlphanumericSalt() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_kithara_ffi_fn_func_drm_prod_salt($0
+    uniffi_kithara_ffi_fn_func_drm_ascii_alphanumeric_salt($0
     )
 })
 }
 /**
- * Generate the zvq.me staging DRM salt required by the WAF:
- * exactly 16 ASCII alphanumeric characters.
+ * Generate an 8-character lowercase-hex DRM salt.
  */
-public func drmStageSalt() -> String  {
+public func drmLowercaseHexSalt() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_kithara_ffi_fn_func_drm_stage_salt($0
+    uniffi_kithara_ffi_fn_func_drm_lowercase_hex_salt($0
     )
 })
 }
@@ -4972,10 +4970,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_func_init_logging() != 43995) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_func_drm_prod_salt() != 38304) {
+    if (uniffi_kithara_ffi_checksum_func_drm_ascii_alphanumeric_salt() != 17656) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_func_drm_stage_salt() != 52754) {
+    if (uniffi_kithara_ffi_checksum_func_drm_lowercase_hex_salt() != 44576) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_audio_id() != 55140) {

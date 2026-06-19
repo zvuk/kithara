@@ -478,7 +478,7 @@ impl NativeInner {
     }
 
     pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
-        let salt = salt::drm_prod_salt();
+        let salt = salt::drm_lowercase_hex_salt();
         let mut rule_headers = HashMap::new();
         rule_headers.insert(SALT_HEADER.to_string(), salt.clone());
         let rule = FfiKeyRule {

@@ -33,19 +33,17 @@ fn sample(spec: SaltSpec) -> String {
     out
 }
 
-/// Generate the zvuk.com production DRM salt required by the WAF:
-/// exactly 8 lowercase-hex characters.
+/// Generate an 8-character lowercase-hex DRM salt.
 #[must_use]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn drm_prod_salt() -> String {
+pub fn drm_lowercase_hex_salt() -> String {
     sample(prod_spec())
 }
 
-/// Generate the zvq.me staging DRM salt required by the WAF:
-/// exactly 16 ASCII alphanumeric characters.
+/// Generate a 16-character ASCII alphanumeric DRM salt.
 #[must_use]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn drm_stage_salt() -> String {
+pub fn drm_ascii_alphanumeric_salt() -> String {
     sample(stage_spec())
 }
 
@@ -54,30 +52,30 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn drm_prod_salt_returns_lowercase_hex_8() {
-        let salt = drm_prod_salt();
+    fn drm_lowercase_hex_salt_returns_8_chars() {
+        let salt = drm_lowercase_hex_salt();
         let spec = prod_spec();
 
         assert_eq!(salt.len(), spec.len);
         assert!(
             salt.bytes().all(|b| spec.alphabet.contains(&b)),
-            "prod salt must be lowercase hex, got {salt:?}"
+            "lowercase-hex salt must use the legal alphabet, got {salt:?}"
         );
     }
 
     #[kithara::test]
-    fn drm_stage_salt_returns_alphanumeric_16() {
-        let salt = drm_stage_salt();
+    fn drm_ascii_alphanumeric_salt_returns_16_chars() {
+        let salt = drm_ascii_alphanumeric_salt();
         let spec = stage_spec();
 
         assert_eq!(salt.len(), spec.len);
         assert!(
             salt.chars().all(|c| c.is_ascii_alphanumeric()),
-            "stage salt must be ASCII alphanumeric, got {salt:?}"
+            "ASCII-alphanumeric salt must be alphanumeric, got {salt:?}"
         );
         assert!(
             salt.bytes().all(|b| spec.alphabet.contains(&b)),
-            "stage salt must use the legal alphabet, got {salt:?}"
+            "ASCII-alphanumeric salt must use the legal alphabet, got {salt:?}"
         );
     }
 }

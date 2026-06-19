@@ -1,11 +1,11 @@
 import KitharaFFI
 
-/// Generate the zvuk.com production DRM salt: 8 lowercase-hex characters.
-public func drmProdSalt() -> String {
-    KitharaFFI.drmProdSalt()
+/// Generate an 8-character lowercase-hex DRM salt.
+public func drmLowercaseHexSalt() -> String {
+    KitharaFFI.drmLowercaseHexSalt()
 }
 
-/// Generate the zvq.me staging DRM salt: 16 ASCII alphanumeric characters.
-public func drmStageSalt() -> String {
-    KitharaFFI.drmStageSalt()
+/// Generate a 16-character ASCII alphanumeric DRM salt.
+public func drmAsciiAlphanumericSalt() -> String {
+    KitharaFFI.drmAsciiAlphanumericSalt()
 }

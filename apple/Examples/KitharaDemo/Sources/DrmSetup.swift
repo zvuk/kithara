@@ -51,7 +51,7 @@ func bundledDrmProviders() -> [DrmProvider] {
                 name: "zvuk-prod",
                 domains: ["zvuk.com", "*.zvuk.com"],
                 cipherKey: prodKey,
-                salt: drmProdSalt(),
+                salt: drmLowercaseHexSalt(),
                 headers: headers
             )
         )
@@ -69,7 +69,7 @@ func bundledDrmProviders() -> [DrmProvider] {
                 name: "zvuk-stage",
                 domains: ["zvq.me", "*.zvq.me"],
                 cipherKey: stageKey,
-                salt: drmStageSalt(),
+                salt: drmAsciiAlphanumericSalt(),
                 headers: headers
             )
         )
