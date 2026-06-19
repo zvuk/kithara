@@ -18,6 +18,7 @@ pub mod index;
 mod key;
 mod lease;
 mod mem_store;
+mod naming;
 mod process;
 mod resource;
 mod scope;
@@ -40,6 +41,9 @@ pub use key::{ResourceKey, asset_root_for_url};
 pub use kithara_bufpool::BytePool;
 pub use lease::{LeaseAssets, LeaseGuard, LeaseReader, LeaseWriter};
 pub use mem_store::MemAssetStore;
+pub use naming::{
+    AssetScopeDelegate, DefaultAssetScopeDelegate, safe_path_component, url_fingerprint,
+};
 pub use process::{ProcessChunkFn, ProcessedReader, ProcessedWriter, ProcessingAssets};
 pub use resource::{BaseReader, BaseWriter};
 pub use scope::AssetScope;

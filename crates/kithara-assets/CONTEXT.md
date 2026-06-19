@@ -11,6 +11,8 @@ Resources are addressed by strings chosen by higher layers:
 
 Disk mapping is `<cache_root>/<asset_root>/<rel_path>`. Assets does not "invent" paths; it only enforces safety (no absolute paths, no `..`, no empty segments).
 
+`AssetScope` may carry an `AssetScopeDelegate` supplied by a protocol crate. The default delegate preserves the historical `asset_root_for_url` and URL-to-resource mapping. Protocol delegates own only naming: they may choose the asset directory name and the relative resource path before the store sees the key, but the resulting `ResourceKey` remains the single identity used by cache, leases, eviction, demand, and availability.
+
 Auto-pin (lease) semantics: all resources opened through the leasing decorator (`LeaseAssets`) are automatically pinned by `asset_root` for the lifetime of the returned handle. The pin is an RAII guard stored inside the `LeaseWriter` / `LeaseReader`; drop the handle to release the pin.
 
 The global index (`_index/*`) stores small best-effort metadata files. The filesystem remains the source of truth; indexes may be missing and can be rebuilt later.

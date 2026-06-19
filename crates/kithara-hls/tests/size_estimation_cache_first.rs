@@ -18,9 +18,9 @@ use axum::{
     response::Response,
 };
 use kithara_assets::{
-    AssetStore, AssetStoreBuilder, ResourceKey, StoreOptions, asset_root_for_url,
+    AssetScopeDelegate, AssetStore, AssetStoreBuilder, ResourceKey, StoreOptions,
 };
-use kithara_hls::{Hls, HlsConfig};
+use kithara_hls::{Hls, HlsAssetScopeDelegate, HlsConfig};
 use kithara_platform::{
     time::{Duration, Instant, sleep},
     tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
@@ -187,7 +187,9 @@ fn verify_store(cache_dir: &Path) -> AssetStore {
 }
 
 fn media_keys(store: &AssetStore, master_url: &Url, paths: &[&str]) -> Vec<(ResourceKey, u64)> {
-    let scope = store.scope(asset_root_for_url(master_url, None));
+    let delegate: Arc<dyn AssetScopeDelegate> = Arc::new(HlsAssetScopeDelegate);
+    let asset_root = delegate.asset_root_for_url(master_url, None);
+    let scope = store.scope_with_delegate(asset_root, delegate);
     paths
         .iter()
         .map(|path| {

@@ -4,8 +4,8 @@ use std::sync::{Arc, OnceLock};
 
 use dashmap::DashMap;
 use kithara_assets::{
-    AssetStore, AssetStoreBuilder, BytePool, EvictConfig, OnInvalidatedFn, ProcessChunkFn,
-    ResourceKey, StoreOptions, asset_root_for_url,
+    AssetScope, AssetScopeDelegate, AssetStore, AssetStoreBuilder, BytePool, EvictConfig,
+    OnInvalidatedFn, ProcessChunkFn, ResourceKey, StoreOptions,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::EventBus;
@@ -22,6 +22,7 @@ use crate::{
     coord::{HlsCoord, HlsCoordEnv},
     invalidation::{HlsInvalidationGuard, HlsInvalidationRegistry, HlsStore},
     loading::{KeyStore, PlaylistCache},
+    naming::HlsAssetScopeDelegate,
     parsing::{MediaPlaylist, VariantStream, variant_info_from_master},
     peer::HlsPeer,
     playlist::PlaylistState,
@@ -50,7 +51,8 @@ impl StreamType for Hls {
     type Source = HlsSource;
 
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
-        let asset_root = asset_root_for_url(&config.url, config.name.as_deref());
+        let naming: Arc<dyn AssetScopeDelegate> = Arc::new(HlsAssetScopeDelegate);
+        let asset_root = naming.asset_root_for_url(&config.url, config.name.as_deref());
         let asset_root_arc: Arc<str> = Arc::from(asset_root.as_str());
         let stream_scope = CancelScope::new(config.cancel.clone());
         let cancel = stream_scope.token();
@@ -71,18 +73,10 @@ impl StreamType for Hls {
         // injection, build a private per-stream store whose
         // `on_invalidated` feeds this single eviction channel directly.
         let (scope, invalidation_guard) = if let Some(shared) = config.asset_store.as_ref() {
-            let guard = HlsInvalidationGuard::install(
-                Arc::clone(&shared.registry),
-                Arc::clone(&asset_root_arc),
-                evict_tx,
-            );
-            (
-                shared.backend.scope(Arc::clone(&asset_root_arc)),
-                Some(guard),
-            )
+            shared_hls_scope(shared, asset_root_arc, naming, evict_tx)
         } else {
             let backend = build_asset_store(&config, cancel.clone(), evict_tx);
-            (backend.scope(Arc::clone(&asset_root_arc)), None)
+            (backend.scope_with_delegate(asset_root_arc, naming), None)
         };
 
         let byte_pool = config
@@ -288,6 +282,21 @@ fn build_asset_store(
         builder = builder.flush_hub(Arc::clone(hub));
     }
     builder.build()
+}
+
+fn shared_hls_scope(
+    shared: &HlsStore,
+    asset_root: Arc<str>,
+    naming: Arc<dyn AssetScopeDelegate>,
+    evict_tx: mpsc::UnboundedSender<ResourceKey>,
+) -> (AssetScope<DecryptContext>, Option<HlsInvalidationGuard>) {
+    let guard = HlsInvalidationGuard::install(
+        Arc::clone(&shared.registry),
+        Arc::clone(&asset_root),
+        evict_tx,
+    );
+    let scope = shared.backend.scope_with_delegate(asset_root, naming);
+    (scope, Some(guard))
 }
 
 /// Build an app-wide shared HLS asset store: one

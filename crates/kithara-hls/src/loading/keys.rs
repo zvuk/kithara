@@ -13,7 +13,7 @@ use kithara_net::Headers;
 use kithara_stream::dl::{FetchCmd, PeerHandle};
 use url::Url;
 
-use super::atomic_fetch::fetch_atomic_body;
+use super::atomic_fetch::{fetch_atomic_body, rel_path_for_log};
 use crate::{HlsError, HlsResult};
 
 /// DRM key fetch + processor pipeline.
@@ -123,7 +123,7 @@ impl KeyStore {
                 .ok_or_else(|| HlsError::KeyProcessing(format!("DRM key not prefetched: {url}")));
         }
 
-        let cache_key = self.scope.key(rel_path_from_url(url).as_str());
+        let cache_key = self.scope.key_from_url(url);
         let res = self
             .scope
             .store()
@@ -146,9 +146,9 @@ impl KeyStore {
     /// Matches a [`KeyProcessorRegistry`] rule by the key URL's host,
     /// applies its query params + headers, and runs its processor on the
     /// response. DRM and plain AES-128 keys both persist to the
-    /// [`AssetStore`] under `ResourceKey::from_url(key_url)`; DRM keys are
-    /// decrypted before write-back, so the cached bytes are the plaintext
-    /// key and the per-session wire seed never reaches disk.
+    /// [`AssetStore`] under the scope delegate's URL key; DRM keys are
+    /// decrypted before write-back, so the cached bytes are the plaintext key
+    /// and the per-session wire seed never reaches disk.
     ///
     /// # Errors
     /// Returns an error when the fetch or the processor fails.
@@ -164,14 +164,12 @@ impl KeyStore {
         let rule = self.key_registry.as_ref().and_then(|r| r.find(url));
         if rule.is_none() {
             let headers = self.merged_headers(None);
-            let rel_path = rel_path_from_url(url);
             return fetch_atomic_body(
                 &self.downloader,
                 &self.scope,
                 &self.byte_pool,
                 headers,
                 url,
-                rel_path.as_str(),
                 Self::RESOURCE_KIND,
             )
             .await;
@@ -182,14 +180,14 @@ impl KeyStore {
             return Ok(cached);
         }
 
-        let rel_path = rel_path_from_url(url);
-        let cache_key = self.scope.key(rel_path.as_str());
+        let cache_key = self.scope.key_from_url(url);
+        let rel_path = rel_path_for_log(&cache_key);
         if let Some(bytes) = super::atomic_fetch::try_read_cached(
             &self.scope,
             &self.byte_pool,
             &cache_key,
             url,
-            rel_path.as_str(),
+            rel_path,
             Self::RESOURCE_KIND,
         )? {
             tracing::info!(%url, bytes = bytes.len(), "drm key: served from disk cache");
@@ -240,7 +238,7 @@ impl KeyStore {
                 &decrypted,
                 &self.scope,
                 url,
-                rel_path.as_str(),
+                rel_path,
                 Self::RESOURCE_KIND,
             );
         }
@@ -424,18 +422,4 @@ impl KeyStore {
             byte_pool,
         )
     }
-}
-
-/// Derive a safe disk cache basename from the key URL.
-fn rel_path_from_url(url: &Url) -> String {
-    let last = url
-        .path_segments()
-        .and_then(|mut segments| segments.next_back())
-        .unwrap_or("index");
-    if let Some((stem, _)) = last.rsplit_once('.')
-        && !stem.is_empty()
-    {
-        return stem.to_string();
-    }
-    last.to_string()
 }

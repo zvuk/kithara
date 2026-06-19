@@ -19,6 +19,7 @@ use crate::{
     identity::RequestIdentity,
     index::{AvailabilityIndex, DemandEntry, DemandIndex, DemandLease, ProducerHandle},
     key::ResourceKey,
+    naming::AssetScopeDelegate,
     scope::AssetScope,
     store::{AssetReader, AssetResource, MemStore},
 };
@@ -301,6 +302,19 @@ where
     #[must_use]
     pub fn scope<R: Into<Arc<str>>>(&self, asset_root: R) -> AssetScope<Ctx> {
         AssetScope::new(self.clone(), asset_root.into())
+    }
+
+    /// Bind this store to one `asset_root` and protocol-specific naming
+    /// policy. The default [`Self::scope`] keeps the historical mapping;
+    /// use this when a protocol owns a safer on-disk representation for
+    /// URL resources.
+    #[must_use]
+    pub fn scope_with_delegate<R: Into<Arc<str>>>(
+        &self,
+        asset_root: R,
+        delegate: Arc<dyn AssetScopeDelegate>,
+    ) -> AssetScope<Ctx> {
+        AssetScope::with_delegate(self.clone(), asset_root.into(), delegate)
     }
 }
 

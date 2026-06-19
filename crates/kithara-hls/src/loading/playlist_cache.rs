@@ -18,13 +18,6 @@ use crate::{
     },
 };
 
-/// Derive a safe basename from a URL path for disk cache storage.
-fn uri_basename_no_query(uri: &str) -> Option<&str> {
-    let no_query = uri.split('?').next().unwrap_or(uri);
-    let base = no_query.rsplit('/').next().unwrap_or(no_query);
-    if base.is_empty() { None } else { Some(base) }
-}
-
 /// Playlist fetch + parse + disk cache.
 ///
 /// Clone-friendly: all mutable state lives behind `Arc`, so clones see
@@ -73,12 +66,10 @@ impl PlaylistCache {
         }
     }
 
-    async fn fetch_and_parse<T, F>(&self, url: &Url, label: &str, parse: F) -> HlsResult<T>
+    async fn fetch_and_parse<T, F>(&self, url: &Url, parse: F) -> HlsResult<T>
     where
         F: Fn(&[u8]) -> HlsResult<T>,
     {
-        let basename = uri_basename_no_query(url.as_str())
-            .ok_or_else(|| HlsError::InvalidUrl(format!("Failed to derive {label} basename")))?;
         let headers = self.headers();
         let bytes = fetch_atomic_body(
             &self.downloader,
@@ -86,7 +77,6 @@ impl PlaylistCache {
             &self.byte_pool,
             headers,
             url,
-            basename,
             Self::RESOURCE_KIND,
         )
         .await?;
@@ -106,10 +96,7 @@ impl PlaylistCache {
     pub async fn master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
         let master = self
             .master
-            .get_or_try_init(|| async {
-                self.fetch_and_parse(url, "master_playlist", parse_master_playlist)
-                    .await
-            })
+            .get_or_try_init(|| async { self.fetch_and_parse(url, parse_master_playlist).await })
             .await?;
         Ok(master.clone())
     }
@@ -132,10 +119,8 @@ impl PlaylistCache {
 
         let playlist = cell
             .get_or_try_init(|| async {
-                self.fetch_and_parse(url, "media_playlist", |bytes| {
-                    parse_media_playlist(url.clone(), bytes)
-                })
-                .await
+                self.fetch_and_parse(url, |bytes| parse_media_playlist(url.clone(), bytes))
+                    .await
             })
             .await?;
         Ok(playlist.clone())

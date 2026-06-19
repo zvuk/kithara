@@ -1,8 +1,8 @@
 use std::{path::PathBuf, sync::Arc};
 
 use kithara_assets::{
-    AcquisitionResult, AssetReader, AssetStore, AssetStoreBuilder, AssetsError, EvictConfig,
-    ReadSide, ResourceKey, StoreOptions, WriteSide, asset_root_for_url,
+    AcquisitionResult, AssetReader, AssetScopeDelegate, AssetStore, AssetStoreBuilder, AssetsError,
+    EvictConfig, ReadSide, ResourceKey, StoreOptions, WriteSide, safe_path_component,
 };
 use kithara_events::EventBus;
 use kithara_net::{HttpClient, NetOptions};
@@ -29,6 +29,40 @@ use crate::{
 
 /// Marker type for file streaming.
 pub struct File;
+
+#[derive(Debug)]
+struct FileAssetScopeDelegate {
+    extension_hint: Option<String>,
+}
+
+impl FileAssetScopeDelegate {
+    fn new(url: &url::Url, name: Option<&str>) -> Self {
+        Self {
+            extension_hint: name.and_then(extension_hint).or_else(|| {
+                url.path_segments()
+                    .and_then(|mut segments| segments.next_back())
+                    .and_then(extension_hint)
+            }),
+        }
+    }
+}
+
+impl AssetScopeDelegate for FileAssetScopeDelegate {
+    fn rel_path_for_url(&self, _url: &url::Url) -> String {
+        self.extension_hint.as_ref().map_or_else(
+            || "track".to_string(),
+            |ext| format!("track.{}", safe_path_component(ext, ext)),
+        )
+    }
+}
+
+fn extension_hint(segment: &str) -> Option<String> {
+    let (_, ext) = segment.rsplit_once('.')?;
+    if ext.is_empty() || !ext.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(ext.to_ascii_lowercase())
+}
 
 impl StreamType for File {
     type Config = FileConfig;
@@ -113,7 +147,9 @@ impl File {
         let from_config = config.name.as_deref();
         let from_query = url.query();
         let name_or_query = from_config.or(from_query).filter(|s| !s.is_empty());
-        let asset_root = asset_root_for_url(&url, name_or_query);
+        let naming: Arc<dyn AssetScopeDelegate> =
+            Arc::new(FileAssetScopeDelegate::new(&url, from_config));
+        let asset_root = naming.asset_root_for_url(&url, name_or_query);
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
             let cancel_for_dl = cancel.child();
@@ -130,7 +166,9 @@ impl File {
             .clone()
             .unwrap_or_else(|| build_shared_asset_store(&config.store, cancel.clone()));
 
-        let key = backend.scope(asset_root.as_str()).key_from_url(&url);
+        let key = backend
+            .scope_with_delegate(asset_root.as_str(), Arc::clone(&naming))
+            .key_from_url(&url);
         let FileStreamState {
             backend,
             acq,

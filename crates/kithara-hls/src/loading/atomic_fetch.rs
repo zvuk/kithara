@@ -30,10 +30,10 @@ pub(crate) async fn fetch_atomic_body(
     byte_pool: &BytePool,
     headers: Option<Headers>,
     url: &Url,
-    rel_path: &str,
     resource_kind: &str,
 ) -> HlsResult<Bytes> {
-    let key = scope.key(rel_path);
+    let key = scope.key_from_url(url);
+    let rel_path = rel_path_for_log(&key);
     if let Some(bytes) = try_read_cached(scope, byte_pool, &key, url, rel_path, resource_kind)? {
         return Ok(bytes);
     }
@@ -103,9 +103,21 @@ pub(crate) fn write_back_cache(
     rel_path: &str,
     resource_kind: &str,
 ) {
+    let final_len = match u64::try_from(bytes.len()) {
+        Ok(len) => len,
+        Err(e) => {
+            trace!(
+                url = %url,
+                error = %e,
+                resource_kind,
+                "kithara-hls: cache write skipped because body length cannot fit u64"
+            );
+            return;
+        }
+    };
     let result = writer
         .write_at(0, bytes)
-        .and_then(|()| writer.commit(Some(bytes.len() as u64)).map(|_reader| ()));
+        .and_then(|()| writer.commit(Some(final_len)).map(|_reader| ()));
     if let Err(e) = result {
         trace!(
             url = %url,
@@ -123,6 +135,10 @@ pub(crate) fn write_back_cache(
             "kithara-hls: fetched from network and cached"
         );
     }
+}
+
+pub(crate) fn rel_path_for_log(key: &ResourceKey) -> &str {
+    key.rel_path().unwrap_or("<absolute>")
 }
 
 /// Fetch a URL and collect the full body into a `Bytes` buffer.

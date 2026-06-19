@@ -4,7 +4,12 @@ use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use url::Url;
 
-use crate::{error::AssetsResult, key::ResourceKey, unified::AssetStore};
+use crate::{
+    error::AssetsResult,
+    key::ResourceKey,
+    naming::{AssetScopeDelegate, DefaultAssetScopeDelegate},
+    unified::AssetStore,
+};
 
 /// A lightweight handle that holds one `asset_root` over a shared
 /// [`AssetStore`] and mints self-identifying [`ResourceKey`]s under it.
@@ -20,6 +25,7 @@ where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
     asset_root: Arc<str>,
+    delegate: Arc<dyn AssetScopeDelegate>,
     store: AssetStore<Ctx>,
 }
 
@@ -28,7 +34,19 @@ where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
     pub(crate) fn new(store: AssetStore<Ctx>, asset_root: Arc<str>) -> Self {
-        Self { asset_root, store }
+        Self::with_delegate(store, asset_root, Arc::new(DefaultAssetScopeDelegate))
+    }
+
+    pub(crate) fn with_delegate(
+        store: AssetStore<Ctx>,
+        asset_root: Arc<str>,
+        delegate: Arc<dyn AssetScopeDelegate>,
+    ) -> Self {
+        Self {
+            asset_root,
+            delegate,
+            store,
+        }
     }
 
     /// The `asset_root` this scope is bound to.
@@ -56,7 +74,7 @@ where
     pub fn key_from_url(&self, url: &Url) -> ResourceKey {
         ResourceKey::relative(
             Arc::clone(&self.asset_root),
-            ResourceKey::rel_path_from_url(url),
+            self.delegate.rel_path_for_url(url),
         )
     }
 
