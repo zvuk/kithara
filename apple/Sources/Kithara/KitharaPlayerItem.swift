@@ -12,7 +12,12 @@ import KitharaFFI
 /// let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
 /// try player.insert(item)
 /// ```
-public final class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
+///
+/// `open` for additive subclassing (extra state, methods, protocol
+/// conformances). Methods stay `public`, not `open`, so item behavior cannot
+/// be overridden. Subclasses construct via the public `init(url:…)` and must
+/// preserve the `@unchecked Sendable` contract: no non-`Sendable` mutable state.
+open class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
     /// Monotonic identifier shared with the queue. Mirrors iOS
     /// `AudioPlayerItemProtocol.audioId: TrackId`. Also used as
     /// `Identifiable.id` so `ForEach`/`List` keying works out of the

@@ -4933,6 +4933,26 @@ public func initLogging(level: UInt8)  {try! rustCall() {
     )
 }
 }
+/**
+ * Generate the zvuk.com production DRM salt required by the WAF:
+ * exactly 8 lowercase-hex characters.
+ */
+public func drmProdSalt() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_func_drm_prod_salt($0
+    )
+})
+}
+/**
+ * Generate the zvq.me staging DRM salt required by the WAF:
+ * exactly 16 ASCII alphanumeric characters.
+ */
+public func drmStageSalt() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_func_drm_stage_salt($0
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -4950,6 +4970,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.contractVersionMismatch
     }
     if (uniffi_kithara_ffi_checksum_func_init_logging() != 43995) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_func_drm_prod_salt() != 38304) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_func_drm_stage_salt() != 52754) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_audio_id() != 55140) {

@@ -13,8 +13,8 @@ use kithara::{
 use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_platform::{CancelToken, sync::Mutex};
 use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource, Transition};
-use rand::{distr::Alphanumeric, prelude::*};
 
+use super::salt;
 use crate::{
     config::StoreOptions,
     event_bridge::EventBridge,
@@ -26,18 +26,6 @@ use crate::{
         FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerConfig, FfiPlayerSnapshot, FfiPlayerStatus,
     },
 };
-
-/// Length of the alphanumeric salt produced by [`NativeInner::setup_hls_aes`].
-/// Mirrors `kithara_app::drm::SEED_LEN`.
-const SALT_LEN: usize = 16;
-
-fn generate_salt() -> String {
-    rand::rng()
-        .sample_iter(Alphanumeric)
-        .take(SALT_LEN)
-        .map(char::from)
-        .collect()
-}
 
 fn build_processor_closure(
     processor: Arc<dyn FfiKeyProcessor>,
@@ -490,7 +478,7 @@ impl NativeInner {
     }
 
     pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
-        let salt = generate_salt();
+        let salt = salt::drm_prod_salt();
         let mut rule_headers = HashMap::new();
         rule_headers.insert(SALT_HEADER.to_string(), salt.clone());
         let rule = FfiKeyRule {
@@ -656,7 +644,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn setup_hls_aes_registers_wildcard_rule_with_auto_salt() {
+    fn setup_hls_aes_registers_wildcard_rule_with_prod_salt() {
         struct DummyProcessor;
         impl FfiKeyProcessor for DummyProcessor {
             fn process_key(&self, _key: Vec<u8>, _salt: String) -> Vec<u8> {
@@ -672,8 +660,12 @@ mod tests {
             .get(SALT_HEADER)
             .map(|r| r.value().clone())
             .expect("salt header populated");
-        assert_eq!(salt.len(), SALT_LEN);
-        assert!(salt.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert_eq!(salt.len(), 8, "prod auto-salt length");
+        assert!(
+            salt.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "prod auto-salt must be lowercase hex, got {salt:?}"
+        );
 
         let key_options = inner.key_options.lock().clone();
         assert!(

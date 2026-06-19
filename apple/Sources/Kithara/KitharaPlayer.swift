@@ -14,7 +14,12 @@ import KitharaFFI
 /// try player.insert(item)
 /// player.play()
 /// ```
-public final class KitharaPlayer: AudioPlayerProtocol, @unchecked Sendable {
+///
+/// `open` for additive subclassing (extra state, methods, protocol
+/// conformances). Methods stay `public`, not `open`, so transport behavior
+/// cannot be overridden. Subclasses must preserve the `@unchecked Sendable`
+/// contract: do not add non-`Sendable` mutable state.
+open class KitharaPlayer: AudioPlayerProtocol, @unchecked Sendable {
     public typealias Item = KitharaPlayerItem
 
     private let _inner: AudioPlayer

@@ -21,21 +21,11 @@ struct DrmProvider {
     /// Bytes of the cipher master key. The runtime decryptor builds
     /// the working cipher from `cipherKey + salt` on every decrypt.
     let cipherKey: String
-    /// Seed alphabet for `X-Encrypted-Key` salt generation.
-    let seedAlphabet: SeedAlphabet
-    /// Salt length in characters.
-    let seedLength: Int
+    /// Rust-core generated `X-Encrypted-Key` salt for this provider.
+    let salt: String
     /// Static HTTP headers attached to every request matched by this
     /// provider (playlist, segment, key URL).
     let headers: [String: String]
-
-    enum SeedAlphabet {
-        /// 0-9 a-f. Matches the iOS production
-        /// `HLSAes128Service.AES128ResourceLoader.randomString(of: 8)`.
-        case hex
-        /// 0-9 a-z A-Z. Legacy zvqengine format used by stage.
-        case alphanumeric
-    }
 }
 
 /// Build the prod + stage providers from secrets baked into the
@@ -61,8 +51,7 @@ func bundledDrmProviders() -> [DrmProvider] {
                 name: "zvuk-prod",
                 domains: ["zvuk.com", "*.zvuk.com"],
                 cipherKey: prodKey,
-                seedAlphabet: .hex,
-                seedLength: 8,
+                salt: drmProdSalt(),
                 headers: headers
             )
         )
@@ -80,33 +69,13 @@ func bundledDrmProviders() -> [DrmProvider] {
                 name: "zvuk-stage",
                 domains: ["zvq.me", "*.zvq.me"],
                 cipherKey: stageKey,
-                seedAlphabet: .alphanumeric,
-                seedLength: 16,
+                salt: drmStageSalt(),
                 headers: headers
             )
         )
     }
 
     return providers
-}
-
-// MARK: - Salt generation (matches per-provider seed spec)
-
-func generateSalt(alphabet: DrmProvider.SeedAlphabet, length: Int) -> String {
-    let chars: [Character] = {
-        switch alphabet {
-        case .hex:
-            return Array("0123456789abcdef")
-        case .alphanumeric:
-            return Array("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-        }
-    }()
-    var out = ""
-    out.reserveCapacity(length)
-    for _ in 0..<length {
-        out.append(chars[Int.random(in: 0..<chars.count)])
-    }
-    return out
 }
 
 // MARK: - KeyProcessor closure adapter

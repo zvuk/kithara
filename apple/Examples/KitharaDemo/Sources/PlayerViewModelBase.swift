@@ -125,10 +125,7 @@ class PlayerViewModelBase: ObservableObject {
         crossfadeDuration = Self.defaultCrossfadeSeconds
 
         for provider in bundledDrmProviders() {
-            let salt = generateSalt(
-                alphabet: provider.seedAlphabet,
-                length: provider.seedLength
-            )
+            let salt = provider.salt
             let cipherKey = provider.cipherKey
             let processor = ClosureKeyProcessor { encryptedKey, _ in
                 let cipher = Cipher(key: cipherKey + salt)
