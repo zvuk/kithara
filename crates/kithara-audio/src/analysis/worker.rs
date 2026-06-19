@@ -39,6 +39,12 @@ impl AnalysisWorker {
         Self { cancel, jobs }
     }
 
+    /// Create a job-scoped token owned by this worker.
+    #[must_use]
+    pub fn child_token(&self) -> CancelToken {
+        self.cancel.child()
+    }
+
     /// Queue one opened track. On success the result arrives on the
     /// returned receiver; on failure or cancel the sender drops without a
     /// value (`changed()` errs). Cancel `cancel` to preempt the job.
@@ -69,8 +75,8 @@ fn run_jobs(jobs: &mpsc::Receiver<Job>, builder: &AnalyzerBuilder, cancel: &Canc
         if job.cancel.is_cancelled() {
             continue;
         }
-        if let Some(out) = analyze_reader(job.reader.as_mut(), builder, &job.cancel) {
-            let _ = job.tx.send(Some(out));
-        }
+        analyze_reader(job.reader.as_mut(), builder, &job.cancel, |a| {
+            let _ = job.tx.send(Some(a));
+        });
     }
 }

@@ -357,11 +357,18 @@ opt-level = 2
 # Time-stretch DSP (FFT/phase-vocoder + C++) is ~10× slower in debug.
 [profile.dev.package.signalsmith-stretch]
 opt-level = 3
-# rten float inference is orders of magnitude slower unoptimised; parity
-# tests run whole-track NN inference.
+# rten float inference is orders of magnitude slower unoptimised.
 [profile.dev.package.rten]
 opt-level = 3
 [profile.dev.package.rten-tensor]
+opt-level = 3
+[profile.dev.package.rten-gemm]
+opt-level = 3
+[profile.dev.package.rten-simd]
+opt-level = 3
+[profile.dev.package.rten-vecmath]
+opt-level = 3
+[profile.dev.package.rten-base]
 opt-level = 3
 [profile.dev.package.bungee-sys]
 opt-level = 3

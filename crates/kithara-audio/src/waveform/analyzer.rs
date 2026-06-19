@@ -113,6 +113,7 @@ impl WaveformAnalyzer {
             return Waveform::from(Vec::new());
         }
 
+        let buckets = buckets.min(self.raw_bands.len());
         let max = |a: [f32; 3], b: [f32; 3]| [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])];
         let energy = bucketize(&self.raw_bands, buckets, [0.0; 3], max);
         let bands = normalize_bands(energy, self.params.band_gain);
@@ -366,7 +367,7 @@ mod tests {
         let mut a = analyzer(AnalysisParams::default());
         a.push_interleaved(&[0.5, -0.5, 0.25], 1);
         let wave = a.finalize(5);
-        assert_eq!(wave.len(), 5);
+        assert!(!wave.is_empty() && wave.len() <= 5, "len {}", wave.len());
         for b in wave.buckets() {
             for v in [b.low, b.mid, b.high] {
                 assert!(
@@ -375,6 +376,22 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[kithara::test]
+    fn output_is_native_window_resolution_capped() {
+        // Ten full FFT windows (4096 + 9 hops of 1024).
+        let samples = 4096 + 1024 * 9;
+        let make = || {
+            let mut a = analyzer(flat());
+            a.push_interleaved(&sine(440.0, samples), 1);
+            a
+        };
+
+        // Above the window count: native resolution, never fabricated.
+        assert_eq!(make().finalize(100_000).len(), 10, "large = native count");
+        // Below it: still decimates (long-track cap).
+        assert_eq!(make().finalize(4).len(), 4, "small request decimates");
     }
 
     #[kithara::test]

@@ -9,7 +9,7 @@ publish = false
 workspace = true
 
 [features]
-default = ["tui", "gui"]
+default = ["tui", "gui", "beat-nn"]
 tui = ["dep:ratatui", "dep:crossterm"]
 gui = ["dep:iced"]
 # NN beat/downbeat detection.

@@ -38,6 +38,7 @@ fn handle_player(state: &mut Kithara, message: &Message) {
         Message::Prev => handle_prev(state),
         Message::SeekChanged(pos) => handle_seek_changed(state, pos),
         Message::SeekReleased => handle_seek_released(state),
+        Message::SeekTo(pos) => handle_seek_to(state, pos),
         Message::VolumeChanged(vol) => handle_volume_changed(state, vol),
         Message::EqBandChanged(band, db) => handle_eq_band_changed(state, band, db),
         Message::PlayRateChanged(rate) => handle_play_rate_changed(state, rate),
@@ -98,6 +99,17 @@ fn handle_seek_released(state: &Kithara) {
         st.seek_position
     });
     if let Err(e) = state.controller.queue().seek(target) {
+        error!("seek failed: {e:?}");
+    }
+}
+
+fn handle_seek_to(state: &Kithara, pos: f64) {
+    state.controller.mutate(|st| {
+        st.is_seeking = false;
+        st.seek_position = pos;
+    });
+
+    if let Err(e) = state.controller.queue().seek(pos) {
         error!("seek failed: {e:?}");
     }
 }

@@ -28,10 +28,13 @@ async fn run_analysis(
 ) -> Option<TrackAnalysis> {
     let mut runner = TrackAnalysisRunner::new(master, buckets);
     let mut rx = runner.analyze(config);
-    if rx.changed().await.is_err() {
-        return None;
+
+    // Staged analysis can emit twice (waveform, then waveform+beat).
+    let mut last = None;
+    while rx.changed().await.is_ok() {
+        last = rx.borrow().clone();
     }
-    rx.borrow().clone()
+    last
 }
 
 #[kithara::test(
@@ -45,9 +48,9 @@ async fn runner_silent_wav_yields_all_zero_envelope() {
     let config =
         ResourceConfig::new(url.as_str()).expect("silence URL must build a ResourceConfig");
 
-    // A silent 1s WAV must decode end to end and finalise to exactly
-    // `buckets` all-zero buckets (no frames are loud, so nothing normalises
-    // up to 1.0).
+    // A silent 1s WAV must decode end to end and finalise to a native-resolution
+    // envelope capped by the requested maximum. No frames are loud, so nothing
+    // normalises up to 1.0.
     let analysis = run_analysis(&CancelToken::never(), config, 100)
         .await
         .expect("silent WAV must decode to a finalised analysis");
@@ -55,7 +58,11 @@ async fn runner_silent_wav_yields_all_zero_envelope() {
         .waveform
         .expect("the registered waveform analyzer must fill its slot");
 
-    assert_eq!(waveform.len(), 100, "one bucket per requested column");
+    assert!(
+        (1..=100).contains(&waveform.len()),
+        "requested buckets are an upper bound, got {}",
+        waveform.len()
+    );
     assert!(
         waveform.buckets().iter().all(|b| *b == Bucket::default()),
         "a silent source must yield all-zero buckets: {:?}",

@@ -9,6 +9,7 @@ use kithara::{
 };
 use kithara_platform::{CancelToken, sync::Mutex, tokio::task};
 use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry};
+use num_traits::cast::AsPrimitive;
 
 use crate::{config::AppConfig, waveform::TrackAnalysis};
 
@@ -21,6 +22,10 @@ pub struct UiState {
     pub engine_load: EngineLoadSnapshot,
     /// Source analysis of the current track; `None` until analysed.
     pub analysis: Option<TrackAnalysis>,
+    /// Beat positions as track fractions in `[0, 1]`, derived from `analysis.beat`.
+    pub beat_marks: Arc<[f32]>,
+    /// Downbeat positions as track fractions in `[0, 1]`, derived from `analysis.beat`.
+    pub downbeat_marks: Arc<[f32]>,
     pub crossfade_progress: Option<f32>,
     pub current_track_index: Option<usize>,
     pub selected_variant: Option<usize>,
@@ -67,6 +72,8 @@ impl UiState {
             crossfade_progress: None,
             eq_bands: vec![0.0; queue.eq_band_count()],
             analysis: None,
+            beat_marks: Arc::from(Vec::new()),
+            downbeat_marks: Arc::from(Vec::new()),
             status_note: None,
             is_seeking: false,
             seek_position: 0.0,
@@ -74,6 +81,74 @@ impl UiState {
             engine_load: EngineLoadSnapshot::default(),
         }
     }
+
+    /// Bare default state for unit tests.
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
+        Self {
+            crossfade_progress: None,
+            current_track_index: None,
+            selected_variant: None,
+            status_note: None,
+            track_name: String::new(),
+            variant_label: String::new(),
+            abr_variants: Vec::new(),
+            eq_bands: Vec::new(),
+            tracks: Vec::new(),
+            analysis: None,
+            beat_marks: Arc::from(Vec::new()),
+            downbeat_marks: Arc::from(Vec::new()),
+            repeat_mode: RepeatMode::default(),
+            abr_mode_is_auto: true,
+            shuffle_enabled: false,
+            is_seeking: false,
+            playing: false,
+            crossfade: 0.0,
+            selected_rate: 1.0,
+            volume: 1.0,
+            duration: 0.0,
+            position: 0.0,
+            seek_position: 0.0,
+            engine_load: EngineLoadSnapshot::default(),
+        }
+    }
+
+    /// Set the analysis and re-derive `beat_marks`/`downbeat_marks` from its
+    /// beat grid, keeping them in sync with their single source.
+    pub(crate) fn set_analysis(&mut self, analysis: Option<TrackAnalysis>) {
+        let (beats, downbeats) = analysis
+            .as_ref()
+            .and_then(|a| {
+                a.beat.as_ref().filter(|_| a.source_frames > 0).map(|grid| {
+                    (
+                        frames_to_fractions(&grid.beats, a.source_frames),
+                        frames_to_fractions(&grid.downbeats, a.source_frames),
+                    )
+                })
+            })
+            .unwrap_or_else(|| (Arc::from(Vec::new()), Arc::from(Vec::new())));
+        self.beat_marks = beats;
+        self.downbeat_marks = downbeats;
+        self.analysis = analysis;
+    }
+}
+
+/// Map source-frame positions to track fractions in `[0, 1]`, clamping
+/// out-of-range frames to `1.0`. Empty input or `total == 0` yields empty.
+fn frames_to_fractions(frames: &[u64], total: u64) -> Arc<[f32]> {
+    if frames.is_empty() || total == 0 {
+        return Arc::from(Vec::new());
+    }
+    let total_f: f64 = total.as_();
+    let out: Vec<f32> = frames
+        .iter()
+        .map(|&frame| {
+            let frame_f: f64 = frame.as_();
+            let frac: f32 = (frame_f / total_f).clamp(0.0, 1.0).as_();
+            frac
+        })
+        .collect();
+    Arc::from(out)
 }
 
 /// Owns the canonical [`UiState`] and bridges queue events to it.
@@ -310,7 +385,31 @@ fn variant_short_label(v: &VariantInfo) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::codec_label;
+    use super::{codec_label, frames_to_fractions};
+
+    #[test]
+    fn frames_to_fractions_maps_and_clamps() {
+        assert!(frames_to_fractions(&[], 100).is_empty(), "empty input");
+        assert!(
+            frames_to_fractions(&[0, 50, 100], 0).is_empty(),
+            "zero total yields empty"
+        );
+
+        let got = frames_to_fractions(&[0, 5_000, 10_000], 10_000);
+        assert_eq!(got.len(), 3);
+        assert!((got[0] - 0.0).abs() < 1e-6, "start at 0.0: {got:?}");
+        assert!((got[1] - 0.5).abs() < 1e-6, "midpoint 0.5: {got:?}");
+        assert!((got[2] - 1.0).abs() < 1e-6, "end at 1.0: {got:?}");
+
+        // An out-of-range frame clamps to 1.0 and order is preserved.
+        let clamped = frames_to_fractions(&[2_000, 50_000], 10_000);
+        assert!((clamped[0] - 0.2).abs() < 1e-6, "{clamped:?}");
+        assert!(
+            (clamped[1] - 1.0).abs() < 1e-6,
+            "over-range clamps: {clamped:?}"
+        );
+        assert!(clamped[0] < clamped[1], "ascending preserved");
+    }
 
     #[test]
     fn codec_label_maps_known_hls_codecs() {

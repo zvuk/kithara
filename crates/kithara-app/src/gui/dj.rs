@@ -2,13 +2,15 @@ use iced::{Task, window};
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara::prelude::StretchBackendKind;
 
-use super::{app::Kithara, frontend::window_settings, message::Message};
+use super::{app::Kithara, frontend::window_settings, message::Message, widgets::Viewport};
+use crate::gui::widgets::WaveMsg;
 
 /// View-local DJ Studio state.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct DjView {
     pub(crate) timestretch: TimestretchState,
     pub(crate) open: bool,
+    pub(crate) wave: Viewport,
 }
 
 /// View-local timestretch deck state.
@@ -61,6 +63,8 @@ impl TimestretchState {
 pub(crate) enum DjMsg {
     /// Toggle between the compact player and the DJ Studio shell.
     Toggle,
+    /// Deck waveform zoom/pan request (wheel, drag, or the `−`/`+` control).
+    Wave(WaveMsg),
     /// Set the tempo offset (± percent) from the slider.
     SetTempo(f32),
     /// Select a tempo range bound (± percent).
@@ -80,6 +84,10 @@ pub(crate) enum DjMsg {
 pub(crate) fn handle(state: &mut Kithara, msg: &DjMsg) -> Task<Message> {
     match msg {
         DjMsg::Toggle => return handle_toggle(state),
+        DjMsg::Wave(m) => {
+            state.dj.wave = state.dj.wave.apply(*m);
+            return Task::none();
+        }
         DjMsg::SetTempo(t) => state.dj.timestretch.set_tempo(*t),
         DjMsg::SetRange(r) => state.dj.timestretch.set_range(*r),
         DjMsg::Nudge(d) => state.dj.timestretch.nudge(*d),

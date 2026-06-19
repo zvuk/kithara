@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     fmt,
+    io::{Error as IoError, ErrorKind},
     sync::Arc,
 };
 
@@ -22,7 +23,7 @@ use crate::waveform::TrackAnalysis;
 struct Consts;
 
 impl Consts {
-    const ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0002;
+    const ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0004;
     /// Analysis artifact resource under the track's asset scope. One blob per
     /// track: the active config fingerprint is checked inside it.
     const ANALYSIS_REL_PATH: &str = "analysis/track.analysis";
@@ -186,7 +187,12 @@ fn write_resource(
         _ => return Ok(()),
     };
     writer.write_at(0, bytes)?;
-    let final_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    let final_len = u64::try_from(bytes.len()).map_err(|_| {
+        AssetsError::Io(IoError::new(
+            ErrorKind::InvalidInput,
+            "track analysis blob length does not fit u64",
+        ))
+    })?;
     writer.commit(Some(final_len))?;
     Ok(())
 }
@@ -230,7 +236,7 @@ fn analysis_to_bytes(
         .map(Vec::<u8>::from)
         .unwrap_or_default();
     let mut out =
-        Vec::with_capacity(4 + 4 + fingerprint.len() + 8 + waveform.len() + 8 + beat.len());
+        Vec::with_capacity(4 + 4 + fingerprint.len() + 8 + waveform.len() + 8 + beat.len() + 8);
     out.extend_from_slice(&Consts::ANALYSIS_BYTES_VERSION.to_le_bytes());
     let fingerprint_len =
         u32::try_from(fingerprint.len()).map_err(|_| AnalysisBytesError::TooLarge)?;
@@ -238,6 +244,7 @@ fn analysis_to_bytes(
     out.extend_from_slice(fingerprint.as_bytes());
     write_section(&mut out, &waveform)?;
     write_section(&mut out, &beat)?;
+    out.extend_from_slice(&analysis.source_frames.to_le_bytes());
     Ok(out)
 }
 
@@ -261,6 +268,7 @@ fn analysis_from_bytes(
     }
     let waveform_bytes = read_section(bytes, &mut cursor)?;
     let beat_bytes = read_section(bytes, &mut cursor)?;
+    let source_frames = read_u64(bytes, &mut cursor)?;
     if cursor != bytes.len() {
         return Err(AnalysisBytesError::Corrupt);
     }
@@ -274,6 +282,7 @@ fn analysis_from_bytes(
         analysis.beat =
             Some(BeatGrid::try_from(beat_bytes).map_err(|_| AnalysisBytesError::Corrupt)?);
     }
+    analysis.source_frames = source_frames;
     Ok(analysis)
 }
 
@@ -362,6 +371,7 @@ mod tests {
         let mut analysis = TrackAnalysis::default();
         analysis.waveform = Some(wave());
         analysis.beat = Some(grid());
+        analysis.source_frames = 1_234_567;
         analysis
     }
 
@@ -389,6 +399,10 @@ mod tests {
             wave().buckets()
         );
         assert_eq!(back.beat.expect("beat grid survives"), grid());
+        assert_eq!(
+            back.source_frames, 1_234_567,
+            "source_frames must survive the round-trip"
+        );
     }
 
     #[kithara::test]

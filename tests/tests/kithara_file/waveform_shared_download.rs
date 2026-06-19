@@ -122,10 +122,10 @@ async fn waveform_and_player_share_one_get() {
     let player_ok = player_drain.await.expect("player drain task");
 
     assert!(player_ok, "player must decode the shared WAV to EOF");
-    assert_eq!(
-        envelope.len(),
-        WAVEFORM_BUCKETS,
-        "waveform analysis must produce one value per bucket"
+    assert!(
+        (1..=WAVEFORM_BUCKETS).contains(&envelope.len()),
+        "waveform analysis must produce native-resolution buckets capped by request, got {}",
+        envelope.len()
     );
     assert_eq!(
         gets.load(Ordering::SeqCst),

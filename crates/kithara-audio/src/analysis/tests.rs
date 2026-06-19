@@ -166,18 +166,31 @@ mod run {
 
     use super::{
         super::{
-            analyzer::AnalyzerBuilder,
+            analyzer::{AnalyzerBuilder, TrackAnalysis},
             beat::{BeatDetector, BeatDetectorMock, GridParams, RawBeats, SharedBeatDetector},
             run::analyze_reader,
         },
         FakeReader, SR, sine,
     };
-    use crate::waveform::{AnalysisParams, WaveformAnalyzer};
+    use crate::{
+        traits::PcmReader,
+        waveform::{AnalysisParams, WaveformAnalyzer},
+    };
 
     const BUCKETS: usize = 64;
 
     fn waveform_only() -> AnalyzerBuilder {
         AnalyzerBuilder::default().with_waveform(BUCKETS)
+    }
+
+    fn stages(
+        reader: &mut dyn PcmReader,
+        builder: &AnalyzerBuilder,
+        cancel: &CancelToken,
+    ) -> Vec<TrackAnalysis> {
+        let mut out = Vec::new();
+        analyze_reader(reader, builder, cancel, |a| out.push(a));
+        out
     }
 
     #[kithara::test]
@@ -188,9 +201,12 @@ mod run {
         let want = direct.finalize(BUCKETS);
 
         let mut reader = FakeReader::chunked(&samples, 4);
-        let out = analyze_reader(&mut reader, &waveform_only(), &CancelToken::root())
-            .expect("stream with data analyses");
-        let got = out.waveform.expect("waveform analyzer fills its slot");
+        let out = stages(&mut reader, &waveform_only(), &CancelToken::root());
+        assert_eq!(out.len(), 1, "waveform-only emits once");
+        let got = out[0]
+            .waveform
+            .clone()
+            .expect("waveform analyzer fills its slot");
         assert_eq!(
             Vec::<u8>::from(&got),
             Vec::<u8>::from(&want),
@@ -203,21 +219,21 @@ mod run {
         let cancel = CancelToken::root();
         cancel.cancel();
         let mut reader = FakeReader::chunked(&sine(4096), 2);
-        assert!(analyze_reader(&mut reader, &waveform_only(), &cancel).is_none());
+        assert!(stages(&mut reader, &waveform_only(), &cancel).is_empty());
     }
 
     #[kithara::test]
     fn decode_error_yields_none() {
         let mut reader = FakeReader::failing();
-        let out = analyze_reader(&mut reader, &waveform_only(), &CancelToken::root());
-        assert!(out.is_none());
+        let out = stages(&mut reader, &waveform_only(), &CancelToken::root());
+        assert!(out.is_empty());
     }
 
     #[kithara::test]
     fn empty_stream_yields_none() {
         let mut reader = FakeReader::empty();
-        let out = analyze_reader(&mut reader, &waveform_only(), &CancelToken::root());
-        assert!(out.is_none(), "EOF with no chunks is not an analysis");
+        let out = stages(&mut reader, &waveform_only(), &CancelToken::root());
+        assert!(out.is_empty(), "EOF with no chunks is not an analysis");
     }
 
     #[kithara::test]
@@ -237,9 +253,16 @@ mod run {
             AnalyzerBuilder::default().with_beat_detector(detector, GridParams::default());
 
         let mut reader = FakeReader::chunked(&sine(8192), 3);
-        let out = analyze_reader(&mut reader, &builder, &CancelToken::root())
-            .expect("stream with data analyses");
-        let grid = out.beat.expect("beat slot fills its slot");
+        let out = stages(&mut reader, &builder, &CancelToken::root());
+        assert_eq!(
+            out.len(),
+            2,
+            "beat pass emits a fast stage then a complete one"
+        );
+        let grid = out[1]
+            .beat
+            .clone()
+            .expect("beat slot fills its slot in the complete stage");
         assert!(
             (grid.bpm - 120.0).abs() < 1e-6,
             "2 s bars are 120 bpm, got {}",
@@ -252,8 +275,8 @@ mod run {
     fn pending_is_tolerated_mid_stream() {
         let samples = sine(8192);
         let mut reader = FakeReader::chunked_with_pending(&samples, 2);
-        let out = analyze_reader(&mut reader, &waveform_only(), &CancelToken::root());
-        assert!(out.is_some_and(|a| a.waveform.is_some()));
+        let out = stages(&mut reader, &waveform_only(), &CancelToken::root());
+        assert!(out.len() == 1 && out[0].waveform.is_some());
     }
 }
 
@@ -277,7 +300,7 @@ mod worker {
         let worker = AnalysisWorker::new(&master, waveform_only());
         let mut rx = worker.analyze(
             Box::new(FakeReader::chunked(&sine(8192), 3)),
-            master.child(),
+            worker.child_token(),
         );
         rx.changed().await.expect("worker sends a result");
         assert!(rx.borrow().as_ref().is_some_and(|a| a.waveform.is_some()));
@@ -288,13 +311,13 @@ mod worker {
         let master = CancelToken::root();
         let worker = AnalysisWorker::new(&master, waveform_only());
 
-        let stale = master.child();
+        let stale = worker.child_token();
         stale.cancel();
         let mut stale_rx = worker.analyze(Box::new(FakeReader::chunked(&sine(8192), 3)), stale);
 
         let mut live_rx = worker.analyze(
             Box::new(FakeReader::chunked(&sine(8192), 3)),
-            master.child(),
+            worker.child_token(),
         );
         live_rx.changed().await.expect("live job completes");
         assert!(live_rx.borrow().is_some());
@@ -303,5 +326,19 @@ mod worker {
             "preempted job must drop its sender without a result"
         );
         assert!(stale_rx.borrow().is_none());
+    }
+
+    #[kithara::test(tokio)]
+    async fn job_token_belongs_to_worker_scope() {
+        let master = CancelToken::root();
+        let worker = AnalysisWorker::new(&master, waveform_only());
+        let job = worker.child_token();
+
+        drop(worker);
+
+        assert!(
+            job.is_cancelled(),
+            "dropping the worker must cancel tokens it creates for jobs"
+        );
     }
 }
