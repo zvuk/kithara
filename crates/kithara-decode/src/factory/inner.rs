@@ -122,10 +122,6 @@ pub struct DecoderConfig {
     /// Enable gapless trim wiring through the per-backend codec.
     #[builder(default = true)]
     pub gapless: bool,
-    /// Source is opened for playback/streaming startup: construction must not
-    /// require tail bytes or a complete file table.
-    #[builder(default)]
-    pub streaming: bool,
     /// Epoch counter for decoder recreation tracking.
     #[builder(default)]
     pub epoch: u64,
@@ -346,13 +342,8 @@ fn build_apple_standalone_decoder(
         let len = handle.load(Ordering::Acquire);
         (len > 0).then_some(len)
     });
-    let mut demuxer = AppleAudioFileDemuxer::open_for_with_mode(
-        source,
-        codec,
-        container,
-        config.streaming,
-        streaming_byte_len,
-    )?;
+    let mut demuxer =
+        AppleAudioFileDemuxer::open_for_with_mode(source, codec, container, streaming_byte_len)?;
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
     }

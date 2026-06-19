@@ -2,6 +2,7 @@
 
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat, PrerollHint};
+use num_traits::ToPrimitive;
 
 use super::{
     audio_file::AppleAudioFile,
@@ -17,25 +18,11 @@ use crate::{
     traits::BoxedSource,
 };
 
-/// Clamp a `kAudioFilePropertyDataFormat`'s `mSampleRate` (f64) into a
-/// non-negative `u32`. Container metadata always carries a positive,
-/// integer-valued rate (44100 / 48000 / 96000); the conversion is
-/// lossless in practice but a pathological negative / `NaN` / overflow
-/// value clamps to 0 / `u32::MAX` (downstream code already treats 0
-/// as "unknown rate").
-#[expect(
-    clippy::cast_sign_loss,
-    clippy::cast_possible_truncation,
-    reason = "explicit guards clamp NaN/negative/overflow; final `as u32` is lossless for 0..u32::MAX"
-)]
-fn sample_rate_from_asbd(rate: f64) -> u32 {
-    if !rate.is_finite() || rate <= 0.0 {
-        return 0;
+fn sample_rate_from_asbd(rate: f64) -> Option<u32> {
+    if !rate.is_finite() || rate <= 0.0 || rate > f64::from(u32::MAX) {
+        return None;
     }
-    if rate >= f64::from(u32::MAX) {
-        return u32::MAX;
-    }
-    rate as u32
+    rate.to_u32()
 }
 
 /// [`Demuxer`] over [`AppleAudioFile`] for standalone (non-fMP4)
@@ -96,10 +83,9 @@ impl AppleAudioFileDemuxer {
         source: BoxedSource,
         hint: Option<u32>,
         codec: AudioCodec,
-        streaming: bool,
         streaming_byte_len: Option<u64>,
     ) -> DecodeResult<Self> {
-        let file = if streaming && matches!(codec, AudioCodec::Mp3) {
+        let file = if matches!(codec, AudioCodec::Mp3) {
             AppleAudioFile::open_streaming(source, hint, streaming_byte_len)?
         } else {
             AppleAudioFile::open(source, hint)?
@@ -117,13 +103,22 @@ impl AppleAudioFileDemuxer {
             _ => file.magic_cookie().unwrap_or_default(),
         };
 
-        let channels = u16::try_from(asbd.mChannelsPerFrame).unwrap_or(2);
-        let sample_rate = sample_rate_from_asbd(asbd.mSampleRate);
-        if sample_rate == 0 {
+        let channels = u16::try_from(asbd.mChannelsPerFrame).map_err(|_| {
+            DecodeError::backend_msg(format!(
+                "apple.audio_file: invalid channel count {}",
+                asbd.mChannelsPerFrame
+            ))
+        })?;
+        if channels == 0 {
+            return Err(DecodeError::backend_msg(
+                "apple.audio_file: invalid zero channel count",
+            ));
+        }
+        let Some(sample_rate) = sample_rate_from_asbd(asbd.mSampleRate) else {
             return Err(DecodeError::InvalidSampleRate {
                 resource: "apple.audio_file",
             });
-        }
+        };
         let duration = total_packets
             .filter(|count| *count > 0)
             .map(|total_packets| {
@@ -140,24 +135,21 @@ impl AppleAudioFileDemuxer {
             gapless: None,
         };
 
-        let (cbr_batch_packets, buf_cap) = Self::CBR_BATCH_TARGET_BYTES
-            .checked_div(asbd.mBytesPerPacket)
-            .map_or_else(
-                || {
-                    (
-                        None,
-                        usize::try_from(file.max_packet_size().max(4096)).unwrap_or(64 * 1024),
-                    )
-                },
-                |packets| {
-                    let packets = packets.max(1);
-                    let bytes = packets.saturating_mul(asbd.mBytesPerPacket);
-                    (
-                        Some(packets),
-                        usize::try_from(bytes).unwrap_or(Self::CBR_BATCH_TARGET_BYTES as usize),
-                    )
-                },
-            );
+        let (cbr_batch_packets, buf_cap) = if asbd.mBytesPerPacket == 0 {
+            (
+                None,
+                usize::try_from(file.max_packet_size().max(4096)).map_err(DecodeError::backend)?,
+            )
+        } else {
+            let packets = Self::CBR_BATCH_TARGET_BYTES
+                .checked_div(asbd.mBytesPerPacket)
+                .map_or(1, |packets| packets.max(1));
+            let bytes = packets.saturating_mul(asbd.mBytesPerPacket);
+            (
+                Some(packets),
+                usize::try_from(bytes).map_err(DecodeError::backend)?,
+            )
+        };
 
         Ok(Self {
             file,
@@ -180,13 +172,12 @@ impl AppleAudioFileDemuxer {
         source: BoxedSource,
         codec: AudioCodec,
         container: Option<ContainerFormat>,
-        streaming: bool,
         streaming_byte_len: Option<u64>,
     ) -> DecodeResult<Self> {
         let hint = container
             .and_then(|c| Self::file_type_id(codec, c))
             .ok_or(DecodeError::UnsupportedCodec(codec))?;
-        Self::open(source, Some(hint), codec, streaming, streaming_byte_len)
+        Self::open(source, Some(hint), codec, streaming_byte_len)
     }
 
     /// Inject encoder priming/padding metadata probed by the factory
@@ -256,7 +247,7 @@ impl Demuxer for AppleAudioFileDemuxer {
             if packets_read == 0 {
                 return Ok(DemuxOutcome::Eof);
             }
-            self.last_read_len = bytes as usize;
+            self.last_read_len = usize::try_from(bytes).map_err(DecodeError::backend)?;
             let total_frames =
                 u64::from(packets_read).saturating_mul(u64::from(self.frames_per_packet));
             let dur = duration_for_frames(sample_rate, total_frames);
@@ -282,11 +273,11 @@ impl Demuxer for AppleAudioFileDemuxer {
             return Ok(DemuxOutcome::Eof);
         };
 
-        self.last_read_len = bytes as usize;
+        self.last_read_len = usize::try_from(bytes).map_err(DecodeError::backend)?;
         // SAFETY: `AudioStreamPacketDescription` is `#[repr(C)]` POD
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &desc as *const _ as *const u8,
+                std::ptr::from_ref(&desc).cast::<u8>(),
                 self.last_packet_desc_blob.as_mut_ptr(),
                 size_of::<AudioStreamPacketDescription>(),
             );
@@ -328,7 +319,8 @@ impl Demuxer for AppleAudioFileDemuxer {
             });
         }
 
-        let target_frame = frames_for_duration(sample_rate, target) as u64;
+        let target_frame = u64::try_from(frames_for_duration(sample_rate, target))
+            .map_err(DecodeError::backend)?;
         let target_packet = target_frame / u64::from(self.frames_per_packet.max(1));
         let backup = u64::from(priming.packets).min(target_packet);
         let landed_packet = target_packet.saturating_sub(backup);
@@ -353,7 +345,11 @@ fn serialize_asbd(asbd: &AudioStreamBasicDescription) -> Vec<u8> {
     let mut out = vec![0u8; size_of::<AudioStreamBasicDescription>()];
     // SAFETY: `AudioStreamBasicDescription` is `#[repr(C)]` POD; we copy
     unsafe {
-        std::ptr::copy_nonoverlapping(asbd as *const _ as *const u8, out.as_mut_ptr(), out.len());
+        std::ptr::copy_nonoverlapping(
+            std::ptr::from_ref(asbd).cast::<u8>(),
+            out.as_mut_ptr(),
+            out.len(),
+        );
     }
     out
 }
@@ -394,7 +390,6 @@ mod tests {
             Box::new(Cursor::new(bytes)),
             AudioCodec::Pcm,
             Some(ContainerFormat::Wav),
-            false,
             None,
         )
         .expect("open_for(Pcm, Wav) must succeed");
@@ -487,7 +482,6 @@ mod tests {
             Box::new(NotReadySource::new(bytes, ready, None)),
             AudioCodec::Pcm,
             Some(ContainerFormat::Wav),
-            false,
             None,
         )
         .expect("open_for must succeed with the header prefix available");
@@ -515,7 +509,6 @@ mod tests {
             )),
             AudioCodec::Mp3,
             Some(ContainerFormat::MpegAudio),
-            true,
             None,
         )
         .expect("MP3 streaming open must not require tail bytes");
