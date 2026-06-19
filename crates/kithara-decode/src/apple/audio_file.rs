@@ -2,6 +2,7 @@
 
 use std::{
     cell::Cell,
+    convert::identity,
     ffi::c_void,
     io::{Error, Read, Seek, SeekFrom},
     ptr,
@@ -10,9 +11,9 @@ use std::{
 use super::{
     consts::{Consts, os_status_to_string},
     ffi::{
-        AudioFileClose, AudioFileGetProperty, AudioFileGetPropertyInfo, AudioFileID,
-        AudioFileOpenWithCallbacks, AudioFileReadPacketData, AudioStreamBasicDescription,
-        AudioStreamPacketDescription, OSStatus, SInt64, UInt32,
+        AudioFile_GetSizeProc, AudioFileClose, AudioFileGetProperty, AudioFileGetPropertyInfo,
+        AudioFileID, AudioFileOpenWithCallbacks, AudioFileReadPacketData,
+        AudioStreamBasicDescription, AudioStreamPacketDescription, OSStatus, SInt64, UInt32,
     },
 };
 use crate::{
@@ -30,7 +31,7 @@ struct CallbackCtx {
     /// stash the original error here so the wrapper can rewrap it into
     /// `DecodeError::Backend` with the chain intact.
     last_error: Cell<Option<Error>>,
-    size: i64,
+    size: Option<i64>,
 }
 
 /// Safe wrapper around an Apple `AudioFile` handle backed by an
@@ -39,8 +40,8 @@ pub(crate) struct AppleAudioFile {
     handle: AudioFileID,
     data_format: AudioStreamBasicDescription,
     _ctx: Box<CallbackCtx>,
+    packet_count: Option<u64>,
     max_packet_size: u32,
-    packet_count: u64,
 }
 
 // SAFETY: `AudioFileID` is an opaque kernel handle accessed only through
@@ -70,6 +71,10 @@ impl AppleAudioFile {
             .seek(SeekFrom::Start(0))
             .map_err(DecodeError::backend)?;
         let size = i64::try_from(end).map_err(DecodeError::backend)?;
+        Self::open_inner(source, hint, Some(size))
+    }
+
+    fn open_inner(source: BoxedSource, hint: Option<u32>, size: Option<i64>) -> DecodeResult<Self> {
         let mut ctx = Box::new(CallbackCtx {
             source,
             size,
@@ -77,13 +82,15 @@ impl AppleAudioFile {
         });
         let mut handle: AudioFileID = ptr::null_mut();
 
+        let get_size_fn: AudioFile_GetSizeProc = get_size_callback;
+        let get_size = size.map(|_| get_size_fn);
         // SAFETY: `ctx` is boxed (stable address) and outlives the
         let status = unsafe {
             AudioFileOpenWithCallbacks(
                 ctx.as_mut() as *mut CallbackCtx as *mut c_void,
                 read_callback,
                 ptr::null(),
-                get_size_callback,
+                get_size,
                 ptr::null(),
                 hint.unwrap_or(0),
                 &mut handle,
@@ -97,8 +104,16 @@ impl AppleAudioFile {
         }
 
         let data_format = read_data_format(handle)?;
-        let packet_count = read_packet_count(handle)?;
-        let max_packet_size = read_max_packet_size(handle).unwrap_or(0);
+        let packet_count = if size.is_some() {
+            Some(read_packet_count(handle)?)
+        } else {
+            None
+        };
+        let max_packet_size = if size.is_some() {
+            read_max_packet_size(handle).unwrap_or(0)
+        } else {
+            0
+        };
 
         Ok(Self {
             handle,
@@ -109,7 +124,22 @@ impl AppleAudioFile {
         })
     }
 
-    pub(crate) fn packet_count(&self) -> u64 {
+    pub(crate) fn open_streaming(
+        mut source: BoxedSource,
+        hint: Option<u32>,
+        known_size: Option<u64>,
+    ) -> DecodeResult<Self> {
+        source
+            .seek(SeekFrom::Start(0))
+            .map_err(DecodeError::backend)?;
+        let size = known_size
+            .map(i64::try_from)
+            .transpose()
+            .map_err(DecodeError::backend)?;
+        Self::open_inner(source, hint, size)
+    }
+
+    pub(crate) fn packet_count(&self) -> Option<u64> {
         self.packet_count
     }
 
@@ -139,6 +169,7 @@ impl AppleAudioFile {
         let mut bytes = UInt32::try_from(buf.len()).map_err(DecodeError::backend)?;
         let mut packets: UInt32 = 1;
         let mut desc = AudioStreamPacketDescription::default();
+        let starting_packet = SInt64::try_from(starting_packet).map_err(DecodeError::backend)?;
         self._ctx.last_error.set(None);
 
         // SAFETY: `self.handle` is non-null (constructor validated it);
@@ -148,7 +179,7 @@ impl AppleAudioFile {
                 0,
                 &mut bytes,
                 &mut desc,
-                SInt64::try_from(starting_packet).unwrap_or(SInt64::MAX),
+                starting_packet,
                 &mut packets,
                 buf.as_mut_ptr() as *mut c_void,
             )
@@ -177,6 +208,7 @@ impl AppleAudioFile {
     ) -> DecodeResult<(u32, u32)> {
         let mut bytes = UInt32::try_from(buf.len()).map_err(DecodeError::backend)?;
         let mut packets: UInt32 = max_packets;
+        let starting_packet = SInt64::try_from(starting_packet).map_err(DecodeError::backend)?;
         self._ctx.last_error.set(None);
         // SAFETY: `self.handle` non-null; out-params exclusively
         let status = unsafe {
@@ -185,7 +217,7 @@ impl AppleAudioFile {
                 0,
                 &mut bytes,
                 ptr::null_mut(),
-                SInt64::try_from(starting_packet).unwrap_or(SInt64::MAX),
+                starting_packet,
                 &mut packets,
                 buf.as_mut_ptr() as *mut c_void,
             )
@@ -309,6 +341,8 @@ extern "C" fn read_callback(
     buffer: *mut c_void,
     actual: *mut UInt32,
 ) -> OSStatus {
+    const UNKNOWN_SIZE_TAIL_PROBE_MIN: SInt64 = SInt64::MAX / 2;
+
     // SAFETY: `user_data` is the boxed `CallbackCtx` we pinned in
     let (ctx, slice, actual) = unsafe {
         (
@@ -325,6 +359,10 @@ extern "C" fn read_callback(
         ))));
         return -1;
     };
+    if ctx.size.is_none() && position >= UNKNOWN_SIZE_TAIL_PROBE_MIN {
+        *actual = 0;
+        return Consts::noErr;
+    }
     if let Err(e) = ctx.source.seek(SeekFrom::Start(pos)) {
         *actual = 0;
         ctx.last_error.set(Some(e));
@@ -352,5 +390,13 @@ extern "C" fn read_callback(
 extern "C" fn get_size_callback(user_data: *mut c_void) -> SInt64 {
     // SAFETY: `user_data` is the boxed `CallbackCtx` we pinned in
     let ctx = unsafe { &*(user_data as *const CallbackCtx) };
-    ctx.size
+    ctx.size.map_or_else(
+        || {
+            ctx.last_error.set(Some(Error::other(
+                "AppleAudioFile get_size_callback called without a known size",
+            )));
+            0
+        },
+        identity,
+    )
 }

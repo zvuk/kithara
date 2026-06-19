@@ -278,16 +278,23 @@ audit *ARGS:
     # cargo's `Finished/Running target/...` noise on every step.
     cargo build --quiet -p xtask
     XTASK=target/debug/xtask
+    scope() {
+        if ((${#scope_args[@]})); then
+            "$XTASK" scope "$@" "${scope_args[@]}"
+        else
+            "$XTASK" scope "$@"
+        fi
+    }
 
     # Validate scope tokens up front so a typo doesn't silently fall back to
     # a workspace-wide audit. `cargo xtask scope` exits non-zero on bad scope.
-    if ! XTASK_FLAGS=$($XTASK scope --for=xtask "${scope_args[@]}"); then exit 2; fi
-    CLIPPY_FLAGS=$($XTASK scope --for=clippy "${scope_args[@]}")
-    FMT_FLAGS=$($XTASK scope --for=fmt "${scope_args[@]}")
-    AST_GREP_PATHS=$($XTASK scope --for=ast-grep "${scope_args[@]}")
-    TYPOS_PATHS=$($XTASK scope --for=typos "${scope_args[@]}")
-    SIMILARITY_PATHS=$($XTASK scope --for=similarity "${scope_args[@]}")
-    ORPHANS_FLAGS=$($XTASK scope --for=orphans "${scope_args[@]}")
+    if ! XTASK_FLAGS=$(scope --for=xtask); then exit 2; fi
+    CLIPPY_FLAGS=$(scope --for=clippy)
+    FMT_FLAGS=$(scope --for=fmt)
+    AST_GREP_PATHS=$(scope --for=ast-grep)
+    TYPOS_PATHS=$(scope --for=typos)
+    SIMILARITY_PATHS=$(scope --for=similarity)
+    ORPHANS_FLAGS=$(scope --for=orphans)
 
     record() {
         local name=$1 status=$2

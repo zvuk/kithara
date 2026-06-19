@@ -160,7 +160,7 @@ unsafe extern "C" {
         inClientData: *mut c_void,
         inReadFunc: AudioFile_ReadProc,
         inWriteFunc: *const c_void,
-        inGetSizeFunc: AudioFile_GetSizeProc,
+        inGetSizeFunc: Option<AudioFile_GetSizeProc>,
         inSetSizeFunc: *const c_void,
         inFileTypeHint: AudioFileTypeID,
         outAudioFile: *mut AudioFileID,

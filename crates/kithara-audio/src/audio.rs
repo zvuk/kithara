@@ -1019,6 +1019,7 @@ where
                 .pcm_pool(factory_pool.clone())
                 .byte_pool(factory_byte_pool.clone())
                 .epoch(factory_epoch.load(Ordering::Acquire))
+                .streaming(true)
                 .maybe_byte_map(stream.byte_map())
                 .maybe_hooks(stream.take_reader_event_sink())
                 .build();
@@ -1073,6 +1074,7 @@ where
             .byte_len_handle(byte_len_handle)
             .pcm_pool(deps.pcm_pool.clone())
             .byte_pool(deps.byte_pool.clone())
+            .streaming(true)
             .maybe_byte_map(shared_stream.byte_map())
             .maybe_hooks(shared_stream.take_reader_event_sink())
             .maybe_hint(hint.clone())
