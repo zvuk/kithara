@@ -17,27 +17,24 @@ import KitharaFFI
 /// conformances). Methods stay `public`, not `open`, so item behavior cannot
 /// be overridden. Subclasses construct via the public `init(url:…)` and must
 /// preserve the `@unchecked Sendable` contract: no non-`Sendable` mutable state.
-open class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
-    /// Monotonic identifier shared with the queue. Mirrors iOS
-    /// `AudioPlayerItemProtocol.audioId: TrackId`. Also used as
-    /// `Identifiable.id` so `ForEach`/`List` keying works out of the
-    /// box.
-    public nonisolated var id: TrackId { audioId }
+open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
+    /// Unique queue-item identity for SwiftUI lists.
+    public nonisolated var id: Int64 { uuid }
 
-    /// Stable per-item identifier as required by `AudioPlayerItemProtocol`.
+    /// Caller-facing content track id.
     public nonisolated let audioId: TrackId
 
-    /// Secondary handle derived from `url + audioId` (UUIDv5 → first
-    /// 64 bits). Distinct from ``audioId`` for two items with the same
-    /// URL but different queue insertions. Mirrors iOS
-    /// `AudioPlayerItemProtocol.uuid: Int64`.
+    /// Internal id allocated by the Rust queue layer.
+    nonisolated let ffiTrackId: KitharaFFI.TrackId
+
+    /// Unique queue-item handle. Distinct from ``audioId`` when the same
+    /// content track is inserted more than once.
     public nonisolated var uuid: Int64 { _inner.uuidI64() }
 
     /// The source URL — `file://…` for absolute local paths.
     public nonisolated let url: URL
 
-    /// Caller-declared live-stream flag, mirrored from the construction
-    /// parameter.
+    /// Whether the source is an endless live stream.
     public nonisolated var isLiveStream: Bool { _inner.isLiveStream() }
 
     /// Cached duration in seconds. Defaults to `0` until the underlying
@@ -53,7 +50,7 @@ open class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
         _eventSubject.eraseToAnyPublisher()
     }
 
-    // MARK: - Discrete publishers (AudioPlayerItemProtocol)
+    // MARK: - Discrete publishers (KitharaPlayerItemProtocol)
 
     /// Buffered byte ranges. Each emission is the full set. Combine
     /// equivalent of iOS `rxLoadedRanges`.
@@ -210,20 +207,20 @@ open class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
     ///
     /// - Parameters:
     ///   - url: The audio source URL.
+    ///   - audioId: Caller-facing content track id. If `nil`, Kithara
+    ///     uses the internally allocated queue id converted to `Int`.
     ///   - additionalHeaders: Optional HTTP headers included in all requests for this item.
     ///   - preferredPeakBitrate: Peak bitrate ceiling in bits/sec. `0` means no cap.
     ///   - preferredPeakBitrateForExpensiveNetworks: Peak bitrate ceiling on
     ///     expensive networks (cellular). `0` means no cap.
     ///   - abrMode: Optional per-item ABR mode override.
-    ///   - isLiveStream: `true` for live HLS feeds; reported through
-    ///     ``isLiveStream`` and consumed by ``isPlayable(progress:ranges:)``.
     public init(
         url: String,
+        audioId: TrackId? = nil,
         additionalHeaders: [String: String]? = nil,
         preferredPeakBitrate: Double = 0,
         preferredPeakBitrateForExpensiveNetworks: Double = 0,
-        abrMode: AbrMode? = nil,
-        isLiveStream: Bool = false
+        abrMode: AbrMode? = nil
     ) {
         let ffiAbrMode: FfiAbrMode? = abrMode.map {
             switch $0 {
@@ -235,12 +232,13 @@ open class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
             abrMode: ffiAbrMode,
             headers: additionalHeaders,
             url: url,
-            isLiveStream: isLiveStream,
+            isLiveStream: false,
             preferredPeakBitrate: preferredPeakBitrate,
             preferredPeakBitrateExpensive: preferredPeakBitrateForExpensiveNetworks
         )
         self._inner = AudioPlayerItem(config: config)
-        self.audioId = _inner.audioId()
+        self.ffiTrackId = _inner.audioId()
+        self.audioId = audioId ?? TrackId(ffi: ffiTrackId)
         self.url = URL(string: url) ?? URL(fileURLWithPath: url)
 
         let observer = ItemObserverBridge(subject: _eventSubject)
@@ -250,7 +248,8 @@ open class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
     /// Internal init wrapping an existing FFI item (used by ``KitharaPlayer/items``).
     init(inner: AudioPlayerItem) {
         self._inner = inner
-        self.audioId = inner.audioId()
+        self.ffiTrackId = inner.audioId()
+        self.audioId = TrackId(ffi: ffiTrackId)
         let urlString = inner.url()
         self.url = URL(string: urlString) ?? URL(fileURLWithPath: urlString)
 
@@ -262,9 +261,7 @@ open class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
 
     /// Resolve a ``ItemLoadResult`` describing the item's current load
     /// status. The result reflects cached state — `KitharaPlayer.insert`
-    /// already kicks off background loading. This method mirrors the
-    /// iOS `AudioPlayerItemProtocol.load()` Observable contract,
-    /// translated to Swift's `async`/`await`.
+    /// already kicks off background loading.
     public func load() async -> ItemLoadResult {
         await withCheckedContinuation { continuation in
             let bridge = ItemLoadCallbackBridge { result in
@@ -284,8 +281,7 @@ open class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
         return _inner.isPlayable(progress: progress, ranges: ffiRanges)
     }
 
-    /// `and:`-labelled overload mirroring the iOS
-    /// `AudioPlayerItemProtocol.isPlayable(progress:and:)` signature.
+    /// `and:`-labelled overload for call sites that prefer that spelling.
     /// Delegates to ``isPlayable(progress:ranges:)``.
     public func isPlayable(progress: Double, and ranges: [ItemLoadedRange]) -> Bool {
         isPlayable(progress: progress, ranges: ranges)

@@ -106,9 +106,6 @@ public enum AbrMode: Sendable {
 
 // MARK: - Public type aliases (avoid `import KitharaFFI` in consumer code)
 
-/// Player event from Rust — use with ``KitharaPlayer/eventPublisher``.
-public typealias PlayerEvent = FfiPlayerEvent
-
 /// Item event from Rust — use with ``KitharaPlayerItem/eventPublisher``.
 public typealias ItemEvent = FfiItemEvent
 
@@ -117,11 +114,33 @@ public typealias ItemEvent = FfiItemEvent
 /// Surfaced through `PlayerEvent.trackStatusChanged(itemId:status:)`.
 public typealias TrackStatus = FfiTrackStatus
 
-/// Strongly-typed monotonic identifier shared between the player and
-/// the queue. Mirrors the iOS `AudioPlayerItemProtocol.audioId: TrackId`
-/// contract. Conceptually a `UInt64`; passed straight through from
-/// Rust without conversion.
-public typealias TrackId = KitharaFFI.TrackId
+/// Caller-facing track identifier.
+///
+/// For integrations that already have domain track ids, pass the content id
+/// into ``KitharaPlayerItem`` at construction.
+/// If omitted, Kithara uses the internally allocated queue id converted to
+/// `Int`.
+public typealias TrackId = Int
+
+/// Player event dispatched through ``KitharaPlayer/eventPublisher``.
+public enum PlayerEvent: Sendable, Equatable {
+    case timeChanged(seconds: Double)
+    case rateChanged(rate: Float)
+    case currentItemChanged(itemId: TrackId?)
+    case statusChanged(status: PlayerStatus)
+    case timeControlStatusChanged(status: TimeControlStatus)
+    case error(String)
+    case durationChanged(seconds: Double)
+    case bufferedDurationChanged(seconds: Double)
+    case volumeChanged(volume: Float)
+    case muteChanged(muted: Bool)
+    case itemDidPlayToEnd
+    case itemDidFail(itemId: TrackId?)
+    case trackStatusChanged(itemId: TrackId, status: TrackStatus)
+    case queueEnded
+    case crossfadeStarted(durationSeconds: Float)
+    case crossfadeDurationChanged(seconds: Float)
+}
 
 // MARK: - Transition
 
@@ -160,6 +179,15 @@ public typealias PlayerSnapshot = FfiPlayerSnapshot
 public typealias SeekCallback = KitharaFFI.SeekCallback
 
 // MARK: - Internal conversions
+
+extension TrackId {
+    init(ffi id: KitharaFFI.TrackId) {
+        guard let converted = TrackId(exactly: id) else {
+            preconditionFailure("KitharaFFI TrackId \(id) exceeds Int.max")
+        }
+        self = converted
+    }
+}
 
 extension PlayerStatus {
     /// Convert an FFI status from a ``PlayerEvent`` payload into the

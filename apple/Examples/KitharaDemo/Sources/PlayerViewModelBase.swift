@@ -43,14 +43,14 @@ class PlayerViewModelBase: ObservableObject {
     @Published var errorMessage: String?
     @Published var urlText = ""
     @Published var isSeeking = false
-    @Published internal(set) var playlist: [PlaylistEntry] = []
-    @Published internal(set) var currentTrackId: TrackId?
+    @Published var playlist: [PlaylistEntry] = []
+    @Published var currentTrackId: TrackId?
     @Published var volume: Float = 1.0
     @Published var isMuted = false
     @Published var selectedRate: Float = 1.0
     @Published var eqGains: [Float] = []
     @Published var currentVariantLabel: String?
-    @Published internal(set) var discoveredVariants: [(index: UInt32, label: String)] = []
+    @Published var discoveredVariants: [(index: UInt32, label: String)] = []
     @Published var abrIsAuto = true
     @Published var selectedVariantIndex: UInt32?
     @Published var crossfadeDuration: Float = 0

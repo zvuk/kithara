@@ -5,12 +5,19 @@ import Testing
 @Suite("KitharaPlayerItem")
 struct KitharaPlayerItemTests {
 
-    @Test("init sets monotonic audioId and url")
+    @Test("init sets default audioId and url")
     func initSetsIdAndUrl() {
         let urlString = "https://example.com/song.mp3"
         let item = KitharaPlayerItem(url: urlString)
-        #expect(item.audioId == item.id)
+        #expect(item.audioId >= 0)
+        #expect(item.id == item.uuid)
         #expect(item.url == URL(string: urlString))
+    }
+
+    @Test("init surfaces caller audioId")
+    func initSurfacesCallerAudioId() {
+        let item = KitharaPlayerItem(url: "https://example.com/song.mp3", audioId: 42)
+        #expect(item.audioId == 42)
     }
 
     @Test("preferred bitrate frozen at construction defaults to zero")
@@ -31,18 +38,19 @@ struct KitharaPlayerItemTests {
         #expect(item.preferredPeakBitrateForExpensiveNetworks == 96_000)
     }
 
-    @Test("each item gets monotonic audioId")
-    func uniqueAudioIds() {
+    @Test("default audioId stays monotonic")
+    func defaultAudioIdsAreMonotonic() {
         let a = KitharaPlayerItem(url: "https://example.com/a.mp3")
         let b = KitharaPlayerItem(url: "https://example.com/b.mp3")
         #expect(a.audioId < b.audioId)
     }
 
-    @Test("two items with the same URL get distinct audioId and uuid")
+    @Test("two items with the same caller audioId get distinct uuid")
     func distinctIdentifiersForSameUrl() {
-        let a = KitharaPlayerItem(url: "https://example.com/track.mp3")
-        let b = KitharaPlayerItem(url: "https://example.com/track.mp3")
-        #expect(a.audioId != b.audioId)
+        let a = KitharaPlayerItem(url: "https://example.com/track.mp3", audioId: 7)
+        let b = KitharaPlayerItem(url: "https://example.com/track.mp3", audioId: 7)
+        #expect(a.audioId == b.audioId)
         #expect(a.uuid != b.uuid)
+        #expect(a.id != b.id)
     }
 }

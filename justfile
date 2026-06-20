@@ -813,5 +813,7 @@ _xcodegen-local:
       -e 's|url: https://github.com/zvuk/kithara|path: ../../..|' \
       -e '/from:/d' \
       project.yml && \
+    unset SDKROOT && \
+    /usr/bin/xcrun --sdk macosx swift scripts/bake-secrets.swift && \
     KITHARA_LOCAL_DEV=1 xcodegen generate && \
     mv project.yml.bak project.yml

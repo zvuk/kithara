@@ -4,8 +4,7 @@ import Kithara
 import RxSwift
 
 /// RxSwift bridge over Kithara's Combine publishers. Mirrors the
-/// `rx*` accessor shape expected by consumers of the
-/// `AudioPlayerProtocol` / `AudioPlayerItemProtocol` contracts.
+/// `rx*` accessor shape expected by consumers that prefer RxSwift.
 public extension KitharaPlayer {
     /// Current queue item as a hot `Observable`. Emits `nil` when the
     /// queue is empty or the player is stopped. Rx mirror of

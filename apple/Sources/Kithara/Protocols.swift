@@ -2,28 +2,21 @@ import Combine
 import Foundation
 import KitharaFFI
 
-// MARK: - AudioPlayerItemProtocol
+// MARK: - KitharaPlayerItemProtocol
 
-/// Protocol matching AVPlayerItem-style semantics for audio items.
-/// Combine equivalent of the iOS `AudioPlayerItemProtocol` — each
-/// `rxFoo: Observable<T>` slot in the iOS contract becomes a typed
-/// `foo: AnyPublisher<T, Never>` slot here.
-public protocol AudioPlayerItemProtocol: AnyObject, Identifiable, Sendable {
-    /// Monotonic per-item identifier — same `TrackId` the queue uses
-    /// internally. Mirrors `AudioPlayerItemProtocol.audioId: TrackId`
-    /// on iOS.
+/// Protocol matching Kithara's Swift item surface.
+public protocol KitharaPlayerItemProtocol: AnyObject, Identifiable, Sendable {
+    /// Caller-facing content track id.
     var audioId: TrackId { get }
 
-    /// Secondary handle derived from `url + audioId` (UUIDv5 → first
-    /// 64 bits). Distinct from `audioId` for two items with the same
-    /// URL but different queue insertions. Mirrors
-    /// `AudioPlayerItemProtocol.uuid: Int64` on iOS.
+    /// Unique queue-item handle. Distinct from ``audioId`` when the same
+    /// content track is inserted more than once.
     var uuid: Int64 { get }
 
     /// The source URL (`file://…` for local paths).
     var url: URL { get }
 
-    /// Caller-declared live-stream flag.
+    /// Whether the source is an endless live stream.
     var isLiveStream: Bool { get }
 
     /// Cached duration in seconds. `0` until duration metadata arrives.
@@ -37,8 +30,7 @@ public protocol AudioPlayerItemProtocol: AnyObject, Identifiable, Sendable {
     /// Frozen at item construction.
     var preferredPeakBitrateForExpensiveNetworks: Double { get }
 
-    /// Buffered byte ranges. Each emission is the full set of buffered
-    /// ranges. Combine equivalent of iOS `rxLoadedRanges`.
+    /// Buffered byte ranges. Each emission is the full set of buffered ranges.
     var loadedRanges: AnyPublisher<[ItemLoadedRange], Never> { get }
 
     /// Item duration publisher (seconds). Emits `nil` while unknown.
@@ -47,25 +39,19 @@ public protocol AudioPlayerItemProtocol: AnyObject, Identifiable, Sendable {
     /// Error publisher. Combine equivalent of iOS `rxError`.
     var error: AnyPublisher<Error, Never> { get }
 
-    /// Current bitrate in bits/sec (latest applied variant). Combine
-    /// equivalent of iOS `rxBitrate`.
+    /// Current bitrate in bits/sec (latest applied variant).
     var bitrate: AnyPublisher<Int32, Never> { get }
 
-    /// Fires once the metadata layer reports `ReadyToPlay`. Combine
-    /// equivalent of iOS `rxReadyToPlay`.
+    /// Fires once the metadata layer reports `ReadyToPlay`.
     var readyToPlay: AnyPublisher<Void, Never> { get }
 
-    /// Fires when the item plays out to its natural end. Combine
-    /// equivalent of iOS `rxDidReachEnd`.
+    /// Fires when the item plays out to its natural end.
     var didReachEnd: AnyPublisher<Void, Never> { get }
 
-    /// Fires when playback stalls (waiting for more data). Combine
-    /// equivalent of iOS `rxDidStall`.
+    /// Fires when playback stalls.
     var didStall: AnyPublisher<Void, Never> { get }
 
     /// Resolves once the item's metadata layer reports playable state.
-    /// Mirrors the iOS `func load() -> Observable<ItemLoadResult>`
-    /// shape via Swift Concurrency.
     func load() async -> ItemLoadResult
 
     /// Whether the item is playable at `progress` (seconds) given the
@@ -74,21 +60,16 @@ public protocol AudioPlayerItemProtocol: AnyObject, Identifiable, Sendable {
     func isPlayable(progress: Double, ranges: [ItemLoadedRange]) -> Bool
 
     /// `and:`-labeled variant of ``isPlayable(progress:ranges:)``.
-    /// Mirrors the iOS `AudioPlayerItemProtocol.isPlayable(progress:and:)`
-    /// external label.
     func isPlayable(progress: Double, and ranges: [ItemLoadedRange]) -> Bool
 }
 
-// MARK: - AudioPlayerProtocol
+// MARK: - KitharaPlayerProtocol
 
-/// Protocol matching AVPlayer-style semantics for queue-based playback.
-/// Combine equivalent of the iOS `AudioPlayerProtocol`: every `rxFoo`
-/// Observable on the iOS side becomes a typed `foo: AnyPublisher`
-/// here; sync getters and setters keep their iOS names.
-public protocol AudioPlayerProtocol: AnyObject, Sendable {
+/// Protocol matching Kithara's queue-based playback surface.
+public protocol KitharaPlayerProtocol: AnyObject, Sendable {
     /// Concrete queue-item type the conforming player drives. The
     /// stock implementation pins this to ``KitharaPlayerItem``.
-    associatedtype Item: AudioPlayerItemProtocol
+    associatedtype Item: KitharaPlayerItemProtocol
 
     /// Playback volume (0.0–1.0, clamped).
     var volume: Float { get set }
