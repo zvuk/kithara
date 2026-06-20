@@ -37,8 +37,8 @@ enum ReleaseCommand {
     Prepare {
         /// Version to release, without the `v` prefix (e.g. 0.0.2).
         version: String,
-        /// Pre-built `XCFramework` zip. When omitted, `just apple release`
-        /// is run to produce /tmp/KitharaFFIInternal.xcframework.zip.
+        /// Pre-built `XCFramework` zip. When omitted, `cargo xtask apple
+        /// release` is run to produce /tmp/KitharaFFIInternal.xcframework.zip.
         #[arg(long)]
         zip: Option<PathBuf>,
     },
@@ -67,11 +67,11 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
     let zip = if let Some(path) = zip {
         path
     } else {
-        check_tool("just", &["--version"], "cargo install just")?;
-        println!("Building XCFramework (just apple release)...");
+        check_tool("cargo", &["--version"], "https://rustup.rs")?;
+        println!("Building XCFramework (cargo xtask apple release)...");
         run_step(
-            Command::new("just").args(["apple", "release"]),
-            "just apple release",
+            Command::new("cargo").args(["xtask", "apple", "release"]),
+            "cargo xtask apple release",
         )?;
         built = env::temp_dir().join(&cfg.asset);
         built.as_path()

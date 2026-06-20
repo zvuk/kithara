@@ -723,11 +723,7 @@ android MODE="build" *ARGS:
         cargo xtask android build {{ARGS}}
         ;;
       aar)
-        cargo xtask android build --profile release
-        cd android && ./gradlew :lib:exportReleaseAars -Pkithara.release=true -x generateKitharaFfi
-        echo "==> AARs:"
-        echo "    android/lib/build/outputs/aar/kithara.aar"
-        echo "    android/lib/build/outputs/aar/rust-tls.aar"
+        cargo xtask android aar
         ;;
       *)
         cargo xtask android {{MODE}} {{ARGS}}
@@ -781,23 +777,7 @@ apple MODE="xcframework" *ARGS:
             --output-path ./docs-build/Kithara.doccarchive
         ;;
       release)
-        just apple xcframework
-        # Strip debug symbols from each slice's static lib so the
-        # resulting zip fits under release-hosting limits (gitlab caps
-        # LFS objects at 1 GB; github releases tolerate 2 GB but tiny
-        # is still nicer). `-S` drops debug info, `-x` drops local
-        # symbols — global symbols required for linking stay intact.
-        for f in apple/KitharaFFIInternal.xcframework/*/libkithara_ffi.a; do
-            strip -S -x "$f"
-        done
-        # Symbol audit: fail fast if a software-backend dep leaked
-        # into the apple xcframework. Apple HW must own decode on iOS.
-        cargo xtask apple audit apple/KitharaFFIInternal.xcframework
-        just apple single
-        cd apple && zip -ry /tmp/KitharaFFIInternal.xcframework.zip KitharaFFIInternal.xcframework
-        cd apple/dist && zip -ry /tmp/Kithara.xcframework.zip Kithara.xcframework
-        swift package compute-checksum /tmp/KitharaFFIInternal.xcframework.zip \
-            | tee /tmp/KitharaFFIInternal.xcframework.zip.sha256
+        cargo xtask apple release
         ;;
       *)
         echo "unknown apple mode: {{MODE}} (use xcframework|single|demo|xcode|ios|doc|release)"

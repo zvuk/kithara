@@ -9,6 +9,8 @@ use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
 use regex::Regex;
 
+use crate::common::project::ProjectConfig;
+
 /// Module constants for `cargo xtask apple run`. Grouped per the
 /// `style.multiple-private-module-consts` lint.
 struct Consts;
@@ -198,12 +200,15 @@ pub(crate) enum AppleCommand {
     },
     /// Audit symbols in an Apple `XCFramework`: assert that no
     /// software-fallback backend (Symphonia / fdk-aac) leaked into
-    /// any slice. Used as a pre-publish gate from `just apple release`.
+    /// any slice. Used as a pre-publish gate from `apple release`.
     Audit {
         /// Path to the `*.xcframework` directory (e.g.
         /// `apple/KitharaFFIInternal.xcframework`).
         path: PathBuf,
     },
+    /// Build release Apple artifacts, strip/audit them, zip them, and print
+    /// the SPM checksum for the Rust `XCFramework` binary target.
+    Release,
 }
 
 pub(crate) fn run(cmd: AppleCommand) -> Result<()> {
@@ -224,6 +229,7 @@ pub(crate) fn run(cmd: AppleCommand) -> Result<()> {
             skip_framework,
         ),
         AppleCommand::Audit { path } => audit_symbols(&path),
+        AppleCommand::Release => run_release(),
     }
 }
 
@@ -372,6 +378,113 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     println!("  cd {} && swift build && swift test", apple_dir.display());
 
     Ok(())
+}
+
+fn run_release() -> Result<()> {
+    let metadata = MetadataCommand::new()
+        .exec()
+        .context("failed to read cargo metadata")?;
+    let root = metadata.workspace_root.as_std_path().to_path_buf();
+    let project = ProjectConfig::load(&root)?;
+    let release = &project.release;
+    if release.asset.trim().is_empty() {
+        bail!("release.asset is not set in .config/xtask.toml");
+    }
+    if release.single_asset.trim().is_empty() {
+        bail!("release.single_asset is not set in .config/xtask.toml");
+    }
+
+    let apple_dir = root.join("apple");
+    let internal = apple_dir.join("KitharaFFIInternal.xcframework");
+
+    run_build(crate::BuildProfile::Release)?;
+    strip_xcframework(&internal)?;
+    audit_symbols(&internal)?;
+    run_single(crate::BuildProfile::Release)?;
+
+    let tmp = env::temp_dir();
+    let internal_zip = tmp.join(&release.asset);
+    let single_zip = tmp.join(&release.single_asset);
+    zip_dir(&apple_dir, "KitharaFFIInternal.xcframework", &internal_zip)?;
+
+    let single_dir = release
+        .single_asset
+        .strip_suffix(".zip")
+        .context("release.single_asset must end with .zip")?;
+    zip_dir(&apple_dir.join("dist"), single_dir, &single_zip)?;
+
+    let checksum = swift_checksum(&internal_zip)?;
+    let checksum_file = tmp.join(format!("{}.sha256", release.asset));
+    fs::write(&checksum_file, format!("{checksum}\n"))
+        .with_context(|| format!("write {}", checksum_file.display()))?;
+
+    println!("==> Release artifacts:");
+    println!("    {}", internal_zip.display());
+    println!("    {}", single_zip.display());
+    println!("    {}", checksum_file.display());
+    println!("==> SPM checksum: {checksum}");
+    Ok(())
+}
+
+fn strip_xcframework(xcframework: &Path) -> Result<()> {
+    require_dir(xcframework)?;
+    for entry in
+        fs::read_dir(xcframework).with_context(|| format!("read {}", xcframework.display()))?
+    {
+        let slice = entry?.path();
+        if !slice.is_dir() {
+            continue;
+        }
+        let lib = slice.join("libkithara_ffi.a");
+        if !lib.is_file() {
+            continue;
+        }
+        println!("==> Stripping {}", lib.display());
+        let status = Command::new("strip")
+            .args(["-S", "-x"])
+            .arg(&lib)
+            .status()
+            .with_context(|| format!("strip {}", lib.display()))?;
+        if !status.success() {
+            bail!("strip failed for {}", lib.display());
+        }
+    }
+    Ok(())
+}
+
+fn zip_dir(parent: &Path, directory_name: &str, output: &Path) -> Result<()> {
+    let source = parent.join(directory_name);
+    require_dir(&source)?;
+    if output.exists() {
+        fs::remove_file(output).with_context(|| format!("remove {}", output.display()))?;
+    }
+    println!("==> Zipping {} -> {}", source.display(), output.display());
+    let status = Command::new("zip")
+        .args(["-r", "-y"])
+        .arg(output)
+        .arg(directory_name)
+        .current_dir(parent)
+        .status()
+        .with_context(|| format!("zip {}", source.display()))?;
+    if !status.success() {
+        bail!("zip failed for {}", source.display());
+    }
+    Ok(())
+}
+
+fn swift_checksum(zip: &Path) -> Result<String> {
+    let output = Command::new("swift")
+        .args(["package", "compute-checksum"])
+        .arg(zip)
+        .output()
+        .context("run swift package compute-checksum")?;
+    if !output.status.success() {
+        bail!(
+            "swift package compute-checksum failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Per-arch inputs for one slice of the single-framework build.
