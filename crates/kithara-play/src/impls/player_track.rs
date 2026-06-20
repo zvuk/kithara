@@ -141,26 +141,6 @@ pub struct PlayerTrack {
 }
 
 impl PlayerTrack {
-    fn seek_frame_index(seconds: f64, sample_rate: u32, duration: f64) -> u64 {
-        let sample_rate = sample_rate.max(1);
-        let target_seconds = if seconds.is_nan() {
-            0.0
-        } else if seconds.is_finite() {
-            seconds.max(0.0)
-        } else if seconds.is_sign_positive() {
-            duration.max(0.0)
-        } else {
-            0.0
-        };
-        let bounded_seconds = if duration > 0.0 {
-            target_seconds.min(duration)
-        } else {
-            target_seconds
-        };
-        let frames = bounded_seconds * f64::from(sample_rate);
-        ToPrimitive::to_u64(&frames).unwrap_or(0)
-    }
-
     /// Create a new track in the `Preloading` state.
     ///
     /// The `MixDSP` starts at `FULLY_WET` (silent) so that an explicit
@@ -597,6 +577,26 @@ impl PlayerTrack {
         self.notified_track_requested = false;
         self.notified_prefetch_requested = false;
         self.ended_at_eof = false;
+    }
+
+    fn seek_frame_index(seconds: f64, sample_rate: u32, duration: f64) -> u64 {
+        let sample_rate = sample_rate.max(1);
+        let target_seconds = if seconds.is_nan() {
+            0.0
+        } else if seconds.is_finite() {
+            seconds.max(0.0)
+        } else if seconds.is_sign_positive() {
+            duration.max(0.0)
+        } else {
+            0.0
+        };
+        let bounded_seconds = if duration > 0.0 {
+            target_seconds.min(duration)
+        } else {
+            target_seconds
+        };
+        let frames = bounded_seconds * f64::from(sample_rate);
+        ToPrimitive::to_u64(&frames).unwrap_or(0)
     }
 
     /// Update the prefetch lead time used for the preload trigger.

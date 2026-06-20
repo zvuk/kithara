@@ -38,6 +38,12 @@ pub struct FileSource {
 }
 
 impl FileSource {
+    fn known_len(&self) -> Option<u64> {
+        self.coord
+            .total_bytes()
+            .or_else(|| self.inner.asset.reader.len())
+    }
+
     /// Create a source for a local/cached file (no downloads needed).
     ///
     /// `cancel` is a child of the file config master so a track drop
@@ -81,6 +87,16 @@ impl FileSource {
         }
     }
 
+    fn readable_part(&self, range: Range<u64>) -> Option<Range<u64>> {
+        let Some(total) = self.known_len() else {
+            return Some(range);
+        };
+        if total > 0 && range.start >= total {
+            return None;
+        }
+        Some(range.start..range.end.min(total))
+    }
+
     /// Pin the Downloader peer registration to this source's lifetime.
     /// Called once after `Downloader::register`; mirrors
     /// `HlsSource::set_peer_handle`. Without this the handle returned by
@@ -88,6 +104,15 @@ impl FileSource {
     /// in-flight fetch.
     pub(crate) fn set_peer_handle(&mut self, handle: PeerHandle) {
         self.peer_handle = Some(handle);
+    }
+
+    fn update_read_demand(&self, read_pos: u64) {
+        if read_pos > self.coord.read_pos() {
+            self.coord.set_read_pos(read_pos);
+            if let Some(lease) = self.inner.demand_lease.as_ref() {
+                lease.note_progress();
+            }
+        }
     }
 
     /// Build a `FileSource` over a pre-constructed [`FileInner`]. The
@@ -100,31 +125,6 @@ impl FileSource {
             inner,
             peer_handle: None,
         }
-    }
-
-    fn update_read_demand(&self, read_pos: u64) {
-        if read_pos > self.coord.read_pos() {
-            self.coord.set_read_pos(read_pos);
-            if let Some(lease) = self.inner.demand_lease.as_ref() {
-                lease.note_progress();
-            }
-        }
-    }
-
-    fn known_len(&self) -> Option<u64> {
-        self.coord
-            .total_bytes()
-            .or_else(|| self.inner.asset.reader.len())
-    }
-
-    fn readable_part(&self, range: Range<u64>) -> Option<Range<u64>> {
-        let Some(total) = self.known_len() else {
-            return Some(range);
-        };
-        if total > 0 && range.start >= total {
-            return None;
-        }
-        Some(range.start..range.end.min(total))
     }
 }
 

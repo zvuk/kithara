@@ -1790,6 +1790,21 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.arm_peer_wake();
     }
 
+    fn post_seek_anchor_offset(&self, resume: &ResumeState) -> Option<u64> {
+        let offset = resume.anchor_offset?;
+        let Some(anchor_variant) = resume.anchor_variant_index else {
+            return Some(offset);
+        };
+        let current_variant = self
+            .shared_stream
+            .abr_handle()
+            .and_then(|handle| handle.current_variant_index());
+        match current_variant {
+            Some(current) if current == anchor_variant => Some(offset),
+            _ => None,
+        }
+    }
+
     /// Decoder-construction input contract for the demuxer `recreate` will
     /// rebuild, declared per-demuxer by the decode factory: an init-bearing
     /// container (segment-aware fMP4) reports [`InputRequirement::InitOnly`] —
@@ -1830,6 +1845,19 @@ impl<T: StreamType> StreamAudioSource<T> {
             return init_range;
         }
         recreate.offset..self.boundary_end(recreate.offset)
+    }
+
+    fn seek_anchor_stale(&self, mode: SeekMode) -> bool {
+        let SeekMode::Anchor(anchor) = mode else {
+            return false;
+        };
+        let Some(anchor_variant) = anchor.variant_index else {
+            return false;
+        };
+        self.shared_stream
+            .abr_handle()
+            .and_then(|handle| handle.current_variant_index())
+            .is_some_and(|current| current != anchor_variant)
     }
 
     /// Compute the upper bound of the byte range required for the
@@ -1896,6 +1924,12 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.source_ready_for_range(byte..end)
     }
 
+    fn source_park(&self, phase: SourcePhase) -> Option<WaitingReason> {
+        let reason = map_source_phase(phase)?;
+        self.arm_peer_wake();
+        Some(reason)
+    }
+
     fn source_phase_for_boundary(&self, start: u64) -> SourcePhase {
         let end = self.boundary_end(start);
         self.shared_stream.phase_at(start..end)
@@ -1950,12 +1984,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.shared_stream.phase_at(pos..end)
     }
 
-    fn source_park(&self, phase: SourcePhase) -> Option<WaitingReason> {
-        let reason = map_source_phase(phase)?;
-        self.arm_peer_wake();
-        Some(reason)
-    }
-
     fn source_ready_for_range(&self, range: Range<u64>) -> bool {
         let phase = self.shared_stream.phase_at(range);
         if self.source_park(phase).is_some() {
@@ -1976,34 +2004,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             phase,
             SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
         )
-    }
-
-    fn post_seek_anchor_offset(&self, resume: &ResumeState) -> Option<u64> {
-        let offset = resume.anchor_offset?;
-        let Some(anchor_variant) = resume.anchor_variant_index else {
-            return Some(offset);
-        };
-        let current_variant = self
-            .shared_stream
-            .abr_handle()
-            .and_then(|handle| handle.current_variant_index());
-        match current_variant {
-            Some(current) if current == anchor_variant => Some(offset),
-            _ => None,
-        }
-    }
-
-    fn seek_anchor_stale(&self, mode: SeekMode) -> bool {
-        let SeekMode::Anchor(anchor) = mode else {
-            return false;
-        };
-        let Some(anchor_variant) = anchor.variant_index else {
-            return false;
-        };
-        self.shared_stream
-            .abr_handle()
-            .and_then(|handle| handle.current_variant_index())
-            .is_some_and(|current| current != anchor_variant)
     }
 }
 

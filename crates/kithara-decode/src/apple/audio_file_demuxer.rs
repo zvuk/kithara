@@ -458,9 +458,9 @@ mod tests {
             ErrorKind::Interrupted,
             StreamPending {
                 pos,
-                reason: PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted),
                 want,
                 len,
+                reason: PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted),
                 phase: SourcePhase::Waiting,
                 epoch: 0,
                 flushing: false,

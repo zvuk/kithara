@@ -19,13 +19,13 @@ use crate::{config::AppConfig, waveform::TrackAnalysis};
 /// listener task and direct setter calls from the UI controller.
 #[derive(Debug, Clone)]
 pub struct UiState {
-    pub engine_load: EngineLoadSnapshot,
-    /// Source analysis of the current track; `None` until analysed.
-    pub analysis: Option<TrackAnalysis>,
     /// Beat positions as track fractions in `[0, 1]`, derived from `analysis.beat`.
     pub beat_marks: Arc<[f32]>,
     /// Downbeat positions as track fractions in `[0, 1]`, derived from `analysis.beat`.
     pub downbeat_marks: Arc<[f32]>,
+    pub engine_load: EngineLoadSnapshot,
+    /// Source analysis of the current track; `None` until analysed.
+    pub analysis: Option<TrackAnalysis>,
     pub crossfade_progress: Option<f32>,
     pub current_track_index: Option<usize>,
     pub selected_variant: Option<usize>,

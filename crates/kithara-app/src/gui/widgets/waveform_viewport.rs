@@ -25,20 +25,29 @@ pub(crate) enum WaveMsg {
 /// window without panicking. Bucket `i` of `n` spans `[i/n, (i+1)/n]`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Viewport {
-    zoom: f32,
     offset: f32,
+    zoom: f32,
 }
 
 impl Default for Viewport {
     fn default() -> Self {
         Self {
-            zoom: MIN_ZOOM,
             offset: 0.0,
+            zoom: MIN_ZOOM,
         }
     }
 }
 
 impl Viewport {
+    /// Apply a [`WaveMsg`] transition, yielding the next viewport.
+    pub(crate) fn apply(self, msg: WaveMsg) -> Self {
+        match msg {
+            WaveMsg::ZoomBy { factor, anchor } => self.zoom_by(factor, anchor),
+            WaveMsg::Zoom(factor) => self.zoom_by(factor, 0.5),
+            WaveMsg::Pan(delta) => self.pan(delta),
+        }
+    }
+
     /// Clamp zoom into range, then offset into `[0, 1 - 1/zoom]`. Order matters:
     /// deriving the offset bound from the clamped zoom keeps it non-negative.
     fn normalized(self) -> Self {
@@ -53,7 +62,49 @@ impl Viewport {
         } else {
             0.0
         };
-        Self { zoom, offset }
+        Self { offset, zoom }
+    }
+
+    /// Shift the window by a screen-fraction drag delta. Dragging right
+    /// (positive delta) reveals earlier content, so offset decreases.
+    pub(crate) fn pan(self, delta_screen_frac: f32) -> Self {
+        let cur = self.normalized();
+        let delta = if delta_screen_frac.is_finite() {
+            delta_screen_frac
+        } else {
+            0.0
+        };
+        Self {
+            offset: cur.offset - delta / cur.zoom,
+            zoom: cur.zoom,
+        }
+        .normalized()
+    }
+
+    /// Bucket range `[lo, hi)` covering pixel column `[x, x+1]` of a `w`-wide
+    /// canvas.
+    pub(crate) fn pixel_buckets(self, x: f32, w: f32, n: usize) -> (usize, usize) {
+        if n == 0 || w <= 0.0 {
+            return (0, 0);
+        }
+        let nf: f32 = n.as_();
+        let lo: usize = (self.track_frac(x / w) * nf).floor().max(0.0).as_();
+        let hi: usize = (self.track_frac((x + 1.0) / w) * nf).ceil().max(0.0).as_();
+        let lo = lo.min(n - 1);
+        (lo, hi.clamp(lo + 1, n))
+    }
+
+    /// Map a track fraction to a screen fraction. May fall outside `[0, 1]`
+    /// when the point is off-screen (e.g. a playhead past the visible window).
+    pub(crate) fn screen_frac(self, track_frac: f32) -> f32 {
+        let cur = self.normalized();
+        (track_frac - cur.offset) * cur.zoom
+    }
+
+    /// Map a screen fraction in `[0, 1]` to a track fraction.
+    pub(crate) fn track_frac(self, screen_frac: f32) -> f32 {
+        let cur = self.normalized();
+        cur.offset + screen_frac / cur.zoom
     }
 
     /// Clamped zoom level, for the on-screen `N×` readout.
@@ -82,56 +133,5 @@ impl Viewport {
             offset: pinned - anchor / new_zoom,
         }
         .normalized()
-    }
-
-    /// Shift the window by a screen-fraction drag delta. Dragging right
-    /// (positive delta) reveals earlier content, so offset decreases.
-    pub(crate) fn pan(self, delta_screen_frac: f32) -> Self {
-        let cur = self.normalized();
-        let delta = if delta_screen_frac.is_finite() {
-            delta_screen_frac
-        } else {
-            0.0
-        };
-        Self {
-            zoom: cur.zoom,
-            offset: cur.offset - delta / cur.zoom,
-        }
-        .normalized()
-    }
-
-    /// Map a screen fraction in `[0, 1]` to a track fraction.
-    pub(crate) fn track_frac(self, screen_frac: f32) -> f32 {
-        let cur = self.normalized();
-        cur.offset + screen_frac / cur.zoom
-    }
-
-    /// Map a track fraction to a screen fraction. May fall outside `[0, 1]`
-    /// when the point is off-screen (e.g. a playhead past the visible window).
-    pub(crate) fn screen_frac(self, track_frac: f32) -> f32 {
-        let cur = self.normalized();
-        (track_frac - cur.offset) * cur.zoom
-    }
-
-    /// Apply a [`WaveMsg`] transition, yielding the next viewport.
-    pub(crate) fn apply(self, msg: WaveMsg) -> Self {
-        match msg {
-            WaveMsg::ZoomBy { factor, anchor } => self.zoom_by(factor, anchor),
-            WaveMsg::Zoom(factor) => self.zoom_by(factor, 0.5),
-            WaveMsg::Pan(delta) => self.pan(delta),
-        }
-    }
-
-    /// Bucket range `[lo, hi)` covering pixel column `[x, x+1]` of a `w`-wide
-    /// canvas.
-    pub(crate) fn pixel_buckets(self, x: f32, w: f32, n: usize) -> (usize, usize) {
-        if n == 0 || w <= 0.0 {
-            return (0, 0);
-        }
-        let nf: f32 = n.as_();
-        let lo: usize = (self.track_frac(x / w) * nf).floor().max(0.0).as_();
-        let hi: usize = (self.track_frac((x + 1.0) / w) * nf).ceil().max(0.0).as_();
-        let lo = lo.min(n - 1);
-        (lo, hi.clamp(lo + 1, n))
     }
 }

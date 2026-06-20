@@ -114,15 +114,15 @@ impl SegmentStore {
         &self.init
     }
 
-    /// Whether the (separately fetched) init segment settled terminally.
-    pub(super) fn init_failed(&self) -> bool {
-        self.init.pending().is_some_and(|e| e.state.is_failed())
-    }
-
     pub(super) fn init_downloading(&self) -> bool {
         self.init
             .pending()
             .is_some_and(|e| e.state.is_downloading())
+    }
+
+    /// Whether the (separately fetched) init segment settled terminally.
+    pub(super) fn init_failed(&self) -> bool {
+        self.init.pending().is_some_and(|e| e.state.is_failed())
     }
 
     /// Resource key for the variant's init segment — `None` when the
@@ -200,6 +200,12 @@ impl SegmentStore {
         Ok(Some(n))
     }
 
+    pub(super) fn segment_downloading(&self, seg_idx: u32) -> bool {
+        self.segments
+            .get(seg_idx as usize)
+            .is_some_and(|e| e.state.is_downloading())
+    }
+
     /// Whether media segment `seg_idx` settled terminally (`Failed`): the
     /// downloader exhausted its retry budget, so the segment will never
     /// load. Readers surface a terminal error on it.
@@ -207,12 +213,6 @@ impl SegmentStore {
         self.segments
             .get(seg_idx as usize)
             .is_some_and(|e| e.state.is_failed())
-    }
-
-    pub(super) fn segment_downloading(&self, seg_idx: u32) -> bool {
-        self.segments
-            .get(seg_idx as usize)
-            .is_some_and(|e| e.state.is_downloading())
     }
 
     pub(super) fn segment_resource(&self, seg_idx: u32) -> Option<ResourceKey> {

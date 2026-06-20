@@ -195,14 +195,6 @@ pub trait PcmReader: kithara_platform::maybe_send::MaybeSend {
         Ok(())
     }
 
-    /// Startup gate signalled once preload completes (first chunk
-    /// available). The async consumer awaits [`PreloadGate::wait`]; the
-    /// worker opens it with a lock-free store. `None` for readers without
-    /// a worker-backed preload (file, test fixtures).
-    fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
-        None
-    }
-
     /// Decoder epoch whose preload gate should be observed by async callers.
     ///
     /// Readers without epoch-based seek invalidation keep the default initial
@@ -211,6 +203,14 @@ pub trait PcmReader: kithara_platform::maybe_send::MaybeSend {
     /// post-seek preload wait.
     fn preload_epoch(&self) -> u64 {
         0
+    }
+
+    /// Startup gate signalled once preload completes (first chunk
+    /// available). The async consumer awaits [`PreloadGate::wait`]; the
+    /// worker opens it with a lock-free store. `None` for readers without
+    /// a worker-backed preload (file, test fixtures).
+    fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
+        None
     }
 
     /// Read interleaved PCM samples.

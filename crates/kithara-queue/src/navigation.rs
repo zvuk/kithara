@@ -41,10 +41,23 @@ impl NavigationState {
         self.current_index
     }
 
+    /// Mark the queue exhausted without selecting a successor.
+    pub(crate) fn finish(&mut self) {
+        if let Some(current) = self.current_index {
+            add_to_history(&mut self.history, current);
+        }
+        self.current_index = None;
+    }
+
     /// Shuffle flag.
     #[must_use]
     pub fn is_shuffle_enabled(&self) -> bool {
         self.shuffle_enabled
+    }
+
+    /// Current index, or the last selected index after [`Self::finish`].
+    pub(crate) fn last_selected_index(&self) -> Option<usize> {
+        self.current_index.or_else(|| self.history.back().copied())
     }
 
     /// Advance to the next track.
@@ -93,11 +106,6 @@ impl NavigationState {
         self.repeat_mode
     }
 
-    /// Current index, or the last selected index after [`Self::finish`].
-    pub(crate) fn last_selected_index(&self) -> Option<usize> {
-        self.current_index.or_else(|| self.history.back().copied())
-    }
-
     /// Record an explicit selection. If the previously-current track is
     /// different, it is pushed onto history (deduped against the tail).
     pub fn select(&mut self, idx: usize) {
@@ -108,14 +116,6 @@ impl NavigationState {
             add_to_history(&mut self.history, current);
         }
         self.current_index = Some(idx);
-    }
-
-    /// Mark the queue exhausted without selecting a successor.
-    pub(crate) fn finish(&mut self) {
-        if let Some(current) = self.current_index {
-            add_to_history(&mut self.history, current);
-        }
-        self.current_index = None;
     }
 
     /// Set repeat mode.

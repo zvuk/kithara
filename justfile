@@ -752,8 +752,7 @@ apple MODE="xcframework" *ARGS:
         cargo xtask apple single {{ARGS}}
         ;;
       demo)
-        just apple xcframework --profile debug
-        KITHARA_LOCAL_DEV=1 swift run KitharaDemo
+        cargo xtask apple run {{ARGS}}
         ;;
       xcode)
         just apple xcframework --profile debug

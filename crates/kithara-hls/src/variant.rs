@@ -79,14 +79,14 @@ impl SegmentSlotState {
     const LOADED: u8 = 2;
     const MISSING: u8 = 0;
 
+    fn is_downloading(&self) -> bool {
+        self.0.load(Ordering::Acquire) == Self::DOWNLOADING
+    }
+
     /// Terminal-failure probe. A `Failed` slot will never load (the
     /// downloader gave up); readers surface a terminal error on it.
     fn is_failed(&self) -> bool {
         self.0.load(Ordering::Acquire) == Self::FAILED
-    }
-
-    fn is_downloading(&self) -> bool {
-        self.0.load(Ordering::Acquire) == Self::DOWNLOADING
     }
 
     fn is_loaded(&self) -> bool {
@@ -1327,6 +1327,61 @@ impl HlsVariant {
         false
     }
 
+    pub(crate) fn range_ready(&self, range: &Range<u64>) -> bool {
+        let total = self.total_bytes();
+        // When a served segment's size is still unknown, `total` is a lower
+        // bound, not the stream end. An offset at/past it is NOT "ready"
+        // (clamping `end` to the under-count would falsely report a zero-width
+        // ready range and let the reader spin past a real, not-yet-sized
+        // segment) — treat it as not-ready so the gate holds Waiting.
+        if total > 0 && range.start >= total && !self.sizes_complete() {
+            return false;
+        }
+        let end = if total > 0 {
+            range.end.min(total)
+        } else {
+            range.end
+        };
+        if range.start >= end {
+            return true;
+        }
+
+        let mut cursor = range.start;
+        while let Some((ref key, init_range)) = self.init_descriptor_at(cursor) {
+            if cursor >= init_range.end {
+                break;
+            }
+            let slice_end = end.min(init_range.end);
+            let local_start = cursor - init_range.start;
+            let local_end = slice_end - init_range.start;
+            if !self.store.contains_range(key, local_start..local_end) {
+                return false;
+            }
+            cursor = slice_end;
+            if cursor >= end {
+                return true;
+            }
+        }
+        if cursor >= end {
+            return true;
+        }
+
+        while cursor < end {
+            let Some((ref key, seg_off, seg_size)) = self.media_descriptor(cursor) else {
+                return false;
+            };
+            let seg_end = seg_off + seg_size;
+            let slice_end = end.min(seg_end);
+            let local_start = cursor - seg_off;
+            let local_end = slice_end - seg_off;
+            if !self.store.contains_range(key, local_start..local_end) {
+                return false;
+            }
+            cursor = slice_end;
+        }
+        cursor >= end
+    }
+
     fn range_wait_phase(&self, range: &Range<u64>) -> SourcePhase {
         let total = self.total_bytes();
         if total > 0 && range.start >= total && !self.sizes_complete() {
@@ -1397,61 +1452,6 @@ impl HlsVariant {
         } else {
             SourcePhase::Waiting
         }
-    }
-
-    pub(crate) fn range_ready(&self, range: &Range<u64>) -> bool {
-        let total = self.total_bytes();
-        // When a served segment's size is still unknown, `total` is a lower
-        // bound, not the stream end. An offset at/past it is NOT "ready"
-        // (clamping `end` to the under-count would falsely report a zero-width
-        // ready range and let the reader spin past a real, not-yet-sized
-        // segment) — treat it as not-ready so the gate holds Waiting.
-        if total > 0 && range.start >= total && !self.sizes_complete() {
-            return false;
-        }
-        let end = if total > 0 {
-            range.end.min(total)
-        } else {
-            range.end
-        };
-        if range.start >= end {
-            return true;
-        }
-
-        let mut cursor = range.start;
-        while let Some((ref key, init_range)) = self.init_descriptor_at(cursor) {
-            if cursor >= init_range.end {
-                break;
-            }
-            let slice_end = end.min(init_range.end);
-            let local_start = cursor - init_range.start;
-            let local_end = slice_end - init_range.start;
-            if !self.store.contains_range(key, local_start..local_end) {
-                return false;
-            }
-            cursor = slice_end;
-            if cursor >= end {
-                return true;
-            }
-        }
-        if cursor >= end {
-            return true;
-        }
-
-        while cursor < end {
-            let Some((ref key, seg_off, seg_size)) = self.media_descriptor(cursor) else {
-                return false;
-            };
-            let seg_end = seg_off + seg_size;
-            let slice_end = end.min(seg_end);
-            let local_start = cursor - seg_off;
-            let local_end = slice_end - seg_off;
-            if !self.store.contains_range(key, local_start..local_end) {
-                return false;
-            }
-            cursor = slice_end;
-        }
-        cursor >= end
     }
 
     #[kithara::hang_watchdog]

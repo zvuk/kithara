@@ -863,11 +863,11 @@ mod tests {
 
     /// Reader that records the last `host_sample_rate` set via `set_host_sample_rate`.
     struct SampleRateTrackingReader {
+        duration: Duration,
         bus: EventBus,
         spec: PcmSpec,
         recorded_host_rate: TestArc<AtomicU32>,
         meta: TrackMetadata,
-        duration: Duration,
     }
 
     impl SampleRateTrackingReader {
@@ -879,10 +879,10 @@ mod tests {
             let recorded = TestArc::new(AtomicU32::new(0));
             let reader = Self {
                 spec,
+                duration,
                 meta: TrackMetadata::default(),
                 bus: EventBus::default(),
                 recorded_host_rate: TestArc::clone(&recorded),
-                duration,
             };
             (reader, recorded)
         }

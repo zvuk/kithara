@@ -121,7 +121,7 @@ final class MySeekCallback: SeekCallback, @unchecked Sendable {
 | `player.seek(to:callback:)` | `player.seek(to:tolerance:completionHandler:)` |
 | `player.setPreferredPeakBitrate(...)` | `player.updatePeakBitrate(wifi:cellular:)` |
 | `KeyProcessor.processKey(_ key:)` | `KeyProcessor.processKey(_ key:salt:)` |
-| `KitharaPlayerItem.id` | `KitharaPlayerItem.audioId` (synonym `id` retained) |
+| content `KitharaPlayerItem.id` | `KitharaPlayerItem.audioId`; `id` is now the unique queue-item identity |
 | `ItemEvent.bufferedDurationChanged(seconds:)` | `ItemEvent.loadedRangesChanged(ranges:)` |
 | `currentTime: TimeInterval?` | `currentTime: TimeInterval` (`0` when no item is loaded) |
 
@@ -177,14 +177,20 @@ item.eventPublisher
     .store(in: &cancellables)
 
 // Explicit preload is optional. Insert can auto-load with player config.
-item.load()
+Task {
+    let result = await item.load()
+    print("Playable: \(result.isPlayable)")
+}
 ```
 
 ### ABR Bitrate Hints
 
 ```swift
-item.preferredPeakBitrate = 256_000               // cap quality
-item.preferredPeakBitrateForExpensiveNetworks = 0  // unlimited on Wi-Fi
+let item = KitharaPlayerItem(
+    url: "https://example.com/stream.m3u8",
+    preferredPeakBitrate: 256_000,
+    preferredPeakBitrateForExpensiveNetworks: 0
+)
 ```
 
 ## Architecture
@@ -222,17 +228,17 @@ KITHARA_LOCAL_DEV=1 open Package.swift
 ```
 ## Demo App
 
-A minimal macOS demo player is included in [`Examples/KitharaDemo`](Examples/KitharaDemo). Plays audio from any URL (MP3, AAC, FLAC, HLS) with transport controls, seek, volume, playback rate, and error reporting.
+An iOS/macOS demo player is included in [`Examples/KitharaDemo`](Examples/KitharaDemo). It plays audio from any URL (MP3, AAC, FLAC, HLS) with transport controls, seek, volume, playback rate, and error reporting.
 
 ```bash
+cargo xtask apple run
 just apple demo
 ```
 
-Or manually:
+To open the generated Xcode project instead of launching a simulator:
 
 ```bash
-cargo xtask apple build --profile debug
-cd apple && swift run KitharaDemo
+just apple xcode
 ```
 
 Features: URL input with Cmd+V, play/pause with auto-reload after track ends, seek slider, volume with mute, rate selector (0.5x–2.0x), status badge, and error display.

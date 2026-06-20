@@ -39,12 +39,6 @@ impl AnalysisWorker {
         Self { cancel, jobs }
     }
 
-    /// Create a job-scoped token owned by this worker.
-    #[must_use]
-    pub fn child_token(&self) -> CancelToken {
-        self.cancel.child()
-    }
-
     /// Queue one opened track. On success the result arrives on the
     /// returned receiver; on failure or cancel the sender drops without a
     /// value (`changed()` errs). Cancel `cancel` to preempt the job.
@@ -58,6 +52,12 @@ impl AnalysisWorker {
             warn!("analysis worker stopped; job dropped");
         }
         rx
+    }
+
+    /// Create a job-scoped token owned by this worker.
+    #[must_use]
+    pub fn child_token(&self) -> CancelToken {
+        self.cancel.child()
     }
 }
 

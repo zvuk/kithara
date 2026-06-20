@@ -110,9 +110,9 @@ impl PlayerImpl {
         if let Some(pending_slot) = self.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
                 index,
+                duration_seconds,
                 src: Arc::clone(&src),
                 state: PendingNextState::Armed,
-                duration_seconds,
             });
         }
         Some(src)
@@ -234,19 +234,6 @@ impl PlayerImpl {
         Some((src, duration_seconds))
     }
 
-    pub(crate) fn publish_current_track_snapshot(&self, duration_seconds: f64) {
-        let Some(slot_id) = self.slot() else {
-            return;
-        };
-        let Some(shared_state) = self.core.engine.slot_shared_state(slot_id) else {
-            return;
-        };
-        shared_state.position.store(0.0, Ordering::Relaxed);
-        shared_state
-            .duration
-            .store(duration_seconds.max(0.0), Ordering::Relaxed);
-    }
-
     /// Promote the armed slot to current after an audio-thread handover.
     ///
     /// Called on `TrackPlaybackStopped { Eof }` for the outgoing track.
@@ -332,6 +319,19 @@ impl PlayerImpl {
             tracing::debug!(?notification, "process_notifications: handle");
             self.dispatch_notification(notification);
         }
+    }
+
+    pub(crate) fn publish_current_track_snapshot(&self, duration_seconds: f64) {
+        let Some(slot_id) = self.slot() else {
+            return;
+        };
+        let Some(shared_state) = self.core.engine.slot_shared_state(slot_id) else {
+            return;
+        };
+        shared_state.position.store(0.0, Ordering::Relaxed);
+        shared_state
+            .duration
+            .store(duration_seconds.max(0.0), Ordering::Relaxed);
     }
 
     /// Remove all items from the queue.

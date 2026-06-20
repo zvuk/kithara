@@ -20,8 +20,8 @@ pub(crate) trait Analyzer: Send {
 pub struct TrackAnalysis {
     /// Cleaned beat grid (source frames).
     pub beat: Option<BeatGrid>,
-    /// Total decoded source frames: the denominator for `BeatGrid` frame to fraction.
-    pub source_frames: u64,
     /// Track waveform.
     pub waveform: Option<Waveform>,
+    /// Total decoded source frames: the denominator for `BeatGrid` frame to fraction.
+    pub source_frames: u64,
 }

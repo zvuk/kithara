@@ -47,7 +47,7 @@ if useLocalBinary {
             \(localBinaryAbsolutePath)
 
             Build it with:
-            just xcframework
+            cargo xtask apple build
             """
         )
     }

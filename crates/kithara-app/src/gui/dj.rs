@@ -9,8 +9,8 @@ use crate::gui::widgets::WaveMsg;
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct DjView {
     pub(crate) timestretch: TimestretchState,
-    pub(crate) open: bool,
     pub(crate) wave: Viewport,
+    pub(crate) open: bool,
 }
 
 /// View-local timestretch deck state.

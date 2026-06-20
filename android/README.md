@@ -41,8 +41,8 @@ rustup target add aarch64-linux-android x86_64-linux-android
 
 ```bash
 just android                              # debug (default)
-cargo xtask android                       # equivalent
-cargo xtask android --profile release     # release (optimized)
+cargo xtask android build                 # equivalent
+cargo xtask android build --profile release
 ```
 
 Output:
@@ -64,7 +64,6 @@ val player = KitharaPlayer()
 val item = KitharaPlayerItem("https://example.com/track.mp3")
 
 lifecycleScope.launch {
-    item.load()
     player.insert(item)
     player.play()
 }
@@ -77,7 +76,7 @@ lifecycleScope.launch {
 ```kotlin
 player.play()
 player.pause()
-player.defaultRate = 1.5f   // playback speed
+player.playingRate = 1.5f   // target playback speed
 ```
 
 ### Seek
@@ -97,8 +96,6 @@ val first = KitharaPlayerItem("https://example.com/a.mp3")
 val second = KitharaPlayerItem("https://example.com/b.mp3")
 
 lifecycleScope.launch {
-    first.load()
-    second.load()
     player.insert(first)
     player.insert(second, after = first)
     player.remove(first)
@@ -148,8 +145,11 @@ lifecycleScope.launch {
 ### ABR Bitrate Hints
 
 ```kotlin
-item.preferredPeakBitrate = 256_000.0                  // cap quality
-item.preferredPeakBitrateForExpensiveNetworks = 128_000.0  // lower cap on metered networks
+val item = KitharaPlayerItem(
+    url = "https://example.com/stream.m3u8",
+    preferredPeakBitrate = 256_000.0,
+    preferredPeakBitrateForExpensiveNetworks = 128_000.0,
+)
 ```
 
 ### Additional HTTP Headers
@@ -181,10 +181,7 @@ val item = KitharaPlayerItem(
 | **com.kithara.ffi** | Auto-generated UniFFI bindings — not intended for direct use |
 | **libkithara_ffi.so** | Native shared library built from the Rust crate |
 
-On Android, `libkithara_ffi.so` contains both decode paths:
-
-- `MediaCodec` hardware backend for AAC family / MP3 / FLAC over `MediaExtractor`.
-- Symphonia software fallback for every unsupported or rejected combination.
+The release AAR uses the Android `MediaCodec` backend for AAC family / MP3 / FLAC over `MediaExtractor`.
 
 ## Demo App
 
@@ -203,6 +200,7 @@ Builds the Rust core for all supported ABIs and packages it into a release AAR:
 
 ```bash
 just android aar
+cargo xtask android aar
 ```
 
 Outputs in `android/lib/build/outputs/aar/`:

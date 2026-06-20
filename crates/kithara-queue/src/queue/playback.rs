@@ -11,6 +11,23 @@ use super::{
 use crate::{error::QueueError, track::TrackSource};
 
 impl Queue {
+    fn advance_loaded_successor(&self, current_id: TrackId, transition: Transition) {
+        let Some(next) = self.next_selectable_entry() else {
+            return;
+        };
+        if !matches!(next.status, TrackStatus::Loaded) {
+            return;
+        }
+
+        let before_index = self.player.current_index();
+        if self.select(next.id, transition).is_err() {
+            return;
+        }
+        if self.player.current_index() != before_index {
+            self.write_armed_for(CrossfadeArm::armed(current_id));
+        }
+    }
+
     /// If an advance was already armed from `tick()`, consume it and
     /// return `true` — the engine's trailing `ItemDidPlayToEnd` for
     /// the same track must not advance again.
@@ -58,6 +75,12 @@ impl Queue {
         }
     }
 
+    fn freeze_cached_position(&self) {
+        if let Some(t) = self.player.position_seconds() {
+            self.write_cached_position(CachedPosition::known(t));
+        }
+    }
+
     fn handle_current_item_changed(&self) {
         let idx = self.player.current_index();
         let id = self.lock_tracks().get(idx).map(|e| e.id);
@@ -65,15 +88,14 @@ impl Queue {
         self.bus.publish(QueueEvent::CurrentTrackChanged { id });
     }
 
-    fn track_id_for_src(&self, src: &str) -> Option<TrackId> {
-        let sources = self.sources.lock().unwrap_or_else(PoisonError::into_inner);
-        sources.iter().find_map(|(id, source)| {
-            let matches = match source {
-                TrackSource::Uri(uri) => uri == src,
-                TrackSource::Config(config) => config.src.to_string() == src,
-            };
-            matches.then_some(*id)
-        })
+    fn handle_handover_requested(&self) {
+        if self.is_paused() {
+            return;
+        }
+        let Some(entry) = self.current() else {
+            return;
+        };
+        self.advance_loaded_successor(entry.id, Transition::Crossfade);
     }
 
     fn handle_item_did_fail(&self, src: &std::sync::Arc<str>) {
@@ -131,33 +153,6 @@ impl Queue {
         }
     }
 
-    fn advance_loaded_successor(&self, current_id: TrackId, transition: Transition) {
-        let Some(next) = self.next_selectable_entry() else {
-            return;
-        };
-        if !matches!(next.status, TrackStatus::Loaded) {
-            return;
-        }
-
-        let before_index = self.player.current_index();
-        if self.select(next.id, transition).is_err() {
-            return;
-        }
-        if self.player.current_index() != before_index {
-            self.write_armed_for(CrossfadeArm::armed(current_id));
-        }
-    }
-
-    fn handle_handover_requested(&self) {
-        if self.is_paused() {
-            return;
-        }
-        let Some(entry) = self.current() else {
-            return;
-        };
-        self.advance_loaded_successor(entry.id, Transition::Crossfade);
-    }
-
     /// Whether the user has paused playback.
     ///
     /// Reads the player's live rate: `pause()` (and a no-autoplay select)
@@ -200,6 +195,12 @@ impl Queue {
         self.advance_loaded_successor(entry.id, transition);
     }
 
+    /// Pause playback and freeze the queue-visible head position.
+    pub fn pause(&self) {
+        self.player.pause();
+        self.freeze_cached_position();
+    }
+
     /// Start playback. The player consumes the current slot's resource
     /// (`items[i].take()`), so the current `Loaded` track is marked
     /// `Consumed` to keep the status truthful: a later re-select must go
@@ -215,12 +216,6 @@ impl Queue {
         if let Some((id, TrackStatus::Loaded)) = entry {
             self.set_status(id, TrackStatus::Consumed);
         }
-    }
-
-    /// Pause playback and freeze the queue-visible head position.
-    pub fn pause(&self) {
-        self.player.pause();
-        self.freeze_cached_position();
     }
 
     /// Latest monotonic playback position for the current track in
@@ -309,10 +304,15 @@ impl Queue {
         Ok(())
     }
 
-    fn freeze_cached_position(&self) {
-        if let Some(t) = self.player.position_seconds() {
-            self.write_cached_position(CachedPosition::known(t));
-        }
+    fn track_id_for_src(&self, src: &str) -> Option<TrackId> {
+        let sources = self.sources.lock().unwrap_or_else(PoisonError::into_inner);
+        sources.iter().find_map(|(id, source)| {
+            let matches = match source {
+                TrackSource::Uri(uri) => uri == src,
+                TrackSource::Config(config) => config.src.to_string() == src,
+            };
+            matches.then_some(*id)
+        })
     }
 
     fn update_cached_position(&self) {

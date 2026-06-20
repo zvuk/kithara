@@ -58,6 +58,12 @@ Stale temp left from a prior crashed run is not auto-wiped: liveness is signalle
 
 Range tracking uses `RangeSet<u64>` (from `rangemap`) to record which byte ranges have been written. `wait_range` blocks via `parking_lot::Condvar` with a 50 ms timeout loop until the requested range is fully covered, returns `Eof` when the resource is committed and the range starts beyond the final length, and returns `Interrupted` when a seek/flush wakes the waiter. `CancelToken` is checked at operation entry and during wait loops.
 
+## In-place decorator lifecycle
+
+The public `Resource<Active>` lifecycle is consume-self: `commit`, `reactivate`, and failure transitions move the writer handle so a second commit or write after commit is a compile error for external callers.
+
+`commit_in_place`, `reactivate_in_place`, and `fail_in_place` are `pub(crate)` hooks only for the single-owner storage decorators (`Atomic` and `AtomicChunked`) that must rewrite a file in place: `OpenMode::ReadWrite` index files and the chunked-segment tmp/commit cycle. Those decorators own their writer exclusively and do not clone it, so the in-place transition does not create a second mutable owner or weaken the external consume-self contract.
+
 ## Notes on the `redundant_reexport` audit warning
 
 `just audit kithara-storage` flags two `redundant_reexport` warnings — `MemOptions` and `MmapOptions` are surfaced *both* via `pub use` from `lib.rs` *and* via the `<Driver>::Options` associated type. The duplication is intentional and documented here per `AGENTS.md` ("if you must suppress, document why in the owning crate `README.md`"):

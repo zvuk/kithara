@@ -55,13 +55,6 @@ impl TrackAnalysisRunner {
         }
     }
 
-    /// `false` when no analyzer is configured (`builder.is_empty()`) — the
-    /// runtime signal to skip analysis scheduling.
-    #[must_use]
-    pub fn is_active(&self) -> bool {
-        self.active
-    }
-
     /// Cancel any prior run and queue `config` for analysis.
     /// Staged results arrive on the returned receiver,
     /// which closes when the run ends; nothing arrives on failure/cancel.
@@ -86,6 +79,13 @@ impl TrackAnalysisRunner {
             prev.cancel.cancel();
             prev.task.abort();
         }
+    }
+
+    /// `false` when no analyzer is configured (`builder.is_empty()`) — the
+    /// runtime signal to skip analysis scheduling.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.active
     }
 }
 

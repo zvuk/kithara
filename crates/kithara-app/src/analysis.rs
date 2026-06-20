@@ -93,9 +93,9 @@ struct Run {
 
 /// A run that closed with a usable analysis result.
 struct CompletedRun {
-    track_id: TrackId,
     key: Option<AnalysisKey>,
     analysis: TrackAnalysis,
+    track_id: TrackId,
 }
 
 impl AnalysisController {
@@ -109,6 +109,26 @@ impl AnalysisController {
             current: None,
             displayed: None,
             pending: VecDeque::new(),
+        }
+    }
+
+    fn cache_completed(&mut self, completed: &CompletedRun) {
+        if let Some(key) = &completed.key {
+            self.cache.put(key.clone(), completed.analysis.clone());
+        }
+    }
+
+    /// Cache the finished analysis under its content key, publish it if its
+    /// track is still current, and clear the run.
+    fn commit(&mut self, state: &Mutex<UiState>) {
+        let Some(completed) = self.take_completed_run() else {
+            return;
+        };
+
+        self.cache_completed(&completed);
+
+        if publish_if_current(state, completed.track_id, completed.analysis) {
+            self.displayed = completed.key;
         }
     }
 
@@ -176,6 +196,20 @@ impl AnalysisController {
         self.pump(queue, state, config);
     }
 
+    /// Publish the first part emit to the UI (no caching) when its
+    /// track is still current; the beat overlay arrives on the closing commit.
+    fn publish_intermediate(&self, state: &Mutex<UiState>) {
+        let Some(run) = &self.current else {
+            return;
+        };
+
+        let Some(analysis) = run.rx.borrow().clone() else {
+            return;
+        };
+
+        publish_if_current(state, run.track_id, analysis);
+    }
+
     /// Start the next analysis worth running, if none is in flight: serve
     /// the current track from cache, skip background tracks that are cached
     /// or unkeyable, decode the first genuine miss.
@@ -231,49 +265,15 @@ impl AnalysisController {
         }
     }
 
-    /// Publish the first part emit to the UI (no caching) when its
-    /// track is still current; the beat overlay arrives on the closing commit.
-    fn publish_intermediate(&self, state: &Mutex<UiState>) {
-        let Some(run) = &self.current else {
-            return;
-        };
-
-        let Some(analysis) = run.rx.borrow().clone() else {
-            return;
-        };
-
-        publish_if_current(state, run.track_id, analysis);
-    }
-
-    /// Cache the finished analysis under its content key, publish it if its
-    /// track is still current, and clear the run.
-    fn commit(&mut self, state: &Mutex<UiState>) {
-        let Some(completed) = self.take_completed_run() else {
-            return;
-        };
-
-        self.cache_completed(&completed);
-
-        if publish_if_current(state, completed.track_id, completed.analysis) {
-            self.displayed = completed.key;
-        }
-    }
-
     fn take_completed_run(&mut self) -> Option<CompletedRun> {
         let run = self.current.take()?;
         let analysis = run.rx.borrow().clone()?;
 
         Some(CompletedRun {
+            analysis,
             track_id: run.track_id,
             key: run.key,
-            analysis,
         })
-    }
-
-    fn cache_completed(&mut self, completed: &CompletedRun) {
-        if let Some(key) = &completed.key {
-            self.cache.put(key.clone(), completed.analysis.clone());
-        }
     }
 }
 
@@ -409,8 +409,8 @@ mod tests {
         let (tx, rx) = watch::channel(value);
         controller.current = Some(Run {
             track_id,
-            key: Some(key),
             rx,
+            key: Some(key),
         });
         (controller, tx)
     }

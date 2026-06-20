@@ -180,14 +180,6 @@ impl<D: DriverIo> Resource<Active, D> {
         })
     }
 
-    // In-place lifecycle for the single-owner storage decorators (`Atomic`,
-    // `AtomicChunked`) that legitimately rewrite a file in place
-    // (`OpenMode::ReadWrite` index files, chunked-segment tmp/commit cycle).
-    // These are `pub(crate)` and never part of the public API — external
-    // consumers only get the consume-self `commit`/`reactivate`, so double
-    // commit stays a compile error for them. The decorator owns its writer
-    // exclusively (no clones), so an in-place commit/reactivate/fail has no
-
     /// Commit without consuming, for a decorator that rewrites in place.
     ///
     /// # Errors

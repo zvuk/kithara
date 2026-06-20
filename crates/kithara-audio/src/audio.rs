@@ -140,11 +140,6 @@ pub struct Audio<S> {
     /// underlying stream's source. `None` for non-adaptive sources.
     abr_handle: Option<kithara_abr::AbrHandle>,
 
-    /// Off-core reader→peer wake for segmented sources. `Audio::seek`
-    /// can notify it after publishing the seek target; non-segmented
-    /// sources keep `None`.
-    peer_wake: Option<Arc<DeferredWake>>,
-
     /// Cancellation token for graceful shutdown.
     cancel: Option<CancelToken>,
 
@@ -159,6 +154,11 @@ pub struct Audio<S> {
     /// cannot starve low-frequency control events on the shared bounded bus;
     /// a new seek epoch always emits.
     last_progress_emit: Option<(u64, u64)>,
+
+    /// Off-core reader→peer wake for segmented sources. `Audio::seek`
+    /// can notify it after publishing the seek target; non-segmented
+    /// sources keep `None`.
+    peer_wake: Option<Arc<DeferredWake>>,
 
     /// Live time-stretch controls when this source runs in tempo mode. `Some`
     /// makes it the sink for `set_playback_rate` (speed) so the effect chain's
@@ -1309,12 +1309,12 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
         Self::preload(self)
     }
 
-    fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
-        Some(self.preload_gate.clone())
-    }
-
     fn preload_epoch(&self) -> u64 {
         self.seek_obs.epoch()
+    }
+
+    fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
+        Some(self.preload_gate.clone())
     }
 
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {

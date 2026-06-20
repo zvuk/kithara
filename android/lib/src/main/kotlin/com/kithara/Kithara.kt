@@ -30,7 +30,6 @@ enum class LogLevel {
  * val player = KitharaPlayer()
  * val item = KitharaPlayerItem("https://example.com/audio.mp3")
  * lifecycleScope.launch {
- *     item.load()
  *     player.insert(item)
  *     player.play()
  * }

@@ -25,6 +25,34 @@ pub(crate) struct TrackAnalyzers {
 }
 
 impl TrackAnalyzers {
+    /// Emit the fast waveform first, then waveform+beat.
+    pub(crate) fn finish_staged<F: FnMut(TrackAnalysis)>(mut self, mut emit: F) {
+        let source_frames = self.source_frames;
+        let waveform = self.waveform.take().map(Analyzer::finish);
+
+        if self.beat.is_none() {
+            emit(TrackAnalysis {
+                beat: None,
+                waveform,
+                source_frames,
+            });
+            return;
+        }
+
+        emit(TrackAnalysis {
+            beat: None,
+            waveform: waveform.clone(),
+            source_frames,
+        });
+
+        let beat = self.beat.and_then(Analyzer::finish);
+        emit(TrackAnalysis {
+            beat,
+            waveform,
+            source_frames,
+        });
+    }
+
     pub(crate) fn push(&mut self, chunk: &PcmChunk) {
         let frames: u64 = chunk.frames().as_();
         self.source_frames = self.source_frames.saturating_add(frames);
@@ -36,34 +64,6 @@ impl TrackAnalyzers {
         if let Some(a) = &mut self.beat {
             a.push(chunk);
         }
-    }
-
-    /// Emit the fast waveform first, then waveform+beat.
-    pub(crate) fn finish_staged<F: FnMut(TrackAnalysis)>(mut self, mut emit: F) {
-        let source_frames = self.source_frames;
-        let waveform = self.waveform.take().map(Analyzer::finish);
-
-        if self.beat.is_none() {
-            emit(TrackAnalysis {
-                beat: None,
-                source_frames,
-                waveform,
-            });
-            return;
-        }
-
-        emit(TrackAnalysis {
-            beat: None,
-            source_frames,
-            waveform: waveform.clone(),
-        });
-
-        let beat = self.beat.and_then(Analyzer::finish);
-        emit(TrackAnalysis {
-            beat,
-            source_frames,
-            waveform,
-        });
     }
 }
 

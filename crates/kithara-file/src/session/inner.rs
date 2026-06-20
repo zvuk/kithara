@@ -107,13 +107,13 @@ pub(crate) struct FileInner {
     /// already-cached sources that never download.
     pub(crate) demand_lease: Option<DemandLease>,
 
+    /// FSM phase as `FilePhase as u8`. Lock-free transitions.
+    phase: AtomicU8,
+
     /// Late-bound audio-worker wake. Remote file sources can underrun while
     /// HTTP bytes are still arriving, so each write wakes the worker that
     /// previously parked on a non-blocking readiness probe.
     worker_wake: OnceLock<Arc<dyn WorkerWake>>,
-
-    /// FSM phase as `FilePhase as u8`. Lock-free transitions.
-    phase: AtomicU8,
 }
 
 impl FileInner {
@@ -136,16 +136,6 @@ impl FileInner {
             inner.try_build_segment_index();
         }
         inner
-    }
-
-    pub(crate) fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
-        let _ = self.worker_wake.set(wake);
-    }
-
-    pub(crate) fn wake_worker(&self) {
-        if let Some(wake) = self.worker_wake.get() {
-            wake.wake();
-        }
     }
 
     /// Read the fully cached file bytes and parse a fragmented-mp4 index,
@@ -186,6 +176,10 @@ impl FileInner {
         }
     }
 
+    pub(crate) fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
+        let _ = self.worker_wake.set(wake);
+    }
+
     /// Take the single commit-owning writer, if this is a download path and it
     /// has not been consumed yet.
     pub(crate) fn take_writer(&self) -> Option<AssetWriter> {
@@ -203,6 +197,12 @@ impl FileInner {
         }
         if let Some(index) = self.build_segment_index_from_cache() {
             let _ = self.segment_index.set(index);
+        }
+    }
+
+    pub(crate) fn wake_worker(&self) {
+        if let Some(wake) = self.worker_wake.get() {
+            wake.wake();
         }
     }
 }

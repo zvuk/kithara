@@ -15,7 +15,7 @@ Cross-platform FFI adapter for the kithara audio player. Not published — consu
 ## Role
 
 - Exposes a stable, language-agnostic surface over `kithara-play` so platform shims (`kithara/apple`, `kithara/android`, and the browser demo) can talk to the engine without depending on internal Rust types.
-- Owns the UniFFI definitions used by `cargo xtask apple xcframework` and `cargo xtask android aar`.
+- Owns the UniFFI definitions used by `cargo xtask apple build` and `cargo xtask android aar`.
 - Owns the wasm-bindgen / Web Worker glue under [`src/web/`](src/web/) and the Trunk-driven demo (`index.html` + `Trunk.toml`).
 
 ## Layout

@@ -65,8 +65,6 @@ final class PlaygroundModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        item.load()
-
         do {
             player.removeAllItems()
             try player.insert(item)
@@ -89,7 +87,7 @@ final class PlaygroundModel: ObservableObject {
 
     func seek() {
         let target = currentTime
-        player.seek(to: target, callback: SeekHandler { [weak self] done in
+        player.seek(to: target, tolerance: nil, completionHandler: SeekHandler { [weak self] done in
             Task { @MainActor in
                 self?.log = done ? "Seek done: \(Int(target))s" : "Seek failed"
             }
@@ -106,7 +104,7 @@ final class PlaygroundModel: ObservableObject {
     }
 
     func setRate(_ value: Float) {
-        player.defaultRate = value
+        player.playingRate = value
         player.play()
         rate = value
     }

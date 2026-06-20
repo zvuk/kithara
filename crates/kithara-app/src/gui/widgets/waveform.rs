@@ -23,13 +23,13 @@ pub(crate) struct BeatMarks {
 
 /// Deck waveform: three concentric mirrored band bars over a grid + playhead.
 struct WaveformCanvas {
-    p: GuiPalette,
-    wave: Waveform,
     beats: Arc<[f32]>,
     downbeats: Arc<[f32]>,
+    p: GuiPalette,
+    view: Viewport,
+    wave: Waveform,
     progress: f32,
     duration: f64,
-    view: Viewport,
 }
 
 /// Dim a played-past band color so the playhead split reads at a glance.
@@ -55,9 +55,9 @@ fn wheel_factor(delta: ScrollDelta) -> f32 {
 
 #[derive(Clone, Copy)]
 struct Press {
-    start_x: f32,
-    last_x: f32,
     moved: bool,
+    last_x: f32,
+    start_x: f32,
 }
 
 #[derive(Default)]
@@ -160,62 +160,6 @@ impl WaveformCanvas {
 
 impl canvas::Program<Message> for WaveformCanvas {
     type State = PointerState;
-
-    fn update(
-        &self,
-        state: &mut PointerState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<Message>> {
-        const DRAG_THRESHOLD_PX: f32 = 3.0;
-
-        match event {
-            Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
-                let factor = wheel_factor(*delta);
-                let cursor_x = cursor.position().map_or(bounds.x, |p| p.x);
-                let anchor = ((cursor_x - bounds.x) / bounds.width).clamp(0.0, 1.0);
-                ((factor - 1.0).abs() >= f32::EPSILON)
-                    .then(|| zoom_action(WaveMsg::ZoomBy { factor, anchor }))
-            }
-            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
-                cursor.position_over(bounds).map(|pos| {
-                    state.press = Some(Press {
-                        start_x: pos.x,
-                        last_x: pos.x,
-                        moved: false,
-                    });
-                    Action::capture()
-                })
-            }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                let press = state.press.as_mut()?;
-                let pos = cursor.position()?;
-                let dx = pos.x - press.last_x;
-                press.last_x = pos.x;
-                if (pos.x - press.start_x).abs() > DRAG_THRESHOLD_PX {
-                    press.moved = true;
-                }
-                if press.moved {
-                    Some(zoom_action(WaveMsg::Pan(dx / bounds.width)))
-                } else {
-                    Some(Action::capture())
-                }
-            }
-            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => {
-                let press = state.press.take()?;
-                if press.moved || self.duration <= 0.0 {
-                    return Some(Action::capture());
-                }
-                let x = cursor.position().map_or(press.last_x, |p| p.x);
-                let frac = ((x - bounds.x) / bounds.width).clamp(0.0, 1.0);
-                let secs = (f64::from(self.view.track_frac(frac)) * self.duration)
-                    .clamp(0.0, self.duration);
-                Some(Action::publish(Message::SeekTo(secs)).and_capture())
-            }
-            _ => None,
-        }
-    }
 
     fn draw(
         &self,
@@ -323,6 +267,62 @@ impl canvas::Program<Message> for WaveformCanvas {
             mouse::Interaction::default()
         }
     }
+
+    fn update(
+        &self,
+        state: &mut PointerState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<Message>> {
+        const DRAG_THRESHOLD_PX: f32 = 3.0;
+
+        match event {
+            Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
+                let factor = wheel_factor(*delta);
+                let cursor_x = cursor.position().map_or(bounds.x, |p| p.x);
+                let anchor = ((cursor_x - bounds.x) / bounds.width).clamp(0.0, 1.0);
+                ((factor - 1.0).abs() >= f32::EPSILON)
+                    .then(|| zoom_action(WaveMsg::ZoomBy { factor, anchor }))
+            }
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
+                cursor.position_over(bounds).map(|pos| {
+                    state.press = Some(Press {
+                        start_x: pos.x,
+                        last_x: pos.x,
+                        moved: false,
+                    });
+                    Action::capture()
+                })
+            }
+            Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                let press = state.press.as_mut()?;
+                let pos = cursor.position()?;
+                let dx = pos.x - press.last_x;
+                press.last_x = pos.x;
+                if (pos.x - press.start_x).abs() > DRAG_THRESHOLD_PX {
+                    press.moved = true;
+                }
+                if press.moved {
+                    Some(zoom_action(WaveMsg::Pan(dx / bounds.width)))
+                } else {
+                    Some(Action::capture())
+                }
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => {
+                let press = state.press.take()?;
+                if press.moved || self.duration <= 0.0 {
+                    return Some(Action::capture());
+                }
+                let x = cursor.position().map_or(press.last_x, |p| p.x);
+                let frac = ((x - bounds.x) / bounds.width).clamp(0.0, 1.0);
+                let secs = (f64::from(self.view.track_frac(frac)) * self.duration)
+                    .clamp(0.0, self.duration);
+                Some(Action::publish(Message::SeekTo(secs)).and_capture())
+            }
+            _ => None,
+        }
+    }
 }
 
 fn zoom_action(msg: WaveMsg) -> Action<Message> {
@@ -342,11 +342,11 @@ pub(crate) fn waveform<'a>(
     Canvas::new(WaveformCanvas {
         p,
         wave,
-        beats: marks.beats,
-        downbeats: marks.downbeats,
         progress,
         duration,
         view,
+        beats: marks.beats,
+        downbeats: marks.downbeats,
     })
     .width(Length::Fill)
     .height(Length::Fixed(height))

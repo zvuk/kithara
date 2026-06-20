@@ -37,18 +37,6 @@ where
         Self::with_delegate(store, asset_root, Arc::new(DefaultAssetScopeDelegate))
     }
 
-    pub(crate) fn with_delegate(
-        store: AssetStore<Ctx>,
-        asset_root: Arc<str>,
-        delegate: Arc<dyn AssetScopeDelegate>,
-    ) -> Self {
-        Self {
-            asset_root,
-            delegate,
-            store,
-        }
-    }
-
     /// The `asset_root` this scope is bound to.
     #[must_use]
     pub fn asset_root(&self) -> &str {
@@ -82,5 +70,17 @@ where
     #[must_use]
     pub fn store(&self) -> &AssetStore<Ctx> {
         &self.store
+    }
+
+    pub(crate) fn with_delegate(
+        store: AssetStore<Ctx>,
+        asset_root: Arc<str>,
+        delegate: Arc<dyn AssetScopeDelegate>,
+    ) -> Self {
+        Self {
+            asset_root,
+            delegate,
+            store,
+        }
     }
 }
