@@ -15,7 +15,7 @@ crossbeam-queue = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
 
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath"]

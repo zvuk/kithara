@@ -46,6 +46,12 @@ let package = Package(
 )
 ```
 
+For CocoaPods consumers, use the release podspec:
+
+```ruby
+pod 'Kithara', '0.0.1-alpha3'
+```
+
 ## Development
 
 For local development, clone the repo and use the `KITHARA_LOCAL_DEV` environment variable to build against the local XCFramework:

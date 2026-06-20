@@ -96,6 +96,7 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
     println!("Cached artifact: {}", cached.display());
 
     let tag = tag_of(version);
+    let mut single_sha256 = None;
     if !cfg.single_asset.is_empty() {
         let built = env::temp_dir().join(&cfg.single_asset);
         if built.is_file() {
@@ -103,6 +104,9 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
             fs::copy(&built, &dest)
                 .with_context(|| format!("cache {} to {}", cfg.single_asset, dest.display()))?;
             println!("Cached artifact: {}", dest.display());
+            let checksum = sha256(&built)?;
+            println!("Checksum {}: {}", cfg.single_asset, checksum);
+            single_sha256 = Some(checksum);
         } else {
             println!(
                 "Note: {} not at {} — single-framework channel skipped (omit --zip to build it)",
@@ -112,9 +116,17 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
         }
     }
     if !cfg.podspec.is_empty() {
+        let checksum = single_sha256.as_deref().with_context(|| {
+            format!(
+                "{} needs {}; run `cargo xtask release prepare {version}` without --zip so \
+                 `cargo xtask apple release` builds both Apple artifacts",
+                cfg.podspec, cfg.single_asset
+            )
+        })?;
+        let source_url = github_asset_url(cfg, &tag, &cfg.single_asset);
         let content =
             fs::read_to_string(&cfg.podspec).with_context(|| format!("read {}", cfg.podspec))?;
-        let stamped = stamp_podspec(&content, version)?;
+        let stamped = stamp_podspec(&content, version, &source_url, checksum)?;
         fs::write(&cfg.podspec, stamped).with_context(|| format!("write {}", cfg.podspec))?;
         println!("Stamped {}: version={version}", cfg.podspec);
     }
@@ -539,6 +551,13 @@ fn release_notes(cfg: &ReleaseConfig, tag: &str, checksum: &str) -> String {
     )
 }
 
+fn github_asset_url(cfg: &ReleaseConfig, tag: &str, asset: &str) -> String {
+    format!(
+        "https://github.com/{}/releases/download/{tag}/{asset}",
+        cfg.github_repo
+    )
+}
+
 fn require_config(cfg: &ReleaseConfig) -> Result<()> {
     let fields = [
         ("github_repo", &cfg.github_repo),
@@ -616,23 +635,33 @@ fn stamp_manifest(manifest: &str, version: &str, checksum: &str) -> Result<Strin
     Ok(out)
 }
 
-/// Replace the podspec `s.version = '...'` line. Bails when the line is
-/// missing so a refactor cannot silently ship an unstamped podspec.
-fn stamp_podspec(content: &str, version: &str) -> Result<String> {
+/// Replace the podspec release fields. Bails when any line is missing so a
+/// refactor cannot silently ship an unstamped podspec.
+fn stamp_podspec(content: &str, version: &str, source_url: &str, checksum: &str) -> Result<String> {
     let mut out = String::with_capacity(content.len());
-    let mut seen = false;
+    let mut seen_version = false;
+    let mut seen_url = false;
+    let mut seen_checksum = false;
     for line in content.split_inclusive('\n') {
         let trimmed = line.trim_start();
         if trimmed.starts_with("s.version") {
             let indent = &line[..line.len() - trimmed.len()];
             out.push_str(&format!("{indent}s.version = '{version}'\n"));
-            seen = true;
+            seen_version = true;
+        } else if trimmed.starts_with(":http =>") {
+            let indent = &line[..line.len() - trimmed.len()];
+            out.push_str(&format!("{indent}:http => '{source_url}',\n"));
+            seen_url = true;
+        } else if trimmed.starts_with(":sha256 =>") {
+            let indent = &line[..line.len() - trimmed.len()];
+            out.push_str(&format!("{indent}:sha256 => '{checksum}'\n"));
+            seen_checksum = true;
         } else {
             out.push_str(line);
         }
     }
-    if !seen {
-        bail!("podspec is missing the `s.version` line");
+    if !seen_version || !seen_url || !seen_checksum {
+        bail!("podspec is missing `s.version`, `:http`, or `:sha256` release fields");
     }
     Ok(out)
 }
@@ -725,7 +754,7 @@ mod tests {
     use super::*;
 
     const MANIFEST_SAMPLE: &str =
-        "// header\nlet version = \"0.0.1-alpha2\"\nlet checksum = \"abc\"\nlet other = 1\n";
+        "// header\nlet version = \"0.0.1-alpha3\"\nlet checksum = \"abc\"\nlet other = 1\n";
 
     #[test]
     fn stamp_replaces_version_and_checksum() {
@@ -746,7 +775,7 @@ mod tests {
     fn manifest_field_reads_values() {
         assert_eq!(
             manifest_field(MANIFEST_SAMPLE, "version").unwrap(),
-            "0.0.1-alpha2"
+            "0.0.1-alpha3"
         );
         assert_eq!(manifest_field(MANIFEST_SAMPLE, "checksum").unwrap(), "abc");
         assert!(manifest_field(MANIFEST_SAMPLE, "missing").is_err());
@@ -762,12 +791,32 @@ mod tests {
     }
 
     #[test]
-    fn stamp_podspec_replaces_version() {
-        let src = "Pod::Spec.new do |s|\n  s.name = 'Kithara'\n  s.version = '0.0.1-alpha2'\nend\n";
-        let out = stamp_podspec(src, "0.0.2").unwrap();
+    fn stamp_podspec_replaces_release_fields() {
+        let src = "\
+Pod::Spec.new do |s|
+  s.name = 'Kithara'
+  s.version = '0.0.1-alpha3'
+  s.source = {
+    :http => 'old',
+    :sha256 => 'abc'
+  }
+end
+";
+        let out = stamp_podspec(
+            src,
+            "0.0.2",
+            "https://example.test/Kithara.xcframework.zip",
+            "deadbeef",
+        )
+        .unwrap();
         assert!(out.contains("  s.version = '0.0.2'\n"), "{out}");
-        assert!(!out.contains("0.0.1-alpha2"), "{out}");
-        assert!(stamp_podspec("s.name = 'x'\n", "0.0.2").is_err());
+        assert!(
+            out.contains("    :http => 'https://example.test/Kithara.xcframework.zip',\n"),
+            "{out}"
+        );
+        assert!(out.contains("    :sha256 => 'deadbeef'\n"), "{out}");
+        assert!(!out.contains("0.0.1-alpha3"), "{out}");
+        assert!(stamp_podspec("s.name = 'x'\n", "0.0.2", "url", "sha").is_err());
     }
 
     #[test]

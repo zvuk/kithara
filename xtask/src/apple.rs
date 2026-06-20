@@ -579,6 +579,9 @@ fn merge_sources(apple_dir: &Path, merged: &Path, autolink: &[String]) -> Result
             let content =
                 fs::read_to_string(&f).with_context(|| format!("read {}", f.display()))?;
             let name = f.file_name().context("layer source without a file name")?;
+            if name.to_str() == Some("DrmSalt.swift") {
+                continue;
+            }
             fs::write(merged.join(Path::new(name)), transform_layer(&content)?)?;
         }
     }
@@ -631,12 +634,14 @@ fn transform_ffi(src: &str) -> Result<String> {
         .context("compile AudioPlayerItemProtocol rename regex")?;
     let player_protocol = Regex::new(r"\bAudioPlayerProtocol\b")
         .context("compile AudioPlayerProtocol rename regex")?;
+    let track_id = Regex::new(r"\bTrackId\b").context("compile TrackId rename regex")?;
     let out = item_protocol
         .replace_all(&out, "FfiAudioPlayerItemProtocol")
         .into_owned();
-    Ok(player_protocol
+    let out = player_protocol
         .replace_all(&out, "FfiAudioPlayerProtocol")
-        .into_owned())
+        .into_owned();
+    Ok(track_id.replace_all(&out, "FfiTrackId").into_owned())
 }
 
 /// High-level layer transforms: drop now-intra-module imports, drop the
@@ -655,6 +660,7 @@ fn transform_layer(src: &str) -> Result<String> {
         out.push_str(line);
         out.push('\n');
     }
+    let out = out.replace("KitharaFFI.TrackId", "FfiTrackId");
     Ok(out.replace("KitharaFFI.", ""))
 }
 
@@ -1266,4 +1272,51 @@ fn parse_launch_pid(stdout: &str) -> Option<u32> {
     stdout
         .lines()
         .find_map(|line| line.split(':').nth(1)?.trim().parse::<u32>().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transform_ffi_keeps_track_id_internal_to_ffi_namespace() {
+        let src = "\
+public protocol AudioPlayerItemProtocol {
+    func audioId() -> TrackId
+}
+public typealias TrackId = UInt64
+public struct FfiConverterTypeTrackId {
+    public static func lift(_ value: UInt64) throws -> TrackId { value }
+}
+";
+        let out = transform_ffi(src).unwrap();
+
+        assert!(
+            out.contains("public protocol FfiAudioPlayerItemProtocol"),
+            "{out}"
+        );
+        assert!(out.contains("func audioId() -> FfiTrackId"), "{out}");
+        assert!(
+            out.contains("public typealias FfiTrackId = UInt64"),
+            "{out}"
+        );
+        assert!(out.contains("FfiConverterTypeTrackId"), "{out}");
+        assert!(!out.contains("typealias TrackId = UInt64"), "{out}");
+    }
+
+    #[test]
+    fn transform_layer_preserves_public_track_id_alias() {
+        let src = "\
+import KitharaFFI
+public typealias TrackId = Int
+let ffiTrackId: KitharaFFI.TrackId
+public typealias SeekCallback = KitharaFFI.SeekCallback
+";
+        let out = transform_layer(src).unwrap();
+
+        assert!(out.contains("public typealias TrackId = Int"), "{out}");
+        assert!(out.contains("let ffiTrackId: FfiTrackId"), "{out}");
+        assert!(!out.contains("KitharaFFI."), "{out}");
+        assert!(!out.contains("SeekCallback ="), "{out}");
+    }
 }
