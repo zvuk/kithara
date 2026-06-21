@@ -1,9 +1,6 @@
 use std::{
     io::{Read, Seek},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, atomic::AtomicU64},
 };
 
 use bon::Builder;
@@ -328,22 +325,33 @@ fn build_apple_standalone_decoder(
     config: DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
-        apple::{AppleAudioFileDemuxer, AppleCodec},
+        apple::{AppleAudioFileDemuxer, AppleCodec, SourceOpenMode},
         composed::{ComposedDecoder, DecoderRuntime},
         demuxer::Demuxer,
-        gapless::scoped_probe,
+        gapless::{scoped_probe, scoped_startup_probe},
     };
+    let startup_probe = scoped_startup_probe(&mut *source, codec)?;
     let probed_gapless = if config.gapless {
-        scoped_probe(&mut *source, codec)?
+        if matches!(codec, AudioCodec::Mp3) {
+            startup_probe.gapless
+        } else {
+            scoped_probe(&mut *source, codec)?
+        }
     } else {
         None
     };
-    let streaming_byte_len = config.byte_len_handle.as_ref().and_then(|handle| {
-        let len = handle.load(Ordering::Acquire);
-        (len > 0).then_some(len)
-    });
-    let mut demuxer =
-        AppleAudioFileDemuxer::open_for_with_mode(source, codec, container, streaming_byte_len)?;
+    let open_mode = if config.byte_len_handle.is_some() {
+        SourceOpenMode::Streaming
+    } else {
+        SourceOpenMode::Complete
+    };
+    let mut demuxer = AppleAudioFileDemuxer::open_for_with_mode(
+        source,
+        codec,
+        container,
+        open_mode,
+        startup_probe.duration,
+    )?;
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
     }

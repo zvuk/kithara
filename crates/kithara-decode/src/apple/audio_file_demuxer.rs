@@ -50,6 +50,12 @@ pub(crate) struct AppleAudioFileDemuxer {
     last_read_len: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourceOpenMode {
+    Complete,
+    Streaming,
+}
+
 impl AppleAudioFileDemuxer {
     /// Target ~16 `KiB` per CBR read — large enough to amortise the
     /// source `wait_range` cost on streamed sources (HLS), small enough
@@ -83,13 +89,15 @@ impl AppleAudioFileDemuxer {
         source: BoxedSource,
         hint: Option<u32>,
         codec: AudioCodec,
-        streaming_byte_len: Option<u64>,
+        open_mode: SourceOpenMode,
+        duration_hint: Option<Duration>,
     ) -> DecodeResult<Self> {
-        let file = if matches!(codec, AudioCodec::Mp3) {
-            AppleAudioFile::open_streaming(source, hint, streaming_byte_len)?
-        } else {
-            AppleAudioFile::open(source, hint)?
-        };
+        let file =
+            if matches!(codec, AudioCodec::Mp3) && matches!(open_mode, SourceOpenMode::Streaming) {
+                AppleAudioFile::open_streaming(source, hint, None)?
+            } else {
+                AppleAudioFile::open(source, hint)?
+            };
         let asbd = file.data_format();
         let total_packets = file.packet_count();
         let frames_per_packet = if asbd.mFramesPerPacket > 0 {
@@ -124,7 +132,8 @@ impl AppleAudioFileDemuxer {
             .map(|total_packets| {
                 let frames = total_packets.saturating_mul(u64::from(frames_per_packet));
                 duration_for_frames(sample_rate, frames)
-            });
+            })
+            .or(duration_hint);
 
         let track_info = TrackInfo {
             codec,
@@ -172,12 +181,13 @@ impl AppleAudioFileDemuxer {
         source: BoxedSource,
         codec: AudioCodec,
         container: Option<ContainerFormat>,
-        streaming_byte_len: Option<u64>,
+        open_mode: SourceOpenMode,
+        duration_hint: Option<Duration>,
     ) -> DecodeResult<Self> {
         let hint = container
             .and_then(|c| Self::file_type_id(codec, c))
             .ok_or(DecodeError::UnsupportedCodec(codec))?;
-        Self::open(source, Some(hint), codec, streaming_byte_len)
+        Self::open(source, Some(hint), codec, open_mode, duration_hint)
     }
 
     /// Inject encoder priming/padding metadata probed by the factory
@@ -370,7 +380,7 @@ mod tests {
     };
     use kithara_test_utils::kithara;
 
-    use super::AppleAudioFileDemuxer;
+    use super::{AppleAudioFileDemuxer, SourceOpenMode};
     use crate::demuxer::{DemuxOutcome, Demuxer};
 
     fn read_asset(name: &str) -> Vec<u8> {
@@ -390,6 +400,7 @@ mod tests {
             Box::new(Cursor::new(bytes)),
             AudioCodec::Pcm,
             Some(ContainerFormat::Wav),
+            SourceOpenMode::Complete,
             None,
         )
         .expect("open_for(Pcm, Wav) must succeed");
@@ -482,6 +493,7 @@ mod tests {
             Box::new(NotReadySource::new(bytes, ready, None)),
             AudioCodec::Pcm,
             Some(ContainerFormat::Wav),
+            SourceOpenMode::Complete,
             None,
         )
         .expect("open_for must succeed with the header prefix available");
@@ -509,12 +521,18 @@ mod tests {
             )),
             AudioCodec::Mp3,
             Some(ContainerFormat::MpegAudio),
-            None,
+            SourceOpenMode::Streaming,
+            Some(kithara_platform::time::Duration::from_secs(2)),
         )
         .expect("MP3 streaming open must not require tail bytes");
         assert!(
             !tail_read_attempted.load(Ordering::Acquire),
             "MP3 streaming open must not probe bytes beyond the startup prefix"
+        );
+        assert_eq!(
+            dx.duration(),
+            Some(kithara_platform::time::Duration::from_secs(2)),
+            "MP3 streaming open must use the caller's prefix duration hint"
         );
 
         match dx
@@ -525,5 +543,26 @@ mod tests {
             DemuxOutcome::Pending(PendingReason::NotReady(_)) => {}
             other => panic!("unexpected first MP3 outcome: {other:?}"),
         }
+    }
+
+    #[kithara::test]
+    fn open_mp3_demuxer_complete_source_reports_duration() {
+        let bytes = read_asset("test.mp3");
+        let dx = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(Cursor::new(bytes)),
+            AudioCodec::Mp3,
+            Some(ContainerFormat::MpegAudio),
+            SourceOpenMode::Complete,
+            None,
+        )
+        .expect("MP3 complete open must succeed");
+
+        let duration = dx
+            .duration()
+            .expect("complete MP3 open must report packet-count duration");
+        assert!(
+            duration.as_secs_f64() > 1.0,
+            "complete MP3 duration is suspiciously short: {duration:?}"
+        );
     }
 }

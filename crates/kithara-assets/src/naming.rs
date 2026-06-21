@@ -106,7 +106,7 @@ mod tests {
         let safe = safe_path_component(&label, "identity");
 
         assert!(safe.len() <= Consts::MAX_PATH_COMPONENT_LEN);
-        assert!(safe.chars().all(|ch| ch.is_ascii()));
+        assert!(safe.is_ascii());
     }
 
     #[kithara::test]

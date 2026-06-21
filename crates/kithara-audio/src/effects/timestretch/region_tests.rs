@@ -47,9 +47,12 @@ fn seg(start: usize, end: usize, ratio: f64) -> GridSegment {
 }
 
 fn spec() -> PcmSpec {
+    let Some(sample_rate) = NonZero::new(SR) else {
+        panic!("test sample rate must be non-zero");
+    };
     PcmSpec {
+        sample_rate,
         channels: u16::try_from(CH).unwrap_or(2),
-        sample_rate: NonZero::new(SR).unwrap(),
     }
 }
 

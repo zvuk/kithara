@@ -396,7 +396,7 @@ mod tests {
     }
 
     impl ShrinkingLayout {
-        fn desc(&self, range: Range<u64>) -> SegmentDescriptor {
+        fn desc(range: Range<u64>) -> SegmentDescriptor {
             SegmentDescriptor::new(range, Duration::ZERO, Duration::from_secs(1), 0, 0)
         }
 
@@ -425,11 +425,11 @@ mod tests {
         }
 
         fn segment_at_index(&self, _idx: u32) -> Option<SegmentDescriptor> {
-            Some(self.desc(self.range()))
+            Some(Self::desc(self.range()))
         }
 
         fn segment_at_time(&self, _t: Duration) -> Option<SegmentDescriptor> {
-            Some(self.desc(0..self.full_end))
+            Some(Self::desc(0..self.full_end))
         }
 
         fn segment_count(&self) -> Option<u32> {

@@ -511,8 +511,8 @@ mod tests {
 
         controller.commit(&state);
 
-        let state = state.lock();
-        assert!(state.analysis.is_some(), "current run publishes to the UI");
+        let has_analysis = state.lock().analysis.is_some();
+        assert!(has_analysis, "current run publishes to the UI");
         assert_eq!(
             controller.displayed.as_ref(),
             Some(&key),
@@ -535,9 +535,9 @@ mod tests {
 
         controller.commit(&state);
 
-        let state = state.lock();
+        let has_analysis = state.lock().analysis.is_some();
         assert!(
-            state.analysis.is_none(),
+            !has_analysis,
             "stale run must not replace the current track's analysis"
         );
         assert!(

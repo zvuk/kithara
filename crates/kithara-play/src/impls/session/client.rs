@@ -45,6 +45,13 @@ pub trait SessionDispatcher: Send + Sync + 'static {
         Ok(reply)
     }
 
+    fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::InvalidateAudioRoute {
+            reason: reason.to_owned(),
+        })
+        .map(|_| ())
+    }
+
     fn query_sample_rate(&self, fallback: u32) -> u32 {
         match self.exec(Cmd::QuerySampleRate) {
             Ok(Reply::SampleRate(sr)) => sr,

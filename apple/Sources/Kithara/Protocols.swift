@@ -59,8 +59,40 @@ public protocol KitharaPlayerItemProtocol: AnyObject, Identifiable, Sendable {
     /// playable unconditionally.
     func isPlayable(progress: Double, ranges: [ItemLoadedRange]) -> Bool
 
+    /// Whether the item is playable for structured queue progress.
+    func isPlayable(progress: PlaybackProgress, ranges: [ItemLoadedRange]) -> Bool
+
+    /// Whether the item is playable for structured queue progress with an
+    /// explicit buffered-range start tolerance.
+    func isPlayable(
+        progress: PlaybackProgress,
+        ranges: [ItemLoadedRange],
+        startTolerance: TimeInterval
+    ) -> Bool
+
     /// `and:`-labeled variant of ``isPlayable(progress:ranges:)``.
     func isPlayable(progress: Double, and ranges: [ItemLoadedRange]) -> Bool
+}
+
+public extension KitharaPlayerItemProtocol {
+    func isPlayable<ProgressSource: PlaybackProgressSource, RangeSource: ItemLoadedRangeSource>(
+        progress: ProgressSource,
+        ranges: [RangeSource]
+    ) -> Bool {
+        isPlayable(progress: progress, ranges: ranges, startTolerance: .zero)
+    }
+
+    func isPlayable<ProgressSource: PlaybackProgressSource, RangeSource: ItemLoadedRangeSource>(
+        progress: ProgressSource,
+        ranges: [RangeSource],
+        startTolerance: TimeInterval
+    ) -> Bool {
+        isPlayable(
+            progress: PlaybackProgress(progress),
+            ranges: ranges.map { ItemLoadedRange($0) },
+            startTolerance: startTolerance
+        )
+    }
 }
 
 // MARK: - KitharaPlayerProtocol
@@ -84,11 +116,13 @@ public protocol KitharaPlayerProtocol: AnyObject, Sendable {
     /// `currentTime: Double`.
     var currentTime: TimeInterval { get }
 
-    /// Currently playing item, or `nil` when the queue is empty.
+    /// Current queue item visible to iOS-style clients, or `nil` when
+    /// the queue is empty.
     var currentAudioItem: Item? { get }
 
-    /// Current item publisher — re-emits when the engine flips to a
-    /// new track. Combine equivalent of iOS `rxCurrentAudioItem`.
+    /// Current item publisher. Emits the first queued item before
+    /// playback starts and re-emits when the visible current item
+    /// changes. Combine equivalent of iOS `rxCurrentAudioItem`.
     var currentItem: AnyPublisher<Item?, Never> { get }
 
     /// Live playback rate publisher. Combine equivalent of iOS
@@ -126,11 +160,14 @@ public protocol KitharaPlayerProtocol: AnyObject, Sendable {
     /// Pause playback.
     func pause()
 
+    /// Notify Kithara that the platform audio route changed.
+    func notifyAudioRouteChanged(reason: String)
+
     /// Seek to a position with optional landing tolerance (advisory).
     func seek(
         to: Double,
         tolerance: Double?,
-        completionHandler: SeekCallback
+        completionHandler: @escaping SeekCompletionHandler
     )
 
     /// Per-network bitrate ceilings (bits/sec). Pass `0` for either

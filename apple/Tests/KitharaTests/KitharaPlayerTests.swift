@@ -1,3 +1,5 @@
+import Combine
+import Foundation
 import Testing
 @testable import Kithara
 
@@ -47,6 +49,29 @@ struct KitharaPlayerTests {
         #expect(player.currentAudioItem == nil)
     }
 
+    @Test("first inserted item becomes current before playback")
+    func firstInsertedItemBecomesCurrentBeforePlayback() throws {
+        let player = KitharaPlayer()
+        var observed: [Int64?] = []
+        let cancellable = player.currentItem.sink { item in
+            observed.append(item?.uuid)
+        }
+
+        let assetURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("assets/test.mp3")
+        let item = KitharaPlayerItem(
+            url: assetURL.absoluteString,
+            audioId: 42,
+            uuid: 123
+        )
+
+        try player.insert(item)
+
+        #expect(player.currentAudioItem?.uuid == item.uuid)
+        #expect(observed == [nil, item.uuid])
+        _ = cancellable
+    }
+
     @Test("setupNetwork stores auth token")
     func setupNetworkStoresAuthToken() {
         let player = KitharaPlayer()
@@ -55,5 +80,35 @@ struct KitharaPlayerTests {
         // Rust-level FFI tests.
         player.setupNetwork(authToken: "demo-token-123")
         #expect(player.status == .unknown)
+    }
+
+    @Test("command errors are emitted with affected item id")
+    func commandErrorsAreEmittedWithAffectedItemId() {
+        let player = KitharaPlayer()
+        var observed: [KitharaPlayerError] = []
+        let cancellable = player.contextualError.sink { error in
+            observed.append(error)
+        }
+
+        let item = KitharaPlayerItem(
+            url: "https://example.com/not-in-queue.mp3",
+            audioId: 42,
+            uuid: 123
+        )
+        var thrown: Error?
+        do {
+            try player.remove(item)
+        } catch {
+            thrown = error
+        }
+
+        #expect(thrown is KitharaError)
+        #expect(observed.count == 1)
+        #expect(observed.first?.itemId == item.audioId)
+        if case .command = observed.first {
+        } else {
+            Issue.record("expected command error")
+        }
+        _ = cancellable
     }
 }

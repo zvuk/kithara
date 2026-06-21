@@ -258,6 +258,12 @@ impl PlayerImpl {
         &self.core.config
     }
 
+    /// Notify the audio host that the platform route changed and the
+    /// native output stream must be recreated if playback is active.
+    pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
+        self.core.engine.invalidate_audio_route(reason)
+    }
+
     /// Get crossfade duration in seconds.
     pub fn crossfade_duration(&self) -> f32 {
         self.core.crossfade_duration.load(Ordering::Relaxed)

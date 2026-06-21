@@ -201,6 +201,20 @@ impl Queue {
         self.freeze_cached_position();
     }
 
+    /// Platform audio-route changed while playback may be active.
+    ///
+    /// Recreates the native output stream below the queue without
+    /// changing queue state, current item, or track loading.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueueError`] when the underlying player cannot restart
+    /// the active audio route.
+    pub fn notify_audio_route_changed(&self, reason: &str) -> Result<(), QueueError> {
+        self.player.invalidate_audio_route(reason)?;
+        Ok(())
+    }
+
     /// Start playback. The player consumes the current slot's resource
     /// (`items[i].take()`), so the current `Loaded` track is marked
     /// `Consumed` to keep the status truthful: a later re-select must go

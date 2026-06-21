@@ -98,13 +98,6 @@ impl QueueConfig {
         self
     }
 
-    /// Set the prefetch lead-time (seconds) before EOF.
-    #[must_use]
-    pub fn with_prefetch_duration(mut self, secs: f32) -> Self {
-        self.prefetch_duration = secs;
-        self
-    }
-
     /// Set whether the queue auto-advances at EOF.
     #[must_use]
     pub fn with_should_autoplay(mut self, value: bool) -> Self {

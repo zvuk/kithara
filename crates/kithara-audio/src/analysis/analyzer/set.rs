@@ -32,17 +32,17 @@ impl TrackAnalyzers {
 
         if self.beat.is_none() {
             emit(TrackAnalysis {
-                beat: None,
                 waveform,
                 source_frames,
+                beat: None,
             });
             return;
         }
 
         emit(TrackAnalysis {
+            source_frames,
             beat: None,
             waveform: waveform.clone(),
-            source_frames,
         });
 
         let beat = self.beat.and_then(Analyzer::finish);

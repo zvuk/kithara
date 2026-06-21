@@ -20,6 +20,13 @@ struct KitharaPlayerItemTests {
         #expect(item.audioId == 42)
     }
 
+    @Test("init surfaces caller uuid")
+    func initSurfacesCallerUuid() {
+        let item = KitharaPlayerItem(url: "https://example.com/song.mp3", uuid: 123_456)
+        #expect(item.uuid == 123_456)
+        #expect(item.id == 123_456)
+    }
+
     @Test("preferred bitrate frozen at construction defaults to zero")
     func preferredBitrateDefaults() {
         let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
@@ -53,4 +60,61 @@ struct KitharaPlayerItemTests {
         #expect(a.uuid != b.uuid)
         #expect(a.id != b.id)
     }
+
+    @Test("structured playback progress accepts HLS seek landing tolerance")
+    func structuredProgressAcceptsSeekLandingTolerance() {
+        let item = KitharaPlayerItem(url: "https://example.com/song.m3u8")
+        let ranges = [ItemLoadedRange(start: 211.6, duration: 10)]
+        let startTolerance: TimeInterval = 5
+
+        #expect(item.isPlayable(
+            progress: PlaybackProgress(value: 0.74, time: 208.3, duration: 283.16),
+            ranges: ranges,
+            startTolerance: startTolerance
+        ))
+        #expect(!item.isPlayable(
+            progress: PlaybackProgress(value: 0.70, time: 205.0, duration: 283.16),
+            ranges: ranges,
+            startTolerance: startTolerance
+        ))
+    }
+
+    @Test("structured playback progress keeps end progress playable with buffered ranges")
+    func structuredProgressKeepsEndProgressPlayableWithRanges() {
+        let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
+        let ranges = [ItemLoadedRange(start: 0, duration: 30)]
+
+        #expect(item.isPlayable(
+            progress: PlaybackProgress(value: 1, time: 45, duration: 45),
+            ranges: ranges
+        ))
+        #expect(!item.isPlayable(
+            progress: PlaybackProgress(value: 1, time: 45, duration: 45),
+            ranges: []
+        ))
+    }
+
+    @Test("playability accepts client-shaped progress and ranges")
+    func playabilityAcceptsClientShapedProgressAndRanges() {
+        let item = KitharaPlayerItem(url: "https://example.com/song.m3u8")
+        let progress = ExternalProgress(value: 0.74, time: 208.3, duration: 283.16)
+        let ranges = [ExternalRange(start: 211.6, duration: 10)]
+
+        #expect(item.isPlayable(
+            progress: progress,
+            ranges: ranges,
+            startTolerance: 5
+        ))
+    }
+}
+
+private struct ExternalProgress: PlaybackProgressSource {
+    let value: TimeInterval
+    let time: TimeInterval
+    let duration: TimeInterval
+}
+
+private struct ExternalRange: ItemLoadedRangeSource {
+    let start: TimeInterval
+    let duration: TimeInterval
 }

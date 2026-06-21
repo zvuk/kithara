@@ -311,6 +311,17 @@ impl NativeInner {
         self.queue.pause();
     }
 
+    pub(crate) fn notify_audio_route_changed(&self, reason: &str) -> Result<(), FfiError> {
+        self.queue
+            .notify_audio_route_changed(reason)
+            .map_err(|err| match err {
+                QueueError::Play(err) => FfiError::from(err),
+                other => FfiError::Internal {
+                    description: other.to_string(),
+                },
+            })
+    }
+
     pub(crate) fn play(&self) {
         self.queue.play();
     }

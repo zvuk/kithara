@@ -209,6 +209,8 @@ open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
     ///   - url: The audio source URL.
     ///   - audioId: Caller-facing content track id. If `nil`, Kithara
     ///     uses the internally allocated queue id converted to `Int`.
+    ///   - uuid: Caller-facing queue item id. If `nil`, Kithara uses
+    ///     its legacy generated handle.
     ///   - additionalHeaders: Optional HTTP headers included in all requests for this item.
     ///   - preferredPeakBitrate: Peak bitrate ceiling in bits/sec. `0` means no cap.
     ///   - preferredPeakBitrateForExpensiveNetworks: Peak bitrate ceiling on
@@ -217,6 +219,7 @@ open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
     public init(
         url: String,
         audioId: TrackId? = nil,
+        uuid: Int64? = nil,
         additionalHeaders: [String: String]? = nil,
         preferredPeakBitrate: Double = 0,
         preferredPeakBitrateForExpensiveNetworks: Double = 0,
@@ -230,15 +233,17 @@ open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
         }
         let config = FfiItemConfig(
             abrMode: ffiAbrMode,
+            audioId: audioId.map { Self.ffiTrackId(from: $0) },
             headers: additionalHeaders,
+            uuidI64: uuid,
             url: url,
             isLiveStream: false,
             preferredPeakBitrate: preferredPeakBitrate,
             preferredPeakBitrateExpensive: preferredPeakBitrateForExpensiveNetworks
         )
         self._inner = AudioPlayerItem(config: config)
-        self.ffiTrackId = _inner.audioId()
-        self.audioId = audioId ?? TrackId(ffi: ffiTrackId)
+        self.ffiTrackId = _inner.queueId()
+        self.audioId = TrackId(ffi: _inner.audioId())
         self.url = URL(string: url) ?? URL(fileURLWithPath: url)
 
         let observer = ItemObserverBridge(subject: _eventSubject)
@@ -248,13 +253,20 @@ open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
     /// Internal init wrapping an existing FFI item (used by ``KitharaPlayer/items``).
     init(inner: AudioPlayerItem) {
         self._inner = inner
-        self.ffiTrackId = inner.audioId()
-        self.audioId = TrackId(ffi: ffiTrackId)
+        self.ffiTrackId = inner.queueId()
+        self.audioId = TrackId(ffi: inner.audioId())
         let urlString = inner.url()
         self.url = URL(string: urlString) ?? URL(fileURLWithPath: urlString)
 
         let observer = ItemObserverBridge(subject: _eventSubject)
         inner.setObserver(observer: observer)
+    }
+
+    private static func ffiTrackId(from id: TrackId) -> KitharaFFI.TrackId {
+        guard let converted = KitharaFFI.TrackId(exactly: id) else {
+            preconditionFailure("Kithara TrackId \(id) cannot be represented as KitharaFFI.TrackId")
+        }
+        return converted
     }
 
     // MARK: - Load / playability
@@ -285,6 +297,36 @@ open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
     /// Delegates to ``isPlayable(progress:ranges:)``.
     public func isPlayable(progress: Double, and ranges: [ItemLoadedRange]) -> Bool {
         isPlayable(progress: progress, ranges: ranges)
+    }
+
+    /// Whether the item is playable for a structured playback progress.
+    public func isPlayable(progress: PlaybackProgress, ranges: [ItemLoadedRange]) -> Bool {
+        isPlayable(progress: progress, ranges: ranges, startTolerance: .zero)
+    }
+
+    /// Whether the item is playable for a structured playback progress.
+    ///
+    /// `startTolerance` accepts a buffered range whose start lands slightly
+    /// after `progress.time`, which is useful for HLS seek readiness policies.
+    public func isPlayable(
+        progress: PlaybackProgress,
+        ranges: [ItemLoadedRange],
+        startTolerance: TimeInterval
+    ) -> Bool {
+        if isLiveStream {
+            return true
+        }
+        if progress.value >= 1, !ranges.isEmpty {
+            return true
+        }
+        let tolerance = max(TimeInterval.zero, startTolerance)
+        let adjustedRanges = ranges.map { range in
+            ItemLoadedRange(
+                start: range.start - tolerance,
+                duration: range.duration + tolerance
+            )
+        }
+        return isPlayable(progress: progress.time, ranges: adjustedRanges)
     }
 }
 
@@ -320,7 +362,48 @@ public struct ItemLoadedRange: Sendable, Equatable {
         self.start = ffi.startSeconds
         self.duration = ffi.durationSeconds
     }
+
+    public init<Source: ItemLoadedRangeSource>(_ source: Source) {
+        self.start = source.start
+        self.duration = source.duration
+    }
 }
+
+/// Structured playback progress for queue-readiness checks.
+public struct PlaybackProgress: Sendable, Equatable {
+    /// Normalised playback position in `[0, 1]`.
+    public let value: TimeInterval
+    /// Playback position in seconds.
+    public let time: TimeInterval
+    /// Item duration in seconds.
+    public let duration: TimeInterval
+
+    public init(value: TimeInterval, time: TimeInterval, duration: TimeInterval) {
+        self.value = value
+        self.time = time
+        self.duration = duration
+    }
+
+    public init<Source: PlaybackProgressSource>(_ source: Source) {
+        self.value = source.value
+        self.time = source.time
+        self.duration = source.duration
+    }
+}
+
+public protocol ItemLoadedRangeSource {
+    var start: TimeInterval { get }
+    var duration: TimeInterval { get }
+}
+
+public protocol PlaybackProgressSource {
+    var value: TimeInterval { get }
+    var time: TimeInterval { get }
+    var duration: TimeInterval { get }
+}
+
+extension ItemLoadedRange: ItemLoadedRangeSource {}
+extension PlaybackProgress: PlaybackProgressSource {}
 
 // MARK: - ItemObserver bridge (single on_event callback)
 

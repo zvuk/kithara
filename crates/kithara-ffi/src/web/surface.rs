@@ -20,6 +20,8 @@ fn item_for_url(url: String) -> Arc<AudioPlayerItem> {
         url,
         abr_mode: None,
         headers: None,
+        audio_id: None,
+        uuid_i64: None,
         is_live_stream: false,
         preferred_peak_bitrate: 0.0,
         preferred_peak_bitrate_expensive: 0.0,
@@ -27,7 +29,7 @@ fn item_for_url(url: String) -> Arc<AudioPlayerItem> {
 }
 
 fn id_to_f64(item: &Arc<AudioPlayerItem>) -> f64 {
-    cast::<u64, f64>(item.audio_id().as_u64()).unwrap_or(0.0)
+    cast::<u64, f64>(item.track_id().as_u64()).unwrap_or(0.0)
 }
 
 /// Browser control surface for the cross-platform
@@ -112,7 +114,7 @@ impl AudioPlayer {
         self.inner
             .items()
             .into_iter()
-            .find(|item| item.audio_id().as_u64() == id)
+            .find(|item| item.track_id().as_u64() == id)
     }
 
     #[wasm_bindgen(js_name = itemCount)]

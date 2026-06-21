@@ -55,6 +55,29 @@ public enum KitharaError: Error, Sendable {
     case `internal`(String)
 }
 
+/// Player-level error with optional queue-item attribution.
+public enum KitharaPlayerError: Error, Sendable {
+    case playback(PlayerError, itemId: TrackId?)
+    case command(KitharaError, itemId: TrackId?)
+
+    public var itemId: TrackId? {
+        switch self {
+        case .playback(_, let itemId),
+             .command(_, let itemId):
+            return itemId
+        }
+    }
+
+    public var underlying: Error {
+        switch self {
+        case .playback(let error, _):
+            return error
+        case .command(let error, _):
+            return error
+        }
+    }
+}
+
 // MARK: - Player Error (async event stream)
 
 /// Error surfaced on the player / item error publishers
@@ -174,9 +197,9 @@ public struct Transition: Sendable, Equatable {
 /// Snapshot of the player state — use with ``KitharaPlayer/snapshot``.
 public typealias PlayerSnapshot = FfiPlayerSnapshot
 
-/// Seek completion callback — use with
+/// Seek completion handler — use with
 /// ``KitharaPlayer/seek(to:tolerance:completionHandler:)``.
-public typealias SeekCallback = KitharaFFI.SeekCallback
+public typealias SeekCompletionHandler = (Bool) -> Void
 
 // MARK: - Internal conversions
 

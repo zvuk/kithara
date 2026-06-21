@@ -4,13 +4,13 @@ use std::sync::Arc;
 use firewheel::nodes::volume_pan::VolumePanNode;
 use firewheel::{
     FirewheelConfig, FirewheelCtx, Volume, backend::AudioBackend, channel_config::ChannelCount,
-    diff::Memo, node::NodeID,
+    diff::Memo, error::UpdateError, node::NodeID,
 };
 use kithara_audio::EqBandConfig;
 use kithara_bufpool::PcmPool;
 use kithara_platform::sync::mpsc;
 use ringbuf::{HeapProd, HeapRb, traits::Split};
-use tracing::warn;
+use tracing::{debug, trace, warn};
 
 use super::super::{
     master_eq_node::MasterEqNode, player_node::PlayerNode, player_processor::PlayerCmd,
@@ -88,6 +88,7 @@ pub struct SessionState<B: AudioBackend> {
     /// concretely.
     start_stream_fn: StartStreamFn<B>,
     players: Vec<PlayerState>,
+    stream_needs_restart: bool,
     sample_rate_hint: u32,
 }
 
@@ -111,6 +112,7 @@ impl<B: AudioBackend> SessionState<B> {
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
             session_output_node_id: None,
+            stream_needs_restart: false,
         }
     }
 
@@ -173,6 +175,9 @@ pub enum Cmd {
         mode: SessionDuckingMode,
     },
     SessionDucking,
+    InvalidateAudioRoute {
+        reason: String,
+    },
     QuerySampleRate,
     Tick,
 }
@@ -241,6 +246,29 @@ fn player_index<B: AudioBackend>(
         .ok_or_else(|| format!("player not found: {player_id}"))
 }
 
+fn trace_stream_info<B: AudioBackend>(state: &SessionState<B>, context: &'static str) {
+    if let Some(info) = state.ctx.as_ref().and_then(|ctx| ctx.stream_info()) {
+        trace!(
+            context,
+            sample_rate = info.sample_rate.get(),
+            prev_sample_rate = info.prev_sample_rate.get(),
+            max_block_frames = info.max_block_frames.get(),
+            out_channels = info.num_stream_out_channels,
+            output_device_id = %info.output_device_id,
+            input_device_id = ?info.input_device_id.as_deref(),
+            stream_needs_restart = state.stream_needs_restart,
+            "[KITHARA-ROUTE] session stream-info"
+        );
+    } else {
+        trace!(
+            context,
+            sample_rate_hint = state.sample_rate_hint,
+            stream_needs_restart = state.stream_needs_restart,
+            "[KITHARA-ROUTE] session stream-info unavailable"
+        );
+    }
+}
+
 /// Canonical command-dispatch loop body. Generic over the firewheel
 /// backend so production cpal paths and integration-test offline paths
 /// share the same code.
@@ -260,6 +288,11 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             state
                 .players
                 .push(PlayerState::new(player_id, eq_layout, pcm_pool));
+            debug!(
+                player_id,
+                players = state.players.len(),
+                "[KITHARA-ROUTE] session player registered"
+            );
             Reply::PlayerRegistered(player_id)
         }
         Cmd::UnregisterPlayer { player_id } => match unregister_player(state, player_id) {
@@ -313,59 +346,180 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             Reply::Ok
         }
         Cmd::SessionDucking => Reply::SessionDucking(state.session_ducking),
+        Cmd::InvalidateAudioRoute { reason } => invalidate_audio_route(state, &reason),
         Cmd::QuerySampleRate => {
             let sample_rate = state
                 .ctx
                 .as_ref()
                 .and_then(|ctx| ctx.stream_info())
                 .map_or(state.sample_rate_hint, |si| si.sample_rate.get());
+            trace_stream_info(state, "query-sample-rate");
             Reply::SampleRate(sample_rate)
         }
-        Cmd::Tick => {
-            if let Some(ref mut fw_ctx) = state.ctx
-                && let Err(err) = fw_ctx.update()
-            {
-                return Reply::Err(format!("session graph update failed: {err:?}"));
+        Cmd::Tick => tick_session(state),
+    }
+}
+
+fn tick_session<B: AudioBackend>(state: &mut SessionState<B>) -> Reply {
+    if state.stream_needs_restart
+        && let Err(err) = restart_stream(state, state.sample_rate_hint)
+    {
+        warn!(?err, "[KITHARA-ROUTE] deferred stream restart failed");
+        return Reply::Err(format!("session stream restart failed: {err}"));
+    }
+
+    let update = state.ctx.as_mut().map(FirewheelCtx::update);
+    if let Some(Err(err)) = update {
+        return handle_update_error(state, err);
+    }
+    Reply::Ok
+}
+
+fn handle_update_error<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    err: UpdateError<B::StreamError>,
+) -> Reply {
+    match err {
+        UpdateError::StreamStoppedUnexpectedly(reason) => {
+            state.stream_needs_restart = true;
+            warn!(
+                ?reason,
+                "session stream stopped unexpectedly; restarting audio stream"
+            );
+            trace!(
+                ?reason,
+                sample_rate_hint = state.sample_rate_hint,
+                "[KITHARA-ROUTE] firewheel update reported stopped stream"
+            );
+            match restart_stream(state, state.sample_rate_hint) {
+                Ok(()) => Reply::Ok,
+                Err(restart_err) => Reply::Err(format!(
+                    "session stream stopped unexpectedly: {reason:?}; restart failed: {restart_err}"
+                )),
             }
-            Reply::Ok
+        }
+        other => {
+            warn!(?other, "[KITHARA-ROUTE] firewheel update failed");
+            Reply::Err(format!("session graph update failed: {other:?}"))
         }
     }
+}
+
+fn invalidate_audio_route<B: AudioBackend>(state: &mut SessionState<B>, reason: &str) -> Reply {
+    debug!(
+        reason,
+        ctx_ready = state.ctx.is_some(),
+        stream_needs_restart = state.stream_needs_restart,
+        "[KITHARA-ROUTE] audio route invalidated"
+    );
+    if state.ctx.is_none() {
+        return Reply::Ok;
+    }
+    state.stream_needs_restart = true;
+    match restart_stream(state, state.sample_rate_hint) {
+        Ok(()) => Reply::Ok,
+        Err(err) => Reply::Err(format!(
+            "audio route invalidated ({reason}); restart failed: {err}"
+        )),
+    }
+}
+
+fn restart_stream<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    sample_rate: u32,
+) -> Result<(), String> {
+    let Some(ref mut fw_ctx) = state.ctx else {
+        return Err("session context is not initialised".into());
+    };
+    debug!(sample_rate, "[KITHARA-ROUTE] restarting firewheel stream");
+    if fw_ctx.is_audio_stream_running() {
+        trace!("[KITHARA-ROUTE] stopping existing stream before restart");
+        fw_ctx.stop_stream();
+    }
+    (state.start_stream_fn)(fw_ctx, sample_rate)?;
+    state.sample_rate_hint = sample_rate;
+    state.stream_needs_restart = false;
+    trace_stream_info(state, "restart-stream");
+    debug!(
+        sample_rate,
+        "[KITHARA-ROUTE] firewheel stream restart complete"
+    );
+    Ok(())
 }
 
 pub(super) fn ensure_ctx<B: AudioBackend>(
     state: &mut SessionState<B>,
     sample_rate: u32,
 ) -> Result<(), String> {
+    ensure_stream_ready(state, sample_rate)?;
+    ensure_session_output(state)
+}
+
+fn ensure_stream_ready<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    sample_rate: u32,
+) -> Result<(), String> {
     if state.ctx.is_none() {
-        let config = FirewheelConfig {
-            num_graph_outputs: ChannelCount::STEREO,
-            ..FirewheelConfig::default()
-        };
-        let mut ctx = FirewheelCtx::<B>::new(config);
-        (state.start_stream_fn)(&mut ctx, sample_rate)?;
-        state.ctx = Some(ctx);
-        state.sample_rate_hint = sample_rate;
+        return create_firewheel_context(state, sample_rate);
     }
 
+    if state.stream_needs_restart {
+        debug!(
+            sample_rate,
+            "[KITHARA-ROUTE] ensuring stopped stream is restarted"
+        );
+        restart_stream(state, sample_rate)?;
+    }
+
+    Ok(())
+}
+
+fn create_firewheel_context<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    sample_rate: u32,
+) -> Result<(), String> {
+    debug!(sample_rate, "[KITHARA-ROUTE] creating firewheel context");
+    let config = FirewheelConfig {
+        num_graph_outputs: ChannelCount::STEREO,
+        ..FirewheelConfig::default()
+    };
+    let mut ctx = FirewheelCtx::<B>::new(config);
+    (state.start_stream_fn)(&mut ctx, sample_rate)?;
+    state.ctx = Some(ctx);
+    state.sample_rate_hint = sample_rate;
+    state.stream_needs_restart = false;
+    trace_stream_info(state, "start-stream");
+    debug!(sample_rate, "[KITHARA-ROUTE] firewheel context ready");
+    Ok(())
+}
+
+fn ensure_session_output<B: AudioBackend>(state: &mut SessionState<B>) -> Result<(), String> {
     if state.session_output_node_id.is_none() {
-        let Some(ref mut fw_ctx) = state.ctx else {
-            return Err("session context is not initialised".into());
-        };
-        let session_node =
-            VolumePanNode::from_volume(Volume::Linear(ducking_gain(state.session_ducking)));
-        let session_memo = Memo::new(session_node);
-        let session_id = fw_ctx.add_node(session_node, None);
-        let graph_out = fw_ctx.graph_out_node_id();
-        fw_ctx
-            .connect(session_id, graph_out, &[(0, 0), (1, 1)], false)
-            .map_err(|err| format!("connect session output to graph_out failed: {err}"))?;
-        if let Err(err) = fw_ctx.update() {
-            warn!("session graph update after output init failed: {err:?}");
-        }
-        state.session_output_node_id = Some(session_id);
-        state.session_output_memo = Some(session_memo);
+        return create_session_output(state);
     }
 
+    Ok(())
+}
+
+fn create_session_output<B: AudioBackend>(state: &mut SessionState<B>) -> Result<(), String> {
+    debug!("[KITHARA-ROUTE] creating session output graph");
+    let Some(ref mut fw_ctx) = state.ctx else {
+        return Err("session context is not initialised".into());
+    };
+    let session_node =
+        VolumePanNode::from_volume(Volume::Linear(ducking_gain(state.session_ducking)));
+    let session_memo = Memo::new(session_node);
+    let session_id = fw_ctx.add_node(session_node, None);
+    let graph_out = fw_ctx.graph_out_node_id();
+    fw_ctx
+        .connect(session_id, graph_out, &[(0, 0), (1, 1)], false)
+        .map_err(|err| format!("connect session output to graph_out failed: {err}"))?;
+    if let Err(err) = fw_ctx.update() {
+        warn!("session graph update after output init failed: {err:?}");
+    }
+    state.session_output_node_id = Some(session_id);
+    state.session_output_memo = Some(session_memo);
+    debug!(?session_id, "[KITHARA-ROUTE] session output graph ready");
     Ok(())
 }
 
@@ -375,6 +529,10 @@ fn start_player<B: AudioBackend>(
     sample_rate: u32,
     master_volume: f32,
 ) -> Result<(), String> {
+    debug!(
+        player_id,
+        sample_rate, master_volume, "[KITHARA-ROUTE] starting player"
+    );
     ensure_ctx(state, sample_rate)?;
 
     let idx = player_index(state, player_id)?;
@@ -418,6 +576,12 @@ fn start_player<B: AudioBackend>(
     player.master_vol_pan_memo = Some(master_vol_memo);
     player.started = true;
 
+    debug!(
+        player_id,
+        ?master_eq_id,
+        ?master_vol_id,
+        "[KITHARA-ROUTE] player graph started"
+    );
     Ok(())
 }
 
@@ -425,6 +589,7 @@ fn stop_player<B: AudioBackend>(
     state: &mut SessionState<B>,
     player_id: PlayerId,
 ) -> Result<(), String> {
+    debug!(player_id, "[KITHARA-ROUTE] stopping player");
     let idx = player_index(state, player_id)?;
     stop_player_idx(state, idx)
 }
@@ -455,6 +620,7 @@ fn stop_player_idx<B: AudioBackend>(state: &mut SessionState<B>, idx: usize) -> 
     }
 
     shutdown_if_idle(state);
+    debug!("[KITHARA-ROUTE] player stopped");
     Ok(())
 }
 
@@ -490,6 +656,7 @@ fn clear_player_graph_state(player: &mut PlayerState) {
 
 fn shutdown_if_idle<B: AudioBackend>(state: &mut SessionState<B>) {
     if state.players.iter().all(|player| !player.started) {
+        debug!("[KITHARA-ROUTE] shutting down idle session stream");
         if let Some(ref mut fw_ctx) = state.ctx {
             fw_ctx.stop_stream();
         }
@@ -503,11 +670,17 @@ fn unregister_player<B: AudioBackend>(
     state: &mut SessionState<B>,
     player_id: PlayerId,
 ) -> Result<(), String> {
+    debug!(player_id, "[KITHARA-ROUTE] unregistering player");
     let idx = player_index(state, player_id)?;
     if state.players[idx].started {
         stop_player_idx(state, idx)?;
     }
     state.players.remove(idx);
+    debug!(
+        player_id,
+        players = state.players.len(),
+        "[KITHARA-ROUTE] player unregistered"
+    );
     Ok(())
 }
 
@@ -515,6 +688,7 @@ fn allocate_slot<B: AudioBackend>(
     state: &mut SessionState<B>,
     player_id: PlayerId,
 ) -> Result<Reply, String> {
+    debug!(player_id, "[KITHARA-ROUTE] allocating player slot");
     let idx = player_index(state, player_id)?;
     if !state.players[idx].started {
         return Err("player not running".into());
@@ -565,6 +739,14 @@ fn allocate_slot<B: AudioBackend>(
         vol_pan_node_id: slot_vol_pan_id,
     });
 
+    debug!(
+        player_id,
+        ?slot_id,
+        ?player_node_id,
+        ?slot_vol_pan_id,
+        slots = state.players[idx].slots.len(),
+        "[KITHARA-ROUTE] player slot allocated"
+    );
     Ok(Reply::SlotAllocated(
         slot_id,
         cmd_tx,
@@ -578,24 +760,42 @@ fn release_slot<B: AudioBackend>(
     player_id: PlayerId,
     slot: SlotId,
 ) -> Result<(), String> {
+    debug!(player_id, ?slot, "[KITHARA-ROUTE] releasing player slot");
     let idx = player_index(state, player_id)?;
-    if !state.players[idx].started {
-        return Err("player not running".into());
-    }
-
-    let Some(slot_idx) = state.players[idx]
-        .slots
-        .iter()
-        .position(|s| s.slot_id == slot)
-    else {
-        return Err(format!("slot not found: {slot:?}"));
+    let slot_nodes = {
+        let player = &mut state.players[idx];
+        if !player.started {
+            return Err("player not running".into());
+        }
+        take_slot(player, slot)?
     };
-    let slot = state.players[idx].slots.remove(slot_idx);
 
     let Some(ref mut fw_ctx) = state.ctx else {
         return Err("session context is not initialised".into());
     };
 
+    remove_slot_graph(fw_ctx, player_id, &slot_nodes);
+
+    debug!(
+        player_id,
+        ?slot_nodes,
+        "[KITHARA-ROUTE] player slot released"
+    );
+    Ok(())
+}
+
+fn take_slot(player: &mut PlayerState, slot: SlotId) -> Result<SlotNodes, String> {
+    let Some(slot_idx) = player.slots.iter().position(|s| s.slot_id == slot) else {
+        return Err(format!("slot not found: {slot:?}"));
+    };
+    Ok(player.slots.remove(slot_idx))
+}
+
+fn remove_slot_graph<B: AudioBackend>(
+    fw_ctx: &mut FirewheelCtx<B>,
+    player_id: PlayerId,
+    slot: &SlotNodes,
+) {
     if let Err(err) = fw_ctx.remove_node(slot.vol_pan_node_id) {
         warn!(player_id, ?err, "failed to remove slot vol_pan node");
     }
@@ -605,8 +805,6 @@ fn release_slot<B: AudioBackend>(
     if let Err(err) = fw_ctx.update() {
         warn!(player_id, "graph update after slot release failed: {err:?}");
     }
-
-    Ok(())
 }
 
 fn set_player_master_volume<B: AudioBackend>(
@@ -711,5 +909,309 @@ fn set_session_ducking<B: AudioBackend>(state: &mut SessionState<B>, mode: Sessi
         memo.volume = Volume::Linear(ducking_gain(mode));
         let mut queue = fw_ctx.event_queue(session_id);
         memo.update_memo(&mut queue);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        num::NonZeroU32,
+        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+
+    use firewheel::{StreamInfo, processor::FirewheelProcessor};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    struct RouteLossProbe {
+        fail_next_poll: AtomicBool,
+        fail_next_start: AtomicBool,
+        start_count: AtomicUsize,
+    }
+
+    impl RouteLossProbe {
+        fn reset(&self) {
+            self.start_count.store(0, Ordering::SeqCst);
+            self.fail_next_poll.store(false, Ordering::SeqCst);
+            self.fail_next_start.store(false, Ordering::SeqCst);
+        }
+    }
+
+    static ROUTE_LOSS: RouteLossProbe = RouteLossProbe {
+        fail_next_poll: AtomicBool::new(false),
+        fail_next_start: AtomicBool::new(false),
+        start_count: AtomicUsize::new(0),
+    };
+
+    struct RouteLossBackend {
+        _processor: Option<FirewheelProcessor<Self>>,
+    }
+
+    #[derive(Clone)]
+    struct RouteLossConfig {
+        sample_rate: u32,
+    }
+
+    impl Default for RouteLossConfig {
+        fn default() -> Self {
+            Self {
+                sample_rate: SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
+            }
+        }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("route lost")]
+    struct RouteLossError;
+
+    impl AudioBackend for RouteLossBackend {
+        type Config = RouteLossConfig;
+        type Enumerator = ();
+        type Instant = kithara_platform::time::Instant;
+        type StartStreamError = RouteLossError;
+        type StreamError = RouteLossError;
+
+        fn delay_from_last_process(
+            &self,
+            _process_timestamp: Self::Instant,
+        ) -> Option<kithara_platform::time::Duration> {
+            None
+        }
+
+        fn enumerator() -> Self::Enumerator {}
+
+        fn poll_status(&mut self) -> Result<(), Self::StreamError> {
+            if ROUTE_LOSS.fail_next_poll.swap(false, Ordering::SeqCst) {
+                Err(RouteLossError)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn set_processor(&mut self, processor: FirewheelProcessor<Self>) {
+            self._processor = Some(processor);
+        }
+
+        fn start_stream(
+            config: Self::Config,
+        ) -> Result<(Self, StreamInfo), Self::StartStreamError> {
+            ROUTE_LOSS.start_count.fetch_add(1, Ordering::SeqCst);
+            if ROUTE_LOSS.fail_next_start.swap(false, Ordering::SeqCst) {
+                return Err(RouteLossError);
+            }
+
+            let sample_rate = NonZeroU32::new(config.sample_rate).ok_or(RouteLossError)?;
+            let max_block_frames = NonZeroU32::new(512).ok_or(RouteLossError)?;
+            let stream_info = StreamInfo {
+                sample_rate,
+                sample_rate_recip: 1.0 / f64::from(config.sample_rate),
+                prev_sample_rate: sample_rate,
+                max_block_frames,
+                num_stream_in_channels: 0,
+                num_stream_out_channels: 2,
+                input_to_output_latency_seconds: 0.0,
+                declick_frames: max_block_frames,
+                output_device_id: String::from("route-loss-test"),
+                input_device_id: None,
+            };
+            Ok((Self { _processor: None }, stream_info))
+        }
+    }
+
+    fn start_route_loss_stream(
+        ctx: &mut FirewheelCtx<RouteLossBackend>,
+        sample_rate: u32,
+    ) -> Result<(), String> {
+        ctx.start_stream(RouteLossConfig { sample_rate })
+            .map_err(|err| err.to_string())
+    }
+
+    fn register_player(state: &mut SessionState<RouteLossBackend>) -> PlayerId {
+        match run_cmd(
+            state,
+            Cmd::RegisterPlayer {
+                eq_layout: Vec::new(),
+                pcm_pool: PcmPool::default().clone(),
+            },
+        ) {
+            Reply::PlayerRegistered(id) => id,
+            Reply::Err(err) => panic!("player registration failed: {err}"),
+            _ => panic!("player registration returned unexpected reply"),
+        }
+    }
+
+    #[kithara::test]
+    fn explicit_audio_route_invalidation_restarts_stream_without_backend_error() {
+        ROUTE_LOSS.reset();
+
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        let player_id = register_player(&mut state);
+
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::StartPlayer {
+                    player_id,
+                    sample_rate: 44_100,
+                    master_volume: 1.0,
+                },
+            ),
+            Reply::Ok
+        ));
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
+            Reply::SlotAllocated(..)
+        ));
+        assert_eq!(ROUTE_LOSS.start_count.load(Ordering::SeqCst), 1);
+
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::InvalidateAudioRoute {
+                    reason: String::from("oldDeviceUnavailable"),
+                },
+            ),
+            Reply::Ok
+        ));
+
+        assert_eq!(
+            ROUTE_LOSS.start_count.load(Ordering::SeqCst),
+            2,
+            "explicit platform route invalidation must restart the audio stream"
+        );
+        assert!(
+            state.ctx.is_some(),
+            "route invalidation must keep the graph context"
+        );
+        assert!(
+            state.players[0].started,
+            "route invalidation must keep the player graph logically started"
+        );
+        assert_eq!(
+            state.players[0].slots.len(),
+            1,
+            "route invalidation must not drop active slots"
+        );
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
+            Reply::SlotAllocated(..)
+        ));
+        assert_eq!(
+            state.players[0].slots.len(),
+            2,
+            "session must accept future slots after explicit route restart"
+        );
+        assert!(!state.stream_needs_restart);
+    }
+
+    #[kithara::test]
+    fn unexpected_stream_stop_restarts_stream_without_dropping_player_graph_or_future_slots() {
+        ROUTE_LOSS.reset();
+
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        let player_id = register_player(&mut state);
+
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::StartPlayer {
+                    player_id,
+                    sample_rate: 44_100,
+                    master_volume: 1.0,
+                },
+            ),
+            Reply::Ok
+        ));
+        assert!(state.ctx.is_some());
+        assert!(state.players[0].started);
+        assert_eq!(ROUTE_LOSS.start_count.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
+            Reply::SlotAllocated(..)
+        ));
+        assert_eq!(state.players[0].slots.len(), 1);
+
+        ROUTE_LOSS.fail_next_poll.store(true, Ordering::SeqCst);
+        assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
+
+        assert_eq!(
+            ROUTE_LOSS.start_count.load(Ordering::SeqCst),
+            2,
+            "stream loss must restart the audio stream immediately"
+        );
+        assert!(
+            state.ctx.is_some(),
+            "session must keep the graph context across stream restart"
+        );
+        assert!(
+            state.session_output_node_id.is_some(),
+            "session output node id must survive stream restart"
+        );
+        assert!(
+            state.players[0].started,
+            "player graph must remain logically started after stream restart"
+        );
+        assert_eq!(
+            state.players[0].slots.len(),
+            1,
+            "active slot graph must survive stream restart"
+        );
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
+            Reply::SlotAllocated(..)
+        ));
+        assert_eq!(
+            state.players[0].slots.len(),
+            2,
+            "session must accept a future slot after route-loss reinit"
+        );
+        assert!(!state.stream_needs_restart);
+    }
+
+    #[kithara::test]
+    fn failed_stream_restart_is_retried_on_next_tick() {
+        ROUTE_LOSS.reset();
+
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        let player_id = register_player(&mut state);
+
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::StartPlayer {
+                    player_id,
+                    sample_rate: 44_100,
+                    master_volume: 1.0,
+                },
+            ),
+            Reply::Ok
+        ));
+        assert_eq!(ROUTE_LOSS.start_count.load(Ordering::SeqCst), 1);
+
+        ROUTE_LOSS.fail_next_poll.store(true, Ordering::SeqCst);
+        ROUTE_LOSS.fail_next_start.store(true, Ordering::SeqCst);
+        match run_cmd(&mut state, Cmd::Tick) {
+            Reply::Err(err) => assert!(
+                err.contains("restart failed"),
+                "restart failure must be surfaced, got {err:?}"
+            ),
+            _ => panic!("failed restart must return Reply::Err"),
+        }
+
+        assert!(
+            state.stream_needs_restart,
+            "a failed restart must leave retry state armed"
+        );
+        assert_eq!(ROUTE_LOSS.start_count.load(Ordering::SeqCst), 2);
+
+        assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
+        assert_eq!(
+            ROUTE_LOSS.start_count.load(Ordering::SeqCst),
+            3,
+            "next tick must retry the stream restart"
+        );
+        assert!(!state.stream_needs_restart);
+        assert!(state.players[0].started);
     }
 }

@@ -130,39 +130,6 @@ impl<D: Driver> Resource<Active, D> {
 }
 
 impl<D: DriverIo> Resource<Active, D> {
-    /// Write data at the given offset.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the write fails.
-    pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.data.core.write_at_inner(offset, data)
-    }
-
-    /// Write entire contents and commit atomically, consuming the writer.
-    ///
-    /// # Errors
-    /// Returns error if the write or commit fails.
-    pub fn write_all(self, data: &[u8]) -> StorageResult<Resource<Committed, D>> {
-        self.data.core.write_at_inner(0, data)?;
-        self.commit(Some(data.len() as u64))
-    }
-
-    /// Mark the resource as failed, consuming the writer.
-    pub fn fail(self, reason: String) {
-        self.data.core.fail_inner(reason);
-    }
-
-    /// Mint a cloneable read-only view over the in-flight resource (readers may
-    /// observe the committed prefix while the writer keeps appending).
-    #[must_use]
-    pub fn reader(&self) -> Resource<Reader, D> {
-        Resource {
-            data: ReadCore {
-                core: self.data.core.clone(),
-            },
-        }
-    }
-
     /// Commit the resource, consuming the writer and returning the sealed
     /// `Committed` handle. A second `commit` (or any `write_at`) is a compile
     /// error: the writer value is moved out here.
@@ -189,6 +156,16 @@ impl<D: DriverIo> Resource<Active, D> {
         self.data.core.commit_inner(final_len)
     }
 
+    /// Mark the resource as failed, consuming the writer.
+    pub fn fail(self, reason: String) {
+        self.data.core.fail_inner(reason);
+    }
+
+    /// Mark failed without consuming, for a decorator that owns the writer.
+    pub(crate) fn fail_in_place(&self, reason: String) {
+        self.data.core.fail_inner(reason);
+    }
+
     /// Reactivate without consuming, for a decorator that rewrites in place.
     ///
     /// # Errors
@@ -197,9 +174,32 @@ impl<D: DriverIo> Resource<Active, D> {
         self.data.core.reactivate_inner()
     }
 
-    /// Mark failed without consuming, for a decorator that owns the writer.
-    pub(crate) fn fail_in_place(&self, reason: String) {
-        self.data.core.fail_inner(reason);
+    /// Mint a cloneable read-only view over the in-flight resource (readers may
+    /// observe the committed prefix while the writer keeps appending).
+    #[must_use]
+    pub fn reader(&self) -> Resource<Reader, D> {
+        Resource {
+            data: ReadCore {
+                core: self.data.core.clone(),
+            },
+        }
+    }
+
+    /// Write entire contents and commit atomically, consuming the writer.
+    ///
+    /// # Errors
+    /// Returns error if the write or commit fails.
+    pub fn write_all(self, data: &[u8]) -> StorageResult<Resource<Committed, D>> {
+        self.data.core.write_at_inner(0, data)?;
+        self.commit(Some(data.len() as u64))
+    }
+
+    /// Write data at the given offset.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the write fails.
+    pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.data.core.write_at_inner(offset, data)
     }
 }
 

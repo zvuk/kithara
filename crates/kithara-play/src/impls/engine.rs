@@ -349,6 +349,17 @@ impl Engine for EngineImpl {
         self.running.load(Ordering::Acquire)
     }
 
+    fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
+        if !self.running.load(Ordering::Acquire) {
+            debug!(
+                reason,
+                "audio route invalidation ignored while engine is stopped"
+            );
+            return Ok(());
+        }
+        self.session.invalidate_audio_route(reason)
+    }
+
     fn master_channels(&self) -> u16 {
         self.config.channels
     }

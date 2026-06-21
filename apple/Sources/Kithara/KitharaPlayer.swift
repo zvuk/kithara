@@ -2,6 +2,10 @@ import Combine
 import Foundation
 import KitharaFFI
 
+#if canImport(AVFoundation) && (os(iOS) || os(tvOS) || os(watchOS) || targetEnvironment(macCatalyst))
+import AVFoundation
+#endif
+
 /// A queue-based audio player with Combine-driven observation.
 ///
 /// Thin wrapper over the Rust `AudioPlayer`. All state lives in Rust —
@@ -24,6 +28,12 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     private let _inner: AudioPlayer
     private let _eventSubject = PassthroughSubject<FfiPlayerEvent, Never>()
+    private let _commandErrorSubject = PassthroughSubject<KitharaPlayerError, Never>()
+    private let _currentItemSubject = CurrentValueSubject<KitharaPlayerItem?, Never>(nil)
+    private var _eventCancellable: AnyCancellable?
+#if canImport(AVFoundation) && (os(iOS) || os(tvOS) || os(watchOS) || targetEnvironment(macCatalyst))
+    private var _audioRouteCancellables = Set<AnyCancellable>()
+#endif
 
     // MARK: - Event stream
 
@@ -78,23 +88,11 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     // MARK: - Discrete publishers (KitharaPlayerProtocol)
 
-    /// Current item changed publisher. Resolves the Rust-side `item_id`
-    /// back to the Swift instance owned by ``items()``. Combine equivalent
-    /// of an Rx `rxCurrentAudioItem` bridge.
+    /// Current item publisher. Emits the first queued item before playback
+    /// starts, then follows Rust-side playback-current changes. Combine
+    /// equivalent of an Rx `rxCurrentAudioItem` bridge.
     public var currentItem: AnyPublisher<KitharaPlayerItem?, Never> {
-        _eventSubject
-            .compactMap { [weak self] event -> KitharaPlayerItem?? in
-                guard let self else { return nil }
-                if case let .currentItemChanged(itemId) = event {
-                    if let id = itemId {
-                        return .some(self._knownItems[id])
-                    }
-                    return .some(nil)
-                }
-                return nil
-            }
-            .map { $0 }
-            .eraseToAnyPublisher()
+        _currentItemSubject.eraseToAnyPublisher()
     }
 
     /// Current playback rate publisher. `0.0` while paused, otherwise
@@ -122,21 +120,37 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             .eraseToAnyPublisher()
     }
 
-    /// Error publisher. Emits ``PlayerError`` whenever the Rust side
-    /// reports a player-wide error or an item failure. Combine
-    /// equivalent of an Rx `rxError` bridge.
+    /// Typed error publisher. Emits runtime playback failures and errors
+    /// thrown by imperative queue commands with queue-item attribution when
+    /// Kithara can identify the affected item.
+    public var contextualError: AnyPublisher<KitharaPlayerError, Never> {
+        let playbackErrors = _eventSubject
+            .compactMap { [weak self] event in self?.playerError(from: event) }
+
+        return Publishers.Merge(playbackErrors, _commandErrorSubject)
+            .eraseToAnyPublisher()
+    }
+
+    /// Error publisher. Emits runtime playback failures and errors thrown by
+    /// imperative queue commands. Combine equivalent of an Rx `rxError` bridge.
     public var error: AnyPublisher<Error, Never> {
-        _eventSubject
-            .compactMap { event -> PlayerError? in
-                switch event {
-                case let .error(message): return .playerError(message)
-                case let .itemDidFail(itemId):
-                    return .itemFailed(itemId.map(String.init) ?? "<unknown>")
-                default: return nil
-                }
-            }
+        contextualError
             .map { $0 as Error }
             .eraseToAnyPublisher()
+    }
+
+    private func playerError(from event: FfiPlayerEvent) -> KitharaPlayerError? {
+        switch event {
+        case let .error(message):
+            return .playback(.playerError(message), itemId: currentAudioItem?.audioId)
+        case let .itemDidFail(itemId):
+            return .playback(
+                .itemFailed(itemId.map(String.init) ?? "<unknown>"),
+                itemId: itemId.flatMap(audioId(for:))
+            )
+        default:
+            return nil
+        }
     }
 
     // MARK: - State (queried from Rust on demand)
@@ -163,11 +177,10 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         _inner.snapshot().duration
     }
 
-    /// Currently playing item, or `nil` when the queue is empty.
+    /// Current queue item visible to iOS-style clients, or `nil` when
+    /// the queue is empty.
     public var currentAudioItem: KitharaPlayerItem? {
-        guard let inner = _inner.currentItem() else { return nil }
-        let id = inner.audioId()
-        return _knownItems[id]
+        _currentItemSubject.value
     }
 
     // MARK: - Rate
@@ -315,6 +328,10 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
         let bridge = PlayerObserverBridge(subject: _eventSubject)
         _inner.setObserver(observer: bridge)
+        _eventCancellable = _eventSubject.sink { [weak self] event in
+            self?.syncCurrentItem(with: event)
+        }
+        bindPlatformAudioRouteInvalidation()
     }
 
     // MARK: - Playback control
@@ -329,6 +346,33 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         _inner.pause()
     }
 
+    /// Notify Kithara that the platform audio route changed.
+    public func notifyAudioRouteChanged(reason: String) {
+        do {
+            try _inner.notifyAudioRouteChanged(reason: reason)
+        } catch {
+            _eventSubject.send(.error(error: String(describing: error)))
+        }
+    }
+
+#if canImport(AVFoundation) && (os(iOS) || os(tvOS) || os(watchOS) || targetEnvironment(macCatalyst))
+    private func bindPlatformAudioRouteInvalidation() {
+        NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
+            .sink { [weak self] _ in
+                self?.notifyAudioRouteChanged(reason: "AVAudioSession.routeChange")
+            }
+            .store(in: &_audioRouteCancellables)
+
+        NotificationCenter.default.publisher(for: AVAudioSession.mediaServicesWereResetNotification)
+            .sink { [weak self] _ in
+                self?.notifyAudioRouteChanged(reason: "AVAudioSession.mediaServicesWereReset")
+            }
+            .store(in: &_audioRouteCancellables)
+    }
+#else
+    private func bindPlatformAudioRouteInvalidation() {}
+#endif
+
     /// Seek to a position in the current item.
     ///
     /// - Parameters:
@@ -342,15 +386,38 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     public func seek(
         to seconds: TimeInterval,
         tolerance: TimeInterval? = nil,
-        completionHandler: SeekCallback
+        completionHandler: @escaping SeekCompletionHandler
     ) {
-        _inner.seek(toSeconds: seconds, tolerance: tolerance, callback: completionHandler)
+        _inner.seek(
+            toSeconds: seconds,
+            tolerance: tolerance,
+            callback: ClosureSeekCallback(completionHandler)
+        )
     }
 
     // MARK: - Queue management (delegated to Rust)
 
     /// Items inserted via ``insert(_:after:)``, preserving Swift identity.
     private var _knownItems: [KitharaFFI.TrackId: KitharaPlayerItem] = [:]
+
+    private func syncCurrentItem(with event: FfiPlayerEvent) {
+        guard case let .currentItemChanged(itemId) = event else { return }
+        publishCurrentItem(itemId.flatMap { _knownItems[$0] })
+    }
+
+    private func publishCurrentItem(_ item: KitharaPlayerItem?) {
+        if _currentItemSubject.value?.ffiTrackId != item?.ffiTrackId {
+            _currentItemSubject.send(item)
+        }
+    }
+
+    private func publishQueueHeadAsCurrent() {
+        publishCurrentItem(items().first)
+    }
+
+    private func publishCommandError(_ error: KitharaError, itemId: TrackId?) {
+        _commandErrorSubject.send(.command(error, itemId: itemId))
+    }
 
     /// The current playback queue.
     ///
@@ -360,7 +427,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     public func items() -> [KitharaPlayerItem] {
         let ffiItems = _inner.items()
         return ffiItems.compactMap { ffiItem in
-            let id = ffiItem.audioId()
+            let id = ffiItem.queueId()
             return _knownItems[id]
         }
     }
@@ -375,12 +442,18 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     ///     ``append(_:)`` for AVQueuePlayer-style append.
     /// - Throws: ``KitharaError`` if `after` is not in the queue.
     public func insert(_ item: KitharaPlayerItem, after: KitharaPlayerItem? = nil) throws {
+        let wasEmpty = itemCount == 0
         _knownItems[item.ffiTrackId] = item
         do {
             try _inner.insert(item: item._inner, after: after?._inner)
+            if wasEmpty {
+                publishCurrentItem(item)
+            }
         } catch let ffiError as FfiError {
             _knownItems.removeValue(forKey: item.ffiTrackId)
-            throw KitharaError(ffi: ffiError)
+            let error = KitharaError(ffi: ffiError)
+            publishCommandError(error, itemId: item.audioId)
+            throw error
         }
     }
 
@@ -388,12 +461,18 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// Counterpart of ``insert(_:after:)``, which inserts at the head
     /// when `after == nil` per the iOS protocol contract.
     public func append(_ item: KitharaPlayerItem) throws {
+        let wasEmpty = itemCount == 0
         _knownItems[item.ffiTrackId] = item
         do {
             try _inner.append(item: item._inner)
+            if wasEmpty {
+                publishCurrentItem(item)
+            }
         } catch let ffiError as FfiError {
             _knownItems.removeValue(forKey: item.ffiTrackId)
-            throw KitharaError(ffi: ffiError)
+            let error = KitharaError(ffi: ffiError)
+            publishCommandError(error, itemId: item.audioId)
+            throw error
         }
     }
 
@@ -405,8 +484,13 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         do {
             try _inner.remove(item: item._inner)
             _knownItems.removeValue(forKey: item.ffiTrackId)
+            if _currentItemSubject.value?.ffiTrackId == item.ffiTrackId {
+                publishQueueHeadAsCurrent()
+            }
         } catch let ffiError as FfiError {
-            throw KitharaError(ffi: ffiError)
+            let error = KitharaError(ffi: ffiError)
+            publishCommandError(error, itemId: item.audioId)
+            throw error
         }
     }
 
@@ -414,6 +498,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     public func removeAllItems() {
         _inner.removeAllItems()
         _knownItems.removeAll()
+        publishCurrentItem(nil)
     }
 
     /// Number of items currently in the queue.
@@ -428,12 +513,20 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// must already have a loaded resource (``KitharaPlayerItem/load()``
     /// finished).
     public func replaceItem(at index: Int, with item: KitharaPlayerItem) throws {
+        let oldItems = items()
+        let replacesCurrent = oldItems.indices.contains(index)
+            && oldItems[index].ffiTrackId == _currentItemSubject.value?.ffiTrackId
         _knownItems[item.ffiTrackId] = item
         do {
             try _inner.replaceItem(index: UInt32(index), item: item._inner)
+            if replacesCurrent {
+                publishCurrentItem(item)
+            }
         } catch let ffiError as FfiError {
             _knownItems.removeValue(forKey: item.ffiTrackId)
-            throw KitharaError(ffi: ffiError)
+            let error = KitharaError(ffi: ffiError)
+            publishCommandError(error, itemId: item.audioId)
+            throw error
         }
     }
 
@@ -447,10 +540,14 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// - Throws: ``KitharaError`` if the index is out of range or the item
     ///   is not yet inserted into the engine.
     public func selectItem(at index: Int, transition: Transition = .none) throws {
+        let snapshot = items()
+        let itemId = snapshot.indices.contains(index) ? snapshot[index].audioId : nil
         do {
             try _inner.selectItem(index: UInt32(index), transition: transition.ffi)
         } catch let ffiError as FfiError {
-            throw KitharaError(ffi: ffiError)
+            let error = KitharaError(ffi: ffiError)
+            publishCommandError(error, itemId: itemId)
+            throw error
         }
     }
 
@@ -469,7 +566,9 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     public func selectItem(_ item: KitharaPlayerItem, transition: Transition = .none) throws {
         let snapshot = items()
         guard let index = snapshot.firstIndex(where: { $0.ffiTrackId == item.ffiTrackId }) else {
-            throw KitharaError.invalidArgument("item \(item.id) not in queue")
+            let error = KitharaError.invalidArgument("item \(item.id) not in queue")
+            publishCommandError(error, itemId: item.audioId)
+            throw error
         }
         try selectItem(at: index, transition: transition)
     }
@@ -495,6 +594,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     public func stop() {
         _inner.stop()
         _knownItems.removeAll()
+        publishCurrentItem(nil)
     }
 
     // MARK: - Network / DRM hooks
@@ -537,6 +637,18 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         _inner.setupHlsAesWithRule(rule: ffiRule)
     }
 
+}
+
+private final class ClosureSeekCallback: KitharaFFI.SeekCallback, @unchecked Sendable {
+    private let completionHandler: SeekCompletionHandler
+
+    init(_ completionHandler: @escaping SeekCompletionHandler) {
+        self.completionHandler = completionHandler
+    }
+
+    func onComplete(finished: Bool) {
+        completionHandler(finished)
+    }
 }
 
 // MARK: - Key processor

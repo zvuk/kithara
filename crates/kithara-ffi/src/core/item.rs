@@ -84,16 +84,12 @@ impl ItemView {
 /// FFI-facing audio player item.
 ///
 /// Carries two identifiers, per iOS `AudioPlayerItemProtocol`:
-/// - [`Self::audio_id`] — monotonic [`TrackId`] (`u64`) reserved at
-///   construction via [`TrackId::allocate`]. The queue consumes the
-///   same value via
-///   [`kithara_queue::Queue::insert_with_id`] / `append_with_id`, so
-///   there is exactly one address space across the FFI ↔ core
-///   boundary. This is `audioId: TrackId` on iOS.
-/// - [`Self::uuid_i64`] — `i64` derived from a per-item `UUIDv5` over
-///   `url + audio_id`. Stable for the item's lifetime and distinct
-///   for every fresh insertion of the same URL. This is
-///   `uuid: Int64` on iOS.
+/// - [`Self::audio_id`] — caller-facing content id. When
+///   [`FfiItemConfig::audio_id`] is absent it falls back to the
+///   internally allocated queue id for standalone Kithara callers.
+/// - [`Self::uuid_i64`] — caller-facing queue-item id. When
+///   [`FfiItemConfig::uuid_i64`] is absent it falls back to the
+///   legacy UUIDv5-derived handle.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct AudioPlayerItem {
     pub(crate) state: Arc<Mutex<ItemView>>,
@@ -114,36 +110,39 @@ pub struct AudioPlayerItem {
     #[cfg(not(target_arch = "wasm32"))]
     event_bridge: Mutex<Option<ItemEventBridge>>,
     observer: Mutex<Option<Arc<dyn ItemObserver>>>,
-    /// Process-wide monotonic id allocated at construction. Surfaces
-    /// through [`Self::audio_id`] and consumed by the queue.
-    id: TrackId,
-    /// `UUIDv5` over `format!("{url}:{audio_id}")`. Two items with the
-    /// same URL but different monotonic [`Self::id`] get different
-    /// uuids, so the queue can distinguish independent insertions.
-    /// Computed once in [`Self::new`] for `O(1)` accessor cost.
-    uuid: Uuid,
+    /// Process-wide monotonic id allocated at construction and consumed
+    /// by the core queue. Not exposed by the high-level Swift API: it is
+    /// only the routing key that lets repeated business tracks coexist.
+    queue_id: TrackId,
+    /// Caller-facing content id returned by [`Self::audio_id`].
+    audio_id: TrackId,
+    /// Caller-facing queue-item uuid returned by [`Self::uuid_i64`].
+    uuid_i64: i64,
 }
 
 /// Methods exported across the FFI boundary.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 impl AudioPlayerItem {
     /// Create a new item with frozen preferences. Reserves a fresh
-    /// [`TrackId`] from the process-wide counter so `audioId` is stable
-    /// from this point on, and derives a `UUIDv5` over
-    /// `format!("{url}:{audio_id}")` for the secondary `uuid` handle.
+    /// private queue id from the process-wide counter. Caller-supplied
+    /// `audioId` / `uuid` are stored on the item and surfaced through
+    /// the iOS-compatible accessors without becoming the core queue key.
     /// Loading starts automatically when the item is inserted into an
     /// [`crate::player::AudioPlayer`].
     #[must_use]
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     pub fn new(config: FfiItemConfig) -> Arc<Self> {
         let live = config.is_live_stream;
-        let id = TrackId::allocate();
-        let key = format!("{}:{}", config.url, id.as_u64());
-        let uuid = Uuid::new_v5(&Uuid::NAMESPACE_URL, key.as_bytes());
+        let queue_id = TrackId::allocate();
+        let audio_id = config.audio_id.unwrap_or(queue_id);
+        let uuid_i64 = config
+            .uuid_i64
+            .unwrap_or_else(|| derived_uuid_i64(&config.url, queue_id));
         Arc::new(Self {
             config,
-            id,
-            uuid,
+            queue_id,
+            audio_id,
+            uuid_i64,
             #[cfg(not(target_arch = "wasm32"))]
             event_bridge: Mutex::default(),
             observer: Mutex::default(),
@@ -154,12 +153,10 @@ impl AudioPlayerItem {
         })
     }
 
-    /// Monotonic per-item identifier reserved at construction. Mirrors
-    /// the iOS `AudioPlayerItemProtocol.audioId: TrackId`. Same value
-    /// the queue uses internally — see [`Self::new`] for the
-    /// allocation contract.
+    /// Caller-facing content id. Mirrors the iOS
+    /// `AudioPlayerItemProtocol.audioId: TrackId`.
     pub fn audio_id(&self) -> TrackId {
-        self.id
+        self.audio_id
     }
 
     /// Cached item duration in seconds. Defaults to `0.0` until the
@@ -236,6 +233,13 @@ impl AudioPlayerItem {
         self.config.preferred_peak_bitrate_expensive
     }
 
+    /// Private queue id used by player-level events to route back to the
+    /// Swift-owned item instance. High-level Swift maps it back to
+    /// [`Self::audio_id`] before publishing public events.
+    pub fn queue_id(&self) -> TrackId {
+        self.queue_id
+    }
+
     pub fn set_observer(&self, observer: Arc<dyn ItemObserver>) {
         *self.observer.lock() = Some(observer);
         self.restart_bridge();
@@ -249,17 +253,10 @@ impl AudioPlayerItem {
         self.config.url.clone()
     }
 
-    /// Signed-integer view of the per-item `UUIDv5` (`url + audioId`).
-    /// Maps to `AudioPlayerItemProtocol.uuid: Int64` on iOS. Distinct
-    /// from [`Self::audio_id`]: two items with the same URL but
-    /// different monotonic ids produce different `uuid_i64`s, so the
-    /// queue can distinguish independent insertions even when the
-    /// caller has not reset state in between.
+    /// Caller-facing queue-item uuid. Maps to
+    /// `AudioPlayerItemProtocol.uuid: Int64` on iOS.
     pub fn uuid_i64(&self) -> i64 {
-        let bytes = self.uuid.as_bytes();
-        let mut buf = [0u8; 8];
-        buf.copy_from_slice(&bytes[0..8]);
-        i64::from_be_bytes(buf)
+        self.uuid_i64
     }
 }
 
@@ -339,8 +336,16 @@ impl AudioPlayerItem {
     /// take a [`TrackId`]. The value is identical — just the wrapper
     /// type — so there is no conversion loss across the boundary.
     pub(crate) fn track_id(&self) -> TrackId {
-        self.id
+        self.queue_id
     }
+}
+
+fn derived_uuid_i64(url: &str, queue_id: TrackId) -> i64 {
+    let key = format!("{}:{}", url, queue_id.as_u64());
+    let uuid = Uuid::new_v5(&Uuid::NAMESPACE_URL, key.as_bytes());
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(&uuid.as_bytes()[0..8]);
+    i64::from_be_bytes(buf)
 }
 
 #[cfg(test)]
@@ -351,6 +356,8 @@ mod tests {
         FfiItemConfig {
             url,
             headers: None,
+            audio_id: None,
+            uuid_i64: None,
             preferred_peak_bitrate: 0.0,
             preferred_peak_bitrate_expensive: 0.0,
             abr_mode: None,
@@ -387,11 +394,32 @@ mod tests {
     fn uuid_i64_matches_uuid_v5_of_url_and_audio_id() {
         let url = "https://example.com/song.mp3";
         let item = item_for(url);
-        let key = format!("{}:{}", url, item.audio_id());
+        let key = format!("{}:{}", url, item.track_id());
         let expected = Uuid::new_v5(&Uuid::NAMESPACE_URL, key.as_bytes());
         let mut buf = [0u8; 8];
         buf.copy_from_slice(&expected.as_bytes()[0..8]);
         assert_eq!(item.uuid_i64(), i64::from_be_bytes(buf));
+    }
+
+    #[kithara::test]
+    fn caller_audio_id_is_exposed_without_becoming_queue_id() {
+        let config = FfiItemConfig {
+            audio_id: Some(TrackId(42)),
+            ..config_with_url("https://example.com/song.mp3".to_string())
+        };
+        let item = AudioPlayerItem::new(config);
+        assert_eq!(item.audio_id(), TrackId(42));
+        assert_ne!(item.track_id(), TrackId(42));
+    }
+
+    #[kithara::test]
+    fn caller_uuid_i64_is_exposed() {
+        let config = FfiItemConfig {
+            uuid_i64: Some(123_456),
+            ..config_with_url("https://example.com/song.mp3".to_string())
+        };
+        let item = AudioPlayerItem::new(config);
+        assert_eq!(item.uuid_i64(), 123_456);
     }
 
     #[kithara::test]

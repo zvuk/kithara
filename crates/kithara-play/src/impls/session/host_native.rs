@@ -5,6 +5,7 @@ use kithara_platform::{
     sync::{Mutex, mpsc},
     thread::spawn_named,
 };
+use tracing::{debug, warn};
 
 use super::{
     client::SessionDispatcher,
@@ -28,9 +29,10 @@ impl SessionClient {
             .lock()
             .send(CmdMsg { cmd, reply_tx })
             .map_err(|_| PlayError::Internal("session thread gone".into()))?;
-        reply_rx
+        let reply = reply_rx
             .recv()
-            .map_err(|_| PlayError::Internal("session thread gone (reply)".into()))
+            .map_err(|_| PlayError::Internal("session thread gone (reply)".into()))?;
+        Ok(reply)
     }
 }
 
@@ -45,12 +47,16 @@ fn engine_thread<B: AudioBackend>(
     start_stream_fn: StartStreamFn<B>,
 ) {
     let mut state = SessionState::<B>::new(start_stream_fn);
+    debug!("[KITHARA-ROUTE] native session worker started");
     // Block on the command-arrival event. `recv` returns `Err` only once
     // every sender has been dropped, which is the worker's exit signal.
     for CmdMsg { cmd, reply_tx } in cmd_rx.iter() {
         let reply = run_cmd(&mut state, cmd);
-        let _ = reply_tx.send(reply);
+        if reply_tx.send(reply).is_err() {
+            warn!("[KITHARA-ROUTE] native session reply receiver dropped");
+        }
     }
+    debug!("[KITHARA-ROUTE] native session worker stopped");
 }
 
 fn spawn_session_client<B: AudioBackend + Send + 'static>(
@@ -90,6 +96,7 @@ fn start_stream_cpal(
     ctx: &mut FirewheelCtx<firewheel::cpal::CpalBackend>,
     sample_rate: u32,
 ) -> Result<(), String> {
+    debug!(sample_rate, "[KITHARA-ROUTE] starting cpal stream");
     let config = firewheel::cpal::CpalConfig {
         output: firewheel::cpal::CpalOutputConfig {
             desired_sample_rate: Some(sample_rate),
@@ -97,5 +104,18 @@ fn start_stream_cpal(
         },
         ..Default::default()
     };
-    ctx.start_stream(config).map_err(|err| err.to_string())
+    match ctx.start_stream(config) {
+        Ok(()) => {
+            debug!(sample_rate, "[KITHARA-ROUTE] cpal stream started");
+            Ok(())
+        }
+        Err(err) => {
+            warn!(
+                sample_rate,
+                ?err,
+                "[KITHARA-ROUTE] cpal stream start failed"
+            );
+            Err(err.to_string())
+        }
+    }
 }

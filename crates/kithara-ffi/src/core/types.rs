@@ -1,4 +1,4 @@
-use kithara_events::TrackStatus as TS;
+use kithara_events::{TrackId, TrackStatus as TS};
 use kithara_platform::time::Duration;
 use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 
@@ -137,18 +137,19 @@ impl std::fmt::Debug for FfiKeyRule {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FfiItemConfig {
     pub abr_mode: Option<FfiAbrMode>,
+    /// Optional caller-facing content id. When absent, the item exposes
+    /// its internally allocated queue id as `audioId` for the standalone
+    /// Kithara API.
+    pub audio_id: Option<TrackId>,
     pub headers: Option<std::collections::HashMap<String, String>>,
+    /// Optional caller-facing queue-item uuid. When absent, the item
+    /// exposes the legacy UUIDv5-derived handle.
+    pub uuid_i64: Option<i64>,
     /// Audio source. Accepts a network URL (`https://example.com/song.mp3`,
     /// `https://…/master.m3u8`) **or** an absolute local file path
     /// (`/Users/…/song.flac`). Parsed via
     /// [`kithara::play::ResourceConfig::for_src`] at insert time, so the
-    /// same string flows untouched into the player core. The item's
-    /// [`crate::item::AudioPlayerItem::audio_id`] is a monotonic
-    /// [`kithara_events::TrackId`] reserved at construction (process-wide
-    /// counter) — independent of this string. The secondary handle
-    /// [`crate::item::AudioPlayerItem::uuid_i64`] is a `UUIDv5` over
-    /// `url + audio_id` and is distinct for every fresh insertion of the
-    /// same URL.
+    /// same string flows untouched into the player core.
     pub url: String,
     /// Caller-declared live-stream flag. `true` means the source is a
     /// live HLS feed (radio / broadcast); the player skips end-of-stream
@@ -282,7 +283,7 @@ impl From<TimeRange> for FfiTimeRange {
 pub enum FfiPlayerEvent {
     TimeChanged { seconds: f64 },
     RateChanged { rate: f32 },
-    CurrentItemChanged { item_id: Option<kithara_events::TrackId> },
+    CurrentItemChanged { item_id: Option<TrackId> },
     StatusChanged { status: FfiPlayerStatus },
     TimeControlStatusChanged { status: FfiTimeControlStatus },
     Error { error: String },
@@ -296,10 +297,11 @@ pub enum FfiPlayerEvent {
     /// [`Self::ItemDidPlayToEnd`]: the track did NOT reach its
     /// natural end. UI clients should surface this as a track
     /// failure (skip-and-flag), not treat it as completion.
-    ItemDidFail { item_id: Option<kithara_events::TrackId> },
+    ItemDidFail { item_id: Option<TrackId> },
     /// Queue-level: the loading/playback status of an item changed.
-    /// `item_id` matches `AudioPlayerItem::audio_id()`.
-    TrackStatusChanged { item_id: kithara_events::TrackId, status: FfiTrackStatus },
+    /// `item_id` is the private queue id used by the player wrapper to
+    /// route back to the Swift-owned item.
+    TrackStatusChanged { item_id: TrackId, status: FfiTrackStatus },
     /// Queue reached the end with `RepeatMode::Off` active.
     QueueEnded,
     /// A crossfade between tracks just started. `duration_seconds` is

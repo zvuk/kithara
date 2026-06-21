@@ -223,6 +223,10 @@ impl WasmInner {
         self.send(WorkerCmd::Pause);
     }
 
+    pub(crate) fn notify_audio_route_changed(&self, _reason: &str) -> Result<(), FfiError> {
+        Ok(())
+    }
+
     pub(crate) fn play(&self) {
         self.send(WorkerCmd::Play);
     }

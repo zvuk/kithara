@@ -186,7 +186,7 @@ kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-app = { path = "crates/kithara-app", default-features = false }
 kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha3" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
-serial_test = "3.4.0"
+serial_test = "3.5.0"
 unimock = { version = "0.6", features = ["std"] }
 backtrace = "0.3"
 tokio = { version = "1.52.3", default-features = false, features = ["sync", "macros", "rt", "time"] }
@@ -197,17 +197,17 @@ wasm_safe_thread = "0.1.1"
 parking_lot = "0.12"
 pin-project-lite = "0.2"
 arc-swap = "1.9"
-bytes = "1.11.1"
+bytes = "1.12.0"
 ringbuf = "0.5.0"
 slice_ring_buf = "0.3"
 async-stream = "0.3.6"
 crossbeam-queue = "0.3"
-reqwest = { version = "0.13.3", default-features = false }
+reqwest = { version = "0.13.4", default-features = false }
 url = "2.5.8"
 axum = "0.8.9"
 hls_m3u8 = "0.7.0"
 fallible-iterator = "0.3"
-re_mp4 = "0.4.0"
+re_mp4 = "0.5.0"
 symphonia = { version = "0.6.0", features = ["all", "opt-simd"] }
 symphonia-format-isomp4 = "0.6.0"
 symphonia-core = "0.6.0"
@@ -215,8 +215,8 @@ fdk-aac = "0.8.0"
 fdk-aac-sys = "0.5.0"
 ffmpeg-next = "8.1.0"
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
-ratatui = "0.30.0"
-rubato = "2.0"
+ratatui = "0.30.2"
+rubato = "3.0"
 realfft = "3.5"
 # Beat detection NN inference (kithara-beat).
 rten = { version = "0.24", features = ["fft"] }
@@ -227,10 +227,10 @@ bungee-rs = "0.1.1"
 audioadapter-buffers = "3.0"
 smallvec = "1"
 num-traits = { version = "0.2", default-features = false }
-cpal = { version = "0.17", default-features = false }
+cpal = { version = "0.18", default-features = false }
 firewheel = { version = "0.10.0", default-features = false, features = ["std", "pool", "all_nodes", "musical_transport", "scheduled_events", "tracing"] }
 firewheel-web-audio = { version = "0.4.0", default-features = false }
-bevy_platform = { version = "0.18", default-features = false, features = ["alloc", "std", "web"] }
+bevy_platform = { version = "0.19", default-features = false, features = ["alloc", "std", "web"] }
 biquad = "0.6.0"
 thunderdome = { version = "0.6.1", default-features = false }
 portable-atomic = { version = "1.13.1", default-features = false, features = ["fallback", "float"] }
@@ -253,7 +253,7 @@ send_wrapper = "0.6"
 base64 = "0.22.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yml = "0.0.12"
+serde_yml = "0.0.13"
 toml = { version = "1.1", features = ["preserve_order"] }
 rkyv = "0.8.16"
 bytecheck = "0.8.2"
@@ -268,27 +268,27 @@ rand = "0.10.1"
 
 # misc
 glob = "0.3"
-aes = "0.9.0"
-cbc = "0.2.0"
+aes = "0.9.1"
+cbc = "0.2.1"
 uuid = { version = "1", features = ["v5"] }
 sha2 = "0.11"
 tower = "0.5.3"
-tower-http = { version = "0.6", features = ["cors", "fs", "set-header"] }
+tower-http = { version = "0.7", features = ["cors", "fs", "set-header"] }
 tempfile = "3.27.0"
 
 # FFI
-uniffi = { version = "0.31.1" }
+uniffi = { version = "0.31.2" }
 jni = "0.22"
 ndk-context = "0.1.1"
 rustls-platform-verifier = "0.7.0"
 
 # async traits
 async-trait = "0.1.89"
-thirtyfour = "0.37.0"
+thirtyfour = "0.37.1"
 
 # delegation
 delegate = "0.13"
-bitflags = "2.11"
+bitflags = "2.13"
 
 # proc macros
 proc-macro2 = "1"
@@ -316,7 +316,7 @@ stats_alloc = "0.1"
 assert_no_alloc = "1.1"
 
 # performance monitoring
-hotpath = "0.16.1"
+hotpath = "0.17.0"
 criterion = "0.8.2"
 
 # fast interleave/deinterleave

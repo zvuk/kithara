@@ -4,19 +4,24 @@ import RxSwift
 
 final class KitharaZvukPlayerItemService: PlayerItemService {
     enum Error: Swift.Error {
-        case unsupportedLegacyFairplay
+        case legacyFairplayDisabled
         case invalidHeaderName
         case invalidHeaderValue(name: String)
     }
 
     var fairplayHlsEnabled = false
+    private let playabilityStartTolerance: TimeInterval
+
+    init(playabilityStartTolerance: TimeInterval = 5.0) {
+        self.playabilityStartTolerance = playabilityStartTolerance
+    }
 
     func makePlayerItem(
         track: StreamToPlay,
         streamHeaders: [AnyHashable: Any]?
     ) -> Observable<Event<any AudioPlayerItemProtocol>> {
-        guard track.streamType != .fairplay else {
-            return .just(.error(Error.unsupportedLegacyFairplay))
+        if track.streamType == .fairplay && !fairplayHlsEnabled {
+            return .just(.error(Error.legacyFairplayDisabled))
         }
 
         let headers: [String: String]?
@@ -29,6 +34,8 @@ final class KitharaZvukPlayerItemService: PlayerItemService {
         let item = KitharaZvukAudioPlayerItem(
             url: track.url,
             audioId: track.id,
+            uuid: track.uuid,
+            playabilityStartTolerance: playabilityStartTolerance,
             additionalHeaders: headers
         )
 

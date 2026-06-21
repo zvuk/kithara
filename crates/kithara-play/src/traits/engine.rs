@@ -24,6 +24,8 @@ pub trait Engine: MaybeSend + MaybeSync + 'static {
 
     fn is_running(&self) -> bool;
 
+    fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError>;
+
     fn master_channels(&self) -> u16;
 
     fn master_sample_rate(&self) -> u32;
