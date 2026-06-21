@@ -8,10 +8,14 @@ repository.workspace = true
 description = "Beat / downbeat detection: pure-Rust NN inference (beat_this port on rten)."
 keywords = ["audio", "beat", "tempo", "bpm", "dsp"]
 categories = ["multimedia::audio"]
+exclude = ["tests/**"]
 
 [lints]
 workspace = true
 
+[features]
+default = []
+embed-small-model = []
 
 [dependencies]
 num-traits = { workspace = true }

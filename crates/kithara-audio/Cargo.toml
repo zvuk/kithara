@@ -65,7 +65,7 @@ stretch-signalsmith = ["dep:signalsmith-stretch"]
 stretch-bungee = ["dep:bungee-rs"]
 # NN beat/downbeat detector (kithara-beat, embedded small model). Native-only
 # in practice: wasm builds simply do not enable it (rten on wasm unverified).
-beat-nn = ["dep:kithara-beat"]
+beat-nn = ["dep:kithara-beat", "kithara-beat/embed-small-model"]
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
 signalsmith-stretch = { workspace = true, optional = true }
