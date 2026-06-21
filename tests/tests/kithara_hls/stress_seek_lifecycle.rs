@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara::{
     assets::StoreOptions,
@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use kithara_platform::{CancellationToken, thread, time::Instant, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, thread, time::Duration, tokio::task::spawn_blocking};
 use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;
@@ -162,7 +162,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
     info!(%url, "HLS server ready");
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
@@ -182,6 +182,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .media_info(wav_info)
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -196,16 +197,15 @@ async fn stress_seek_lifecycle_with_zero_reset(
 
     let result = spawn_blocking(move || {
         let channels = spec.channels as usize;
-        let chunk_samples = (0.05 * f64::from(spec.sample_rate) * channels as f64) as usize;
+        let chunk_samples = (0.05 * f64::from(spec.sample_rate.get()) * channels as f64) as usize;
         let mut buf = vec![0.0f32; chunk_samples];
         let mut rng = Xorshift64::new(0xCAFE_BABE_DEAD_BEEF);
 
         info!("Phase 1: warmup - reading until ABR switch");
         let mut initial_direction = Direction::Unknown;
         let mut switch_detected = false;
-        let warmup_deadline = Instant::now() + Duration::from_secs(10);
 
-        while Instant::now() < warmup_deadline {
+        loop {
             let (n, _, _) = read_with_retry(&mut audio, &mut buf);
             if n == 0 {
                 break;

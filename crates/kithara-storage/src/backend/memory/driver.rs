@@ -4,7 +4,7 @@ use std::{fmt, sync::Arc};
 
 use arc_swap::ArcSwapOption;
 use kithara_bufpool::{BytePool, PooledOwned};
-use kithara_platform::{CancellationToken, Mutex};
+use kithara_platform::{CancelToken, sync::Mutex};
 use rangemap::RangeSet;
 
 use crate::{
@@ -42,14 +42,14 @@ pub(super) struct MemState {
 ///
 /// `path()` returns `None`.
 pub struct MemDriver {
-    pub(super) state: Mutex<MemState>,
     /// Immutable committed snapshot for the lock-free read fast path.
     pub(super) committed: ArcSwapOption<Vec<u8>>,
+    pub(super) state: Mutex<MemState>,
 }
 
 impl fmt::Debug for MemDriver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = self.state.lock_sync();
+        let state = self.state.lock();
         f.debug_struct("MemDriver")
             .field("len", &state.len)
             .field("capacity", &state.buf.capacity())
@@ -105,8 +105,8 @@ impl Driver for MemDriver {
         };
 
         let driver = Self {
-            state: Mutex::new(MemState { buf, len }),
             committed,
+            state: Mutex::new(MemState { buf, len }),
         };
 
         Ok((driver, init_state))
@@ -126,7 +126,7 @@ impl MemResource {
     ///
     /// Panics if `MemDriver::open` fails (should never happen with default options).
     #[must_use]
-    pub fn new(cancel: CancellationToken) -> Self {
+    pub fn new(cancel: CancelToken) -> Self {
         Self::open(cancel, MemOptions::default())
             .expect("BUG: MemDriver::open with default options is infallible")
     }

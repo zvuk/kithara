@@ -5,12 +5,10 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::time::Duration;
-
 use kithara::{audio::Bucket, prelude::ResourceConfig};
 use kithara_app::waveform::{TrackAnalysis, TrackAnalysisRunner};
 use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
-use kithara_platform::CancellationToken;
+use kithara_platform::{CancelToken, time::Duration};
 
 fn silence_wav_spec() -> SignalSpec {
     SignalSpec {
@@ -24,13 +22,13 @@ fn silence_wav_spec() -> SignalSpec {
 
 /// Run one analysis through the production runner and await its result.
 async fn run_analysis(
-    master: &CancellationToken,
+    master: &CancelToken,
     config: ResourceConfig,
     buckets: usize,
 ) -> Option<TrackAnalysis> {
     let mut runner = TrackAnalysisRunner::new(master, buckets);
     let mut rx = runner.analyze(config);
-    
+
     // Staged analysis can emit twice (waveform, then waveform+beat).
     let mut last = None;
     while rx.changed().await.is_ok() {
@@ -50,17 +48,21 @@ async fn runner_silent_wav_yields_all_zero_envelope() {
     let config =
         ResourceConfig::new(url.as_str()).expect("silence URL must build a ResourceConfig");
 
-    // A silent 1s WAV must decode end to end and finalise to exactly
-    // `buckets` all-zero buckets (no frames are loud, so nothing normalises
-    // up to 1.0).
-    let analysis = run_analysis(&CancellationToken::default(), config, 100)
+    // A silent 1s WAV must decode end to end and finalise to a native-resolution
+    // envelope capped by the requested maximum. No frames are loud, so nothing
+    // normalises up to 1.0.
+    let analysis = run_analysis(&CancelToken::never(), config, 100)
         .await
         .expect("silent WAV must decode to a finalised analysis");
     let waveform = analysis
         .waveform
         .expect("the registered waveform analyzer must fill its slot");
 
-    assert_eq!(waveform.len(), 100, "one bucket per requested column");
+    assert!(
+        (1..=100).contains(&waveform.len()),
+        "requested buckets are an upper bound, got {}",
+        waveform.len()
+    );
     assert!(
         waveform.buckets().iter().all(|b| *b == Bucket::default()),
         "a silent source must yield all-zero buckets: {:?}",
@@ -79,7 +81,7 @@ async fn runner_returns_nothing_when_cancelled_upfront() {
     let config =
         ResourceConfig::new(url.as_str()).expect("silence URL must build a ResourceConfig");
 
-    let master = CancellationToken::default();
+    let master = CancelToken::never();
     master.cancel();
     assert!(
         run_analysis(&master, config, 100).await.is_none(),

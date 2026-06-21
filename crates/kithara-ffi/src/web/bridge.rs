@@ -41,30 +41,6 @@ impl WorkerBridge {
     /// Sentinel stored in [`CURRENT_TRACK_ID`] when no track is current.
     const NO_CURRENT_TRACK: i64 = -1;
 
-    fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
-        self.cmd_tx.lock_sync()
-    }
-
-    /// Live playback position (seconds) read from the worker's audio
-    /// session bridge. `0.0` when no item is loaded.
-    pub(crate) fn position_secs(&self) -> f64 {
-        let _ = self;
-        wasm_support::bridge_position_secs()
-    }
-
-    /// Current item duration (seconds) read from the worker's audio
-    /// session bridge. `0.0` when unknown.
-    pub(crate) fn duration_secs(&self) -> f64 {
-        let _ = self;
-        wasm_support::bridge_duration_secs()
-    }
-
-    /// Whether the worker's audio session is currently playing.
-    pub(crate) fn is_playing(&self) -> bool {
-        let _ = self;
-        wasm_support::bridge_is_playing()
-    }
-
     /// Id of the worker's current track, read synchronously from the
     /// shared [`CURRENT_TRACK_ID`] atomic the worker's event source keeps
     /// in sync. `None` when no track is current.
@@ -76,6 +52,13 @@ impl WorkerBridge {
         }
     }
 
+    /// Current item duration (seconds) read from the worker's audio
+    /// session bridge. `0.0` when unknown.
+    pub(crate) fn duration_secs(&self) -> f64 {
+        let _ = self;
+        wasm_support::bridge_duration_secs()
+    }
+
     /// Boot the engine worker once. Idempotent: subsequent calls return
     /// early while a live channel exists.
     pub(crate) fn ensure_worker_started(&self) {
@@ -83,7 +66,7 @@ impl WorkerBridge {
             return;
         }
 
-        let _start_guard = self.start_lock.lock_sync();
+        let _start_guard = self.start_lock.lock();
         if self.lock_cmd_tx().is_some() {
             return;
         }
@@ -100,10 +83,27 @@ impl WorkerBridge {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);
 
-        let worker = kithara_platform::spawn(move || {
+        let worker = kithara_platform::thread::spawn(move || {
             crate::web::worker::worker_main(cmd_rx);
         });
         std::mem::forget(worker);
+    }
+
+    /// Whether the worker's audio session is currently playing.
+    pub(crate) fn is_playing(&self) -> bool {
+        let _ = self;
+        wasm_support::bridge_is_playing()
+    }
+
+    fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
+        self.cmd_tx.lock()
+    }
+
+    /// Live playback position (seconds) read from the worker's audio
+    /// session bridge. `0.0` when no item is loaded.
+    pub(crate) fn position_secs(&self) -> f64 {
+        let _ = self;
+        wasm_support::bridge_position_secs()
     }
 
     /// Forward a command to the worker, respawning the worker once if the
@@ -120,7 +120,7 @@ impl WorkerBridge {
             .as_ref()
             .cloned()
             .ok_or_else(|| JsValue::from_str("command channel not ready"))?;
-        if tx.send_sync(cmd.clone()).is_ok() {
+        if tx.send(cmd.clone()).is_ok() {
             return Ok(());
         }
 
@@ -131,7 +131,7 @@ impl WorkerBridge {
             .as_ref()
             .cloned()
             .ok_or_else(|| JsValue::from_str("command channel not ready"))?;
-        tx.send_sync(cmd)
+        tx.send(cmd)
             .map_err(|_| JsValue::from_str("worker channel closed"))
     }
 }

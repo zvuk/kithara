@@ -5,6 +5,7 @@ use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_hls::{KeyOptions, KeyProcessorRule};
 use kithara_platform::{
     sync::mpsc,
+    thread::{assert_not_main_thread, keep_worker_alive},
     time::{Duration, sleep},
     tokio::task::spawn as task_spawn,
 };
@@ -23,8 +24,8 @@ use crate::{
 /// and each track build snapshots it into a [`ResourceConfig`].
 #[derive(Default)]
 struct BuildState {
-    keys: KeyOptions,
     headers: HashMap<String, String>,
+    keys: KeyOptions,
 }
 
 macro_rules! clog {
@@ -33,7 +34,7 @@ macro_rules! clog {
     };
 }
 
-/// Entry called inside a Web Worker thread (via `kithara_platform::spawn`).
+/// Entry called inside a Web Worker thread (via `thread::spawn`).
 ///
 /// Creates and owns the [`Queue`] (mirroring
 /// [`NativeInner`](crate::native::inner::NativeInner)'s construction),
@@ -42,12 +43,12 @@ pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
     /// Default crossfade window, in seconds. Mirrors the legacy worker.
     const CROSSFADE_SECONDS: f32 = 5.0;
 
-    kithara_platform::thread::assert_not_main_thread(concat!(module_path!(), "::worker_main"));
+    assert_not_main_thread(concat!(module_path!(), "::worker_main"));
     // Without this the Worker's spawn closure returns immediately (it only
     // spawns async tasks) and `wasm_safe_thread` `close()`s the Worker, killing
     // the command + tick loops. Keeps the Worker's event loop pumping for the
     // page's lifetime so the spawned futures keep running.
-    kithara_platform::thread::keep_worker_alive();
+    keep_worker_alive();
 
     task_spawn(async move {
         let queue = Rc::new(Queue::new(QueueConfig::default()));

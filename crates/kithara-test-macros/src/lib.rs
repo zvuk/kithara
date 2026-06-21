@@ -12,6 +12,7 @@
 //! - [`mock`] — `#[kithara::mock]` (unimock forwarder, gated `cfg(any(test, feature = "mock"))`).
 
 mod fixture;
+mod flash;
 mod hang_watchdog;
 mod mock;
 mod probe;
@@ -38,6 +39,15 @@ pub fn hang_watchdog(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn fixture(attr: TokenStream, item: TokenStream) -> TokenStream {
     fixture::expand(attr, item)
+}
+
+/// `#[kithara::flash]` / `#[kithara::flash(true|false)]` — PROD dynamic-flash
+/// guard. Wraps a fn so its body propagates flash through the callstack and
+/// spawn (sync: RAII guard; async: per-poll combinator). No-op off `flash`.
+/// См. [`flash`] для деталей.
+#[proc_macro_attribute]
+pub fn flash(attr: TokenStream, item: TokenStream) -> TokenStream {
+    flash::expand(attr, item)
 }
 
 /// `#[kithara::probe]` — USDT + tracing-event instrumentation.

@@ -2,6 +2,8 @@ use std::{error::Error as StdError, io, io::ErrorKind, num::TryFromIntError};
 
 use kithara_bufpool::BudgetExhausted;
 use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, VariantChangeError};
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+use kithara_stream::{NotReadyCause, StreamPending};
 use thiserror::Error;
 
 /// Errors that can occur during audio decoding.
@@ -48,6 +50,9 @@ pub enum DecodeError {
     /// means the backend itself is absent from the binary.
     #[error("Backend unavailable: {backend}")]
     BackendUnavailable { backend: &'static str },
+
+    #[error("invalid sample rate: zero is not a valid audio rate ({resource})")]
+    InvalidSampleRate { resource: &'static str },
 
     /// A seek interrupted the decode operation. Not a real error —
     /// the caller should check for pending seeks and retry.
@@ -181,6 +186,35 @@ impl DecodeError {
     #[must_use]
     pub fn is_interrupted(&self) -> bool {
         matches!(self.classify(), ErrorClass::Interrupted)
+    }
+
+    /// Typed [`PendingReason`] carried by a transient source-read error
+    /// (`Interrupted`/`WouldBlock` `io::Error` with a `StreamPending` /
+    /// `PendingReason` payload). Demuxers use this to honour the
+    /// [`Demuxer::next_frame`](crate::demuxer::Demuxer::next_frame)
+    /// contract — "data not ready" returns `Ok(DemuxOutcome::Pending)`,
+    /// never `Err`. Mirrors the Symphonia demuxer's not-ready guard
+    /// (including the bare-`Interrupted` → `SourcePending` default).
+    #[must_use]
+    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    pub(crate) fn pending_reason(&self) -> Option<PendingReason> {
+        let io_err = match self {
+            Self::Io(e) => e,
+            Self::Backend(b) => b.as_ref().downcast_ref::<io::Error>()?,
+            _ => return None,
+        };
+        if io_err.kind() != ErrorKind::Interrupted && io_err.kind() != ErrorKind::WouldBlock {
+            return None;
+        }
+        let reason = io_err
+            .get_ref()
+            .and_then(|src| {
+                src.downcast_ref::<StreamPending>()
+                    .map(|p| p.reason)
+                    .or_else(|| src.downcast_ref::<PendingReason>().copied())
+            })
+            .unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending));
+        Some(reason)
     }
 }
 

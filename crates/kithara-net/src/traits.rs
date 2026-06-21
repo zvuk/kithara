@@ -1,13 +1,16 @@
 use std::{
     pin::Pin,
     task::{Context, Poll},
-    time::Duration,
 };
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use kithara_platform::{CancellationToken, MaybeSend, MaybeSync};
+use kithara_platform::{
+    CancelToken,
+    maybe_send::{MaybeSend, MaybeSync},
+    time::Duration,
+};
 use url::Url;
 
 mod kithara {
@@ -101,7 +104,7 @@ pub trait NetExt: Net + Sized {
     fn with_retry(
         self,
         policy: RetryPolicy,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> RetryNet<Self, DefaultRetryPolicy> {
         RetryNet::new(self, DefaultRetryPolicy::new(policy), cancel)
     }

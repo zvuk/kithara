@@ -4,7 +4,8 @@ use crate::runtime::SlotId;
 
 /// Best result from a single round-robin pass over all nodes.
 ///
-/// Ordered by priority: `Produced > Waiting > Backpressured > Idle`.
+/// Ordered by priority:
+/// `Produced > Waiting > UpstreamPending > Backpressured > Idle`.
 /// A single node returning `Progress` overrides everything else.
 /// `Waiting` (upstream-blocked) outranks `Backpressured`
 /// (downstream-not-pulling) so a real source hang is still detected
@@ -17,6 +18,10 @@ pub(crate) enum PassOutcome {
     /// (source not ready). Ticking the hang watchdog here turns a
     /// forever-stuck source into a panic at the configured budget.
     Waiting,
+    /// No progress made and at least one node is waiting on an already
+    /// in-flight upstream demand. This is not a lost wake/dispatch; the
+    /// source layer owns terminal failure detection for the fetch.
+    UpstreamPending,
     /// No progress made and every non-terminal node is downstream-
     /// backpressured (PCM ring full / consumer not pulling). The hang
     /// watchdog must NOT tick — this is the paused/idle player state.
@@ -43,6 +48,9 @@ pub(crate) enum SchedulerEvent {
     /// blocked-forever source surfaces as a hang panic instead of an
     /// indefinite park.
     Waiting,
+    /// Source demand is already in flight; park briefly without ticking
+    /// the audio-worker hang detector.
+    UpstreamPending,
     /// Every non-terminal slot is downstream-backpressured (its
     /// downstream consumer is not pulling, so the PCM ring is full
     /// and the node cannot push more). Progress is not expected until

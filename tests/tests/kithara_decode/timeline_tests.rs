@@ -1,7 +1,8 @@
-use std::{io::Cursor, time::Duration};
+use std::io::Cursor;
 
 use kithara::decode::{DecoderConfig, DecoderFactory, PcmChunk};
 use kithara_integration_tests::audio_fixture::EmbeddedAudio;
+use kithara_platform::time::Duration;
 #[kithara::test]
 fn test_progressive_file_timeline_monotonic() {
     let audio = EmbeddedAudio::get();
@@ -16,7 +17,7 @@ fn test_progressive_file_timeline_monotonic() {
     while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
         let meta = chunk.meta;
 
-        assert_eq!(meta.spec.sample_rate, 44100);
+        assert_eq!(meta.spec.sample_rate.get(), 44100);
         assert_eq!(meta.spec.channels, 2);
 
         assert_eq!(
@@ -25,8 +26,9 @@ fn test_progressive_file_timeline_monotonic() {
             meta.frame_offset
         );
 
-        let expected_ts =
-            Duration::from_secs_f64(meta.frame_offset as f64 / f64::from(meta.spec.sample_rate));
+        let expected_ts = Duration::from_secs_f64(
+            meta.frame_offset as f64 / f64::from(meta.spec.sample_rate.get()),
+        );
         let diff = meta.timestamp.abs_diff(expected_ts);
         assert!(
             diff < Duration::from_micros(100),
@@ -73,7 +75,7 @@ fn test_progressive_file_seek_resets_frame_offset() {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod hls_timeline {
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
 
     use kithara::{
         assets::StoreOptions,
@@ -86,7 +88,7 @@ mod hls_timeline {
         hls_server::{HlsTestServer, HlsTestServerConfig},
         signal_pcm::signal,
     };
-    use kithara_platform::CancellationToken;
+    use kithara_platform::{CancelToken, time::Duration};
 
     use crate::common::test_defaults::SawWav;
 
@@ -121,7 +123,7 @@ mod hls_timeline {
 
         let url = server.url("/master.m3u8");
         let temp_dir = TestTempDir::new();
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
 
         let hls_config = HlsConfig::for_url(url)
             .store(StoreOptions::new(temp_dir.path()))
@@ -134,7 +136,7 @@ mod hls_timeline {
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
         let decoder_config = DecoderConfig::builder()
             .hint("wav".to_string())
-            .maybe_segment_layout(stream.as_segment_layout())
+            .maybe_byte_map(stream.byte_map())
             .build();
 
         let result = tokio::task::spawn_blocking(move || {
@@ -148,7 +150,7 @@ mod hls_timeline {
             while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
                 let meta = chunk.meta;
 
-                assert_eq!(meta.spec.sample_rate, SawWav::DEFAULT.sample_rate);
+                assert_eq!(meta.spec.sample_rate.get(), SawWav::DEFAULT.sample_rate);
                 assert_eq!(meta.spec.channels, SawWav::DEFAULT.channels);
 
                 assert_eq!(
@@ -158,7 +160,7 @@ mod hls_timeline {
                 );
 
                 let expected_ts = Duration::from_secs_f64(
-                    meta.frame_offset as f64 / f64::from(meta.spec.sample_rate),
+                    meta.frame_offset as f64 / f64::from(meta.spec.sample_rate.get()),
                 );
                 let diff = meta.timestamp.abs_diff(expected_ts);
                 assert!(

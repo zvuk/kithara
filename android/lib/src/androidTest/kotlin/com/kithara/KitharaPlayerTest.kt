@@ -3,7 +3,6 @@ package com.kithara
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.kithara.ffi.FfiPlayerEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -71,16 +70,14 @@ class KitharaPlayerTest {
     }
 
     @Test
-    fun queueItemRemovedEventUpdatesItemsSnapshot() {
+    fun removeUpdatesItemsSnapshot() {
         val player = KitharaPlayer()
         val item = KitharaPlayerItem("https://example.com/audio.mp3")
 
         player.insert(item)
         assertEquals(listOf(item.id), player.items.map(KitharaPlayerItem::id))
 
-        val handleEvent = KitharaPlayer::class.java.getDeclaredMethod("handleEvent", FfiPlayerEvent::class.java)
-        handleEvent.isAccessible = true
-        handleEvent.invoke(player, FfiPlayerEvent.QueueItemRemoved(item.id))
+        player.remove(item)
 
         assertTrue(player.items.isEmpty())
     }

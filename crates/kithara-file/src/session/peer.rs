@@ -1,5 +1,6 @@
 use std::{
     io,
+    io::Error,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -11,7 +12,7 @@ use kithara_abr::Abr;
 use kithara_assets::{ProducerHandle, ReadSide, WriteSide};
 use kithara_events::{FileError, FileEvent};
 use kithara_net::{Headers, NetError, RangeSpec, Retryability};
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use kithara_storage::ResourceStatus;
 use kithara_stream::{
     MediaInfo,
@@ -52,28 +53,6 @@ impl FilePeer {
         }
     }
 
-    /// Whether this peer may issue GETs for the shared resource.
-    ///
-    /// Resources with no demand lease (standalone store, single
-    /// consumer) always drive. With a lease, only the elected producer
-    /// drives; a non-producer first tries to take over an abandoned slot
-    /// (`try_take_producer`) and otherwise yields to the live producer.
-    fn ensure_producer(&self) -> bool {
-        let Some(lease) = self.inner.demand_lease.as_ref() else {
-            return true;
-        };
-        let mut producer = self.producer.lock_sync();
-        if producer.is_some() {
-            return true;
-        }
-        if let Some(handle) = lease.try_take_producer() {
-            *producer = Some(handle);
-            return true;
-        }
-        drop(producer);
-        false
-    }
-
     fn build_fetch_cmd(&self, resume_from: u64) -> FetchCmd {
         let url = self.inner.asset.url.clone();
         let headers = self.inner.asset.headers.clone();
@@ -81,17 +60,25 @@ impl FilePeer {
 
         let raw = self.inner.asset.raw.clone();
         let coord_writer = Arc::clone(&self.inner.source.coord);
+        let inner_for_write = Arc::clone(&self.inner);
         let offset = Arc::new(AtomicU64::new(resume_from));
         let writer_offset = Arc::clone(&offset);
         let writer = Box::new(move |chunk: &[u8]| -> io::Result<()> {
-            let pos = writer_offset.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            let chunk_len = u64::try_from(chunk.len()).map_err(|err| {
+                Error::other(format!("file chunk length does not fit u64: {err}"))
+            })?;
+            let pos = writer_offset.fetch_add(chunk_len, Ordering::Relaxed);
+            let end = pos
+                .checked_add(chunk_len)
+                .ok_or_else(|| Error::other("file download offset overflow"))?;
             let Some(raw) = raw.as_ref() else {
-                return Err(io::Error::other(
+                return Err(Error::other(
                     "file resource has no writer (already committed or read-only)",
                 ));
             };
-            raw.write_at(pos, chunk).map_err(io::Error::other)?;
-            coord_writer.set_download_pos(pos + chunk.len() as u64);
+            raw.write_at(pos, chunk).map_err(Error::other)?;
+            coord_writer.set_download_pos(end);
+            inner_for_write.wake_worker();
             Ok(())
         });
 
@@ -122,6 +109,28 @@ impl FilePeer {
             .maybe_headers(headers)
             .on_complete(on_complete)
             .build()
+    }
+
+    /// Whether this peer may issue GETs for the shared resource.
+    ///
+    /// Resources with no demand lease (standalone store, single
+    /// consumer) always drive. With a lease, only the elected producer
+    /// drives; a non-producer first tries to take over an abandoned slot
+    /// (`try_take_producer`) and otherwise yields to the live producer.
+    fn ensure_producer(&self) -> bool {
+        let Some(lease) = self.inner.demand_lease.as_ref() else {
+            return true;
+        };
+        let mut producer = self.producer.lock();
+        if producer.is_some() {
+            return true;
+        }
+        if let Some(handle) = lease.try_take_producer() {
+            *producer = Some(handle);
+            return true;
+        }
+        drop(producer);
+        false
     }
 
     /// Start of the next byte range worth fetching, or `None` when the
@@ -161,7 +170,7 @@ impl Peer for FilePeer {
     }
 
     fn priority(&self) -> RequestPriority {
-        if self.inner.source.coord.timeline().is_playing() {
+        if self.inner.source.coord.activity().is_playing() {
             RequestPriority::High
         } else {
             RequestPriority::Low

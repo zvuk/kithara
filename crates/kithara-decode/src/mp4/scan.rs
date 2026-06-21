@@ -1,4 +1,7 @@
-use std::{io::SeekFrom, ops::ControlFlow};
+use std::{
+    io::{ErrorKind, SeekFrom},
+    ops::ControlFlow,
+};
 
 use smallvec::SmallVec;
 use thiserror::Error;
@@ -573,7 +576,7 @@ fn next_box(
     let mut header = [0; 8];
     match reader.read_exact(&mut header) {
         Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+        Err(error) if error.kind() == ErrorKind::UnexpectedEof => {
             if end.is_some() {
                 return Err(invalid("truncated MP4 box header"));
             }
@@ -589,7 +592,7 @@ fn next_box(
         1 => {
             let mut extended = [0; 8];
             reader.read_exact(&mut extended).map_err(|error| {
-                if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                if error.kind() == ErrorKind::UnexpectedEof {
                     invalid("truncated extended MP4 box size")
                 } else {
                     error.into()

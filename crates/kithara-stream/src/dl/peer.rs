@@ -9,7 +9,9 @@ use kithara_abr::{Abr, AbrHandle, AbrPeerId};
 use kithara_events::{EventBus, RequestPriority};
 use kithara_net::{Headers, NetError};
 use kithara_platform::{
-    CancelGroup, CancellationToken, RwLock,
+    CancelGroup, CancelToken,
+    sync::RwLock,
+    time::Instant,
     tokio::sync::{mpsc, oneshot},
 };
 
@@ -83,7 +85,7 @@ pub(super) enum ResponseTarget {
 /// `CancelReason::PeerCancel` without holding a reference back into
 /// the Registry.
 pub(super) struct SlotEntry {
-    pub(super) peer_cancel: CancellationToken,
+    pub(super) peer_cancel: CancelToken,
     pub(super) cmd: InternalCmd,
 }
 
@@ -96,7 +98,7 @@ pub(super) struct InternalCmd {
     /// Wall-clock instant the cmd was placed into a priority slot.
     /// Used to compute `RequestStarted::wait_in_queue` later in the
     /// pipeline.
-    pub(super) enqueued_at: kithara_platform::time::Instant,
+    pub(super) enqueued_at: Instant,
     /// Bus of the peer that issued this command. Downloader publishes
     /// per-fetch `DownloaderEvent`s here.
     pub(super) bus: Option<EventBus>,
@@ -125,7 +127,7 @@ struct PeerInner {
     /// to both the handle's own imperative path and the Registry's
     /// proactive `poll_next` path.
     bus: Arc<RwLock<Option<EventBus>>>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     cmd_tx: mpsc::Sender<InternalCmd>,
 }
 
@@ -155,7 +157,7 @@ impl std::fmt::Debug for PeerHandle {
 impl PeerHandle {
     pub(super) fn new(
         pool: Arc<DownloaderInner>,
-        cancel: CancellationToken,
+        cancel: CancelToken,
         cmd_tx: mpsc::Sender<InternalCmd>,
         bus: Arc<RwLock<Option<EventBus>>>,
         abr: AbrHandle,
@@ -215,7 +217,7 @@ impl PeerHandle {
     /// Currently attached bus, if any.
     #[must_use]
     pub fn bus(&self) -> Option<EventBus> {
-        self.inner.bus.lock_sync_read().clone()
+        self.inner.bus.read().clone()
     }
 
     /// Peer-level cancellation token.
@@ -224,7 +226,7 @@ impl PeerHandle {
     /// peer. The cancel also fires automatically when the last clone
     /// of this handle is dropped.
     #[must_use]
-    pub fn cancel(&self) -> CancellationToken {
+    pub fn cancel(&self) -> CancelToken {
         self.inner.cancel.clone()
     }
 
@@ -260,10 +262,10 @@ impl PeerHandle {
         InternalCmd,
         oneshot::Receiver<Result<CollectedResponse, NetError>>,
     ) {
-        let cancel = CancelGroup::new(vec![self.inner.cancel.child_token()]);
+        let cancel = CancelGroup::new(vec![self.inner.cancel.child()]);
         let (resp_tx, resp_rx) = oneshot::channel();
         let request_id = self.inner._pool.next_request_id();
-        let enqueued_at = kithara_platform::time::Instant::now();
+        let enqueued_at = Instant::now();
         let internal = InternalCmd {
             cmd,
             cancel,
@@ -291,7 +293,7 @@ impl PeerHandle {
     /// [`Downloader::register`](super::Downloader::register).
     #[must_use]
     pub fn with_bus(self, bus: EventBus) -> Self {
-        *self.inner.bus.lock_sync_write() = Some(bus.clone());
+        *self.inner.bus.write() = Some(bus.clone());
         let _ = self.inner.abr.clone().with_bus(bus);
         self
     }

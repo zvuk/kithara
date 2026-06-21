@@ -6,7 +6,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Attribute, Expr, Ident, ItemFn, parse_macro_input};
+use syn::{Attribute, Expr, Ident, ItemFn, parse_macro_input, visit_mut::VisitMut};
 
 use super::{
     case::{Case, case_ident, extract_cases, is_case_attr},
@@ -14,9 +14,10 @@ use super::{
     expand_sync::{emit_native_only_one, emit_one_test},
     fixture_args::{ParamInfo, extract_params, make_preamble},
     parse::TestArgs,
+    rewrite::FlashRewrite,
     shared::{
-        finalize_body, make_dedicated_worker_config, make_serial_attr, make_sync_test_attrs,
-        make_tracing_init, wrap_with_timeout,
+        finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_serial_attr,
+        make_sync_test_attrs, make_tracing_init, wrap_with_timeout,
     },
 };
 
@@ -25,7 +26,7 @@ use super::{
 /// Flags (`tokio`, `wasm`, `native`, `browser`, `timeout`, `env`,
 /// `tracing`, `soft_fail`, `serial`, `multi_thread`, `selenium`) can be
 /// combined and support `#[case]` parameterization plus fixture injection.
-/// See the crate `README.md` "`#[kithara::test]` flags".
+/// See the crate `CONTEXT.md` "`#[kithara::test]` flags".
 pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as TestArgs);
     let func = parse_macro_input!(item as ItemFn);
@@ -36,10 +37,41 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
+fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
     let cases = extract_cases(&func.attrs)?;
     let remaining_attrs: Vec<_> = func.attrs.iter().filter(|a| !is_case_attr(a)).collect();
     let params = extract_params(&func);
+
+    // Flash containment (default `true`). Under `flash(true)` lexically retarget
+    // the BODY's direct time-primitive calls onto the unconditional
+    // `virtual_*` variants (so the body collapses without setting
+    // `FLASH_ACTIVE`, leaving callee prod fns on REAL); under `flash(false)`
+    // leave the body untouched. The ambient holder is NOT injected here:
+    // each emit path adds its own (see `shared::make_ambient_stmt`) —
+    // sync/wasm bodies hold a body-head `ambient_scope` for their whole
+    // extent, while async-native bodies carry ONLY the per-poll
+    // `with_ambient` wrapper (a body-held scope inside the cancellable
+    // timeout would tear down non-LIFO on Elapsed). Off the `flash` feature
+    // both `virtual_*` and `ambient_scope` are real-aliases / no-ops, so the
+    // emitted body is behaviour-identical to the original.
+    let flash = args.flash.unwrap_or(true);
+    if flash {
+        let mut rewrite = FlashRewrite::default();
+        rewrite.visit_block_mut(&mut func.block);
+        if let Some((span, name)) = rewrite.bare_time_calls.first() {
+            return Err(syn::Error::new(
+                *span,
+                format!(
+                    "bare `{name}(...)` in a flash test body stays on the REAL clock: the \
+                     flash rewriter matches the last two path segments (`time::{name}`) and \
+                     cannot see a single-segment call — a mixed-clock hazard. Import the \
+                     module (`use kithara_platform::time;`) and call `time::{name}(...)`, \
+                     or mark the test `flash(false)`."
+                ),
+            ));
+        }
+    }
+
     let ctx = GenCtx {
         args: &args,
         params: &params,
@@ -88,8 +120,11 @@ fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
     let emit = |name: &Ident, case_values: Option<&[Expr]>| -> TokenStream2 {
         let preamble = make_preamble(ctx.params, case_values);
         let tracing_init = make_tracing_init(ctx.args);
+        // wasm emission: no per-poll `with_ambient`, the body-held scope is
+        // the sole ambient writer — KEEP it.
+        let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
-        let full = quote! { { #tracing_init #preamble #(#body_stmts)* } };
+        let full = quote! { { #tracing_init #preamble #ambient #(#body_stmts)* } };
         let with_timeout = wrap_with_timeout(&full, &ctx.args.timeout, true, name);
         let wrapped = finalize_body(&with_timeout, ctx.args, name, true);
         let remaining_attrs = ctx.remaining_attrs;
@@ -123,12 +158,17 @@ fn generate_native_only(ctx: &GenCtx<'_>) -> TokenStream2 {
     let mut emit_one = |name: &Ident, case_values: Option<&[Expr]>| {
         let preamble = make_preamble(ctx.params, case_values);
         let tracing_init = make_tracing_init(ctx.args);
+        let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
-        let full = quote! { #tracing_init #preamble #(#body_stmts)* };
+        // Plain body for the async-native branches (sole ambient holder there
+        // is the per-poll `with_ambient`); held body for the sync branch.
+        let full_plain = quote! { #tracing_init #preamble #(#body_stmts)* };
+        let full_held = quote! { #tracing_init #preamble #ambient #(#body_stmts)* };
         tests.extend(emit_native_only_one(
             ctx,
             name,
-            &full,
+            &full_plain,
+            &full_held,
             &serial_attr,
             native_is_async,
         ));

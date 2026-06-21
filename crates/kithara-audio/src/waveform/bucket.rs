@@ -16,9 +16,9 @@ const BUCKET_BYTES: usize = 12;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct Bucket {
+    pub high: f32,
     pub low: f32,
     pub mid: f32,
-    pub high: f32,
 }
 
 /// A track's analysed waveform: per-bucket band heights in `[0, 1]`, indexed by
@@ -27,18 +27,9 @@ pub struct Bucket {
 pub struct Waveform(Arc<[Bucket]>);
 
 impl Waveform {
-    pub(crate) fn from_buckets(buckets: Vec<Bucket>) -> Self {
-        Self(Arc::from(buckets))
-    }
-
     #[must_use]
     pub fn buckets(&self) -> &[Bucket] {
         &self.0
-    }
-
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.0.len()
     }
 
     #[must_use]
@@ -46,38 +37,43 @@ impl Waveform {
         self.0.is_empty()
     }
 
-    /// Serialize to a versioned little-endian blob: a `u32` version, then three
-    /// `f32` band heights per bucket.
     #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        blob::to_bytes(self)
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
+}
 
-    /// Parse a blob produced by [`Self::to_bytes`]. A version mismatch, a body
-    /// that is not a whole number of buckets, or a band height outside `[0, 1]`
-    /// is a typed error the caller treats as a cache miss.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BlobError::Version`] when the header version does not match
-    /// [`WAVEFORM_BYTES_VERSION`], and [`BlobError::Corrupt`] when the body is
-    /// truncated, mis-sized, or carries a band height outside `[0, 1]`.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, BlobError> {
+impl From<Vec<Bucket>> for Waveform {
+    fn from(buckets: Vec<Bucket>) -> Self {
+        Self(Arc::from(buckets))
+    }
+}
+
+/// Serialize to a versioned little-endian blob: a `u32` version, then three
+/// `f32` band heights per bucket.
+impl From<&Waveform> for Vec<u8> {
+    fn from(wave: &Waveform) -> Self {
+        blob::to_bytes(wave)
+    }
+}
+
+/// Parse a blob produced by `Vec::<u8>::from(&Waveform)`. A version mismatch, a
+/// body that is not a whole number of buckets, or a band height outside `[0, 1]`
+/// is a typed error the caller treats as a cache miss.
+///
+/// Returns [`BlobError::Version`] when the header version does not match
+/// [`WAVEFORM_BYTES_VERSION`], and [`BlobError::Corrupt`] when the body is
+/// truncated, mis-sized, or carries a band height outside `[0, 1]`.
+impl TryFrom<&[u8]> for Waveform {
+    type Error = BlobError;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, BlobError> {
         blob::from_bytes(bytes)
     }
 }
 
 impl Blob for Waveform {
     const VERSION: u32 = WAVEFORM_BYTES_VERSION;
-
-    fn encode(&self, w: &mut Writer<'_>) {
-        w.reserve(self.0.len() * BUCKET_BYTES);
-        for b in self.0.iter() {
-            w.write_f32(b.low);
-            w.write_f32(b.mid);
-            w.write_f32(b.high);
-        }
-    }
 
     fn decode(r: &mut Reader<'_>) -> Result<Self, BlobError> {
         if !r.remaining().is_multiple_of(BUCKET_BYTES) {
@@ -95,9 +91,18 @@ impl Blob for Waveform {
             if !(ok(low) && ok(mid) && ok(high)) {
                 return Err(BlobError::Corrupt);
             }
-            buckets.push(Bucket { low, mid, high });
+            buckets.push(Bucket { high, low, mid });
         }
-        Ok(Self::from_buckets(buckets))
+        Ok(Self::from(buckets))
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) {
+        w.reserve(self.0.len() * BUCKET_BYTES);
+        for b in self.0.iter() {
+            w.write_f32(b.low);
+            w.write_f32(b.mid);
+            w.write_f32(b.high);
+        }
     }
 }
 
@@ -109,7 +114,7 @@ mod bytes_tests {
     use crate::blob::BlobError;
 
     fn sample() -> Waveform {
-        Waveform::from_buckets(vec![
+        Waveform::from(vec![
             Bucket {
                 low: 0.1,
                 mid: 0.2,
@@ -126,41 +131,46 @@ mod bytes_tests {
     #[kithara::test]
     fn round_trips() {
         let wave = sample();
-        let bytes = wave.to_bytes();
-        let back = Waveform::from_bytes(&bytes).expect("valid blob round-trips");
+        let bytes = Vec::<u8>::from(&wave);
+        let back = Waveform::try_from(bytes.as_slice()).expect("valid blob round-trips");
         assert_eq!(back.buckets(), wave.buckets());
     }
 
     #[kithara::test]
     fn empty_round_trips() {
-        let wave = Waveform::from_buckets(Vec::new());
-        let back = Waveform::from_bytes(&wave.to_bytes()).expect("empty blob round-trips");
+        let wave = Waveform::from(Vec::new());
+        let bytes = Vec::<u8>::from(&wave);
+        let back = Waveform::try_from(bytes.as_slice()).expect("empty blob round-trips");
         assert!(back.is_empty());
     }
 
     #[kithara::test]
     fn rejects_wrong_version() {
-        let mut bytes = sample().to_bytes();
+        let mut bytes = Vec::<u8>::from(&sample());
         bytes[0] = bytes[0].wrapping_add(1);
         assert!(matches!(
-            Waveform::from_bytes(&bytes),
+            Waveform::try_from(bytes.as_slice()),
             Err(BlobError::Version { expected, .. }) if expected == WAVEFORM_BYTES_VERSION
         ));
     }
 
     #[kithara::test]
     fn rejects_corrupt_blobs() {
-        let corrupt =
-            |bytes: Vec<u8>| matches!(Waveform::from_bytes(&bytes), Err(BlobError::Corrupt));
+        let corrupt = |bytes: Vec<u8>| {
+            matches!(
+                Waveform::try_from(bytes.as_slice()),
+                Err(BlobError::Corrupt)
+            )
+        };
 
         assert!(corrupt(vec![0, 0]), "shorter than the version header");
 
-        let mut truncated = sample().to_bytes();
+        let mut truncated = Vec::<u8>::from(&sample());
         truncated.pop();
         assert!(corrupt(truncated), "body not a whole number of buckets");
 
         let nan_at_end = |v: f32| {
-            let mut bytes = sample().to_bytes();
+            let mut bytes = Vec::<u8>::from(&sample());
             let tail = bytes.len() - 4;
             bytes[tail..].copy_from_slice(&v.to_le_bytes());
             bytes

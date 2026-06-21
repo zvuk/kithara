@@ -21,78 +21,25 @@ use kithara_platform::{Mutex, time};
 
 let lock = Mutex::new(42_u32);
 {
-    let mut guard = lock.lock_sync();
+    let mut guard = lock.lock();
     *guard += 1;
 }
 
 time::sleep(std::time::Duration::from_millis(10)).await;
 ```
 
-## Synchronization Backends
+## Key types and entry points
 
-<table>
-<tr><th>Type</th><th>Native</th><th>wasm32</th></tr>
-<tr><td><code>Mutex&lt;T&gt;</code></td><td><code>parking_lot::Mutex</code> wrapper</td><td><code>wasm_safe_thread::Mutex</code> wrapper</td></tr>
-<tr><td><code>RwLock&lt;T&gt;</code></td><td><code>parking_lot::RwLock</code> wrapper</td><td><code>wasm_safe_thread::rwlock::RwLock</code> wrapper</td></tr>
-<tr><td><code>Condvar</code></td><td><code>parking_lot::Condvar</code> wrapper</td><td><code>wasm_safe_thread::condvar::Condvar</code> wrapper</td></tr>
-<tr><td><code>MaybeSend</code></td><td>Equivalent to <code>Send</code></td><td>Blanket trait (no Send requirement)</td></tr>
-<tr><td><code>MaybeSync</code></td><td>Equivalent to <code>Sync</code></td><td>Blanket trait (no Sync requirement)</td></tr>
-</table>
-
-## Thread and Task Primitives
-
-<table>
-<tr><th>API</th><th>Native</th><th>wasm32</th></tr>
-<tr><td><code>thread::spawn</code></td><td><code>std::thread::spawn</code></td><td><code>wasm_safe_thread::Builder::spawn</code> (Web Worker)</td></tr>
-<tr><td><code>tokio::task::spawn</code></td><td><code>tokio_with_wasm</code> alias runtime</td><td>Worker-aware wrapper with lifecycle hooks</td></tr>
-<tr><td><code>tokio::task::spawn_blocking</code></td><td><code>tokio_with_wasm</code> blocking pool</td><td>Dedicated worker-thread execution</td></tr>
-<tr><td><code>thread::is_main_thread / is_worker_thread</code></td><td>always main / false</td><td>detects browser main vs Worker global scope</td></tr>
-<tr><td><code>thread::assert_main_thread / assert_not_main_thread</code></td><td>no-op</td><td>panic on wrong thread affinity</td></tr>
-</table>
-
-## Time Utilities
-
-- `time::sleep(duration)`
-- `time::timeout(duration, future)`
-- `time::Instant` (via `web-time`)
-
-On native these delegate to `tokio` runtime primitives, on wasm they use `setTimeout`-based scheduling.
-
-## CancellationToken
-
-`CancellationToken` is the **single** cancellation token type across the workspace —
-crates never depend on `tokio_util` directly; they use this one. It is a real-time-safe
-token: a `tokio_util::CancellationToken` (async `cancelled()` side + the wider
-propagation tree) paired with a **chain of per-node cancel flags**. `tokio_util`'s own
-`is_cancelled()` takes the `TreeNode` `Mutex<Inner>` (no atomic fast path), which traps
-under RealtimeSanitizer on the audio produce-core. `CancellationToken::is_cancelled()`
-walks `self → root` loading each node's flag (`Acquire`) — lock-free, wait-free, bounded
-by tree depth (master → consumer is 2–3 nodes), RT-safe.
-
-- `cancel()` `Release`-stores **this node's** flag **then** calls `inner.cancel()`, so a
-  thread observing the inner async cancellation (or any later `Acquire` walk) is
-  guaranteed to see the flag set; the flag can never lag the inner token.
-- `child_token()` creates a **new** flag node linked to the parent's chain. A
-  parent/master `cancel()` is observed by every descendant's lock-free `is_cancelled()`
-  (the descendant's walk reaches the parent's flag), while cancelling a child or sibling
-  never marks the parent cancelled — the correct hierarchy. `Clone` keeps the **same**
-  node (same identity), like `tokio_util`'s clone.
-- `cancelled()` / `cancelled_owned()` delegate to the inner token (async side unchanged),
-  so the token drops into `tokio::select!` exactly like a `tokio_util` token.
-
-Consumer-crate masters (`Queue`, `App`, FFI, `PlayerImpl` fallback) mint a root
-`CancellationToken` (via `new()` / `default()`) and thread `child_token()`s down the
-player → audio-worker and player → HLS-coord chains so a master `cancel()` is seen by the
-worker's lock-free read. `new()` / `default()` root a fresh hierarchy and belong only at
-marked owner sites (see the `AGENTS.md` cancel-hierarchy contract, enforced by
-`cargo xtask lint arch`).
-
-## Trait Bridges
-
-- `CancellationToken` → `CancelGroup` (`From`) — single-token group
-- `Vec<CancellationToken>` → `CancelGroup` (`From`) — multi-token group
-- `NotAvailable` / `TimeoutError` / `JoinError` / `TryCurrentError` (`Display`) — human-readable error rendering
+- `Mutex<T>` / `RwLock<T>` / `Condvar` — synchronization wrappers over `parking_lot` (native) or `wasm_safe_thread` (wasm32).
+- `MaybeSend` / `MaybeSync` — conditional trait bounds (`Send`/`Sync` on native, blanket no-op on wasm32).
+- `thread::{spawn, spawn_named, is_main_thread, is_worker_thread, assert_main_thread, park_timeout, paced_backoff, unpark}` — thread primitives with thread-affinity helpers.
+- `tokio::task::{spawn, spawn_blocking, yield_now}` — runtime task primitives (native `tokio`, worker-aware on wasm).
+- `time::{sleep, timeout, Instant, real_io, reset}` — timing helpers; the single timestamp source (`web_time` / `std::time` are banned outside this crate).
+- `CancelToken` — the single workspace cancellation token; `CancelScope`, `CancelGroup`, `CancelToken::{root, never, child}`.
+- `flash` — off-by-default, native, test-only cargo feature that swaps the wall clock for a deterministic virtual timeline.
 
 ## Integration
 
-Foundation crate used across the workspace (`kithara-storage`, `kithara-assets`, `kithara-stream`, `kithara-play`, `kithara-wasm`, and test infrastructure) to keep platform-specific branching isolated in one place.
+Foundation crate used across the workspace (`kithara-storage`, `kithara-assets`, `kithara-stream`, `kithara-play`, `kithara-ffi`, and test infrastructure) to keep platform-specific branching isolated in one place.
+
+See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

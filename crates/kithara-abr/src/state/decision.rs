@@ -39,10 +39,10 @@ pub enum AbrDecision {
 }
 
 impl AbrDecision {
-    /// The variant this decision lands on (`current` for [`Self::Stay`]).
+    /// `true` when the decision moves off the current variant.
     #[must_use]
-    pub fn target(&self) -> VariantIndex {
-        self.into()
+    pub fn changed(&self) -> bool {
+        !matches!(self, Self::Stay { .. })
     }
 
     /// The reason recorded for this decision.
@@ -51,10 +51,10 @@ impl AbrDecision {
         self.into()
     }
 
-    /// `true` when the decision moves off the current variant.
+    /// The variant this decision lands on (`current` for [`Self::Stay`]).
     #[must_use]
-    pub fn changed(&self) -> bool {
-        !matches!(self, Self::Stay { .. })
+    pub fn target(&self) -> VariantIndex {
+        self.into()
     }
 }
 
@@ -238,12 +238,12 @@ fn candidate_variant(
 #[derive(Clone, Copy)]
 struct SwitchContext<'a> {
     settings: &'a AbrSettings,
-    buffer_ahead: Option<std::time::Duration>,
+    buffer_ahead: Option<kithara_platform::time::Duration>,
+    candidate_idx: VariantIndex,
+    current: VariantIndex,
     adjusted_bps: f64,
     candidate_bw: u64,
     current_bw: u64,
-    candidate_idx: VariantIndex,
-    current: VariantIndex,
 }
 
 fn up_switch(ctx: SwitchContext<'_>) -> AbrDecision {

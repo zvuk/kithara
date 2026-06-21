@@ -8,21 +8,23 @@ use crate::api::BeatError;
 /// Simple f32 tensor with shape (row-major / C-order).
 #[derive(Debug, Clone)]
 pub(crate) struct Tensor {
-    pub(crate) shape: Vec<usize>,
     pub(crate) data: Vec<f32>,
+    pub(crate) shape: Vec<usize>,
 }
 
 /// ONNX model loaded from bytes, run via the pure-Rust rten runtime.
 pub(crate) struct RtenModel {
-    model: RtenGraph,
     input_map: HashMap<String, NodeId>,
-    output_names: Vec<(NodeId, String)>,
+    model: RtenGraph,
     output_ids: Vec<NodeId>,
+    output_names: Vec<(NodeId, String)>,
 }
 
-impl RtenModel {
-    /// Load a model from ONNX bytes; `name` tags load errors.
-    pub(crate) fn from_bytes(name: &'static str, bytes: &[u8]) -> Result<Self, BeatError> {
+/// Load a model from ONNX bytes; `name` tags load errors.
+impl TryFrom<(&'static str, &[u8])> for RtenModel {
+    type Error = BeatError;
+
+    fn try_from((name, bytes): (&'static str, &[u8])) -> Result<Self, BeatError> {
         let model = RtenGraph::load(bytes.to_vec()).map_err(|e| BeatError::ModelLoad {
             model: name,
             reason: e.to_string(),
@@ -51,13 +53,15 @@ impl RtenModel {
         let output_ids: Vec<NodeId> = model.output_ids().to_vec();
 
         Ok(Self {
-            model,
             input_map,
-            output_names,
+            model,
             output_ids,
+            output_names,
         })
     }
+}
 
+impl RtenModel {
     /// Run inference with named inputs, return named outputs.
     pub(crate) fn run(
         &mut self,
@@ -108,7 +112,7 @@ impl RtenModel {
             let shape: Vec<usize> = rten_tensor.shape().to_vec();
             let data: Vec<f32> = rten_tensor.to_vec();
 
-            result.insert(name, Tensor { shape, data });
+            result.insert(name, Tensor { data, shape });
         }
 
         Ok(result)

@@ -11,10 +11,10 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_drm::{KeyRequest, KeyRequestFactory};
-use kithara_platform::{CancellationToken, Mutex};
-use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource};
-use rand::{distr::Alphanumeric, prelude::*};
+use kithara_platform::{CancelToken, sync::Mutex};
+use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource, Transition};
 
+use super::salt;
 use crate::{
     config::StoreOptions,
     event_bridge::EventBridge,
@@ -26,18 +26,6 @@ use crate::{
         FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerConfig, FfiPlayerSnapshot, FfiPlayerStatus,
     },
 };
-
-/// Length of the alphanumeric salt produced by [`NativeInner::setup_hls_aes`].
-/// Mirrors `kithara_app::drm::SEED_LEN`.
-const SALT_LEN: usize = 16;
-
-fn generate_salt() -> String {
-    rand::rng()
-        .sample_iter(Alphanumeric)
-        .take(SALT_LEN)
-        .map(char::from)
-        .collect()
-}
 
 fn build_processor_closure(
     processor: Arc<dyn FfiKeyProcessor>,
@@ -167,11 +155,11 @@ pub(crate) struct NativeInner {
     /// asset store, HLS peer, and per-track resources all derive
     /// children of this token. The facade's `Drop` fires
     /// `cancel.cancel()` so the shutdown pulse reaches subsystems before
-    /// structural Arc teardown unwinds. See `kithara-play/README.md`
+    /// structural Arc teardown unwinds. See `kithara-play/CONTEXT.md`
     /// "Cancel Hierarchy". The chain flag reaches the audio worker and HLS
     /// coord lock-free `is_cancelled()` reads; every subsystem derives its
-    /// own [`CancellationToken::child_token`] from this consumer-top master.
-    shutdown: CancellationToken,
+    /// own [`CancelToken::child`] from this consumer-top master.
+    shutdown: CancelToken,
     /// Player-wide HTTP headers (e.g. `X-Encrypted-Key`,
     /// `X-Auth-Token`). Merged into per-item `headers` on insert.
     /// Item-supplied headers take precedence on key collision.
@@ -198,16 +186,16 @@ pub(crate) struct NativeInner {
 
 impl NativeInner {
     pub(crate) fn new(config: FfiPlayerConfig) -> Self {
-        let cancel = CancellationToken::default(); // kithara:cancel:owner
+        let cancel = CancelToken::root();
         let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(config.eq_band_count as usize))
-            .cancel(cancel.clone())
+            .cancel(cancel.child())
             .build();
         let player = Arc::new(PlayerImpl::new(player_config));
         let queue_config = QueueConfig::default().with_player(player);
         let net = default_net_options();
         let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(net, cancel.child_token()))
+            DownloaderConfig::for_client(HttpClient::new(net, cancel.child()))
                 .runtime(crate::FFI_RUNTIME.clone())
                 .build(),
         );
@@ -218,12 +206,12 @@ impl NativeInner {
             shutdown: cancel,
             key_options: Mutex::new(key_options),
             player_headers: player_headers_map,
-            peak_bitrate: Mutex::new(PeakBitrate::default()),
+            peak_bitrate: Mutex::default(),
             queue: Arc::new(Queue::new(queue_config)),
             store: config.store,
-            observer: Mutex::new(None),
-            event_bridge: Mutex::new(None),
-            items: Arc::new(Mutex::new(HashMap::new())),
+            observer: Mutex::default(),
+            event_bridge: Mutex::default(),
+            items: Arc::new(Mutex::default()),
         }
     }
 
@@ -237,7 +225,7 @@ impl NativeInner {
         let Some(next) = tracks.get(next_idx) else {
             return;
         };
-        let _ = self.queue.select(next.id, kithara_queue::Transition::None);
+        let _ = self.queue.select(next.id, Transition::None);
     }
 
     pub(crate) fn append(&self, item: &Arc<AudioPlayerItem>) -> Result<(), FfiError> {
@@ -245,8 +233,8 @@ impl NativeInner {
         let source = build_source_for_item(self, item)?;
         let id = item.track_id();
         self.queue.append_with_id(id, source);
-        *item.inserted.lock_sync() = true;
-        self.items.lock_sync().insert(id, Arc::clone(item));
+        *item.inserted.lock() = true;
+        self.items.lock().insert(id, Arc::clone(item));
         item.restart_bridge();
         Ok(())
     }
@@ -257,7 +245,7 @@ impl NativeInner {
 
     pub(crate) fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
         let entry = self.queue.current()?;
-        self.items.lock_sync().get(&entry.id).cloned()
+        self.items.lock().get(&entry.id).cloned()
     }
 
     pub(crate) fn current_time(&self) -> f64 {
@@ -292,8 +280,8 @@ impl NativeInner {
                 reason: e.to_string(),
             })?;
 
-        *item.inserted.lock_sync() = true;
-        self.items.lock_sync().insert(id, Arc::clone(item));
+        *item.inserted.lock() = true;
+        self.items.lock().insert(id, Arc::clone(item));
         item.restart_bridge();
         Ok(())
     }
@@ -312,7 +300,7 @@ impl NativeInner {
 
     pub(crate) fn items(&self) -> Vec<Arc<AudioPlayerItem>> {
         let tracks = self.queue.tracks();
-        let items = self.items.lock_sync();
+        let items = self.items.lock();
         tracks
             .iter()
             .filter_map(|t| items.get(&t.id).cloned())
@@ -321,6 +309,17 @@ impl NativeInner {
 
     pub(crate) fn pause(&self) {
         self.queue.pause();
+    }
+
+    pub(crate) fn notify_audio_route_changed(&self, reason: &str) -> Result<(), FfiError> {
+        self.queue
+            .notify_audio_route_changed(reason)
+            .map_err(|err| match err {
+                QueueError::Play(err) => FfiError::from(err),
+                other => FfiError::Internal {
+                    description: other.to_string(),
+                },
+            })
     }
 
     pub(crate) fn play(&self) {
@@ -336,7 +335,7 @@ impl NativeInner {
     }
 
     pub(crate) fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {
-        if !*item.inserted.lock_sync() {
+        if !*item.inserted.lock() {
             return Err(FfiError::InvalidArgument {
                 reason: format!("item {} not in queue", item.audio_id()),
             });
@@ -347,16 +346,16 @@ impl NativeInner {
             .map_err(|e| FfiError::InvalidArgument {
                 reason: e.to_string(),
             })?;
-        self.items.lock_sync().remove(&id);
-        *item.inserted.lock_sync() = false;
+        self.items.lock().remove(&id);
+        *item.inserted.lock() = false;
         Ok(())
     }
 
     pub(crate) fn remove_all_items(&self) {
         self.queue.clear();
-        let mut items = self.items.lock_sync();
+        let mut items = self.items.lock();
         for (_, item) in items.drain() {
-            *item.inserted.lock_sync() = false;
+            *item.inserted.lock() = false;
         }
     }
 
@@ -388,11 +387,11 @@ impl NativeInner {
         let _ = self.queue.remove(old_id);
 
         {
-            let mut items = self.items.lock_sync();
+            let mut items = self.items.lock();
             items.remove(&old_id);
             items.insert(new_id, Arc::clone(item));
         }
-        *item.inserted.lock_sync() = true;
+        *item.inserted.lock() = true;
         item.restart_bridge();
         Ok(())
     }
@@ -470,11 +469,11 @@ impl NativeInner {
             Arc::clone(&observer),
             Arc::clone(&self.queue),
             &self.items,
-            CancellationToken::default(), // kithara:cancel:bridge
+            CancelToken::never(),
         );
 
-        let mut eb = self.event_bridge.lock_sync();
-        let mut obs = self.observer.lock_sync();
+        let mut eb = self.event_bridge.lock();
+        let mut obs = self.observer.lock();
         *eb = Some(bridge);
         *obs = Some(observer);
         drop(obs);
@@ -490,7 +489,7 @@ impl NativeInner {
     }
 
     pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
-        let salt = generate_salt();
+        let salt = salt::drm_lowercase_hex_salt();
         let mut rule_headers = HashMap::new();
         rule_headers.insert(SALT_HEADER.to_string(), salt.clone());
         let rule = FfiKeyRule {
@@ -515,7 +514,7 @@ impl NativeInner {
         }
 
         let processor_rule = build_processor_rule(rule);
-        let mut opts = self.key_options.lock_sync();
+        let mut opts = self.key_options.lock();
         let mut registry = opts.key_registry.take().unwrap_or_default();
         registry.add(processor_rule);
         *opts = KeyOptions::builder().key_registry(registry).build();
@@ -552,7 +551,7 @@ impl NativeInner {
             cellular_bps,
             wifi_bps,
         };
-        *self.peak_bitrate.lock_sync() = updated;
+        *self.peak_bitrate.lock() = updated;
         if let Some(handle) = self.queue.current_abr_handle() {
             handle.set_max_bandwidth_bps(updated.effective_cap());
         }
@@ -584,12 +583,12 @@ fn build_source_for_item(
         .maybe_headers(merged_headers_for_item(inner, item).map(Into::into))
         .events(scoped.clone())
         .downloader(inner.downloader.clone())
-        .keys(inner.key_options.lock_sync().clone())
+        .keys(inner.key_options.lock().clone())
         .initial_abr_mode(abr_mode.unwrap_or_default())
         .build();
 
     native_config::configure_resource(&mut config, &inner.store);
-    *item.bus.lock_sync() = Some(scoped);
+    *item.bus.lock() = Some(scoped);
 
     Ok(TrackSource::Config(Box::new(config)))
 }
@@ -624,7 +623,7 @@ impl Drop for NativeInner {
     /// Fire the master cancel pulse so the shutdown signal reaches
     /// subsystems before structural Arc teardown unwinds. The facade
     /// owns `NativeInner` by value, so this runs exactly when the
-    /// `AudioPlayer` is dropped. See `kithara-play/README.md`
+    /// `AudioPlayer` is dropped. See `kithara-play/CONTEXT.md`
     /// "Cancel Hierarchy".
     fn drop(&mut self) {
         self.shutdown.cancel();
@@ -656,7 +655,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn setup_hls_aes_registers_wildcard_rule_with_auto_salt() {
+    fn setup_hls_aes_registers_wildcard_rule_with_prod_salt() {
         struct DummyProcessor;
         impl FfiKeyProcessor for DummyProcessor {
             fn process_key(&self, _key: Vec<u8>, _salt: String) -> Vec<u8> {
@@ -672,10 +671,14 @@ mod tests {
             .get(SALT_HEADER)
             .map(|r| r.value().clone())
             .expect("salt header populated");
-        assert_eq!(salt.len(), SALT_LEN);
-        assert!(salt.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert_eq!(salt.len(), 8, "prod auto-salt length");
+        assert!(
+            salt.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "prod auto-salt must be lowercase hex, got {salt:?}"
+        );
 
-        let key_options = inner.key_options.lock_sync().clone();
+        let key_options = inner.key_options.lock().clone();
         assert!(
             key_options.key_registry.is_some(),
             "registry must hold the wildcard rule"
@@ -686,7 +689,7 @@ mod tests {
     fn update_peak_bitrate_remembers_both_limits() {
         let inner = NativeInner::new(FfiPlayerConfig::default());
         inner.update_peak_bitrate(2_000_000.0, 500_000.0);
-        let snapshot = *inner.peak_bitrate.lock_sync();
+        let snapshot = *inner.peak_bitrate.lock();
         assert!((snapshot.wifi_bps - 2_000_000.0).abs() < f64::EPSILON);
         assert!((snapshot.cellular_bps - 500_000.0).abs() < f64::EPSILON);
     }

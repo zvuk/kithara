@@ -2,6 +2,7 @@
 
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat, PrerollHint};
+use num_traits::ToPrimitive;
 
 use super::{
     audio_file::AppleAudioFile,
@@ -17,25 +18,11 @@ use crate::{
     traits::BoxedSource,
 };
 
-/// Clamp a `kAudioFilePropertyDataFormat`'s `mSampleRate` (f64) into a
-/// non-negative `u32`. Container metadata always carries a positive,
-/// integer-valued rate (44100 / 48000 / 96000); the conversion is
-/// lossless in practice but a pathological negative / `NaN` / overflow
-/// value clamps to 0 / `u32::MAX` (downstream code already treats 0
-/// as "unknown rate").
-#[expect(
-    clippy::cast_sign_loss,
-    clippy::cast_possible_truncation,
-    reason = "explicit guards clamp NaN/negative/overflow; final `as u32` is lossless for 0..u32::MAX"
-)]
-fn sample_rate_from_asbd(rate: f64) -> u32 {
-    if !rate.is_finite() || rate <= 0.0 {
-        return 0;
+fn sample_rate_from_asbd(rate: f64) -> Option<u32> {
+    if !rate.is_finite() || rate <= 0.0 || rate > f64::from(u32::MAX) {
+        return None;
     }
-    if rate >= f64::from(u32::MAX) {
-        return u32::MAX;
-    }
-    rate as u32
+    rate.to_u32()
 }
 
 /// [`Demuxer`] over [`AppleAudioFile`] for standalone (non-fMP4)
@@ -54,13 +41,19 @@ pub(crate) struct AppleAudioFileDemuxer {
     /// packets. `None` for VBR (MP3, ALAC) — one packet per call so
     /// each `Frame` carries its own `AudioStreamPacketDescription`.
     cbr_batch_packets: Option<u32>,
+    total_packets: Option<u64>,
     track_info: TrackInfo,
     read_buf: Vec<u8>,
     last_packet_desc_blob: [u8; size_of::<AudioStreamPacketDescription>()],
     frames_per_packet: u32,
     next_packet: u64,
-    total_packets: u64,
     last_read_len: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourceOpenMode {
+    Complete,
+    Streaming,
 }
 
 impl AppleAudioFileDemuxer {
@@ -92,8 +85,19 @@ impl AppleAudioFileDemuxer {
         })
     }
 
-    fn open(source: BoxedSource, hint: Option<u32>, codec: AudioCodec) -> DecodeResult<Self> {
-        let file = AppleAudioFile::open(source, hint)?;
+    fn open(
+        source: BoxedSource,
+        hint: Option<u32>,
+        codec: AudioCodec,
+        open_mode: SourceOpenMode,
+        duration_hint: Option<Duration>,
+    ) -> DecodeResult<Self> {
+        let file =
+            if matches!(codec, AudioCodec::Mp3) && matches!(open_mode, SourceOpenMode::Streaming) {
+                AppleAudioFile::open_streaming(source, hint, None)?
+            } else {
+                AppleAudioFile::open(source, hint)?
+            };
         let asbd = file.data_format();
         let total_packets = file.packet_count();
         let frames_per_packet = if asbd.mFramesPerPacket > 0 {
@@ -107,14 +111,29 @@ impl AppleAudioFileDemuxer {
             _ => file.magic_cookie().unwrap_or_default(),
         };
 
-        let channels = u16::try_from(asbd.mChannelsPerFrame).unwrap_or(2);
-        let sample_rate = sample_rate_from_asbd(asbd.mSampleRate);
-        let duration = if sample_rate > 0 && total_packets > 0 {
-            let frames = total_packets.saturating_mul(u64::from(frames_per_packet));
-            Some(duration_for_frames(sample_rate, frames))
-        } else {
-            None
+        let channels = u16::try_from(asbd.mChannelsPerFrame).map_err(|_| {
+            DecodeError::backend_msg(format!(
+                "apple.audio_file: invalid channel count {}",
+                asbd.mChannelsPerFrame
+            ))
+        })?;
+        if channels == 0 {
+            return Err(DecodeError::backend_msg(
+                "apple.audio_file: invalid zero channel count",
+            ));
+        }
+        let Some(sample_rate) = sample_rate_from_asbd(asbd.mSampleRate) else {
+            return Err(DecodeError::InvalidSampleRate {
+                resource: "apple.audio_file",
+            });
         };
+        let duration = total_packets
+            .filter(|count| *count > 0)
+            .map(|total_packets| {
+                let frames = total_packets.saturating_mul(u64::from(frames_per_packet));
+                duration_for_frames(sample_rate, frames)
+            })
+            .or(duration_hint);
 
         let track_info = TrackInfo {
             codec,
@@ -125,24 +144,21 @@ impl AppleAudioFileDemuxer {
             gapless: None,
         };
 
-        let (cbr_batch_packets, buf_cap) = Self::CBR_BATCH_TARGET_BYTES
-            .checked_div(asbd.mBytesPerPacket)
-            .map_or_else(
-                || {
-                    (
-                        None,
-                        usize::try_from(file.max_packet_size().max(4096)).unwrap_or(64 * 1024),
-                    )
-                },
-                |packets| {
-                    let packets = packets.max(1);
-                    let bytes = packets.saturating_mul(asbd.mBytesPerPacket);
-                    (
-                        Some(packets),
-                        usize::try_from(bytes).unwrap_or(Self::CBR_BATCH_TARGET_BYTES as usize),
-                    )
-                },
-            );
+        let (cbr_batch_packets, buf_cap) = if asbd.mBytesPerPacket == 0 {
+            (
+                None,
+                usize::try_from(file.max_packet_size().max(4096)).map_err(DecodeError::backend)?,
+            )
+        } else {
+            let packets = Self::CBR_BATCH_TARGET_BYTES
+                .checked_div(asbd.mBytesPerPacket)
+                .map_or(1, |packets| packets.max(1));
+            let bytes = packets.saturating_mul(asbd.mBytesPerPacket);
+            (
+                Some(packets),
+                usize::try_from(bytes).map_err(DecodeError::backend)?,
+            )
+        };
 
         Ok(Self {
             file,
@@ -161,15 +177,17 @@ impl AppleAudioFileDemuxer {
     /// `AudioFileServices` file-type hint internally. The caller is
     /// expected to have checked [`Self::supports`] (the factory does);
     /// unsupported combinations return [`DecodeError::UnsupportedCodec`].
-    pub(crate) fn open_for(
+    pub(crate) fn open_for_with_mode(
         source: BoxedSource,
         codec: AudioCodec,
         container: Option<ContainerFormat>,
+        open_mode: SourceOpenMode,
+        duration_hint: Option<Duration>,
     ) -> DecodeResult<Self> {
         let hint = container
             .and_then(|c| Self::file_type_id(codec, c))
             .ok_or(DecodeError::UnsupportedCodec(codec))?;
-        Self::open(source, Some(hint), codec)
+        Self::open(source, Some(hint), codec, open_mode, duration_hint)
     }
 
     /// Inject encoder priming/padding metadata probed by the factory
@@ -183,7 +201,7 @@ impl AppleAudioFileDemuxer {
 
     /// Whether Apple's standalone file path supports this `(codec,
     /// container)` pair. Used by the factory to gate dispatch into
-    /// [`Self::open_for`]; mirrors [`Self::file_type_id`].
+    /// [`Self::open_for_with_mode`]; mirrors [`Self::file_type_id`].
     #[must_use]
     pub(crate) fn supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
         container.is_some_and(|c| Self::file_type_id(codec, c).is_some())
@@ -196,26 +214,50 @@ impl Demuxer for AppleAudioFileDemuxer {
     }
 
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
-        if self.next_packet >= self.total_packets {
+        if self
+            .total_packets
+            .is_some_and(|total_packets| self.next_packet >= total_packets)
+        {
             return Ok(DemuxOutcome::Eof);
         }
 
-        let sample_rate = self.track_info.sample_rate.max(1);
+        let sample_rate = self.track_info.sample_rate;
         let start_packet = self.next_packet;
         let frame_idx = start_packet.saturating_mul(u64::from(self.frames_per_packet));
         let pts = duration_for_frames(sample_rate, frame_idx);
 
         if let Some(batch_packets) = self.cbr_batch_packets {
-            let remaining =
-                u32::try_from(self.total_packets.saturating_sub(start_packet)).unwrap_or(u32::MAX);
-            let want = batch_packets.min(remaining);
+            let want = if let Some(total_packets) = self.total_packets {
+                let remaining = total_packets.saturating_sub(start_packet);
+                if remaining >= u64::from(batch_packets) {
+                    batch_packets
+                } else {
+                    u32::try_from(remaining).map_err(DecodeError::backend)?
+                }
+            } else {
+                batch_packets
+            };
+            // Contract: "data not ready" surfaces as `Pending`, never `Err` —
+            // an `Err` classifies as `Interrupted` upstream and the decode
+            // loop retries it hot instead of parking the worker. The packet
+            // cursor was not advanced, so the next call re-reads the same
             let (bytes, packets_read) =
-                self.file
-                    .read_packets_cbr(start_packet, want, &mut self.read_buf)?;
+                match self
+                    .file
+                    .read_packets_cbr(start_packet, want, &mut self.read_buf)
+                {
+                    Ok(read) => read,
+                    Err(e) => {
+                        if let Some(reason) = e.pending_reason() {
+                            return Ok(DemuxOutcome::Pending(reason));
+                        }
+                        return Err(e);
+                    }
+                };
             if packets_read == 0 {
                 return Ok(DemuxOutcome::Eof);
             }
-            self.last_read_len = bytes as usize;
+            self.last_read_len = usize::try_from(bytes).map_err(DecodeError::backend)?;
             let total_frames =
                 u64::from(packets_read).saturating_mul(u64::from(self.frames_per_packet));
             let dur = duration_for_frames(sample_rate, total_frames);
@@ -228,15 +270,24 @@ impl Demuxer for AppleAudioFileDemuxer {
             }));
         }
 
-        let Some((bytes, desc)) = self.file.read_packet(start_packet, &mut self.read_buf)? else {
+        let read = match self.file.read_packet(start_packet, &mut self.read_buf) {
+            Ok(read) => read,
+            Err(e) => {
+                if let Some(reason) = e.pending_reason() {
+                    return Ok(DemuxOutcome::Pending(reason));
+                }
+                return Err(e);
+            }
+        };
+        let Some((bytes, desc)) = read else {
             return Ok(DemuxOutcome::Eof);
         };
 
-        self.last_read_len = bytes as usize;
+        self.last_read_len = usize::try_from(bytes).map_err(DecodeError::backend)?;
         // SAFETY: `AudioStreamPacketDescription` is `#[repr(C)]` POD
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &desc as *const _ as *const u8,
+                std::ptr::from_ref(&desc).cast::<u8>(),
                 self.last_packet_desc_blob.as_mut_ptr(),
                 size_of::<AudioStreamPacketDescription>(),
             );
@@ -261,19 +312,25 @@ impl Demuxer for AppleAudioFileDemuxer {
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
-        let sample_rate = self.track_info.sample_rate.max(1);
-        let total_frames = self
-            .total_packets
-            .saturating_mul(u64::from(self.frames_per_packet));
-        let total_duration = duration_for_frames(sample_rate, total_frames);
+        let sample_rate = self.track_info.sample_rate;
+        if let Some(total_packets) = self.total_packets {
+            let total_frames = total_packets.saturating_mul(u64::from(self.frames_per_packet));
+            let total_duration = duration_for_frames(sample_rate, total_frames);
+            if target >= total_duration {
+                return Ok(DemuxSeekOutcome::PastEof {
+                    duration: total_duration,
+                });
+            }
+        }
 
-        if target >= total_duration {
+        if self.total_packets == Some(0) {
             return Ok(DemuxSeekOutcome::PastEof {
-                duration: total_duration,
+                duration: Duration::ZERO,
             });
         }
 
-        let target_frame = frames_for_duration(sample_rate, target) as u64;
+        let target_frame = u64::try_from(frames_for_duration(sample_rate, target))
+            .map_err(DecodeError::backend)?;
         let target_packet = target_frame / u64::from(self.frames_per_packet.max(1));
         let backup = u64::from(priming.packets).min(target_packet);
         let landed_packet = target_packet.saturating_sub(backup);
@@ -298,7 +355,11 @@ fn serialize_asbd(asbd: &AudioStreamBasicDescription) -> Vec<u8> {
     let mut out = vec![0u8; size_of::<AudioStreamBasicDescription>()];
     // SAFETY: `AudioStreamBasicDescription` is `#[repr(C)]` POD; we copy
     unsafe {
-        std::ptr::copy_nonoverlapping(asbd as *const _ as *const u8, out.as_mut_ptr(), out.len());
+        std::ptr::copy_nonoverlapping(
+            std::ptr::from_ref(asbd).cast::<u8>(),
+            out.as_mut_ptr(),
+            out.len(),
+        );
     }
     out
 }
@@ -306,12 +367,20 @@ fn serialize_asbd(asbd: &AudioStreamBasicDescription) -> Vec<u8> {
 #[cfg(test)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod tests {
-    use std::io::Cursor;
+    use std::{
+        io::{self, Cursor, Error, ErrorKind, Read, Seek, SeekFrom},
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
 
-    use kithara_stream::{AudioCodec, ContainerFormat};
+    use kithara_stream::{
+        AudioCodec, ContainerFormat, NotReadyCause, PendingReason, SourcePhase, StreamPending,
+    };
     use kithara_test_utils::kithara;
 
-    use super::AppleAudioFileDemuxer;
+    use super::{AppleAudioFileDemuxer, SourceOpenMode};
     use crate::demuxer::{DemuxOutcome, Demuxer};
 
     fn read_asset(name: &str) -> Vec<u8> {
@@ -327,10 +396,12 @@ mod tests {
     #[kithara::test]
     fn open_wav_demuxer_track_info_and_first_frame() {
         let bytes = read_asset("silence_1s.wav");
-        let mut dx = AppleAudioFileDemuxer::open_for(
+        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
             Box::new(Cursor::new(bytes)),
             AudioCodec::Pcm,
             Some(ContainerFormat::Wav),
+            SourceOpenMode::Complete,
+            None,
         )
         .expect("open_for(Pcm, Wav) must succeed");
 
@@ -344,5 +415,154 @@ mod tests {
             DemuxOutcome::Frame(frame) => assert!(!frame.data.is_empty()),
             other => panic!("expected Frame, got {other:?}"),
         }
+    }
+
+    /// Streamed source: bytes past `ready` are not delivered yet. Mirrors
+    /// `Stream::probe_read` — a read at/past the boundary fails with an
+    /// `Interrupted` `io::Error` carrying a typed [`StreamPending`] payload.
+    struct NotReadySource {
+        inner: Cursor<Vec<u8>>,
+        notify_not_ready: Option<Arc<AtomicBool>>,
+        ready: u64,
+    }
+
+    impl NotReadySource {
+        fn new(bytes: Vec<u8>, ready: u64, notify_not_ready: Option<Arc<AtomicBool>>) -> Self {
+            let inner = Cursor::new(bytes);
+            Self {
+                inner,
+                notify_not_ready,
+                ready,
+            }
+        }
+    }
+
+    impl Read for NotReadySource {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let pos = self.inner.position();
+            let want = u64::try_from(buf.len())
+                .map_err(|_| Error::other("NotReadySource request exceeds u64"))?;
+            // `probe_read` waits on the WHOLE requested range — a request
+            // crossing the delivery boundary fails outright, it is never
+            if pos.saturating_add(want) > self.ready {
+                if let Some(notify_not_ready) = &self.notify_not_ready {
+                    notify_not_ready.store(true, Ordering::Release);
+                }
+                return Err(not_ready_error(
+                    pos,
+                    buf.len(),
+                    u64::try_from(self.inner.get_ref().len()).ok(),
+                ));
+            }
+            self.inner.read(buf)
+        }
+    }
+
+    impl Seek for NotReadySource {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    fn not_ready_error(pos: u64, want: usize, len: Option<u64>) -> Error {
+        Error::new(
+            ErrorKind::Interrupted,
+            StreamPending {
+                pos,
+                want,
+                len,
+                reason: PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted),
+                phase: SourcePhase::Waiting,
+                epoch: 0,
+                flushing: false,
+                variant_fence: false,
+            },
+        )
+    }
+
+    /// Contract pin (#110): "data not ready" from the source must surface
+    /// as `DemuxOutcome::Pending`, never as `Err`. An `Err` here is
+    /// classified `Interrupted` by the decode loop, which retries
+    /// immediately — a hot spin that burns a core for as long as the
+    /// stall lasts instead of parking the worker.
+    #[kithara::test]
+    fn next_frame_surfaces_not_ready_as_pending_not_err() {
+        let bytes = read_asset("silence_1s.wav");
+        let ready = u64::try_from(bytes.len() / 2).expect("fixture length fits in u64");
+        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(NotReadySource::new(bytes, ready, None)),
+            AudioCodec::Pcm,
+            Some(ContainerFormat::Wav),
+            SourceOpenMode::Complete,
+            None,
+        )
+        .expect("open_for must succeed with the header prefix available");
+
+        loop {
+            match dx.next_frame() {
+                Ok(DemuxOutcome::Frame(_)) => {}
+                Ok(DemuxOutcome::Pending(PendingReason::NotReady(_))) => return,
+                Ok(other) => panic!("unexpected outcome before the not-ready boundary: {other:?}"),
+                Err(e) => panic!("data-not-ready must surface as Pending, got Err: {e}"),
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn open_mp3_demuxer_does_not_require_tail_bytes() {
+        let bytes = read_asset("test.mp3");
+        let ready = 16_u64 * 1024;
+        let tail_read_attempted = Arc::new(AtomicBool::new(false));
+        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(NotReadySource::new(
+                bytes,
+                ready,
+                Some(Arc::clone(&tail_read_attempted)),
+            )),
+            AudioCodec::Mp3,
+            Some(ContainerFormat::MpegAudio),
+            SourceOpenMode::Streaming,
+            Some(kithara_platform::time::Duration::from_secs(2)),
+        )
+        .expect("MP3 streaming open must not require tail bytes");
+        assert!(
+            !tail_read_attempted.load(Ordering::Acquire),
+            "MP3 streaming open must not probe bytes beyond the startup prefix"
+        );
+        assert_eq!(
+            dx.duration(),
+            Some(kithara_platform::time::Duration::from_secs(2)),
+            "MP3 streaming open must use the caller's prefix duration hint"
+        );
+
+        match dx
+            .next_frame()
+            .expect("first MP3 frame read returns a status")
+        {
+            DemuxOutcome::Frame(frame) => assert!(!frame.data.is_empty()),
+            DemuxOutcome::Pending(PendingReason::NotReady(_)) => {}
+            other => panic!("unexpected first MP3 outcome: {other:?}"),
+        }
+    }
+
+    #[kithara::test]
+    fn open_mp3_demuxer_complete_source_reports_duration() {
+        let bytes = read_asset("test.mp3");
+        let dx = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(Cursor::new(bytes)),
+            AudioCodec::Mp3,
+            Some(ContainerFormat::MpegAudio),
+            SourceOpenMode::Complete,
+            None,
+        )
+        .expect("MP3 complete open must succeed");
+
+        let duration = dx
+            .duration()
+            .expect("complete MP3 open must report packet-count duration");
+        assert!(
+            duration.as_secs_f64() > 1.0,
+            "complete MP3 duration is suspiciously short: {duration:?}"
+        );
     }
 }

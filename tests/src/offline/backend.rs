@@ -1,4 +1,4 @@
-use std::{num::NonZeroU32, time::Duration};
+use std::num::NonZeroU32;
 
 use firewheel::{
     StreamInfo,
@@ -6,6 +6,7 @@ use firewheel::{
     node::StreamStatus,
     processor::FirewheelProcessor,
 };
+use kithara_platform::time::Duration;
 
 /// Minimal firewheel `AudioBackend` that renders offline (no real device).
 pub struct OfflineBackend {

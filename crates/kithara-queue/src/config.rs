@@ -1,7 +1,7 @@
 use std::{fmt, num::NonZeroUsize, sync::Arc};
 
 use bon::Builder;
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 use kithara_play::PlayerImpl;
 
 /// Default parallelism cap for async track loads.
@@ -40,14 +40,14 @@ pub struct QueueConfig {
     #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
     pub max_concurrent_loads: NonZeroUsize,
 
-    /// Externally-owned player. `None` means Queue builds a default.
-    pub player: Option<Arc<PlayerImpl>>,
-
     /// Master cancel for the queue. `Some` threads the app master so the
     /// queue subtree cascades from one app-wide owner; `None` falls back
     /// to a fresh standalone token (test / library use). Must never be
     /// `None` on the production app path.
-    pub cancel: Option<CancellationToken>,
+    pub cancel: Option<CancelToken>,
+
+    /// Externally-owned player. `None` means Queue builds a default.
+    pub player: Option<Arc<PlayerImpl>>,
 
     /// Whether the queue auto-advances to the next track at EOF.
     #[builder(default = true)]
@@ -83,25 +83,18 @@ impl QueueConfig {
         Self::default()
     }
 
-    /// Replace the [`PlayerImpl`] instance.
-    #[must_use]
-    pub fn with_player(mut self, player: Arc<PlayerImpl>) -> Self {
-        self.player = Some(player);
-        self
-    }
-
     /// Thread an app-wide master cancel so the queue subtree derives from
     /// a single owner instead of minting its own root.
     #[must_use]
-    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
+    pub fn with_cancel(mut self, cancel: CancelToken) -> Self {
         self.cancel = Some(cancel);
         self
     }
 
-    /// Set the prefetch lead-time (seconds) before EOF.
+    /// Replace the [`PlayerImpl`] instance.
     #[must_use]
-    pub fn with_prefetch_duration(mut self, secs: f32) -> Self {
-        self.prefetch_duration = secs;
+    pub fn with_player(mut self, player: Arc<PlayerImpl>) -> Self {
+        self.player = Some(player);
         self
     }
 

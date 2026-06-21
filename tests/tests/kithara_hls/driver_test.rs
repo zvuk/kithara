@@ -1,7 +1,6 @@
 use std::{
     io::{Read, Seek, SeekFrom},
     sync::{Arc, Mutex as StdMutex},
-    time::Duration,
 };
 
 use kithara::{
@@ -19,8 +18,8 @@ use kithara_integration_tests::{
     rt_cancel, temp_dir,
 };
 use kithara_platform::{
-    CancellationToken,
-    time::sleep,
+    CancelToken,
+    time::Duration,
     tokio::task::{spawn, spawn_blocking},
 };
 use tracing::info;
@@ -40,10 +39,7 @@ use tracing::info;
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn test_driver_seek_after_playlist_finished(
-    temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
-) {
+async fn test_driver_seek_after_playlist_finished(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8");
 
@@ -103,7 +99,7 @@ async fn test_driver_seek_after_playlist_finished(
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: CancellationToken) {
+async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
         false,
@@ -141,8 +137,9 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: Cancell
         }
     });
 
-    sleep(Duration::from_millis(100)).await;
-
+    // No settle timer: the blocking `stream.read()` below already waits for the
+    // first bytes to land (state-driven), exactly like
+    // `test_driver_seek_after_playlist_finished` which reads with no pre-sleep.
     spawn_blocking(move || {
         let mut first_read = vec![0u8; 50_000];
         let n1 = stream.read(&mut first_read).unwrap();

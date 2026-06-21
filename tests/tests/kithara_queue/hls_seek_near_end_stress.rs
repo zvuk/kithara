@@ -1,20 +1,26 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
-use kithara_events::{AbrMode, TrackId, TrackStatus};
+use kithara_events::{AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara, offline::OfflineSession, temp_dir,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
+    offline::OfflineSession,
+    temp_dir,
+    waits::{wait_for_loader_done_event, wait_for_position_event},
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancelToken,
+    time::{self, Duration, timeout},
+    tokio::sync::broadcast::error::RecvError,
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::time::sleep;
 use url::Url;
 
 struct Consts;
@@ -96,13 +102,28 @@ async fn build_hls(helper: &TestServerHelper, include_sidx: bool) -> Url {
         .master_url()
 }
 
+/// Queue tick driver, flash-coherent: spawned through the platform chokepoint
+/// (participant + ambient propagation) with `#[kithara::flash(true)]` so the
+/// 50ms cadence rides the VIRTUAL clock under flash. The previous raw
+/// `tokio::spawn` + bare real sleep ran invisible to the engine: the test's
+/// virtual `ITER_DEADLINE` elapsed after a handful of real ticks under load.
+#[kithara::flash(true)]
+async fn drive_queue_ticks(queue: Arc<Queue>) {
+    loop {
+        time::sleep(Duration::from_millis(50)).await;
+        if queue.tick().is_err() {
+            break;
+        }
+    }
+}
+
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
     Arc<Queue>,
     Downloader,
     StoreOptions,
-    tokio::task::JoinHandle<()>,
+    kithara_platform::tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
@@ -110,70 +131,13 @@ fn build_queue_with_tick(
             .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
-    let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = kithara_platform::tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
     let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
-}
-
-async fn wait_for_loader_done(
-    queue: &Queue,
-    track_id: TrackId,
-    deadline: Duration,
-) -> Result<(), String> {
-    let start = std::time::Instant::now();
-    loop {
-        if let Some(entry) = queue.track(track_id) {
-            match &entry.status {
-                TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
-                TrackStatus::Failed(err) => return Err(format!("loader failed: {err}")),
-                _ => {}
-            }
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "loader timeout {deadline:?} (last={:?})",
-                queue.track(track_id).map(|e| e.status)
-            ));
-        }
-        sleep(Duration::from_millis(40)).await;
-    }
-}
-
-async fn wait_for_position_at_least(
-    queue: &Queue,
-    min: f64,
-    deadline: Duration,
-) -> Result<(), String> {
-    let start = std::time::Instant::now();
-    loop {
-        if let Some(p) = queue.position_seconds()
-            && p >= min
-        {
-            return Ok(());
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "position never reached {min:.2}s in {deadline:?} (last={:?})",
-                queue.position_seconds()
-            ));
-        }
-        sleep(Duration::from_millis(40)).await;
-    }
 }
 
 /// Run one fresh-player attempt: spin up Queue + Player, append the HLS
@@ -209,6 +173,12 @@ async fn run_one_attempt(
         .build();
     let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
 
+    // Subscribe before the action that drives loading/playback so no
+    // status or progress event can slip between `select` and the first
+    // `recv`. The queue bus is the player bus (`Queue::new` clones
+    // `player.bus()`), so audio sink-truth events arrive here too.
+    let mut rx = queue.subscribe();
+
     if let Err(e) = queue.select(track_id, Transition::None) {
         tick_handle.abort();
         return IterOutcome::Errored {
@@ -218,7 +188,9 @@ async fn run_one_attempt(
         };
     }
 
-    if let Err(e) = wait_for_loader_done(&queue, track_id, Consts::LOAD_DEADLINE).await {
+    if let Err(e) =
+        wait_for_loader_done_event(&mut rx, &queue, track_id, Consts::LOAD_DEADLINE).await
+    {
         tick_handle.abort();
         return IterOutcome::Errored {
             iter,
@@ -227,8 +199,13 @@ async fn run_one_attempt(
         };
     }
 
-    if let Err(e) =
-        wait_for_position_at_least(&queue, Consts::PRE_SEEK_PLAY_S, Duration::from_secs(15)).await
+    if let Err(e) = wait_for_position_event(
+        &mut rx,
+        &queue,
+        Consts::PRE_SEEK_PLAY_S,
+        Duration::from_secs(15),
+    )
+    .await
     {
         tick_handle.abort();
         return IterOutcome::Errored {
@@ -252,7 +229,6 @@ async fn run_one_attempt(
     let target = (duration - target_offset).max(0.0);
     let pos_before = queue.position_seconds().unwrap_or(0.0);
 
-    let seek_started = std::time::Instant::now();
     if let Err(e) = queue.seek(target) {
         tick_handle.abort();
         return IterOutcome::Errored {
@@ -262,73 +238,202 @@ async fn run_one_attempt(
         };
     }
 
-    let mut landed = false;
-    let mut errored: Option<String> = None;
-    while seek_started.elapsed() < Consts::SEEK_BUDGET {
-        if let Some(entry) = queue.track(track_id)
-            && let TrackStatus::Failed(err) = &entry.status
-        {
-            errored = Some(format!("track entered Failed: {err}"));
-            break;
-        }
-        if let Some(p) = queue.position_seconds()
-            && (p - target).abs() < 1.0
-        {
-            landed = true;
-            break;
-        }
-        sleep(Duration::from_millis(30)).await;
-    }
-
-    if let Some(error) = errored {
-        tick_handle.abort();
-        return IterOutcome::Errored {
-            iter,
-            target,
-            error,
-        };
-    }
-    if !landed {
-        let pos_after = queue.position_seconds().unwrap_or(0.0);
-        tick_handle.abort();
-        return IterOutcome::Hung {
-            iter,
-            target,
-            pos_before,
-            pos_after,
-            budget_ms: Consts::SEEK_BUDGET.as_millis(),
-        };
-    }
-
-    let post_seek_started = std::time::Instant::now();
-    let mut pos_after = queue.position_seconds().unwrap_or(0.0);
-    while post_seek_started.elapsed() < Consts::POST_SEEK_RENDER_WALL {
-        if let Some(entry) = queue.track(track_id)
-            && let TrackStatus::Failed(err) = &entry.status
-        {
+    // Seek-landed: wait on the sink-truth events the worker emits after
+    // applying the seek — `SeekComplete` (post-seek output committed) or a
+    // `PlaybackProgress` whose position is within tolerance of `target` —
+    // rather than polling the tick-cached position. A `Failed` transition is
+    // the failure branch. The budget is a virtual hang ceiling under flash.
+    match wait_for_seek_landed(&mut rx, &queue, track_id, target, Consts::SEEK_BUDGET).await {
+        SeekLanded::Landed => {}
+        SeekLanded::Failed(err) => {
             tick_handle.abort();
             return IterOutcome::Errored {
                 iter,
                 target,
-                error: format!("track entered Failed (post-seek): {err}"),
+                error: err,
             };
         }
-        if let Some(p) = queue.position_seconds() {
-            pos_after = p;
-            if (p - target) >= Consts::MIN_POST_SEEK_ADVANCE_S {
-                tick_handle.abort();
-                return IterOutcome::Ok;
+        SeekLanded::Timeout => {
+            let pos_after = queue.position_seconds().unwrap_or(0.0);
+            tick_handle.abort();
+            return IterOutcome::Hung {
+                iter,
+                target,
+                pos_before,
+                pos_after,
+                budget_ms: Consts::SEEK_BUDGET.as_millis(),
+            };
+        }
+    }
+
+    // Post-seek "playing again": wait for real PCM-commit progress past the
+    // seek target by `MIN_POST_SEEK_ADVANCE_S`, observed via
+    // `PlaybackProgress`, rather than a fixed render wall.
+    match wait_for_post_seek_advance(
+        &mut rx,
+        &queue,
+        track_id,
+        target,
+        Consts::MIN_POST_SEEK_ADVANCE_S,
+        Consts::POST_SEEK_RENDER_WALL,
+    )
+    .await
+    {
+        PostSeekAdvance::Advanced => {
+            tick_handle.abort();
+            IterOutcome::Ok
+        }
+        PostSeekAdvance::Failed(err) => {
+            tick_handle.abort();
+            IterOutcome::Errored {
+                iter,
+                target,
+                error: err,
             }
         }
-        sleep(Duration::from_millis(30)).await;
+        PostSeekAdvance::Timeout(pos_after) => {
+            tick_handle.abort();
+            IterOutcome::Hung {
+                iter,
+                target,
+                pos_before,
+                pos_after,
+                budget_ms: Consts::SEEK_BUDGET.as_millis(),
+            }
+        }
     }
-    tick_handle.abort();
-    IterOutcome::Hung {
-        iter,
-        target,
-        pos_before,
-        pos_after,
-        budget_ms: Consts::SEEK_BUDGET.as_millis(),
+}
+
+enum SeekLanded {
+    Landed,
+    Failed(String),
+    Timeout,
+}
+
+/// Wait until the seek lands: a `SeekComplete` whose committed position is
+/// within tolerance of `target`, or a `PlaybackProgress` position within
+/// tolerance. `Failed` is surfaced; the budget caps the wait.
+async fn wait_for_seek_landed(
+    rx: &mut EventReceiver,
+    queue: &Queue,
+    track_id: TrackId,
+    target: f64,
+    budget: Duration,
+) -> SeekLanded {
+    if let Some(entry) = queue.track(track_id)
+        && let TrackStatus::Failed(err) = &entry.status
+    {
+        return SeekLanded::Failed(format!("track entered Failed: {err}"));
+    }
+    let landed = timeout(budget, async {
+        loop {
+            match rx.recv().await {
+                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                    if ((position_ms as f64 / 1000.0) - target).abs() < 1.0 {
+                        return Ok(());
+                    }
+                }
+                Ok(Event::Audio(AudioEvent::SeekComplete { position, .. })) => {
+                    if (position.as_secs_f64() - target).abs() < 1.0 {
+                        return Ok(());
+                    }
+                }
+                Ok(Event::Queue(QueueEvent::TrackStatusChanged {
+                    id,
+                    status: TrackStatus::Failed(err),
+                })) if id == track_id => {
+                    return Err(format!("track entered Failed: {err}"));
+                }
+                Ok(_) => {}
+                Err(RecvError::Lagged(_)) => {
+                    if let Some(entry) = queue.track(track_id)
+                        && let TrackStatus::Failed(err) = &entry.status
+                    {
+                        return Err(format!("track entered Failed: {err}"));
+                    }
+                    if let Some(p) = queue.position_seconds()
+                        && (p - target).abs() < 1.0
+                    {
+                        return Ok(());
+                    }
+                }
+                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
+            }
+        }
+    })
+    .await;
+    match landed {
+        Ok(Ok(())) => SeekLanded::Landed,
+        Ok(Err(err)) => SeekLanded::Failed(err),
+        Err(_) => SeekLanded::Timeout,
+    }
+}
+
+enum PostSeekAdvance {
+    Advanced,
+    Failed(String),
+    Timeout(f64),
+}
+
+/// Wait until playback advances at least `min_advance` seconds past
+/// `target`, observed via `PlaybackProgress`. Proves "playing again after
+/// seek" on real PCM-commit progress. `Failed` is surfaced; the budget caps
+/// the wait and the timeout carries the last observed position.
+async fn wait_for_post_seek_advance(
+    rx: &mut EventReceiver,
+    queue: &Queue,
+    track_id: TrackId,
+    target: f64,
+    min_advance: f64,
+    budget: Duration,
+) -> PostSeekAdvance {
+    if let Some(entry) = queue.track(track_id)
+        && let TrackStatus::Failed(err) = &entry.status
+    {
+        return PostSeekAdvance::Failed(format!("track entered Failed (post-seek): {err}"));
+    }
+    if let Some(p) = queue.position_seconds()
+        && (p - target) >= min_advance
+    {
+        return PostSeekAdvance::Advanced;
+    }
+    let advanced = timeout(budget, async {
+        loop {
+            match rx.recv().await {
+                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                    let p = position_ms as f64 / 1000.0;
+                    if (p - target) >= min_advance {
+                        return Ok(());
+                    }
+                }
+                Ok(Event::Queue(QueueEvent::TrackStatusChanged {
+                    id,
+                    status: TrackStatus::Failed(err),
+                })) if id == track_id => {
+                    return Err(format!("track entered Failed (post-seek): {err}"));
+                }
+                Ok(_) => {}
+                Err(RecvError::Lagged(_)) => {
+                    if let Some(entry) = queue.track(track_id)
+                        && let TrackStatus::Failed(err) = &entry.status
+                    {
+                        return Err(format!("track entered Failed (post-seek): {err}"));
+                    }
+                    if let Some(p) = queue.position_seconds()
+                        && (p - target) >= min_advance
+                    {
+                        return Ok(());
+                    }
+                }
+                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
+            }
+        }
+    })
+    .await;
+    match advanced {
+        Ok(Ok(())) => PostSeekAdvance::Advanced,
+        Ok(Err(err)) => PostSeekAdvance::Failed(err),
+        Err(_) => PostSeekAdvance::Timeout(queue.position_seconds().unwrap_or(0.0)),
     }
 }
 
@@ -364,7 +469,7 @@ async fn hls_seek_near_end_fresh_player_stress(
     let mut outcomes: Vec<IterOutcome> = Vec::with_capacity(Consts::FRESH_ITERATIONS as usize);
     for iter in 0..Consts::FRESH_ITERATIONS {
         let offset = Consts::NEAR_END_OFFSETS_S[(iter as usize) % Consts::NEAR_END_OFFSETS_S.len()];
-        let outcome = match tokio::time::timeout(
+        let outcome = match time::timeout(
             Consts::ITER_DEADLINE,
             run_one_attempt(iter, &url, offset, backend),
         )

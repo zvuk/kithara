@@ -11,11 +11,11 @@ use crate::{gui::message::Message, theme::gui::GuiPalette};
 /// border. Click or drag the rail to set the band gain; snaps to 0 within
 /// 0.3 dB and rounds to one decimal.
 struct VFader {
-    band: usize,
-    value: f32,
-    min: f32,
-    max: f32,
     p: GuiPalette,
+    max: f32,
+    min: f32,
+    value: f32,
+    band: usize,
 }
 
 mod consts {
@@ -55,35 +55,6 @@ struct DragState {
 
 impl canvas::Program<Message> for VFader {
     type State = DragState;
-
-    fn update(
-        &self,
-        state: &mut DragState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<Message>> {
-        match event {
-            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
-                cursor.position_over(bounds).map(|pos| {
-                    state.dragging = true;
-                    let v = value_at(self.min, self.max, bounds.height, pos.y - bounds.y);
-                    Action::publish(Message::EqBandChanged(self.band, v)).and_capture()
-                })
-            }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
-                cursor.position().map(|pos| {
-                    let v = value_at(self.min, self.max, bounds.height, pos.y - bounds.y);
-                    Action::publish(Message::EqBandChanged(self.band, v)).and_capture()
-                })
-            }
-            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.dragging => {
-                state.dragging = false;
-                Some(Action::capture())
-            }
-            _ => None,
-        }
-    }
 
     fn draw(
         &self,
@@ -172,24 +143,61 @@ impl canvas::Program<Message> for VFader {
             mouse::Interaction::default()
         }
     }
+
+    fn update(
+        &self,
+        state: &mut DragState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<Message>> {
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
+                cursor.position_over(bounds).map(|pos| {
+                    state.dragging = true;
+                    let v = value_at(self.min, self.max, bounds.height, pos.y - bounds.y);
+                    Action::publish(Message::EqBandChanged(self.band, v)).and_capture()
+                })
+            }
+            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
+                cursor.position().map(|pos| {
+                    let v = value_at(self.min, self.max, bounds.height, pos.y - bounds.y);
+                    Action::publish(Message::EqBandChanged(self.band, v)).and_capture()
+                })
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.dragging => {
+                state.dragging = false;
+                Some(Action::capture())
+            }
+            _ => None,
+        }
+    }
 }
 
-/// Build a vertical EQ fader of pixel `height` for `band`, with `value` in
-/// `min..=max` dB.
-pub(crate) fn vfader<'a>(
-    band: usize,
-    value: f32,
-    min: f32,
-    max: f32,
-    height: f32,
-    p: GuiPalette,
-) -> Element<'a, Message> {
-    Canvas::new(VFader {
-        band,
+/// Range, current value, and pixel height for a single [`vfader`].
+#[derive(Clone, Copy)]
+pub(crate) struct VFaderParams {
+    pub(crate) height: f32,
+    pub(crate) max: f32,
+    pub(crate) min: f32,
+    pub(crate) value: f32,
+}
+
+/// Build a vertical EQ fader of pixel `params.height` for `band`, with
+/// `params.value` in `params.min..=params.max` dB.
+pub(crate) fn vfader<'a>(band: usize, params: VFaderParams, p: GuiPalette) -> Element<'a, Message> {
+    let VFaderParams {
         value,
         min,
         max,
+        height,
+    } = params;
+    Canvas::new(VFader {
         p,
+        max,
+        min,
+        value,
+        band,
     })
     .width(Length::Fill)
     .height(Length::Fixed(height))

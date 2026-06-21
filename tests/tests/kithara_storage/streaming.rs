@@ -13,7 +13,7 @@ use kithara::storage::{ResourceRead, ResourceStatus, StorageError, StorageResour
 use kithara_integration_tests::storage_ext::mem_resource_with_bytes;
 use kithara_integration_tests::{TestTempDir, cancel_token, temp_dir};
 use kithara_platform::{
-    CancellationToken, thread,
+    CancelToken, thread,
     time::{Duration, Instant},
 };
 
@@ -22,11 +22,7 @@ type TestResource = MmapResource;
 #[cfg(target_arch = "wasm32")]
 type TestResource = MemResource;
 
-fn open_test_resource(
-    temp_dir: &TestTempDir,
-    name: &str,
-    cancel: CancellationToken,
-) -> TestResource {
+fn open_test_resource(temp_dir: &TestTempDir, name: &str, cancel: CancelToken) -> TestResource {
     #[cfg(not(target_arch = "wasm32"))]
     {
         open_mmap_at(temp_dir.path().join(name), None, cancel)
@@ -43,7 +39,7 @@ fn open_test_resource_with_len(
     temp_dir: &TestTempDir,
     name: &str,
     len: u64,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) -> TestResource {
     open_mmap_at(temp_dir.path().join(name), Some(len), cancel)
 }
@@ -52,7 +48,7 @@ fn open_test_resource_with_len(
 fn open_mmap_at(
     path: std::path::PathBuf,
     initial_len: Option<u64>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) -> MmapResource {
     let opts = MmapOptions::for_path(path)
         .maybe_initial_len(initial_len)
@@ -91,7 +87,7 @@ fn assert_wait_finishes<T>(handle: &thread::JoinHandle<T>, timeout: Duration) {
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn streaming_resource_path_method(temp_dir: TestTempDir, cancel_token: CancellationToken) {
+fn streaming_resource_path_method(temp_dir: TestTempDir, cancel_token: CancelToken) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let file_path = temp_dir.path().join("streaming.dat");
@@ -119,17 +115,14 @@ fn streaming_resource_path_method(temp_dir: TestTempDir, cancel_token: Cancellat
 }
 
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn streaming_resource_open_and_status_new(temp_dir: TestTempDir, cancel_token: CancellationToken) {
+fn streaming_resource_open_and_status_new(temp_dir: TestTempDir, cancel_token: CancelToken) {
     let resource = open_test_resource(&temp_dir, "stream.dat", cancel_token);
 
     assert_eq!(resource.status(), ResourceStatus::Active);
 }
 
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn streaming_resource_open_existing_is_committed(
-    temp_dir: TestTempDir,
-    cancel_token: CancellationToken,
-) {
+fn streaming_resource_open_existing_is_committed(temp_dir: TestTempDir, cancel_token: CancelToken) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let file_path = temp_dir.path().join("stream.dat");
@@ -166,10 +159,7 @@ fn streaming_resource_open_existing_is_committed(
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn streaming_resource_range_write_wait_read(
-    temp_dir: TestTempDir,
-    cancel_token: CancellationToken,
-) {
+fn streaming_resource_range_write_wait_read(temp_dir: TestTempDir, cancel_token: CancelToken) {
     let resource = open_test_resource(&temp_dir, "ranges.dat", cancel_token);
 
     resource.write_at(0, b"Hello, ").unwrap();
@@ -183,7 +173,7 @@ fn streaming_resource_range_write_wait_read(
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_sparse_file_behavior() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let resource = open_test_resource(&temp_dir, "sparse.dat", cancel_token);
 
@@ -203,7 +193,7 @@ fn streaming_resource_sparse_file_behavior() {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_overlapping_writes() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let resource = open_test_resource(&temp_dir, "overlap.dat", cancel_token);
 
@@ -218,7 +208,7 @@ fn streaming_resource_overlapping_writes() {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_zero_length_commit() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let resource = open_test_resource(&temp_dir, "zero.dat", cancel_token);
 
@@ -237,7 +227,7 @@ fn streaming_resource_zero_length_commit() {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_edge_case_ranges() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let resource = open_test_resource(&temp_dir, "edges.dat", cancel_token);
 
@@ -258,7 +248,7 @@ fn streaming_resource_edge_case_ranges() {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_concurrent_wait_and_write() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let resource = open_test_resource(&temp_dir, "concurrent_wait.dat", cancel_token);
 
@@ -292,7 +282,7 @@ fn streaming_resource_reopen_round_trip(
     #[case] payload: &[u8],
 ) {
     let _temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -310,7 +300,7 @@ fn streaming_resource_reopen_round_trip(
         }
 
         let file_len = fs::metadata(&file_path).unwrap().len();
-        let resource = open_mmap_at(file_path, None, CancellationToken::default());
+        let resource = open_mmap_at(file_path, None, CancelToken::never());
 
         if wait_after_reopen {
             let outcome = resource.wait_range(0..file_len).unwrap();
@@ -337,7 +327,7 @@ fn streaming_resource_reopen_round_trip(
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_wait_range_partial_coverage() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let resource = open_test_resource(&temp_dir, "partial.dat", cancel_token.clone());
 
@@ -355,7 +345,7 @@ fn streaming_resource_wait_range_partial_coverage() {
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn streaming_resource_commit_and_eof(temp_dir: TestTempDir, cancel_token: CancellationToken) {
+fn streaming_resource_commit_and_eof(temp_dir: TestTempDir, cancel_token: CancelToken) {
     let resource = open_test_resource(&temp_dir, "commit.dat", cancel_token);
 
     resource.write_at(0, b"Hello").unwrap();
@@ -375,7 +365,7 @@ fn streaming_resource_commit_and_eof(temp_dir: TestTempDir, cancel_token: Cancel
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_commit_without_final_len() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let resource = open_test_resource(&temp_dir, "commit_no_len.dat", cancel_token);
 
@@ -392,7 +382,7 @@ fn streaming_resource_commit_without_final_len() {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_sealed_after_commit() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let resource = open_test_resource(&temp_dir, "sealed.dat", cancel_token);
 
@@ -411,7 +401,7 @@ fn streaming_resource_sealed_after_commit() {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_cancel_during_wait() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let resource = open_test_resource(&temp_dir, "cancel_wait.dat", cancel_token.clone());
 
@@ -439,7 +429,7 @@ fn streaming_resource_cancel_during_wait() {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_fail_wakes_waiters() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let resource = open_test_resource(&temp_dir, "fail_waiters.dat", cancel_token);
     let reader = resource.reader();
@@ -465,7 +455,7 @@ fn streaming_resource_fail_wakes_waiters() {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_concurrent_operations() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     // Concurrent writers need a shared, cloneable handle: use the
     // `StorageResource` facade (the single-owner `ResourceWriter` is not Clone).
@@ -525,7 +515,7 @@ fn streaming_resource_concurrent_operations() {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_invalid_ranges() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let resource = open_test_resource(&temp_dir, "invalid_ranges.dat", cancel_token);
 
@@ -545,7 +535,7 @@ fn streaming_resource_invalid_ranges() {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_whole_object_operations() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let resource = open_test_resource(&temp_dir, "whole_object.dat", cancel_token);
 
@@ -568,7 +558,7 @@ fn streaming_resource_whole_object_operations() {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_empty_operations() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let resource = open_test_resource(&temp_dir, "empty_ops.dat", cancel_token);
 
@@ -586,7 +576,7 @@ fn streaming_resource_empty_operations() {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_complex_range_scenario() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let resource = open_test_resource(&temp_dir, "complex_ranges.dat", cancel_token);
 
@@ -616,7 +606,7 @@ fn streaming_resource_complex_range_scenario() {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn streaming_resource_initial_len_hint() {
     let temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     #[cfg(not(target_arch = "wasm32"))]
     let resource = open_test_resource_with_len(&temp_dir, "initial_hint.dat", 100, cancel_token);

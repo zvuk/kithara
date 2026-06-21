@@ -29,7 +29,7 @@ struct NnDetector {
 #[cfg(feature = "beat-nn")]
 impl NnDetector {
     fn new() -> Result<Self, BeatDetectError> {
-        let inner = BeatThis::from_model_bytes(MEL_MODEL_BYTES, BEAT_MODEL_BYTES).map_err(|e| {
+        let inner = BeatThis::try_from((MEL_MODEL_BYTES, BEAT_MODEL_BYTES)).map_err(|e| {
             BeatDetectError::Init {
                 reason: e.to_string(),
             }

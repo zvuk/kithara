@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use kithara_events::{AbrEvent, AbrMode, EventBus, VariantIndex, VariantInfo};
 use kithara_platform::{
-    RwLock,
+    sync::RwLock,
     time::{Duration, Instant},
 };
 use kithara_test_utils::kithara;
@@ -120,7 +120,7 @@ impl AbrHandle {
         reader_pt: Duration,
         now: Instant,
     ) {
-        let bus = self.inner.bus.lock_sync_read().clone();
+        let bus = self.inner.bus.read().clone();
         if let Some(bus) = bus {
             bus.publish(AbrEvent::VariantApplied {
                 from: VariantIndex::new(current_before),
@@ -212,7 +212,7 @@ impl AbrHandle {
     /// the controller reads it through the shared `Arc` when publishing.
     #[must_use]
     pub fn with_bus(self, bus: EventBus) -> Self {
-        *self.inner.bus.lock_sync_write() = Some(bus);
+        *self.inner.bus.write() = Some(bus);
         self
     }
 }
@@ -229,6 +229,7 @@ mod tests {
         AbrEvent, AbrReason, DEFAULT_EVENT_BUS_CAPACITY, Event, EventBus, VariantDuration,
         VariantIndex, VariantInfo,
     };
+    use kithara_platform::CancelToken;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -291,6 +292,7 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
+            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
@@ -321,6 +323,7 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
+            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
@@ -344,6 +347,7 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
+            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
@@ -379,6 +383,7 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
+            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let handle = {
@@ -401,6 +406,7 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
+            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {

@@ -1,10 +1,11 @@
-use std::{num::NonZeroU32, sync::Arc, time::Duration};
+use std::{num::NonZeroU32, sync::Arc};
 
 use kithara_audio::{
     Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome, ServiceClass,
 };
 use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_stream::{Stream, StreamType};
 
 use crate::impls::{config::ResourceConfig, source_type::SourceType};
@@ -32,7 +33,40 @@ use crate::impls::{config::ResourceConfig, source_type::SourceType};
 pub struct Resource {
     pub(crate) inner: Box<dyn PcmReader>,
     src: Arc<str>,
+    /// Drop guard for the per-track cancel — the token passed as
+    /// `ResourceConfig.cancel`, whose subtree covers BOTH the inner stream
+    /// (File/Hls) and the `Audio` pipeline (each a `child()` of it). Declared
+    /// first so it drops before `inner`: a mid-session unload tears down the
+    /// whole track subtree — not just the `Audio` half `Audio::Drop` would
+    /// reach under propagate-down — while the stream's fetch loops still
+    /// observe the cancel as `Audio` drops. `None` for custom-reader resources;
+    /// disarmed by the `From<Resource>` reader unwrap when the live reader
+    /// passes to the analysis worker.
+    cancel: CancelGuard,
     bus: EventBus,
+}
+
+/// Cancels the wrapped per-track token on drop. A `Resource` field rather than
+/// a `Resource: Drop` impl so the `From<Resource>` reader unwrap can move
+/// `inner` out of the wrapper after [`disarm`](CancelGuard::disarm)ing. Passive
+/// when `None`.
+struct CancelGuard(Option<CancelToken>);
+
+impl CancelGuard {
+    /// Disarm so dropping the guard cancels nothing — used when the live reader
+    /// outlives this wrapper (handed to the analysis worker), where teardown
+    /// rides the analysis run-scope cancel (a parent of this token) instead.
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        if let Some(cancel) = &self.0 {
+            cancel.cancel();
+        }
+    }
 }
 
 impl Resource {
@@ -49,16 +83,21 @@ impl Resource {
     pub async fn new(config: ResourceConfig) -> DecodeResult<Self> {
         let src: Arc<str> = Arc::from(config.src.to_string());
         let source_type = SourceType::detect(&config.src)?;
-        match source_type {
+        // Capture the per-track cancel before `build_*_config` consumes `config`
+        // (it is cloned by identity into both the inner stream and the Audio).
+        let cancel = config.cancel.clone();
+        let mut resource = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
                 let audio_config = config.build_file_config();
-                Self::from_stream_audio(audio_config, src).await
+                Self::from_stream_audio(audio_config, src).await?
             }
             SourceType::HlsStream(_) => {
                 let audio_config = config.build_hls_config()?;
-                Self::from_stream_audio(audio_config, src).await
+                Self::from_stream_audio(audio_config, src).await?
             }
-        }
+        };
+        resource.cancel = CancelGuard(cancel);
+        Ok(resource)
     }
 
     /// Runtime ABR handle for adaptive sources (HLS). `None` for files.
@@ -103,6 +142,7 @@ impl Resource {
             inner,
             bus,
             src: src.unwrap_or_else(|| Arc::from("unknown")),
+            cancel: CancelGuard(None),
         }
     }
 
@@ -127,13 +167,6 @@ impl Resource {
     #[must_use]
     pub fn metadata(&self) -> &TrackMetadata {
         self.inner.metadata()
-    }
-
-    /// Unwrap into the underlying reader, e.g. to hand the opened source to
-    /// the shared analysis worker (`kithara_audio::analysis`).
-    #[must_use]
-    pub fn into_reader(self) -> Box<dyn PcmReader> {
-        self.inner
     }
 
     /// Read the next decoded chunk with full metadata.
@@ -161,7 +194,7 @@ impl Resource {
     /// failure.
     pub async fn preload(&mut self) -> Result<(), DecodeError> {
         if let Some(gate) = self.inner.preload_gate() {
-            gate.wait().await;
+            gate.wait_for_epoch(self.inner.preload_epoch()).await;
         }
         self.inner.preload()
     }
@@ -234,5 +267,121 @@ impl Resource {
     #[must_use]
     pub fn subscribe(&self) -> kithara_events::EventReceiver {
         self.bus.subscribe()
+    }
+}
+
+/// Unwrap a `Resource` into its underlying reader, e.g. to hand the opened
+/// source to the shared analysis worker (`kithara_audio::analysis`).
+///
+/// Disarms the per-track cancel before moving the reader out: the live reader
+/// outlives this wrapper, so freeing the wrapper must not tear down its fetch
+/// loops. Teardown then rides the analysis run-scope cancel.
+impl From<Resource> for Box<dyn PcmReader> {
+    fn from(resource: Resource) -> Self {
+        let Resource {
+            inner, mut cancel, ..
+        } = resource;
+        cancel.disarm();
+        inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use kithara_audio::{PcmReader, ReadOutcome, SeekOutcome};
+    use kithara_decode::{PcmSpec, TrackMetadata};
+    use kithara_platform::CancelToken;
+
+    use super::*;
+
+    /// Minimal reader whose only job is to let us build a `Resource` and drop
+    /// it; reads report EOF immediately.
+    struct EofReader {
+        bus: EventBus,
+        spec: PcmSpec,
+        meta: TrackMetadata,
+    }
+
+    impl Default for EofReader {
+        fn default() -> Self {
+            Self {
+                bus: EventBus::default(),
+                meta: TrackMetadata::default(),
+                spec: PcmSpec::new(2, NonZeroU32::new(44_100).expect("static rate")),
+            }
+        }
+    }
+
+    impl PcmReader for EofReader {
+        fn duration(&self) -> Option<Duration> {
+            None
+        }
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+        fn position(&self) -> Duration {
+            Duration::ZERO
+        }
+        fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+            Ok(ReadOutcome::Eof {
+                position: Duration::ZERO,
+            })
+        }
+        fn read_planar<'a>(
+            &mut self,
+            _output: &'a mut [&'a mut [f32]],
+        ) -> Result<ReadOutcome, DecodeError> {
+            Ok(ReadOutcome::Eof {
+                position: Duration::ZERO,
+            })
+        }
+        fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+            Ok(SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
+        }
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
+    /// Pin (W3 Task 3.3 (b)): a mid-session unload — i.e. dropping the
+    /// `Resource` — cancels the whole per-track subtree, not just the `Audio`
+    /// half. The per-track token `T` is passed by identity into both the inner
+    /// stream (File/Hls) and the `Audio` config; under propagate-down both take
+    /// `T.child()`, so `Audio::Drop` alone would only reach its own child and
+    /// leave the stream-side fetch loops running. `Resource::Drop` must cancel
+    /// `T` so the stream subtree (modelled here by `stream_sub`) is torn down.
+    #[test]
+    fn drop_cancels_whole_per_track_subtree_not_just_audio() {
+        let track = CancelToken::never();
+        let stream_sub = track.child(); // File/Hls subtree F = T.child()
+        let audio_sub = track.child(); // Audio subtree A = T.child()
+
+        let mut resource = Resource::from_reader(EofReader::default(), None);
+        resource.cancel = CancelGuard(Some(track.clone()));
+
+        assert!(!stream_sub.is_cancelled() && !audio_sub.is_cancelled());
+        drop(resource);
+        assert!(
+            stream_sub.is_cancelled(),
+            "unload must cancel the stream-side subtree, not only the Audio half"
+        );
+        assert!(audio_sub.is_cancelled());
+        assert!(track.is_cancelled());
+    }
+
+    /// A resource with no per-track cancel wired in (custom reader) drops
+    /// without panicking and cancels nothing.
+    #[test]
+    fn drop_without_cancel_is_passive() {
+        let resource = Resource::from_reader(EofReader::default(), None);
+        drop(resource);
     }
 }

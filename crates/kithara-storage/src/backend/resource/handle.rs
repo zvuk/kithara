@@ -2,7 +2,10 @@
 
 use std::{ops::Range, path::Path, sync::Arc};
 
-use kithara_platform::{CancellationToken, MaybeSend, MaybeSync};
+use kithara_platform::{
+    CancelToken,
+    maybe_send::{MaybeSend, MaybeSync},
+};
 use tracing::warn;
 
 use super::state::ResourceCore;
@@ -101,7 +104,7 @@ impl<D: Driver> Resource<Active, D> {
     ///
     /// # Errors
     /// Returns error if `D::open(opts)` fails.
-    pub fn open(cancel: CancellationToken, opts: D::Options) -> StorageResult<Self> {
+    pub fn open(cancel: CancelToken, opts: D::Options) -> StorageResult<Self> {
         Ok(Self {
             data: WriteGuard {
                 core: ResourceCore::open(cancel, opts)?,
@@ -114,7 +117,7 @@ impl<D: Driver> Resource<Active, D> {
     /// # Errors
     /// Returns error if `D::open(opts)` fails.
     pub fn open_with_observer(
-        cancel: CancellationToken,
+        cancel: CancelToken,
         opts: D::Options,
         observer: Option<Arc<dyn AvailabilityObserver>>,
     ) -> StorageResult<Self> {
@@ -127,39 +130,6 @@ impl<D: Driver> Resource<Active, D> {
 }
 
 impl<D: DriverIo> Resource<Active, D> {
-    /// Write data at the given offset.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the write fails.
-    pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.data.core.write_at_inner(offset, data)
-    }
-
-    /// Write entire contents and commit atomically, consuming the writer.
-    ///
-    /// # Errors
-    /// Returns error if the write or commit fails.
-    pub fn write_all(self, data: &[u8]) -> StorageResult<Resource<Committed, D>> {
-        self.data.core.write_at_inner(0, data)?;
-        self.commit(Some(data.len() as u64))
-    }
-
-    /// Mark the resource as failed, consuming the writer.
-    pub fn fail(self, reason: String) {
-        self.data.core.fail_inner(reason);
-    }
-
-    /// Mint a cloneable read-only view over the in-flight resource (readers may
-    /// observe the committed prefix while the writer keeps appending).
-    #[must_use]
-    pub fn reader(&self) -> Resource<Reader, D> {
-        Resource {
-            data: ReadCore {
-                core: self.data.core.clone(),
-            },
-        }
-    }
-
     /// Commit the resource, consuming the writer and returning the sealed
     /// `Committed` handle. A second `commit` (or any `write_at`) is a compile
     /// error: the writer value is moved out here.
@@ -177,15 +147,6 @@ impl<D: DriverIo> Resource<Active, D> {
         })
     }
 
-    // In-place lifecycle for the single-owner storage decorators (`Atomic`,
-    // `AtomicChunked`) that legitimately rewrite a file in place
-    // (`OpenMode::ReadWrite` index files, chunked-segment tmp/commit cycle).
-    // These are `pub(crate)` and never part of the public API — external
-    // consumers only get the consume-self `commit`/`reactivate`, so double
-    // commit stays a compile error for them. The decorator owns its writer
-    // exclusively (no clones), so an in-place commit/reactivate/fail has no
-    // aliasing hazard.
-
     /// Commit without consuming, for a decorator that rewrites in place.
     ///
     /// # Errors
@@ -193,6 +154,16 @@ impl<D: DriverIo> Resource<Active, D> {
     /// cannot finalize.
     pub(crate) fn commit_in_place(&self, final_len: Option<u64>) -> StorageResult<()> {
         self.data.core.commit_inner(final_len)
+    }
+
+    /// Mark the resource as failed, consuming the writer.
+    pub fn fail(self, reason: String) {
+        self.data.core.fail_inner(reason);
+    }
+
+    /// Mark failed without consuming, for a decorator that owns the writer.
+    pub(crate) fn fail_in_place(&self, reason: String) {
+        self.data.core.fail_inner(reason);
     }
 
     /// Reactivate without consuming, for a decorator that rewrites in place.
@@ -203,9 +174,32 @@ impl<D: DriverIo> Resource<Active, D> {
         self.data.core.reactivate_inner()
     }
 
-    /// Mark failed without consuming, for a decorator that owns the writer.
-    pub(crate) fn fail_in_place(&self, reason: String) {
-        self.data.core.fail_inner(reason);
+    /// Mint a cloneable read-only view over the in-flight resource (readers may
+    /// observe the committed prefix while the writer keeps appending).
+    #[must_use]
+    pub fn reader(&self) -> Resource<Reader, D> {
+        Resource {
+            data: ReadCore {
+                core: self.data.core.clone(),
+            },
+        }
+    }
+
+    /// Write entire contents and commit atomically, consuming the writer.
+    ///
+    /// # Errors
+    /// Returns error if the write or commit fails.
+    pub fn write_all(self, data: &[u8]) -> StorageResult<Resource<Committed, D>> {
+        self.data.core.write_at_inner(0, data)?;
+        self.commit(Some(data.len() as u64))
+    }
+
+    /// Write data at the given offset.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the write fails.
+    pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.data.core.write_at_inner(offset, data)
     }
 }
 
@@ -214,16 +208,6 @@ impl<D: DriverIo> Resource<Committed, D> {
     #[must_use]
     pub fn final_len(&self) -> Option<u64> {
         self.data.core.len_inner()
-    }
-
-    /// Mint a cloneable read-only view.
-    #[must_use]
-    pub fn reader(&self) -> Resource<Reader, D> {
-        Resource {
-            data: ReadCore {
-                core: self.data.core.clone(),
-            },
-        }
     }
 
     /// Reactivate a committed resource for continued writing, consuming the
@@ -239,6 +223,16 @@ impl<D: DriverIo> Resource<Committed, D> {
             data: WriteGuard { core },
         })
     }
+
+    /// Mint a cloneable read-only view.
+    #[must_use]
+    pub fn reader(&self) -> Resource<Reader, D> {
+        Resource {
+            data: ReadCore {
+                core: self.data.core.clone(),
+            },
+        }
+    }
 }
 
 impl<D: DriverIo> Clone for Resource<Reader, D> {
@@ -253,11 +247,38 @@ impl<D: DriverIo> Clone for Resource<Reader, D> {
 /// [`Resource<Active, D>`], [`Resource<Committed, D>`] and
 /// [`Resource<Reader, D>`].
 pub trait ResourceRead: sealed::Sealed + MaybeSend + MaybeSync {
+    /// Whether the given range is fully covered by available data (non-blocking).
+    fn contains_range(&self, range: Range<u64>) -> bool;
+
+    /// Returns `true` if the resource has been committed with zero length.
+    fn is_empty(&self) -> bool {
+        self.len() == Some(0)
+    }
+
+    /// Committed length, if known.
+    fn len(&self) -> Option<u64>;
+
+    /// First gap in available data starting at `from`, up to `limit`.
+    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
+
+    /// Backing file path, if any.
+    fn path(&self) -> Option<&Path>;
+
     /// Read data at the given offset into `buf`; returns bytes read.
     ///
     /// # Errors
     /// Returns error if the resource is cancelled, failed, or the read fails.
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+
+    /// Read the **active working storage**, bypassing the lock-free committed
+    /// snapshot. A re-download keeps the prior generation's snapshot published
+    /// for concurrent [`read_at`](Self::read_at) callers; the producer's own
+    /// in-flight read-back (e.g. decrypt on commit) reads here to observe the
+    /// freshly-written generation rather than the stale snapshot.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
 
     /// Read the entire resource into a caller buffer; returns bytes read.
     ///
@@ -280,43 +301,16 @@ pub trait ResourceRead: sealed::Sealed + MaybeSend + MaybeSync {
         Ok(n)
     }
 
+    /// Runtime lifecycle observation (the resource mutates under concurrent
+    /// readers, so this is genuinely runtime state, not a type fact).
+    fn status(&self) -> ResourceStatus;
+
     /// Wait until the given byte range is available.
     ///
     /// # Errors
     /// Returns error if the range is invalid, the resource is cancelled, or the
     /// resource has failed.
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
-
-    /// Read the **active working storage**, bypassing the lock-free committed
-    /// snapshot. A re-download keeps the prior generation's snapshot published
-    /// for concurrent [`read_at`](Self::read_at) callers; the producer's own
-    /// in-flight read-back (e.g. decrypt on commit) reads here to observe the
-    /// freshly-written generation rather than the stale snapshot.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the read fails.
-    fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-
-    /// Committed length, if known.
-    fn len(&self) -> Option<u64>;
-
-    /// Returns `true` if the resource has been committed with zero length.
-    fn is_empty(&self) -> bool {
-        self.len() == Some(0)
-    }
-
-    /// Backing file path, if any.
-    fn path(&self) -> Option<&Path>;
-
-    /// Whether the given range is fully covered by available data (non-blocking).
-    fn contains_range(&self, range: Range<u64>) -> bool;
-
-    /// First gap in available data starting at `from`, up to `limit`.
-    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
-
-    /// Runtime lifecycle observation (the resource mutates under concurrent
-    /// readers, so this is genuinely runtime state, not a type fact).
-    fn status(&self) -> ResourceStatus;
 }
 
 impl<S: ResourcePhase, D: DriverIo> sealed::Sealed for Resource<S, D> {}

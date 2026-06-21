@@ -1,6 +1,4 @@
-use std::sync::mpsc;
-
-use kithara_platform::{CancellationToken, thread, tokio::sync::watch};
+use kithara_platform::{CancelToken, sync::mpsc, thread, tokio::sync::watch};
 use tracing::warn;
 
 use super::{
@@ -17,13 +15,13 @@ use crate::traits::PcmReader;
 /// inside one cancel hierarchy. The caller keeps at most one job in
 /// flight and cancels the previous token before queueing the next.
 pub struct AnalysisWorker {
+    cancel: CancelToken,
     jobs: mpsc::Sender<Job>,
-    cancel: CancellationToken,
 }
 
 struct Job {
     reader: Box<dyn PcmReader>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     tx: watch::Sender<Option<TrackAnalysis>>,
 }
 
@@ -31,20 +29,14 @@ impl AnalysisWorker {
     /// `parent` must be a child of the consumer-crate master cancel; the
     /// worker thread stops on parent cancel or drop.
     #[must_use]
-    pub fn new(parent: &CancellationToken, builder: AnalyzerBuilder) -> Self {
-        let cancel = parent.child_token();
+    pub fn new(parent: &CancelToken, builder: AnalyzerBuilder) -> Self {
+        let cancel = parent.child();
         let thread_cancel = cancel.clone();
         let (jobs, rx) = mpsc::channel();
         thread::spawn_named("kithara-analysis", move || {
             run_jobs(&rx, &builder, &thread_cancel);
         });
-        Self { jobs, cancel }
-    }
-
-    /// Create a job-scoped token owned by this worker.
-    #[must_use]
-    pub fn child_token(&self) -> CancellationToken {
-        self.cancel.child_token()
+        Self { cancel, jobs }
     }
 
     /// Queue one opened track. On success the result arrives on the
@@ -53,13 +45,19 @@ impl AnalysisWorker {
     pub fn analyze(
         &self,
         reader: Box<dyn PcmReader>,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> watch::Receiver<Option<TrackAnalysis>> {
         let (tx, rx) = watch::channel(None);
         if self.jobs.send(Job { reader, cancel, tx }).is_err() {
             warn!("analysis worker stopped; job dropped");
         }
         rx
+    }
+
+    /// Create a job-scoped token owned by this worker.
+    #[must_use]
+    pub fn child_token(&self) -> CancelToken {
+        self.cancel.child()
     }
 }
 
@@ -69,7 +67,7 @@ impl Drop for AnalysisWorker {
     }
 }
 
-fn run_jobs(jobs: &mpsc::Receiver<Job>, builder: &AnalyzerBuilder, cancel: &CancellationToken) {
+fn run_jobs(jobs: &mpsc::Receiver<Job>, builder: &AnalyzerBuilder, cancel: &CancelToken) {
     while let Ok(mut job) = jobs.recv() {
         if cancel.is_cancelled() {
             break;

@@ -1,6 +1,3 @@
-//! `beat-nn` cfg seam: the only site that knows whether an NN detector is
-//! compiled in. [`super::set`] stays cfg-free above it.
-
 #[cfg(feature = "beat-nn")]
 mod model {
     /// Embedded NN model identity for the cache tag.

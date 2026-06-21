@@ -12,11 +12,8 @@ fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8])
     let AcquisitionResult::Pending(w) = acq else {
         panic!("expected a Pending writer");
     };
-    w.write_at(0, data).expect("scripted write succeeds");
-    drop(
-        w.commit(Some(data.len() as u64))
-            .expect("scripted commit succeeds"),
-    );
+    w.write_at(0, data).expect("write_at");
+    drop(w.commit(Some(data.len() as u64)).expect("commit"));
 }
 
 /// Extract the Pending writer or panic.

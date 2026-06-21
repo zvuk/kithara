@@ -3,7 +3,7 @@
 use std::{collections::HashSet, fmt, path::Path, sync::Arc};
 
 use dashmap::DashSet;
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 
 use crate::{
     AssetResourceState,
@@ -52,7 +52,7 @@ where
     deleter: Arc<dyn AssetDeleter>,
     inner: Arc<A>,
     seen: Arc<DashSet<String>>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     cfg: EvictConfig,
     /// Shared LRU index — same instance held by `DiskAssetDeleter` so
     /// LRU bookkeeping and disk-side deletion stay in sync.
@@ -71,6 +71,17 @@ impl<A: Assets> fmt::Debug for EvictAssets<A> {
     }
 }
 
+/// Eviction wiring for [`EvictAssets::new`], separate from the wrapped
+/// `inner` store: the `cfg`, the `cancel` token, the shared `lru` / `pins`
+/// indices, and the canonical `deleter`.
+pub(crate) struct EvictDeps {
+    pub(crate) deleter: Arc<dyn AssetDeleter>,
+    pub(crate) cancel: CancelToken,
+    pub(crate) cfg: EvictConfig,
+    pub(crate) lru: LruIndex,
+    pub(crate) pins: PinsIndex,
+}
+
 impl<A> EvictAssets<A>
 where
     A: Assets,
@@ -78,14 +89,14 @@ where
     /// Create a new eviction decorator.
     ///
     /// Activation is driven by [`crate::base::Capabilities::EVICT`] on the inner store.
-    pub(crate) fn new(
-        inner: Arc<A>,
-        cfg: EvictConfig,
-        cancel: CancellationToken,
-        lru: LruIndex,
-        pins: PinsIndex,
-        deleter: Arc<dyn AssetDeleter>,
-    ) -> Self {
+    pub(crate) fn new(inner: Arc<A>, deps: EvictDeps) -> Self {
+        let EvictDeps {
+            cfg,
+            cancel,
+            lru,
+            pins,
+            deleter,
+        } = deps;
         Self {
             inner,
             cfg,

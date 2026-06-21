@@ -9,8 +9,8 @@ use kithara_assets::{
 };
 use kithara_events::EventBus;
 use kithara_net::Headers;
-use kithara_platform::{CancellationToken, Mutex};
-use kithara_stream::MediaInfo;
+use kithara_platform::{CancelToken, sync::Mutex};
+use kithara_stream::{MediaInfo, WorkerWake};
 use url::Url;
 
 use super::segments::FileSegmentIndex;
@@ -63,7 +63,7 @@ pub(crate) enum FilePhase {
 /// Control-plane handles shared between the source and the download driver.
 pub(crate) struct FileSourceCtx {
     pub(crate) coord: Arc<FileCoord>,
-    pub(crate) cancel: CancellationToken,
+    pub(crate) cancel: CancelToken,
     pub(crate) bus: EventBus,
 }
 
@@ -77,8 +77,8 @@ pub(crate) struct FileAssetCtx {
     pub(crate) backend: Arc<AssetStore>,
     pub(crate) reader: AssetReader,
     pub(crate) writer: Mutex<Option<AssetWriter>>,
-    pub(crate) raw: Option<RawWriteHandle>,
     pub(crate) headers: Option<Headers>,
+    pub(crate) raw: Option<RawWriteHandle>,
     pub(crate) key: ResourceKey,
     pub(crate) url: Url,
 }
@@ -109,6 +109,11 @@ pub(crate) struct FileInner {
 
     /// FSM phase as `FilePhase as u8`. Lock-free transitions.
     phase: AtomicU8,
+
+    /// Late-bound audio-worker wake. Remote file sources can underrun while
+    /// HTTP bytes are still arriving, so each write wakes the worker that
+    /// previously parked on a non-blocking readiness probe.
+    worker_wake: OnceLock<Arc<dyn WorkerWake>>,
 }
 
 impl FileInner {
@@ -121,9 +126,10 @@ impl FileInner {
         let inner = Self {
             source,
             asset,
+            demand_lease,
             content_type_info: OnceLock::new(),
             segment_index: OnceLock::new(),
-            demand_lease,
+            worker_wake: OnceLock::new(),
             phase: AtomicU8::new(initial_phase as u8),
         };
         if matches!(initial_phase, FilePhase::Complete) {
@@ -145,12 +151,6 @@ impl FileInner {
         FileSegmentIndex::try_build(&buf)
     }
 
-    /// Take the single commit-owning writer, if this is a download path and it
-    /// has not been consumed yet.
-    pub(crate) fn take_writer(&self) -> Option<AssetWriter> {
-        self.asset.writer.lock_sync().take()
-    }
-
     /// Mark the resource failed and evict the pre-allocated cache file.
     ///
     /// Call on any terminal download error so the file is gone from disk
@@ -166,7 +166,7 @@ impl FileInner {
     }
 
     /// Lock-free FSM transition. The one-shot fragmented-mp4 parse runs
-    /// on the `Complete` edge so the hot-path `as_segment_layout` audit
+    /// on the `Complete` edge so the hot-path `byte_map` audit
     /// can short-circuit on `segment_index.get()` without re-reading the
     /// file each tick.
     pub(crate) fn set_phase(&self, phase: FilePhase) {
@@ -176,10 +176,20 @@ impl FileInner {
         }
     }
 
+    pub(crate) fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
+        let _ = self.worker_wake.set(wake);
+    }
+
+    /// Take the single commit-owning writer, if this is a download path and it
+    /// has not been consumed yet.
+    pub(crate) fn take_writer(&self) -> Option<AssetWriter> {
+        self.asset.writer.lock().take()
+    }
+
     /// One-shot fragmented-mp4 parse from the fully cached file bytes.
     /// Idempotent: a second call is a `OnceLock::get` fast-path no-op.
     /// Called from `set_phase(Complete)` (and from `new` for files
-    /// constructed already-complete) so the hot-path `as_segment_layout`
+    /// constructed already-complete) so the hot-path `byte_map`
     /// audit only ever reads the cached result.
     fn try_build_segment_index(&self) {
         if self.segment_index.get().is_some() {
@@ -187,6 +197,12 @@ impl FileInner {
         }
         if let Some(index) = self.build_segment_index_from_cache() {
             let _ = self.segment_index.set(index);
+        }
+    }
+
+    pub(crate) fn wake_worker(&self) {
+        if let Some(wake) = self.worker_wake.get() {
+            wake.wake();
         }
     }
 }

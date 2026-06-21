@@ -6,7 +6,7 @@ use dashmap::DashMap;
 use kithara_assets::AssetScope;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
-use kithara_platform::{RwLock, tokio::sync::OnceCell};
+use kithara_platform::{sync::RwLock, tokio::sync::OnceCell};
 use kithara_stream::dl::PeerHandle;
 use url::Url;
 
@@ -17,13 +17,6 @@ use crate::{
         MasterPlaylist, MediaPlaylist, VariantId, parse_master_playlist, parse_media_playlist,
     },
 };
-
-/// Derive a safe basename from a URL path for disk cache storage.
-fn uri_basename_no_query(uri: &str) -> Option<&str> {
-    let no_query = uri.split('?').next().unwrap_or(uri);
-    let base = no_query.rsplit('/').next().unwrap_or(no_query);
-    if base.is_empty() { None } else { Some(base) }
-}
 
 /// Playlist fetch + parse + disk cache.
 ///
@@ -67,18 +60,16 @@ impl PlaylistCache {
             scope,
             downloader,
             byte_pool,
-            config: Arc::new(RwLock::new(PlaylistConfig::default())),
-            master: Arc::new(OnceCell::new()),
+            config: Arc::new(RwLock::default()),
+            master: Arc::new(OnceCell::default()),
             media: Arc::new(DashMap::new()),
         }
     }
 
-    async fn fetch_and_parse<T, F>(&self, url: &Url, label: &str, parse: F) -> HlsResult<T>
+    async fn fetch_and_parse<T, F>(&self, url: &Url, parse: F) -> HlsResult<T>
     where
         F: Fn(&[u8]) -> HlsResult<T>,
     {
-        let basename = uri_basename_no_query(url.as_str())
-            .ok_or_else(|| HlsError::InvalidUrl(format!("Failed to derive {label} basename")))?;
         let headers = self.headers();
         let bytes = fetch_atomic_body(
             &self.downloader,
@@ -86,7 +77,6 @@ impl PlaylistCache {
             &self.byte_pool,
             headers,
             url,
-            basename,
             Self::RESOURCE_KIND,
         )
         .await?;
@@ -95,7 +85,7 @@ impl PlaylistCache {
 
     #[must_use]
     pub fn headers(&self) -> Option<Headers> {
-        self.config.lock_sync_read().headers.clone()
+        self.config.read().headers.clone()
     }
 
     /// Load and parse the master playlist. First call fetches from the
@@ -106,10 +96,7 @@ impl PlaylistCache {
     pub async fn master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
         let master = self
             .master
-            .get_or_try_init(|| async {
-                self.fetch_and_parse(url, "master_playlist", parse_master_playlist)
-                    .await
-            })
+            .get_or_try_init(|| async { self.fetch_and_parse(url, parse_master_playlist).await })
             .await?;
         Ok(master.clone())
     }
@@ -127,15 +114,13 @@ impl PlaylistCache {
         let cell: Arc<OnceCell<MediaPlaylist>> = self
             .media
             .entry(variant_id)
-            .or_insert_with(|| Arc::new(OnceCell::new()))
+            .or_insert_with(|| Arc::new(OnceCell::default()))
             .clone();
 
         let playlist = cell
             .get_or_try_init(|| async {
-                self.fetch_and_parse(url, "media_playlist", |bytes| {
-                    parse_media_playlist(url.clone(), bytes)
-                })
-                .await
+                self.fetch_and_parse(url, |bytes| parse_media_playlist(url.clone(), bytes))
+                    .await
             })
             .await?;
         Ok(playlist.clone())
@@ -147,7 +132,7 @@ impl PlaylistCache {
     /// # Errors
     /// Returns an error when URL joining fails.
     pub fn resolve_url(&self, base: &Url, target: &str) -> HlsResult<Url> {
-        let base_override = self.config.lock_sync_read().base_url.clone();
+        let base_override = self.config.read().base_url.clone();
         let resolved = if let Some(base_url) = base_override {
             base_url.join(target).map_err(|e| {
                 HlsError::InvalidUrl(format!("Failed to resolve URL with base override: {e}"))
@@ -160,14 +145,14 @@ impl PlaylistCache {
     }
 
     pub fn set_base_url(&self, url: Option<Url>) {
-        self.config.lock_sync_write().base_url = url;
+        self.config.write().base_url = url;
     }
 
     pub fn set_headers(&self, headers: Option<Headers>) {
-        self.config.lock_sync_write().headers = headers;
+        self.config.write().headers = headers;
     }
 
     pub fn set_master_url(&self, url: Url) {
-        self.config.lock_sync_write().master_url = Some(url);
+        self.config.write().master_url = Some(url);
     }
 }

@@ -53,8 +53,8 @@ flowchart LR
 ## Track Analysis Cache
 
 The DJ Studio source analysis is an expensive whole-track decode. It currently
-derives the colored waveform and an optional source BPM estimate in one pass, so
-the combined result is memoized (`wave_cache.rs`, owned by the single
+derives the colored waveform and optional beat/BPM data in one pass, so the
+combined result is memoized (`wave_cache.rs`, owned by the single
 `StateController` listener task). Two distinct identity spaces are kept
 separate on purpose:
 
@@ -88,3 +88,5 @@ is bumped (acceptable for a library of stable files).
 
 - Depends on `kithara` with `file` + `hls` features.
 - TUI and GUI frontends are gated by the `tui` / `gui` Cargo features.
+
+See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

@@ -52,13 +52,13 @@ pub struct Pool<const SHARDS: usize, T>
 where
     T: Reuse,
 {
-    shards: [PoolShard<T>; SHARDS],
     stat_alloc_misses: AtomicU64,
     stat_home_hits: AtomicU64,
     stat_put_drops: AtomicU64,
     stat_steal_hits: AtomicU64,
     /// Total bytes tracked across all live buffers (pooled + checked out).
     allocated_bytes: AtomicUsize,
+    shards: [PoolShard<T>; SHARDS],
     /// Maximum allowed byte budget. `usize::MAX` means unlimited.
     max_bytes: usize,
 }

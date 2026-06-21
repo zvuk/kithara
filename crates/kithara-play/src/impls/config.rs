@@ -16,8 +16,8 @@ use kithara_decode::{DecodeError, DecoderBackend};
 use kithara_events::EventBus;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::{HlsConfig, HlsStore, KeyOptions, SizeProbeMethod};
-use kithara_net::Headers;
-use kithara_platform::CancellationToken;
+use kithara_net::{Headers, HttpClient};
+use kithara_platform::{CancelScope, CancelToken};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use portable_atomic::AtomicF32;
 use url::Url;
@@ -98,27 +98,29 @@ pub struct ResourceConfig {
     pub bus: Option<EventBus>,
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
-    /// Cancellation token for graceful shutdown. The master `CancellationToken` whose
-    /// shared atomic mirror reaches the HLS coord's lock-free `is_cancelled()`
-    /// read; the async-only downloader / file / decode paths take its inner
-    /// `CancellationToken` via [`CancellationToken::token`].
-    pub cancel: Option<CancellationToken>,
+    /// Per-track parent cancel. The atomic flag reaches the HLS coord's
+    /// lock-free `is_cancelled()` read; downloader / file / decode paths derive
+    /// children via [`CancelToken::child`]. `None` lets each subsystem own a
+    /// standalone scope (see [`CancelScope::new`](kithara_platform::CancelScope)).
+    pub cancel: Option<CancelToken>,
     /// Shared downloader instance.
     pub downloader: Option<Downloader>,
-    /// Shared flush coordinator for `AssetStore` on-disk indexes.
-    pub flush_hub: Option<Arc<FlushHub>>,
+    /// Shared live audio-engine cost meter (decode + effects).
+    pub engine_load: Option<Arc<EngineLoad>>,
     /// App-wide shared file store. When present, file resources for the
     /// same URL share one download and cached byte surface (player +
     /// waveform dedup). `None` builds a private per-resource store.
     pub file_asset_store: Option<Arc<AssetStore>>,
-    /// App-wide shared HLS store (shared cache + DRM `process_fn` +
-    /// per-`asset_root` eviction routing). `None` builds a private
-    /// per-resource store.
-    pub hls_asset_store: Option<HlsStore>,
+    /// Shared flush coordinator for `AssetStore` on-disk indexes.
+    pub flush_hub: Option<Arc<FlushHub>>,
     /// Additional HTTP headers to include in all network requests.
     pub headers: Option<Headers>,
     /// Optional format hint (file extension like "mp3", "wav").
     pub hint: Option<String>,
+    /// App-wide shared HLS store (shared cache + DRM `process_fn` +
+    /// per-`asset_root` eviction routing). `None` builds a private
+    /// per-resource store.
+    pub hls_asset_store: Option<HlsStore>,
     /// Base URL for resolving relative HLS playlist/segment URLs.
     pub hls_base_url: Option<Url>,
     /// Target sample rate of the audio host (for resampling).
@@ -136,8 +138,6 @@ pub struct ResourceConfig {
     /// tempo mode; the same `Arc` must flow to every track so live changes
     /// reach the running effect chain. `None` keeps the resampler-first chain.
     pub stretch: Option<Arc<StretchControls>>,
-    /// Shared live audio-engine cost meter (decode + effects).
-    pub engine_load: Option<Arc<EngineLoad>>,
     /// Shared audio worker handle for cooperative multi-track decoding.
     pub worker: Option<AudioWorkerHandle>,
     /// Resampling quality preset.
@@ -195,14 +195,8 @@ impl ResourceConfig {
             )
             .build();
         let downloader = self.downloader.clone().unwrap_or_else(|| {
-            let dl_cancel = self
-                .cancel
-                .as_ref()
-                .map_or_else(CancellationToken::default, CancellationToken::child_token);
-            let client = kithara_net::HttpClient::new(
-                kithara_net::NetOptions::default(),
-                dl_cancel.child_token(),
-            );
+            let dl_cancel = CancelScope::new(self.cancel.clone()).token();
+            let client = HttpClient::new(kithara_net::NetOptions::default(), dl_cancel.child());
             Downloader::new(
                 DownloaderConfig::for_client(client)
                     .cancel(dl_cancel)
@@ -473,7 +467,7 @@ mod tests {
 
     #[kithara::test]
     fn config_with_worker_sets_field() {
-        let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
         let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
             .worker(worker.clone())
@@ -484,7 +478,7 @@ mod tests {
 
     #[kithara::test]
     fn config_worker_propagates_to_file_config() {
-        let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
         let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
             .worker(worker.clone())
@@ -496,7 +490,7 @@ mod tests {
 
     #[kithara::test]
     fn config_worker_propagates_to_hls_config() {
-        let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
         let config = ResourceConfig::for_src("https://example.com/live.m3u8")
             .unwrap()
             .worker(worker.clone())

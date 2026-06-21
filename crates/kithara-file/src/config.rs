@@ -4,7 +4,7 @@ use bon::Builder;
 use kithara_assets::{AssetStore, StoreOptions};
 use kithara_events::EventBus;
 use kithara_net::Headers;
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 use kithara_stream::dl::Downloader;
 use url::Url;
 
@@ -38,11 +38,16 @@ impl From<PathBuf> for FileSrc {
 pub struct FileConfig {
     /// File source (remote URL or local path).
     pub src: FileSrc,
+    /// Externally-owned shared `AssetStore<()>`. When `Some`, the file
+    /// session reuses it and skips building a private store from
+    /// [`Self::store`]. Lets several `Resource`s pointing at the same
+    /// URL share one cached resource and availability surface.
+    pub asset_store: Option<Arc<AssetStore<()>>>,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown.
-    pub cancel: Option<CancellationToken>,
+    pub cancel: Option<CancelToken>,
     /// Shared downloader (created lazily if not provided).
     pub downloader: Option<Downloader>,
     /// Additional HTTP headers to include in all requests.
@@ -59,11 +64,6 @@ pub struct FileConfig {
     /// fallback chain.
     #[builder(default)]
     pub store: StoreOptions,
-    /// Externally-owned shared `AssetStore<()>`. When `Some`, the file
-    /// session reuses it and skips building a private store from
-    /// [`Self::store`]. Lets several `Resource`s pointing at the same
-    /// URL share one cached resource and availability surface.
-    pub asset_store: Option<Arc<AssetStore<()>>>,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
@@ -140,7 +140,7 @@ mod tests {
     }
 
     fn apply_cancel(mut config: FileConfig) -> FileConfig {
-        config.cancel = Some(CancellationToken::default());
+        config.cancel = Some(CancelToken::never());
         config
     }
 
@@ -183,7 +183,7 @@ mod tests {
     #[kithara::test]
     fn test_builder_chain() {
         let store = StoreOptions::default();
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         let bus = EventBus::new(32);
 
         let config = FileConfig::for_src(test_src())

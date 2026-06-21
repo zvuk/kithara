@@ -2,11 +2,12 @@ use std::{num::NonZeroUsize, ops::Range, sync::Arc};
 
 use kithara_assets::{AssetReader, AssetStore, ReadSide, ResourceKey};
 use kithara_events::EventBus;
-use kithara_platform::{CancellationToken, Mutex, time::Duration};
+use kithara_platform::{CancelToken, sync::Mutex, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, MediaInfo, ReadOutcome, SegmentDescriptor, SourcePhase, StreamError, Timeline,
-    dl::PeerHandle,
+    Activity, AudioCodec, MediaInfo, PlayheadRead, PlayheadWrite, ReadOutcome, SeekControl,
+    SeekObserve, SegmentDescriptor, SourceError as StreamSourceError, SourcePhase, StreamError,
+    WorkerWake, dl::PeerHandle,
 };
 use tracing::trace;
 use url::Url;
@@ -37,18 +38,24 @@ pub struct FileSource {
 }
 
 impl FileSource {
+    fn known_len(&self) -> Option<u64> {
+        self.coord
+            .total_bytes()
+            .or_else(|| self.inner.asset.reader.len())
+    }
+
     /// Create a source for a local/cached file (no downloads needed).
     ///
     /// `cancel` is a child of the file config master so a track drop
     /// pulse interrupts any in-flight reads — see
-    /// `kithara-play/README.md` "Cancel Hierarchy".
+    /// `kithara-play/CONTEXT.md` "Cancel Hierarchy".
     pub(crate) fn local(
         reader: AssetReader,
         coord: Arc<FileCoord>,
         bus: EventBus,
         backend: Arc<AssetStore>,
         key: ResourceKey,
-        cancel: CancellationToken,
+        cancel: CancelToken,
         cached_codec: Option<AudioCodec>,
     ) -> Self {
         let inner = Arc::new(FileInner::new(
@@ -60,9 +67,9 @@ impl FileSource {
             FileAssetCtx {
                 backend,
                 reader,
-                writer: Mutex::new(None),
-                raw: None,
                 key,
+                writer: Mutex::default(),
+                raw: None,
                 headers: None,
                 url: Url::parse("file:///local")
                     .expect("BUG: hard-coded literal `file:///local` is a valid URL"),
@@ -80,6 +87,16 @@ impl FileSource {
         }
     }
 
+    fn readable_part(&self, range: Range<u64>) -> Option<Range<u64>> {
+        let Some(total) = self.known_len() else {
+            return Some(range);
+        };
+        if total > 0 && range.start >= total {
+            return None;
+        }
+        Some(range.start..range.end.min(total))
+    }
+
     /// Pin the Downloader peer registration to this source's lifetime.
     /// Called once after `Downloader::register`; mirrors
     /// `HlsSource::set_peer_handle`. Without this the handle returned by
@@ -87,6 +104,15 @@ impl FileSource {
     /// in-flight fetch.
     pub(crate) fn set_peer_handle(&mut self, handle: PeerHandle) {
         self.peer_handle = Some(handle);
+    }
+
+    fn update_read_demand(&self, read_pos: u64) {
+        if read_pos > self.coord.read_pos() {
+            self.coord.set_read_pos(read_pos);
+            if let Some(lease) = self.inner.demand_lease.as_ref() {
+                lease.note_progress();
+            }
+        }
     }
 
     /// Build a `FileSource` over a pre-constructed [`FileInner`]. The
@@ -103,21 +129,23 @@ impl FileSource {
 }
 
 impl kithara_stream::Source for FileSource {
+    fn activity(&self) -> Arc<dyn Activity> {
+        self.coord.activity_handle()
+    }
+
     fn advance(&self, n: u64) {
         self.coord.advance_position(n);
     }
 
-    fn as_segment_layout(&self) -> Option<Arc<dyn kithara_stream::SegmentLayout>> {
+    fn byte_map(&self) -> Option<Arc<dyn kithara_stream::ByteMap>> {
         self.inner.segment_index.get()?;
-        Some(Arc::new(FileSegmentLayout {
+        Some(Arc::new(FileByteMap {
             inner: Arc::clone(&self.inner),
         }))
     }
 
     fn len(&self) -> Option<u64> {
-        let from_coord = self.coord.total_bytes();
-        let from_res = self.inner.asset.reader.len();
-        from_coord.or(from_res)
+        self.known_len()
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
@@ -130,24 +158,26 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        let contains = self.inner.asset.reader.contains_range(range.clone());
+        let Some(readable) = self.readable_part(range.clone()) else {
+            return SourcePhase::Eof;
+        };
+        let contains = readable.is_empty() || self.inner.asset.reader.contains_range(readable);
         if contains {
             return SourcePhase::Ready;
         }
 
-        let from_coord = self.coord.total_bytes();
-        let from_res = self.inner.asset.reader.len();
-        let past_eof = from_coord
-            .or(from_res)
-            .is_some_and(|total| total > 0 && range.start >= total);
-
-        if self.coord.timeline().is_flushing() {
+        if self.coord.seek_obs().is_flushing() {
             return SourcePhase::Seeking;
         }
-        if past_eof {
-            return SourcePhase::Eof;
-        }
         SourcePhase::Waiting
+    }
+
+    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        self.coord.playhead_read()
+    }
+
+    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        self.coord.playhead_write()
     }
 
     fn position(&self) -> u64 {
@@ -176,21 +206,29 @@ impl kithara_stream::Source for FileSource {
         Ok(ReadOutcome::Bytes(count))
     }
 
+    fn seek_control(&self) -> Arc<dyn SeekControl> {
+        self.coord.seek_control()
+    }
+
+    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        self.coord.seek_observe()
+    }
+
     fn set_position(&self, pos: u64) {
         self.coord.set_position(pos);
     }
 
-    fn take_reader_hooks(&mut self) -> Option<kithara_stream::BoxedHooks> {
-        let hooks = super::reader::FileReaderHooks::new(
-            self.inner.source.bus.clone(),
-            Arc::clone(&self.coord),
-            self.coord.timeline().seek_epoch_handle(),
-        );
-        Some(Box::new(hooks))
+    fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
+        self.inner.set_worker_wake(wake);
     }
 
-    fn timeline(&self) -> Timeline {
-        self.coord.timeline()
+    fn take_reader_event_sink(&mut self) -> Option<kithara_stream::BoxedEventSink> {
+        let hooks = super::reader::FileReaderEventSink::new(
+            self.inner.source.bus.clone(),
+            Arc::clone(&self.coord),
+            self.coord.seek_epoch_handle(),
+        );
+        Some(Box::new(hooks))
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -199,8 +237,6 @@ impl kithara_stream::Source for FileSource {
         range: Range<u64>,
         timeout: Option<Duration>,
     ) -> kithara_stream::StreamResult<WaitOutcome> {
-        let _ = timeout;
-
         match self.phase_at(range.clone()) {
             SourcePhase::Seeking => return Ok(WaitOutcome::Interrupted),
             SourcePhase::Eof => return Ok(WaitOutcome::Eof),
@@ -208,8 +244,10 @@ impl kithara_stream::Source for FileSource {
             _ => {}
         }
 
-        if range.start > self.coord.read_pos() {
-            self.coord.set_read_pos(range.start);
+        self.update_read_demand(range.start);
+
+        if timeout.is_some() {
+            return Err(StreamError::Source(StreamSourceError::WaitBudgetExceeded));
         }
 
         self.inner
@@ -220,22 +258,22 @@ impl kithara_stream::Source for FileSource {
     }
 }
 
-/// Segment-layout handle for a fully cached fragmented-mp4 file.
+/// Byte-map handle for a fully cached fragmented-mp4 file.
 ///
 /// Holds a clone of `FileInner` so the layout survives independently of
 /// the original `FileSource` cursor; segment queries hit the lazy
 /// `OnceLock<FileSegmentIndex>` populated on first call.
-struct FileSegmentLayout {
+struct FileByteMap {
     inner: Arc<FileInner>,
 }
 
-impl FileSegmentLayout {
+impl FileByteMap {
     fn segment_index(&self) -> Option<&FileSegmentIndex> {
         self.inner.segment_index.get()
     }
 }
 
-impl kithara_stream::SegmentLayout for FileSegmentLayout {
+impl kithara_stream::ByteMap for FileByteMap {
     fn init_segment_range(&self) -> Range<u64> {
         self.segment_index()
             .map(FileSegmentIndex::init_range)

@@ -13,8 +13,8 @@ pub(crate) struct WaveformPass {
 impl WaveformPass {
     pub(crate) fn new(sample_rate: u32, buckets: usize) -> Self {
         Self {
-            inner: WaveformAnalyzer::new(sample_rate, AnalysisParams::default()),
             buckets,
+            inner: WaveformAnalyzer::new(sample_rate, AnalysisParams::default()),
         }
     }
 }
@@ -22,12 +22,12 @@ impl WaveformPass {
 impl Analyzer for WaveformPass {
     type Output = Waveform;
 
-    fn push(&mut self, chunk: &PcmChunk) {
-        let channels = usize::from(chunk.spec().channels.max(1));
-        self.inner.push_interleaved(&chunk.pcm[..], channels);
-    }
-
     fn finish(self) -> Waveform {
         self.inner.finalize(self.buckets)
+    }
+
+    fn push(&mut self, chunk: &PcmChunk) {
+        let channels = usize::from(chunk.spec().channels.max(1));
+        self.inner.push_interleaved(&chunk.samples[..], channels);
     }
 }

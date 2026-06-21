@@ -4,8 +4,8 @@ import Foundation
 import PackageDescription
 
 // Updated automatically by CI on release.
-let version = "0.0.1-alpha2"
-let checksum = "34f2520f00eabba5e08e7921816e496ed700a8b1cbd05774efa770fff52bdd87"
+let version = "0.0.1-alpha3"
+let checksum = "4d858a31552f1aeb3287020af0b05319feaecd9eebc0b51aa0c525899f9e3638"
 
 // KITHARA_LOCAL_DEV       — use locally built xcframework (for development).
 // KITHARA_BINARY_BASE_URL — override binary download host (for GitLab mirror).
@@ -47,7 +47,7 @@ if useLocalBinary {
             \(localBinaryAbsolutePath)
 
             Build it with:
-            just xcframework
+            cargo xtask apple build
             """
         )
     }

@@ -127,32 +127,20 @@ pub(crate) enum CurrentFsm {
 }
 
 impl CurrentFsm {
-    pub(crate) fn decoding() -> Self {
-        Self::Decoding(Track::new(()))
+    pub(crate) fn applying_seek(state: ApplySeekState) -> Self {
+        Self::ApplyingSeek(Track::new(state))
     }
 
     pub(crate) fn at_eof() -> Self {
         Self::AtEof(Track::new(()))
     }
 
-    pub(crate) fn seek_requested(request: SeekRequest) -> Self {
-        Self::SeekRequested(Track::new(request))
-    }
-
-    pub(crate) fn waiting(context: WaitContext, reason: WaitingReason) -> Self {
-        Self::WaitingForSource(Track::new(WaitState { context, reason }))
-    }
-
-    pub(crate) fn applying_seek(state: ApplySeekState) -> Self {
-        Self::ApplyingSeek(Track::new(state))
-    }
-
-    pub(crate) fn recreating(state: RecreateState) -> Self {
-        Self::RecreatingDecoder(Track::new(state))
-    }
-
     pub(crate) fn awaiting_resume(state: ResumeState) -> Self {
         Self::AwaitingResume(Track::new(state))
+    }
+
+    pub(crate) fn decoding() -> Self {
+        Self::Decoding(Track::new(()))
     }
 
     pub(crate) fn failed(failure: TrackFailure) -> Self {
@@ -166,6 +154,18 @@ impl CurrentFsm {
     pub(crate) fn is_terminal(&self) -> bool {
         matches!(self, Self::Failed(_))
     }
+
+    pub(crate) fn recreating(state: RecreateState) -> Self {
+        Self::RecreatingDecoder(Track::new(state))
+    }
+
+    pub(crate) fn seek_requested(request: SeekRequest) -> Self {
+        Self::SeekRequested(Track::new(request))
+    }
+
+    pub(crate) fn waiting(context: WaitContext, reason: WaitingReason) -> Self {
+        Self::WaitingForSource(Track::new(WaitState { context, reason }))
+    }
 }
 
 /// Context for a pending seek, carried through multiple states.
@@ -175,11 +175,20 @@ pub(crate) struct SeekContext {
     pub(crate) epoch: u64,
 }
 
-/// Stateful seek request tracked across retries and waits.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Stateful seek request carried across waits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SeekRequest {
     pub(crate) seek: SeekContext,
-    pub(crate) attempt: u8,
+    pub(crate) emit_request: bool,
+}
+
+impl Default for SeekRequest {
+    fn default() -> Self {
+        Self {
+            seek: SeekContext::default(),
+            emit_request: true,
+        }
+    }
 }
 
 /// Seek application mode resolved before touching the decoder.
@@ -195,9 +204,12 @@ pub(crate) struct ResumeState {
     /// Anchor byte offset from the seek — used for readiness checks and demand
     /// when the decoder's stream position differs from the `StreamIndex` layout.
     pub(crate) anchor_offset: Option<u64>,
+    /// Variant that owns `anchor_offset`. An HLS manual switch can commit after
+    /// anchor resolution; then the old offset is not meaningful in the new
+    /// variant's byte space and must not drive post-seek demand.
+    pub(crate) anchor_variant_index: Option<usize>,
     pub(crate) skip: Option<Duration>,
     pub(crate) seek: SeekContext,
-    pub(crate) recover_attempts: u8,
 }
 
 /// What to do once decoder recreation succeeds.
@@ -218,7 +230,6 @@ pub(crate) struct RecreateState {
     pub(crate) cause: RecreateCause,
     pub(crate) next: RecreateNext,
     pub(crate) offset: u64,
-    pub(crate) attempt: u8,
 }
 
 /// Outcome of one `execute_recreation` call.
@@ -394,19 +405,18 @@ mod tests {
                 request: seek_at(5),
             }),
             CurrentFsm::recreating(RecreateState {
-                attempt: 0,
                 cause: RecreateCause::FormatBoundary,
                 media_info: MediaInfo::default(),
                 next: RecreateNext::Decode,
                 offset: 0,
             }),
             CurrentFsm::awaiting_resume(ResumeState {
-                recover_attempts: 0,
                 seek: SeekContext {
                     epoch: 1,
                     target: Duration::from_secs(5),
                 },
                 anchor_offset: None,
+                anchor_variant_index: None,
                 skip: None,
             }),
             CurrentFsm::at_eof(),

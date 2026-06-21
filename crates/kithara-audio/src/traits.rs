@@ -1,12 +1,12 @@
 use std::{
     num::{NonZeroU32, NonZeroUsize},
     sync::Arc,
-    time::Duration,
 };
 
 pub use kithara_decode::{DecodeError, DecodeResult};
 use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
+use kithara_platform::time::Duration;
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
@@ -135,7 +135,7 @@ pub enum ChunkOutcome {
 ///   or may not recover; callers that finalise tracks MUST NOT treat
 ///   this as EOF.
 #[kithara::mock(api = PcmReaderMock)]
-pub trait PcmReader: kithara_platform::MaybeSend {
+pub trait PcmReader: kithara_platform::maybe_send::MaybeSend {
     /// Runtime ABR handle for the underlying stream.
     ///
     /// Adaptive readers (HLS) return `Some(handle)` so the queue/FFI can
@@ -193,6 +193,16 @@ pub trait PcmReader: kithara_platform::MaybeSend {
     /// returns `Ok(())` even if the stream contains no data.
     fn preload(&mut self) -> Result<(), DecodeError> {
         Ok(())
+    }
+
+    /// Decoder epoch whose preload gate should be observed by async callers.
+    ///
+    /// Readers without epoch-based seek invalidation keep the default initial
+    /// epoch (`0`). Worker-backed [`Audio`](crate::audio::Audio) readers return
+    /// the current seek epoch so a stale pre-seek signal cannot release a
+    /// post-seek preload wait.
+    fn preload_epoch(&self) -> u64 {
+        0
     }
 
     /// Startup gate signalled once preload completes (first chunk

@@ -30,7 +30,17 @@ pub(crate) fn shared() -> &'static SharedTestServer {
                     .build()
                     .expect("build shared-server runtime");
                 rt.block_on(async move {
-                    let base_url = router_base_url_on_runtime(state_for_thread).await;
+                    // Server STARTUP (socket bind + readiness delay) is real
+                    // infrastructure, not sim-clock-driven test logic: run it on
+                    // REAL time so its readiness sleep does not wait on the virtual
+                    // clock — which the caller has frozen by blocking on `rx.recv()`
+                    // below (a deadlock otherwise). The scope drops before serving
+                    // begins, so per-request THROTTLE sleeps stay on the sim clock
+                    // and still collapse under `flash`.
+                    let base_url = {
+                        let _real = kithara_platform::flash::flash_real();
+                        router_base_url_on_runtime(state_for_thread).await
+                    };
                     tx.send(base_url).expect("send shared server base url");
                     std::future::pending::<()>().await;
                 });

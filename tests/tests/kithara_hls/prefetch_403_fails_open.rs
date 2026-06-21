@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{error::Error, time::Duration};
+use std::error::Error;
 
 use kithara::{
     assets::StoreOptions,
@@ -12,7 +12,7 @@ use kithara_integration_tests::{
     fixture_protocol::{HlsRouteKind, HttpErrorRule},
     temp_dir,
 };
-use kithara_platform::CancellationToken;
+use kithara_platform::{CancelToken, time::Duration};
 
 #[kithara::test(
     tokio,
@@ -34,13 +34,14 @@ async fn prefetch_403_returns_err_quickly(
     let url = server.url("/master-encrypted.m3u8");
     let config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         .build();
 
-    let started = std::time::Instant::now();
-    let result = tokio::time::timeout(Duration::from_secs(1), Stream::<Hls>::new(config))
-        .await
-        .map_err(|_| "Stream::<Hls>::new did not return within 1s — silent hang regression")?;
+    let started = kithara_platform::time::Instant::now();
+    let result =
+        kithara_platform::time::timeout(Duration::from_secs(1), Stream::<Hls>::new(config))
+            .await
+            .map_err(|_| "Stream::<Hls>::new did not return within 1s — silent hang regression")?;
     let elapsed = started.elapsed();
 
     let err = match result {

@@ -31,30 +31,25 @@ fn ewma(prev: f32, sample: f32) -> f32 {
 /// / not started).
 #[derive(Debug)]
 pub struct EngineLoad {
-    /// Produced audio-seconds per CPU-second (`>1` = faster than realtime).
-    realtime: AtomicF32,
     /// Fraction of realtime spent producing (`busy / audio`, `0.05` = 5%).
     load: AtomicF32,
     /// Wall time spent per produced chunk, in milliseconds.
     ms: AtomicF32,
+    /// Produced audio-seconds per CPU-second (`>1` = faster than realtime).
+    realtime: AtomicF32,
 }
 
 impl Default for EngineLoad {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl EngineLoad {
-    #[must_use]
-    pub fn new() -> Self {
         Self {
             realtime: AtomicF32::new(0.0),
             load: AtomicF32::new(0.0),
             ms: AtomicF32::new(0.0),
         }
     }
+}
 
+impl EngineLoad {
     /// Fold one produced chunk's cost into the EWMA (worker thread).
     ///
     /// `busy` is the wall time the tick spent producing `frames` output
@@ -94,12 +89,12 @@ impl EngineLoad {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 #[non_exhaustive]
 pub struct EngineLoadSnapshot {
-    /// Produced audio-seconds per CPU-second (`>1` = faster than realtime).
-    pub realtime: f32,
     /// Fraction of realtime spent producing (`0.05` = 5% load).
     pub load: f32,
     /// Wall time per produced chunk, in milliseconds.
     pub ms: f32,
+    /// Produced audio-seconds per CPU-second (`>1` = faster than realtime).
+    pub realtime: f32,
 }
 
 impl EngineLoadSnapshot {
@@ -118,10 +113,9 @@ mod tests {
 
     #[kithara::test]
     fn record_populates_snapshot_and_skips_empty() {
-        let meter = EngineLoad::new();
+        let meter = EngineLoad::default();
         assert!(!meter.snapshot().is_active(), "idle before any record");
 
-        // Empty chunk records nothing.
         meter.record(Duration::from_millis(5), 0, 44_100);
         assert!(!meter.snapshot().is_active(), "empty chunk records nothing");
 

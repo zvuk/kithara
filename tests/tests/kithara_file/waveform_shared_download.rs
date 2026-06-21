@@ -7,24 +7,23 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use axum::{Router, body::Body, extract::State, http::header, response::Response, routing::get};
 use bytes::Bytes;
 use kithara::{
     assets::AssetStoreBuilder,
-    audio::ChunkOutcome,
-    prelude::{Resource, ResourceConfig},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    file::{File, FileConfig, FileSrc},
+    prelude::ResourceConfig,
+    stream::Stream,
 };
 use kithara_app::waveform::TrackAnalysisRunner;
 use kithara_integration_tests::{TestHttpServer, create_test_wav};
-use kithara_platform::{CancellationToken, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 
 const WAVEFORM_BUCKETS: usize = 100;
 
@@ -45,11 +44,17 @@ async fn serve_wav(State(state): State<CountState>) -> Response {
         .expect("valid response")
 }
 
-fn drain_to_eof(mut resource: Resource) -> bool {
+/// Drain the player to EOF. The pipeline is built with `block_on_underrun`
+/// (see the call site), so `next_chunk` PARKS on the engine-coordinated ring
+/// underrun until the decode worker delivers the next chunk or signals EOF —
+/// it never returns `Pending`. The park drives the virtual clock forward under
+/// flash (no real-clock re-poll sleep), so the worker advances and the shared
+/// WAV is decoded deterministically.
+fn drain_to_eof(mut audio: Audio<Stream<File>>) -> bool {
     loop {
-        match resource.next_chunk() {
+        match audio.next_chunk() {
             Ok(ChunkOutcome::Chunk(_)) => {}
-            Ok(ChunkOutcome::Pending { .. }) => std::thread::sleep(Duration::from_millis(2)),
+            Ok(ChunkOutcome::Pending { .. }) => {}
             Ok(ChunkOutcome::Eof { .. }) => return true,
             Err(_) => return false,
         }
@@ -82,21 +87,26 @@ async fn waveform_and_player_share_one_get() {
         .file_asset_store(Arc::clone(&store))
         .build();
 
-    // Player consumer of the same URL through the same shared store.
-    let player_cfg = ResourceConfig::for_src(url.as_str())
-        .expect("player url")
-        .file_asset_store(Arc::clone(&store))
-        .build();
+    // Player consumer of the same URL through the same shared store. Built
+    // with `block_on_underrun(true)` so the drain parks on the virtual clock
+    // until the worker delivers, instead of sleep-polling on `Pending`.
+    let player_cfg = AudioConfig::<File>::for_stream(
+        FileConfig::for_src(FileSrc::Remote(url.clone()))
+            .asset_store(Arc::clone(&store))
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
 
     // Run both concurrently so they cooperate on one download.
-    let master = CancellationToken::default();
+    let master = CancelToken::never();
     let mut runner = TrackAnalysisRunner::new(&master, WAVEFORM_BUCKETS);
     let mut analysis_rx = runner.analyze(waveform_cfg);
 
-    let mut player = Resource::new(player_cfg)
+    let mut player = Audio::<Stream<File>>::new(player_cfg)
         .await
-        .expect("open player resource");
-    player.preload().await.expect("player preload");
+        .expect("open player audio");
+    player.preload().expect("player preload");
     let player_drain = spawn_blocking(move || drain_to_eof(player));
 
     analysis_rx
@@ -112,10 +122,10 @@ async fn waveform_and_player_share_one_get() {
     let player_ok = player_drain.await.expect("player drain task");
 
     assert!(player_ok, "player must decode the shared WAV to EOF");
-    assert_eq!(
-        envelope.len(),
-        WAVEFORM_BUCKETS,
-        "waveform analysis must produce one value per bucket"
+    assert!(
+        (1..=WAVEFORM_BUCKETS).contains(&envelope.len()),
+        "waveform analysis must produce native-resolution buckets capped by request, got {}",
+        envelope.len()
     );
     assert_eq!(
         gets.load(Ordering::SeqCst),

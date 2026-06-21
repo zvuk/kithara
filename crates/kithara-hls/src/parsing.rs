@@ -6,6 +6,7 @@ use hls_m3u8::{
     types::{DecryptionKey as HlsDecryptionKey, EncryptionMethod as HlsEncryptionMethod},
 };
 use kithara_abr::VariantInfo;
+use kithara_events::{VariantDuration, VariantIndex};
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;
@@ -337,21 +338,20 @@ pub fn variant_info_from_master(
         .iter()
         .enumerate()
         .map(|(idx, v)| {
-            let duration = media_playlists.get(idx).map_or(
-                kithara_events::VariantDuration::Unknown,
-                |playlist| {
+            let duration = media_playlists
+                .get(idx)
+                .map_or(VariantDuration::Unknown, |playlist| {
                     if playlist.segments.is_empty() {
-                        kithara_events::VariantDuration::Unknown
+                        VariantDuration::Unknown
                     } else {
-                        kithara_events::VariantDuration::Segmented(
+                        VariantDuration::Segmented(
                             playlist.segments.iter().map(|s| s.duration).collect(),
                         )
                     }
-                },
-            );
+                });
             VariantInfo {
                 duration,
-                variant_index: kithara_events::VariantIndex::new(v.id.0),
+                variant_index: VariantIndex::new(v.id.0),
                 bandwidth_bps: v.bandwidth,
                 name: v.name.clone(),
                 codecs: v.codec.as_ref().and_then(|c| c.codecs.clone()),

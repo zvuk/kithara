@@ -18,27 +18,14 @@ HTTP client with retry, timeout, and streaming. Wraps reqwest behind the `Net` t
 
 ```rust
 use kithara_net::{HttpClient, Net, NetOptions};
-use tokio_util::sync::CancellationToken;
+use kithara_platform::CancelToken;
 
-let client = HttpClient::new(NetOptions::default(), CancellationToken::new());
+let client = HttpClient::new(NetOptions::default(), CancelToken::never());
 let bytes = client.get_bytes(url, None).await?;        // None = no extra headers
 let stream = client.stream(url, None).await?;
 ```
 
-## Decorators
-
-`TimeoutNet<N>` wraps all methods with `tokio::time::timeout` and is exported in the public API. A retry decorator with exponential backoff (retries on 5xx, 429, 408, timeouts; does not retry on other 4xx) is also available, but only via the `NetExt` builder methods — the wrapper type itself is not part of the public surface.
-
-Decorators compose via the `NetExt` extension trait:
-```rust
-use kithara_net::{HttpClient, Net, NetExt, NetOptions, RetryPolicy};
-use std::time::Duration;
-use tokio_util::sync::CancellationToken;
-
-let client = HttpClient::new(NetOptions::default(), CancellationToken::new())
-    .with_retry(RetryPolicy::default(), CancellationToken::new())
-    .with_timeout(Duration::from_secs(30));
-```
+Decorators compose via the `NetExt` extension trait: `with_retry` adds exponential-backoff retry, `with_timeout` wraps every call in `TimeoutNet<N>`.
 
 ## Key Types
 
@@ -52,26 +39,8 @@ let client = HttpClient::new(NetOptions::default(), CancellationToken::new())
 <tr><td><code>NetError</code></td><td>Error variants: <code>Status</code>, <code>Timeout</code>, <code>Network</code>, <code>Decode</code>, <code>RetryExhausted</code>, <code>Unimplemented</code>, <code>Cancelled</code>, <code>InvalidContentType</code>. Retry decisioning via <code>retryability() -&gt; Retryability</code> (typed, no substring matching)</td></tr>
 </table>
 
-## Timeout Behavior
-
-Two independent limits in `NetOptions`, applied to **all** methods (`get_bytes`,
-`head`, `get_range`, `stream`):
-
-- `inactivity_timeout` (default 30s) — max gap between reads (reqwest
-  `read_timeout`); guards against stalled connections, not total duration.
-- `total_timeout` (default 120s) — hard cap on request lifetime. Set to `None`
-  to allow indefinite streaming as long as data keeps flowing.
-
-The `TimeoutNet` decorator can wrap any `Net` with an additional
-`tokio::time::timeout` over the whole call.
-
-## Trait Bridges
-
-- `&RangeSpec` → `String` (`Display`) — HTTP Range header rendering
-- `HashMap<String, String>` → `Headers` (`From`) — build header set from a map
-- `Compression` → `Vec<ClientBuilderMod>` (`From`) — map compression flags to reqwest builder mods
-- `ReqwestError` → `NetError` (`From`) — wrap transport errors into typed `NetError`
-
 ## Integration
 
 Used by `kithara-file` and `kithara-hls` for all HTTP operations. `MockNet` (behind the `mock` feature) enables deterministic testing without network access.
+
+See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

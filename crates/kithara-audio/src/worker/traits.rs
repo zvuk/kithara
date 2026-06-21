@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use kithara_decode::PcmChunk;
-use kithara_stream::Timeline;
+use kithara_stream::SeekObserve;
 
 use crate::{pipeline::track_fsm, traits::AudioEffect};
 
@@ -16,6 +18,27 @@ mod kithara {
 pub trait AudioWorkerSource: Send + 'static {
     type Chunk: Send + 'static;
 
+    /// The producer's current decode epoch — the seek epoch the most recent
+    /// decode operated under. The worker stamps terminal markers (EOF /
+    /// failure) with this rather than the live `seek_observe().epoch()`,
+    /// which a concurrent consumer seek may have already advanced: stamping
+    /// the live epoch would mislabel a stale terminal as the newer seek's and
+    /// let the consumer's epoch validator accept it (the oversubscription
+    /// false-EOF race). Defaults to the live seek epoch for sources whose
+    /// decode epoch is the seek epoch (e.g. test mocks).
+    fn decode_epoch(&self) -> u64 {
+        self.seek_observe().epoch()
+    }
+
+    /// Drain deferred off-core signals armed on the forbid-blocking decode
+    /// core: reader-hook events (published to the event bus) and the reader→peer
+    /// wake (a cross-thread `notify_one` the RT core must not make). The worker
+    /// shell calls this once per pass, off the checked path. Default no-op.
+    fn flush_deferred(&mut self) {}
+
+    /// Narrow seek-observe handle — epoch queries and decoder-node seek latch.
+    fn seek_observe(&self) -> Arc<dyn SeekObserve>;
+
     /// Advance the track FSM by one step.
     ///
     /// Handles seek preemption, source readiness, decoding, and all
@@ -26,15 +49,6 @@ pub trait AudioWorkerSource: Send + 'static {
     /// - `Eof` — end of stream (may transition out via seek-after-EOF).
     /// - `Failed` — terminal failure.
     fn step_track(&mut self) -> track_fsm::TrackStep<Self::Chunk>;
-
-    /// Access the shared timeline for epoch queries.
-    fn timeline(&self) -> &Timeline;
-
-    /// Drain deferred off-core signals armed on the forbid-blocking decode
-    /// core: reader-hook events (published to the event bus) and the reader→peer
-    /// wake (a cross-thread `notify_one` the RT core must not make). The worker
-    /// shell calls this once per pass, off the checked path. Default no-op.
-    fn flush_deferred(&mut self) {}
 
     /// One-time worker-thread warmup, called from the scheduler shell when the
     /// node registers. Pre-touches the produce-core read path so lazy global
@@ -62,11 +76,7 @@ pub(crate) fn drain_effects(effects: &mut [Box<dyn AudioEffect>]) -> Vec<PcmChun
     let mut carry: Vec<PcmChunk> = Vec::new();
     for effect in &mut *effects {
         let mut produced: Vec<PcmChunk> = Vec::new();
-        for chunk in carry.drain(..) {
-            if let Some(out) = effect.process(chunk) {
-                produced.push(out);
-            }
-        }
+        produced.extend(carry.drain(..).filter_map(|chunk| effect.process(chunk)));
         while let Some(out) = effect.flush() {
             produced.push(out);
         }
@@ -84,6 +94,8 @@ pub(crate) fn reset_effects(effects: &mut [Box<dyn AudioEffect>]) {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmMeta, PcmSpec};
     use kithara_test_utils::kithara;
@@ -93,10 +105,13 @@ mod tests {
     use super::*;
     use crate::traits::AudioEffectMock;
 
-    const SPEC: PcmSpec = PcmSpec {
-        channels: 1,
-        sample_rate: 48_000,
-    };
+    const SPEC: PcmSpec = PcmSpec::new(
+        1,
+        match NonZeroU32::new(48_000) {
+            Some(r) => r,
+            None => unreachable!(),
+        },
+    );
 
     fn chunk(range: std::ops::Range<u32>) -> PcmChunk {
         let samples: Vec<f32> = range.map(AsPrimitive::as_).collect();
@@ -146,7 +161,7 @@ mod tests {
 
         let mut chain: Vec<Box<dyn AudioEffect>> = vec![stage0, stage1];
         let out = drain_effects(&mut chain);
-        let total: Vec<f32> = out.iter().flat_map(|c| c.pcm.iter().copied()).collect();
+        let total: Vec<f32> = out.iter().flat_map(|c| c.samples.iter().copied()).collect();
 
         assert!(
             out.len() > 1,

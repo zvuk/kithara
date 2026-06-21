@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use iced::{Size, window};
+use iced::{Size, window::Settings};
 use kithara::play::StretchControls;
+use kithara_platform::tokio;
 use kithara_queue::Queue;
 
 use super::{app::Kithara, fonts, update, view};
@@ -29,7 +30,7 @@ use consts::*;
 /// Window settings per mode. A mode swap opens a fresh window rather than
 /// resizing the live one. Close is handled via `close_requests()`, so the
 /// programmatic swap-close does not exit the app.
-pub(crate) fn window_settings(dj: bool) -> window::Settings {
+pub(crate) fn window_settings(dj: bool) -> Settings {
     let (size, min_size) = if dj {
         (
             Size::new(STUDIO_WIDTH, STUDIO_HEIGHT),
@@ -41,11 +42,11 @@ pub(crate) fn window_settings(dj: bool) -> window::Settings {
             Size::new(COMPACT_MIN_WIDTH, COMPACT_MIN_HEIGHT),
         )
     };
-    window::Settings {
+    Settings {
         size,
         min_size: Some(min_size),
         exit_on_close_request: false,
-        ..window::Settings::default()
+        ..Settings::default()
     }
 }
 
@@ -80,7 +81,7 @@ impl Frontend for GuiFrontend {
             Arc::clone(&queue),
             timestretch,
             config.clone(),
-            config.shutdown.child_token(),
+            config.shutdown.child(),
         ));
 
         let result = iced::daemon(

@@ -2,7 +2,7 @@
 //!
 //! Thread-safe, RAII-guarded, sharded buffers for any type implementing
 //! the `Reuse` trait (`Vec<u8>`, `Vec<f32>`, etc.). See the crate
-//! `README.md` for usage and the allocation flow.
+//! `README.md` for usage and `CONTEXT.md` for the allocation flow.
 
 #![forbid(unsafe_code)]
 

@@ -2,7 +2,7 @@ use std::sync::{Arc, atomic::Ordering};
 
 use firewheel::{FirewheelConfig, FirewheelCtx, channel_config::ChannelCount};
 use kithara_audio::PcmReader;
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use kithara_play::{
     PlayerNode, Resource,
     impls::{
@@ -144,7 +144,7 @@ impl OfflinePlayer {
     pub fn take_notification_kinds(&self) -> Vec<NotificationKind> {
         use ringbuf::traits::Consumer;
 
-        let mut rx = self.shared_state.notification_rx.lock_sync();
+        let mut rx = self.shared_state.notification_rx.lock();
         let mut out = Vec::new();
         while let Some(n) = rx.try_pop() {
             use kithara_play::impls::player_notification::PlayerNotification as N;

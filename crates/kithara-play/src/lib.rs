@@ -33,7 +33,7 @@ pub use events::{
 pub use impls::{
     config::{ResourceConfig, ResourceSrc},
     engine::{EngineConfig, EngineImpl},
-    player::{PlayerConfig, PlayerImpl},
+    player::{PlayerConfig, PlayerImpl, SelectTransition},
     player_node::PlayerNode,
     resource::Resource,
     session::{

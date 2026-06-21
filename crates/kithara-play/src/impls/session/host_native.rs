@@ -1,19 +1,11 @@
-use std::{
-    sync::{Arc, OnceLock},
-    time::Duration,
-};
+use std::sync::{Arc, OnceLock};
 
 use firewheel::{FirewheelCtx, backend::AudioBackend};
 use kithara_platform::{
-    Mutex,
-    sync::mpsc,
-    thread::{Thread, park_timeout, sleep as thread_sleep, spawn_named},
+    sync::{Mutex, mpsc},
+    thread::spawn_named,
 };
-use kithara_test_utils::kithara;
-use ringbuf::{
-    HeapCons, HeapProd, HeapRb,
-    traits::{Consumer, Producer, Split},
-};
+use tracing::{debug, warn};
 
 use super::{
     client::SessionDispatcher,
@@ -21,43 +13,26 @@ use super::{
 };
 use crate::error::PlayError;
 
-/// Native session client: pushes `CmdMsg`s into a ring buffer drained by
-/// a dedicated `kithara-engine` worker thread. Latency-sensitive control
-/// commands hit the worker via park/unpark wake-up.
+/// Native session client: sends `CmdMsg`s over an engine-aware channel drained
+/// by a dedicated `kithara-engine` worker thread. The worker blocks on the
+/// command-arrival EVENT (`recv`), not a `park_timeout` budget, so a
+/// latency-sensitive control command wakes it the instant it lands — under both
+/// the real and the virtual clock, with no cross-thread park/unpark to lose.
 pub(crate) struct SessionClient {
-    cmd_tx: Mutex<HeapProd<CmdMsg>>,
-    engine_thread: Thread,
+    cmd_tx: Mutex<mpsc::Sender<CmdMsg>>,
 }
 
 impl SessionClient {
-    /// Back-off sleep when the command ring buffer is full (milliseconds).
-    const CMD_PUSH_BACKOFF_MS: u64 = 1;
-
     fn call(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         let (reply_tx, reply_rx) = mpsc::channel();
-        self.push_cmd(CmdMsg { cmd, reply_tx })
+        self.cmd_tx
+            .lock()
+            .send(CmdMsg { cmd, reply_tx })
             .map_err(|_| PlayError::Internal("session thread gone".into()))?;
-        reply_rx
-            .recv_sync()
-            .map_err(|_| PlayError::Internal("session thread gone (reply)".into()))
-    }
-
-    #[kithara::hang_watchdog]
-    fn push_cmd(&self, msg: CmdMsg) -> Result<(), PlayError> {
-        let mut pending = msg;
-        loop {
-            hang_tick!();
-            match self.cmd_tx.lock_sync().try_push(pending) {
-                Ok(()) => {
-                    self.engine_thread.unpark();
-                    return Ok(());
-                }
-                Err(returned) => {
-                    pending = returned;
-                    thread_sleep(Duration::from_millis(Self::CMD_PUSH_BACKOFF_MS));
-                }
-            }
-        }
+        let reply = reply_rx
+            .recv()
+            .map_err(|_| PlayError::Internal("session thread gone (reply)".into()))?;
+        Ok(reply)
     }
 }
 
@@ -67,38 +42,32 @@ impl SessionDispatcher for SessionClient {
     }
 }
 
-fn engine_thread<B: AudioBackend>(mut cmd_rx: HeapCons<CmdMsg>, start_stream_fn: StartStreamFn<B>) {
-    /// Fallback park timeout when no commands arrive (milliseconds).
-    /// The engine thread parks and wakes instantly on command push via `unpark()`.
-    /// This timeout is a safety net for spurious wakeups and periodic housekeeping.
-    const ENGINE_PARK_TIMEOUT_MS: u64 = 50;
-
+fn engine_thread<B: AudioBackend>(
+    cmd_rx: &mpsc::Receiver<CmdMsg>,
+    start_stream_fn: StartStreamFn<B>,
+) {
     let mut state = SessionState::<B>::new(start_stream_fn);
-    loop {
-        let mut processed = false;
-        while let Some(msg) = cmd_rx.try_pop() {
-            let CmdMsg { cmd, reply_tx } = msg;
-            let reply = run_cmd(&mut state, cmd);
-            let _ = reply_tx.send_sync(reply);
-            processed = true;
-        }
-        if !processed {
-            park_timeout(Duration::from_millis(ENGINE_PARK_TIMEOUT_MS));
+    debug!("[KITHARA-ROUTE] native session worker started");
+    // Block on the command-arrival event. `recv` returns `Err` only once
+    // every sender has been dropped, which is the worker's exit signal.
+    for CmdMsg { cmd, reply_tx } in cmd_rx.iter() {
+        let reply = run_cmd(&mut state, cmd);
+        if reply_tx.send(reply).is_err() {
+            warn!("[KITHARA-ROUTE] native session reply receiver dropped");
         }
     }
+    debug!("[KITHARA-ROUTE] native session worker stopped");
 }
 
 fn spawn_session_client<B: AudioBackend + Send + 'static>(
     thread_name: &'static str,
     start_stream_fn: StartStreamFn<B>,
 ) -> Arc<SessionClient> {
-    let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(SessionState::<B>::CMD_RINGBUF_CAPACITY).split();
-    let handle = spawn_named(thread_name, move || {
-        engine_thread::<B>(cmd_rx, start_stream_fn);
+    let (cmd_tx, cmd_rx) = mpsc::channel::<CmdMsg>();
+    spawn_named(thread_name, move || {
+        engine_thread::<B>(&cmd_rx, start_stream_fn);
     });
-    let engine_thread = handle.thread().clone();
     Arc::new(SessionClient {
-        engine_thread,
         cmd_tx: Mutex::new(cmd_tx),
     })
 }
@@ -127,6 +96,7 @@ fn start_stream_cpal(
     ctx: &mut FirewheelCtx<firewheel::cpal::CpalBackend>,
     sample_rate: u32,
 ) -> Result<(), String> {
+    debug!(sample_rate, "[KITHARA-ROUTE] starting cpal stream");
     let config = firewheel::cpal::CpalConfig {
         output: firewheel::cpal::CpalOutputConfig {
             desired_sample_rate: Some(sample_rate),
@@ -134,5 +104,18 @@ fn start_stream_cpal(
         },
         ..Default::default()
     };
-    ctx.start_stream(config).map_err(|err| err.to_string())
+    match ctx.start_stream(config) {
+        Ok(()) => {
+            debug!(sample_rate, "[KITHARA-ROUTE] cpal stream started");
+            Ok(())
+        }
+        Err(err) => {
+            warn!(
+                sample_rate,
+                ?err,
+                "[KITHARA-ROUTE] cpal stream start failed"
+            );
+            Err(err.to_string())
+        }
+    }
 }

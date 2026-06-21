@@ -104,7 +104,7 @@ fn resolve_codec_priming(decoder: &dyn Decoder, media_info: Option<&MediaInfo>) 
     if frames == 0 {
         GaplessTrimmer::disabled()
     } else {
-        GaplessTrimmer::codec_priming(frames, decoder.spec().sample_rate)
+        GaplessTrimmer::codec_priming(frames, decoder.spec().sample_rate.get())
     }
 }
 
@@ -137,10 +137,6 @@ pub(crate) fn visible_duration(decoder: &dyn Decoder, mode: GaplessMode) -> Opti
         return Some(raw);
     }
 
-    if decoder.spec().sample_rate == 0 {
-        return Some(raw);
-    }
-
-    let trim = duration_for_frames(decoder.spec().sample_rate, trim_frames);
+    let trim = duration_for_frames(decoder.spec().sample_rate.get(), trim_frames);
     Some(raw.saturating_sub(trim))
 }

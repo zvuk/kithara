@@ -2,7 +2,7 @@ use kithara_platform::time::Duration;
 pub(crate) use kithara_stream::PrerollHint;
 use kithara_stream::{AudioCodec, PendingReason};
 
-use crate::{codec::CodecPriming, error::DecodeResult};
+use crate::{InputRequirement, codec::CodecPriming, error::DecodeResult};
 
 /// Container-side demuxer trait.
 ///
@@ -37,6 +37,18 @@ pub(crate) trait Demuxer: Send {
     /// Surfaces parser-level failures verbatim. Source-level pending
     /// states return `Ok(DemuxOutcome::Pending(_))`.
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>>;
+
+    /// The *shape* of bytes that must be Ready before this demuxer can be
+    /// constructed, for the kithara-audio readiness gate. Defaults to
+    /// [`InputRequirement::Incremental`]; init-bearing demuxers (fMP4) MUST
+    /// override to [`InputRequirement::InitOnly`]. See the crate `CONTEXT.md`
+    /// "Decoder input contract".
+    fn required_input() -> InputRequirement
+    where
+        Self: Sized,
+    {
+        InputRequirement::Incremental
+    }
 
     /// Seek the demuxer to `target` time.
     ///
@@ -128,7 +140,7 @@ pub(crate) enum DemuxSeekOutcome {
     Landed {
         landed_at: Duration,
         landed_byte: Option<u64>,
-        /// Codec priming hint. See `kithara-decode` README §Seek priming.
+        /// Codec priming hint. See `kithara-decode` CONTEXT.md "Seek pre-roll and trim".
         preroll: PrerollHint,
     },
     /// The seek target lies past the stream's end; `duration` is the

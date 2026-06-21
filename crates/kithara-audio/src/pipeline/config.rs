@@ -50,7 +50,10 @@ pub struct AudioConfig<T: StreamType> {
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
     /// Master cancel token for the audio pipeline.
-    pub cancel: Option<kithara_platform::CancellationToken>,
+    pub cancel: Option<kithara_platform::CancelToken>,
+    /// Live audio-engine cost meter (decode + effects). When set, the worker
+    /// publishes its per-chunk processing cost here.
+    pub engine_load: Option<Arc<EngineLoad>>,
     /// Optional format hint (file extension like "mp3", "wav")
     pub hint: Option<String>,
     /// Target sample rate of the audio host (for resampling).
@@ -69,9 +72,6 @@ pub struct AudioConfig<T: StreamType> {
     /// the speed directly. `None` keeps the resampler-first chain reading
     /// `playback_rate`.
     pub stretch: Option<Arc<StretchControls>>,
-    /// Live audio-engine cost meter (decode + effects). When set, the worker
-    /// publishes its per-chunk processing cost here.
-    pub engine_load: Option<Arc<EngineLoad>>,
     /// Optional shared audio worker handle.
     pub worker: Option<handle::AudioWorkerHandle>,
     /// Resampling quality preset.
@@ -80,6 +80,14 @@ pub struct AudioConfig<T: StreamType> {
     /// Additional effects to append after resampler in the processing chain.
     #[builder(default)]
     pub effects: Vec<Box<dyn AudioEffect>>,
+    /// Make a producer-ring underrun block (engine-aware park) instead of
+    /// surfacing an empty outcome. Offline (faster-than-real-time) consumers
+    /// opt in so `read` / `next_chunk` wait for the decode worker instead of
+    /// returning `Pending` / zero frames the caller would have to sleep-poll.
+    /// Real-time hosts must keep the default (`false`): the audio callback
+    /// can never block.
+    #[builder(default)]
+    pub block_on_underrun: bool,
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s).
     /// Default: 10 on native, 32 on wasm32.
     #[builder(default = default_pcm_buffer_chunks())]
@@ -115,13 +123,12 @@ pub(crate) fn expected_output_spec(
     host_sample_rate: &Arc<AtomicU32>,
 ) -> PcmSpec {
     let host_sr = host_sample_rate.load(Ordering::Relaxed);
-    if host_sr == 0 || host_sr == initial_spec.sample_rate {
+    if host_sr == 0 || host_sr == initial_spec.sample_rate.get() {
         initial_spec
+    } else if let Some(nz_host) = NonZeroU32::new(host_sr) {
+        PcmSpec::new(initial_spec.channels, nz_host)
     } else {
-        PcmSpec {
-            channels: initial_spec.channels,
-            sample_rate: host_sr,
-        }
+        initial_spec
     }
 }
 
@@ -147,7 +154,7 @@ pub(crate) fn create_effects(
 
     let params = ResamplerParams::builder()
         .host_sample_rate(Arc::clone(host_sample_rate))
-        .source_sample_rate(initial_spec.sample_rate)
+        .source_sample_rate(initial_spec.sample_rate.get())
         .channels(initial_spec.channels as usize)
         .playback_rate(resampler_rate)
         .quality(quality)
@@ -230,10 +237,7 @@ mod tests {
     }
 
     fn spec() -> PcmSpec {
-        PcmSpec {
-            sample_rate: 44100,
-            channels: 2,
-        }
+        PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
     }
 
     /// Without a compiled-in stretch backend, `stretch` still selects live
@@ -336,6 +340,6 @@ mod tests {
         let out = effects[0]
             .process(chunk)
             .expect("bypass forwards the chunk");
-        assert_eq!(out.samples(), &samples[..], "bypass: PCM untouched");
+        assert_eq!(&out.samples[..], &samples[..], "bypass: PCM untouched");
     }
 }

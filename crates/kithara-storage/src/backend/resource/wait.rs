@@ -1,13 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
-use kithara_platform::{
-    thread::yield_now,
-    time::{Duration as PlatformDuration, Instant},
-};
+use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
-use tracing::debug;
 
 use crate::{
     StorageError, StorageResult,
@@ -20,14 +16,12 @@ use crate::{
 /// failed by the network layer (this wait then returns `Failed`) before the
 /// deadlock-watchdog fires. Only a wait that never returns after the fetch
 /// resolved is a real deadlock.
-const WAIT_HANG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 
 impl<D: DriverIo> ResourceCore<D> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara::hang_watchdog(timeout = WAIT_HANG_TIMEOUT)]
     pub(super) fn wait_range_inner(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        const WAIT_SPIN_TIMEOUT_MS: u64 = 50;
-
         if range.start > range.end {
             return Err(StorageError::InvalidRange {
                 start: range.start,
@@ -38,6 +32,20 @@ impl<D: DriverIo> ResourceCore<D> {
         if range.is_empty() {
             return Ok(WaitOutcome::Ready);
         }
+
+        // Wake the parked condvar on cancellation. Bytes / commit / fail /
+        // reactivate already `notify_all` it (io.rs, lifecycle.rs); cancel is the
+        // ONE readiness transition with no notify, so register a sync cancel-waker
+        // that notifies under the SAME state mutex the wait releases — closing the
+        // lost-wakeup window. Without it the wait could learn of a cancel only by
+        // re-polling on a timer. The guard unregisters when this wait returns.
+        let _cancel_wake = {
+            let inner = Arc::clone(&self.inner);
+            self.inner.cancel.on_cancel(move || {
+                let _guard = inner.gate.lock();
+                inner.gate.notify_all();
+            })
+        };
 
         // How far the available prefix of `range` reaches. Bytes arrive
         // front-to-back for a sequential fetch, so this advancing means the
@@ -50,7 +58,7 @@ impl<D: DriverIo> ResourceCore<D> {
                 return Ok(WaitOutcome::Ready);
             }
 
-            let state = self.inner.state.lock_sync();
+            let state = self.inner.gate.lock();
 
             if self.inner.cancel.is_cancelled() {
                 return Err(StorageError::Cancelled);
@@ -88,17 +96,9 @@ impl<D: DriverIo> ResourceCore<D> {
                 hang_reset!();
             }
 
-            debug!(
-                range_start = range.start,
-                range_end = range.end,
-                committed = state.committed,
-                final_len = ?state.final_len,
-                "storage::wait_range spinning"
-            );
-
-            yield_now();
-            let deadline = Instant::now() + PlatformDuration::from_millis(WAIT_SPIN_TIMEOUT_MS);
-            let _state = self.inner.condvar.wait_sync_timeout(state, deadline);
+            // Park until a readiness transition notifies the gate (bytes,
+            // commit, fail, reactivate, or cancel) — event-driven, no timer.
+            let _state = self.inner.gate.wait(state);
         }
     }
 }

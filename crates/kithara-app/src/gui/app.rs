@@ -1,10 +1,12 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use iced::{
     Event as IcedEvent, Subscription, Task, Theme, event,
+    event::Status,
     keyboard::{Event as KeyboardEvent, Key, key::Named},
     time as iced_time, window,
 };
+use kithara_platform::time::Duration;
 
 use super::{
     dj::DjView,
@@ -28,19 +30,19 @@ use crate::{
 /// a single, consistent snapshot.
 pub(crate) struct Kithara {
     pub(crate) controller: Arc<StateController>,
-    pub(crate) palette: gui::GuiPalette,
-
-    pub(crate) selected_track_index: Option<usize>,
-    pub(crate) url: UrlBar,
-    pub(crate) active_tab: Tab,
-    pub(crate) ui_state: UiState,
-    pub(crate) previous_volume: f32,
-    pub(crate) blink_counter: u8,
     /// View-local DJ Studio state (open / closed).
     pub(crate) dj: DjView,
+
+    pub(crate) palette: gui::GuiPalette,
+    pub(crate) selected_track_index: Option<usize>,
     /// Currently live window. One window is open at a time; the DJ-mode
     /// swap opens the new window and closes this one.
     pub(crate) window_id: Option<window::Id>,
+    pub(crate) active_tab: Tab,
+    pub(crate) ui_state: UiState,
+    pub(crate) url: UrlBar,
+    pub(crate) previous_volume: f32,
+    pub(crate) blink_counter: u8,
 }
 
 impl Kithara {
@@ -89,7 +91,7 @@ impl Kithara {
                 IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
                     key: Key::Named(Named::Delete | Named::Backspace),
                     ..
-                }) if status == event::Status::Ignored => Some(Message::DeleteTrack),
+                }) if status == Status::Ignored => Some(Message::DeleteTrack),
                 _ => None,
             }));
         }

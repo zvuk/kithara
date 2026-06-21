@@ -1,4 +1,4 @@
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 /// One step in a user-simulation scenario. Each variant maps to a
 /// single observable mutation through the public `Queue` API; the

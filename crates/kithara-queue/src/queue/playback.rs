@@ -1,22 +1,45 @@
 use std::sync::PoisonError;
 
-use kithara_events::{Event, PlayerEvent, QueueEvent, TrackStatus};
-use tokio::sync::broadcast::error::TryRecvError;
+use kithara_events::{Event, PlayerEvent, QueueEvent, TrackId, TrackStatus};
+use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
 use tracing::debug;
 
 use super::{
     Queue,
     types::{CachedPosition, CrossfadeArm, Transition},
 };
-use crate::error::QueueError;
+use crate::{error::QueueError, track::TrackSource};
 
 impl Queue {
+    fn advance_loaded_successor(&self, current_id: TrackId, transition: Transition) {
+        let Some(next) = self.next_selectable_entry() else {
+            return;
+        };
+        if !matches!(next.status, TrackStatus::Loaded) {
+            return;
+        }
+
+        let before_index = self.player.current_index();
+        if self.select(next.id, transition).is_err() {
+            return;
+        }
+        if self.player.current_index() != before_index {
+            self.write_armed_for(CrossfadeArm::armed(current_id));
+        }
+    }
+
     /// If an advance was already armed from `tick()`, consume it and
     /// return `true` — the engine's trailing `ItemDidPlayToEnd` for
     /// the same track must not advance again.
-    fn consume_armed_advance(&self, pos: f64, dur: f64) -> bool {
-        if self.take_armed_for().is_armed() {
-            debug!(pos, dur, "consumed ItemDidPlayToEnd (armed pre-end)");
+    fn consume_armed_advance(&self, ended_id: Option<TrackId>, pos: f64, dur: f64) -> bool {
+        let Some(ended_id) = ended_id else {
+            return false;
+        };
+        if self.take_armed_for_if_matches(ended_id) {
+            debug!(
+                track_id = ended_id.as_u64(),
+                pos, dur, "consumed ItemDidPlayToEnd (armed pre-end)"
+            );
             true
         } else {
             false
@@ -52,6 +75,12 @@ impl Queue {
         }
     }
 
+    fn freeze_cached_position(&self) {
+        if let Some(t) = self.player.position_seconds() {
+            self.write_cached_position(CachedPosition::known(t));
+        }
+    }
+
     fn handle_current_item_changed(&self) {
         let idx = self.player.current_index();
         let id = self.lock_tracks().get(idx).map(|e| e.id);
@@ -59,11 +88,30 @@ impl Queue {
         self.bus.publish(QueueEvent::CurrentTrackChanged { id });
     }
 
+    fn handle_handover_requested(&self) {
+        if self.is_paused() {
+            return;
+        }
+        let Some(entry) = self.current() else {
+            return;
+        };
+        self.advance_loaded_successor(entry.id, Transition::Crossfade);
+    }
+
     fn handle_item_did_fail(&self, src: &std::sync::Arc<str>) {
         let pos = self.player.position_seconds().unwrap_or(0.0);
         let dur = self.player.duration_seconds().unwrap_or(0.0);
         debug!(%src, pos, dur, "ItemDidFail received — track aborted mid-stream");
-        if self.consume_armed_advance(pos, dur) {
+        if self.current().is_none() {
+            self.bus.publish(QueueEvent::QueueEnded);
+            return;
+        }
+        if self.is_paused() {
+            debug!(%src, "paused: not auto-advancing on ItemDidFail");
+            return;
+        }
+        let ended_id = self.track_id_for_src(src);
+        if self.consume_armed_advance(ended_id, pos, dur) {
             return;
         }
         let _ = self.advance_to_next(Transition::None);
@@ -86,7 +134,16 @@ impl Queue {
         let pos = self.player.position_seconds().unwrap_or(0.0);
         let dur = self.player.duration_seconds().unwrap_or(0.0);
         debug!(%src, pos, dur, "ItemDidPlayToEnd received");
-        if self.consume_armed_advance(pos, dur) {
+        if self.current().is_none() {
+            self.bus.publish(QueueEvent::QueueEnded);
+            return;
+        }
+        if self.is_paused() {
+            debug!(%src, pos, dur, "paused: not auto-advancing on ItemDidPlayToEnd");
+            return;
+        }
+        let ended_id = self.track_id_for_src(src);
+        if self.consume_armed_advance(ended_id, pos, dur) {
             return;
         }
         if src.is_empty() {
@@ -96,12 +153,27 @@ impl Queue {
         }
     }
 
+    /// Whether the user has paused playback.
+    ///
+    /// Reads the player's live rate: `pause()` (and a no-autoplay select)
+    /// stores `0.0`, while `play` / `set_rate` keep it `>= MIN_PLAYBACK_RATE`.
+    /// A natural end-of-track leaves the rate untouched, so this stays
+    /// distinct from `is_playing()` (which drops to `false` once the arena
+    /// drains at EOF). Auto-advance gates on this so a paused head freezes
+    /// without blocking the genuine end-of-track advance.
+    pub(super) fn is_paused(&self) -> bool {
+        self.player.rate() <= 0.0
+    }
+
     /// Start the next-track crossfade ahead of end-of-track when the
     /// remaining playtime drops below the configured crossfade window,
     /// so the two tracks actually overlap. `ItemDidPlayToEnd` alone
     /// fires after the first track is already silent — too late for a
     /// real crossfade.
     fn maybe_arm_crossfade(&self) {
+        if self.is_paused() {
+            return;
+        }
         let crossfade = self.player.crossfade_duration();
         let (Some(dur), Some(pos), Some(entry)) = (
             self.player.duration_seconds(),
@@ -115,13 +187,32 @@ impl Queue {
         if !super::types::should_arm_crossfade(time, crossfade, entry.id, armed_for) {
             return;
         }
-        self.write_armed_for(CrossfadeArm::armed(entry.id));
         let transition = if crossfade > 0.0 {
             Transition::Crossfade
         } else {
             Transition::None
         };
-        let _ = self.advance_to_next(transition);
+        self.advance_loaded_successor(entry.id, transition);
+    }
+
+    /// Pause playback and freeze the queue-visible head position.
+    pub fn pause(&self) {
+        self.player.pause();
+        self.freeze_cached_position();
+    }
+
+    /// Platform audio-route changed while playback may be active.
+    ///
+    /// Recreates the native output stream below the queue without
+    /// changing queue state, current item, or track loading.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueueError`] when the underlying player cannot restart
+    /// the active audio route.
+    pub fn notify_audio_route_changed(&self, reason: &str) -> Result<(), QueueError> {
+        self.player.invalidate_audio_route(reason)?;
+        Ok(())
     }
 
     /// Start playback. The player consumes the current slot's resource
@@ -161,6 +252,9 @@ impl Queue {
             Event::Player(PlayerEvent::CurrentItemChanged) => {
                 self.handle_current_item_changed();
             }
+            Event::Player(PlayerEvent::HandoverRequested) => {
+                self.handle_handover_requested();
+            }
             _ => {}
         }
     }
@@ -182,7 +276,30 @@ impl Queue {
     /// # Errors
     /// Returns [`QueueError::Play`] if the player reports a seek failure.
     pub fn seek(&self, seconds: f64) -> Result<kithara_play::SeekOutcome, QueueError> {
-        self.player.seek_seconds(seconds).map_err(QueueError::from)
+        // Superpowered-style resume after end-of-queue: once the last track
+        // played to natural EOF the nav cursor ran off the end (`current()` is
+        // `None`). Re-park the cursor to the last navigation-owned item and
+        // re-announce it (`CurrentTrackChanged`) so `current()` and every
+        // event-mirrored consumer (wasm/FFI/app "now playing") un-latch from
+        // the ended state before the seek revives playback. During normal
+        // mid-track playback `current()` is `Some`, so this is a no-op.
+        if self.current().is_none() {
+            let idx = { self.lock_navigation().last_selected_index() };
+            if let Some(idx) = idx
+                && idx < self.len()
+            {
+                self.lock_navigation_mut().select(idx);
+                self.handle_current_item_changed();
+            }
+        }
+        let outcome = self
+            .player
+            .seek_seconds(seconds)
+            .map_err(QueueError::from)?;
+        if let kithara_play::SeekOutcome::Landed { landed_at, .. } = outcome {
+            self.write_cached_position(CachedPosition::known(landed_at.as_secs_f64()));
+        }
+        Ok(outcome)
     }
 
     /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
@@ -201,11 +318,26 @@ impl Queue {
         Ok(())
     }
 
+    fn track_id_for_src(&self, src: &str) -> Option<TrackId> {
+        let sources = self.sources.lock().unwrap_or_else(PoisonError::into_inner);
+        sources.iter().find_map(|(id, source)| {
+            let matches = match source {
+                TrackSource::Uri(uri) => uri == src,
+                TrackSource::Config(config) => config.src.to_string() == src,
+            };
+            matches.then_some(*id)
+        })
+    }
+
     fn update_cached_position(&self) {
         /// Minimum position threshold used to suppress spurious 0.0 reports
         /// on pause/resume. Values above this are considered a valid
         /// non-zero position.
         const MIN_STABLE_POSITION_SECS: f64 = 0.5;
+
+        if self.is_paused() {
+            return;
+        }
 
         let Some(t) = self.player.position_seconds() else {
             return;
@@ -251,6 +383,38 @@ mod tests {
 
         let nav_idx = queue.lock_navigation().current_index();
         assert_eq!(nav_idx, None, "navigation must not have advanced");
+    }
+
+    #[kithara::test(tokio)]
+    async fn eof_after_queue_end_does_not_restart_from_first_track() {
+        let queue = make_queue();
+        let _a = queue.register_for_test();
+        let b = queue.register_for_test();
+        queue.lock_navigation_mut().select(1);
+        queue.lock_navigation_mut().finish();
+        let mut rx = queue.subscribe();
+
+        queue
+            .player
+            .bus()
+            .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
+                src: Arc::from(format!("test://memory/{}", b.as_u64())),
+                item_id: None,
+            }));
+
+        queue
+            .tick()
+            .expect("BUG: tick returned error in test setup");
+
+        let nav_idx = queue.lock_navigation().current_index();
+        assert_eq!(nav_idx, None, "stale EOF must not restart the queue");
+        let saw_ended = crate::queue::state::tests::wait_for_queue_event(
+            &mut rx,
+            |ev| matches!(ev, QueueEvent::QueueEnded),
+            200,
+        )
+        .await;
+        assert!(saw_ended, "stale EOF should re-announce QueueEnded");
     }
 
     #[kithara::test]

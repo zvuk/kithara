@@ -1,0 +1,32 @@
+id: arch.no-flash-time-hacks
+message: |
+  Reintroduction of a deleted flash determinism hack. The flash
+  redesign DELETED two crutches that papered over quiescence bugs instead of
+  fixing the underlying contract; this gate stops them from creeping back.
+
+  Forbidden identifiers (all removed — must stay removed):
+  - `real_timeout` — the always-real timeout watchdog. Deleted in A1: a flash
+    region is REAL by default now, so a plain `time::timeout` is already real
+    off the feature and where ambient is `flash(false)`. There is no second
+    "always real" timeout primitive.
+  - `io_guard` / `io_enter` / `io_leave` / `io_pending` / `IO_PACE` / `IoGuard`
+    — the I/O pacing machinery that crawled the virtual clock for the whole
+    fetch lifetime. Deleted in A2. Real socket I/O is plain real I/O under a
+    `#[kithara::test(flash(false))]` graph; quiescence credit is the lazy
+    spawn-bracket (`reset_credit` / `on_participant_exit`), NOT an I/O guard.
+
+  If you reach for one of these, STOP: the primitive you want already exists
+  (real-by-default timeout, the credit bracket, `flash(false)` for real I/O).
+  Fix the state contract, do not resurrect the hack. See
+  `.docs/flash-time/blocking-primitive-coverage.md` and the kithara-platform
+  README "Virtual time (flash)" section.
+
+  This is an ERROR gate covering ALL workspace Rust — production AND tests.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+rule:
+  kind: identifier
+  regex: '^(real_timeout|io_guard|io_enter|io_leave|io_pending|IO_PACE|IoGuard)$'

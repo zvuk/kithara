@@ -1,8 +1,9 @@
-use std::{collections::VecDeque, num::NonZeroU32, sync::Arc, time::Duration};
+use std::{collections::VecDeque, num::NonZeroU32, sync::Arc};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{DecodeError, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
+use kithara_platform::time::Duration;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -16,7 +17,7 @@ const CH: u16 = 2;
 fn spec() -> PcmSpec {
     PcmSpec {
         channels: CH,
-        sample_rate: SR,
+        sample_rate: NonZeroU32::new(SR).unwrap(),
     }
 }
 
@@ -50,9 +51,9 @@ fn chunk(samples: &[f32]) -> PcmChunk {
 /// Scripted `PcmReader` for analysis tests: pops pre-built `next_chunk`
 /// outcomes; the playback-oriented methods are unreachable on this path.
 struct FakeReader {
-    outcomes: VecDeque<Result<ChunkOutcome, DecodeError>>,
     bus: EventBus,
     metadata: TrackMetadata,
+    outcomes: VecDeque<Result<ChunkOutcome, DecodeError>>,
 }
 
 impl FakeReader {
@@ -85,14 +86,14 @@ impl FakeReader {
         Self::new(with_pending)
     }
 
+    fn empty() -> Self {
+        Self::new(VecDeque::from([Ok(eof())]))
+    }
+
     fn failing() -> Self {
         Self::new(VecDeque::from([Err(DecodeError::InvalidData(
             "scripted failure".into(),
         ))]))
-    }
-
-    fn empty() -> Self {
-        Self::new(VecDeque::from([Ok(eof())]))
     }
 }
 
@@ -159,7 +160,7 @@ impl PcmReader for FakeReader {
 mod run {
     use std::sync::Arc;
 
-    use kithara_platform::{CancellationToken, sync::Mutex};
+    use kithara_platform::{CancelToken, sync::Mutex};
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
@@ -185,7 +186,7 @@ mod run {
     fn stages(
         reader: &mut dyn PcmReader,
         builder: &AnalyzerBuilder,
-        cancel: &CancellationToken,
+        cancel: &CancelToken,
     ) -> Vec<TrackAnalysis> {
         let mut out = Vec::new();
         analyze_reader(reader, builder, cancel, |a| out.push(a));
@@ -200,22 +201,22 @@ mod run {
         let want = direct.finalize(BUCKETS);
 
         let mut reader = FakeReader::chunked(&samples, 4);
-        let out = stages(&mut reader, &waveform_only(), &CancellationToken::default());
+        let out = stages(&mut reader, &waveform_only(), &CancelToken::root());
         assert_eq!(out.len(), 1, "waveform-only emits once");
         let got = out[0]
             .waveform
             .clone()
             .expect("waveform analyzer fills its slot");
         assert_eq!(
-            got.to_bytes(),
-            want.to_bytes(),
+            Vec::<u8>::from(&got),
+            Vec::<u8>::from(&want),
             "worker path must reproduce the direct analyzer output"
         );
     }
 
     #[kithara::test]
     fn cancelled_token_yields_none() {
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::root();
         cancel.cancel();
         let mut reader = FakeReader::chunked(&sine(4096), 2);
         assert!(stages(&mut reader, &waveform_only(), &cancel).is_empty());
@@ -224,14 +225,14 @@ mod run {
     #[kithara::test]
     fn decode_error_yields_none() {
         let mut reader = FakeReader::failing();
-        let out = stages(&mut reader, &waveform_only(), &CancellationToken::default());
+        let out = stages(&mut reader, &waveform_only(), &CancelToken::root());
         assert!(out.is_empty());
     }
 
     #[kithara::test]
     fn empty_stream_yields_none() {
         let mut reader = FakeReader::empty();
-        let out = stages(&mut reader, &waveform_only(), &CancellationToken::default());
+        let out = stages(&mut reader, &waveform_only(), &CancelToken::root());
         assert!(out.is_empty(), "EOF with no chunks is not an analysis");
     }
 
@@ -252,7 +253,7 @@ mod run {
             AnalyzerBuilder::default().with_beat_detector(detector, GridParams::default());
 
         let mut reader = FakeReader::chunked(&sine(8192), 3);
-        let out = stages(&mut reader, &builder, &CancellationToken::default());
+        let out = stages(&mut reader, &builder, &CancelToken::root());
         assert_eq!(
             out.len(),
             2,
@@ -274,14 +275,14 @@ mod run {
     fn pending_is_tolerated_mid_stream() {
         let samples = sine(8192);
         let mut reader = FakeReader::chunked_with_pending(&samples, 2);
-        let out = stages(&mut reader, &waveform_only(), &CancellationToken::default());
+        let out = stages(&mut reader, &waveform_only(), &CancelToken::root());
         assert!(out.len() == 1 && out[0].waveform.is_some());
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 mod worker {
-    use kithara_platform::CancellationToken;
+    use kithara_platform::CancelToken;
     use kithara_test_utils::kithara;
 
     use super::{
@@ -295,7 +296,7 @@ mod worker {
 
     #[kithara::test(tokio)]
     async fn delivers_result_on_its_own_thread() {
-        let master = CancellationToken::default();
+        let master = CancelToken::root();
         let worker = AnalysisWorker::new(&master, waveform_only());
         let mut rx = worker.analyze(
             Box::new(FakeReader::chunked(&sine(8192), 3)),
@@ -307,7 +308,7 @@ mod worker {
 
     #[kithara::test(tokio)]
     async fn preempted_job_sends_nothing_and_next_job_runs() {
-        let master = CancellationToken::default();
+        let master = CancelToken::root();
         let worker = AnalysisWorker::new(&master, waveform_only());
 
         let stale = worker.child_token();
@@ -329,7 +330,7 @@ mod worker {
 
     #[kithara::test(tokio)]
     async fn job_token_belongs_to_worker_scope() {
-        let master = CancellationToken::default();
+        let master = CancelToken::root();
         let worker = AnalysisWorker::new(&master, waveform_only());
         let job = worker.child_token();
 

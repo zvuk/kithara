@@ -1,6 +1,5 @@
-use std::time::Duration;
-
 use kithara_events::{AbrMode, CancelReason, RequestId, RequestPriority};
+use kithara_platform::time::Duration;
 use url::Url;
 
 pub trait Probe {

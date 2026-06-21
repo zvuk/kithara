@@ -31,37 +31,6 @@ let stream = Stream::<File>::new(local).await?;
 
 `FileConfig` is a [`bon`](https://crates.io/crates/bon) builder. `FileConfig::for_src(src)` returns the chained builder for non-default settings (event channel capacity, downloader, asset store, cancel token).
 
-## Architecture
-
-```mermaid
-flowchart LR
-    Cfg["FileConfig<br/>(bon builder)"]
-    Cfg --> File["File<br/>(StreamType marker)"]
-    File --> Coord["FileCoord<br/>(internal)"]
-
-    subgraph Local["Local FileSrc::Local"]
-        AS1["AssetStore<br/>(absolute ResourceKey)"]
-    end
-
-    subgraph Remote["Remote FileSrc::Remote"]
-        Peer["FilePeer<br/>(pull-driven, internal)"]
-        DL["dl::Downloader<br/>(shared HTTP pool)"]
-        AS2["AssetStore<br/>(asset_root_for_url)"]
-    end
-
-    Coord --> Local
-    Coord --> Remote
-    Peer -- "FetchCmd batches" --> DL
-    DL -- "writer / on_complete" --> AS2
-
-    Source["FileSource<br/>(impl kithara_stream::Source)"] --> Coord
-    Stream2["Stream&lt;File&gt;<br/>(Read + Seek)"] --> Source
-```
-
-- A remote `FileConfig` spawns an internal `FilePeer`, registers it with the shared `Downloader`, and emits `FetchCmd` batches from `Peer::poll_next()`.
-- Each fetch's `writer` closure writes bytes directly into the underlying `AssetStore`-managed `StorageResource`; `on_complete` lets the peer advance its state.
-- The reader side (`Stream<File>::Read + Seek`) goes through `FileSource::wait_range` / `read_at`, which block until the requested range is present in the resource.
-
 ## Public Items
 
 <table>
@@ -73,13 +42,7 @@ flowchart LR
 
 `FileSource` is the `StreamType::Source` associated type; it is exported through `kithara_stream::Stream<File>` and is rarely constructed directly. `FilePeer`, `FileCoord`, and the rest of the orchestration types are internal.
 
-## Local Files
-
-When `FileSrc::Local(path)` is used, the crate opens the file via `AssetStore` with an absolute `ResourceKey`, skips all network activity, and produces a fully-cached `FileSource` with no peer / downloader.
-
-## Remote Files
-
-For `FileSrc::Remote(url)`, downloading is pull-driven: the peer requests fetches as the reader advances, with backpressure controlled by the `Timeline` shared between `FileCoord` and the reader. Seek miss enqueues an explicit range fetch for the requested offset.
+Local sources (`FileSrc::Local`) open directly via `AssetStore` and skip all network activity; remote sources (`FileSrc::Remote`) download pull-driven through a `FilePeer` registered with the shared `Downloader`. See [CONTEXT.md](CONTEXT.md) for the architecture diagram and the local/remote contracts.
 
 ## Features
 
@@ -91,3 +54,5 @@ For `FileSrc::Remote(url)`, downloading is pull-driven: the peer requests fetche
 ## Integration
 
 Depends on `kithara-stream` (Peer/Downloader, Source, Timeline), `kithara-net` (HTTP), `kithara-assets` (disk cache via `AssetStore`), `kithara-storage` (`Resource`), `kithara-events` (`FileEvent` via the shared `EventBus`). Composes with `kithara-audio` as `Audio<Stream<File>>` inside the decode pipeline.
+
+See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

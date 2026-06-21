@@ -2,11 +2,12 @@
 
 use std::{
     fs::{self, OpenOptions},
+    io,
     ops::Range,
     path::{Path, PathBuf},
 };
 
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 
 use crate::{
     ResourceRead, ResourceReader, ResourceStatus, ResourceWriter, StorageError, StorageResult,
@@ -94,10 +95,69 @@ impl<D: DriverIo> AtomicChunked<D> {
         &self.canonical_path
     }
 
-    /// Mint a cheap read-only view without holding the inner lock during
-    /// subsequent (possibly blocking) reads.
-    fn read_view(&self) -> ResourceReader<D> {
-        self.inner.lock_sync().reader()
+    /// Commit the accumulated chunks: durably flush + atomically rename the
+    /// temp file to the canonical path + reopen the inner on the canonical
+    /// path. Rewrites in place (the writer commits without being consumed).
+    ///
+    /// # Errors
+    /// Propagates the inner commit error and any filesystem error.
+    pub fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
+        let mut guard = self.inner.lock();
+        guard.commit_in_place(final_len)?;
+
+        let tmp = self.tmp_path.lock().take();
+        if let Some(tmp) = tmp {
+            let f = OpenOptions::new().write(true).open(&tmp).map_err(|e| {
+                StorageError::Failed(format!("AtomicChunked commit: open tmp {tmp:?}: {e}"))
+            })?;
+            f.sync_data().map_err(|e| {
+                StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
+            })?;
+            drop(f);
+            fs::rename(&tmp, &self.canonical_path).map_err(|e| {
+                StorageError::Failed(format!(
+                    "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
+                    self.canonical_path
+                ))
+            })?;
+
+            if let Some(factory) = self.factory.as_ref() {
+                let new_inner = factory(&self.canonical_path, OpenIntent::Reopen)?;
+                *guard = new_inner;
+            }
+        }
+        drop(guard);
+        Ok(())
+    }
+
+    /// Whether the given range is fully covered by available data.
+    pub fn contains_range(&self, range: Range<u64>) -> bool {
+        self.read_view().contains_range(range)
+    }
+
+    /// Mark the resource failed and remove the orphaned temp file.
+    pub fn fail(&self, reason: String) {
+        self.inner.lock().fail_in_place(reason);
+        if let Some(tmp) = self.tmp_path.lock().take() {
+            let _ = fs::remove_file(&tmp);
+        }
+    }
+
+    /// Returns `true` if the resource has been committed with zero length.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == Some(0)
+    }
+
+    /// Committed length, if known.
+    #[must_use]
+    pub fn len(&self) -> Option<u64> {
+        self.read_view().len()
+    }
+
+    /// First gap in available data starting at `from`, up to `limit`.
+    pub fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
+        self.read_view().next_gap(from, limit)
     }
 
     /// Open a fresh chunked-atomic resource at `canonical_path`.
@@ -139,7 +199,7 @@ impl<D: DriverIo> AtomicChunked<D> {
             Ok(file) => {
                 drop(file);
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 return Err(StorageError::TmpClaimed(tmp_path));
             }
             Err(e) => return Err(StorageError::Io(e)),
@@ -162,74 +222,9 @@ impl<D: DriverIo> AtomicChunked<D> {
         Self {
             canonical_path,
             inner: Mutex::new(inner),
-            tmp_path: Mutex::new(None),
+            tmp_path: Mutex::default(),
             factory: None,
         }
-    }
-
-    /// Commit the accumulated chunks: durably flush + atomically rename the
-    /// temp file to the canonical path + reopen the inner on the canonical
-    /// path. Rewrites in place (the writer commits without being consumed).
-    ///
-    /// # Errors
-    /// Propagates the inner commit error and any filesystem error.
-    pub fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        let mut guard = self.inner.lock_sync();
-        guard.commit_in_place(final_len)?;
-
-        let tmp = self.tmp_path.lock_sync().take();
-        if let Some(tmp) = tmp {
-            let f = OpenOptions::new().write(true).open(&tmp).map_err(|e| {
-                StorageError::Failed(format!("AtomicChunked commit: open tmp {tmp:?}: {e}"))
-            })?;
-            f.sync_data().map_err(|e| {
-                StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
-            })?;
-            drop(f);
-            fs::rename(&tmp, &self.canonical_path).map_err(|e| {
-                StorageError::Failed(format!(
-                    "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
-                    self.canonical_path
-                ))
-            })?;
-
-            if let Some(factory) = self.factory.as_ref() {
-                let new_inner = factory(&self.canonical_path, OpenIntent::Reopen)?;
-                *guard = new_inner;
-            }
-        }
-        drop(guard);
-        Ok(())
-    }
-
-    /// Whether the given range is fully covered by available data.
-    pub fn contains_range(&self, range: Range<u64>) -> bool {
-        self.read_view().contains_range(range)
-    }
-
-    /// Mark the resource failed and remove the orphaned temp file.
-    pub fn fail(&self, reason: String) {
-        self.inner.lock_sync().fail_in_place(reason);
-        if let Some(tmp) = self.tmp_path.lock_sync().take() {
-            let _ = fs::remove_file(&tmp);
-        }
-    }
-
-    /// Returns `true` if the resource has been committed with zero length.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.len() == Some(0)
-    }
-
-    /// Committed length, if known.
-    #[must_use]
-    pub fn len(&self) -> Option<u64> {
-        self.read_view().len()
-    }
-
-    /// First gap in available data starting at `from`, up to `limit`.
-    pub fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
-        self.read_view().next_gap(from, limit)
     }
 
     /// Backing file path (the canonical path the resource lands at).
@@ -242,7 +237,7 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// # Errors
     /// Returns error if the resource is cancelled or the backend cannot reopen.
     pub fn reactivate(&self) -> StorageResult<()> {
-        self.inner.lock_sync().reactivate_in_place()
+        self.inner.lock().reactivate_in_place()
     }
 
     /// Read data at the given offset into `buf`.
@@ -272,6 +267,12 @@ impl<D: DriverIo> AtomicChunked<D> {
         self.read_view().read_into(buf)
     }
 
+    /// Mint a cheap read-only view without holding the inner lock during
+    /// subsequent (possibly blocking) reads.
+    fn read_view(&self) -> ResourceReader<D> {
+        self.inner.lock().reader()
+    }
+
     /// Current runtime status.
     pub fn status(&self) -> ResourceStatus {
         self.read_view().status()
@@ -291,7 +292,7 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// # Errors
     /// Returns error if the resource is cancelled, failed, or the write fails.
     pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner.lock_sync().write_at(offset, data)
+        self.inner.lock().write_at(offset, data)
     }
 }
 
@@ -301,7 +302,7 @@ impl<D: DriverIo> Drop for AtomicChunked<D> {
     /// `Drop` entirely, in which case the next `AtomicChunked::open`
     /// over the same canonical path wipes the stale temp.
     fn drop(&mut self) {
-        if let Some(tmp) = self.tmp_path.lock_sync().take() {
+        if let Some(tmp) = self.tmp_path.lock().take() {
             let _ = fs::remove_file(&tmp);
         }
     }

@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use kithara_events::{DeferredBus, EventBus, FileEvent};
-use kithara_stream::{DecoderHooks, ReaderChunkSignal, ReaderSeekSignal};
+use kithara_stream::{ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 
 use crate::coord::FileCoord;
 
@@ -13,18 +13,18 @@ use crate::coord::FileCoord;
 /// post-seek skip burst without blocking the decode core.
 const READER_EVENT_CAPACITY: usize = 256;
 
-pub(crate) struct FileReaderHooks {
+pub(crate) struct FileReaderEventSink {
     coord: Arc<FileCoord>,
     seek_epoch_handle: Arc<AtomicU64>,
     bus: DeferredBus<FileEvent>,
     initial_seek_published: bool,
-    /// See `HlsReaderHooks::initial_cursor` — same recreate-after-
+    /// See `HlsReaderEventSink::initial_cursor` — same recreate-after-
     /// seek-failure scenario.
     initial_cursor: u64,
     last_cursor: u64,
 }
 
-impl FileReaderHooks {
+impl FileReaderEventSink {
     pub(crate) fn new(
         bus: EventBus,
         coord: Arc<FileCoord>,
@@ -58,7 +58,11 @@ impl FileReaderHooks {
     }
 }
 
-impl DecoderHooks for FileReaderHooks {
+impl ReaderEventSink for FileReaderEventSink {
+    fn flush(&mut self) {
+        self.bus.flush();
+    }
+
     fn on_chunk(&mut self, signal: ReaderChunkSignal) {
         if !matches!(signal, ReaderChunkSignal::Chunk) {
             return;
@@ -88,9 +92,5 @@ impl DecoderHooks for FileReaderHooks {
             from_offset: from,
             to_offset: to,
         });
-    }
-
-    fn flush_pending(&mut self) {
-        self.bus.flush();
     }
 }

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{error::Error, io::Read, time::Duration};
+use std::{error::Error, io::Read};
 
 use kithara::{
     assets::StoreOptions,
@@ -13,7 +13,11 @@ use kithara_integration_tests::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::tokio::task::spawn_blocking;
-use kithara_platform::{CancellationToken, time::sleep, tokio::task::spawn};
+use kithara_platform::{
+    CancelToken,
+    time::Duration,
+    tokio::{sync::broadcast::error::RecvError, task::spawn},
+};
 use tracing::info;
 use url::Url;
 
@@ -33,7 +37,7 @@ use url::Url;
 )]
 async fn test_basic_hls_playback(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8");
@@ -41,6 +45,7 @@ async fn test_basic_hls_playback(
 
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
+    let mut live_rx = bus.subscribe();
 
     info!("Opening HLS source...");
     let config = HlsConfig::for_url(test_stream_url.clone())
@@ -63,7 +68,20 @@ async fn test_basic_hls_playback(
     });
 
     let _ = stream;
-    sleep(Duration::from_millis(50)).await;
+    // Wait for the pipeline to become live: the first event published on the
+    // bus (segment-fetch enqueue / playlist activity) proves the stream is
+    // producing real work, instead of sleeping for a fixed duration. The
+    // enclosing `timeout(5s)` bounds this state-wait against a hang.
+    //
+    // A `Lagged(n)` is also proof of liveness: under flash the pipeline floods
+    // the (capacity-32) bus with events before this first `recv` is polled, so
+    // the receiver legitimately laps. `n` events were produced — exactly the
+    // signal we wait on. Only a `Closed` channel (the bus dropped without ever
+    // producing) is a real failure.
+    match live_rx.recv().await {
+        Ok(_) | Err(RecvError::Lagged(_)) => {}
+        Err(e @ RecvError::Closed) => return Err(Box::new(e) as Box<dyn Error + Send + Sync>),
+    }
     info!("HLS stream opened successfully");
     Ok(())
 }
@@ -77,7 +95,7 @@ async fn test_basic_hls_playback(
 )]
 async fn test_hls_session_creation(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8");
@@ -107,7 +125,7 @@ async fn test_hls_session_creation(
 )]
 async fn test_hls_with_init_segments(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
     info!("Testing HLS with init segments");
@@ -135,7 +153,7 @@ async fn test_hls_with_different_options(
     info!("Testing HLS with custom options");
 
     let _stream = HlsStreamBuilder::new()
-        .build(&server, temp_dir.path(), CancellationToken::default())
+        .build(&server, temp_dir.path(), CancelToken::never())
         .await;
 
     info!("HLS source opened successfully with custom options");
@@ -155,7 +173,7 @@ async fn test_hls_with_different_options(
 async fn test_hls_invalid_url_handling(
     #[case] invalid_url: &str,
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let url_result = Url::parse(invalid_url);
 
@@ -187,7 +205,7 @@ async fn test_hls_invalid_url_handling(
 )]
 async fn test_init_segment_at_stream_start(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
     info!("Testing INIT segment at stream start");
@@ -196,8 +214,6 @@ async fn test_init_segment_at_stream_start(
         .with_init()
         .build(&server, temp_dir.path(), rt_cancel)
         .await;
-
-    sleep(Duration::from_millis(100)).await;
 
     let mut buf = [0u8; 32];
 
@@ -242,7 +258,7 @@ async fn test_hls_without_cache(temp_dir: TestTempDir) -> Result<(), Box<dyn Err
     let _stream = HlsStreamBuilder::new()
         .max_assets(1)
         .max_bytes(1024)
-        .build(&server, temp_dir.path(), CancellationToken::default())
+        .build(&server, temp_dir.path(), CancelToken::never())
         .await;
 
     info!("HLS source opened successfully with limited cache");

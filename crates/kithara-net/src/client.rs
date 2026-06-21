@@ -3,12 +3,20 @@ use std::{num::NonZeroU16, sync::Arc};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, timeout},
+};
 use reqwest::Client;
 use url::Url;
 
+mod kithara {
+    pub(crate) use kithara_test_macros::flash;
+}
+
 use crate::{
     error::{NetError, NetResult},
+    resumable::{Refetch, Resumed, resumable_body},
     retry::{DefaultRetryPolicy, RetryNet},
     traits::{Net, NetExt},
     types::{Compression, Headers, NetOptions, RangeSpec},
@@ -37,6 +45,22 @@ fn truncate_error_body(mut body: String) -> String {
     body.truncate(cut_at);
     body.push_str(&format!("…(truncated, {total} chars total)"));
     body
+}
+
+/// Read an error response's body for [`NetError::Status`] context — a real
+/// socket read, so the fn is one `flash(io)` bracket.
+#[kithara::flash(io)]
+async fn error_body(resp: reqwest::Response) -> String {
+    truncate_error_body(resp.text().await.unwrap_or_default())
+}
+
+/// Collect a full response body — a real socket read, so the fn is one
+/// `flash(io)` bracket. The `Net` trait methods cannot carry the attribute
+/// themselves: `#[async_trait]` rewrites them into sync constructors of boxed
+/// futures, which would drop the bracket before the I/O starts.
+#[kithara::flash(io)]
+async fn body_bytes(resp: reqwest::Response) -> Result<Bytes, NetError> {
+    resp.bytes().await.map_err(NetError::from)
 }
 
 fn status_error(url: Url, status: u16, body: String) -> NetError {
@@ -77,12 +101,16 @@ impl From<Compression> for Vec<ClientBuilderMod> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn build_client(options: &NetOptions) -> reqwest::Result<Client> {
+    // No reqwest `.read_timeout`: the idle/stall timeout is owned by the
+    // resilient body (`resumable_body`), whose `sleep(inactivity_timeout)`
+    // routes through `kithara_platform::time` and so collapses under
+    // `flash`. reqwest's timer is real wall-clock and would both
+    // double-own the stall and break simulation determinism.
     let base = Client::builder()
         .cookie_store(true)
         .pool_max_idle_per_host(options.pool_max_idle_per_host)
-        .pool_idle_timeout(Some(std::time::Duration::from_secs(5)))
-        .danger_accept_invalid_certs(options.is_insecure)
-        .read_timeout(options.inactivity_timeout);
+        .pool_idle_timeout(Some(Duration::from_secs(5)))
+        .danger_accept_invalid_certs(options.is_insecure);
     Vec::<ClientBuilderMod>::from(options.compression)
         .into_iter()
         .fold(base, |b, disable| disable(b))
@@ -112,6 +140,9 @@ fn extract_headers(resp: &reqwest::Response) -> Headers {
 /// the [`Net`] trait, never constructed by callers directly.
 #[derive(Clone)]
 struct RawHttp {
+    /// Master-derived cancel, captured by the self-healing body so a re-fetch
+    /// loop exits promptly on teardown. Same token the `RetryNet` layer uses.
+    cancel: CancelToken,
     inner: Client,
     options: NetOptions,
 }
@@ -139,6 +170,28 @@ impl RawHttp {
         self.inner.get(url).header("Range", "bytes=0-0")
     }
 
+    /// Establish ONE body stream (no self-healing) for `range` (`None` = full
+    /// GET). Shared by the first attempt and by the resume re-fetch — keeping
+    /// it un-wrapped is what prevents the resilient wrapper recursing.
+    async fn raw_body(
+        &self,
+        url: Url,
+        range: Option<RangeSpec>,
+        headers: Option<Headers>,
+        accept_partial: bool,
+    ) -> Result<(crate::ByteStream, bool), NetError> {
+        let mut req = self.inner.get(url.clone());
+        if let Some(range) = &range {
+            req = req.header("Range", range.to_string());
+        }
+        let resp = self.send_checked(req, headers, url, accept_partial).await?;
+        let partial = resp.status().as_u16() == HTTP_PARTIAL_CONTENT;
+        Ok((Self::response_to_stream(resp), partial))
+    }
+
+    /// Body-chunk awaits on this stream happen inside [`resumable_body`]'s
+    /// `flash(io)` bracket (`next_chunk`) — every streaming fetch is wrapped
+    /// by [`Self::wrap_resumable`] before it reaches a consumer.
     fn response_to_stream(resp: reqwest::Response) -> crate::ByteStream {
         let headers = extract_headers(&resp);
         let stream = resp.bytes_stream().map_err(NetError::from);
@@ -158,16 +211,76 @@ impl RawHttp {
         } else {
             req
         };
-        let resp = req.send().await.map_err(NetError::from)?;
+        let resp = self.send_idle_bounded(req).await?;
         let status = resp.status();
 
         let ok = status.is_success() || (accept_partial && status.as_u16() == HTTP_PARTIAL_CONTENT);
         if !ok {
-            let body = truncate_error_body(resp.text().await.unwrap_or_default());
+            let body = error_body(resp).await;
             return Err(status_error(url, status.as_u16(), body));
         }
 
         Ok(resp)
+    }
+
+    /// Await a request's response under the idle/stall timeout: no response
+    /// headers within `inactivity_timeout` ⇒ a transient [`NetError::Timeout`]
+    /// so the retry decorator re-issues it. This is the establish-side half of
+    /// the single idle timer (the body half lives in [`resumable_body`]).
+    ///
+    /// This bound measures a REAL socket operation (connect + header wait), so
+    /// the fn is a `flash(io)` bracket: under `flash` the virtual clock
+    /// is paced to real time while the op is in flight, so the (virtual) idle
+    /// timer cannot be fired by the quiescence engine racing ahead of an
+    /// in-flight loopback establish — it measures at least the equivalent real
+    /// time, and never fires for a fast healthy fetch.
+    #[kithara::flash(io)]
+    async fn send_idle_bounded(
+        &self,
+        req: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, NetError> {
+        timeout(self.options.inactivity_timeout, req.send())
+            .await
+            .map_err(|_| NetError::Timeout)?
+            .map_err(NetError::from)
+    }
+
+    /// Wrap a freshly-established body in the self-healing stream: on a stall
+    /// (no chunk within `inactivity_timeout`) or transient body error it
+    /// re-fetches `bytes=base_start+consumed-end` up to the retry policy, then
+    /// surfaces a terminal error. A resume is always a partial (206) request.
+    fn wrap_resumable(
+        &self,
+        first: crate::ByteStream,
+        url: Url,
+        base_start: u64,
+        end: Option<u64>,
+        headers: Option<Headers>,
+    ) -> crate::ByteStream {
+        let out_headers = first.headers.clone();
+        let me = self.clone();
+        let refetch: Refetch = Box::new(move |consumed| {
+            let me = me.clone();
+            let url = url.clone();
+            let headers = headers.clone();
+            let abs = base_start.saturating_add(consumed);
+            let resume = RangeSpec::new(abs, end);
+            Box::pin(async move {
+                let (stream, partial) = me.raw_body(url, Some(resume), headers, true).await?;
+                // `206` → body already starts at `abs` (skip 0); `200` → server
+                // ignored Range and re-sent from zero, drop the consumed prefix.
+                let skip = if partial { 0 } else { abs };
+                Ok(Resumed { stream, skip })
+            })
+        });
+        let body = resumable_body(
+            first,
+            refetch,
+            self.options.inactivity_timeout,
+            self.options.retry_policy.clone(),
+            self.cancel.clone(),
+        );
+        crate::ByteStream::new(out_headers, body)
     }
 }
 
@@ -188,7 +301,7 @@ impl HttpClient {
     /// `RetryNet` layer aborts pending retries when that token is
     /// cancelled. Callers MUST pass a token that lives in the
     /// consumer-crate's cancel tree — typically
-    /// `master_cancel.child_token()` derived at the consumer-crate top
+    /// `master_cancel.child()` derived at the consumer-crate top
     /// (`App`, `Queue`, FFI player). The workspace cancel hierarchy
     /// forbids orphan tokens in production code.
     ///
@@ -196,12 +309,13 @@ impl HttpClient {
     ///
     /// Panics if the `reqwest::Client` builder fails to build.
     #[must_use]
-    pub fn new(options: NetOptions, cancel: CancellationToken) -> Self {
+    pub fn new(options: NetOptions, cancel: CancelToken) -> Self {
         let inner = build_client(&options)
             .expect("BUG: reqwest::Client::builder().build() with our defaults cannot fail");
         let raw = RawHttp {
             inner,
             options: options.clone(),
+            cancel: cancel.clone(),
         };
         let net = Arc::new(raw.with_retry(options.retry_policy.clone(), cancel));
         Self { net, options }
@@ -290,7 +404,7 @@ impl Net for RawHttp {
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         let req = self.inner.get(url.clone());
         let resp = self.send_checked(req, headers, url, false).await?;
-        resp.bytes().await.map_err(NetError::from)
+        body_bytes(resp).await
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -300,12 +414,10 @@ impl Net for RawHttp {
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> Result<crate::ByteStream, NetError> {
-        let req = self
-            .inner
-            .get(url.clone())
-            .header("Range", range.to_string());
-        let resp = self.send_checked(req, headers, url, true).await?;
-        Ok(Self::response_to_stream(resp))
+        let (first, _partial) = self
+            .raw_body(url.clone(), Some(range.clone()), headers.clone(), true)
+            .await?;
+        Ok(self.wrap_resumable(first, url, range.start, range.end, headers))
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -317,12 +429,12 @@ impl Net for RawHttp {
         } else {
             req
         };
-        let resp = req.send().await.map_err(NetError::from)?;
+        let resp = self.send_idle_bounded(req).await?;
 
         let status = resp.status();
 
         if !status.is_success() && status.as_u16() != HTTP_PARTIAL_CONTENT {
-            let body = truncate_error_body(resp.text().await.unwrap_or_default());
+            let body = error_body(resp).await;
             return Err(status_error(url, status.as_u16(), body));
         }
 
@@ -355,9 +467,11 @@ impl Net for RawHttp {
         url: Url,
         headers: Option<Headers>,
     ) -> Result<crate::ByteStream, NetError> {
-        let req = self.inner.get(url.clone());
-        let resp = self.send_checked(req, headers, url, false).await?;
-        Ok(Self::response_to_stream(resp))
+        let (first, _partial) = self
+            .raw_body(url.clone(), None, headers.clone(), false)
+            .await?;
+        // Full GET; a resume re-fetches `bytes=consumed-` (base 0).
+        Ok(self.wrap_resumable(first, url, 0, None, headers))
     }
 }
 
@@ -374,11 +488,11 @@ mod tests {
             Arc,
             atomic::{AtomicU32, Ordering},
         },
-        time::Duration,
     };
 
+    // `::tokio` (the real crate) — `super::*` re-exports `kithara_platform::tokio`.
+    use ::tokio::net::TcpListener;
     use axum::{Router, http::StatusCode, routing::get};
-    use tokio::net::TcpListener;
 
     use super::*;
     use crate::types::RetryPolicy;
@@ -406,7 +520,7 @@ mod tests {
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr: SocketAddr = listener.local_addr().expect("local_addr");
-        tokio::spawn(async move {
+        ::tokio::spawn(async move {
             axum::serve(listener, app.into_make_service())
                 .await
                 .expect("serve");
@@ -428,7 +542,7 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_retries_503_until_ok() {
         let (url, counter) = server_failing_first_n(2).await;
-        let client = HttpClient::new(fast_options(3), CancellationToken::default());
+        let client = HttpClient::new(fast_options(3), CancelToken::never());
         let bytes = client
             .get_bytes(url, None)
             .await
@@ -444,7 +558,7 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_no_retry_propagates_5xx() {
         let (url, counter) = server_failing_first_n(2).await;
-        let client = HttpClient::new(fast_options(0), CancellationToken::default());
+        let client = HttpClient::new(fast_options(0), CancelToken::never());
         let err = client
             .get_bytes(url, None)
             .await
@@ -463,7 +577,7 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_head_retries_503_until_ok() {
         let (url, counter) = server_failing_first_n(1).await;
-        let client = HttpClient::new(fast_options(2), CancellationToken::default());
+        let client = HttpClient::new(fast_options(2), CancelToken::never());
         client.head(url, None).await.expect("HEAD must retry");
         assert_eq!(counter.load(Ordering::SeqCst), 2);
     }

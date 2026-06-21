@@ -69,7 +69,7 @@ impl Baseline {
             *checks
                 .entry(v.check.to_string())
                 .or_default()
-                .entry(v.key.clone())
+                .entry(canonical_key(&v.key))
                 .or_insert(0) += 1;
         }
         Self {
@@ -92,10 +92,22 @@ impl Baseline {
 
     /// Compare observations against this baseline.
     pub(crate) fn diff<'a>(&self, observed: &'a [Violation]) -> RatchetDiff<'a> {
-        let mut observed_counts: BTreeMap<(&str, &str), u64> = BTreeMap::new();
+        // Match on the canonical (line-insensitive) identity so that edits
+        // which merely shift line numbers — e.g. rustfmt re-wrapping an import
+        // block above a violation — do not re-fingerprint an unchanged
+        // violation as new. See `canonical_key`.
+        let mut baseline_counts: BTreeMap<(&str, String), u64> = BTreeMap::new();
+        for (check, keys) in &self.checks {
+            for (key, &recorded) in keys {
+                *baseline_counts
+                    .entry((check.as_str(), canonical_key(key)))
+                    .or_insert(0) += recorded;
+            }
+        }
+        let mut observed_counts: BTreeMap<(&str, String), u64> = BTreeMap::new();
         for v in observed {
             *observed_counts
-                .entry((v.check, v.key.as_str()))
+                .entry((v.check, canonical_key(&v.key)))
                 .or_insert(0) += 1;
         }
 
@@ -104,13 +116,12 @@ impl Baseline {
         let mut improvements: Vec<Improvement> = Vec::new();
 
         for v in observed {
-            let baseline_count = self
-                .checks
-                .get(v.check)
-                .and_then(|m| m.get(&v.key))
+            let ck = canonical_key(&v.key);
+            let baseline_count = baseline_counts
+                .get(&(v.check, ck.clone()))
                 .copied()
                 .unwrap_or(0);
-            let observed_count = observed_counts[&(v.check, v.key.as_str())];
+            let observed_count = observed_counts[&(v.check, ck)];
             if baseline_count == 0 {
                 if v.severity == Severity::Deny {
                     new_violations.push(v);
@@ -120,20 +131,18 @@ impl Baseline {
             }
         }
 
-        for (check, keys) in &self.checks {
-            for (key, &recorded) in keys {
-                let observed_count = observed_counts
-                    .get(&(check.as_str(), key.as_str()))
-                    .copied()
-                    .unwrap_or(0);
-                if observed_count < recorded {
-                    improvements.push(Improvement {
-                        check: check.clone(),
-                        key: key.clone(),
-                        from: recorded,
-                        to: observed_count,
-                    });
-                }
+        for ((check, key), &recorded) in &baseline_counts {
+            let observed_count = observed_counts
+                .get(&(*check, key.clone()))
+                .copied()
+                .unwrap_or(0);
+            if observed_count < recorded {
+                improvements.push(Improvement {
+                    check: (*check).to_string(),
+                    key: key.clone(),
+                    from: recorded,
+                    to: observed_count,
+                });
             }
         }
 
@@ -148,6 +157,29 @@ impl Baseline {
             improvements,
         }
     }
+}
+
+/// Canonical, line-insensitive identity of a violation key for ratchet
+/// matching. A key looks like `<rel/path.rs>[:line[:col]][:Type][::name]`.
+/// This strips the leading `:line[:col]` numeric segments that follow the file
+/// path *iff* a symbolic segment (a type, field, or name) follows them, so a
+/// violation keeps its identity when an unrelated edit shifts its line number
+/// (e.g. rustfmt re-wrapping an import block above it). Purely positional keys
+/// (`path:line:col` with no symbolic tail, such as a loop-body location) are
+/// returned unchanged, since the line is their only stable handle.
+fn canonical_key(key: &str) -> String {
+    let Some((path, rest)) = key.split_once(':') else {
+        return key.to_string();
+    };
+    let segs: Vec<&str> = rest.split(':').collect();
+    let lead_numeric = segs
+        .iter()
+        .take_while(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+        .count();
+    if lead_numeric == 0 || lead_numeric == segs.len() {
+        return key.to_string();
+    }
+    format!("{path}:{}", segs[lead_numeric..].join(":"))
 }
 
 #[derive(Debug)]
@@ -281,5 +313,61 @@ mod tests {
         let loaded = Baseline::load(dir.path()).expect("load");
         assert_eq!(loaded.schema_version, SCHEMA_VERSION);
         assert_eq!(loaded.checks, written.checks);
+    }
+
+    #[test]
+    fn canonical_key_strips_line_for_named_keys_only() {
+        assert_eq!(
+            canonical_key("a/b.rs:211:11::live_source_count"),
+            "a/b.rs::live_source_count"
+        );
+        assert_eq!(canonical_key("a/b.rs:101:Foo::bar"), "a/b.rs:Foo::bar");
+        assert_eq!(canonical_key("a/b.rs:149:FooImpl"), "a/b.rs:FooImpl");
+        // Positional-only key (no symbolic tail): the line is its only handle.
+        assert_eq!(canonical_key("a/b.rs:98:33"), "a/b.rs:98:33");
+        // No line component, and already-canonical keys, are unchanged.
+        assert_eq!(canonical_key("a/b.rs"), "a/b.rs");
+        assert_eq!(canonical_key("kithara-foo"), "kithara-foo");
+        assert_eq!(
+            canonical_key("a/b.rs::live_source_count"),
+            "a/b.rs::live_source_count"
+        );
+    }
+
+    #[test]
+    fn line_shift_does_not_refingerprint_named_violation() {
+        // A tolerated dead export at line 211 must still match after an edit
+        // shifts it to 215 (e.g. rustfmt re-wrapping imports above it): not a
+        // new violation, and not an improvement.
+        let b = baseline_with(&[(
+            "dead_exports",
+            "crates/foo/src/flush.rs:211:11::live_source_count",
+            1,
+        )]);
+        let observed = vec![deny(
+            "dead_exports",
+            "crates/foo/src/flush.rs:215:11::live_source_count",
+        )];
+        let diff = b.diff(&observed);
+        assert!(!diff.has_failures(), "line shift must not fail the ratchet");
+        assert!(diff.new_violations.is_empty());
+        assert!(diff.improvements.is_empty());
+    }
+
+    #[test]
+    fn genuinely_new_named_deny_still_fails_after_canonicalization() {
+        // Canonicalization must not mask a real new export with a new name.
+        let b = baseline_with(&[(
+            "dead_exports",
+            "crates/foo/src/flush.rs:211:11::live_source_count",
+            1,
+        )]);
+        let observed = vec![deny(
+            "dead_exports",
+            "crates/foo/src/flush.rs:300:11::brand_new_export",
+        )];
+        let diff = b.diff(&observed);
+        assert_eq!(diff.new_violations.len(), 1);
+        assert!(diff.has_failures());
     }
 }

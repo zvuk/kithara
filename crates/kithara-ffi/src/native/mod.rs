@@ -8,6 +8,7 @@ pub(crate) mod config;
 pub(crate) mod inner;
 pub mod logging;
 mod runtime;
+pub mod salt;
 
 pub(crate) use bridge::{event_bridge, item_bridge};
 pub(crate) use inner::Inner;

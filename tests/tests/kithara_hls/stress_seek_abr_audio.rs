@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use kithara::{
     assets::StoreOptions,
@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use kithara_platform::{CancellationToken, time::Instant, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -107,7 +107,7 @@ async fn stress_seek_abr_audio() {
     info!(%url, "HLS server ready with 2 variants");
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
@@ -134,7 +134,7 @@ async fn stress_seek_abr_audio() {
         let channels = spec.channels as usize;
         let chunk_duration_secs = 0.05;
         let chunk_samples =
-            (chunk_duration_secs * f64::from(spec.sample_rate) * channels as f64) as usize;
+            (chunk_duration_secs * f64::from(spec.sample_rate.get()) * channels as f64) as usize;
         let mut buf = vec![0.0f32; chunk_samples];
 
         info!("Phase 1: waiting for ABR switch (ascending -> descending)...");

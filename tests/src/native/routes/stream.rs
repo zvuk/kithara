@@ -90,6 +90,14 @@ async fn init_segment(
             if let Some(rule) = fixture.match_http_error(HlsRouteKind::Init, Some(variant), None) {
                 return inject_error(rule);
             }
+            // Deterministic withhold gate (release-driven, not timer-driven):
+            // park the init GET body until the test releases it. `Hls::create`
+            // awaits this body before returning, so the owning track's loader
+            // stays in `Loading` while withheld.
+            if let Some(gate) = state.init_gate(&hls_spec, variant) {
+                gate.mark_requested();
+                gate.wait_until_released().await;
+            }
             fixture.init_bytes(variant).map_or_else(
                 || StatusCode::NOT_FOUND.into_response(),
                 |bytes| {
@@ -127,9 +135,28 @@ async fn serve_media_segment(
                 return inject_error(rule);
             }
             if matches!(method, SegmentMethod::Get) {
+                // Deterministic withhold gate (release-driven, not timer-driven):
+                // park the GET body until the test releases it. HEAD stays
+                // unblocked so the consumer can still learn the segment size.
+                if let Some(gate) = state.segment_gate(hls_spec, variant, segment) {
+                    gate.mark_requested();
+                    gate.wait_until_released().await;
+                }
                 let delay_ms = fixture.segment_delay_ms(variant, segment);
                 if delay_ms > 0 {
-                    sleep(Duration::from_millis(delay_ms)).await;
+                    // Virtual-time delay gate (preferred): park the body until a
+                    // flash-participant releaser fires `delay_ms` of VIRTUAL time
+                    // after this GET arrives, so the client's fetch-duration spans
+                    // that delay on the engine clock (ABR sees the slow variant)
+                    // without the real-time server thread burning wall-clock. The
+                    // raw `sleep` is the fallback only when no delay gate is armed
+                    // (e.g. a flash(false) / non-flash test path).
+                    if let Some(gate) = state.delay_gate(hls_spec, variant, segment) {
+                        gate.mark_requested();
+                        gate.wait_until_released().await;
+                    } else {
+                        sleep(Duration::from_millis(delay_ms)).await;
+                    }
                 }
             }
             fixture.segment_bytes(variant, segment).map_or_else(
@@ -143,9 +170,25 @@ async fn serve_media_segment(
                         fixture.segment_content_type(),
                     ),
                     SegmentMethod::Head => {
-                        let override_len = fixture
-                            .segment_len(variant, segment, true)
-                            .unwrap_or(bytes.len());
+                        // Size/HEAD withhold gate: report Content-Length: 0 so the
+                        // up-front size-estimation pass learns a zero size for this
+                        // segment (models "seek before its size is known"). HEAD is
+                        // counted but never parked — parking it would block stream
+                        // construction, since estimation HEADs every segment
+                        // synchronously at creation.
+                        let head_withheld = state
+                            .segment_gate(hls_spec, variant, segment)
+                            .is_some_and(|gate| {
+                                gate.mark_head_requested();
+                                gate.head_is_withheld()
+                            });
+                        let override_len = if head_withheld {
+                            0
+                        } else {
+                            fixture
+                                .segment_len(variant, segment, true)
+                                .unwrap_or(bytes.len())
+                        };
                         build_range_response_with_len(
                             &bytes,
                             headers,

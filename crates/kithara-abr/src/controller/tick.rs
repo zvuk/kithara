@@ -8,7 +8,7 @@ use tracing::{debug, trace};
 use super::{
     core::{AbrController, AbrPeerId},
     peer::PeerEntry,
-    throttle::bytes_per_second,
+    throttle::{ThrottleSample, bytes_per_second},
 };
 use crate::state::{AbrDecision, AbrView};
 
@@ -40,7 +40,7 @@ impl AbrController {
         let now = Instant::now();
         let bus = entry.bus();
         if let Some(ref bus) = bus {
-            let mut throttle = entry.throttle.lock_sync();
+            let mut throttle = entry.throttle.lock();
             let emit = throttle
                 .last_throughput_sample_at
                 .is_none_or(|t| now.duration_since(t) >= Self::MIN_THROUGHPUT_SAMPLE_INTERVAL);
@@ -94,7 +94,15 @@ impl AbrController {
                 .store(true, Ordering::Release);
         }
 
-        self.emit_throttled(&ctx.entry, &bus, now, estimate_bps, buffer_ahead);
+        self.emit_throttled(
+            &ctx.entry,
+            &bus,
+            ThrottleSample {
+                now,
+                buffer_ahead,
+                estimate_bps,
+            },
+        );
 
         let Some(state) = ctx.entry.state.as_ref() else {
             return;

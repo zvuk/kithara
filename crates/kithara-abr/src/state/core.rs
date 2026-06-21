@@ -5,7 +5,7 @@ use std::sync::{
 
 use kithara_events::{AbrMode, AbrReason, VariantIndex};
 use kithara_platform::{
-    Mutex,
+    sync::Mutex,
     time::{Duration, Instant},
 };
 use num_traits::ToPrimitive;
@@ -87,7 +87,7 @@ impl AbrState {
             lock_count: AtomicUsize::new(0),
             mode: AtomicUsize::new(mode.into()),
             reference_instant: Instant::now(),
-            pending: Mutex::new(None),
+            pending: Mutex::default(),
         }
     }
 
@@ -107,7 +107,7 @@ impl AbrState {
             return;
         }
         let target = decision.target();
-        let mut slot = self.pending.lock_sync();
+        let mut slot = self.pending.lock();
         if slot.as_ref().is_some_and(|p| p.target == target) {
             *slot = None;
         }
@@ -165,7 +165,7 @@ impl AbrState {
     /// `peek_pending_decision_returns_none_during_seek`). Invalidating
     /// is destructive and happens only at semantic seek boundaries.
     pub fn invalidate_pending(&self) {
-        let mut slot = self.pending.lock_sync();
+        let mut slot = self.pending.lock();
         if slot
             .as_ref()
             .is_some_and(|p| is_throughput_driven(p.reason))
@@ -226,7 +226,7 @@ impl AbrState {
         if self.is_locked() {
             return None;
         }
-        let pending = *self.pending.lock_sync().as_ref()?;
+        let pending = *self.pending.lock().as_ref()?;
         if pending.target == current {
             return None;
         }
@@ -237,7 +237,7 @@ impl AbrState {
     /// Used by the Phase 3 scheduler boundary check and by tests.
     #[must_use]
     pub fn pending_target(&self) -> Option<VariantIndex> {
-        self.pending.lock_sync().as_ref().map(|p| p.target)
+        self.pending.lock().as_ref().map(|p| p.target)
     }
 
     fn record_switch(&self, now: Instant) {
@@ -263,8 +263,23 @@ impl AbrState {
     /// post-unlock. Destructive drop of stale pre-seek intents is the
     /// job of [`invalidate_pending`](Self::invalidate_pending), called
     /// from `coord::reset_for_seek` on a semantic seek boundary.
+    ///
+    /// A manual pin admits exactly one pending target — its own index.
+    /// A request for any other target under `Manual` mode is a decision
+    /// derived from a superseded mode (a tick racing
+    /// [`set_mode`](Self::set_mode)) and is refused: nothing cleans the
+    /// slot later (`Stay` ticks never touch it), so letting the write
+    /// through would queue a switch the live mode never decided. The
+    /// mode is read under the slot lock, pairing with the
+    /// store-mode-then-clear-slot order in `set_mode`.
     pub fn request_target(&self, target: VariantIndex, reason: AbrReason) {
-        *self.pending.lock_sync() = Some(PendingApply { reason, target });
+        let mut slot = self.pending.lock();
+        if let AbrMode::Manual(idx) = self.mode()
+            && idx != target
+        {
+            return;
+        }
+        *slot = Some(PendingApply { reason, target });
     }
 
     pub fn set_max_bandwidth_bps(&self, cap: Option<u64>) {
@@ -276,8 +291,16 @@ impl AbrState {
     /// `Manual(idx)` references a known variant — variants live on the
     /// peer, not the state, so validation must happen against
     /// [`Abr::variants()`](crate::Abr::variants) at the call site.
+    ///
+    /// An explicit mode change supersedes any queued boundary switch:
+    /// the pending slot is cleared, and the new mode's intent re-derives
+    /// on the next tick (the controller ticks synchronously from
+    /// `on_mode_changed`). The mode is stored before the slot clears so
+    /// a [`request_target`](Self::request_target) that acquires the slot
+    /// lock afterwards observes the new mode in its consistency check.
     pub fn set_mode(&self, mode: AbrMode) {
         self.mode.store(mode.into(), Ordering::Release);
+        *self.pending.lock() = None;
     }
 
     pub fn unlock(&self) {

@@ -7,7 +7,7 @@ use syn::{
 
 /// Parsed `#[kithara::probe(...)]` arguments: parameter idents, computed
 /// `name = expr` values, and the `caller` / `probe_return` flags. See the
-/// crate `README.md` "`#[kithara::probe(...)]` arguments" for the syntax.
+/// crate `CONTEXT.md` "`#[kithara::probe(...)]` arguments" for the syntax.
 #[derive(Default, Debug)]
 pub(crate) struct ProbeFilter {
     pub args: Option<Vec<Ident>>,

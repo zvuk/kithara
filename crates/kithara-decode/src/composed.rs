@@ -1,13 +1,11 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
 };
 
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_stream::{AudioCodec, BoxedHooks, ReaderChunkSignal, ReaderSeekSignal};
+use kithara_platform::time::Duration;
+use kithara_stream::{AudioCodec, BoxedEventSink, ReaderChunkSignal, ReaderSeekSignal};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -26,12 +24,12 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     demuxer: D,
     byte_len_handle: Option<Arc<AtomicU64>>,
     duration: Option<Duration>,
-    /// Reader-side observer hooks. Single-owner `Box<dyn DecoderHooks>` —
+    /// Reader-side event sink. Single-owner `Box<dyn ReaderEventSink>` —
     /// `None` skips emission entirely; `Some(_)` calls `on_chunk` /
     /// `on_seek` directly via `&mut` after the inner outcome resolves.
     /// No lock on the produce-core. Folded in from the former
     /// `HookedDecoder` decorator — every decoder is hookable now.
-    hooks: Option<BoxedHooks>,
+    hooks: Option<BoxedEventSink>,
     /// When `Some`, frames whose decode-time end is `<= target` are
     /// dropped before the next chunk is emitted. Cleared after the
     /// first frame past the target is consumed. Lets `seek(target)`
@@ -55,16 +53,27 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     frame_offset: u64,
 }
 
+/// Runtime wiring for a [`ComposedDecoder`], separated from the
+/// `(demuxer, codec)` pair: the PCM buffer `pool`, the initial seek
+/// `epoch`, an optional `byte_len_handle` for byte-length observability,
+/// and optional reader-event `hooks`.
+///
+/// `pool` is a required field with no `Default`: the host must thread its
+/// configured pool all the way to the decoder, and a missing pool must be
+/// a compile error, not a silent fall-back to the process-global
+/// `PcmPool::default()`. The test-only [`DecoderRuntime::for_test`] is the
+/// single place that opts into the global pool, and it is `#[cfg(test)]`
+/// so production code physically cannot reach it.
+pub(crate) struct DecoderRuntime {
+    pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
+    pub(crate) hooks: Option<BoxedEventSink>,
+    pub(crate) pool: PcmPool,
+    pub(crate) epoch: u64,
+}
+
 impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
-    /// Build a decoder from a `(demuxer, codec)` pair.
-    pub(crate) fn new(
-        demuxer: D,
-        codec: C,
-        pool: PcmPool,
-        epoch: u64,
-        byte_len_handle: Option<Arc<AtomicU64>>,
-        hooks: Option<BoxedHooks>,
-    ) -> Self {
+    /// Build a decoder from a `(demuxer, codec)` pair and its runtime wiring.
+    pub(crate) fn new(demuxer: D, codec: C, runtime: DecoderRuntime) -> Self {
         let spec = codec.spec();
         let duration = demuxer.duration();
         Self {
@@ -72,10 +81,10 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             codec,
             spec,
             duration,
-            pool,
-            epoch,
-            byte_len_handle,
-            hooks,
+            pool: runtime.pool,
+            epoch: runtime.epoch,
+            byte_len_handle: runtime.byte_len_handle,
+            hooks: runtime.hooks,
             frame_offset: 0,
             pending_seek_target: None,
             resync_frame_offset_to_pts: true,
@@ -98,17 +107,13 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         let live_spec = self.codec.spec();
         self.spec = live_spec;
 
-        let chunk_secs = if live_spec.sample_rate > 0 {
-            f64::from(frames) / f64::from(live_spec.sample_rate)
-        } else {
-            0.0
-        };
+        let chunk_secs = f64::from(frames) / f64::from(live_spec.sample_rate.get());
         let frame_duration = Duration::from_secs_f64(chunk_secs);
         let end_timestamp = timestamp.saturating_add(frame_duration);
 
         if self.resync_frame_offset_to_pts {
             self.resync_frame_offset_to_pts = false;
-            self.frame_offset = frame_offset_for(timestamp, live_spec.sample_rate);
+            self.frame_offset = frame_offset_for(timestamp, live_spec.sample_rate.get());
         }
         let frame_offset = self.frame_offset;
         self.frame_offset = self.frame_offset.saturating_add(u64::from(frames));
@@ -181,11 +186,12 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                     drop(buf);
                     continue;
                 }
-                // WHY: frame straddles target — trim leading samples (README "Seek trim").
+                // WHY: frame straddles target — trim leading samples (CONTEXT.md "Seek pre-roll and trim").
                 if frame_pts < target && frames > 0 {
                     let live_spec = self.codec.spec();
-                    let trim_frames_u64 = frames_to_trim(frame_pts, target, live_spec.sample_rate)
-                        .min(u64::from(frames));
+                    let trim_frames_u64 =
+                        frames_to_trim(frame_pts, target, live_spec.sample_rate.get())
+                            .min(u64::from(frames));
                     let trim_frames = u32::try_from(trim_frames_u64).unwrap_or(frames);
                     if trim_frames > 0 && trim_frames < frames {
                         let channels = usize::from(live_spec.channels);
@@ -223,7 +229,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             } => {
                 self.codec.flush()?;
                 self.pending_seek_target = (landed_at < pos).then_some(pos);
-                self.frame_offset = frame_offset_for(landed_at, self.spec.sample_rate);
+                self.frame_offset = frame_offset_for(landed_at, self.spec.sample_rate.get());
                 self.resync_frame_offset_to_pts = true;
                 Ok(DecoderSeekOutcome::Landed {
                     landed_byte,
@@ -248,6 +254,12 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
 
     fn duration(&self) -> Option<Duration> {
         self.duration
+    }
+
+    fn flush_reader_signals(&mut self) {
+        if let Some(hooks) = self.hooks.as_mut() {
+            hooks.flush();
+        }
     }
 
     fn metadata(&self) -> TrackMetadata {
@@ -279,10 +291,20 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
             handle.store(len, Ordering::Release);
         }
     }
+}
 
-    fn flush_reader_signals(&mut self) {
-        if let Some(hooks) = self.hooks.as_mut() {
-            hooks.flush_pending();
+#[cfg(test)]
+impl DecoderRuntime {
+    /// Test-only runtime: the process-global [`PcmPool::default`], epoch 0,
+    /// no byte-length handle, no hooks. Confined to test builds so a
+    /// production decoder can never silently bind the global pool instead
+    /// of the host's configured one.
+    pub(crate) fn for_test() -> Self {
+        Self {
+            pool: PcmPool::default(),
+            epoch: 0,
+            byte_len_handle: None,
+            hooks: None,
         }
     }
 }
@@ -292,10 +314,13 @@ mod default_priming_tests {
     use std::io::Cursor;
 
     use kithara_stream::AudioCodec;
-    use symphonia::core::{
-        formats::{FormatOptions, probe::Hint},
-        io::{MediaSourceStream, MediaSourceStreamOptions},
-        meta::MetadataOptions,
+    use symphonia::{
+        core::{
+            formats::{FormatOptions, probe::Hint},
+            io::{MediaSourceStream, MediaSourceStreamOptions},
+            meta::MetadataOptions,
+        },
+        default,
     };
 
     use super::*;
@@ -310,7 +335,7 @@ mod default_priming_tests {
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
-        let format_reader = symphonia::default::get_probe()
+        let format_reader = default::get_probe()
             .probe(
                 &hint,
                 mss,
@@ -323,13 +348,13 @@ mod default_priming_tests {
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
             .expect("BUG: MP3 codec should open");
-        ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None)
+        ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test())
     }
 
     #[kithara::test]
     fn composed_decoder_priming_combines_encoder_and_symphonia_mp3_algo_delay() {
         let decoder = build_mp3_decoder();
-        // WHY: 1105 = 576 libmp3lame priming + 529 LAME algo delay (README "Gapless probe contract").
+        // WHY: 1105 = 576 libmp3lame priming + 529 LAME algo delay (CONTEXT.md "Gapless probe contract").
         assert_eq!(decoder.default_priming_frames(AudioCodec::Mp3), 1105);
         assert_eq!(decoder.default_priming_frames(AudioCodec::AacLc), 1024);
         assert_eq!(decoder.default_priming_frames(AudioCodec::Opus), 312);
@@ -337,9 +362,18 @@ mod default_priming_tests {
     }
 }
 
+/// Absolute sample frame a PTS falls on. Rounds the sub-second part to the
+/// nearest frame (half-up) so this map stays consistent with [`frames_to_trim`],
+/// which positions trimmed content by `round(delta_secs * sample_rate)`. A floor
+/// here disagreed with that round by up to one frame: when a demuxer quantizes a
+/// seek landing a fraction of a sample below the exact target frame, a floored
+/// label reads one frame short of the contiguous decode head (a −1 seam at a
+/// mid-playback recreate), while the trimmed audio itself stays continuous.
 fn frame_offset_for(at: Duration, sample_rate: u32) -> u64 {
     let secs = at.as_secs();
-    let subsec_frames = u64::from(at.subsec_nanos()) * u64::from(sample_rate) / 1_000_000_000;
+    let subsec_frames = (u64::from(at.subsec_nanos()) * u64::from(sample_rate))
+        .saturating_add(500_000_000)
+        / 1_000_000_000;
     secs.saturating_mul(u64::from(sample_rate))
         .saturating_add(subsec_frames)
 }
@@ -369,18 +403,20 @@ mod smoke_tests {
 
     use std::io::Cursor;
 
-    use kithara_bufpool::PcmPool;
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
-    use symphonia::core::{
-        formats::{FormatOptions, probe::Hint},
-        io::{MediaSourceStream, MediaSourceStreamOptions},
-        meta::MetadataOptions,
+    use symphonia::{
+        core::{
+            formats::{FormatOptions, probe::Hint},
+            io::{MediaSourceStream, MediaSourceStreamOptions},
+            meta::MetadataOptions,
+        },
+        default,
     };
 
     use super::*;
     use crate::{
-        symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
+        symphonia::{FileOpen, SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
         traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
     };
 
@@ -394,7 +430,7 @@ mod smoke_tests {
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
-        let format_reader = symphonia::default::get_probe()
+        let format_reader = default::get_probe()
             .probe(
                 &hint,
                 mss,
@@ -421,8 +457,7 @@ mod smoke_tests {
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
             .expect("BUG: MP3 codec should open");
-        let mut decoder =
-            ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
 
         let mut got_chunk = false;
         for _ in 0..16 {
@@ -432,7 +467,7 @@ mod smoke_tests {
             {
                 DecoderChunkOutcome::Chunk(chunk) => {
                     assert!(chunk.frames() > 0, "Chunk frames must be > 0");
-                    assert!(chunk.spec().sample_rate > 0);
+                    assert!(chunk.spec().sample_rate.get() > 0);
                     assert!(chunk.spec().channels > 0);
                     got_chunk = true;
                     break;
@@ -450,8 +485,7 @@ mod smoke_tests {
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
             .expect("BUG: MP3 codec should open");
-        let mut decoder =
-            ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
 
         for _ in 0..4 {
             let _ = decoder
@@ -479,17 +513,18 @@ mod smoke_tests {
     fn symphonia_mp3_demuxer_emits_notneeded_preroll_after_seek() {
         let (demuxer, _byte_len_handle) = SymphoniaDemuxer::open_file(
             Cursor::new(TEST_MP3_BYTES),
-            Some("mp3".into()),
-            None,
-            None,
-            None,
+            FileOpen {
+                hint: Some("mp3".into()),
+                container: None,
+                byte_len_handle: None,
+                byte_map: None,
+            },
         )
         .expect("BUG: open_file must succeed");
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
             .expect("BUG: MP3 codec should open");
-        let mut decoder =
-            ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
 
         let outcome = decoder.seek(Duration::from_secs(1)).expect("BUG: seek");
         let DecoderSeekOutcome::Landed {
@@ -510,6 +545,26 @@ mod smoke_tests {
             "Symphonia handles MDCT priming internally; preroll must be NotNeeded"
         );
     }
+}
+
+#[cfg(test)]
+fn write_silent_test_frame(
+    spec: PcmSpec,
+    frames_per_call: u32,
+    out: &mut PcmBuf,
+) -> DecodeResult<u32> {
+    let frames = usize::try_from(frames_per_call)?;
+    let samples = frames
+        .checked_mul(usize::from(spec.channels))
+        .ok_or_else(|| {
+            crate::error::DecodeError::InvalidData("test frame sample count overflow".to_string())
+        })?;
+    out.ensure_len(samples)?;
+    for slot in out.iter_mut() {
+        *slot = 0.0;
+    }
+    out.truncate(samples);
+    Ok(frames_per_call)
 }
 
 #[cfg(test)]
@@ -542,13 +597,7 @@ mod test_stub_codec {
             _packet_desc: &[u8],
             out: &mut PcmBuf,
         ) -> DecodeResult<u32> {
-            let samples = self.frames_per_call as usize * self.spec.channels as usize;
-            out.ensure_len(samples)?;
-            for slot in out.iter_mut() {
-                *slot = 0.0;
-            }
-            out.truncate(samples);
-            Ok(self.frames_per_call)
+            super::write_silent_test_frame(self.spec, self.frames_per_call, out)
         }
 
         fn flush(&mut self) -> DecodeResult<()> {
@@ -601,13 +650,7 @@ mod test_counting_codec {
             out: &mut PcmBuf,
         ) -> DecodeResult<u32> {
             self.decode_calls.fetch_add(1, Ordering::SeqCst);
-            let samples = self.frames_per_call as usize * self.spec.channels as usize;
-            out.ensure_len(samples)?;
-            for slot in out.iter_mut() {
-                *slot = 0.0;
-            }
-            out.truncate(samples);
-            Ok(self.frames_per_call)
+            super::write_silent_test_frame(self.spec, self.frames_per_call, out)
         }
 
         fn flush(&mut self) -> DecodeResult<()> {
@@ -624,9 +667,11 @@ mod test_counting_codec {
 #[cfg(test)]
 mod seek_trim_tests {
 
-    use std::sync::{Arc, atomic::Ordering};
+    use std::{
+        num::NonZeroU32,
+        sync::{Arc, atomic::Ordering},
+    };
 
-    use kithara_bufpool::PcmPool;
     use kithara_platform::time::Duration;
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
@@ -694,10 +739,7 @@ mod seek_trim_tests {
     #[kithara::test]
     fn pre_target_frames_are_decoded_and_dropped_by_pending_seek_target() {
         let codec = CountingCodec::new(
-            PcmSpec {
-                channels: 2,
-                sample_rate: 44_100,
-            },
+            PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             1,
         );
         let calls = Arc::clone(&codec.decode_calls);
@@ -706,8 +748,7 @@ mod seek_trim_tests {
             idx: 0,
             held: Vec::new(),
         };
-        let mut decoder =
-            ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
 
         let _ = decoder.seek(Duration::from_millis(30)).expect("BUG: seek");
 
@@ -729,15 +770,17 @@ mod seek_trim_tests {
 #[cfg(test)]
 mod hook_tests {
 
-    use std::sync::{Arc, Mutex};
+    use std::{
+        num::NonZeroU32,
+        sync::{Arc, Mutex},
+    };
 
-    use kithara_bufpool::PcmPool;
     use kithara_stream::{
-        BoxedHooks, DecoderHooks, PendingReason, ReaderChunkSignal, ReaderSeekSignal,
+        BoxedEventSink, PendingReason, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal,
     };
     use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{test_stub_codec::ConstFrameCodec, *};
     use crate::{
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Frame, TrackInfo},
         traits::Decoder,
@@ -753,7 +796,7 @@ mod hook_tests {
         log: Arc<Mutex<CallLog>>,
     }
 
-    impl DecoderHooks for LoggingHooks {
+    impl ReaderEventSink for LoggingHooks {
         fn on_chunk(&mut self, signal: ReaderChunkSignal) {
             let tag = match signal {
                 ReaderChunkSignal::Chunk => "chunk",
@@ -847,8 +890,6 @@ mod hook_tests {
         }
     }
 
-    use super::test_stub_codec::ConstFrameCodec;
-
     fn empty_track() -> TrackInfo {
         TrackInfo {
             codec: AudioCodec::Flac,
@@ -865,20 +906,17 @@ mod hook_tests {
         log: Arc<Mutex<CallLog>>,
     ) -> ComposedDecoder<StubDemuxer, ConstFrameCodec> {
         let codec = ConstFrameCodec::new(
-            PcmSpec {
-                channels: 2,
-                sample_rate: 44_100,
-            },
+            PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             1,
         );
-        let hooks: BoxedHooks = Box::new(LoggingHooks { log });
+        let hooks: BoxedEventSink = Box::new(LoggingHooks { log });
         ComposedDecoder::new(
             demuxer,
             codec,
-            PcmPool::default().clone(),
-            0,
-            None,
-            Some(hooks),
+            DecoderRuntime {
+                hooks: Some(hooks),
+                ..DecoderRuntime::for_test()
+            },
         )
     }
 
@@ -971,6 +1009,8 @@ mod hook_tests {
 #[cfg(test)]
 mod pool_budget_tests {
 
+    use std::num::NonZeroU32;
+
     use kithara_bufpool::PcmPool;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
@@ -988,10 +1028,7 @@ mod pool_budget_tests {
         let warmup_misses = pool.stats().alloc_misses;
 
         let mut codec = ConstFrameCodec::new(
-            PcmSpec {
-                channels: 2,
-                sample_rate: 44_100,
-            },
+            PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             1024,
         );
         for _ in 0..200 {

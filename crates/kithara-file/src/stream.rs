@@ -1,14 +1,19 @@
 use std::{path::PathBuf, sync::Arc};
 
 use kithara_assets::{
-    AcquisitionResult, AssetReader, AssetStore, AssetStoreBuilder, AssetsError, EvictConfig,
-    ReadSide, ResourceKey, StoreOptions, WriteSide, asset_root_for_url,
+    AcquisitionResult, AssetReader, AssetScopeDelegate, AssetStore, AssetStoreBuilder, AssetsError,
+    EvictConfig, ReadSide, ResourceKey, StoreOptions, WriteSide, safe_path_component,
 };
 use kithara_events::EventBus;
-use kithara_platform::{CancellationToken, Mutex, time::Duration, tokio};
+use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::{
+    CancelScope, CancelToken,
+    sync::Mutex,
+    time::{Duration, sleep},
+};
 use kithara_storage::StorageError;
 use kithara_stream::{
-    AudioCodec, SourceError as StreamSourceError, StreamType, Timeline,
+    AudioCodec, PlayheadState, SeekState, SourceError as StreamSourceError, StreamType,
     dl::{Downloader, DownloaderConfig},
 };
 use kithara_test_utils::kithara;
@@ -25,13 +30,47 @@ use crate::{
 /// Marker type for file streaming.
 pub struct File;
 
+#[derive(Debug)]
+struct FileAssetScopeDelegate {
+    extension_hint: Option<String>,
+}
+
+impl FileAssetScopeDelegate {
+    fn new(url: &url::Url, name: Option<&str>) -> Self {
+        Self {
+            extension_hint: name.and_then(extension_hint).or_else(|| {
+                url.path_segments()
+                    .and_then(|mut segments| segments.next_back())
+                    .and_then(extension_hint)
+            }),
+        }
+    }
+}
+
+impl AssetScopeDelegate for FileAssetScopeDelegate {
+    fn rel_path_for_url(&self, _url: &url::Url) -> String {
+        self.extension_hint.as_ref().map_or_else(
+            || "track".to_string(),
+            |ext| format!("track.{}", safe_path_component(ext, ext)),
+        )
+    }
+}
+
+fn extension_hint(segment: &str) -> Option<String> {
+    let (_, ext) = segment.rsplit_once('.')?;
+    if ext.is_empty() || !ext.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(ext.to_ascii_lowercase())
+}
+
 impl StreamType for File {
     type Config = FileConfig;
     type Events = EventBus;
     type Source = FileSource;
 
     async fn create(config: Self::Config) -> Result<Self::Source, StreamSourceError> {
-        let cancel = config.cancel.clone().unwrap_or_default();
+        let cancel = CancelScope::new(config.cancel.clone()).token();
         let src = config.src.clone();
 
         match src {
@@ -52,7 +91,7 @@ impl File {
     fn create_local(
         path: PathBuf,
         config: FileConfig,
-        cancel: &CancellationToken,
+        cancel: &CancelToken,
     ) -> Result<FileSource, SourceError> {
         if !path.exists() {
             return Err(SourceError::InvalidPath(format!(
@@ -73,8 +112,10 @@ impl File {
             .bus
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
-        let timeline = Timeline::new();
-        let coord = Arc::new(FileCoord::new(timeline));
+        let coord = Arc::new(FileCoord::new(
+            Arc::new(PlayheadState::new()),
+            Arc::new(SeekState::new()),
+        ));
         coord.set_total_bytes(len);
         let total = len.unwrap_or(0);
         coord.set_download_pos(total);
@@ -87,7 +128,7 @@ impl File {
             bus,
             store,
             key,
-            cancel.child_token(),
+            cancel.child(),
             cached_codec,
         ))
     }
@@ -101,19 +142,18 @@ impl File {
     fn create_remote(
         url: url::Url,
         config: FileConfig,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> Result<FileSource, SourceError> {
         let from_config = config.name.as_deref();
         let from_query = url.query();
         let name_or_query = from_config.or(from_query).filter(|s| !s.is_empty());
-        let asset_root = asset_root_for_url(&url, name_or_query);
+        let naming: Arc<dyn AssetScopeDelegate> =
+            Arc::new(FileAssetScopeDelegate::new(&url, from_config));
+        let asset_root = naming.asset_root_for_url(&url, name_or_query);
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
-            let cancel_for_dl = cancel.child_token();
-            let client = kithara_net::HttpClient::new(
-                kithara_net::NetOptions::default(),
-                cancel_for_dl.child_token(),
-            );
+            let cancel_for_dl = cancel.child();
+            let client = HttpClient::new(NetOptions::default(), cancel_for_dl.child());
             Downloader::new(
                 DownloaderConfig::for_client(client)
                     .cancel(cancel_for_dl)
@@ -126,7 +166,9 @@ impl File {
             .clone()
             .unwrap_or_else(|| build_shared_asset_store(&config.store, cancel.clone()));
 
-        let key = backend.scope(asset_root.as_str()).key_from_url(&url);
+        let key = backend
+            .scope_with_delegate(asset_root.as_str(), Arc::clone(&naming))
+            .key_from_url(&url);
         let FileStreamState {
             backend,
             acq,
@@ -139,8 +181,10 @@ impl File {
             config.event_channel_capacity,
         )?;
 
-        let timeline = Timeline::new();
-        let coord = Arc::new(FileCoord::new(timeline));
+        let coord = Arc::new(FileCoord::new(
+            Arc::new(PlayheadState::new()),
+            Arc::new(SeekState::new()),
+        ));
 
         // `Ready` means the file is already committed in the cache — no
         // download. `Pending` hands the single non-Clone commit owner to the
@@ -158,7 +202,7 @@ impl File {
                     bus,
                     backend,
                     key,
-                    cancel.child_token(),
+                    cancel.child(),
                     cached_codec,
                 ));
             }
@@ -175,7 +219,6 @@ impl File {
         // concurrent consumer of the same URL (e.g. a waveform analyzer)
         // loses and reads the shared bytes instead of issuing its own
         // download. With a private per-stream store this is a single
-        // consumer that always wins.
         let (demand_lease, producer) =
             backend.attach_demand(&key, coord.read_pos_handle(), config.look_ahead_bytes);
 
@@ -187,9 +230,9 @@ impl File {
             },
             FileAssetCtx {
                 url,
+                reader,
                 headers: config.headers,
                 backend: Arc::clone(&backend),
-                reader,
                 writer: Mutex::new(Some(writer)),
                 raw: Some(raw),
                 key: key.clone(),
@@ -225,7 +268,7 @@ impl File {
     async fn create_remote_wait_for_claim(
         url: url::Url,
         config: FileConfig,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> Result<FileSource, StreamSourceError> {
         /// Bounded poll interval while a sibling `AssetStore` instance holds
         /// the atomic-chunked tmp for the same canonical path. Short enough
@@ -248,7 +291,7 @@ impl File {
                         last_len = len;
                         hang_reset!();
                     }
-                    tokio::time::sleep(TMP_CLAIMED_POLL_INTERVAL).await;
+                    sleep(TMP_CLAIMED_POLL_INTERVAL).await;
                 }
                 Err(e) => return Err(StreamSourceError::from(e)),
             }
@@ -264,10 +307,7 @@ impl File {
 /// master so a shutdown cascades through the store. Also the standalone
 /// fallback when no store is injected (single consumer).
 #[must_use]
-pub fn build_shared_asset_store(
-    store: &StoreOptions,
-    cancel: CancellationToken,
-) -> Arc<AssetStore<()>> {
+pub fn build_shared_asset_store(store: &StoreOptions, cancel: CancelToken) -> Arc<AssetStore<()>> {
     let mut builder = AssetStoreBuilder::new()
         .cancel(cancel)
         .root_dir(&store.cache_dir)

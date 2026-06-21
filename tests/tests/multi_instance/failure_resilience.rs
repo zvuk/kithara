@@ -13,7 +13,7 @@ use kithara_integration_tests::{
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread;
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, sleep},
     tokio::task::{JoinHandle, spawn, spawn_blocking},
 };
@@ -103,7 +103,7 @@ async fn create_server(wav_data: &Arc<Vec<u8>>) -> HlsTestServer {
 async fn create_hls_audio(
     server: &HlsTestServer,
     cache_dir: &Path,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) -> Audio<Stream<Hls>> {
     let url = server.url("/master.m3u8");
 
@@ -135,7 +135,7 @@ async fn spawn_instance(
 ) -> JoinHandle<Outcome> {
     let server = create_server(wav_data).await;
     let temp = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let healthy = cancel_after.is_none();
 
     let audio = create_hls_audio(&server, temp.path(), cancel.clone()).await;

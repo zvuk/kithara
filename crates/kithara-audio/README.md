@@ -14,6 +14,21 @@
 
 Audio pipeline with decoding, effects chain, and sample rate conversion. Runs a shared OS thread (`AudioWorker`) for blocking decode/process work and bridges it to the caller via `ringbuf` lock-free ring buffers. `Audio<S>` is the main entry point; multiple tracks share one worker thread via `AudioWorkerHandle`.
 
+## Role in the workspace
+
+Sits between `kithara-decode` and the consumer (`cpal` via Firewheel inside `kithara-play`, or custom PCM readers). Depends on `kithara-stream` for `Stream<T>` and `Source`, `kithara-bufpool` for zero-allocation PCM buffers, `kithara-decode` for the decoder factory, `kithara-events` for the `EventBus`, and `kithara-platform` for cross-platform sync types.
+
+## Key types / entry points
+
+- **`Audio<S>`** — main entry point; an `impl PcmReader` the consumer reads from.
+- **`AudioConfig<T>`** — [`bon`](https://crates.io/crates/bon) builder for the pipeline (stream config, host sample rate, resampler quality, gapless mode, stretch, engine load).
+- **`AudioWorker` / `AudioWorkerHandle`** — the shared OS thread that runs decode/effects; multiple tracks register on one worker.
+- **`DecoderNode`** — the per-track `Node` (in `runtime/`) that decodes, runs the effects chain, and pushes PCM to the ring.
+- **`ResamplerQuality`** — sample-rate-conversion quality selector.
+- **`StretchControls` / `TimeStretchProcessor`** — preserve-pitch tempo (key-lock), gated by `stretch-*` backends.
+- **`Waveform` / `WaveformAnalyzer` / `TrackAnalyzer`** — pure-DSP track analysis for display (`analysis/`, `waveform/`).
+- **`EngineLoad` / `EngineLoadSnapshot`** — live processing-cost meter.
+
 ## Usage
 
 ```rust
@@ -34,50 +49,7 @@ let mut audio = Audio::<Stream<Hls>>::new(audio_config).await?;
 
 `AudioConfig` is a [`bon`](https://crates.io/crates/bon) builder; the fields shown above are the most common knobs. The exact builder method names match the field names on `AudioConfig`.
 
-## Threading model
-
-```mermaid
-flowchart TB
-    subgraph "Consumer Thread"
-        App["Application code"]
-        AS["Audio&lt;S&gt;<br/>(impl PcmReader)"]
-        App -- "read(buf)" --> AS
-    end
-
-    subgraph "AudioWorker (shared OS thread)"
-        Sched["runtime::Scheduler"]
-        DN["DecoderNode<br/>(per-track impl Node)"]
-        Resampler
-        Effects["effects/<br/>(per-track AudioEffect chain)"]
-        Sched --> DN --> Effects --> Resampler
-    end
-
-    subgraph "Downloader (tokio)"
-        DL["kithara-stream::dl::Downloader"]
-    end
-
-    subgraph "Shared state"
-        SR["StorageResource<br/>(kithara-storage)"]
-        Bus["EventBus<br/>(kithara-events)"]
-    end
-
-    DL -- "fetch + writer()" --> SR
-    DN -- "wait_range / read_at" --> SR
-    Resampler -- "PcmChunk" --> Ring["ringbuf::HeapRb&lt;PcmChunk&gt;"]
-    AS -- "try_pop()" --> Ring
-    DN -- "AudioEvent" --> Bus
-    Bus --> App
-```
-
-- **AudioWorker (shared OS thread)**: an internal priority scheduler in `runtime/` ticks each registered track. Each track is a single `Node` (`DecoderNode`) — effects run as direct operator calls inside the node, not as separate `Node`s with ring buffers between them.
-- **Downloader (tokio)**: lives in `kithara-stream::dl`. It owns the HTTP pool and writes bytes directly into the `StorageResource` the `DecoderNode` reads from. The downloader is not spawned by `kithara-audio`.
-- **Ring**: a lock-free `ringbuf::HeapRb<PcmChunk>` carries processed PCM from the worker to the consumer; backpressure is enforced by the ring's capacity and an `Outlet` overflow slot.
-- **Trash ring (spent-chunk return)**: the consumer (`Audio`) runs on the caller's real-time audio thread, so it must never `free`. Returning a `PcmChunk`'s pooled buffer to `kithara-bufpool` can deallocate (shard full, or trim), so the consumer never drops a consumed chunk: it pushes every spent chunk back through a second lock-free ring, and `DecoderNode::drain_trash` drops them on the worker thread on its next tick. The ring is sized `pcm_buffer_chunks + 2` — enough to absorb a seek that drains the whole forward ring at once — so the real-time push is infallible and no buffer is ever freed on the audio thread.
-- **Preload gate (`PreloadGate`)**: the one-time startup signal that releases the async consumer's `Resource::preload().await`. The worker is a plain OS thread, not a tokio runtime worker, so it must never run a cross-thread tokio-task `wake()` (that schedules through tokio's inject queue — a lock + futex, real-time-unsafe). The gate is decoupled: the worker only does a lock-free `ready.store(true, Release)` via `signal()`; the async awaiter (`PreloadGate::wait`) polls `ready` with `Acquire` and re-arms its own runtime timer (`POLL_INTERVAL`) while the gate is closed, so the worker never drives the wakeup. `DecoderNode` opens the gate at every preload terminal site — the preload-chunk threshold, EOF, `Failed`, and `on_cancel` — and `rearm()`s (re-closes) it in `sync_seek_epoch` so a post-seek `wait()` blocks again until the refill. A missed `signal()` would stall the consumer before first audio, so all terminal arms must fire it.
-- **Events**: every layer publishes into a unified `EventBus` (`AudioEvent`, `HlsEvent`, `FileEvent`, ABR events).
-- **Epoch-based seek invalidation**: each seek bumps an `AtomicU64` epoch; stale chunks tagged with an older epoch are dropped before reaching the ring.
-
-## Pipeline Architecture
+## Pipeline at a glance
 
 ```mermaid
 flowchart LR
@@ -90,6 +62,8 @@ flowchart LR
 
     ST --> DF --> Node --> AW --> Ring --> A
 ```
+
+The `AudioWorker` is a plain OS thread (not a tokio runtime worker) that ticks each registered track; the `kithara-stream` downloader (tokio) writes bytes into shared storage, and processed PCM crosses to the consumer over a lock-free ring. Seeks are epoch-tagged so stale chunks are discarded.
 
 ## Track analysis (shared worker)
 
@@ -287,7 +261,7 @@ On seek, epoch is incremented atomically. The worker tags each decoded chunk wit
 The whole pipeline runs in one space: **decoder/song time** (`PcmMeta.timestamp` / `end_timestamp` / `frame_offset`, `Timeline`, `total_duration`, the seek target, the UI playhead). A duration-changing `AudioEffect` (resampler "vinyl" today, preserve-pitch time-stretch later) changes frame counts but is the sole timeline authority: it restamps only `spec`+`frames` and carries the consumed input's song-time meta forward (`ResamplerProcessor::last_input_meta` pattern). The consumer keeps reading `end_timestamp` for position, so no translation layer and no parallel frame counter exist (single source of truth). Reporting perceived/elapsed output time instead would need an explicit translation owner; it is deliberately deferred until a real stretch backend lands.
 - **Buffers**: If a backpressure boundary or rate-matching is needed (e.g. between the worker and the audio callback), a separate buffer `Node` should be introduced explicitly.
 - **Push with Backpressure**: Producer nodes call `Outlet::try_push` directly. The outlet has a built-in single-slot overflow that absorbs one backpressure miss per tick, so a producer that emits at most one chunk per tick treats `try_push` as infallible. Each tick begins with `Outlet::flush()` to forward the parked item to the ring once the consumer drains it; if the ring is still full the node returns `TickResult::Waiting`. Under normal operation, the source's FSM is ticked every pass. However, if the outlet is completely saturated (both the ring buffer and the overflow slot are full), the node will return `Waiting` immediately without ticking the FSM. This provides strict backpressure, pausing all internal state transitions (including seeks) until the consumer drains the ring.
-- **Cancellation**: Do not use `CancellationToken` inside `Node` implementations. Cancellation is handled centrally by calling `worker.unregister_track(...)`, which triggers the scheduler to call `Node::on_cancel()`.
+- **Cancellation**: Do not use `CancelToken` inside `Node` implementations. Cancellation is handled centrally by calling `worker.unregister_track(...)`, which triggers the scheduler to call `Node::on_cancel()`.
 - **Track lifecycle**: A `Node` returns `TickResult::Done` only when truly terminal (e.g. `TrackStep::Failed`). EOF is *not* terminal — the track stays alive so a subsequent seek can re-arm it; idle ticks just return `TickResult::Waiting`.
 - `kithara-audio` owns decoder lifecycle, seek or session state, effects reset timing, and stale chunk invalidation.
 - Prefer explicit FSM or session objects for multi-step control flow. Avoid scattering new `pending_*` or shadow flags across worker, source, and consumer layers.
@@ -309,6 +283,4 @@ The whole pipeline runs in one space: **decoder/song time** (`PcmMeta.timestamp`
 <tr><td><code>analysis</code></td><td>no</td><td>FFT stack for track analysis (<code>realfft</code> + <code>WaveformAnalyzer</code>); without it <code>waveform_analyzer()</code> returns <code>None</code> and the analysis API stays inert</td></tr>
 </table>
 
-## Integration
-
-Sits between `kithara-decode` and the consumer (`cpal` via Firewheel inside `kithara-play`, or custom PCM readers). Depends on `kithara-stream` for `Stream<T>` and `Source`, `kithara-bufpool` for zero-allocation PCM buffers, `kithara-decode` for the decoder factory, `kithara-events` for the `EventBus`, and `kithara-platform` for cross-platform sync types.
+See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

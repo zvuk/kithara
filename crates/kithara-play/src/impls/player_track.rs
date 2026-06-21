@@ -9,7 +9,8 @@ use firewheel::dsp::{
     mix::{Mix, MixDSP},
 };
 use kithara_audio::ServiceClass;
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
+use num_traits::cast::{AsPrimitive, ToPrimitive};
 use ringbuf::{HeapProd, traits::Producer};
 
 use super::{
@@ -65,6 +66,10 @@ pub enum TrackReadOutcome {
         /// mixed into the output for this track. Returned for diagnostic
         /// and unit-test inspection.
         position: f64,
+        /// Real PCM frames copied from the underlying resource/scratch buffer.
+        /// The destination block may include additional zero-filled underrun
+        /// frames, which do not count as playback progress.
+        frames: usize,
         /// Visible (post-gapless-trim) duration snapshot in seconds.
         duration: f64,
         /// Exact remaining buffered frames when the resource has already
@@ -102,6 +107,12 @@ pub struct PlayerTrack {
     mix: MixDSP,
     item_id: Option<Arc<str>>,
     state: TrackState,
+    /// Set only when the track reaches *natural* EOF (`handle_natural_end`).
+    /// Marks a played-out track as eligible to be kept warm at end-of-queue
+    /// and revived by a later in-range seek (Superpowered-style resume).
+    /// Cleared by `seek`/`play`. A `Finished` state from `stop()` or a
+    /// faded-out crossfade leaves this `false`, so those are discarded as usual.
+    ended_at_eof: bool,
     notified_prefetch_requested: bool,
     notified_track_requested: bool,
     state_dirty: bool,
@@ -148,6 +159,12 @@ impl PlayerTrack {
             smooth_seconds: fade_duration,
             settle_epsilon: DEFAULT_SETTLE_EPSILON,
         };
+        // Seed from the resource's already-known duration (set synchronously at
+        // source open, before `Loaded`) so a freshly-loaded track reports its
+        // duration on the first render cycle — before any decode-backed `read`.
+        // Without this the render path publishes 0.0 whenever the decode worker
+        // holds the resource lock, leaving `duration_seconds()` racy at load.
+        let observed_duration = resource.try_lock().ok().map_or(0.0, |r| r.duration());
         let track = Self {
             resource,
             fade_curve,
@@ -162,7 +179,8 @@ impl PlayerTrack {
             prefetch_duration: prefetch_duration.max(0.0),
             sample_rate: sample_rate.get(),
             served_frames: 0,
-            observed_duration: 0.0,
+            observed_duration,
+            ended_at_eof: false,
         };
         track.update_service_class(TrackState::Preloading);
         track
@@ -191,7 +209,6 @@ impl PlayerTrack {
         block_frames: usize,
         frames_until_eof: Option<usize>,
     ) {
-        use num_traits::cast::AsPrimitive;
         let block_frames_f32: f32 = block_frames.as_();
         let sr_f32: f32 = self.sample_rate.as_();
         let block_seconds = block_frames_f32 / sr_f32;
@@ -249,7 +266,7 @@ impl PlayerTrack {
         }
 
         if notification_tx
-            .lock_sync()
+            .lock()
             .try_push(PlayerNotification::HandoverRequested)
             .is_ok()
         {
@@ -264,12 +281,20 @@ impl PlayerTrack {
         }
 
         if notification_tx
-            .lock_sync()
+            .lock()
             .try_push(PlayerNotification::Requested)
             .is_ok()
         {
             self.notified_prefetch_requested = true;
         }
+    }
+
+    /// Whether this track reached *natural* EOF (vs `stop()` / faded-out).
+    /// A natural-EOF `Finished` track is kept warm at end-of-queue and can be
+    /// revived by an in-range seek. See [`Self::ended_at_eof`].
+    #[must_use]
+    pub fn ended_at_eof(&self) -> bool {
+        self.ended_at_eof
     }
 
     /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
@@ -299,7 +324,7 @@ impl PlayerTrack {
         }
         self.set_state(TrackState::Finished);
         notification_tx
-            .lock_sync()
+            .lock()
             .try_push(PlayerNotification::PlaybackStopped {
                 src: Arc::clone(&self.src),
                 item_id: self.item_id.clone(),
@@ -317,8 +342,9 @@ impl PlayerTrack {
         self.notified_prefetch_requested = true;
         self.emit_handover_requested(notification_tx);
         self.set_state(TrackState::Finished);
+        self.ended_at_eof = true;
         notification_tx
-            .lock_sync()
+            .lock()
             .try_push(PlayerNotification::PlaybackStopped {
                 src: Arc::clone(&self.src),
                 item_id: self.item_id.clone(),
@@ -347,7 +373,7 @@ impl PlayerTrack {
             },
         };
 
-        if notification_tx.lock_sync().try_push(notification).is_ok() {
+        if notification_tx.lock().try_push(notification).is_ok() {
             self.state_dirty = false;
         }
     }
@@ -359,6 +385,7 @@ impl PlayerTrack {
         self.mix.reset_to_target();
         self.notified_track_requested = false;
         self.notified_prefetch_requested = false;
+        self.ended_at_eof = false;
     }
 
     /// Current position in seconds.
@@ -369,7 +396,7 @@ impl PlayerTrack {
     #[must_use]
     pub fn position(&self) -> f64 {
         let sample_rate = self.sample_rate.max(1);
-        let served_f64: f64 = num_traits::cast::AsPrimitive::as_(self.served_frames);
+        let served_f64: f64 = AsPrimitive::as_(self.served_frames);
         served_f64 / f64::from(sample_rate)
     }
 
@@ -404,6 +431,7 @@ impl PlayerTrack {
                 return TrackReadOutcome::Full {
                     position: self.position(),
                     duration: self.observed_duration,
+                    frames: 0,
                     frames_until_eof: None,
                 };
             };
@@ -414,12 +442,13 @@ impl PlayerTrack {
             ];
 
             match guard.read(&mut scratch_window, 0..range.len()) {
-                ReadOutcome::Full => {
+                ReadOutcome::Full { frames } => {
                     let duration = guard.duration();
                     let frames_until_eof = guard.frames_until_eof();
                     drop(guard);
                     TrackReadOutcome::Full {
                         duration,
+                        frames,
                         frames_until_eof,
                         position: 0.0,
                     }
@@ -440,14 +469,16 @@ impl PlayerTrack {
         match read_outcome {
             TrackReadOutcome::Full {
                 duration,
+                frames,
                 frames_until_eof,
                 ..
             } => {
-                self.advance_served_frames(range.len() as u64);
+                let produced_frames = frames.to_u64().unwrap_or(0);
+                self.advance_served_frames(produced_frames);
                 self.observed_duration = duration;
                 if let Some(remaining_frames) = frames_until_eof {
                     let sample_rate = self.sample_rate.max(1);
-                    let remaining_f64: f64 = num_traits::cast::AsPrimitive::as_(remaining_frames);
+                    let remaining_f64: f64 = AsPrimitive::as_(remaining_frames);
                     let observed_eof = self.position() + remaining_f64 / f64::from(sample_rate);
                     if self.observed_duration <= 0.0 || observed_eof < self.observed_duration {
                         self.observed_duration = observed_eof;
@@ -485,6 +516,7 @@ impl PlayerTrack {
                 TrackReadOutcome::Full {
                     position,
                     duration,
+                    frames,
                     frames_until_eof,
                 }
             }
@@ -540,13 +572,31 @@ impl PlayerTrack {
         if let Ok(mut resource) = self.resource.try_lock() {
             resource.seek(seconds);
         }
-        let sample_rate = self.sample_rate.max(1);
-        let frames =
-            num_traits::cast::ToPrimitive::to_u64(&(seconds.max(0.0) * f64::from(sample_rate)))
-                .unwrap_or(u64::MAX);
+        let frames = Self::seek_frame_index(seconds, self.sample_rate, self.observed_duration);
         self.served_frames = frames;
         self.notified_track_requested = false;
         self.notified_prefetch_requested = false;
+        self.ended_at_eof = false;
+    }
+
+    fn seek_frame_index(seconds: f64, sample_rate: u32, duration: f64) -> u64 {
+        let sample_rate = sample_rate.max(1);
+        let target_seconds = if seconds.is_nan() {
+            0.0
+        } else if seconds.is_finite() {
+            seconds.max(0.0)
+        } else if seconds.is_sign_positive() {
+            duration.max(0.0)
+        } else {
+            0.0
+        };
+        let bounded_seconds = if duration > 0.0 {
+            target_seconds.min(duration)
+        } else {
+            target_seconds
+        };
+        let frames = bounded_seconds * f64::from(sample_rate);
+        ToPrimitive::to_u64(&frames).unwrap_or(0)
     }
 
     /// Update the prefetch lead time used for the preload trigger.
@@ -641,6 +691,7 @@ impl PlayerTrack {
 #[cfg(test)]
 mod tests {
     use kithara_audio::PcmReader;
+    use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
@@ -654,10 +705,17 @@ mod tests {
     use crate::impls::resource::Resource;
 
     fn mock_spec() -> PcmSpec {
-        PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        }
+        PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
+    }
+
+    #[kithara::test]
+    fn seek_frame_index_clamps_unrepresentable_targets() {
+        assert_eq!(
+            PlayerTrack::seek_frame_index(f64::INFINITY, 44_100, 10.0),
+            441_000
+        );
+        assert_eq!(PlayerTrack::seek_frame_index(f64::INFINITY, 44_100, 0.0), 0);
+        assert_eq!(PlayerTrack::seek_frame_index(f64::NAN, 44_100, 10.0), 0);
     }
 
     fn make_track_from_resource(
@@ -665,11 +723,7 @@ mod tests {
         src: Arc<str>,
         item_id: Option<Arc<str>>,
     ) -> PlayerTrack {
-        let player_resource = PlayerResource::new(
-            resource,
-            Arc::clone(&src),
-            &kithara_bufpool::PcmPool::default(),
-        );
+        let player_resource = PlayerResource::new(resource, Arc::clone(&src), &PcmPool::default());
         let arc_resource = Arc::new(Mutex::new(player_resource));
         let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         PlayerTrack::new(
@@ -722,7 +776,7 @@ mod tests {
         fn position(&self) -> Duration {
             let frames =
                 u64::try_from(self.position_frames).expect("test mock position non-negative");
-            Duration::from_micros(frames * 1_000_000 / u64::from(self.spec.sample_rate))
+            Duration::from_micros(frames * 1_000_000 / u64::from(self.spec.sample_rate.get()))
         }
 
         fn read(

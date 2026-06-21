@@ -1,4 +1,6 @@
-use std::{marker::PhantomData, path::PathBuf, time::Duration};
+use std::{marker::PhantomData, path::PathBuf};
+
+use kithara_platform::time::Duration;
 
 pub trait HangDump {
     fn dump_json(&self) -> String;
@@ -23,6 +25,16 @@ impl<C: HangDump> HangDetector<C> {
     #[must_use]
     pub fn new(_label: &'static str, _timeout: Duration) -> Self {
         Self(PhantomData)
+    }
+
+    /// No watchdog compiled in: bound an event wait by the fallback timeout
+    /// rather than below it, so a no-`hang` build still re-checks instead of
+    /// blocking forever on a lost wakeup. (`&mut self` mirrors the real
+    /// detector, whose lazy deadline stamp needs it.)
+    #[inline(always)]
+    #[must_use]
+    pub fn remaining(&mut self) -> Duration {
+        default_timeout()
     }
 
     #[inline(always)]

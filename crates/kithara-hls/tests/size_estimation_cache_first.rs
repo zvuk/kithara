@@ -18,12 +18,12 @@ use axum::{
     response::Response,
 };
 use kithara_assets::{
-    AssetStore, AssetStoreBuilder, ResourceKey, StoreOptions, asset_root_for_url,
+    AssetScopeDelegate, AssetStore, AssetStoreBuilder, ResourceKey, StoreOptions,
 };
-use kithara_hls::{Hls, HlsConfig};
+use kithara_hls::{Hls, HlsAssetScopeDelegate, HlsConfig};
 use kithara_platform::{
-    time::{Duration, Instant},
-    tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn, time as tokio_time},
+    time::{Duration, Instant, sleep},
+    tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
 };
 use kithara_stream::Stream;
 use kithara_test_utils::kithara;
@@ -58,19 +58,11 @@ const MEDIA_PLAYLIST: &str = "#EXTM3U\n\
 type ProbeCounts = Arc<Mutex<HashMap<String, usize>>>;
 
 struct TestServer {
-    master_url: Url,
     probes: ProbeCounts,
+    master_url: Url,
 }
 
 impl TestServer {
-    fn probe_snapshot(&self) -> HashMap<String, usize> {
-        self.probes.lock().expect("probes lock").clone()
-    }
-
-    fn reset_probes(&self) {
-        self.probes.lock().expect("probes lock").clear();
-    }
-
     fn media_probe_count(&self, path: &str) -> usize {
         self.probes
             .lock()
@@ -78,6 +70,14 @@ impl TestServer {
             .get(path)
             .copied()
             .unwrap_or(0)
+    }
+
+    fn probe_snapshot(&self) -> HashMap<String, usize> {
+        self.probes.lock().expect("probes lock").clone()
+    }
+
+    fn reset_probes(&self) {
+        self.probes.lock().expect("probes lock").clear();
     }
 }
 
@@ -177,7 +177,7 @@ async fn spawn_server() -> TestServer {
             .expect("serve");
     });
     let master_url = Url::parse(&format!("http://{addr}/master.m3u8")).expect("master url");
-    TestServer { master_url, probes }
+    TestServer { probes, master_url }
 }
 
 /// Verification-only store over the same `cache_dir`: read-only
@@ -187,7 +187,9 @@ fn verify_store(cache_dir: &Path) -> AssetStore {
 }
 
 fn media_keys(store: &AssetStore, master_url: &Url, paths: &[&str]) -> Vec<(ResourceKey, u64)> {
-    let scope = store.scope(asset_root_for_url(master_url, None));
+    let delegate: Arc<dyn AssetScopeDelegate> = Arc::new(HlsAssetScopeDelegate);
+    let asset_root = delegate.asset_root_for_url(master_url, None);
+    let scope = store.scope_with_delegate(asset_root, delegate);
     paths
         .iter()
         .map(|path| {
@@ -217,7 +219,7 @@ async fn wait_committed(store: &AssetStore, keys: &[(ResourceKey, u64)]) {
             Instant::now() < deadline,
             "timed out waiting for resources to commit"
         );
-        tokio_time::sleep(COMMIT_POLL).await;
+        sleep(COMMIT_POLL).await;
     }
 }
 

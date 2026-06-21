@@ -7,7 +7,7 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::sync::Arc;
+use std::{num::NonZeroU32, sync::Arc};
 
 use kithara_audio::{DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome};
 use kithara_bufpool::PcmPool;
@@ -22,10 +22,7 @@ use kithara_play::{
 use kithara_test_utils::kithara;
 
 fn mock_spec() -> PcmSpec {
-    PcmSpec {
-        channels: 2,
-        sample_rate: 44100,
-    }
+    PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
 }
 
 fn make_player_resource(seconds: f64) -> PlayerResource {
@@ -109,7 +106,7 @@ struct PositionReader {
 impl PositionReader {
     fn new(seconds: f64) -> Self {
         let spec = mock_spec();
-        let total_frames = (seconds * spec.sample_rate as f64) as u64;
+        let total_frames = (seconds * spec.sample_rate.get() as f64) as u64;
         Self {
             bus: EventBus::default(),
             meta: TrackMetadata::default(),
@@ -168,7 +165,7 @@ impl PcmReader for PositionReader {
     }
 
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        let frame = (position.as_secs_f64() * self.spec.sample_rate as f64) as u64;
+        let frame = (position.as_secs_f64() * self.spec.sample_rate.get() as f64) as u64;
         self.frame_idx = frame.min(self.total_frames);
         Ok(SeekOutcome::Landed {
             target: position,
@@ -181,12 +178,12 @@ impl PcmReader for PositionReader {
     }
 
     fn position(&self) -> Duration {
-        Duration::from_secs_f64(self.frame_idx as f64 / self.spec.sample_rate as f64)
+        Duration::from_secs_f64(self.frame_idx as f64 / self.spec.sample_rate.get() as f64)
     }
 
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs_f64(
-            self.total_frames as f64 / self.spec.sample_rate as f64,
+            self.total_frames as f64 / self.spec.sample_rate.get() as f64,
         ))
     }
 
@@ -212,7 +209,7 @@ async fn read_returns_constant_samples_full() {
     let mut right = vec![0.0f32; 128];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
     let result = pr.read(&mut output, 0..128);
-    assert!(matches!(result, BlockReadOutcome::Full));
+    assert!(matches!(result, BlockReadOutcome::Full { frames: 128 }));
     for &s in &left[..128] {
         assert!((s - 0.5).abs() < f32::EPSILON);
     }
@@ -258,7 +255,7 @@ async fn zero_read_without_eof_is_not_error() {
     let mut right = vec![0.0f32; 128];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
     let result = pr.read(&mut output, 0..128);
-    assert!(matches!(result, BlockReadOutcome::Full));
+    assert!(matches!(result, BlockReadOutcome::Full { frames: 0 }));
 }
 
 /// When the reader returns 0 frames and is NOT at EOF (e.g. async seek
@@ -277,7 +274,7 @@ async fn read_zeroes_output_when_no_data_available() {
         let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
         let result = pr.read(&mut output, 0..128);
         assert!(
-            matches!(result, BlockReadOutcome::Full),
+            matches!(result, BlockReadOutcome::Full { frames: 0 }),
             "zero-read without EOF must not error"
         );
     }
@@ -302,7 +299,7 @@ async fn full_read_prefetches_buffered_eof() {
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
     let result = pr.read(&mut output, 0..512);
 
-    assert!(matches!(result, BlockReadOutcome::Full));
+    assert!(matches!(result, BlockReadOutcome::Full { frames: 512 }));
     let remaining = pr
         .frames_until_eof()
         .expect("BUG: EOF should be known after prefetch");
@@ -417,7 +414,7 @@ async fn read_returns_failed_not_eof_on_decoder_error() {
             "decoder Err must NOT be conflated with natural EOF — got {result:?}; \
              this is the false-EOF bug from app.log"
         ),
-        BlockReadOutcome::Full => {
+        BlockReadOutcome::Full { .. } => {
             panic!("decoder Err must surface as Failed, not Full silence — got {result:?}")
         }
     }
@@ -441,7 +438,7 @@ async fn read_returns_eof_when_already_drained() {
     loop {
         let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
         match pr.read(&mut output, 0..4096) {
-            BlockReadOutcome::Full | BlockReadOutcome::Partial(_) => {}
+            BlockReadOutcome::Full { .. } | BlockReadOutcome::Partial(_) => {}
             BlockReadOutcome::Eof => break,
             BlockReadOutcome::Failed => panic!("unexpected Failed in EOF test"),
         }

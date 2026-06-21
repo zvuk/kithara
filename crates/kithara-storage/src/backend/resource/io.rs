@@ -40,7 +40,7 @@ impl<D: DriverIo> ResourceCore<D> {
         self.check_health()?;
 
         let effective_len = {
-            let final_len = self.inner.state.lock_sync().final_len;
+            let final_len = self.inner.gate.lock().final_len;
             let storage_len = self.inner.driver.storage_len();
             let data_len = final_len.unwrap_or(storage_len);
             data_len.min(storage_len)
@@ -75,7 +75,7 @@ impl<D: DriverIo> ResourceCore<D> {
         self.check_health()?;
 
         let effective_len = {
-            let final_len = self.inner.state.lock_sync().final_len;
+            let final_len = self.inner.gate.lock().final_len;
             let storage_len = self.inner.driver.storage_len();
             final_len.unwrap_or(storage_len).min(storage_len)
         };
@@ -108,7 +108,7 @@ impl<D: DriverIo> ResourceCore<D> {
             })?;
 
         let committed = {
-            let state = self.inner.state.lock_sync();
+            let state = self.inner.gate.lock();
             state.committed
         };
 
@@ -118,7 +118,7 @@ impl<D: DriverIo> ResourceCore<D> {
         self.inner.driver.notify_write(&range);
 
         {
-            let mut state = self.inner.state.lock_sync();
+            let mut state = self.inner.gate.lock();
             state.available.insert(range.clone());
 
             if let Some(window) = self.inner.driver.valid_window() {
@@ -131,7 +131,7 @@ impl<D: DriverIo> ResourceCore<D> {
                 }
             }
         }
-        self.inner.condvar.notify_all();
+        self.inner.gate.notify_all();
 
         if let Some(observer) = self.inner.observer.as_ref() {
             observer.on_write(range);
@@ -153,7 +153,7 @@ mod tests {
         mpsc,
     };
 
-    use kithara_platform::{CancellationToken, thread, time::Duration};
+    use kithara_platform::{CancelToken, thread, time::Duration};
 
     use crate::{
         WaitOutcome,
@@ -168,7 +168,7 @@ mod tests {
     /// Open a fresh, uncommitted in-memory resource for the concurrency tests.
     fn open_mem() -> ResourceCore<MemDriver> {
         ResourceCore::open(
-            CancellationToken::default(),
+            CancelToken::never(),
             MemOptions {
                 initial_data: None,
                 capacity: 0,
@@ -181,7 +181,7 @@ mod tests {
     /// builder defaults). The caller keeps the backing `TempDir` alive for the
     /// duration of the test.
     fn open_mmap(path: std::path::PathBuf) -> ResourceCore<MmapDriver> {
-        ResourceCore::open(CancellationToken::default(), MmapOptions::new(path))
+        ResourceCore::open(CancelToken::never(), MmapOptions::new(path))
             .expect("open mmap must succeed")
     }
 
@@ -196,13 +196,13 @@ mod tests {
     }
 
     /// A committed resource's `read_at_inner` must complete WITHOUT taking the
-    /// `inner.state` mutex. The test holds the state mutex on this thread while a
+    /// `inner.gate` state lock. The test holds that lock on this thread while a
     /// worker thread reads; a lock-free fast path completes immediately, a slow
     /// path blocks on the held guard and times out.
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn committed_read_does_not_take_state_mutex() {
         let core: ResourceCore<MemDriver> = ResourceCore::open(
-            CancellationToken::default(),
+            CancelToken::never(),
             MemOptions {
                 initial_data: Some(b"hello world".to_vec()),
                 capacity: 0,
@@ -212,7 +212,7 @@ mod tests {
 
         assert_eq!(core.inner.driver.committed_len(), Some(11));
 
-        let guard = core.inner.state.lock_sync();
+        let guard = core.inner.gate.lock();
 
         let (tx, rx) = mpsc::channel();
         let worker = core.clone();
@@ -234,14 +234,14 @@ mod tests {
     }
 
     /// A committed resource's `len_inner`/`contains_range_inner` must answer
-    /// WITHOUT taking the `inner.state` mutex. Mirrors the read fast-path test:
-    /// the state mutex is held on this thread while a worker queries length and
+    /// WITHOUT taking the `inner.gate` state lock. Mirrors the read fast-path test:
+    /// that lock is held on this thread while a worker queries length and
     /// coverage; a lock-free path completes immediately, a locking path blocks
     /// on the held guard and times out.
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn committed_len_and_contains_do_not_take_state_mutex() {
         let core: ResourceCore<MemDriver> = ResourceCore::open(
-            CancellationToken::default(),
+            CancelToken::never(),
             MemOptions {
                 initial_data: Some(b"hello world".to_vec()),
                 capacity: 0,
@@ -251,7 +251,7 @@ mod tests {
 
         assert_eq!(core.inner.driver.committed_len(), Some(11));
 
-        let guard = core.inner.state.lock_sync();
+        let guard = core.inner.gate.lock();
 
         let (tx, rx) = mpsc::channel();
         let worker = core.clone();

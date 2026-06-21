@@ -8,8 +8,13 @@ use kithara::{
     },
     prelude::{Resource, ResourceConfig},
 };
-use kithara_platform::CancellationToken;
-use tokio::{sync::watch, task::JoinHandle};
+use kithara_platform::{
+    CancelToken,
+    tokio::{
+        sync::watch,
+        task::{self, JoinHandle},
+    },
+};
 use tracing::warn;
 
 /// App-side handle over the shared [`AnalysisWorker`]: opens the resource
@@ -28,7 +33,7 @@ pub struct TrackAnalysisRunner {
 /// Teardown is cooperative — cancelling the token exits the worker's decode
 /// loop at its next per-chunk check.
 struct RunHandle {
-    cancel: CancellationToken,
+    cancel: CancelToken,
     task: JoinHandle<()>,
 }
 
@@ -37,7 +42,7 @@ impl TrackAnalysisRunner {
     /// and every run scope live under it. `buckets` caps the waveform output;
     /// the native window count is the real resolution.
     #[must_use]
-    pub fn new(master: &CancellationToken, buckets: usize) -> Self {
+    pub fn new(master: &CancelToken, buckets: usize) -> Self {
         let builder = AnalyzerBuilder::default()
             .with_waveform(buckets)
             .with_beat();
@@ -45,16 +50,9 @@ impl TrackAnalysisRunner {
         let worker = Arc::new(AnalysisWorker::new(master, builder));
         Self {
             worker,
-            current: None,
             active,
+            current: None,
         }
-    }
-
-    /// `false` when no analyzer is configured (`builder.is_empty()`) — the
-    /// runtime signal to skip analysis scheduling.
-    #[must_use]
-    pub fn is_active(&self) -> bool {
-        self.active
     }
 
     /// Cancel any prior run and queue `config` for analysis.
@@ -65,7 +63,7 @@ impl TrackAnalysisRunner {
 
         let run = self.worker.child_token();
         let (tx, rx) = watch::channel(None);
-        let task = tokio::spawn(run_analysis(
+        let task = task::spawn(run_analysis(
             Arc::clone(&self.worker),
             config,
             run.clone(),
@@ -82,6 +80,13 @@ impl TrackAnalysisRunner {
             prev.task.abort();
         }
     }
+
+    /// `false` when no analyzer is configured (`builder.is_empty()`) — the
+    /// runtime signal to skip analysis scheduling.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
 }
 
 impl Drop for TrackAnalysisRunner {
@@ -95,7 +100,7 @@ impl Drop for TrackAnalysisRunner {
 async fn run_analysis(
     worker: Arc<AnalysisWorker>,
     config: ResourceConfig,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     tx: watch::Sender<Option<TrackAnalysis>>,
 ) {
     let Some(reader) = open_reader(config, &cancel).await else {
@@ -117,12 +122,12 @@ async fn run_analysis(
 /// reader for the analysis worker.
 async fn open_reader(
     mut config: ResourceConfig,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
 ) -> Option<Box<dyn PcmReader>> {
     if cancel.is_cancelled() {
         return None;
     }
-    config.cancel = Some(cancel.child_token());
+    config.cancel = Some(cancel.child());
     let mut resource = match Resource::new(config).await {
         Ok(r) => r,
         Err(e) => {
@@ -134,5 +139,5 @@ async fn open_reader(
         warn!(?e, "analysis: preload failed");
         return None;
     }
-    Some(resource.into_reader())
+    Some(resource.into())
 }

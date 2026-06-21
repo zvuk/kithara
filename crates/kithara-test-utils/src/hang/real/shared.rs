@@ -1,5 +1,4 @@
-use std::time::Duration;
-
+use kithara_platform::time::Duration;
 use serde::Serialize;
 
 /// Context payload that a [`HangDetector`](super::HangDetector) serializes when

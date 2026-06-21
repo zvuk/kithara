@@ -5,7 +5,7 @@ use std::{fmt, fs, ops::Range, path::PathBuf, sync::Arc};
 use arc_swap::ArcSwapOption;
 use bon::Builder;
 use crossbeam_queue::SegQueue;
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use mmap_io::MemoryMappedFile;
 use rangemap::RangeSet;
 
@@ -82,13 +82,13 @@ impl MmapState {
 /// Uses `mmap-io` for file-backed storage with a lock-free `SegQueue`
 /// for fast-path wait notifications.
 pub struct MmapDriver {
+    /// Immutable committed snapshot for the lock-free read fast path.
+    pub(super) committed: ArcSwapOption<MemoryMappedFile>,
     pub(super) mmap: Mutex<MmapState>,
     pub(super) mode: OpenMode,
     pub(super) path: PathBuf,
     /// Lock-free queue for fast-path range notifications.
     pub(super) ready_ranges: SegQueue<Range<u64>>,
-    /// Immutable committed snapshot for the lock-free read fast path.
-    pub(super) committed: ArcSwapOption<MemoryMappedFile>,
 }
 
 impl fmt::Debug for MmapDriver {
@@ -162,10 +162,10 @@ impl Driver for MmapDriver {
 
         let driver = Self {
             mode,
+            committed,
             mmap: Mutex::new(mmap_state),
             path: opts.path,
             ready_ranges: SegQueue::new(),
-            committed,
         };
 
         Ok((driver, init))
@@ -183,7 +183,7 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use kithara_platform::{CancellationToken, thread, time::Duration};
+    use kithara_platform::{CancelToken, thread, time::Duration};
     use tempfile::TempDir;
 
     use super::*;
@@ -199,7 +199,7 @@ mod tests {
     fn create_resource_with_size(dir: &TempDir, size: Option<u64>) -> MmapResource {
         let path = dir.path().join("test.dat");
         Resource::open(
-            CancellationToken::default(),
+            CancelToken::never(),
             MmapOptions {
                 path,
                 initial_len: size,
@@ -306,7 +306,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(2)))]
     fn test_cancel_wakes_waiters() {
         let dir = TempDir::new().unwrap();
-        let cancel = CancellationToken::default();
+        let cancel = CancelToken::never();
         let path = dir.path().join("cancel_test.dat");
 
         let res: MmapResource = Resource::open(
@@ -339,7 +339,7 @@ mod tests {
 
         {
             let res: MmapResource = Resource::open(
-                CancellationToken::default(),
+                CancelToken::never(),
                 MmapOptions {
                     path: path.clone(),
                     initial_len: None,
@@ -351,7 +351,7 @@ mod tests {
         }
 
         let res: MmapResource = Resource::open(
-            CancellationToken::default(),
+            CancelToken::never(),
             MmapOptions {
                 path,
                 initial_len: None,

@@ -1,21 +1,23 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use kithara_app::{config::AppConfig, sources::build_source};
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
+use kithara_integration_tests::{
+    TestTempDir, kithara, offline::OfflineSession, waits::wait_for_position_at_least,
+};
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, sleep, timeout},
+};
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::{
-    sync::OnceCell,
-    time::{sleep, timeout},
-};
+use tokio::sync::OnceCell;
 
 /// Staging zvq.me DRM track — `zvuk-stage` provider in `app.yaml`.
 /// Validates the per-provider X-Encrypted-Key salt shape: stage WAF
@@ -36,11 +38,10 @@ async fn shared_ctx() -> &'static Ctx {
     CTX.get_or_init(|| async {
         let net = NetOptions::builder().is_insecure(true).build();
         let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::default()))
-                .build(),
+            DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
         );
-        let flush_hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
-        let config = AppConfig::new(downloader, flush_hub, CancellationToken::default());
+        let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
+        let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
         let player = Arc::new(PlayerImpl::new(
             PlayerConfig::builder()
                 .session(OfflineSession::arc_auto())
@@ -113,29 +114,6 @@ async fn wait_for_loaded(
     .map_err(|_| format!("no Loaded within {deadline:?}"))?
 }
 
-async fn wait_for_position_at_least(
-    queue: &Queue,
-    min_secs: f64,
-    deadline: Duration,
-) -> Result<(), String> {
-    let start = std::time::Instant::now();
-    loop {
-        if let Some(pos) = queue.position_seconds()
-            && pos >= min_secs
-        {
-            return Ok(());
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "position stayed below {min_secs:.2}s for {:?} (last: {:?})",
-                deadline,
-                queue.position_seconds()
-            ));
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
-}
-
 /// Staging zvq.me DRM end-to-end: load → select → play, asserting
 /// that audio progresses (position advances by ≥0.9s over 2s wall
 /// clock). Mirrors `zvuk_prod_drm_e2e::zvuk_prod_drm_track_plays`
@@ -172,12 +150,14 @@ async fn zvuk_stage_drm_track_plays(#[case] backend: DecoderBackend) {
         .unwrap_or_else(|e| panic!("stage DRM play fail [{STAGE_TRACK}]: {e}"));
 
     let before = ctx.queue.position_seconds().unwrap_or(0.0);
-    sleep(Duration::from_secs(2)).await;
+    wait_for_position_at_least(&ctx.queue, before + 0.9, Duration::from_secs(15))
+        .await
+        .unwrap_or_else(|e| panic!("stage DRM playback stalled [{STAGE_TRACK}]: {e}"));
     let after = ctx.queue.position_seconds().unwrap_or(0.0);
     assert!(
         after - before >= 0.9,
         "stage DRM playback stalled [{STAGE_TRACK}]: \
-         {before:.2}→{after:.2} over 2s wall clock"
+         {before:.2}→{after:.2} (waited on position advance)"
     );
 
     ctx.queue.remove(track_id).expect("remove");

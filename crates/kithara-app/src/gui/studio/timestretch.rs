@@ -29,12 +29,18 @@ use crate::{
     theme::gui::GuiPalette,
 };
 
-/// Selectable tempo bounds in ± percent.
-const RANGES: [u8; 4] = [8, 16, 50, 100];
-/// Shared height of the stat tile / key-lock / nudge row so they align.
-const STAT_H: f32 = 38.0;
-/// Range / library pill height.
-const PILL_H: f32 = 24.0;
+/// Layout tunables for the timestretch panel, grouped to keep the module
+/// surface small.
+struct Consts;
+
+impl Consts {
+    /// Range / library pill height.
+    const PILL_H: f32 = 24.0;
+    /// Selectable tempo bounds in ± percent.
+    const RANGES: [u8; 4] = [8, 16, 50, 100];
+    /// Shared height of the stat tile / key-lock / nudge row so they align.
+    const STAT_H: f32 = 38.0;
+}
 
 /// The timestretch deck panel, matching the design `.ts` block: a single
 /// head row (label · range pills · tempo value), the tempo slider, a stat
@@ -85,7 +91,7 @@ fn head_row(tempo: f32, state: &Kithara, p: GuiPalette) -> Element<'static, Mess
 /// right-aligned above the slider.
 fn ranges_row(range: u8, p: GuiPalette) -> Element<'static, Message> {
     let mut pills = row![].spacing(gap::INLINE_TIGHT).align_y(Alignment::Center);
-    for r in RANGES {
+    for r in Consts::RANGES {
         pills = pills.push(range_pill(r, r == range, p));
     }
     row![Space::new().width(Length::Fill), pills]
@@ -198,7 +204,7 @@ fn stat_tile(label: &str, value: String, p: GuiPalette) -> Element<'static, Mess
         .spacing(1.0),
     )
     .padding([0.0, 10.0])
-    .center_y(Length::Fixed(STAT_H))
+    .center_y(Length::Fixed(Consts::STAT_H))
     .style(tile_style(p))
     .into()
 }
@@ -233,7 +239,7 @@ fn keylock_pill(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
         )
         .center_y(Length::Fill),
     )
-    .height(Length::Fixed(STAT_H))
+    .height(Length::Fixed(Consts::STAT_H))
     .padding([0.0, 12.0])
     .style(move |_theme: &Theme, _status| button::Style {
         background: Some(Background::Color(background)),
@@ -270,7 +276,7 @@ fn nudge_button(label: &str, message: Message, p: GuiPalette) -> Element<'static
         .center_y(Length::Fill),
     )
     .width(Length::Fixed(28.0))
-    .height(Length::Fixed(STAT_H))
+    .height(Length::Fixed(Consts::STAT_H))
     .padding(0)
     .style(move |_theme: &Theme, _status| button::Style {
         background: Some(Background::Color(with_alpha(p.bg_deep, 0.5))),
@@ -312,7 +318,7 @@ fn pill(label: String, active: bool, message: Message, p: GuiPalette) -> Element
         .center_x(Length::Fill)
         .center_y(Length::Fill),
     )
-    .height(Length::Fixed(PILL_H))
+    .height(Length::Fixed(Consts::PILL_H))
     .padding([0.0, 9.0])
     .style(move |_theme: &Theme, _status| button::Style {
         background: Some(Background::Color(background)),

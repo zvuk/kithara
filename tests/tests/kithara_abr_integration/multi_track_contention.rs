@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use kithara_abr::{AbrController, AbrMode, AbrSettings, AbrState, ThroughputEstimator};
 use kithara_events::{BandwidthSource, VariantDuration, VariantIndex, VariantInfo};
-use kithara_platform::time::Duration;
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_test_utils::kithara;
 
 fn settings_fast() -> AbrSettings {
@@ -56,6 +56,7 @@ async fn three_peers_maintain_independent_variant_indices() {
     let controller = AbrController::with_estimator(
         settings_fast(),
         Arc::new(ThroughputEstimator::new()) as Arc<_>,
+        CancelToken::never(),
     );
 
     let (s0, p0) = new_peer(&[300_000, 900_000]);

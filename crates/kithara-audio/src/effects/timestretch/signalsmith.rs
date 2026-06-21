@@ -10,18 +10,18 @@ use super::stretch_backend::{StretchBackend, StretchBackendError};
 /// stores the ratio and sizes the output buffer itself.
 pub(crate) struct SignalsmithBackend {
     inner: Stretch,
-    channels: usize,
-    ratio: f64,
     /// The latency tail was already drained; `flush` is one-shot per stream
     /// end or the caller's drain loop (`drain_effects`) would never finish.
     flushed: bool,
+    ratio: f64,
+    channels: usize,
 }
 
 impl SignalsmithBackend {
     pub(crate) fn new(spec: PcmSpec) -> Self {
         let channels = usize::from(spec.channels.max(1));
         let inner =
-            Stretch::preset_default(u32::from(spec.channels.max(1)), spec.sample_rate.max(1));
+            Stretch::preset_default(u32::from(spec.channels.max(1)), spec.sample_rate.get());
         Self {
             inner,
             channels,
@@ -37,6 +37,22 @@ impl SignalsmithBackend {
 }
 
 impl StretchBackend for SignalsmithBackend {
+    fn flush(&mut self, out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
+        if self.flushed {
+            return Ok(());
+        }
+        self.flushed = true;
+        let tail = self.inner.output_latency().saturating_mul(self.channels);
+        let start = out.len();
+        out.resize(start + tail, 0.0);
+        self.inner.flush(&mut out[start..]);
+        Ok(())
+    }
+
+    fn max_output_samples(&self, input_frames: usize) -> usize {
+        self.out_frames(input_frames).saturating_mul(self.channels)
+    }
+
     fn process(&mut self, input: &[f32], out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
         let in_frames = input.len() / self.channels;
         if in_frames == 0 {
@@ -50,26 +66,9 @@ impl StretchBackend for SignalsmithBackend {
         Ok(())
     }
 
-    fn flush(&mut self, out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
-        if self.flushed {
-            return Ok(());
-        }
-        self.flushed = true;
-        let tail = self.inner.output_latency().saturating_mul(self.channels);
-        let start = out.len();
-        out.resize(start + tail, 0.0);
-        self.inner.flush(&mut out[start..]);
-        Ok(())
-    }
-
-    fn set_ratio(&mut self, stretch: f64) -> Result<(), StretchBackendError> {
-        if !stretch.is_finite() || stretch <= 0.0 {
-            return Err(StretchBackendError::Param(format!(
-                "stretch ratio {stretch}"
-            )));
-        }
-        self.ratio = stretch;
-        Ok(())
+    fn reset(&mut self) {
+        self.inner.reset();
+        self.flushed = false;
     }
 
     fn set_pitch(&mut self, scale: f64) -> Result<(), StretchBackendError> {
@@ -81,12 +80,13 @@ impl StretchBackend for SignalsmithBackend {
         Ok(())
     }
 
-    fn max_output_samples(&self, input_frames: usize) -> usize {
-        self.out_frames(input_frames).saturating_mul(self.channels)
-    }
-
-    fn reset(&mut self) {
-        self.inner.reset();
-        self.flushed = false;
+    fn set_ratio(&mut self, stretch: f64) -> Result<(), StretchBackendError> {
+        if !stretch.is_finite() || stretch <= 0.0 {
+            return Err(StretchBackendError::Param(format!(
+                "stretch ratio {stretch}"
+            )));
+        }
+        self.ratio = stretch;
+        Ok(())
     }
 }

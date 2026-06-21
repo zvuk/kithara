@@ -1,5 +1,5 @@
 use kithara_events::EventReceiver;
-use kithara_platform::{MaybeSend, MaybeSync};
+use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 
 #[rustfmt::skip]
 use crate::traits::dj::crossfade::CrossfadeConfig;
@@ -23,6 +23,8 @@ pub trait Engine: MaybeSend + MaybeSync + 'static {
     fn is_crossfading(&self) -> bool;
 
     fn is_running(&self) -> bool;
+
+    fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError>;
 
     fn master_channels(&self) -> u16;
 

@@ -40,13 +40,24 @@ fn hash_rs_tree(dir: &Path, hasher: &mut DefaultHasher) {
 fn main() {
     let mut hasher = DefaultHasher::new();
 
-    for dir in ["../crates/kithara-encode/src", "src/native"] {
+    // Hash ONLY the spec→bytes transformation code: the encoders, the fMP4
+    // muxer, the packaged-variant encode glue, and the signal encode route.
+    // Spec changes flow into per-entry cache KEYS, and server delivery code
+    // (routes/behavior, throttling, playlists) never changes encoded bytes —
+    // hashing all of `src/native` forced a cold cache (and per-test ffmpeg
+    // re-encodes blowing test budgets) on every test-server edit.
+    for dir in ["../crates/kithara-encode/src", "src/native/fmp4"] {
         println!("cargo:rerun-if-changed={dir}");
         hash_rs_tree(Path::new(dir), &mut hasher);
     }
-    // The PCM signal generator and the dependency lockfile (ffmpeg-sys / encoder
-    // crate versions) also determine the encoded bytes.
-    for file in ["src/signal_pcm.rs", "../Cargo.lock"] {
+    // The encode glue, the PCM signal generator, and the dependency lockfile
+    // (ffmpeg-sys / encoder crate versions) also determine the encoded bytes.
+    for file in [
+        "src/native/hls_stream.rs",
+        "src/native/routes/signal.rs",
+        "src/signal_pcm.rs",
+        "../Cargo.lock",
+    ] {
         if let Ok(bytes) = fs::read(file) {
             bytes.hash(&mut hasher);
         }

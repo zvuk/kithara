@@ -6,7 +6,7 @@ use kithara_integration_tests::{
     create_test_wav, kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
 };
-use kithara_platform::time::{Duration, Instant, sleep, timeout};
+use kithara_platform::time::{self, Duration, Instant};
 use kithara_stream::Stream;
 
 fn wav_stream(samples: usize) -> AudioConfig<MemStream> {
@@ -29,7 +29,7 @@ async fn wait_for_frames<S>(audio: &mut Audio<S>, budget: Duration) -> usize {
             Ok(ReadOutcome::Frames { count, .. }) => return count.get(),
             Ok(ReadOutcome::Eof { .. }) => return 0,
             Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(20)).await;
+                time::sleep(Duration::from_millis(20)).await;
             }
             Err(error) => panic!("decode error while waiting for frames: {error}"),
         }
@@ -46,7 +46,7 @@ async fn drain_to_eof<S>(audio: &mut Audio<S>, budget: Duration) -> usize {
             Ok(ReadOutcome::Frames { count, .. }) => total += count.get(),
             Ok(ReadOutcome::Eof { .. }) => return total,
             Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(10)).await;
+                time::sleep(Duration::from_millis(10)).await;
             }
             Err(error) => panic!("decode error while draining: {error}"),
         }
@@ -87,7 +87,7 @@ async fn seek_during_active_decode_completes_without_hang() {
             stage: SeekLifecycleStage::SeekRequest,
             seek_epoch,
             ..
-        }))) = timeout(remaining, events.recv()).await
+        }))) = time::timeout(remaining, events.recv()).await
         {
             observed_epoch = Some(seek_epoch);
             break;
@@ -99,7 +99,7 @@ async fn seek_during_active_decode_completes_without_hang() {
     let mut saw_complete = false;
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        match timeout(remaining, events.recv()).await {
+        match time::timeout(remaining, events.recv()).await {
             Ok(Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. })))
                 if seek_epoch == expected_epoch =>
             {
@@ -131,7 +131,25 @@ async fn rapid_seeks_via_timeline_all_complete() {
         .expect("audio construction");
     let mut events = audio.event_bus().subscribe();
 
-    let _ = wait_for_frames(&mut audio, Duration::from_secs(2)).await;
+    // Keep the settle reads inline so the flash rewriter retargets these
+    // sleeps onto the virtual clock. `Audio::seek()` publishes SeekRequest
+    // synchronously; SeekComplete / PlaybackProgress still require reads to
+    // commit post-seek output.
+
+    // Prime: read until the first decoded frames arrive.
+    {
+        let mut buf = [0.0f32; 256];
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Eof { .. }) => break,
+                Ok(ReadOutcome::Pending { .. }) => {
+                    time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(error) => panic!("decode error while priming: {error}"),
+            }
+        }
+    }
 
     let mut expected_epochs = Vec::with_capacity(SEEK_COUNT);
     for i in 0..SEEK_COUNT {
@@ -146,7 +164,7 @@ async fn rapid_seeks_via_timeline_all_complete() {
                 stage: SeekLifecycleStage::SeekRequest,
                 seek_epoch,
                 ..
-            }))) = timeout(remaining, events.recv()).await
+            }))) = time::timeout(remaining, events.recv()).await
             {
                 captured = Some(seek_epoch);
                 break;
@@ -154,7 +172,19 @@ async fn rapid_seeks_via_timeline_all_complete() {
         }
         expected_epochs.push(captured.expect("seek epoch from SeekRequest"));
 
-        let _ = wait_for_frames(&mut audio, Duration::from_millis(500)).await;
+        // Settle on the virtual clock: read post-seek frames so the consumer
+        // commits this seek and the worker advances before the next `seek()`.
+        let mut buf = [0.0f32; 256];
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < deadline {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Eof { .. }) => break,
+                Ok(ReadOutcome::Pending { .. }) => {
+                    time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(error) => panic!("decode error while settling seek: {error}"),
+            }
+        }
     }
 
     let highest_expected = *expected_epochs
@@ -162,20 +192,29 @@ async fn rapid_seeks_via_timeline_all_complete() {
         .max()
         .expect("at least one seek epoch");
 
+    let mut buf = [0.0f32; 256];
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut last_complete: Option<SeekEpoch> = None;
     while Instant::now() < deadline {
+        // Read each tick so the consumer keeps committing post-seek output and
+        // emitting `SeekComplete` for the highest requested epoch. `read()` is
+        // non-blocking; the `events.recv()` below parks on the virtual clock,
+        // letting the worker decode the next chunk.
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { .. })
+            | Ok(ReadOutcome::Eof { .. })
+            | Ok(ReadOutcome::Pending { .. }) => {}
+            Err(error) => panic!("decode error while draining seek completions: {error}"),
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
-        match timeout(remaining, events.recv()).await {
+        match time::timeout(remaining, events.recv()).await {
             Ok(Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))) => {
                 last_complete = Some(seek_epoch);
                 if seek_epoch >= highest_expected {
                     break;
                 }
             }
-            Ok(_) => {
-                let _ = wait_for_frames(&mut audio, Duration::from_millis(80)).await;
-            }
+            Ok(_) => {}
             Err(_) => break,
         }
     }
@@ -212,7 +251,14 @@ async fn truncated_wav_surfaces_decode_error_or_eof() {
                 break;
             }
             Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {
-                sleep(Duration::from_millis(20)).await;
+                // Qualified `time::sleep` so the `#[kithara::test(flash(true))]`
+                // body rewriter virtualizes this wait to match the already-
+                // virtualized `Instant::now()` deadline above. A bare-imported
+                // `sleep` is a single-segment path the rewriter does not match,
+                // leaving it REAL — a mixed driver clock whose virtual deadline
+                // races past while the driver sleeps real, exiting the loop
+                // before the worker's EOF marker is drained.
+                time::sleep(Duration::from_millis(20)).await;
             }
         }
     }

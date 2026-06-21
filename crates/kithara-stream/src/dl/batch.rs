@@ -6,7 +6,8 @@ use kithara_events::{
 };
 use kithara_net::{HttpClient, NetError, Retryability};
 use kithara_platform::{
-    CancelGroup, CancellationToken,
+    CancelGroup, CancelToken,
+    flash::virtual_now,
     time::{Duration, Instant},
     tokio,
     tokio::task,
@@ -122,9 +123,7 @@ impl FromIterator<SlotEntry> for BatchGroup {
     fn from_iter<I: IntoIterator<Item = SlotEntry>>(entries: I) -> Self {
         let mut epochs: Vec<EpochGroup> = Vec::new();
         for entry in entries {
-            let found = epochs
-                .iter_mut()
-                .find(|g| g.cancel.equals_ptr(&entry.cmd.cancel));
+            let found = epochs.iter_mut().find(|g| g.cancel == entry.cmd.cancel);
             match found {
                 Some(group) => group.entries.push(entry),
                 None => epochs.push(EpochGroup {
@@ -147,6 +146,7 @@ impl BatchGroup {
     /// number of fetches actually spawned (cancelled cmds don't count),
     /// so [`Registry::tick`](super::registry::Registry::tick) can treat
     /// a non-zero dispatch as forward progress for the hang watchdog.
+    #[kithara::flash(true)]
     pub(super) async fn process(self, inner: &DownloaderInner) -> usize {
         let mut dispatched: usize = 0;
         for group in self.epochs {
@@ -161,12 +161,21 @@ impl BatchGroup {
                     deliver_cancelled_with_event(entry.cmd, &entry.peer_cancel);
                     continue;
                 }
+                // Backpressure is the capacity gate alone: `spawn_fetch` bumps
+                // `inflight` synchronously (`start_request`), so the next
+                // iteration sees the updated count. No unconditional per-spawn
+                // yield: under `flash` this fn runs on the virtual clock while
+                // the spawned fetch tasks run real-socket I/O, and an engine
+                // `yield_now` only resolves on a clock advance (grant needs
+                // `active_async == 0`). The in-flight fetches' `fetch_waker`
+                // churn keeps `active_async` non-zero, so a mid-batch yield can
+                // never be granted — it strands the rest of the batch (a popped
+                // segment that the peer no longer holds is then lost forever).
                 while inner.inflight.load(Ordering::Relaxed) >= inner.max_concurrent {
                     task::yield_now().await;
                 }
                 spawn_fetch(inner, entry.cmd, entry.peer_cancel);
                 dispatched += 1;
-                task::yield_now().await;
             }
         }
         dispatched
@@ -174,9 +183,8 @@ impl BatchGroup {
 }
 
 /// Spawn an HTTP fetch task for one command.
-fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: CancellationToken) {
+fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: CancelToken) {
     let client = inner.client.clone();
-    let chunk_timeout = inner.chunk_timeout;
     let soft_timeout = inner.soft_timeout;
     let inflight = inner.inflight.clone();
     let fetch_waker = inner.fetch_waker.clone();
@@ -197,16 +205,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     start_request(bus.as_ref(), &inflight, request_id, wait_in_queue);
 
     task::spawn(async move {
-        let result = establish(
-            &client,
-            chunk_timeout,
-            soft_timeout,
-            &cancel,
-            bus.clone(),
-            cmd,
-            request_id,
-        )
-        .await;
+        let result = establish(&client, soft_timeout, &cancel, bus.clone(), cmd, request_id).await;
         deliver(
             request_id,
             DeliveryContext {
@@ -230,6 +229,25 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     });
 }
 
+/// Measured duration of a fetch, robust to the flash clock split.
+///
+/// `started` is captured in the `#[kithara::flash(true)]` dispatch (`process`),
+/// so under `flash` it reads the VIRTUAL clock; this delivery runs in a
+/// non-flash fetch task (its real-socket I/O and timeouts must stay on real
+/// time), where `started.elapsed()` reads the REAL clock. A virtual `started`
+/// minus a real `now` would saturate to ZERO (and silently drop the bandwidth
+/// sample). Take the larger of the real elapsed and the virtual-clock delta: a
+/// real server delay (off-feature / `flash(false)`) is captured by the real
+/// elapsed, a virtual server delay (a flash test's withhold gate) is captured by
+/// the virtual delta, and an instant fetch yields zero on both. Off the
+/// `flash` feature `virtual_now` is real `Instant::now`, so both terms
+/// collapse to the same real elapsed.
+fn fetch_elapsed(started: Instant) -> Duration {
+    started
+        .elapsed()
+        .max(virtual_now().saturating_duration_since(started))
+}
+
 /// Race `fut` against a `soft_timeout` timer. When the timer wins, publish
 /// [`DownloaderEvent::LoadSlow`] on `bus` (if any) and keep waiting for
 /// `fut` to complete. Does not abort the underlying request.
@@ -247,7 +265,7 @@ where
     let started = Instant::now();
     tokio::select! {
         r = &mut fut => r,
-        () = tokio::time::sleep(soft) => {
+        () = kithara_platform::time::sleep(soft) => {
             if let Some(bus) = bus {
                 bus.publish(DownloaderEvent::LoadSlow {
                     request_id,
@@ -263,7 +281,6 @@ where
 #[kithara::probe(request_id)]
 async fn establish(
     client: &HttpClient,
-    chunk_timeout: Duration,
     soft_timeout: Duration,
     cancel: &CancelGroup,
     bus: Option<EventBus>,
@@ -318,7 +335,7 @@ async fn establish(
     }
 
     let resp_headers = byte_stream.headers.clone();
-    let body = BodyStream::wrap_http(byte_stream, cancel.clone(), chunk_timeout);
+    let body = BodyStream::wrap_http(byte_stream, cancel.clone());
     Ok(FetchResponse {
         body,
         headers: resp_headers,
@@ -345,13 +362,13 @@ fn bandwidth_bps(bytes: u64, duration: Duration) -> u64 {
 /// downloader-shutdown is the global stop. `BeforeStart` catches the
 /// race where the cancel token was set before any fetch task ran.
 fn classify_cancel(
-    peer_cancel: &CancellationToken,
-    epoch_cancel: Option<&CancellationToken>,
-    downloader_cancel: &CancellationToken,
+    peer_cancel: &CancelToken,
+    epoch_cancel: Option<&CancelToken>,
+    downloader_cancel: &CancelToken,
 ) -> CancelReason {
     if peer_cancel.is_cancelled() {
         CancelReason::PeerCancel
-    } else if epoch_cancel.is_some_and(CancellationToken::is_cancelled) {
+    } else if epoch_cancel.is_some_and(CancelToken::is_cancelled) {
         CancelReason::EpochCancel
     } else if downloader_cancel.is_cancelled() {
         CancelReason::DownloaderShutdown
@@ -365,13 +382,13 @@ fn classify_cancel(
 /// completion callback), the `bus` for telemetry, and the three nested cancel
 /// tokens (peer, epoch, downloader) used to classify cancellation reasons.
 struct DeliveryContext<'a> {
-    downloader_cancel: &'a CancellationToken,
-    peer_cancel: &'a CancellationToken,
+    downloader_cancel: &'a CancelToken,
+    peer_cancel: &'a CancelToken,
     peer_id: AbrPeerId,
     abr: Arc<AbrController>,
     started: Instant,
     bus: Option<EventBus>,
-    epoch_cancel: Option<&'a CancellationToken>,
+    epoch_cancel: Option<&'a CancelToken>,
     on_complete_cb: Option<super::cmd::OnCompleteFn>,
     on_response_cb: Option<super::cmd::OnResponseFn>,
     writer: Option<super::cmd::WriterFn>,
@@ -421,7 +438,7 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
                     cb(&headers);
                 }
                 let write_result = resp.body.write_all(|chunk| w(chunk)).await;
-                let elapsed = started.elapsed();
+                let elapsed = fetch_elapsed(started);
                 match write_result {
                     Ok(total) => {
                         finish_request(bus.as_ref(), &abr, peer_id, request_id, total, elapsed);
@@ -470,9 +487,9 @@ fn publish_failure_or_cancel(
     request_id: RequestId,
     err: &NetError,
     bytes_transferred: u64,
-    peer_cancel: &CancellationToken,
-    epoch_cancel: Option<&CancellationToken>,
-    downloader_cancel: &CancellationToken,
+    peer_cancel: &CancelToken,
+    epoch_cancel: Option<&CancelToken>,
+    downloader_cancel: &CancelToken,
 ) {
     if matches!(err, NetError::Cancelled) {
         let reason = classify_cancel(peer_cancel, epoch_cancel, downloader_cancel);
@@ -490,11 +507,11 @@ fn publish_failure_or_cancel(
 ///
 /// Public to siblings (used by [`Registry::reschedule`] when a peer
 /// went away) and by [`BatchGroup::process`] for early-cancel paths.
-pub(super) fn deliver_cancelled_with_event(internal: InternalCmd, peer_cancel: &CancellationToken) {
+pub(super) fn deliver_cancelled_with_event(internal: InternalCmd, peer_cancel: &CancelToken) {
     let request_id = internal.request_id;
     let bus = internal.bus.clone();
     let epoch_cancel = internal.cmd.cancel.clone();
-    let placeholder_inner = CancellationToken::default(); // kithara:cancel:owner
+    let placeholder_inner = CancelToken::never();
     let reason = classify_cancel(peer_cancel, epoch_cancel.as_ref(), &placeholder_inner);
     abort_request(bus.as_ref(), request_id, reason, 0, false);
     deliver_cancelled(internal.response, internal.cmd);

@@ -1,20 +1,21 @@
-use std::{num::NonZeroUsize, time::Duration};
+use std::{io::Write, num::NonZeroUsize};
 
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
-    file::{File, FileConfig},
+    file::{File, FileConfig, FileSrc},
     stream::Stream,
 };
 use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
     SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir,
 };
-use kithara_platform::tokio::task::spawn_blocking;
+use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 use super::common::{
-    CHANNELS, FREQ_HZ, PhaseDrift, SAMPLE_RATE, STREAM_FRAMES, SinePhaseSpec, e2e_phase_scan,
+    CHANNELS, FREQ_HZ, MIN_SIGNAL_AMP, PhaseDrift, READ_FRAMES_AFTER_SEEK, READ_PENDING_RETRIES,
+    SAMPLE_RATE, STREAM_FRAMES, SinePhaseSpec, TOLERANCE_SAMPLES, e2e_phase_scan,
     measure_phase_rad_window, seek_phase_scan, wrap_pi,
 };
 
@@ -62,9 +63,11 @@ async fn run_case(
     };
 
     let file_config = FileConfig::for_src(url.into()).store(store).build();
+    // Park on ring underrun: the offline scan needs no wall-clock pacing.
     let audio_config = AudioConfig::<File>::for_stream(file_config)
         .decoder_backend(backend)
         .maybe_hint(format_ext(format).map(str::to_owned))
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<File>>::new(audio_config)
         .await
@@ -89,7 +92,7 @@ async fn run_case(
     let total_frames_truth = (total_secs * f64::from(SAMPLE_RATE)) as u64;
 
     let aspec = audio.spec();
-    assert_eq!(aspec.sample_rate, SAMPLE_RATE);
+    assert_eq!(aspec.sample_rate.get(), SAMPLE_RATE);
     assert_eq!(u32::from(aspec.channels), u32::from(CHANNELS));
 
     let drifts = spawn_blocking(move || -> Vec<PhaseDrift> {
@@ -117,6 +120,131 @@ async fn run_case(
     );
 }
 
+/// Encode the sine fixture once (over the loopback test server, the only place
+/// the `pub(crate)` encoder is reachable from `tests/`) and persist the raw
+/// encoded bytes to a file inside `temp_dir`. This HTTP fetch is pure
+/// fixture-build setup on the real tokio runtime; the bytes then live on disk
+/// and the playback path under test (`FileSrc::Local`) never touches a socket.
+async fn write_sine_fixture_to_disk(
+    spec: &SignalSpec,
+    temp_dir: &TestTempDir,
+) -> std::path::PathBuf {
+    let helper = TestServerHelper::new().await;
+    let url = helper.sine(spec, FREQ_HZ).await;
+    let bytes = reqwest::get(url)
+        .await
+        .expect("fetch encoded sine fixture")
+        .bytes()
+        .await
+        .expect("read fixture body");
+    let ext = format_ext(spec.format).expect("known signal format extension");
+    let path = temp_dir.path().join(format!("sine_fixture.{ext}"));
+    let mut file = std::fs::File::create(&path).expect("create fixture file");
+    file.write_all(&bytes).expect("write fixture bytes");
+    file.sync_all().expect("flush fixture file");
+    path
+}
+
+/// Socket-free twin of [`run_case`]: the fixture bytes are read from a local
+/// file via `FileSrc::Local` (which builds its own private `AssetStore` and
+/// never registers a `Downloader` / issues an HTTP request), so the entire
+/// playback pipeline — storage waits, decode, resample — runs without any
+/// loopback transport. This is the path the `flash` quiescence engine can
+/// virtualize end to end. Asserts the identical phase-continuity contract.
+async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate: Option<u64>) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
+    let spec = SignalSpec {
+        sample_rate: SAMPLE_RATE,
+        channels: CHANNELS,
+        length: SignalSpecLength::Frames(STREAM_FRAMES as usize),
+        format,
+        bit_rate,
+    };
+
+    let temp_dir = TestTempDir::new();
+    let fixture_path = write_sine_fixture_to_disk(&spec, &temp_dir).await;
+
+    let file_config = FileConfig::for_src(FileSrc::Local(fixture_path)).build();
+    let audio_config = AudioConfig::<File>::for_stream(file_config)
+        .decoder_backend(backend)
+        .maybe_hint(format_ext(format).map(str::to_owned))
+        .build();
+    let mut audio = Audio::<Stream<File>>::new(audio_config)
+        .await
+        .expect("create local Audio<Stream<File>>");
+
+    let total_secs = audio
+        .duration()
+        .map(|d| d.as_secs_f64())
+        .expect("local file fixture should report duration");
+    info!(?format, ?backend, total_secs, "local fixture ready");
+    assert!(
+        total_secs > 30.0 && total_secs < 120.0,
+        "fixture duration out of sane range: {total_secs:.1}s",
+    );
+    let total_frames_truth = (total_secs * f64::from(SAMPLE_RATE)) as u64;
+
+    let aspec = audio.spec();
+    assert_eq!(aspec.sample_rate.get(), SAMPLE_RATE);
+    assert_eq!(u32::from(aspec.channels), u32::from(CHANNELS));
+
+    // Keep the temp dir alive across the blocking scan: the source reads the
+    // fixture from disk for the whole decode, so the backing file must outlive
+    // the `Audio`.
+    let drifts = spawn_blocking(move || -> Vec<PhaseDrift> {
+        let sine = SinePhaseSpec::default_440();
+        let drifts = e2e_phase_scan(&mut audio, sine, total_frames_truth);
+        drop(audio);
+        drifts
+    })
+    .await
+    .expect("spawn_blocking joined");
+    drop(temp_dir);
+
+    assert!(
+        drifts.is_empty(),
+        "phase continuity broken on {} scan(s) over a local file (format={format:?} backend={backend:?}): {drifts:?}",
+        drifts.len(),
+    );
+}
+
+/// First flash equivalence proof on a socket-free pipeline.
+///
+/// Reads a sine MP3 fixture straight from disk through `FileSrc::Local` and
+/// runs the production phase-continuity scan. Because `FileSrc::Local` builds
+/// its own `AssetStore` and never registers a `Downloader`, there is no async
+/// HTTP fetch for the virtual clock to race past — the whole pipeline collapses
+/// onto the quiescence engine. Run the SAME test twice for the proof:
+///
+/// - default (real clock):    `cargo test … phase_continuity_file_local_socket_free`
+/// - sim (virtual clock):     `cargo test … --features flash phase_continuity_file_local_socket_free`
+///
+/// Both must hold the sub-0.5-sample phase oracle bit-for-bit; the sim run is
+/// deterministic and faster (the storage condvar / park waits collapse to zero
+/// real time). The sub-0.5-sample assertions in `e2e_phase_scan` ARE the PCM
+/// oracle — any virtualization-induced divergence trips them.
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(25)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+#[case::mp3_symphonia(SignalFormat::Mp3, DecoderBackend::Symphonia, Some(320_000))]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::mp3_apple(SignalFormat::Mp3, DecoderBackend::Apple, Some(320_000))
+)]
+async fn phase_continuity_file_local_socket_free(
+    #[case] format: SignalFormat,
+    #[case] backend: DecoderBackend,
+    #[case] bit_rate: Option<u64>,
+) {
+    local_run_case(format, backend, bit_rate).await;
+}
+
 async fn decode_pcm_seconds(
     format: SignalFormat,
     backend: DecoderBackend,
@@ -142,16 +270,18 @@ async fn decode_pcm_seconds(
         .is_ephemeral(true)
         .build();
     let file_config = FileConfig::for_src(url.into()).store(store).build();
+    // Park on ring underrun instead of spinning on Pending.
     let audio_config = AudioConfig::<File>::for_stream(file_config)
         .decoder_backend(backend)
         .maybe_hint(format_ext(format).map(str::to_owned))
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<File>>::new(audio_config)
         .await
         .expect("create Audio<Stream<File>>");
     let aspec = audio.spec();
     let chan = aspec.channels as usize;
-    assert_eq!(aspec.sample_rate, SAMPLE_RATE);
+    assert_eq!(aspec.sample_rate.get(), SAMPLE_RATE);
     assert_eq!(u32::from(aspec.channels), u32::from(CHANNELS));
     let total_frames_target = (secs * f64::from(SAMPLE_RATE)) as usize;
     spawn_blocking(move || -> Vec<f32> {
@@ -401,7 +531,7 @@ async fn dump_aac_for_listening() {
             / residual.len() as f64)
             .sqrt();
         let snr_db = if rms > 1e-9 {
-            20.0 * (f64::from(amp) / rms).log10()
+            20.0 * (amp / rms).log10()
         } else {
             f64::INFINITY
         };
@@ -685,4 +815,172 @@ async fn phase_continuity_file(
     #[case] bit_rate: Option<u64>,
 ) {
     run_case(format, backend, ephemeral, seek_count, bit_rate).await;
+}
+
+/// Build an ephemeral AAC sine [`Audio`] over a file source. Shared by the
+/// deterministic seek-to-0 warm-up repro below.
+async fn build_aac_sine_audio(backend: DecoderBackend) -> Audio<Stream<File>> {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
+    let helper = TestServerHelper::new().await;
+    let spec = SignalSpec {
+        sample_rate: SAMPLE_RATE,
+        channels: CHANNELS,
+        length: SignalSpecLength::Frames(STREAM_FRAMES as usize),
+        format: SignalFormat::Aac,
+        bit_rate: Some(320_000),
+    };
+    let url = helper.sine(&spec, FREQ_HZ).await;
+    let temp_dir = TestTempDir::new();
+    // Keep the temp dir alive for the lifetime of the returned Audio by
+    // leaking it: the source reads from `url` (an HTTP path) and only uses
+    // the store as an ephemeral cache, so the leaked guard is harmless in
+    // this short-lived test and avoids threading a guard through the caller.
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().into())
+        .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
+        .is_ephemeral(true)
+        .build();
+    std::mem::forget(temp_dir);
+    let file_config = FileConfig::for_src(url.into()).store(store).build();
+    // Park on ring underrun: covers both the cold and seeked handles.
+    let audio_config = AudioConfig::<File>::for_stream(file_config)
+        .decoder_backend(backend)
+        .maybe_hint(Some("aac".to_owned()))
+        .block_on_underrun(true)
+        .build();
+    Audio::<Stream<File>>::new(audio_config)
+        .await
+        .expect("create Audio<Stream<File>>")
+}
+
+/// Read forward until the first scan window whose fitted amplitude clears
+/// [`MIN_SIGNAL_AMP`], returning that window's measured sine phase and the
+/// absolute frame index it was consumed at. Drives the decoder offline
+/// exactly like the production scan harness (`read_block` semantics).
+fn first_signal_window_phase(
+    audio: &mut Audio<Stream<File>>,
+    chan: usize,
+    delta: f64,
+) -> (u64, f64) {
+    let mut buf = vec![0.0_f32; READ_FRAMES_AFTER_SEEK * chan];
+    let mut consumed: u64 = 0;
+    let mut pending = 0usize;
+    loop {
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                pending = 0;
+                let n = count.get();
+                let frames = (n / chan) as u64;
+                let mono: Vec<f64> = (0..(n / chan)).map(|f| f64::from(buf[f * chan])).collect();
+                if mono.len() >= 2 {
+                    let (phase, amp) = measure_phase_rad_window(&mono, delta);
+                    if amp >= MIN_SIGNAL_AMP {
+                        return (consumed, phase);
+                    }
+                }
+                consumed += frames;
+            }
+            Ok(ReadOutcome::Pending { .. }) => {
+                pending += 1;
+                assert!(pending < READ_PENDING_RETRIES, "decoder starved");
+            }
+            Ok(ReadOutcome::Eof { .. }) => panic!("EOF before any signal window"),
+            Err(e) => panic!("read error: {e}"),
+        }
+    }
+}
+
+/// Deterministic regression for the AAC seek-to-0 decoder warm-up drift.
+///
+/// The fdk-aac C decoder retains MDCT/QMF/SBR overlap-add state that
+/// `AudioDecoder::reset` (called on the seek path via `codec.flush()`) does
+/// not clear. So the first access unit decoded after a seek used to inherit
+/// the *pre-seek* overlap tail and emit a ~2-AU phase-shifted (or
+/// fully-contaminated) first chunk — non-deterministically, gated on how
+/// many packets were decoded before the seek arrived. Offline the load
+/// harness only caught it intermittently (`phase_continuity_hls_aac_lc_*`,
+/// `jump_samples ≈ ±43.46`); this forces the exact pre-condition without
+/// relying on scheduler timing:
+///
+/// 1. a *cold* `Audio` reads its first signal window at frame 0 — the
+///    ground-truth phase the sine carries at the start of the stream;
+/// 2. a *seeked* `Audio` decodes deep into the stream (so the fdk overlap
+///    state is fully warmed / non-cold), seeks back to 0, then reads its
+///    first signal window at frame 0.
+///
+/// Both windows describe the same absolute content frame, so their measured
+/// phases must match within sub-sample tolerance. Before the reset rebuild
+/// they diverged by ~2 access units; the assertion compares against the
+/// production [`TOLERANCE_SAMPLES`] — the same contract `hls.rs:211` enforces.
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(25)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+#[case::aac_symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::aac_apple(DecoderBackend::Apple)
+)]
+async fn seek_to_zero_decoder_warmup_is_deterministic(#[case] backend: DecoderBackend) {
+    let delta = SinePhaseSpec::default_440().delta_rad_per_sample();
+    let chan = CHANNELS as usize;
+
+    let mut cold = build_aac_sine_audio(backend).await;
+    let mut seeked = build_aac_sine_audio(backend).await;
+
+    let (cold_phase, seek_phase) = spawn_blocking(move || {
+        // Ground truth: cold-start first signal window phase at frame 0.
+        let (cold_frame, cold_phase) = first_signal_window_phase(&mut cold, chan, delta);
+
+        // Warm the fdk overlap state well past the encoder priming, then
+        // seek back to the start. ~20k frames = ~20 AAC access units, far
+        // beyond the ~1024-frame priming, guaranteeing a non-cold decoder.
+        let mut warm = vec![0.0_f32; 4096 * chan];
+        let mut warmed = 0u64;
+        let mut pending = 0usize;
+        while warmed < 20_000 {
+            match seeked.read(&mut warm) {
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    pending = 0;
+                    warmed += (count.get() / chan) as u64;
+                }
+                Ok(ReadOutcome::Pending { .. }) => {
+                    pending += 1;
+                    assert!(
+                        pending < READ_PENDING_RETRIES,
+                        "decoder starved while warming"
+                    );
+                }
+                Ok(ReadOutcome::Eof { .. }) => panic!("EOF while warming"),
+                Err(e) => panic!("warm read error: {e}"),
+            }
+        }
+        seeked
+            .seek(Duration::ZERO)
+            .expect("seek to zero must succeed");
+        let (seek_frame, seek_phase) = first_signal_window_phase(&mut seeked, chan, delta);
+
+        // The first signal window must land at the same absolute frame in
+        // both paths; otherwise the phase comparison is meaningless.
+        assert_eq!(
+            cold_frame, seek_frame,
+            "first signal window landed at different frames: cold={cold_frame} seek={seek_frame}",
+        );
+        (cold_phase, seek_phase)
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    let jump_samples = wrap_pi(seek_phase - cold_phase) / delta;
+    assert!(
+        jump_samples.abs() <= TOLERANCE_SAMPLES,
+        "seek-to-0 decoder warm-up is non-deterministic (backend={backend:?}): \
+         cold_phase={cold_phase:.4}rad seek_phase={seek_phase:.4}rad \
+         jump={jump_samples:.4} samples (> {TOLERANCE_SAMPLES} tolerance)",
+    );
 }

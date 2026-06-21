@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
-
 use kithara::{
     assets::StoreOptions,
     play::{Resource, ResourceConfig},
@@ -13,8 +11,10 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
-use tokio::time::sleep;
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, sleep},
+};
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -62,11 +62,8 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     let temp = temp_dir();
     let store = StoreOptions::new(temp.path());
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
 
     let cfg = ResourceConfig::for_src(master.as_str())

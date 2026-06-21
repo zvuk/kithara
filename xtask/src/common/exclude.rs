@@ -1,17 +1,3 @@
-//! Shared test-code exclusion for the lint namespaces (`arch`, `style`,
-//! `idioms`). Three passes, applied to a built `Report` before baseline-write
-//! and ratchet-diff so every namespace measures the same production surface:
-//!
-//! - [`apply_path_excludes`] — drop violations whose file matches a glob
-//!   (`**/tests/**`, test-support crates, `build.rs`, ...).
-//! - [`apply_cfg_test_exclusion`] — drop violations inside `#[cfg(test)]`
-//!   items (inline `mod tests {}`, test `fn`/`impl`) that path globs miss.
-//! - [`apply_module_excludes`] — drop violations inside an inline `mod` whose
-//!   leaf name or `::`-path matches a glob.
-//!
-//! The glob lists live in `.config/xtask.toml` (`[lint_exclude]`) so a project
-//! configures "what is test code" once for all namespaces.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::RangeInclusive,

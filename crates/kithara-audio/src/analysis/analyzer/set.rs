@@ -19,12 +19,40 @@ pub fn beat_cache_tag() -> Option<String> {
 
 #[derive(Default)]
 pub(crate) struct TrackAnalyzers {
-    waveform: Option<WaveformPass>,
     beat: Option<BeatPass>,
+    waveform: Option<WaveformPass>,
     source_frames: u64,
 }
 
 impl TrackAnalyzers {
+    /// Emit the fast waveform first, then waveform+beat.
+    pub(crate) fn finish_staged<F: FnMut(TrackAnalysis)>(mut self, mut emit: F) {
+        let source_frames = self.source_frames;
+        let waveform = self.waveform.take().map(Analyzer::finish);
+
+        if self.beat.is_none() {
+            emit(TrackAnalysis {
+                waveform,
+                source_frames,
+                beat: None,
+            });
+            return;
+        }
+
+        emit(TrackAnalysis {
+            source_frames,
+            beat: None,
+            waveform: waveform.clone(),
+        });
+
+        let beat = self.beat.and_then(Analyzer::finish);
+        emit(TrackAnalysis {
+            beat,
+            waveform,
+            source_frames,
+        });
+    }
+
     pub(crate) fn push(&mut self, chunk: &PcmChunk) {
         let frames: u64 = chunk.frames().as_();
         self.source_frames = self.source_frames.saturating_add(frames);
@@ -37,53 +65,34 @@ impl TrackAnalyzers {
             a.push(chunk);
         }
     }
-
-    /// Emit the fast waveform first, then waveform+beat.
-    pub(crate) fn finish_staged<F: FnMut(TrackAnalysis)>(mut self, mut emit: F) {
-        let source_frames = self.source_frames;
-        let waveform = self.waveform.take().map(Analyzer::finish);
-
-        if self.beat.is_none() {
-            emit(TrackAnalysis {
-                waveform,
-                beat: None,
-                source_frames,
-            });
-            return;
-        }
-
-        emit(TrackAnalysis {
-            waveform: waveform.clone(),
-            beat: None,
-            source_frames,
-        });
-
-        let beat = self.beat.and_then(Analyzer::finish);
-        emit(TrackAnalysis {
-            waveform,
-            beat,
-            source_frames,
-        });
-    }
 }
 
 /// Configures which analyzers run, then mints a fresh [`TrackAnalyzers`]
 /// per track at the source spec.
 #[derive(Default)]
 pub struct AnalyzerBuilder {
-    waveform_buckets: Option<usize>,
     beat: Option<(SharedBeatDetector, GridParams)>,
+    waveform_buckets: Option<usize>,
 }
 
 impl AnalyzerBuilder {
-    /// Run a waveform analyzer; `buckets` caps output (the native window count
-    /// is the real resolution).
-    #[must_use]
-    pub fn with_waveform(self, buckets: usize) -> Self {
-        Self {
-            waveform_buckets: Some(buckets),
-            ..self
+    pub(crate) fn build(&self, spec: PcmSpec) -> TrackAnalyzers {
+        TrackAnalyzers {
+            beat: self.beat.as_ref().map(|(detector, params)| {
+                BeatPass::new(spec.sample_rate.get(), params.clone(), Arc::clone(detector))
+            }),
+            waveform: self
+                .waveform_buckets
+                .map(|buckets| WaveformPass::new(spec.sample_rate.get(), buckets)),
+            source_frames: 0,
         }
+    }
+
+    /// `true` when no analyzer would run — the runtime signal to skip the
+    /// decode pass entirely.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.waveform_buckets.is_none() && self.beat.is_none()
     }
 
     /// Run the NN beat analyzer. No-op when no detector is compiled in or
@@ -103,25 +112,6 @@ impl AnalyzerBuilder {
         }
     }
 
-    /// `true` when no analyzer would run — the runtime signal to skip the
-    /// decode pass entirely.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.waveform_buckets.is_none() && self.beat.is_none()
-    }
-
-    pub(crate) fn build(&self, spec: PcmSpec) -> TrackAnalyzers {
-        TrackAnalyzers {
-            waveform: self
-                .waveform_buckets
-                .map(|buckets| WaveformPass::new(spec.sample_rate, buckets)),
-            beat: self.beat.as_ref().map(|(detector, params)| {
-                BeatPass::new(spec.sample_rate, params.clone(), Arc::clone(detector))
-            }),
-            source_frames: 0,
-        }
-    }
-
     /// Test seam: install a mock detector without loading the NN model.
     #[cfg(test)]
     pub(crate) fn with_beat_detector(
@@ -132,23 +122,30 @@ impl AnalyzerBuilder {
         self.beat = Some((detector, params));
         self
     }
+
+    /// Run a waveform analyzer at `buckets` resolution.
+    #[must_use]
+    pub fn with_waveform(self, buckets: usize) -> Self {
+        Self {
+            waveform_buckets: Some(buckets),
+            ..self
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{num::NonZeroU32, sync::Arc};
 
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
     use kithara_platform::sync::Mutex;
     use unimock::{MockFn, Unimock, matching};
 
-    use super::super::track_analysis::TrackAnalysis;
-    use super::{AnalyzerBuilder, GridParams, TrackAnalyzers};
-    use crate::{
-        analysis::beat::{BeatDetector, BeatDetectorMock, RawBeats, SharedBeatDetector},
-        waveform::Waveform,
+    use super::{
+        super::track_analysis::TrackAnalysis, AnalyzerBuilder, GridParams, TrackAnalyzers,
     };
+    use crate::analysis::beat::{BeatDetector, BeatDetectorMock, RawBeats, SharedBeatDetector};
 
     fn chunk(frames: usize, channels: u16) -> PcmChunk {
         let samples = vec![0.0_f32; frames * usize::from(channels)];
@@ -156,7 +153,7 @@ mod tests {
             PcmMeta {
                 spec: PcmSpec {
                     channels,
-                    sample_rate: 44_100,
+                    sample_rate: NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
                 },
                 frames: u32::try_from(frames).unwrap_or(0),
                 ..Default::default()
@@ -188,7 +185,7 @@ mod tests {
     fn finish_staged_emits_once_without_a_beat_pass() {
         let spec = PcmSpec {
             channels: 2,
-            sample_rate: 44_100,
+            sample_rate: NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
         };
         let mut analyzers = AnalyzerBuilder::default().with_waveform(8).build(spec);
         analyzers.push(&chunk(64, 2));
@@ -203,7 +200,7 @@ mod tests {
     fn finish_staged_emits_waveform_then_waveform_plus_beat() {
         let spec = PcmSpec {
             channels: 2,
-            sample_rate: 44_100,
+            sample_rate: NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
         };
         let mut analyzers = AnalyzerBuilder::default()
             .with_waveform(8)
@@ -212,7 +209,11 @@ mod tests {
         analyzers.push(&chunk(8192, 2));
 
         let stages = collect(analyzers);
-        assert_eq!(stages.len(), 2, "beat pass emits a fast stage then a complete one");
+        assert_eq!(
+            stages.len(),
+            2,
+            "beat pass emits a fast stage then a complete one"
+        );
 
         let first = &stages[0];
         assert!(first.waveform.is_some(), "stage 1 carries the waveform");
@@ -221,8 +222,8 @@ mod tests {
         let second = &stages[1];
         assert!(second.beat.is_some(), "stage 2 carries the beat grid");
         assert_eq!(
-            first.waveform.as_ref().map(Waveform::to_bytes),
-            second.waveform.as_ref().map(Waveform::to_bytes),
+            first.waveform.as_ref().map(Vec::<u8>::from),
+            second.waveform.as_ref().map(Vec::<u8>::from),
             "both stages share the same waveform"
         );
     }

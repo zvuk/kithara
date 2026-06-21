@@ -15,10 +15,45 @@ use kithara_abr::Abr;
 use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancellationToken,
-    time::{Duration, sleep},
+    CancelToken,
+    thread::active_named_thread_count,
+    time::{self, Duration, Instant},
 };
 use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer};
+
+/// Settle window / hang budget for [`wait_thread_count_quiesced`].
+const SETTLE_WINDOW: usize = 4;
+const SETTLE_BUDGET: Duration = Duration::from_secs(5);
+
+/// Wait until kithara-owned thread teardown after a stream drop has quiesced —
+/// i.e. `active_named_thread_count()` stops decreasing across a short settle
+/// window. This is a state-wait (the loop condition reads the same named-thread
+/// counter the leak assertion measures), not a timer pace: the inner
+/// `time::sleep` is only the poll cadence and `budget` only bounds a hang.
+///
+/// The counter decrements when each `spawn_named` thread function RETURNS, so it
+/// is observable once the engine is quiescent under the flash virtual clock —
+/// unlike `ps -M` / `/proc/self/task`, which track OS reap that lags real time
+/// and cannot be satisfied by virtual-clock advance.
+async fn wait_thread_count_quiesced(settle_window: usize, budget: Duration) -> usize {
+    const POLL: Duration = Duration::from_millis(25);
+    let deadline = Instant::now() + budget;
+    let mut last = active_named_thread_count();
+    let mut stable = 0usize;
+    loop {
+        time::sleep(POLL).await;
+        let now = active_named_thread_count();
+        if now < last {
+            stable = 0;
+        } else {
+            stable += 1;
+        }
+        last = now;
+        if stable >= settle_window || Instant::now() >= deadline {
+            return now;
+        }
+    }
+}
 
 /// A peer that behaves like `HlsPeer`: `poll_next` never returns
 /// `Ready(None)` — always `Pending`.
@@ -55,14 +90,11 @@ impl Peer for ImmortalPeer {
 )]
 async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn StdError + Send + Sync>>
 {
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .cancel(cancel.clone())
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .cancel(cancel.clone())
+            .build(),
     );
 
     let peer: Arc<ImmortalPeer> = Arc::new(ImmortalPeer::new());
@@ -79,7 +111,7 @@ async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn Std
     drop(handle);
 
     for _ in 0..20 {
-        sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
         if Arc::strong_count(&peer) == 1 {
             break;
         }
@@ -116,45 +148,42 @@ async fn red_hls_source_drop_leaks_peer(
     let url = server.url("/master.m3u8");
 
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .cancel(CancellationToken::default())
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .cancel(CancelToken::never())
+            .build(),
     );
 
     {
         let stream = Stream::<Hls>::new(
             HlsConfig::for_url(url.clone())
                 .store(StoreOptions::new(temp_dir.path()))
-                .cancel(CancellationToken::default())
+                .cancel(CancelToken::never())
                 .downloader(downloader.clone())
                 .build(),
         )
         .await?;
         drop(stream);
-        sleep(Duration::from_millis(300)).await;
     }
 
-    let threads_baseline = live_thread_count();
+    // Wait until warmup teardown has quiesced (thread count stops dropping) —
+    // state-wait on the same observable the leak assertion measures, not a timer.
+    let threads_baseline = wait_thread_count_quiesced(SETTLE_WINDOW, SETTLE_BUDGET).await;
 
     for i in 0..ITERATIONS {
         let stream = Stream::<Hls>::new(
             HlsConfig::for_url(url.clone())
                 .store(StoreOptions::new(temp_dir.path()))
-                .cancel(CancellationToken::default())
+                .cancel(CancelToken::never())
                 .downloader(downloader.clone())
                 .build(),
         )
         .await?;
         drop(stream);
-        sleep(Duration::from_millis(150)).await;
-        tracing::info!(iter = i, threads = live_thread_count(), "post-drop");
+        let threads = wait_thread_count_quiesced(SETTLE_WINDOW, SETTLE_BUDGET).await;
+        tracing::info!(iter = i, threads, "post-drop");
     }
 
-    sleep(Duration::from_millis(500)).await;
-    let threads_after = live_thread_count();
+    let threads_after = wait_thread_count_quiesced(SETTLE_WINDOW, SETTLE_BUDGET).await;
     let growth = threads_after.saturating_sub(threads_baseline);
 
     assert!(
@@ -168,29 +197,4 @@ async fn red_hls_source_drop_leaks_peer(
     );
 
     Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn live_thread_count() -> usize {
-    use std::process::Command;
-    let out = Command::new("ps")
-        .args(["-M", "-p", &std::process::id().to_string()])
-        .output()
-        .expect("ps -M succeeded");
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .count()
-        .saturating_sub(1)
-}
-
-#[cfg(target_os = "linux")]
-fn live_thread_count() -> usize {
-    std::fs::read_dir("/proc/self/task")
-        .map(|it| it.count())
-        .unwrap_or(0)
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn live_thread_count() -> usize {
-    0
 }

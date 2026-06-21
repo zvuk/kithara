@@ -131,6 +131,20 @@ impl AudioPlayer {
         self.inner.pause();
     }
 
+    /// Notify the native player that the platform audio route changed.
+    ///
+    /// This does not change queue state. If playback is active, the
+    /// native output stream is recreated so CoreAudio/CPAL cannot keep a
+    /// stale route after headphones or Bluetooth devices are removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FfiError`] when the native player cannot schedule the
+    /// route invalidation.
+    pub fn notify_audio_route_changed(&self, reason: &str) -> Result<(), FfiError> {
+        self.inner.notify_audio_route_changed(reason)
+    }
+
     pub fn play(&self) {
         self.inner.play();
     }

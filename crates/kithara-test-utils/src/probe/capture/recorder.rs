@@ -1,6 +1,8 @@
-use std::{
-    sync::{Arc, Mutex, OnceLock, PoisonError},
-    time::{Duration, Instant},
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+
+use kithara_platform::{
+    thread::sleep as thread_sleep,
+    time::{Duration, Instant, sleep},
 };
 
 use super::event::ProbeEvent;
@@ -113,13 +115,13 @@ impl Recorder {
             if Instant::now() >= deadline {
                 return None;
             }
-            std::thread::sleep(Duration::from_millis(5));
+            thread_sleep(Duration::from_millis(5));
         }
     }
 
     /// Async variant of [`Self::wait_for_probe`].
     ///
-    /// Same semantics — but yields the runtime via `tokio::time::sleep`
+    /// Same semantics — but yields the runtime via `kithara_platform::time::sleep`
     /// instead of `std::thread::sleep`. Required for tests that drive
     /// async work between probe polls (HTTP fetches, peer schedulers,
     /// reader tasks) on a `current_thread` runtime: the blocking variant
@@ -140,7 +142,7 @@ impl Recorder {
             if Instant::now() >= deadline {
                 return None;
             }
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep(Duration::from_millis(5)).await;
         }
     }
 }

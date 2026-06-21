@@ -16,7 +16,7 @@ use kithara_integration_tests::{
     wav::create_wav_header,
 };
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
     time::{Duration, Instant, sleep},
 };
 use tracing::{info, warn};
@@ -37,7 +37,7 @@ impl Consts {
 
 fn detect_chunk_direction(chunk: &PcmChunk) -> Direction {
     let channels = chunk.meta.spec.channels as usize;
-    detect_direction(&chunk.pcm, channels)
+    detect_direction(&chunk.samples, channels)
 }
 
 /// Format chunk metadata for diagnostic output.
@@ -59,8 +59,8 @@ fn intra_chunk_breaks(chunk: &PcmChunk) -> usize {
 
     let mut breaks = 0;
     for f in 1..frames {
-        let prev_phase = phase_from_f32(chunk.pcm[(f - 1) * channels]);
-        let curr_phase = phase_from_f32(chunk.pcm[f * channels]);
+        let prev_phase = phase_from_f32(chunk.samples[(f - 1) * channels]);
+        let curr_phase = phase_from_f32(chunk.samples[f * channels]);
         let expected_asc = (prev_phase + 1) % SawWav::SAW_PERIOD;
         let expected_desc = (prev_phase + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
         if curr_phase != expected_asc && curr_phase != expected_desc {
@@ -166,7 +166,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     info!(%url, "HLS server ready with 2 variants");
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
@@ -238,7 +238,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                     warmup_ascending,
                     warmup_unknown,
                     elapsed_ms = warmup_start.elapsed().as_millis(),
-                    chunk_meta = %format_meta(&chunk.meta, chunk.pcm.len()),
+                    chunk_meta = %format_meta(&chunk.meta, chunk.samples.len()),
                     "ABR switch detected: ascending -> descending"
                 );
                 break;
@@ -282,12 +282,12 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         let frames = chunk.frames();
         let meta = &chunk.meta;
 
-        for (j, &sample) in chunk.pcm.iter().enumerate() {
+        for (j, &sample) in chunk.samples.iter().enumerate() {
             assert!(
                 sample.is_finite() && (-1.0..=1.0).contains(&sample),
                 "invalid sample in post-switch chunk {chunk_idx} offset {j}: {sample}\n  \
                  meta: {}",
-                format_meta(meta, chunk.pcm.len()),
+                format_meta(meta, chunk.samples.len()),
             );
         }
 
@@ -296,7 +296,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
             breaks <= 1,
             "too many intra-chunk breaks in post-switch chunk {chunk_idx}: {breaks}\n  \
              meta: {}",
-            format_meta(meta, chunk.pcm.len()),
+            format_meta(meta, chunk.samples.len()),
         );
 
         let dir = detect_chunk_direction(&chunk);
@@ -305,7 +305,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
             Direction::Descending,
             "post-switch chunk {chunk_idx} direction is {dir:?}, expected Descending\n  \
              meta: {}",
-            format_meta(meta, chunk.pcm.len()),
+            format_meta(meta, chunk.samples.len()),
         );
 
         if let (Some(prev_off), Some(prev_f)) = (prev_frame_offset, prev_frames) {
@@ -386,12 +386,12 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
             let frames = chunk.frames();
             let meta = chunk.meta;
 
-            for (j, &sample) in chunk.pcm.iter().enumerate() {
+            for (j, &sample) in chunk.samples.iter().enumerate() {
                 assert!(
                     sample.is_finite() && (-1.0..=1.0).contains(&sample),
                     "invalid sample at seek #{i} chunk {c} offset {j}: {sample}\n  \
                      meta: {}\n  seek_pos: {pos_secs:.4}s",
-                    format_meta(&meta, chunk.pcm.len()),
+                    format_meta(&meta, chunk.samples.len()),
                 );
             }
 
@@ -403,7 +403,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                         iteration = i,
                         chunk_in_seq = c,
                         breaks,
-                        meta = %format_meta(&meta, chunk.pcm.len()),
+                        meta = %format_meta(&meta, chunk.samples.len()),
                         pos_secs,
                         "Intra-chunk saw-tooth breaks"
                     );
@@ -418,7 +418,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                         iteration = i,
                         chunk_in_seq = c,
                         direction = ?dir,
-                        meta = %format_meta(&meta, chunk.pcm.len()),
+                        meta = %format_meta(&meta, chunk.samples.len()),
                         pos_secs,
                         "Unexpected direction (expected SawtoothDescending)"
                     );
@@ -437,7 +437,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                             prev_frames = prev_f,
                             expected_offset,
                             actual_offset = meta.frame_offset,
-                            curr_meta = %format_meta(&meta, chunk.pcm.len()),
+                            curr_meta = %format_meta(&meta, chunk.samples.len()),
                             pos_secs,
                             "INTER-CHUNK FRAME_OFFSET BREAK"
                         );
@@ -447,9 +447,9 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
 
             if let Some(prev_last) = prev_last_sample
                 && channels > 0
-                && !chunk.pcm.is_empty()
+                && !chunk.samples.is_empty()
             {
-                let curr_first = chunk.pcm[0];
+                let curr_first = chunk.samples[0];
                 let prev_phase = phase_from_f32(prev_last);
                 let curr_phase = phase_from_f32(curr_first);
                 let expected_asc = (prev_phase + 1) % SawWav::SAW_PERIOD;
@@ -470,7 +470,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                                 &prev_chunk_meta.map(|(m, _)| m).unwrap_or_default(),
                                 0
                             ),
-                            curr_meta = %format_meta(&meta, chunk.pcm.len()),
+                            curr_meta = %format_meta(&meta, chunk.samples.len()),
                             pos_secs,
                             "INTER-CHUNK SAMPLE CONTINUITY BREAK"
                         );
@@ -479,7 +479,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
             }
 
             if channels > 0 && frames > 0 {
-                prev_last_sample = Some(chunk.pcm[(frames - 1) * channels]);
+                prev_last_sample = Some(chunk.samples[(frames - 1) * channels]);
             }
 
             prev_chunk_meta = Some((meta, frames));
@@ -553,8 +553,8 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
             break;
         };
         remaining_chunks += 1;
-        remaining_samples += chunk.pcm.len() as u64;
-        for &sample in chunk.pcm.iter() {
+        remaining_samples += chunk.samples.len() as u64;
+        for &sample in chunk.samples.iter() {
             assert!(
                 sample.is_finite() && (-1.0..=1.0).contains(&sample),
                 "invalid sample in final tail read",

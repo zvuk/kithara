@@ -11,11 +11,7 @@ use kithara::{
 };
 use kithara_file::{File as FileSource, FileConfig, FileSrc};
 use kithara_integration_tests::offline::resource_from_reader;
-use kithara_platform::{
-    CancellationToken,
-    time::{Duration, Instant, sleep},
-};
-use tokio::time::timeout;
+use kithara_platform::{CancelToken, time::Duration};
 use tracing::info;
 
 use crate::{common::test_defaults::Consts as Shared, continuity::render_offline_window};
@@ -69,7 +65,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
     store.max_assets = Some(8);
     let hls_url = hls_server.url("/master.m3u8");
 
-    let worker = AudioWorkerHandle::with_cancel(CancellationToken::default());
+    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
     let mut player = OfflinePlayer::new(Consts::SR);
 
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
@@ -102,7 +98,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
                 .await
                 .expect("create HLS audio");
             let mut r: Resource = resource_from_reader(audio);
-            timeout(Consts::READ_TIMEOUT, r.preload())
+            time::timeout(Consts::READ_TIMEOUT, r.preload())
                 .await
                 .expect("HLS preload")
                 .expect("HLS preload result");
@@ -116,7 +112,6 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
 
     for iter in 0..10 {
         let hls = make_hls(worker.clone(), store.clone()).await;
-        sleep(Duration::from_millis(200)).await;
         player.load_and_fadein(hls, &format!("red_hls_{iter}"));
         let _hls_warmup = render_offline_window(
             &mut player,
@@ -126,8 +121,11 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
             Consts::SR,
         );
 
-        let mp3 = make_mp3(worker.clone()).await;
-        sleep(Duration::from_millis(200)).await;
+        let mut mp3 = make_mp3(worker.clone()).await;
+        time::timeout(Consts::READ_TIMEOUT, mp3.preload())
+            .await
+            .expect("MP3 preload")
+            .expect("MP3 preload result");
         let before_fade = Instant::now();
         player.load_and_fadein(mp3, &format!("red_mp3_{iter}"));
         let fade_stats = render_offline_window(

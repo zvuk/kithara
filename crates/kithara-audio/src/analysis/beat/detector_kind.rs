@@ -14,11 +14,16 @@ impl BeatDetectorKind {
         #[cfg(feature = "beat-nn")]
         Self::NnBeatThis,
     ];
+
+    /// First compiled-in detector, in selector order.
+    pub(crate) fn first() -> Self {
+        Self::ALL[0]
+    }
 }
 
 impl Default for BeatDetectorKind {
     fn default() -> Self {
-        Self::ALL[0]
+        Self::first()
     }
 }
 

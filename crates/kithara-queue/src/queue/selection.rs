@@ -1,20 +1,31 @@
 use std::sync::{Arc, PoisonError};
 
 use kithara_events::{QueueEvent, TrackId, TrackStatus};
+use kithara_platform::tokio::task;
+use kithara_play::SelectTransition;
 use tracing::{debug, warn};
 
 use super::{
     Queue,
     types::{PendingSelect, SelectPhase, Transition},
 };
-use crate::{error::QueueError, track::TrackSource};
+use crate::{
+    error::QueueError,
+    navigation::RepeatMode,
+    track::{TrackEntry, TrackSource},
+};
 
 impl Queue {
     /// Advance to the next track per navigation rules. Returns the newly
     /// selected id, or `None` when the queue has ended (and
     /// [`RepeatMode::Off`](crate::navigation::RepeatMode::Off) is active).
     pub fn advance_to_next(&self, transition: Transition) -> Option<TrackId> {
-        let id = self.next_selectable()?;
+        let Some(next) = self.next_selectable_entry() else {
+            self.lock_navigation_mut().finish();
+            self.bus.publish(QueueEvent::QueueEnded);
+            return None;
+        };
+        let id = next.id;
         if let Err(e) = self.select(id, transition) {
             warn!(id = id.as_u64(), error = %e, "advance_to_next: select failed");
         }
@@ -58,33 +69,42 @@ impl Queue {
         }
     }
 
-    /// Walk the navigation cursor forward, skipping entries that vanished
-    /// or are [`TrackStatus::Cancelled`], and return the first selectable
-    /// id. Publishes [`QueueEvent::QueueEnded`] once the cursor runs off
-    /// the end without finding one.
-    fn next_selectable(&self) -> Option<TrackId> {
+    /// Read the next selectable entry without mutating navigation. Selection
+    /// commits navigation only when the player selection actually commits.
+    pub(super) fn next_selectable_entry(&self) -> Option<TrackEntry> {
         let len = self.len();
-        let selected =
-            std::iter::from_fn(|| self.lock_navigation_mut().next(len)).find_map(|idx| {
-                let (id, status) = self
-                    .lock_tracks()
-                    .get(idx)
-                    .map(|e| (e.id, e.status.clone()))?;
-                match status {
-                    TrackStatus::Cancelled => {
-                        debug!(
-                            id = id.as_u64(),
-                            "advance_to_next: skipping cancelled track"
-                        );
-                        None
-                    }
-                    _ => Some(id),
-                }
-            });
-        if selected.is_none() {
-            self.bus.publish(QueueEvent::QueueEnded);
+        if len == 0 {
+            return None;
         }
-        selected
+        let (current, repeat) = {
+            let nav = self.lock_navigation();
+            (nav.current_index(), nav.repeat_mode())
+        };
+        let mut indices = Vec::with_capacity(len);
+        match (current, repeat) {
+            (None, _) => indices.extend(0..len),
+            (Some(idx), RepeatMode::One) => indices.push(idx),
+            (Some(idx), RepeatMode::Off) => {
+                indices.extend(idx.saturating_add(1)..len);
+            }
+            (Some(idx), RepeatMode::All) => {
+                indices.extend(idx.saturating_add(1)..len);
+                indices.extend(0..=idx);
+            }
+        }
+        let tracks = self.lock_tracks();
+        indices.into_iter().find_map(|idx| {
+            let entry = tracks.get(idx)?;
+            if matches!(entry.status, TrackStatus::Cancelled) {
+                debug!(
+                    id = entry.id.as_u64(),
+                    "advance_to_next: skipping cancelled track"
+                );
+                None
+            } else {
+                Some(entry.clone())
+            }
+        })
     }
 
     /// Replace `pending_select` with a new selection. If the previous
@@ -129,6 +149,12 @@ impl Queue {
     /// [`QueueError::NotReady`] if the track is in a terminal failed state,
     /// or [`QueueError::Play`] if the underlying `select_item` call fails.
     pub fn select(&self, id: TrackId, transition: Transition) -> Result<(), QueueError> {
+        // Serialise the whole select against a concurrent
+        // `spawn_apply_after_load` completion (see `select_apply`): the
+        // supersede (marking the prior pending `Cancelled`) and a loading
+        // track's apply must not interleave, or the superseded track barges
+        // in. Held across the synchronous body only.
+        let _apply = self.lock_select_apply();
         let (index, status) = {
             let guard = self.lock_tracks();
             guard
@@ -147,15 +173,20 @@ impl Queue {
         match status {
             TrackStatus::Loaded => {
                 self.cancel_stale_pending(id);
-                let was_playing = self.player.is_playing();
+                let was_playing = !self.is_paused();
                 let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
                 if was_playing && crossfade > 0.0 {
                     self.bus.publish(QueueEvent::CrossfadeStarted {
                         duration_seconds: crossfade,
                     });
                 }
-                self.player
-                    .select_item_with_crossfade(index, true, crossfade)?;
+                self.player.select_item_with_crossfade(
+                    index,
+                    SelectTransition {
+                        autoplay: true,
+                        crossfade_seconds: crossfade,
+                    },
+                )?;
                 self.lock_navigation_mut().select(index);
                 self.set_status(id, TrackStatus::Consumed);
                 Ok(())
@@ -190,8 +221,9 @@ impl Queue {
         let tracks = Arc::clone(&self.tracks);
         let pending_select = Arc::clone(&self.pending_select);
         let navigation = Arc::clone(&self.navigation);
+        let select_apply = Arc::clone(&self.select_apply);
         let bus = self.bus.clone();
-        drop(kithara_platform::tokio::task::spawn(async move {
+        drop(task::spawn(async move {
             let resource = match handle.await {
                 Ok(Ok(resource)) => resource,
                 Ok(Err(_)) => return,
@@ -200,6 +232,13 @@ impl Queue {
                     return;
                 }
             };
+
+            // Serialise the apply against a concurrent `select` (see
+            // `select_apply`): the cancelled re-check below and the
+            // `select_item` must be atomic w.r.t. a superseding select that
+            // marks this track `Cancelled`. The whole block is synchronous —
+            // the guard is never held across an `.await`.
+            let _apply = select_apply.lock().unwrap_or_else(PoisonError::into_inner);
 
             let was_cancelled = tracks
                 .lock()
@@ -248,14 +287,20 @@ impl Queue {
             };
 
             if let Some(transition) = pending_transition {
-                let was_playing = player.is_playing();
+                let was_playing = player.rate() > 0.0;
                 let crossfade = transition.crossfade_seconds(player.crossfade_duration());
                 if was_playing && crossfade > 0.0 {
                     bus.publish(QueueEvent::CrossfadeStarted {
                         duration_seconds: crossfade,
                     });
                 }
-                if let Err(e) = player.select_item_with_crossfade(index, true, crossfade) {
+                if let Err(e) = player.select_item_with_crossfade(
+                    index,
+                    SelectTransition {
+                        autoplay: true,
+                        crossfade_seconds: crossfade,
+                    },
+                ) {
                     warn!(id = id.as_u64(), error = %e, "pending select failed");
                 } else {
                     navigation
@@ -288,17 +333,20 @@ impl Queue {
         let resource = cached?;
         self.player.replace_item(index, resource);
         self.set_status(id, TrackStatus::Loaded);
-        let was_playing = self.player.is_playing();
+        let was_playing = !self.is_paused();
         let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
         if was_playing && crossfade > 0.0 {
             self.bus.publish(QueueEvent::CrossfadeStarted {
                 duration_seconds: crossfade,
             });
         }
-        if let Err(err) = self
-            .player
-            .select_item_with_crossfade(index, true, crossfade)
-        {
+        if let Err(err) = self.player.select_item_with_crossfade(
+            index,
+            SelectTransition {
+                autoplay: true,
+                crossfade_seconds: crossfade,
+            },
+        ) {
             return Some(Err(err.into()));
         }
         self.lock_navigation_mut().select(index);
@@ -368,14 +416,30 @@ mod tests {
         let queue = make_queue();
         let _a = queue.append("https://example.com/a.mp3");
         let _b = queue.append("https://example.com/b.mp3");
+        queue.lock_navigation_mut().select(1);
         let mut rx = queue.subscribe();
 
-        assert!(queue.advance_to_next(Transition::Crossfade).is_some());
-        assert!(queue.advance_to_next(Transition::Crossfade).is_some());
         assert!(queue.advance_to_next(Transition::Crossfade).is_none());
 
         let saw_ended =
             wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 400).await;
         assert!(saw_ended, "QueueEnded should be broadcast at end-of-queue");
+    }
+
+    #[kithara::test(tokio)]
+    async fn advance_to_pending_next_does_not_move_navigation_before_select_commit() {
+        let queue = make_queue();
+        let first = queue.append("https://example.com/a.mp3");
+        let second = queue.append("https://example.com/b.mp3");
+        queue.lock_navigation_mut().select(0);
+        queue.set_status(first, TrackStatus::Consumed);
+        queue.set_status(second, TrackStatus::Pending);
+
+        assert_eq!(queue.advance_to_next(Transition::Crossfade), Some(second));
+        assert_eq!(
+            queue.lock_navigation().current_index(),
+            Some(0),
+            "navigation must stay on the audible item until pending select commits"
+        );
     }
 }

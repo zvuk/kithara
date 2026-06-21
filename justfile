@@ -94,19 +94,60 @@ doc:
 #   * Android       → Android MediaCodec + Symphonia software
 #   * Linux / other → Symphonia only
 #
-#   just test                 # whole workspace, all available backends
-#   just test -p kithara-hls  # one package
+# The flash virtual clock is ENABLED by default (`--features flash`): tests
+# run on a deterministic engine-driven clock that collapses artificial waits, so
+# the suite is fast and reproducible. Opt out with `--flash=off` (`--no-flash` /
+# `--flash=false`) to run on the real wall clock — the regression baseline. The
+# `--flash=*` token is stripped before reaching nextest; every other arg passes
+# through unchanged.
+#
+#   just test                 # whole workspace, flash ON, all backends
+#   just test --flash=off     # real wall clock (regression baseline)
+#   just test -p kithara-hls  # one package, flash ON
 #   just test --profile ci    # CI nextest profile
 #   just test EXPR            # nextest filter expression
 test *ARGS:
-    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
+    #!/usr/bin/env bash
+    set -eo pipefail
+    flash_feat="--features flash"
+    passthru=""
+    for a in {{ARGS}}; do
+        case "$a" in
+            --flash=off|--flash=false|--no-flash) flash_feat="" ;;
+            --flash=on|--flash=true) flash_feat="--features flash" ;;
+            *) passthru="$passthru $a" ;;
+        esac
+    done
+    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release $flash_feat $passthru
+
+# Dual-run wave gate for the platform refactor: flash ON, then flash OFF.
+# OFF lane builds in its own target dir so the feature flip does not
+# invalidate the ON cache (and vice versa).
+gate *ARGS:
+    #!/usr/bin/env bash
+    set -eo pipefail
+    echo "=== gate: flash ON ==="
+    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features flash {{ARGS}}
+    echo "=== gate: flash OFF ==="
+    CARGO_TARGET_DIR=target-flash-off cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
 
 # The L2 fixture cache is ON BY DEFAULT (build-fingerprinted temp dir, see
 # tests/src/fixture_cache.rs). This variant instead uses the nextest `cache`
 # profile, whose setup script wipes + recreates a shared cache dir and exports
 # KITHARA_FIXTURE_CACHE — an ephemeral, explicitly-scoped per-run cache.
 test-cached *ARGS:
-    cargo nextest run --profile cache --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
+    #!/usr/bin/env bash
+    set -eo pipefail
+    flash_feat="--features flash"
+    passthru=""
+    for a in {{ARGS}}; do
+        case "$a" in
+            --flash=off|--flash=false|--no-flash) flash_feat="" ;;
+            --flash=on|--flash=true) flash_feat="--features flash" ;;
+            *) passthru="$passthru $a" ;;
+        esac
+    done
+    cargo nextest run --profile cache --workspace --exclude kithara-fuzz --cargo-profile test-release $flash_feat $passthru
 
 # Doc-tests (cargo nextest doesn't run them).
 test-doc:
@@ -237,16 +278,23 @@ audit *ARGS:
     # cargo's `Finished/Running target/...` noise on every step.
     cargo build --quiet -p xtask
     XTASK=target/debug/xtask
+    scope() {
+        if ((${#scope_args[@]})); then
+            "$XTASK" scope "$@" "${scope_args[@]}"
+        else
+            "$XTASK" scope "$@"
+        fi
+    }
 
     # Validate scope tokens up front so a typo doesn't silently fall back to
     # a workspace-wide audit. `cargo xtask scope` exits non-zero on bad scope.
-    if ! XTASK_FLAGS=$($XTASK scope --for=xtask "${scope_args[@]}"); then exit 2; fi
-    CLIPPY_FLAGS=$($XTASK scope --for=clippy "${scope_args[@]}")
-    FMT_FLAGS=$($XTASK scope --for=fmt "${scope_args[@]}")
-    AST_GREP_PATHS=$($XTASK scope --for=ast-grep "${scope_args[@]}")
-    TYPOS_PATHS=$($XTASK scope --for=typos "${scope_args[@]}")
-    SIMILARITY_PATHS=$($XTASK scope --for=similarity "${scope_args[@]}")
-    ORPHANS_FLAGS=$($XTASK scope --for=orphans "${scope_args[@]}")
+    if ! XTASK_FLAGS=$(scope --for=xtask); then exit 2; fi
+    CLIPPY_FLAGS=$(scope --for=clippy)
+    FMT_FLAGS=$(scope --for=fmt)
+    AST_GREP_PATHS=$(scope --for=ast-grep)
+    TYPOS_PATHS=$(scope --for=typos)
+    SIMILARITY_PATHS=$(scope --for=similarity)
+    ORPHANS_FLAGS=$(scope --for=orphans)
 
     record() {
         local name=$1 status=$2
@@ -622,9 +670,13 @@ wasm MODE="check":
     set -uo pipefail
     case "{{MODE}}" in
       check)
-        for c in kithara-storage kithara-net kithara-stream kithara-assets kithara-hls kithara-decode; do
+        for c in kithara-storage kithara-net kithara-stream kithara-assets kithara-hls; do
           cargo check -p "$c" --target wasm32-unknown-unknown
         done
+        # kithara-decode on wasm uses symphonia (pure Rust). Its default `fdk-aac`
+        # feature is libfdk-aac (C via fdk-aac-sys), which cannot target
+        # wasm32-unknown-unknown (no libc/sysroot), so check the realistic wasm set.
+        cargo check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia
         cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
       test)
@@ -671,11 +723,7 @@ android MODE="build" *ARGS:
         cargo xtask android build {{ARGS}}
         ;;
       aar)
-        cargo xtask android build --profile release
-        cd android && ./gradlew :lib:exportReleaseAars -Pkithara.release=true -x generateKitharaFfi
-        echo "==> AARs:"
-        echo "    android/lib/build/outputs/aar/kithara.aar"
-        echo "    android/lib/build/outputs/aar/rust-tls.aar"
+        cargo xtask android aar
         ;;
       *)
         cargo xtask android {{MODE}} {{ARGS}}
@@ -687,6 +735,7 @@ android MODE="build" *ARGS:
 # Apple tasks.
 #   just apple                          # build XCFramework (default)
 #   just apple xcframework --profile debug
+#   just apple single                   # build single binary Kithara.xcframework
 #   just apple demo                     # XCFramework + run KitharaDemo
 #   just apple xcode                    # XCFramework + open xcodeproj
 #   just apple ios SCHEME [DESTINATION] # build for iOS Simulator
@@ -699,9 +748,11 @@ apple MODE="xcframework" *ARGS:
       xcframework)
         cargo xtask apple build {{ARGS}}
         ;;
+      single)
+        cargo xtask apple single {{ARGS}}
+        ;;
       demo)
-        just apple xcframework --profile debug
-        KITHARA_LOCAL_DEV=1 swift run KitharaDemo
+        cargo xtask apple run {{ARGS}}
         ;;
       xcode)
         just apple xcframework --profile debug
@@ -725,24 +776,10 @@ apple MODE="xcframework" *ARGS:
             --output-path ./docs-build/Kithara.doccarchive
         ;;
       release)
-        just apple xcframework
-        # Strip debug symbols from each slice's static lib so the
-        # resulting zip fits under release-hosting limits (gitlab caps
-        # LFS objects at 1 GB; github releases tolerate 2 GB but tiny
-        # is still nicer). `-S` drops debug info, `-x` drops local
-        # symbols — global symbols required for linking stay intact.
-        for f in apple/KitharaFFIInternal.xcframework/*/libkithara_ffi.a; do
-            strip -S -x "$f"
-        done
-        # Symbol audit: fail fast if a software-backend dep leaked
-        # into the apple xcframework. Apple HW must own decode on iOS.
-        cargo xtask apple audit apple/KitharaFFIInternal.xcframework
-        cd apple && zip -ry /tmp/KitharaFFIInternal.xcframework.zip KitharaFFIInternal.xcframework
-        swift package compute-checksum /tmp/KitharaFFIInternal.xcframework.zip \
-            | tee /tmp/KitharaFFIInternal.xcframework.zip.sha256
+        cargo xtask apple release
         ;;
       *)
-        echo "unknown apple mode: {{MODE}} (use xcframework|demo|xcode|ios|doc|release)"
+        echo "unknown apple mode: {{MODE}} (use xcframework|single|demo|xcode|ios|doc|release)"
         exit 2
         ;;
     esac
@@ -755,5 +792,7 @@ _xcodegen-local:
       -e 's|url: https://github.com/zvuk/kithara|path: ../../..|' \
       -e '/from:/d' \
       project.yml && \
+    unset SDKROOT && \
+    /usr/bin/xcrun --sdk macosx swift scripts/bake-secrets.swift && \
     KITHARA_LOCAL_DEV=1 xcodegen generate && \
     mv project.yml.bak project.yml

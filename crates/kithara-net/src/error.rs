@@ -44,11 +44,11 @@ impl NetError {
     /// HTTP 408 Request Timeout.
     const HTTP_REQUEST_TIMEOUT: u16 = 408;
 
-    /// HTTP 429 Too Many Requests.
-    const HTTP_TOO_MANY_REQUESTS: u16 = 429;
-
     /// Minimum HTTP status code for server errors (5xx).
     const HTTP_SERVER_ERROR_MIN: u16 = 500;
+
+    /// HTTP 429 Too Many Requests.
+    const HTTP_TOO_MANY_REQUESTS: u16 = 429;
 
     /// Classifies the error for retry decisioning via its typed variant.
     #[must_use]

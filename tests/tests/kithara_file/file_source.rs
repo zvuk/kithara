@@ -2,9 +2,9 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    fs,
     io::{self, Read, Seek, SeekFrom},
     sync::Arc,
-    time::Duration,
 };
 
 use kithara::{
@@ -15,7 +15,7 @@ use kithara::{
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
 };
-use kithara_platform::tokio::task::spawn_blocking;
+use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use url::Url;
 
 struct Consts;
@@ -34,6 +34,54 @@ fn audio_behavior(helper: &TestServerHelper, content_type: Option<&'static str>)
         delivery: Delivery::Range,
     });
     handle.url()
+}
+
+fn collect_file_names(path: &std::path::Path, names: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(path) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_file_names(&path, names);
+        } else if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+            names.push(name.to_string());
+        }
+    }
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+async fn remote_presigned_file_url_uses_bounded_cache_name(temp_dir: TestTempDir) {
+    let long_query = [
+        "X-Amz-Algorithm=AWS4-HMAC-SHA256",
+        "X-Amz-Checksum-Mode=ENABLED",
+        "X-Amz-Credential=4ERWYG0QLZRFV6UIHHTL%2F20260619%2FNone%2Fs3%2Faws4_request",
+        "X-Amz-Date=20260619T120540Z",
+        "X-Amz-Expires=86400",
+        "X-Amz-SignedHeaders=host",
+        "x-id=GetObject",
+        "X-Amz-Signature=58c448c8b42465768e87a6112f7e625dc06f044ff9778500d58341a580fb59c1",
+    ]
+    .join("&");
+    let url = Url::parse(&format!(
+        "https://cdn68.tvoyzvuk.me/track/134381605/streamhq?{long_query}"
+    ))
+    .expect("test URL must parse");
+
+    let config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(temp_dir.path()))
+        .build();
+
+    if let Err(e) = Stream::<File>::new(config).await {
+        panic!("presigned progressive URL must not fail while opening cache path: {e}");
+    }
+
+    let mut names = Vec::new();
+    collect_file_names(temp_dir.path(), &mut names);
+    assert!(
+        names.iter().all(|name| name.len() < 128),
+        "cache file names must stay bounded: {names:?}"
+    );
 }
 
 #[kithara::test(

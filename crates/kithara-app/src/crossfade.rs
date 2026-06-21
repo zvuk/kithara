@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use kithara_platform::time::{Duration, Instant};
 
 pub struct CrossfadeClock {
     duration: Duration,

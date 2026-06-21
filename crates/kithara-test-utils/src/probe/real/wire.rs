@@ -1,10 +1,10 @@
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
-    time::Duration,
 };
 
 use kithara_events::{AbrMode, CancelReason, RequestId, RequestPriority};
+use kithara_platform::time::Duration;
 use url::Url;
 
 /// Implemented by `#[derive(kithara::Probe)]` for value-type probe payloads.
@@ -258,9 +258,6 @@ pub fn next_thread_probe_seq() -> u64 {
 
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::tokio;
-
 /// Process-wide install-generation counter.
 ///
 /// Bumped once per [`bump_install_id`]; the probe macro stamps the
@@ -284,7 +281,7 @@ use kithara_platform::tokio;
 static INSTALL_ID: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(not(target_arch = "wasm32"))]
-tokio::task_local! {
+kithara_platform::tokio::task_local! {
     /// Per-test install_id captured at scope entry. Inherited by
     /// `tokio::spawn` automatically; not inherited by `spawn_blocking`
     /// — that path falls back to the global atomic, which is the
@@ -325,7 +322,7 @@ pub fn bump_install_id() -> u64 {
 /// nightly-only) but implements `Hash` over that inner value directly, so
 /// we hash the `ThreadId` itself — no `format!`/`String` allocation. That
 /// matters because this runs on the real-time render path (e.g.
-/// `Timeline::write_playhead`); allocating here would abort under
+/// `PlayheadState::write_playhead`); allocating here would abort under
 /// `-Zsanitizer=realtime`. Equal `ThreadId` values hash to the same `u64`,
 /// distinct values almost certainly do not — the only consumer is "group
 /// probe events by thread" and a hash collision would fold two threads

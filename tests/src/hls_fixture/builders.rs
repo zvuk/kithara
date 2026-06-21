@@ -6,7 +6,7 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 
 use crate::hls_server::TestServer;
 
@@ -88,7 +88,7 @@ impl HlsStreamBuilder {
         self,
         server: &TestServer,
         temp_path: &Path,
-        cancel: CancellationToken,
+        cancel: CancelToken,
     ) -> Stream<Hls> {
         let url = server.url(self.master_path);
 

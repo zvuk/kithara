@@ -1,5 +1,6 @@
 use iced::{
-    Background, Border, Color, Degrees, Element, Length, Theme, gradient,
+    Background, Border, Color, Degrees, Element, Length, Theme,
+    gradient::Linear,
     widget::{
         Space,
         button::{Status as ButtonStatus, Style as ButtonStyle},
@@ -57,7 +58,7 @@ pub(crate) fn ghost_button_style(p: GuiPalette) -> impl Fn(&Theme, ButtonStatus)
 }
 
 pub(super) fn linear_background(angle: f32, start: Color, end: Color) -> Background {
-    gradient::Linear::new(Degrees(angle))
+    Linear::new(Degrees(angle))
         .add_stop(0.0, start)
         .add_stop(1.0, end)
         .into()

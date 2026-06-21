@@ -1,4 +1,7 @@
-use std::sync::{Arc, atomic::AtomicU32};
+use std::{
+    num::NonZeroU32,
+    sync::{Arc, atomic::AtomicU32},
+};
 
 use assert_no_alloc::*;
 use kithara_bufpool::{PcmPool, SharedPool};
@@ -29,10 +32,7 @@ fn make_chunk_at(pool: &PcmPool, frames: usize, channels: u16, sample_rate: u32)
         *s = val;
     }
     let meta = PcmMeta {
-        spec: PcmSpec {
-            channels,
-            sample_rate,
-        },
+        spec: PcmSpec::new(channels, NonZeroU32::new(sample_rate).expect("test rate")),
         ..Default::default()
     };
     PcmChunk::new(meta, pcm)
@@ -66,11 +66,11 @@ fn test_pcm_chunk_access_allocation_free() {
     });
 
     assert_no_alloc(|| {
-        let _samples: &[f32] = &chunk.pcm;
+        let _samples: &[f32] = &chunk.samples;
         let _frames = chunk.frames();
         let _spec = chunk.spec();
-        if !chunk.pcm.is_empty() {
-            let _ = chunk.pcm[0];
+        if !chunk.samples.is_empty() {
+            let _ = chunk.samples[0];
         }
     });
 
@@ -90,7 +90,7 @@ fn active_resampler(pool: &PcmPool) -> kithara_audio::ResamplerProcessor {
     ResamplerProcessor::new(params)
 }
 
-/// WS5b: the ACTIVE resampler (source != host) pre-allocates its scratch at
+/// `WS5b`: the ACTIVE resampler (source != host) pre-allocates its scratch at
 /// construction, so the VERY FIRST `process` on the produce-core is already
 /// allocation-free — no cold-start malloc once `decode_next_chunk` loses its
 /// permit. Without the constructor pre-size this aborts (SIGABRT) on the first
@@ -110,13 +110,13 @@ fn resampler_active_first_chunk_alloc_free() {
 
     assert_no_alloc(|| {
         if let Some(output) = processor.process(first_chunk) {
-            let _ = output.pcm.len();
+            let _ = output.samples.len();
             drop(output);
         }
     });
 }
 
-/// WS5b: a live ratio change (DJ rate sweep) stays allocation-free — the
+/// `WS5b`: a live ratio change (DJ rate sweep) stays allocation-free — the
 /// scratch is pre-sized to the resampler's worst-case block across the whole
 /// `MAX_RATIO_ADJUSTMENT` window, so the steady `process` after a rate change
 /// never reallocates.
@@ -139,13 +139,13 @@ fn resampler_active_steady_state_alloc_free() {
 
     assert_no_alloc(|| {
         if let Some(output) = processor.process(steady_chunk) {
-            let _ = output.pcm.len();
+            let _ = output.samples.len();
             drop(output);
         }
     });
 }
 
-/// WS5b bit-exactness guard: pre-sizing the scratch only changes capacity, so
+/// `WS5b` bit-exactness guard: pre-sizing the scratch only changes capacity, so
 /// two independent processors fed the same input must emit byte-identical
 /// output. Catches any accidental value/length change the pre-size could
 /// introduce (pro-DJ zero phase tolerance).
@@ -161,7 +161,7 @@ fn resampler_presize_keeps_output_bit_exact() {
         let mut out = Vec::new();
         for n in 0..12 {
             let mut chunk = make_chunk_at(&pool, 4096, 2, 48_000);
-            for (i, s) in chunk.pcm.as_mut_slice().iter_mut().enumerate() {
+            for (i, s) in chunk.samples.as_mut_slice().iter_mut().enumerate() {
                 #[expect(
                     clippy::cast_precision_loss,
                     reason = "test waveform, precision irrelevant"
@@ -170,7 +170,7 @@ fn resampler_presize_keeps_output_bit_exact() {
                 *s = v;
             }
             if let Some(output) = processor.process(chunk) {
-                out.extend_from_slice(&output.pcm);
+                out.extend_from_slice(&output.samples);
             }
         }
         out
@@ -221,7 +221,7 @@ fn test_resampler_passthrough_allocation_free() {
     assert_no_alloc(|| {
         let result = processor.process(chunk);
         if let Some(output) = result {
-            let _ = output.pcm.len();
+            let _ = output.samples.len();
             drop(output);
         }
     });

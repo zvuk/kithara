@@ -14,14 +14,6 @@ use super::{
 };
 use crate::traits::AudioEffect;
 
-/// Floor for the shared playback speed before inverting to a stretch
-/// factor. Higher than the resampler's `0.01` floor: at `speed = 0.05` the
-/// stretch is already 20x, beyond which time-stretch quality collapses, so
-/// there is no point clamping lower.
-const MIN_SPEED: f32 = 0.05;
-/// Re-apply the stretch ratio to the backend only when it moves this much.
-const RATIO_EPS: f64 = 1e-4;
-
 /// Pre-resampler time-stretch slot. Reads live key-lock, backend, and speed
 /// from the shared [`StretchControls`] each chunk:
 ///
@@ -39,35 +31,43 @@ const RATIO_EPS: f64 = 1e-4;
 /// It owns the speed split: each chunk it writes the resampler's rate atomic
 /// (`1.0` when key-locked, else `speed`). Both effects run sequentially on the
 /// same worker thread, so the resampler always reads the value written for the
-/// current chunk. See the crate `README.md` ("Live stretch controls").
+/// current chunk. See the crate `CONTEXT.md` ("Live stretch controls").
 pub struct TimeStretchProcessor {
-    backend: Box<dyn StretchBackend>,
-    /// Backend kind currently built; compared against `controls.backend()` to
-    /// detect a live backend swap.
-    current_kind: StretchBackendKind,
     controls: Arc<StretchControls>,
     /// Resampler rate atomic this slot drives. Shared with the resampler that
     /// follows it in the chain.
     resampler_rate: Arc<AtomicF32>,
-    pool: PcmPool,
-    spec: PcmSpec,
-    /// Last stretch factor pushed to the backend; avoids redundant updates.
-    applied_stretch: f64,
-    /// Whether the previous chunk ran through the backend (key-lock on). Drives
-    /// a clean backend reset on an on->off transition.
-    active: bool,
+    backend: Box<dyn StretchBackend>,
     /// Most recent input meta, carried onto each output chunk.
     last_input_meta: Option<PcmMeta>,
-    /// Interleaved output scratch, reused across calls (alloc-free steady state).
-    scratch: Vec<f32>,
     /// Region plan cached from the controls; `Arc::ptr_eq` detects a live swap.
     plan: Option<Arc<RegionPlan>>,
     /// Region covering the playhead — the lookup cursor. `None` forces a
     /// fresh binary search (first chunk, plan swap, region exit, seek).
     region: Option<ActiveRegion>,
+    pool: PcmPool,
+    spec: PcmSpec,
+    /// Backend kind currently built; compared against `controls.backend()` to
+    /// detect a live backend swap.
+    current_kind: StretchBackendKind,
+    /// Interleaved output scratch, reused across calls (alloc-free steady state).
+    scratch: Vec<f32>,
+    /// Whether the previous chunk ran through the backend (key-lock on). Drives
+    /// a clean backend reset on an on->off transition.
+    active: bool,
+    /// Last stretch factor pushed to the backend; avoids redundant updates.
+    applied_stretch: f64,
 }
 
 impl TimeStretchProcessor {
+    /// Floor for the shared playback speed before inverting to a stretch
+    /// factor. Higher than the resampler's `0.01` floor: at `speed = 0.05` the
+    /// stretch is already 20x, beyond which time-stretch quality collapses, so
+    /// there is no point clamping lower.
+    const MIN_SPEED: f32 = 0.05;
+    /// Re-apply the stretch ratio to the backend only when it moves this much.
+    const RATIO_EPS: f64 = 1e-4;
+
     /// Build the slot at the source `spec`, driven by the shared `controls`.
     /// `resampler_rate` is the atomic the following resampler reads; this slot
     /// is its sole writer.
@@ -100,6 +100,83 @@ impl TimeStretchProcessor {
         me
     }
 
+    /// Push `stretch` to the backend when it moved beyond `RATIO_EPS`. At a
+    /// region `boundary` the old region's tail is drained (`flush`, into
+    /// `scratch`) and the backend restarted so the new ratio starts clean;
+    /// live speed moves glide via `set_ratio` alone. Boundaries whose ratio
+    /// did not move cost nothing. `NaN` is the "never applied" sentinel; the
+    /// diff test alone would skip it (every comparison with `NaN` is false).
+    fn apply_stretch(&mut self, stretch: f64, boundary: bool) {
+        let first = self.applied_stretch.is_nan();
+        if !first && (stretch - self.applied_stretch).abs() <= Self::RATIO_EPS {
+            return;
+        }
+        if boundary && !first {
+            if let Err(e) = self.backend.flush(&mut self.scratch) {
+                warn!(error = %e, "time-stretch flush at region boundary failed");
+            }
+            self.backend.reset();
+        }
+        match self.backend.set_ratio(stretch) {
+            Ok(()) => self.applied_stretch = stretch,
+            Err(e) => warn!(error = %e, "time-stretch set_ratio failed"),
+        }
+    }
+
+    /// Assemble an output chunk from `scratch`, preserving decoder timing.
+    fn emit(&mut self) -> Option<PcmChunk> {
+        let total = self.scratch.len();
+        if total == 0 {
+            return None;
+        }
+        let channels = usize::from(self.spec.channels.max(1));
+        let mut meta = self.last_input_meta.unwrap_or_default();
+        // The output carries real audio, so its spec must be the live source
+        // spec — never the `PcmMeta::default()` sentinel (channels 0, placeholder
+        // rate) that `unwrap_or_default()` yields on a flush with no prior input
+        // meta. A stretch only retimes; it preserves channels and sample rate.
+        // Leaving the sentinel spec on a non-empty chunk breaks the downstream
+        // `spec.channels > 0` chunk invariant (the resampler divides by it).
+        meta.spec = self.spec;
+        meta.frames = u32::try_from(total / channels).unwrap_or(u32::MAX);
+        let mut pcm = self.pool.get();
+        if pcm.ensure_len(total).is_err() {
+            warn!("PCM pool budget exhausted during time-stretch");
+            return None;
+        }
+        pcm[..].copy_from_slice(&self.scratch);
+        Some(PcmChunk::new(meta, pcm))
+    }
+
+    /// Rebuild the backend for `kind` at the current `spec`, discarding any
+    /// buffered state. Used on a live backend swap and on a source-spec change.
+    fn rebuild_backend(&mut self, kind: StretchBackendKind) {
+        self.backend = build_backend(kind, self.spec);
+        if let Err(e) = self.backend.set_pitch(1.0) {
+            warn!(error = %e, "time-stretch set_pitch(1.0) failed");
+        }
+        self.current_kind = kind;
+        self.applied_stretch = f64::NAN;
+        self.active = false;
+    }
+
+    /// Region covering `frame`, plus whether the playhead just crossed out
+    /// of a previously resolved region (a plan boundary or a seek).
+    fn region_for(&mut self, frame: u64) -> (ActiveRegion, bool) {
+        if let Some(r) = self.region
+            && r.contains(frame)
+        {
+            return (r, false);
+        }
+        let next = self
+            .plan
+            .as_ref()
+            .map_or(ActiveRegion::UNBOUNDED, |p| p.region_at(frame));
+        let crossed = self.region.is_some();
+        self.region = Some(next);
+        (next, crossed)
+    }
+
     /// Route the playback speed: the resampler stays at `1.0` while key-locked
     /// (this slot owns the tempo) and follows `speed` otherwise.
     fn route_rate(&self) {
@@ -124,80 +201,18 @@ impl TimeStretchProcessor {
             self.region = None;
         }
     }
-
-    /// Region covering `frame`, plus whether the playhead just crossed out
-    /// of a previously resolved region (a plan boundary or a seek).
-    fn region_for(&mut self, frame: u64) -> (ActiveRegion, bool) {
-        if let Some(r) = self.region
-            && r.contains(frame)
-        {
-            return (r, false);
-        }
-        let next = self
-            .plan
-            .as_ref()
-            .map_or(ActiveRegion::UNBOUNDED, |p| p.region_at(frame));
-        let crossed = self.region.is_some();
-        self.region = Some(next);
-        (next, crossed)
-    }
-
-    /// Push `stretch` to the backend when it moved beyond `RATIO_EPS`. At a
-    /// region `boundary` the old region's tail is drained (`flush`, into
-    /// `scratch`) and the backend restarted so the new ratio starts clean;
-    /// live speed moves glide via `set_ratio` alone. Boundaries whose ratio
-    /// did not move cost nothing. `NaN` is the "never applied" sentinel; the
-    /// diff test alone would skip it (every comparison with `NaN` is false).
-    fn apply_stretch(&mut self, stretch: f64, boundary: bool) {
-        let first = self.applied_stretch.is_nan();
-        if !first && (stretch - self.applied_stretch).abs() <= RATIO_EPS {
-            return;
-        }
-        if boundary && !first {
-            if let Err(e) = self.backend.flush(&mut self.scratch) {
-                warn!(error = %e, "time-stretch flush at region boundary failed");
-            }
-            self.backend.reset();
-        }
-        match self.backend.set_ratio(stretch) {
-            Ok(()) => self.applied_stretch = stretch,
-            Err(e) => warn!(error = %e, "time-stretch set_ratio failed"),
-        }
-    }
-
-    /// Rebuild the backend for `kind` at the current `spec`, discarding any
-    /// buffered state. Used on a live backend swap and on a source-spec change.
-    fn rebuild_backend(&mut self, kind: StretchBackendKind) {
-        self.backend = build_backend(kind, self.spec);
-        if let Err(e) = self.backend.set_pitch(1.0) {
-            warn!(error = %e, "time-stretch set_pitch(1.0) failed");
-        }
-        self.current_kind = kind;
-        self.applied_stretch = f64::NAN;
-        self.active = false;
-    }
-
-    /// Assemble an output chunk from `scratch`, preserving decoder timing.
-    fn emit(&mut self) -> Option<PcmChunk> {
-        let total = self.scratch.len();
-        if total == 0 {
-            return None;
-        }
-        let channels = usize::from(self.spec.channels.max(1));
-        let mut meta = self.last_input_meta.unwrap_or_default();
-        meta.frames = u32::try_from(total / channels).unwrap_or(u32::MAX);
-        let mut pcm = self.pool.get();
-        if pcm.ensure_len(total).is_err() {
-            warn!("PCM pool budget exhausted during time-stretch");
-            return None;
-        }
-        pcm[..].copy_from_slice(&self.scratch);
-        Some(PcmChunk::new(meta, pcm))
-    }
 }
 
 impl AudioEffect for TimeStretchProcessor {
     fn flush(&mut self) -> Option<PcmChunk> {
+        // Only drain the backend when it actually processed input. In bypass
+        // (key-lock off) `process` forwards chunks untouched and never feeds
+        // the backend, so flushing it would emit its algorithmic-latency
+        // buffer as spurious trailing zeros — a silent tail appended after
+        // gapless trim, breaking seamless joins. Nothing was buffered: skip.
+        if !self.active {
+            return None;
+        }
         self.scratch.clear();
         if let Err(e) = self.backend.flush(&mut self.scratch) {
             warn!(error = %e, "time-stretch backend flush failed");
@@ -236,11 +251,11 @@ impl AudioEffect for TimeStretchProcessor {
         self.last_input_meta = Some(chunk.meta);
         self.scratch.clear();
 
-        let speed = self.controls.speed().max(MIN_SPEED);
+        let speed = self.controls.speed().max(Self::MIN_SPEED);
         let base = 1.0 / f64::from(speed);
         let channels = usize::from(self.spec.channels.max(1));
         let frames = chunk.frames();
-        let samples = chunk.samples();
+        let samples = &chunk.samples;
         let mut consumed = 0_usize;
         let mut frame = chunk.meta.frame_offset;
         // Walk the chunk region by region: a plan boundary mid-chunk splits
@@ -278,18 +293,25 @@ impl AudioEffect for TimeStretchProcessor {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmMeta, PcmSpec};
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use realfft::RealFftPlanner;
 
     use super::*;
 
-    const SR: u32 = 44_100;
-    const F0: f64 = 440.0;
-    const CH: u16 = 2;
-    /// FFT length for the pitch (dominant-frequency) check.
-    const N: usize = 1 << 14;
+    struct Consts;
+
+    impl Consts {
+        const CH: u16 = 2;
+        const F0: f64 = 440.0;
+        /// FFT length for the pitch (dominant-frequency) check.
+        const N: usize = 1 << 14;
+        const SR: u32 = 44_100;
+    }
 
     fn f32_of(x: f64) -> f32 {
         num_traits::cast(x).unwrap_or_default()
@@ -301,9 +323,9 @@ mod tests {
 
     /// Interleaved stereo sine at `F0`, phase-accumulated to avoid drift.
     fn sine(frames: usize) -> Vec<f32> {
-        let inc = std::f64::consts::TAU * F0 / f64::from(SR);
+        let inc = std::f64::consts::TAU * Consts::F0 / f64::from(Consts::SR);
         let mut phase = 0.0_f64;
-        let mut out = Vec::with_capacity(frames * usize::from(CH));
+        let mut out = Vec::with_capacity(frames * usize::from(Consts::CH));
         for _ in 0..frames {
             let s = f32_of(0.5 * phase.sin());
             out.push(s);
@@ -314,15 +336,15 @@ mod tests {
     }
 
     fn chunk(samples: &[f32]) -> PcmChunk {
-        let frames = samples.len() / usize::from(CH);
+        let frames = samples.len() / usize::from(Consts::CH);
         PcmChunk::new(
             PcmMeta {
                 spec: PcmSpec {
-                    channels: CH,
-                    sample_rate: SR,
+                    channels: Consts::CH,
+                    sample_rate: NonZero::new(Consts::SR).unwrap(),
                 },
                 frames: u32::try_from(frames).unwrap_or(0),
-                timestamp: std::time::Duration::ZERO,
+                timestamp: Duration::ZERO,
                 ..Default::default()
             },
             PcmPool::default().attach(samples.to_vec()),
@@ -332,10 +354,10 @@ mod tests {
     /// Index of the strongest spectral bin (skipping DC) of a mono window
     /// taken from the middle of `mono`.
     fn dominant_bin(mono: &[f32]) -> usize {
-        let start = (mono.len().saturating_sub(N)) / 2;
-        let seg = &mono[start..start + N];
+        let start = (mono.len().saturating_sub(Consts::N)) / 2;
+        let seg = &mono[start..start + Consts::N];
         let mut planner = RealFftPlanner::<f32>::new();
-        let fft = planner.plan_fft_forward(N);
+        let fft = planner.plan_fft_forward(Consts::N);
         let mut input = fft.make_input_vec();
         input.copy_from_slice(seg);
         let mut spectrum = fft.make_output_vec();
@@ -349,13 +371,13 @@ mod tests {
     }
 
     fn expected_bin(freq: f64) -> usize {
-        num_traits::cast((freq * f64_of(N) / f64::from(SR)).round()).unwrap_or(0)
+        num_traits::cast((freq * f64_of(Consts::N) / f64::from(Consts::SR)).round()).unwrap_or(0)
     }
 
     fn spec() -> PcmSpec {
         PcmSpec {
-            channels: CH,
-            sample_rate: SR,
+            channels: Consts::CH,
+            sample_rate: NonZero::new(Consts::SR).unwrap(),
         }
     }
 
@@ -379,16 +401,29 @@ mod tests {
         let input = sine(in_frames);
         let (mut fx, _rate) = keylocked(kind, speed);
         let mut out: Vec<f32> = Vec::new();
-        let block = 4096 * usize::from(CH);
+        let block = 4096 * usize::from(Consts::CH);
         for data in input.chunks(block) {
             if let Some(c) = fx.process(chunk(data)) {
-                assert_eq!(c.spec().sample_rate, SR, "stretch preserves sample rate");
-                assert_eq!(c.spec().channels, CH);
-                out.extend_from_slice(c.samples());
+                assert_eq!(
+                    c.spec().sample_rate.get(),
+                    Consts::SR,
+                    "stretch preserves sample rate"
+                );
+                assert_eq!(c.spec().channels, Consts::CH);
+                out.extend_from_slice(&c.samples);
             }
         }
         while let Some(c) = fx.flush() {
-            out.extend_from_slice(c.samples());
+            // A non-empty flush chunk carries real audio, so its spec must stay
+            // the source spec — never the `PcmMeta::default()` sentinel (0
+            // channels) that a `None` `last_input_meta` would otherwise yield.
+            assert_eq!(c.spec().channels, Consts::CH, "flush preserves channels");
+            assert_eq!(
+                c.spec().sample_rate.get(),
+                Consts::SR,
+                "flush preserves sample rate"
+            );
+            out.extend_from_slice(&c.samples);
         }
         out
     }
@@ -396,15 +431,14 @@ mod tests {
     /// Half playback speed -> stretch 2.0 -> ~double duration, pitch held.
     /// Shared across every compiled-in backend.
     fn assert_half_speed_contract(kind: StretchBackendKind) {
-        let channels = usize::from(CH);
-        let in_frames = usize::try_from(SR).unwrap() * 2; // 2 s
+        let channels = usize::from(Consts::CH);
+        let in_frames = usize::try_from(Consts::SR).unwrap() * 2; // 2 s
         let out = run(kind, 0.5, in_frames);
         let out_frames = out.len() / channels;
 
         // Both C++ backends emit fixed-length output with leading latency-fill
         // (and bungee drops its tail), nudging the measured duration off an
         // exact 2x on a short clip — hence the ±10% band. Pitch is still
-        // checked tightly below.
         assert!(
             out_frames * 10 >= in_frames * 18 && out_frames * 10 <= in_frames * 22,
             "{kind:?}: expected ~2x duration, got {out_frames} from {in_frames}"
@@ -414,11 +448,11 @@ mod tests {
         // a resampler-in-disguise would shift it).
         let mono: Vec<f32> = out.iter().step_by(channels).copied().collect();
         assert!(
-            mono.len() >= N,
+            mono.len() >= Consts::N,
             "{kind:?}: not enough output for the FFT window"
         );
         let peak = dominant_bin(&mono);
-        let want = expected_bin(F0);
+        let want = expected_bin(Consts::F0);
         assert!(
             peak.abs_diff(want) <= 3,
             "{kind:?}: pitch moved under time-stretch: peak bin {peak}, expected {want}"
@@ -426,8 +460,8 @@ mod tests {
     }
 
     fn assert_unity_contract(kind: StretchBackendKind) {
-        let channels = usize::from(CH);
-        let in_frames = usize::try_from(SR).unwrap() * 2;
+        let channels = usize::from(Consts::CH);
+        let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
         let out = run(kind, 1.0, in_frames);
         let out_frames = out.len() / channels;
         assert!(
@@ -437,7 +471,7 @@ mod tests {
         let mono: Vec<f32> = out.iter().step_by(channels).copied().collect();
         let peak = dominant_bin(&mono);
         assert!(
-            peak.abs_diff(expected_bin(F0)) <= 3,
+            peak.abs_diff(expected_bin(Consts::F0)) <= 3,
             "{kind:?}: pitch moved at unity speed"
         );
     }
@@ -458,7 +492,7 @@ mod tests {
 
     #[kithara::test]
     fn output_meta_preserves_decoder_timeline() {
-        let channels = usize::from(CH);
+        let channels = usize::from(Consts::CH);
         let (mut fx, _rate) = keylocked(StretchBackendKind::default(), 0.5);
         let cf = 1024usize;
         let block = sine(cf);
@@ -466,8 +500,8 @@ mod tests {
         let mut emitted = Vec::new();
         for i in 0..40u64 {
             let mut c = chunk(&block);
-            let end = std::time::Duration::from_millis(i * 100 + 100);
-            c.meta.timestamp = std::time::Duration::from_millis(i * 100);
+            let end = Duration::from_millis(i * 100 + 100);
+            c.meta.timestamp = Duration::from_millis(i * 100);
             c.meta.end_timestamp = end;
             c.meta.frame_offset = i * u64::try_from(cf).unwrap();
             fed_ends.insert(end);
@@ -483,14 +517,14 @@ mod tests {
             assert_eq!(
                 o.spec(),
                 PcmSpec {
-                    channels: CH,
-                    sample_rate: SR
+                    channels: Consts::CH,
+                    sample_rate: NonZero::new(Consts::SR).unwrap()
                 },
                 "spec (incl. sample rate) preserved verbatim"
             );
             assert_eq!(
                 usize::try_from(o.meta.frames).unwrap(),
-                o.samples().len() / channels,
+                o.samples.len() / channels,
                 "frames recomputed to the actual output count"
             );
             assert!(
@@ -513,11 +547,11 @@ mod tests {
             PcmPool::default().clone(),
         );
         let input = sine(8192);
-        let block = 4096 * usize::from(CH);
+        let block = 4096 * usize::from(Consts::CH);
         let mut out: Vec<f32> = Vec::new();
         for data in input.chunks(block) {
             if let Some(c) = fx.process(chunk(data)) {
-                out.extend_from_slice(c.samples());
+                out.extend_from_slice(&c.samples);
             }
         }
         assert_eq!(out, input, "key-lock off forwards PCM untouched");
@@ -554,7 +588,7 @@ mod tests {
 
         // Phase 1: key-lock off -> untouched passthrough, speed routed out.
         let off = fx.process(chunk(&block)).expect("bypass emits every chunk");
-        assert_eq!(off.samples(), &block[..], "off: PCM forwarded untouched");
+        assert_eq!(&off.samples[..], &block[..], "off: PCM forwarded untouched");
         assert!(
             (rate.load(Ordering::Relaxed) - 0.5).abs() < 1e-6,
             "off: speed routed to resampler"
@@ -565,20 +599,27 @@ mod tests {
         let mut stretched: Vec<f32> = Vec::new();
         for _ in 0..24 {
             if let Some(c) = fx.process(chunk(&block)) {
-                stretched.extend_from_slice(c.samples());
+                stretched.extend_from_slice(&c.samples);
             }
         }
         while let Some(c) = fx.flush() {
-            stretched.extend_from_slice(c.samples());
+            stretched.extend_from_slice(&c.samples);
         }
         assert!(
             (rate.load(Ordering::Relaxed) - 1.0).abs() < 1e-6,
             "on: resampler pinned to unity"
         );
-        let mono: Vec<f32> = stretched.iter().step_by(usize::from(CH)).copied().collect();
-        assert!(mono.len() >= N, "on: not enough output for the FFT window");
+        let mono: Vec<f32> = stretched
+            .iter()
+            .step_by(usize::from(Consts::CH))
+            .copied()
+            .collect();
         assert!(
-            dominant_bin(&mono).abs_diff(expected_bin(F0)) <= 3,
+            mono.len() >= Consts::N,
+            "on: not enough output for the FFT window"
+        );
+        assert!(
+            dominant_bin(&mono).abs_diff(expected_bin(Consts::F0)) <= 3,
             "on: pitch preserved after live toggle"
         );
     }
@@ -604,19 +645,23 @@ mod tests {
                 controls.set_backend(StretchBackendKind::Signalsmith);
             }
             if let Some(c) = fx.process(chunk(&block)) {
-                out.extend_from_slice(c.samples());
+                out.extend_from_slice(&c.samples);
             }
         }
         while let Some(c) = fx.flush() {
-            out.extend_from_slice(c.samples());
+            out.extend_from_slice(&c.samples);
         }
-        let mono: Vec<f32> = out.iter().step_by(usize::from(CH)).copied().collect();
+        let mono: Vec<f32> = out
+            .iter()
+            .step_by(usize::from(Consts::CH))
+            .copied()
+            .collect();
         assert!(
-            mono.len() >= N,
+            mono.len() >= Consts::N,
             "not enough output after swap for the FFT window"
         );
         assert!(
-            dominant_bin(&mono).abs_diff(expected_bin(F0)) <= 3,
+            dominant_bin(&mono).abs_diff(expected_bin(Consts::F0)) <= 3,
             "pitch preserved after live backend swap"
         );
     }

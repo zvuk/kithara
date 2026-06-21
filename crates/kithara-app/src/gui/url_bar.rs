@@ -1,10 +1,8 @@
-use std::time::Duration;
-
 use iced::{
     Alignment, Background, Border, Color, Degrees, Element, Length, Padding, Shadow, Task, Vector,
     alignment::{Horizontal, Vertical},
     font::Weight,
-    gradient,
+    gradient::Linear,
     widget::{
         button,
         button::{Status as ButtonStatus, Style as ButtonStyle},
@@ -14,6 +12,7 @@ use iced::{
         text_input::{Status as InputStatus, Style as InputStyle},
     },
 };
+use kithara_platform::time::{Duration, sleep};
 
 use super::{app::Kithara, fonts, icons::Icon, message::Message};
 use crate::{
@@ -76,8 +75,8 @@ use consts::*;
 /// ephemeral submit flash.
 #[derive(Debug, Default)]
 pub(crate) struct UrlBar {
-    pub(crate) text: String,
     pub(crate) flash: Option<Flash>,
+    pub(crate) text: String,
 }
 
 /// Transient feedback shown in place of the format chip after a submit.
@@ -151,10 +150,9 @@ fn submit(state: &mut Kithara) -> Task<Message> {
     });
     state.url.text.clear();
 
-    Task::perform(
-        tokio::time::sleep(Duration::from_millis(FLASH_EXPIRE_MS)),
-        |()| Message::Url(UrlMsg::FlashExpired),
-    )
+    Task::perform(sleep(Duration::from_millis(FLASH_EXPIRE_MS)), |()| {
+        Message::Url(UrlMsg::FlashExpired)
+    })
 }
 
 /// Format chip label, auto-detected from the URL extension. Mirrors the
@@ -375,14 +373,14 @@ fn badge_padding() -> Padding {
 }
 
 fn bar_background(p: GuiPalette) -> Background {
-    gradient::Linear::new(Degrees(180.0))
+    Linear::new(Degrees(180.0))
         .add_stop(0.0, with_alpha(p.bg_inset, GRADIENT_ALPHA))
         .add_stop(1.0, with_alpha(p.bg_deep, GRADIENT_ALPHA))
         .into()
 }
 
 fn linear(start: Color, end: Color) -> Background {
-    gradient::Linear::new(Degrees(180.0))
+    Linear::new(Degrees(180.0))
         .add_stop(0.0, start)
         .add_stop(1.0, end)
         .into()

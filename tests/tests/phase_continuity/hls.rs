@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, time::Duration};
+use std::num::NonZeroUsize;
 
 use kithara::{
     abr::AbrMode,
@@ -12,13 +12,11 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, auto,
     fixture_protocol::{EncryptionRequest, PackagedSignal},
 };
-use kithara_platform::{CancellationToken, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_stream::AudioCodec;
 use tracing::{info, warn};
 
-use super::common::{
-    CHANNELS, FREQ_HZ, PhaseDrift, SAMPLE_RATE, SinePhaseSpec, scripted_phase_scan,
-};
+use super::common::{CHANNELS, FREQ_HZ, SAMPLE_RATE, SinePhaseSpec, scripted_phase_scan};
 
 const SEGMENT_DURATION_SECS: f64 = 2.0;
 const SEGMENTS_PER_VARIANT: usize = 30;
@@ -131,6 +129,23 @@ async fn run_case(
     scenario: Vec<(AbrMode, f64)>,
     bit_rate: Option<u64>,
 ) {
+    run_case_paced(fixture, backend, ephemeral, drm, scenario, bit_rate, None).await;
+}
+
+/// `run_case` with an optional consumer pace: a real sleep after every
+/// 128-frame read, emulating the full-suite CPU contention where the
+/// consumer lags the producer and the outlet ring fills. Used by the
+/// paced diagnostic cases to reproduce the load-gated recreate-seam
+/// drift in isolation.
+async fn run_case_paced(
+    fixture: Fixture,
+    backend: DecoderBackend,
+    ephemeral: bool,
+    drm: bool,
+    scenario: Vec<(AbrMode, f64)>,
+    bit_rate: Option<u64>,
+    pace: Option<Duration>,
+) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
@@ -141,7 +156,7 @@ async fn run_case(
         .expect("create sine HLS fixture");
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
         store.cache_capacity = Some(NonZeroUsize::new(SEGMENTS_PER_VARIANT + 10).expect("nonzero"));
@@ -153,12 +168,15 @@ async fn run_case(
         .cancel(cancel)
         .initial_abr_mode(initial_mode)
         .build();
+    // Keep HLS scan nonblocking: readiness is observed through Frames/Pending,
+    // not through the blocking read watchdog's wall-clock budget.
     let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
         .decoder_backend(backend)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(audio_config)
         .await
         .expect("create Audio<Stream<Hls>>");
+    audio.preload().expect("preload HLS phase scanner");
 
     let total_secs = audio
         .duration()
@@ -181,7 +199,7 @@ async fn run_case(
     let total_frames_truth = (total_secs * f64::from(SAMPLE_RATE)) as u64;
 
     let aspec = audio.spec();
-    assert_eq!(aspec.sample_rate, SAMPLE_RATE);
+    assert_eq!(aspec.sample_rate.get(), SAMPLE_RATE);
     assert_eq!(u32::from(aspec.channels), u32::from(CHANNELS));
 
     let abr_handle = audio.abr_handle();
@@ -191,10 +209,15 @@ async fn run_case(
         "fixture should expose {VARIANT_COUNT} variants, got {abr_variants}",
     );
 
-    let drifts = spawn_blocking(move || -> Vec<PhaseDrift> {
-        let sine = SinePhaseSpec::default_440();
-        let mut current = initial_mode;
-        scripted_phase_scan(&mut audio, sine, total_frames_truth, &scenario, |&mode| {
+    let sine = SinePhaseSpec::default_440();
+    let mut current = initial_mode;
+    let drifts = scripted_phase_scan(
+        &mut audio,
+        sine,
+        total_frames_truth,
+        &scenario,
+        pace,
+        |&mode| {
             if mode != current {
                 if let Some(h) = abr_handle.as_ref()
                     && let Err(e) = h.set_mode(mode)
@@ -203,10 +226,9 @@ async fn run_case(
                 }
                 current = mode;
             }
-        })
-    })
-    .await
-    .expect("spawn_blocking joined");
+        },
+    )
+    .await;
 
     assert!(
         drifts.is_empty(),
@@ -333,12 +355,12 @@ async fn run_case(
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::aac_he_v2_apple_eph_auto_e2e(
+    case::aac_he_v2_apple_eph_manual_v1_e2e(
         Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Apple,
         true,
         false,
-        e2e(auto(1)),
+        e2e(AbrMode::manual(1)),
         None,
     )
 )]
@@ -433,6 +455,58 @@ async fn phase_continuity_hls(
     #[case] bit_rate: Option<u64>,
 ) {
     run_case(fixture, backend, ephemeral, drm, scenario, bit_rate).await;
+}
+
+/// Late-track switch script for the paced pin below: the load-gated
+/// recreate-seam duplicates fired on the 0.83/0.93 switch commits, so the
+/// paced scan covers only that tail instead of the whole track.
+fn late_switches() -> Vec<(AbrMode, f64)> {
+    vec![
+        (AbrMode::manual(0), 0.78),
+        (AbrMode::manual(1), 0.83),
+        (AbrMode::manual(TOP_VARIANT), 0.93),
+    ]
+}
+
+/// Paced pin for the load-gated recreate-seam duplicate (`resume_target`
+/// vs `decode_head` in `execute_recreation`): the same seek+switch seams as
+/// `multi_switch`, but the consumer sleeps after every read so `committed`
+/// lags the producer the way full-suite CPU contention makes it lag.
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(60)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "10")
+)]
+#[case::aac_lc_symphonia_pace1ms(
+    Fixture::Single(Codec::AacLc),
+    DecoderBackend::Symphonia,
+    Some(320_000),
+    1
+)]
+#[case::aac_he_v2_symphonia_pace1ms(
+    Fixture::Single(Codec::AacHeV2),
+    DecoderBackend::Symphonia,
+    None,
+    1
+)]
+async fn phase_continuity_hls_diag_paced(
+    #[case] fixture: Fixture,
+    #[case] backend: DecoderBackend,
+    #[case] bit_rate: Option<u64>,
+    #[case] pace_ms: u64,
+) {
+    run_case_paced(
+        fixture,
+        backend,
+        true,
+        false,
+        late_switches(),
+        bit_rate,
+        Some(Duration::from_millis(pace_ms)),
+    )
+    .await;
 }
 
 /// Pins real, uncompensated decoder-warmup phase drifts at HLS seek/switch

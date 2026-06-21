@@ -50,9 +50,9 @@ final class PlayerViewModelCombine: PlayerViewModelBase {
             if !isSeeking { currentTime = seconds }
         case let .rateChanged(rate):
             isPlaying = rate > 0
-        case let .statusChanged(ffiStatus):
+        case let .statusChanged(status):
             if errorMessage == nil {
-                status = PlayerStatus(ffi: ffiStatus)
+                self.status = status
             }
         case let .durationChanged(seconds):
             duration = seconds

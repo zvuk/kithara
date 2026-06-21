@@ -62,10 +62,6 @@ impl CrossfadeArm {
         Self::Armed { for_track }
     }
 
-    pub(super) fn is_armed(self) -> bool {
-        matches!(self, Self::Armed { .. })
-    }
-
     pub(super) fn is_armed_for(self, id: TrackId) -> bool {
         matches!(self, Self::Armed { for_track } if for_track == id)
     }
@@ -121,22 +117,6 @@ pub(super) struct AtomicTrackId(AtomicU64);
 impl AtomicTrackId {
     const NONE_BITS: u64 = u64::MAX;
 
-    pub(super) fn disarmed() -> Self {
-        Self(AtomicU64::new(Self::NONE_BITS))
-    }
-
-    pub(super) fn load(&self) -> CrossfadeArm {
-        Self::decode(self.0.load(Ordering::Acquire))
-    }
-
-    pub(super) fn store(&self, arm: CrossfadeArm) {
-        self.0.store(Self::encode(arm), Ordering::Release);
-    }
-
-    pub(super) fn take(&self) -> CrossfadeArm {
-        Self::decode(self.0.swap(Self::NONE_BITS, Ordering::AcqRel))
-    }
-
     /// CAS [`CrossfadeArm::Disarmed`] → `Armed(track)`. Returns `true`
     /// when this call performed the arm. Used only by the cfg-gated
     /// autoplay path (`register_for_test`).
@@ -150,6 +130,16 @@ impl AtomicTrackId {
                 Ordering::Acquire,
             )
             .is_ok()
+    }
+
+    fn decode(bits: u64) -> CrossfadeArm {
+        if bits == Self::NONE_BITS {
+            CrossfadeArm::Disarmed
+        } else {
+            CrossfadeArm::Armed {
+                for_track: TrackId(bits),
+            }
+        }
     }
 
     /// CAS `Armed(track)` → [`CrossfadeArm::Disarmed`]. Returns `true`
@@ -167,14 +157,8 @@ impl AtomicTrackId {
             .is_ok()
     }
 
-    fn decode(bits: u64) -> CrossfadeArm {
-        if bits == Self::NONE_BITS {
-            CrossfadeArm::Disarmed
-        } else {
-            CrossfadeArm::Armed {
-                for_track: TrackId(bits),
-            }
-        }
+    pub(super) fn disarmed() -> Self {
+        Self(AtomicU64::new(Self::NONE_BITS))
     }
 
     fn encode(arm: CrossfadeArm) -> u64 {
@@ -182,6 +166,25 @@ impl AtomicTrackId {
             CrossfadeArm::Disarmed => Self::NONE_BITS,
             CrossfadeArm::Armed { for_track } => for_track.as_u64(),
         }
+    }
+
+    pub(super) fn load(&self) -> CrossfadeArm {
+        Self::decode(self.0.load(Ordering::Acquire))
+    }
+
+    pub(super) fn store(&self, arm: CrossfadeArm) {
+        self.0.store(Self::encode(arm), Ordering::Release);
+    }
+
+    pub(super) fn take_if_matches(&self, track: TrackId) -> bool {
+        self.0
+            .compare_exchange(
+                track.as_u64(),
+                Self::NONE_BITS,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
     }
 }
 
@@ -192,10 +195,6 @@ impl AtomicTrackId {
 pub(super) struct AtomicCachedPosition(AtomicU64);
 
 impl AtomicCachedPosition {
-    pub(super) fn unknown() -> Self {
-        Self(AtomicU64::new(f64::NAN.to_bits()))
-    }
-
     pub(super) fn load(&self) -> CachedPosition {
         let seconds = f64::from_bits(self.0.load(Ordering::Acquire));
         if seconds.is_nan() {
@@ -211,6 +210,10 @@ impl AtomicCachedPosition {
             CachedPosition::Known { seconds } => seconds.to_bits(),
         };
         self.0.store(bits, Ordering::Release);
+    }
+
+    pub(super) fn unknown() -> Self {
+        Self(AtomicU64::new(f64::NAN.to_bits()))
     }
 }
 
@@ -296,7 +299,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn atomic_track_id_store_load_take_round_trip() {
+    fn atomic_track_id_take_if_matches_only_disarms_matching_track() {
         let cell = AtomicTrackId::disarmed();
         cell.store(CrossfadeArm::armed(TrackId(7)));
         assert_eq!(
@@ -305,12 +308,14 @@ mod tests {
                 for_track: TrackId(7),
             }
         );
+        assert!(!cell.take_if_matches(TrackId(8)));
         assert_eq!(
-            cell.take(),
+            cell.load(),
             CrossfadeArm::Armed {
                 for_track: TrackId(7),
             }
         );
+        assert!(cell.take_if_matches(TrackId(7)));
         assert_eq!(cell.load(), CrossfadeArm::Disarmed);
     }
 
@@ -348,10 +353,8 @@ mod tests {
     #[kithara::test]
     fn crossfade_arm_is_armed_for_matches_track() {
         let arm = CrossfadeArm::armed(TrackId(2));
-        assert!(arm.is_armed());
         assert!(arm.is_armed_for(TrackId(2)));
         assert!(!arm.is_armed_for(TrackId(3)));
-        assert!(!CrossfadeArm::Disarmed.is_armed());
     }
 
     #[kithara::test]

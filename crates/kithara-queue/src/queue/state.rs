@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_events::{EventBus, EventReceiver, TrackId};
-use kithara_platform::CancellationToken;
+use kithara_platform::{CancelScope, CancelToken};
 use kithara_play::{PlayerConfig, PlayerImpl};
 
 use super::types::{
@@ -71,6 +71,16 @@ pub struct Queue {
     pub(super) loader: Arc<Loader>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
     pub(super) pending_select: Arc<Mutex<SelectPhase>>,
+    /// Serialises a selection-apply against a concurrent [`Queue::select`].
+    /// A track's `spawn_apply_after_load` completion and a later `select`
+    /// that supersedes it both mutate the same selection state (pending,
+    /// current, navigation cursor, `TrackStatus::Cancelled`); without a
+    /// single serialization point the completion can observe-not-cancelled
+    /// then `select_item` *after* the superseding select committed, so the
+    /// superseded track barges in. Held only across the synchronous apply
+    /// critical section — never across an `.await`. See the crate `CONTEXT.md`
+    /// "Selection serialization".
+    pub(super) select_apply: Arc<Mutex<()>>,
     pub(super) player: Arc<PlayerImpl>,
     /// Kept alongside `tracks` so a `Consumed` track can be re-spawned
     /// on re-selection (user tapping a previously-played track). The
@@ -101,7 +111,7 @@ pub struct Queue {
     /// shutdown to the player's subsystems. When a caller supplies a
     /// pre-built player, this token is independent — the caller owns
     /// the player's master directly.
-    pub(super) shutdown: CancellationToken,
+    pub(super) shutdown: CancelToken,
 }
 
 impl Queue {
@@ -131,7 +141,7 @@ impl Queue {
         } = config;
         // App path threads a child of the app master; standalone / test
         // use falls back to a fresh root (the documented safety net).
-        let cancel = config_cancel.unwrap_or_default();
+        let cancel = CancelScope::new(config_cancel).token();
         let player = player.unwrap_or_else(|| {
             let config = PlayerConfig::builder().cancel(cancel.clone()).build();
             Arc::new(PlayerImpl::new(config))
@@ -155,6 +165,7 @@ impl Queue {
             shutdown: cancel,
             navigation: Arc::new(Mutex::new(NavigationState::new())),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
+            select_apply: Arc::new(Mutex::new(())),
             sources: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(test, feature = "probe"))]
             test_resources: Arc::new(Mutex::new(HashMap::new())),
@@ -186,6 +197,16 @@ impl Queue {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Acquire the selection-apply serialization guard (see
+    /// [`Self::select_apply`]). Taken before `tracks`/`pending_select`/
+    /// `navigation`/`player` in both `select` and the
+    /// `spawn_apply_after_load` completion, so the two cannot interleave.
+    pub(in crate::queue) fn lock_select_apply(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.select_apply
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackEntry>> {
         self.tracks.lock()
     }
@@ -206,8 +227,8 @@ impl Queue {
         self.tracks.set_status(id, status);
     }
 
-    pub(super) fn take_armed_for(&self) -> CrossfadeArm {
-        self.crossfade_armed_for.take()
+    pub(super) fn take_armed_for_if_matches(&self, id: TrackId) -> bool {
+        self.crossfade_armed_for.take_if_matches(id)
     }
 
     pub(super) fn write_armed_for(&self, arm: CrossfadeArm) {
@@ -228,9 +249,8 @@ impl Drop for Queue {
 #[cfg(test)]
 pub(super) mod tests {
     use kithara_events::{Event, EventReceiver, QueueEvent};
-    use kithara_platform::time::Duration;
+    use kithara_platform::time::{Duration, Instant, timeout};
     use kithara_test_utils::kithara;
-    use tokio::time::{Instant as TokioInstant, timeout as tokio_timeout};
 
     use super::*;
 
@@ -246,13 +266,13 @@ pub(super) mod tests {
     where
         F: FnMut(&QueueEvent) -> bool,
     {
-        let deadline = TokioInstant::now() + Duration::from_millis(timeout_ms);
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         loop {
-            let remaining = deadline.saturating_duration_since(TokioInstant::now());
+            let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return false;
             }
-            match tokio_timeout(remaining, rx.recv()).await {
+            match timeout(remaining, rx.recv()).await {
                 Ok(Ok(Event::Queue(ev))) if matches(&ev) => return true,
                 Ok(Ok(_)) => continue,
                 Ok(Err(_)) | Err(_) => return false,
@@ -272,15 +292,17 @@ pub(super) mod tests {
     }
 
     #[kithara::test]
-    fn crossfade_arm_take_round_trips_then_disarms() {
+    fn crossfade_arm_take_only_disarms_matching_track() {
         let queue = make_queue();
         queue.write_armed_for(CrossfadeArm::armed(TrackId(9)));
+        assert!(!queue.take_armed_for_if_matches(TrackId(10)));
         assert_eq!(
-            queue.take_armed_for(),
+            queue.read_armed_for(),
             CrossfadeArm::Armed {
                 for_track: TrackId(9),
             }
         );
+        assert!(queue.take_armed_for_if_matches(TrackId(9)));
         assert_eq!(queue.read_armed_for(), CrossfadeArm::Disarmed);
     }
 

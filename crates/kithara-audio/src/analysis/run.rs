@@ -1,12 +1,13 @@
-use std::time::Duration;
-
-use kithara_platform::{CancellationToken, thread::sleep};
+use kithara_platform::{CancelToken, thread::paced_backoff, time::Duration};
 use tracing::{debug, warn};
 
 use super::analyzer::{AnalyzerBuilder, TrackAnalysis, TrackAnalyzers};
 use crate::traits::{ChunkOutcome, PcmReader};
 
-/// Backoff while the reader is buffering and has no chunk ready.
+/// Backoff while the reader is buffering and has no chunk ready. The decode
+/// loop runs on the engine-visible `kithara-analysis` thread, so the wait is
+/// paced by the producer (the audio worker fed by the real download), not a
+/// free virtual timer; see [`paced_backoff`].
 const PENDING_BACKOFF: Duration = Duration::from_millis(5);
 
 /// Decode `reader` to EOF feeding the analyzer set, then finalize in stages
@@ -15,7 +16,7 @@ const PENDING_BACKOFF: Duration = Duration::from_millis(5);
 pub fn analyze_reader<F: FnMut(TrackAnalysis)>(
     reader: &mut dyn PcmReader,
     builder: &AnalyzerBuilder,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
     emit: F,
 ) {
     let mut analyzers: Option<TrackAnalyzers> = None;
@@ -30,13 +31,12 @@ pub fn analyze_reader<F: FnMut(TrackAnalysis)>(
                     .get_or_insert_with(|| builder.build(chunk.spec()))
                     .push(&chunk);
             }
-            Ok(ChunkOutcome::Pending { .. }) => sleep(PENDING_BACKOFF),
+            Ok(ChunkOutcome::Pending { .. }) => paced_backoff(PENDING_BACKOFF),
             Ok(ChunkOutcome::Eof { .. }) => {
                 let Some(analyzers) = analyzers else {
                     return;
                 };
-                // Finalize can be expensive: honor a cancel that raced the last chunk before
-                // paying for it.
+                // Finalize can be expensive: honor a cancel that raced the last chunk.
                 if cancel.is_cancelled() {
                     debug!("analysis cancelled before finalize");
                     return;

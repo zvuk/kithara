@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     ops::Range,
     path::{Path, PathBuf},
 };
@@ -60,6 +60,7 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
     let mut refs = Refs::default();
     let mut defs: Vec<Def> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut chain_cache: HashMap<PathBuf, bool> = HashMap::new();
 
     for pkg in &members {
         let role = classify(pkg, cfg);
@@ -94,11 +95,14 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
                         .unwrap_or(&path)
                         .to_string_lossy()
                         .replace('\\', "/");
+                    let mod_gated =
+                        mod_chain_gated(target.src_path.as_std_path(), &path, &mut chain_cache);
                     DefScan {
                         crate_name: &pkg.name,
                         rel: &rel,
                         kinds: &kinds,
                         export_attrs: &cfg.export_attrs,
+                        mod_gated,
                         out: &mut defs,
                     }
                     .collect(&file.items, false);
@@ -331,9 +335,9 @@ fn item_head(it: &Item) -> Option<Head<'_>> {
 }
 
 /// Names whose callers this scan cannot see and so must never be reported or
-/// auto-deleted: items gated by `#[cfg(target_os/target_arch)]` (compiled on
-/// another target) or living under a platform-gated module dir
-/// (`fix_protect_paths`, e.g. `/android/`).
+/// auto-deleted: items gated by `#[cfg(target_os/target_arch)]` (at the item
+/// or on the `mod`-declaration chain; compiled on another target) or living
+/// under a platform-gated module dir (`fix_protect_paths`, e.g. `/android/`).
 fn protected_names<'a>(defs: &'a [Def], cfg: &DeadExportsThreshold) -> HashSet<&'a str> {
     defs.iter()
         .filter(|d| {
@@ -345,6 +349,83 @@ fn protected_names<'a>(defs: &'a [Def], cfg: &DeadExportsThreshold) -> HashSet<&
         })
         .map(|d| d.name.as_str())
         .collect()
+}
+
+/// A file whose `mod`-declaration chain (crate root down to the file) carries
+/// a `#[cfg(target_os/target_arch)]` gate is protected exactly like an
+/// item-level cfg: the gate is declared once on the parent `mod x;` (the
+/// module-level switch pattern, e.g. `flash/mod.rs` gating `mod api;` /
+/// `mod inert;`), so every item inside compiles only in build configurations
+/// this scan cannot see.
+fn mod_chain_gated(root_file: &Path, file: &Path, cache: &mut HashMap<PathBuf, bool>) -> bool {
+    if file == root_file {
+        return false;
+    }
+    if let Some(&gated) = cache.get(file) {
+        return gated;
+    }
+    let gated = decl_gated(root_file, file, cache).unwrap_or(false);
+    cache.insert(file.to_path_buf(), gated);
+    gated
+}
+
+/// Resolve the parent file declaring `file`'s module and combine that
+/// declaration's cfg gate with the parent's own chain. `None` when no
+/// declaring file is found (unresolvable layouts stay unprotected).
+fn decl_gated(root_file: &Path, file: &Path, cache: &mut HashMap<PathBuf, bool>) -> Option<bool> {
+    let stem = file.file_stem()?.to_str()?.to_owned();
+    let dir = file.parent()?;
+    let (name, owner_dir) = if stem == "mod" {
+        (dir.file_name()?.to_str()?.to_owned(), dir.parent()?)
+    } else {
+        (stem, dir)
+    };
+    for parent in decl_candidates(root_file, owner_dir) {
+        let Ok(ast) = parse_file(&parent) else {
+            continue;
+        };
+        if let Some(gated) = find_mod_decl(&ast.items, &name, false) {
+            return Some(gated || mod_chain_gated(root_file, &parent, cache));
+        }
+    }
+    None
+}
+
+/// Files that may declare a module living in `owner_dir`: the crate root when
+/// `owner_dir` is the source root, otherwise `owner_dir/mod.rs` or the 2018
+/// sibling `<owner_dir>.rs`.
+fn decl_candidates(root_file: &Path, owner_dir: &Path) -> Vec<PathBuf> {
+    if Some(owner_dir) == root_file.parent() {
+        return vec![root_file.to_path_buf()];
+    }
+    let mut out = vec![owner_dir.join("mod.rs")];
+    if let (Some(parent), Some(dir_name)) = (owner_dir.parent(), owner_dir.file_name()) {
+        out.push(parent.join(dir_name).with_extension("rs"));
+    }
+    out.retain(|p| p.is_file());
+    out
+}
+
+/// Find the `mod <name>;` declaration (no inline body) among `items`,
+/// recursing through inline modules; returns whether the declaration or any
+/// enclosing inline module is cfg-gated.
+fn find_mod_decl(items: &[Item], name: &str, enclosing: bool) -> Option<bool> {
+    for item in items {
+        let Item::Mod(m) = item else {
+            continue;
+        };
+        let gated = enclosing || is_gated(&m.attrs);
+        match &m.content {
+            None if m.ident == name => return Some(gated),
+            Some((_, inner)) => {
+                if let Some(found) = find_mod_decl(inner, name, gated) {
+                    return Some(found);
+                }
+            }
+            None => {}
+        }
+    }
+    None
 }
 
 /// A `#[cfg(target_os/target_arch = ...)]`-gated item — its callers may live in
@@ -463,9 +544,9 @@ struct Def {
     rel_path: String,
     line: usize,
     col: usize,
-    /// `#[cfg(target_os/target_arch)]`-gated at the item: never auto-deleted,
-    /// and its re-export is never pruned (a build config this scan can't see
-    /// may still use it).
+    /// `#[cfg(target_os/target_arch)]`-gated — at the item or anywhere on the
+    /// file's `mod`-declaration chain: never auto-deleted, and its re-export
+    /// is never pruned (a build config this scan can't see may still use it).
     gated: bool,
 }
 
@@ -483,6 +564,9 @@ struct DefScan<'a> {
     rel: &'a str,
     kinds: &'a HashSet<&'a str>,
     export_attrs: &'a [String],
+    /// The file's `mod`-declaration chain carries a cfg gate; every def in
+    /// the file inherits it (see [`mod_chain_gated`]).
+    mod_gated: bool,
     out: &'a mut Vec<Def>,
 }
 
@@ -536,7 +620,7 @@ impl DefScan<'_> {
             rel_path: self.rel.to_string(),
             line: start.line,
             col: start.column,
-            gated: is_gated(h.attrs),
+            gated: self.mod_gated || is_gated(h.attrs),
         });
     }
 }
@@ -698,5 +782,99 @@ impl<'ast> Visit<'ast> for RefCollector<'_> {
     fn visit_expr_method_call(&mut self, mc: &'ast syn::ExprMethodCall) {
         self.record(mc.method.to_string());
         visit::visit_expr_method_call(self, mc);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, fs, path::Path};
+
+    use super::mod_chain_gated;
+
+    const GATE: &str = "#[cfg(all(not(target_arch = \"wasm32\"), feature = \"flash\"))]";
+
+    fn write(root: &Path, rel: &str, content: &str) {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+
+    fn gated(root: &Path, rel: &str) -> bool {
+        let mut cache = HashMap::new();
+        mod_chain_gated(&root.join("lib.rs"), &root.join(rel), &mut cache)
+    }
+
+    #[test]
+    fn item_in_cfg_gated_mod_declaration_is_gated() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "lib.rs", "mod flash;");
+        write(root, "flash/mod.rs", &format!("{GATE}\nmod api;"));
+        write(root, "flash/api.rs", "pub fn dump_to_stderr() {}");
+        assert!(
+            gated(root, "flash/api.rs"),
+            "cfg gate on the parent `mod api;` declaration must protect the file's items"
+        );
+    }
+
+    #[test]
+    fn ungated_mod_chain_stays_unprotected() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "lib.rs", "mod flash;");
+        write(root, "flash/mod.rs", "mod api;");
+        write(root, "flash/api.rs", "pub fn open() {}");
+        assert!(!gated(root, "flash/api.rs"));
+    }
+
+    #[test]
+    fn gate_on_ancestor_declaration_propagates_down() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "lib.rs", &format!("{GATE}\nmod flash;"));
+        write(root, "flash/mod.rs", "mod api;");
+        write(root, "flash/api.rs", "pub fn open() {}");
+        assert!(
+            gated(root, "flash/api.rs"),
+            "a gate on `mod flash;` at the crate root must protect nested files"
+        );
+    }
+
+    #[test]
+    fn sibling_file_module_owner_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "lib.rs", "mod flash;");
+        write(root, "flash.rs", &format!("{GATE}\nmod api;"));
+        write(root, "flash/api.rs", "pub fn open() {}");
+        assert!(
+            gated(root, "flash/api.rs"),
+            "2018 layout: `flash.rs` owning `flash/api.rs` must be resolved"
+        );
+    }
+
+    #[test]
+    fn crate_root_file_is_never_gated() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "lib.rs", "pub fn open() {}");
+        assert!(!gated(root, "lib.rs"));
+    }
+
+    #[test]
+    fn feature_only_gate_does_not_protect() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "lib.rs", "mod flash;");
+        write(
+            root,
+            "flash/mod.rs",
+            "#[cfg(feature = \"flash\")]\nmod api;",
+        );
+        write(root, "flash/api.rs", "pub fn open() {}");
+        assert!(
+            !gated(root, "flash/api.rs"),
+            "same semantics as item-level cfg: only target_os/target_arch gates protect"
+        );
     }
 }

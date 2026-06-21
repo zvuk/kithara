@@ -1,11 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use kithara_assets::StoreOptions;
 use kithara_events::{
-    AbrMode, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
+    AbrMode, AudioEvent, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -15,11 +15,13 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, Instant, sleep, timeout},
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::time::{sleep, timeout};
 
 /// Track shape: 30 segments × 4 s = 120 s. Long enough that 50 % and
 /// 90 % targets land in distinct cold regions.
@@ -58,7 +60,7 @@ async fn wait_for_status(
     {
         return Ok(());
     }
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     while start.elapsed() < budget {
         match timeout(Duration::from_millis(200), rx.recv()).await {
             Ok(Ok(Event::Queue(QueueEvent::TrackStatusChanged { id: tid, status })))
@@ -99,14 +101,14 @@ async fn observe_scrub_outcome(
     budget: Duration,
 ) -> ScrubOutcome {
     use kithara_platform::tokio::sync::broadcast::error::RecvError;
-    let deadline = tokio::time::Instant::now() + budget;
+    let deadline = Instant::now() + budget;
     loop {
         if let Some(pos) = queue.position_seconds()
             && pos > seek_target + 0.5
         {
             return ScrubOutcome::Landed { reached: pos };
         }
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return ScrubOutcome::BudgetElapsed {
                 last_position: queue.position_seconds(),
@@ -130,6 +132,36 @@ async fn observe_scrub_outcome(
             Err(_) => continue,
         }
     }
+}
+
+/// Wait until the playback sink commits real PCM progress past
+/// `baseline_secs` — i.e. the audio worker has left the post-seek
+/// `WaitingForSource` state and is rendering again. This is the
+/// concrete state the old fixed inter-scrub sleep was approximating:
+/// "play between scrubs so recovery actually runs and real PCM is
+/// rendered". `budget` is a safety deadline that bounds a hang, not a
+/// pacing wait — the function returns the moment progress is observed.
+async fn wait_for_playback_progress(
+    rx: &mut EventReceiver,
+    baseline_secs: f64,
+    budget: Duration,
+) -> Option<f64> {
+    use kithara_platform::tokio::sync::broadcast::error::RecvError;
+    let fut = async {
+        loop {
+            match rx.recv().await {
+                Ok(Event::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                    let pos_secs = position_ms as f64 / 1000.0;
+                    if pos_secs > baseline_secs {
+                        return Some(pos_secs);
+                    }
+                }
+                Ok(_) | Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    };
+    timeout(budget, fut).await.ok().flatten()
 }
 
 struct Harness {
@@ -195,7 +227,7 @@ impl Harness {
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::default(),
-                CancellationToken::default(),
+                CancelToken::never(),
             ))
             .build(),
         );
@@ -324,8 +356,10 @@ fn assert_not_failed(outcome: ScrubOutcome, target: f64, tag: &str) {
 ///   to dodge with a passive scheduler warm-up.
 ///
 /// `second_ratio = None` skips the second seek; otherwise the
-/// harness sleeps `PLAY_BETWEEN_SCRUBS` between the two so any
-/// post-first-seek recovery actually runs. Each case asserts no
+/// harness waits between the two for the playback sink to commit
+/// real PCM progress past the first landing point — bounded by
+/// `PLAY_BETWEEN_SCRUBS` as a safety deadline — so any post-first-seek
+/// recovery actually runs. Each case asserts no
 /// `PlayerEvent::ItemDidFail` after the final scrub.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::single_mid(0.40, None)]
@@ -358,7 +392,13 @@ async fn seek_into_cold_range_does_not_fail(
         panic!("[first] CRASHED before second scrub (src={src})");
     }
 
-    sleep(PLAY_BETWEEN_SCRUBS).await;
+    // Between scrubs, wait for the audio worker to actually render real
+    // PCM past where the first seek landed — not a fixed timer. This is
+    // the state the second scrub needs: post-first-seek recovery has run
+    // and playback is progressing again. `PLAY_BETWEEN_SCRUBS` is the
+    // safety deadline bounding a stall, not a pacing wait.
+    let baseline_secs = harness.queue.position_seconds().unwrap_or(0.0);
+    wait_for_playback_progress(&mut harness.rx, baseline_secs, PLAY_BETWEEN_SCRUBS).await;
 
     let second_target = TRACK_DURATION_S * second_ratio;
     let second_outcome = harness.scrub(second_target, "second").await;

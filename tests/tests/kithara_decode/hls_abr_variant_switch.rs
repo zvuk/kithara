@@ -2,7 +2,6 @@ use std::{
     error::Error,
     io::{Read as _, Seek as _, SeekFrom},
     sync::{Arc, Mutex as StdMutex},
-    time::Duration,
 };
 
 use kithara::{
@@ -16,7 +15,7 @@ use kithara_integration_tests::{
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
-use kithara_platform::{CancellationToken, time::sleep, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 /// Test that ABR variant switch does not cause byte reading glitches.
@@ -52,7 +51,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
     let url = server.url("/master.m3u8");
     info!("Test server started at: {}", url);
 
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
@@ -88,8 +87,6 @@ async fn test_abr_variant_switch_no_byte_glitches(
     });
 
     info!("Reading bytes from Stream<Hls>");
-
-    sleep(Duration::from_millis(100)).await;
 
     let result = spawn_blocking(move || -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         let mut all_bytes = Vec::new();
@@ -165,7 +162,7 @@ async fn test_basic_multi_segment_reading(
     .await;
 
     let url = server.url("/master.m3u8");
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let config = HlsConfig::for_url(url)
         .cancel(cancel_token.clone())
@@ -232,7 +229,7 @@ async fn test_abr_variant_switch_with_seek_backward(
     .await;
 
     let url = server.url("/master.m3u8");
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
@@ -258,8 +255,6 @@ async fn test_abr_variant_switch_with_seek_backward(
             }
         }
     });
-
-    sleep(Duration::from_millis(100)).await;
 
     spawn_blocking(move || -> Result<(), Box<dyn Error + Send + Sync>> {
         let mut buffer = vec![0u8; 50000];

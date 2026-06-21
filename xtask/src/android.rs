@@ -35,6 +35,8 @@ pub(crate) enum AndroidCommand {
         #[arg(long, default_value_t = crate::BuildProfile::Debug)]
         profile: BuildProfile,
     },
+    /// Build release JNI/Kotlin bindings and export stable release AAR files.
+    Aar,
     /// Boot an emulator (if needed), install the demo APK, and launch it.
     ///
     /// Pass `--debug` to start the activity with `am start -D`, which
@@ -59,6 +61,7 @@ pub(crate) enum AndroidCommand {
 pub(crate) fn run(cmd: AndroidCommand) -> Result<()> {
     match cmd {
         AndroidCommand::Build { profile } => run_build(profile),
+        AndroidCommand::Aar => run_aar(),
         AndroidCommand::Run {
             profile,
             avd,
@@ -190,6 +193,49 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
     println!("==> JNI libs: {}", jni_dir.display());
     println!("==> Kotlin bindings: {}", kotlin_dir.display());
 
+    Ok(())
+}
+
+fn run_aar() -> Result<()> {
+    run_build(BuildProfile::Release)?;
+
+    let metadata = MetadataCommand::new()
+        .exec()
+        .context("failed to read cargo metadata")?;
+    let workspace_root = metadata.workspace_root.as_std_path().to_path_buf();
+    let android_root = workspace_root.join("android");
+    let gradlew = android_root.join("gradlew");
+    if !gradlew.exists() {
+        bail!("gradlew not found at {}", gradlew.display());
+    }
+
+    println!("==> Exporting release AARs");
+    let status = Command::new(&gradlew)
+        .args([
+            ":lib:exportReleaseAars",
+            "-Pkithara.release=true",
+            "-x",
+            "generateKitharaFfi",
+        ])
+        .current_dir(&android_root)
+        .status()
+        .context("failed to run Gradle exportReleaseAars")?;
+    if !status.success() {
+        bail!("Gradle exportReleaseAars failed");
+    }
+
+    let output = android_root.join("lib/build/outputs/aar");
+    let aars = [output.join("kithara.aar"), output.join("rust-tls.aar")];
+    for aar in &aars {
+        if !aar.is_file() {
+            bail!("expected AAR was not produced: {}", aar.display());
+        }
+    }
+
+    println!("==> AARs:");
+    for aar in &aars {
+        println!("    {}", aar.display());
+    }
     Ok(())
 }
 

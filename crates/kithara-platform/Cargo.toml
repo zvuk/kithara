@@ -13,18 +13,26 @@ categories = ["wasm", "concurrency"]
 [lints]
 workspace = true
 
+[features]
+# Virtual monotonic clock for fast, deterministic offline playback tests.
+# OFF by default and referenced by no shipping crate, so production builds are
+# unchanged. See src/time/flash.rs and the README. Turn on in the test build to
+# run warm-cache offline tests at CPU speed (compared against the real-time run
+# as ground truth).
+flash = []
+
 [dependencies]
 delegate = { workspace = true }
 futures = { workspace = true }
-tokio-util = { workspace = true }
 tracing = { workspace = true }
 web-time = { workspace = true }
 tokio_with_wasm = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
 parking_lot = { workspace = true }
-tokio = { workspace = true, features = ["time", "sync", "rt"] }
+pin-project-lite = { workspace = true }
+tokio = { workspace = true, features = ["time", "sync", "rt", "signal"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm_safe_thread = { workspace = true }
@@ -39,3 +47,13 @@ kithara-platform = { path = ".", default-features = false }
 kithara-test-macros = { path = "../kithara-test-macros" }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
 wasm-bindgen-test = { workspace = true }
+
+# Native-only: criterion pulls a native-only toolchain, never wasm.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { workspace = true }
+
+# Micro-benchmarks for the propagate-down cancel primitives (`CancelToken` /
+# `CancelGroup`). `cargo bench -p kithara-platform`.
+[[bench]]
+name = "cancel"
+harness = false

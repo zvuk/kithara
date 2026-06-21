@@ -96,12 +96,6 @@ impl Queue {
         self.lock_tracks().iter().find(|e| e.id == id).cloned()
     }
 
-    /// Snapshot of all track entries, in queue order.
-    #[must_use]
-    pub fn tracks(&self) -> Vec<TrackEntry> {
-        self.lock_tracks().clone()
-    }
-
     /// The original [`TrackSource`] for `id`, if still queued. Lets callers
     /// rebuild a resource by track identity rather than by queue position.
     #[must_use]
@@ -111,5 +105,11 @@ impl Queue {
             .unwrap_or_else(PoisonError::into_inner)
             .get(&id)
             .cloned()
+    }
+
+    /// Snapshot of all track entries, in queue order.
+    #[must_use]
+    pub fn tracks(&self) -> Vec<TrackEntry> {
+        self.lock_tracks().clone()
     }
 }

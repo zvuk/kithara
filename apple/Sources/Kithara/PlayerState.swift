@@ -55,6 +55,29 @@ public enum KitharaError: Error, Sendable {
     case `internal`(String)
 }
 
+/// Player-level error with optional queue-item attribution.
+public enum KitharaPlayerError: Error, Sendable {
+    case playback(PlayerError, itemId: TrackId?)
+    case command(KitharaError, itemId: TrackId?)
+
+    public var itemId: TrackId? {
+        switch self {
+        case .playback(_, let itemId),
+             .command(_, let itemId):
+            return itemId
+        }
+    }
+
+    public var underlying: Error {
+        switch self {
+        case .playback(let error, _):
+            return error
+        case .command(let error, _):
+            return error
+        }
+    }
+}
+
 // MARK: - Player Error (async event stream)
 
 /// Error surfaced on the player / item error publishers
@@ -106,9 +129,6 @@ public enum AbrMode: Sendable {
 
 // MARK: - Public type aliases (avoid `import KitharaFFI` in consumer code)
 
-/// Player event from Rust — use with ``KitharaPlayer/eventPublisher``.
-public typealias PlayerEvent = FfiPlayerEvent
-
 /// Item event from Rust — use with ``KitharaPlayerItem/eventPublisher``.
 public typealias ItemEvent = FfiItemEvent
 
@@ -117,11 +137,33 @@ public typealias ItemEvent = FfiItemEvent
 /// Surfaced through `PlayerEvent.trackStatusChanged(itemId:status:)`.
 public typealias TrackStatus = FfiTrackStatus
 
-/// Strongly-typed monotonic identifier shared between the player and
-/// the queue. Mirrors the iOS `AudioPlayerItemProtocol.audioId: TrackId`
-/// contract. Conceptually a `UInt64`; passed straight through from
-/// Rust without conversion.
-public typealias TrackId = KitharaFFI.TrackId
+/// Caller-facing track identifier.
+///
+/// For integrations that already have domain track ids, pass the content id
+/// into ``KitharaPlayerItem`` at construction.
+/// If omitted, Kithara uses the internally allocated queue id converted to
+/// `Int`.
+public typealias TrackId = Int
+
+/// Player event dispatched through ``KitharaPlayer/eventPublisher``.
+public enum PlayerEvent: Sendable, Equatable {
+    case timeChanged(seconds: Double)
+    case rateChanged(rate: Float)
+    case currentItemChanged(itemId: TrackId?)
+    case statusChanged(status: PlayerStatus)
+    case timeControlStatusChanged(status: TimeControlStatus)
+    case error(String)
+    case durationChanged(seconds: Double)
+    case bufferedDurationChanged(seconds: Double)
+    case volumeChanged(volume: Float)
+    case muteChanged(muted: Bool)
+    case itemDidPlayToEnd
+    case itemDidFail(itemId: TrackId?)
+    case trackStatusChanged(itemId: TrackId, status: TrackStatus)
+    case queueEnded
+    case crossfadeStarted(durationSeconds: Float)
+    case crossfadeDurationChanged(seconds: Float)
+}
 
 // MARK: - Transition
 
@@ -155,11 +197,20 @@ public struct Transition: Sendable, Equatable {
 /// Snapshot of the player state — use with ``KitharaPlayer/snapshot``.
 public typealias PlayerSnapshot = FfiPlayerSnapshot
 
-/// Seek completion callback — use with
+/// Seek completion handler — use with
 /// ``KitharaPlayer/seek(to:tolerance:completionHandler:)``.
-public typealias SeekCallback = KitharaFFI.SeekCallback
+public typealias SeekCompletionHandler = (Bool) -> Void
 
 // MARK: - Internal conversions
+
+extension TrackId {
+    init(ffi id: KitharaFFI.TrackId) {
+        guard let converted = TrackId(exactly: id) else {
+            preconditionFailure("KitharaFFI TrackId \(id) exceeds Int.max")
+        }
+        self = converted
+    }
+}
 
 extension PlayerStatus {
     /// Convert an FFI status from a ``PlayerEvent`` payload into the

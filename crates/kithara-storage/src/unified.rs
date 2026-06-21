@@ -232,7 +232,7 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use kithara_platform::{CancellationToken, time::Duration};
+    use kithara_platform::{CancelToken, time::Duration};
 
     use super::*;
     #[cfg(not(target_arch = "wasm32"))]
@@ -244,7 +244,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.bin");
         let mmap: MmapResource = Resource::open(
-            CancellationToken::default(),
+            CancelToken::never(),
             MmapOptions {
                 path,
                 initial_len: None,
@@ -266,7 +266,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn mem_variant_roundtrip() {
-        let mem = MemResource::new(CancellationToken::default());
+        let mem = MemResource::new(CancelToken::never());
         let res = StorageResource::from(mem);
 
         res.write_at(0, b"hello mem").unwrap();
@@ -285,7 +285,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("conv.bin");
         let mmap: MmapResource = Resource::open(
-            CancellationToken::default(),
+            CancelToken::never(),
             MmapOptions {
                 path,
                 initial_len: None,
@@ -299,14 +299,14 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn from_mem_resource() {
-        let mem = MemResource::new(CancellationToken::default());
+        let mem = MemResource::new(CancelToken::never());
         let res: StorageResource = mem.into();
         assert!(matches!(res, StorageResource::Mem(_)));
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn status_delegation() {
-        let mem = MemResource::new(CancellationToken::default());
+        let mem = MemResource::new(CancelToken::never());
         let res = StorageResource::from(mem);
 
         assert_eq!(res.status(), ResourceStatus::Active);
@@ -317,7 +317,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn wait_range_delegation() {
-        let mem = MemResource::new(CancellationToken::default());
+        let mem = MemResource::new(CancelToken::never());
         let res = StorageResource::from(mem);
 
         res.write_at(0, b"data").unwrap();
@@ -327,7 +327,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn fail_delegation() {
-        let mem = MemResource::new(CancellationToken::default());
+        let mem = MemResource::new(CancelToken::never());
         let res = StorageResource::from(mem);
 
         res.fail("boom".to_string());
@@ -336,7 +336,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn reactivate_delegation() {
-        let mem = MemResource::new(CancellationToken::default());
+        let mem = MemResource::new(CancelToken::never());
         let res = StorageResource::from(mem);
 
         res.write_at(0, b"data").unwrap();
@@ -349,7 +349,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn reactivate_clears_failed_for_refetch() {
-        let mem = MemResource::new(CancellationToken::default());
+        let mem = MemResource::new(CancelToken::never());
         let res = StorageResource::from(mem);
 
         res.write_at(0, b"par").unwrap();

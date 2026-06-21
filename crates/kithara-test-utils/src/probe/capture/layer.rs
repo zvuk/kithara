@@ -1,5 +1,6 @@
-use std::{collections::HashMap, time::Instant};
+use std::collections::HashMap;
 
+use kithara_platform::time::Instant;
 use tracing::{Subscriber, field::Visit};
 use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 

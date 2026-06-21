@@ -1,6 +1,7 @@
-use std::time::Duration;
+use std::num::NonZeroU32;
 
 use kithara_bufpool::PcmPool;
+use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
 use super::{Consts, GaplessTrimmer};
@@ -45,21 +46,15 @@ fn custom_chunk(spec: PcmSpec, frame_offset: u64, pcm: Vec<f32>) -> PcmChunk {
 }
 
 fn mono_spec() -> PcmSpec {
-    PcmSpec {
-        channels: 1,
-        sample_rate: 48_000,
-    }
+    PcmSpec::new(1, NonZeroU32::new(48_000).expect("test rate"))
 }
 
 fn stereo_spec() -> PcmSpec {
-    PcmSpec {
-        channels: 2,
-        sample_rate: 48_000,
-    }
+    PcmSpec::new(2, NonZeroU32::new(48_000).expect("test rate"))
 }
 
 fn fade_frames_for(spec: PcmSpec) -> usize {
-    let computed = (u64::from(spec.sample_rate.max(1)) * Consts::FADE_IN_DURATION_MS) / 1000;
+    let computed = (u64::from(spec.sample_rate.get()) * Consts::FADE_IN_DURATION_MS) / 1000;
     computed.max(1) as usize
 }
 
@@ -73,7 +68,7 @@ fn silence_params(threshold_db: f32, min_trim_frames: u64) -> SilenceTrimParams 
 }
 
 fn collect_pcm(out: &[PcmChunk]) -> Vec<f32> {
-    out.iter().flat_map(|c| c.samples().to_vec()).collect()
+    out.iter().flat_map(|c| c.samples.to_vec()).collect()
 }
 
 #[kithara::test]
@@ -90,7 +85,7 @@ fn leading_trim_updates_offset_and_timestamp() {
     assert_eq!(out.frames(), 448);
     assert_eq!(out.meta.frame_offset, 576);
     assert_eq!(out.meta.timestamp, Duration::from_millis(12));
-    assert_eq!(out.samples()[0], 576.0);
+    assert_eq!(out.samples[0], 576.0);
 }
 
 #[kithara::test]
@@ -109,7 +104,7 @@ fn leading_trim_can_consume_multiple_chunks() {
     let out = ready.remove(0);
     assert_eq!(out.frames(), 672);
     assert_eq!(out.meta.frame_offset, 2400);
-    assert_eq!(out.samples()[0], 352.0);
+    assert_eq!(out.samples[0], 352.0);
 }
 
 #[kithara::test]
@@ -199,7 +194,7 @@ fn notify_seek_resets_leading_only() {
 #[kithara::test]
 fn codec_priming_with_zero_frames_is_disabled() {
     let spec = mono_spec();
-    let mut trimmer = GaplessTrimmer::codec_priming(0, spec.sample_rate);
+    let mut trimmer = GaplessTrimmer::codec_priming(0, spec.sample_rate.get());
     let mut ready = trimmer.push(chunk(spec, 0, 64));
     assert_eq!(ready.len(), 1);
     assert_eq!(ready.remove(0).frames(), 64);
@@ -212,7 +207,7 @@ fn codec_priming_drops_leading_frames_and_fades_in() {
     let trim_len = usize::try_from(trim).expect("BUG: test trim fits in usize");
     let total_frames = trim_len + fade_frames_for(spec) + 32;
     let pcm = vec![1.0_f32; total_frames];
-    let mut trimmer = GaplessTrimmer::codec_priming(trim, spec.sample_rate);
+    let mut trimmer = GaplessTrimmer::codec_priming(trim, spec.sample_rate.get());
 
     let ready = trimmer.push(custom_chunk(spec, 0, pcm));
     let pcm_out = collect_pcm(&ready);
@@ -246,7 +241,7 @@ fn codec_priming_metadata_takes_precedence_when_combined() {
         leading_frames: 50,
         trailing_frames: 0,
     });
-    let codec_trimmer = GaplessTrimmer::codec_priming(50, spec.sample_rate);
+    let codec_trimmer = GaplessTrimmer::codec_priming(50, spec.sample_rate.get());
     let pcm = vec![0.5_f32; 200];
 
     let mut from_info = metadata_trimmer;
@@ -405,7 +400,7 @@ fn silence_trim_trailing_enabled() {
     assert_eq!(pcm_out.len(), audible_frames);
 
     let fade_frames =
-        (u64::from(spec.sample_rate) * Consts::FADE_OUT_DURATION_MS / 1000).max(1) as usize;
+        (u64::from(spec.sample_rate.get()) * Consts::FADE_OUT_DURATION_MS / 1000).max(1) as usize;
     let untouched = pcm_out.len().saturating_sub(fade_frames);
     for &sample in &pcm_out[..untouched] {
         assert!(
@@ -443,7 +438,7 @@ fn silence_trim_trailing_window_rms_ignores_zero_crossings_in_audible_signal() {
     let silent_frames: u32 = 480;
     let mut pcm = Vec::with_capacity((sine_frames + silent_frames) as usize);
     for n in 0..sine_frames {
-        let t = f64::from(n) / f64::from(spec.sample_rate);
+        let t = f64::from(n) / f64::from(spec.sample_rate.get());
         let s: f64 = 0.5 * (2.0 * std::f64::consts::PI * 800.0 * t).sin();
         pcm.push(num_traits::cast::AsPrimitive::<f32>::as_(s));
     }
@@ -455,7 +450,7 @@ fn silence_trim_trailing_window_rms_ignores_zero_crossings_in_audible_signal() {
     assert_eq!(pcm_out.len(), sine_frames as usize);
 
     let fade_frames =
-        (u64::from(spec.sample_rate) * Consts::FADE_OUT_DURATION_MS / 1000).max(1) as usize;
+        (u64::from(spec.sample_rate.get()) * Consts::FADE_OUT_DURATION_MS / 1000).max(1) as usize;
     let pre_fade_end = pcm_out.len().saturating_sub(fade_frames);
     let pre_fade = &pcm_out[..pre_fade_end];
     let pre_fade_len = u32::try_from(pre_fade.len()).expect("BUG: pre-fade window fits in u32");
@@ -486,7 +481,7 @@ fn silence_trim_seek_disables_leading_only() {
     assert_eq!(flushed.len(), 1);
     let out = flushed.remove(0);
     assert_eq!(out.meta.frame_offset, 128);
-    assert_eq!(out.samples(), &[0.0, 0.0, 3.0, 4.0]);
+    assert_eq!(&out.samples[..], &[0.0, 0.0, 3.0, 4.0]);
 }
 
 #[kithara::test]
@@ -500,7 +495,7 @@ fn silence_trim_preserves_all_silence_track() {
     assert_eq!(flushed.len(), 1);
     let out = flushed.remove(0);
     assert_eq!(out.frames(), 128);
-    assert!(out.samples().iter().all(|sample| *sample == 0.0));
+    assert!(out.samples.iter().all(|sample| *sample == 0.0));
 }
 
 #[kithara::test]
@@ -528,7 +523,7 @@ fn silence_trim_respects_multi_channel_threshold() {
     let out = flushed.remove(0);
     assert_eq!(out.meta.frame_offset, 32);
     assert_eq!(out.frames(), 1);
-    assert!(out.samples()[1].abs() < 2.0e-3);
+    assert!(out.samples[1].abs() < 2.0e-3);
 }
 
 #[kithara::test]

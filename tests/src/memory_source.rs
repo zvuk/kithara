@@ -13,7 +13,8 @@ use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ReadOutcome, Source, SourceError, SourcePhase, Stream, StreamResult, StreamType, Timeline,
+    Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve,
+    SeekState, Source, SourceError, SourcePhase, Stream, StreamResult, StreamType,
 };
 
 /// Error type for memory-backed sources.
@@ -27,7 +28,8 @@ pub struct MemorySourceError;
 /// Set `report_len` to `false` to simulate sources without known length
 /// (e.g. for testing `SeekFrom::End` error paths).
 pub struct MemorySource {
-    timeline: Timeline,
+    seek: Arc<SeekState>,
+    playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
     data: Vec<u8>,
     report_len: bool,
@@ -38,7 +40,8 @@ impl MemorySource {
     pub fn new(data: Vec<u8>) -> Self {
         Self {
             data,
-            timeline: Timeline::new(),
+            seek: Arc::new(SeekState::new()),
+            playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             report_len: true,
         }
@@ -49,7 +52,8 @@ impl MemorySource {
     pub fn without_len(data: Vec<u8>) -> Self {
         Self {
             data,
-            timeline: Timeline::new(),
+            seek: Arc::new(SeekState::new()),
+            playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             report_len: false,
         }
@@ -99,8 +103,24 @@ impl Source for MemorySource {
         Ok(ReadOutcome::Bytes(count))
     }
 
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
+    fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
+    }
+
+    fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
+        Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
+    }
+
+    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+    }
+
+    fn seek_control(&self) -> Arc<dyn SeekControl> {
+        Arc::clone(&self.seek) as Arc<dyn SeekControl>
+    }
+
+    fn activity(&self) -> Arc<dyn Activity> {
+        Arc::clone(&self.seek) as Arc<dyn Activity>
     }
 
     fn wait_range(

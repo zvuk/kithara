@@ -1,17 +1,20 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use kithara_app::{config::AppConfig, sources::build_source};
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_integration_tests::{TestTempDir, kithara};
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, sleep, timeout},
+};
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::{sync::OnceCell, time::timeout};
+use tokio::sync::OnceCell;
 use tracing_subscriber::EnvFilter;
 
 /// Real-network DRM trace harness. Loads a single zvq.me DRM master
@@ -61,18 +64,18 @@ async fn shared_ctx() -> &'static Ctx {
         let net = NetOptions::builder().is_insecure(true).build();
         let downloader = Downloader::new(
             DownloaderConfig::builder()
-                .client(HttpClient::new(net, CancellationToken::default()))
+                .client(HttpClient::new(net, CancelToken::never()))
                 .build(),
         );
-        let flush_hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
-        let config = AppConfig::new(downloader, flush_hub, CancellationToken::default());
+        let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
+        let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
         let player = Arc::new(PlayerImpl::new(PlayerConfig::builder().build()));
         let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
         let q = Arc::clone(&queue);
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                sleep(Duration::from_millis(50)).await;
                 let _ = q.tick();
             }
         });

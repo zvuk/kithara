@@ -42,14 +42,14 @@ fn decode_with_probe(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &
     let mut decoder = DecoderFactory::create_with_probe(reader, Some(ext), test_config()).unwrap();
     let spec = decoder.spec();
 
-    assert!(spec.sample_rate > 0);
+    assert!(spec.sample_rate.get() > 0);
     assert!(spec.channels > 0);
 
     let outcome = decoder.next_chunk().unwrap();
     assert!(outcome.is_chunk());
 
     let chunk = PcmChunk::try_from(outcome).unwrap();
-    assert!(!chunk.pcm.is_empty());
+    assert!(!chunk.samples.is_empty());
 }
 
 #[kithara::test]
@@ -65,7 +65,7 @@ fn decode_complete(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &st
     let mut chunk_count = 0;
 
     while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
-        total_samples += chunk.pcm.len();
+        total_samples += chunk.samples.len();
         chunk_count += 1;
     }
 
@@ -92,7 +92,7 @@ fn from_media_info(
     let mut decoder = DecoderFactory::create_from_media_info(reader, info, test_config()).unwrap();
     let spec = decoder.spec();
 
-    assert!(spec.sample_rate > 0);
+    assert!(spec.sample_rate.get() > 0);
     assert!(spec.channels > 0);
 
     let outcome = decoder.next_chunk().unwrap();
@@ -103,12 +103,12 @@ fn from_media_info(
 fn assert_spec(spec: &kithara::decode::PcmSpec, ext: &str) {
     match ext {
         "wav" => {
-            assert_eq!(spec.sample_rate, 44100);
+            assert_eq!(spec.sample_rate.get(), 44100);
             assert_eq!(spec.channels, 2);
         }
         "mp3" => {
             assert!(
-                [44100, 48000, 22050].contains(&spec.sample_rate),
+                [44100, 48000, 22050].contains(&spec.sample_rate.get()),
                 "Unexpected MP3 sample rate: {}",
                 spec.sample_rate
             );
@@ -164,7 +164,7 @@ fn chunk_has_valid_samples(audio: EmbeddedAudio) {
 
     let chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
 
-    for sample in chunk.pcm.iter() {
+    for sample in chunk.samples.iter() {
         assert!(
             sample.is_finite(),
             "Sample should be finite, got: {}",
@@ -178,7 +178,7 @@ fn chunk_has_valid_samples(audio: EmbeddedAudio) {
     }
 
     assert_eq!(
-        chunk.pcm.len() % spec.channels as usize,
+        chunk.samples.len() % spec.channels as usize,
         0,
         "Sample count should be multiple of channels"
     );
@@ -198,21 +198,21 @@ fn multiple_chunks_consistent(audio: EmbeddedAudio) {
     while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
         chunk_count += 1;
 
-        assert_eq!(chunk.pcm.len() % spec.channels as usize, 0);
+        assert_eq!(chunk.samples.len() % spec.channels as usize, 0);
 
         if chunk_count > 3
             && let Some(prev) = prev_len
         {
-            let ratio = chunk.pcm.len() as f64 / prev as f64;
+            let ratio = chunk.samples.len() as f64 / prev as f64;
             if !(0.01..=100.0).contains(&ratio) {
                 panic!(
                     "Chunk size varies extremely: {} vs {}",
-                    chunk.pcm.len(),
+                    chunk.samples.len(),
                     prev
                 );
             }
         }
-        prev_len = Some(chunk.pcm.len());
+        prev_len = Some(chunk.samples.len());
 
         if chunk_count > 100 {
             break;
@@ -230,11 +230,11 @@ fn consecutive_chunks_differ(audio: EmbeddedAudio) {
     let first_chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
     let second_chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
 
-    if first_chunk.pcm.len() > 10 && second_chunk.pcm.len() > 10 {
+    if first_chunk.samples.len() > 10 && second_chunk.samples.len() > 10 {
         let differs = first_chunk
-            .pcm
+            .samples
             .iter()
-            .zip(second_chunk.pcm.iter())
+            .zip(second_chunk.samples.iter())
             .any(|(a, b)| (a - b).abs() > f32::EPSILON);
         assert!(differs, "Consecutive chunks should have different samples");
     }

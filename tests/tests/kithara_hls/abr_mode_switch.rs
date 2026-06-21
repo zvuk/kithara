@@ -10,20 +10,25 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
-    events::{AbrEvent, DownloaderEvent, Event, EventBus, HlsEvent, RequestId},
+    events::{
+        AbrEvent, AudioEvent, DownloaderEvent, Event, EventBus, EventReceiver, HlsEvent, RequestId,
+    },
     hls::{AbrMode, Hls, HlsConfig},
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, auto,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
+    reads::{read_to_eof, read_until_samples},
     signal_pcm::{Finite, SignalPcm, signal},
+    waits::{wait_for_event, wait_until},
     wav::create_wav_header,
 };
 use kithara_platform::{
-    CancellationToken, Mutex,
-    time::{Duration, Instant},
+    CancelToken,
+    sync::Mutex,
+    time::Duration,
     tokio::task::{spawn, spawn_blocking},
 };
 use tracing::info;
@@ -79,66 +84,116 @@ fn parse_segment_url(url: &str) -> Option<(usize, usize)> {
 }
 
 /// Collect download/reader segment events from a bus.
+///
+/// Drains the bus PULL-side (synchronously, on inspection) rather than from a
+/// spawned task. A spawned observer would, under flash on a current-thread
+/// runtime, pin the virtual clock: a bus event wakes it mid `audio.read()`,
+/// but the blocking read holds the runtime's only thread, so the woken task
+/// can never be re-polled to quiescence — its `active_async` slot freezes the
+/// clock, the producer can never advance, and the read deadlocks. A pull drain
+/// holds no slot, so it cannot pin the clock; the broadcast ring buffers events
+/// between drains.
 struct EventCollector {
+    /// Receiver held for pull draining (see [`Self::drain`]).
+    rx: Mutex<EventReceiver>,
+    /// In-flight request→(variant, seg) map, carried across drains.
+    request_map: Mutex<HashMap<RequestId, (usize, usize)>>,
     /// Network fetches that completed (URL→variant/seg parsed at enqueue).
-    network_fetches: Arc<Mutex<HashSet<(usize, usize)>>>,
+    network_fetches: Mutex<HashSet<(usize, usize)>>,
     /// Reader-side reads (segment boundaries crossed in `read_at`).
-    reader_segments: Arc<Mutex<Vec<(usize, usize)>>>,
-    switch_count: Arc<AtomicUsize>,
+    reader_segments: Mutex<Vec<(usize, usize)>>,
+    applied_targets: Mutex<Vec<usize>>,
+    audio_trace: Mutex<Vec<String>>,
+    switch_count: AtomicUsize,
 }
 
 impl EventCollector {
     fn new(bus: &EventBus) -> Self {
-        let network_fetches: Arc<Mutex<HashSet<(usize, usize)>>> =
-            Arc::new(Mutex::new(HashSet::new()));
-        let reader_segments: Arc<Mutex<Vec<(usize, usize)>>> = Arc::new(Mutex::new(Vec::new()));
-        let switch_count = Arc::new(AtomicUsize::new(0));
-
-        let net_bg = Arc::clone(&network_fetches);
-        let read_bg = Arc::clone(&reader_segments);
-        let sw_bg = Arc::clone(&switch_count);
-        let mut rx = bus.subscribe();
-        spawn(async move {
-            let mut request_map: HashMap<RequestId, (usize, usize)> = HashMap::new();
-            loop {
-                let ev = match rx.recv().await {
-                    Ok(ev) => ev,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                };
-                match &ev {
-                    Event::Downloader(DownloaderEvent::RequestEnqueued {
-                        request_id, url, ..
-                    }) => {
-                        if let Some(seg) = parse_segment_url(url.as_str()) {
-                            request_map.insert(*request_id, seg);
-                        }
-                    }
-                    Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
-                        if let Some(seg) = request_map.remove(request_id) {
-                            net_bg.lock_sync().insert(seg);
-                        }
-                    }
-                    Event::Hls(HlsEvent::SegmentReadStart {
-                        variant,
-                        segment_index,
-                        ..
-                    }) => {
-                        read_bg.lock_sync().push((*variant, *segment_index));
-                    }
-                    Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
-                        info!(to = to.get(), ?reason, "VariantApplied");
-                        sw_bg.fetch_add(1, Ordering::Release);
-                    }
-                    _ => {}
-                }
-            }
-        });
-
         Self {
-            network_fetches,
-            reader_segments,
-            switch_count,
+            rx: Mutex::new(bus.subscribe()),
+            request_map: Mutex::new(HashMap::new()),
+            network_fetches: Mutex::new(HashSet::new()),
+            reader_segments: Mutex::new(Vec::new()),
+            applied_targets: Mutex::new(Vec::new()),
+            audio_trace: Mutex::new(Vec::new()),
+            switch_count: AtomicUsize::new(0),
+        }
+    }
+
+    fn push_audio_trace(&self, entry: String) {
+        let mut trace = self.audio_trace.lock();
+        if trace.len() < 64 {
+            trace.push(entry);
+        }
+    }
+
+    /// Fold every event published since the last drain into the accumulators.
+    /// `Lagged` is tolerated (mirrors the old task's `continue`); `Empty`/
+    /// `Closed` end the drain. No `.await`, so it never pins the virtual clock.
+    fn drain(&self) {
+        use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
+        let mut rx = self.rx.lock();
+        loop {
+            let ev = match rx.try_recv() {
+                Ok(ev) => ev,
+                Err(TryRecvError::Lagged(_)) => continue,
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            };
+            match &ev {
+                Event::Downloader(DownloaderEvent::RequestEnqueued {
+                    request_id, url, ..
+                }) => {
+                    if let Some(seg) = parse_segment_url(url.as_str()) {
+                        self.request_map.lock().insert(*request_id, seg);
+                    }
+                }
+                Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                    if let Some(seg) = self.request_map.lock().remove(request_id) {
+                        self.network_fetches.lock().insert(seg);
+                    }
+                }
+                Event::Hls(HlsEvent::SegmentReadStart {
+                    variant,
+                    segment_index,
+                    ..
+                }) => {
+                    self.reader_segments.lock().push((*variant, *segment_index));
+                }
+                Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
+                    info!(to = to.get(), ?reason, "VariantApplied");
+                    self.applied_targets.lock().push(to.get());
+                    self.switch_count.fetch_add(1, Ordering::Release);
+                }
+                Event::Audio(AudioEvent::SeekLifecycle {
+                    stage,
+                    seek_epoch,
+                    location,
+                }) => {
+                    self.push_audio_trace(format!(
+                        "SeekLifecycle({stage:?}, epoch={seek_epoch:?}, location={location:?})"
+                    ));
+                }
+                Event::Audio(AudioEvent::SeekComplete {
+                    position,
+                    seek_epoch,
+                }) => {
+                    self.push_audio_trace(format!(
+                        "SeekComplete(epoch={seek_epoch:?}, position={position:?})"
+                    ));
+                }
+                Event::Audio(AudioEvent::DecoderReady {
+                    base_offset,
+                    variant,
+                }) => {
+                    self.push_audio_trace(format!(
+                        "DecoderReady(base_offset={base_offset}, variant={variant:?})"
+                    ));
+                }
+                Event::Audio(AudioEvent::EndOfStream) => {
+                    self.push_audio_trace("EndOfStream".to_owned());
+                }
+                _ => {}
+            }
         }
     }
 
@@ -148,8 +203,9 @@ impl EventCollector {
     /// per `SegmentReadStart`, dedup'd by (variant, seg) — first sighting
     /// wins.
     fn segments(&self) -> Vec<SegmentRecord> {
-        let net = self.network_fetches.lock_sync().clone();
-        let reads = self.reader_segments.lock_sync().clone();
+        self.drain();
+        let net = self.network_fetches.lock().clone();
+        let reads = self.reader_segments.lock().clone();
         let mut seen: HashSet<(usize, usize)> = HashSet::new();
         let mut out = Vec::new();
         for (v, s) in reads {
@@ -175,23 +231,92 @@ impl EventCollector {
     }
 
     fn switch_count(&self) -> usize {
+        self.drain();
         self.switch_count.load(Ordering::Acquire)
+    }
+
+    fn applied_targets(&self) -> Vec<usize> {
+        self.drain();
+        self.applied_targets.lock().clone()
+    }
+
+    fn audio_trace(&self) -> Vec<String> {
+        self.drain();
+        self.audio_trace.lock().clone()
     }
 }
 
-fn read_until_eof(audio: &mut Audio<Stream<Hls>>, timeout: Duration) -> u64 {
-    let mut buf = vec![0.0f32; 4096];
-    let mut total = 0u64;
-    let start = Instant::now();
-    while start.elapsed() < timeout {
+#[derive(Clone, Copy, Debug)]
+struct PhaseReadStats {
+    samples: u64,
+    pending: u64,
+    saw_eof: bool,
+}
+
+fn read_phase_until_samples<S: StreamType>(
+    audio: &mut Audio<Stream<S>>,
+    target_samples: u64,
+    label: &str,
+) -> PhaseReadStats {
+    let mut buf = vec![0f32; 4096 * 2];
+    let mut stats = PhaseReadStats {
+        samples: 0,
+        pending: 0,
+        saw_eof: false,
+    };
+
+    while stats.samples < target_samples {
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => {}
-            Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error: {e}"),
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                let n = count.get();
+                for &sample in &buf[..n] {
+                    assert!(
+                        sample.is_finite(),
+                        "{label}: non-finite sample after {} samples",
+                        stats.samples
+                    );
+                }
+                let n64 = u64::try_from(n)
+                    .unwrap_or_else(|err| panic!("{label}: read count does not fit u64: {err}"));
+                stats.samples += n64;
+            }
+            Ok(ReadOutcome::Pending { .. }) => {
+                stats.pending += 1;
+            }
+            Ok(ReadOutcome::Eof { .. }) => {
+                stats.saw_eof = true;
+                break;
+            }
+            Err(err) => {
+                panic!(
+                    "{label}: decode error after {} samples and {} pending reads: {err}",
+                    stats.samples, stats.pending
+                );
+            }
         }
     }
-    total
+
+    stats
+}
+
+/// Wait until every v0 media segment has been network-fetched (the all-cached
+/// precondition the bug repros against), polling the real download state.
+///
+/// `EventCollector::segments()` drains the bus on each call, so the net-fetch
+/// count is the actual produced state (a `RequestCompleted` per segment), not a
+/// clock snapshot. Funnels through the shared `wait_until` poll primitive so the
+/// only timer tick lives in one audited place.
+async fn wait_v0_fully_cached(collector: &EventCollector, segment_count: usize) {
+    wait_until(Duration::from_secs(20), "v0_fully_cached", || {
+        collector
+            .segments()
+            .iter()
+            .filter(|s| s.variant == 0 && !s.cached)
+            .count()
+            >= segment_count
+    })
+    .await
+    .expect("v0 never fully prefetched");
 }
 
 /// VOD single-track: manual quality switch takes effect on future segments.
@@ -235,7 +360,7 @@ async fn vod_manual_switch_affects_future_segments() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -255,7 +380,7 @@ async fn vod_manual_switch_affects_future_segments() {
         .await
         .expect("create audio");
 
-    let total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(25)))
+    let total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
 
@@ -339,30 +464,57 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
     let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
     let pcm_data = Arc::new(create_pcm_segments(segment_count));
 
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: 2,
-        segments_per_variant: segment_count,
-        segment_size: D.segment_size,
-        segment_duration_secs: segment_duration_secs(),
-        custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
-        init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-        codecs: Some("wav".to_string()),
-        delay_rules: vec![DelayRule {
-            variant: Some(0),
-            segment_gte: Some(5),
-            delay_ms: 10_000,
+    // Slow variant modelled as STATE, not a wall-clock timer: withhold V0's
+    // segment-5 BODY entirely (its HEAD/size stays open, so the layout is learned
+    // up front). The reader consumes V0 seg 0..5, then blocks on the
+    // never-delivered seg 5 — exactly "reader blocked on a slow variant" — and the
+    // urgent rescue must hand the tail to V1. No `delay_ms`, no `sleep`: progress
+    // is driven purely by the read outcome and the rescue, deterministic on both
+    // the real and the virtual clock.
+    let (server, gate) = HlsTestServer::with_segment_gate(
+        HlsTestServerConfig {
+            variant_count: 2,
+            segments_per_variant: segment_count,
+            segment_size: D.segment_size,
+            segment_duration_secs: segment_duration_secs(),
+            custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
+            init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
+            variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+            codecs: Some("wav".to_string()),
             ..Default::default()
-        }],
-        ..Default::default()
-    })
+        },
+        0,
+        5,
+    )
     .await;
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
+
+    // Event-driven release: the moment the urgent down-switch commits (the first
+    // `VariantApplied`, which in this test is the rescue onto V1), the rescue owns
+    // the tail, so free V0's withheld seg-5 GET. Driven by the EVENT, never a
+    // timer — and it fires only AFTER the behaviour under test has happened, so it
+    // cannot mask a missing rescue (no rescue ⇒ no event ⇒ no release ⇒ the read
+    // stalls and the hang watchdog still catches a real regression).
+    let release_gate = gate.clone();
+    let mut release_rx = bus.subscribe();
+    drop(spawn(async move {
+        loop {
+            match release_rx.recv().await {
+                Ok(Event::Abr(AbrEvent::VariantApplied { .. })) => {
+                    release_gate.release();
+                    break;
+                }
+                Ok(_) => {}
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    }));
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
@@ -380,7 +532,7 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
         .await
         .expect("create audio");
 
-    let total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(20)))
+    let total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
 
@@ -470,7 +622,7 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls1 = HlsConfig::for_url(url1.clone())
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         .events(bus1.clone())
         .initial_abr_mode(auto(0))
         .build();
@@ -481,7 +633,7 @@ async fn multi_track_shared_abr_with_cache() {
         .build();
     let mut audio1 = Audio::<Stream<Hls>>::new(config1).await.expect("track 1");
 
-    let t1_samples = spawn_blocking(move || read_until_eof(&mut audio1, Duration::from_secs(15)))
+    let t1_samples = spawn_blocking(move || read_to_eof(&mut audio1))
         .await
         .expect("read t1");
 
@@ -506,7 +658,7 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls2 = HlsConfig::for_url(url2)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         .events(bus2.clone())
         .initial_abr_mode(AbrMode::manual(1))
         .build();
@@ -517,7 +669,7 @@ async fn multi_track_shared_abr_with_cache() {
         .build();
     let mut audio2 = Audio::<Stream<Hls>>::new(config2).await.expect("track 2");
 
-    let t2_samples = spawn_blocking(move || read_until_eof(&mut audio2, Duration::from_secs(15)))
+    let t2_samples = spawn_blocking(move || read_to_eof(&mut audio2))
         .await
         .expect("read t2");
 
@@ -541,7 +693,7 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls3 = HlsConfig::for_url(url1)
         .store(StoreOptions::new(temp_dir.path()))
-        .cancel(CancellationToken::default())
+        .cancel(CancelToken::never())
         .events(bus3.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -554,7 +706,7 @@ async fn multi_track_shared_abr_with_cache() {
         .await
         .expect("track 1 replay");
 
-    let t3_samples = spawn_blocking(move || read_until_eof(&mut audio3, Duration::from_secs(15)))
+    let t3_samples = spawn_blocking(move || read_to_eof(&mut audio3))
         .await
         .expect("read t3");
 
@@ -626,7 +778,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -646,7 +798,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
         .await
         .expect("create audio");
 
-    let total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(25)))
+    let total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
 
@@ -716,7 +868,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -737,14 +889,16 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         .expect("create audio");
 
     // Warm up a couple of segments so the reader is past the boundary
-    // commit gate, then trigger a Manual switch via the handle.
+    // commit gate, then trigger a Manual switch via the handle. The
+    // blocking `read` parks until the worker commits frames, so the loop
+    // waits on real decoded audio (the `total` gate), not a wall clock.
     let mut buf = vec![0.0f32; 4096];
     let mut total = 0u64;
-    let warmup_deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < warmup_deadline && total < 8_192 {
+    while total < 8_192 {
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
+            Ok(ReadOutcome::Pending { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => break,
             Err(e) => panic!("decode error in warmup: {e}"),
         }
     }
@@ -757,7 +911,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         .set_mode(AbrMode::manual(2))
         .expect("Manual(2) target is in the variant list");
 
-    let post_total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(15)))
+    let post_total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
 
@@ -805,25 +959,11 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     // is FLAC (fLaC). Manual(3) forces the cross-codec path.
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     // EventCollector's segment URL parser is HlsTestServer-specific; for
     // real-asset URLs we capture VariantApplied targets directly.
-    let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
-    let applied_bg = Arc::clone(&applied_targets);
-    let mut applied_rx = bus.subscribe();
-    spawn(async move {
-        loop {
-            let ev = match applied_rx.recv().await {
-                Ok(ev) => ev,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            };
-            if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock_sync().push(to.get());
-            }
-        }
-    });
+    let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
@@ -839,16 +979,9 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         .await
         .expect("create audio");
 
-    let mut buf = vec![0f32; 4096];
-    let mut pre_total = 0u64;
-    let warmup_deadline = Instant::now() + Duration::from_secs(4);
-    while Instant::now() < warmup_deadline && pre_total < 16_384 {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => pre_total += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
-            Err(e) => panic!("decode error pre-switch: {e}"),
-        }
-    }
+    // Warmup: read until enough AAC samples are produced (state target, not a
+    // wall-clock deadline). The outer test timeout is the only backstop.
+    let pre_total = read_until_samples(&mut audio, 16_384);
     assert!(
         pre_total > 0,
         "warmup must produce AAC samples before the cross-codec flip"
@@ -865,11 +998,11 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     // `Pending(VariantChange)` without recovery, the hang_watchdog or
     // the test timeout will fail. Otherwise we should see post-switch
     // samples coming from the FLAC variant.
-    let post_total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(25)))
+    let post_total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
 
-    let targets = applied_targets.lock_sync().clone();
+    let targets = collector.applied_targets();
     let saw_flac = targets.contains(&3);
 
     info!(
@@ -931,7 +1064,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -946,9 +1079,12 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    // Offline pull: park on ring underrun instead of spinning on Pending,
+    // so the warmup loop needs no wall-clock deadline.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -958,22 +1094,25 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     // reader so the prefetch can finish on its own thread.
     let mut buf = vec![0.0f32; 4096];
     let mut warmup_samples = 0u64;
-    let warmup_deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < warmup_deadline && warmup_samples < 8_192 {
+    while warmup_samples < 8_192 {
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => {
                 warmup_samples += count.get() as u64;
             }
-            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Ok(ReadOutcome::Pending { .. }) => {}
             Err(e) => panic!("decode error in warmup: {e}"),
         }
     }
     assert!(warmup_samples > 0, "warmup must produce some audio");
 
-    // Give the downloader enough time to finish prefetching every v0
-    // segment and let the peer park itself in `Poll::Pending` — this
-    // is the production state the bug reproduces against.
-    kithara_platform::time::sleep(Duration::from_secs(2)).await;
+    // The downloader must finish prefetching every v0 segment — the
+    // all-cached production state the bug reproduces against. Wait on the
+    // real download state (one `RequestCompleted` per v0 segment) with a
+    // virtual tick and a panicking watchdog; the prior trailing settle nap
+    // was a no-op under flash (it collapsed once the system was quiescent)
+    // and is unnecessary now the poll gates the precondition directly.
+    wait_v0_fully_cached(&collector, segment_count).await;
 
     let v0_fetched = collector
         .segments()
@@ -994,12 +1133,11 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
         .set_mode(AbrMode::manual(1))
         .expect("Manual(1) target must be valid");
 
-    // Give the controller a moment to react. If `set_mode` correctly
-    // wakes the peer, the peer polls, observes the pending decision,
-    // and `commit_variant_switch` fires within tens of ms. The 3-second
-    // window leaves ample slack for the kithara::test serial runtime.
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline && collector.switch_count() == pre_switch {
+    // Wait for the commit, event-driven: if `set_mode` correctly wakes
+    // the parked peer, `commit_variant_switch` fires within tens of ms.
+    // If the wake is lost (the pinned bug) the harness timeout fails
+    // the test.
+    while collector.switch_count() == pre_switch {
         kithara_platform::time::sleep(Duration::from_millis(50)).await;
     }
 
@@ -1060,7 +1198,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -1075,6 +1213,10 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
         .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    // Subscribe before the bus is moved into the config so the post-seek
+    // `ReaderSeek` event is retained in the broadcast buffer for the
+    // seek-settled wait below.
+    let mut seek_rx = bus.subscribe();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
@@ -1085,19 +1227,13 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
 
     // Tiny warmup so the peer is actually pumping. Drop the reader to
     // let the prefetch finish in the background.
-    let mut buf = vec![0.0f32; 4096];
-    let mut warmup_samples = 0u64;
-    let warmup_deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < warmup_deadline && warmup_samples < 8_192 {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
-            Err(e) => panic!("decode error in warmup: {e}"),
-        }
-    }
+    let warmup_samples = read_until_samples(&mut audio, 8_192);
     assert!(warmup_samples > 0, "warmup must produce some audio");
 
-    kithara_platform::time::sleep(Duration::from_secs(2)).await;
+    // Wait on the real prefetch state (one net fetch per v0 segment), not a
+    // wall nap that collapses under flash and lets the assert below race the
+    // download.
+    wait_v0_fully_cached(&collector, segment_count).await;
 
     let v0_fetched = collector
         .segments()
@@ -1120,8 +1256,18 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
         .seek(Duration::from_secs_f64(seek_target_secs))
         .expect("seek must succeed");
 
-    // Let the peer process the seek epoch bump and re-park itself.
-    kithara_platform::time::sleep(Duration::from_millis(300)).await;
+    // Wait on the real seek-applied signal — the reader byte cursor jump
+    // (`HlsEvent::ReaderSeek`) — instead of a wall nap that collapses under
+    // flash and lets `set_mode` fire before the peer has processed the seek
+    // epoch bump (defeating the parked-after-seek repro precondition).
+    wait_for_event(
+        &mut seek_rx,
+        "ReaderSeek after seek",
+        |ev| matches!(ev, Event::Hls(HlsEvent::ReaderSeek { .. })),
+        Duration::from_secs(20),
+    )
+    .await
+    .expect("ReaderSeek after seek");
 
     let handle = audio
         .abr_handle()
@@ -1218,7 +1364,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
@@ -1244,12 +1390,16 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
     // (large enough sample budget but bounded).
     let mut buf = vec![0.0f32; 4096];
     let mut samples = 0u64;
-    let deadline = Instant::now() + Duration::from_secs(3);
     let single_segment_frames = (D.segment_size / 4) as u64; // 200 KB / (stereo i16) ≈ 50_000 frames
-    while Instant::now() < deadline && samples < single_segment_frames * 2 {
+    // Engine-aware blocking read parks until each chunk commits, so wait on
+    // the *fact* of two segments' worth of samples — not a wall-clock window
+    // (a virtual deadline would race the clock past in-flight real bytes
+    // under flash). A genuine wedge is bounded by `KITHARA_HANG_TIMEOUT_SECS`.
+    while samples < single_segment_frames * 2 {
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => samples += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Ok(ReadOutcome::Pending { .. }) => {}
             Err(e) => panic!("decode error: {e}"),
         }
     }
@@ -1311,24 +1461,10 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     // AAC sibling of v=0) before v=3's decoder recreate fires.
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
 
-    let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
-    let applied_bg = Arc::clone(&applied_targets);
-    let mut applied_rx = bus.subscribe();
-    spawn(async move {
-        loop {
-            let ev = match applied_rx.recv().await {
-                Ok(ev) => ev,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            };
-            if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock_sync().push(to.get());
-            }
-        }
-    });
+    let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
@@ -1345,16 +1481,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
         .expect("create audio");
 
     // Warmup on v=0 (AAC).
-    let mut buf = vec![0f32; 4096];
-    let mut warmup_total = 0u64;
-    let warmup_deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < warmup_deadline && warmup_total < 16_384 {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => warmup_total += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
-            Err(e) => panic!("decode error pre-switch: {e}"),
-        }
-    }
+    let warmup_total = read_until_samples(&mut audio, 16_384);
     assert!(warmup_total > 0, "warmup must produce AAC samples");
 
     let handle = audio
@@ -1383,11 +1510,11 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     // Read for 15s. Without the fix, decoder hits false EOF inside this
     // window → `EndOfStream` → kithara-queue may trigger an auto-seek →
     // `HangDetector audio_worker_loop no progress for 10s` panic.
-    let post_total = spawn_blocking(move || read_until_eof(&mut audio, Duration::from_secs(15)))
+    let post_total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
 
-    let targets = applied_targets.lock_sync().clone();
+    let targets = collector.applied_targets();
     info!(?targets, warmup_total, post_total, "S.3 result");
 
     // We must see both switches applied through the ABR contract.
@@ -1400,7 +1527,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
         "Manual(1) same-codec must be applied, saw: {targets:?}"
     );
 
-    // Crucially: read_until_eof must NOT return prematurely on a false
+    // Crucially: read_to_eof must NOT return prematurely on a false
     // EOF mid-window. 15s @ 44100 stereo → ≥ ~600 000 frames if
     // playback continues; we accept any non-trivial post-switch
     // production as proof.
@@ -1450,8 +1577,6 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
 async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     #[case] backend: DecoderBackend,
 ) {
-    use kithara_platform::time::sleep;
-
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
@@ -1462,24 +1587,9 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     // can downswitch to slq (v=0) for the same-codec scenario.
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
-
-    let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
-    let applied_bg = Arc::clone(&applied_targets);
-    let mut applied_rx = bus.subscribe();
-    spawn(async move {
-        loop {
-            let ev = match applied_rx.recv().await {
-                Ok(ev) => ev,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            };
-            if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
-                applied_bg.lock_sync().push(to.get());
-            }
-        }
-    });
+    let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
         .store(StoreOptions::new(temp_dir.path()))
@@ -1496,34 +1606,26 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
         .await
         .expect("create audio");
 
-    // Real-time-ish reader: each read pulls a 4096-frame buffer
-    // (~93 ms @ 44.1 kHz) and we sleep 50 ms between iterations so
-    // the network DelayRule-like cadence of the real CDN is imitated.
-    // Without the sleep the in-process server feeds the whole track
-    // before any switch can land mid-segment.
-    let buf_frames = 4096usize;
-    let read_pace = Duration::from_millis(50);
+    // Reader cadence is driven by decoded sample targets, not wall-clock
+    // deadlines. Slower scheduling may add `Pending` and delay the outer test
+    // timeout, but it must not change which state transition wins.
 
     // Phase 1 — play near end. Track ≈ 220 s; pump 180 s of decoded
     // audio so the seek-back step targets a position well before the
     // current playback head.
-    let mut buf = vec![0f32; buf_frames * 2];
-    let target_samples_phase1: u64 = 180 * 44_100;
-    let mut samples_phase1 = 0u64;
-    let deadline = Instant::now() + Duration::from_secs(40);
-    while samples_phase1 < target_samples_phase1 && Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => samples_phase1 += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) => {}
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("phase 1 decode error: {e}"),
-        }
-        sleep(read_pace).await;
-    }
-    info!(samples_phase1, "phase 1 done");
+    let (mut audio, phase1) = spawn_blocking(move || {
+        let target_samples_phase1: u64 = 180 * 44_100;
+        let stats = read_phase_until_samples(&mut audio, target_samples_phase1, "phase 1");
+        (audio, stats)
+    })
+    .await
+    .expect("phase 1 join");
+    info!(?phase1, "phase 1 done");
     assert!(
-        samples_phase1 > 4 * 44_100,
-        "phase 1 must produce at least a few seconds of audio, got {samples_phase1}"
+        phase1.samples > 4 * 44_100,
+        "phase 1 must produce at least a few seconds of audio, \
+         stats={phase1:?}, audio_trace={:?}",
+        collector.audio_trace()
     );
 
     // Phase 2 — seek backwards to ~25 % of the track (~55 s).
@@ -1533,20 +1635,20 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
 
     // Pump some samples so the post-seek decoder lands mid-segment
     // before the downswitch fires.
-    let mut samples_phase2 = 0u64;
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while samples_phase2 < 2 * 44_100 && Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => samples_phase2 += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) => {}
-            Ok(ReadOutcome::Eof { .. }) => {
-                panic!("unexpected EOF during phase 2 post-seek read")
-            }
-            Err(e) => panic!("phase 2 decode error: {e}"),
-        }
-        sleep(read_pace).await;
-    }
-    info!(samples_phase2, "phase 2 done");
+    let (mut audio, phase2) = spawn_blocking(move || {
+        let stats = read_phase_until_samples(&mut audio, 2 * 44_100, "phase 2");
+        (audio, stats)
+    })
+    .await
+    .expect("phase 2 join");
+    info!(?phase2, "phase 2 done");
+    assert!(
+        !phase2.saw_eof,
+        "unexpected EOF during phase 2 post-seek read, stats={phase2:?}, \
+         targets={:?}, audio_trace={:?}",
+        collector.applied_targets(),
+        collector.audio_trace()
+    );
 
     // Phase 3 — same-codec downswitch shq (v=2, 270 kbps) → slq
     // (v=0, 66 kbps). Both are mp4a.40.2, no cross-codec fence, no
@@ -1558,35 +1660,38 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
         .set_mode(AbrMode::manual(0))
         .expect("Manual(0) (slq AAC) target valid");
 
-    // Phase 4 — read 10 s post-switch. Bug repro: decoder emits a
-    // false `decoder_next_chunk_safe: Eof` ~hundreds of KB after the
+    // Phase 4 — pump sustained playback post-switch. Bug repro: decoder
+    // emits a false `decoder_next_chunk_safe: Eof` ~hundreds of KB after the
     // switch and `handle_decode_eof` surfaces it as terminal EOS.
-    let mut samples_phase4 = 0u64;
-    let mut saw_eof_phase4 = false;
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let post_pace = Duration::from_millis(30);
-    while Instant::now() < deadline {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => samples_phase4 += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) => {}
-            Ok(ReadOutcome::Eof { .. }) => {
-                saw_eof_phase4 = true;
-                break;
-            }
-            Err(e) => panic!("phase 4 decode error: {e}"),
-        }
-        sleep(post_pace).await;
-    }
+    //
+    // Bound by a SAMPLE TARGET, not a wall clock: after a seek to 55 s the
+    // track still has ~165 s ahead, so a real-time-only loop would (under
+    // flash, where parked reads collapse real time) read the whole tail and
+    // hit a *legitimate* end-of-track EOF — indistinguishable from the bug.
+    // Capping at `phase4_target` (≈ 11 s of audio) keeps us far short of the
+    // true tail: any `Eof` before the cap is the premature/false EOS the
+    // contract guards against, and is still recorded in `saw_eof`.
+    let phase4_target: u64 = 500_000;
+    let phase4 =
+        spawn_blocking(move || read_phase_until_samples(&mut audio, phase4_target, "phase 4"))
+            .await
+            .expect("phase 4 join");
 
-    let targets = applied_targets.lock_sync().clone();
+    let targets = collector.applied_targets();
+    let audio_trace = collector.audio_trace();
     info!(
         ?targets,
-        samples_phase1, samples_phase2, samples_phase4, saw_eof_phase4, "repro result"
+        ?audio_trace,
+        ?phase1,
+        ?phase2,
+        ?phase4,
+        "repro result"
     );
 
     assert!(
         targets.contains(&0),
-        "Manual(0) (slq AAC) must publish VariantApplied, saw: {targets:?}"
+        "Manual(0) (slq AAC) must publish VariantApplied, saw: {targets:?}, \
+         audio_trace={audio_trace:?}"
     );
 
     // Bug surfaces as samples_phase4 ≪ expected. 10 s @ 44.1 kHz
@@ -1595,14 +1700,16 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     // after the switch then EOS; threshold above that exposes the
     // regression.
     assert!(
-        !saw_eof_phase4,
+        !phase4.saw_eof,
         "phase 4 EOF after same-codec downswitch — false EOS bug \
-         (app.log 2026-05-16 09:42:28). samples_phase4={samples_phase4}"
+         (app.log 2026-05-16 09:42:28). stats={phase4:?}, \
+         targets={targets:?}, audio_trace={audio_trace:?}"
     );
     assert!(
-        samples_phase4 > 300_000,
+        phase4.samples > 300_000,
         "phase 4 (post same-codec downswitch) must yield sustained \
-         playback. samples_phase4={samples_phase4}"
+         playback. stats={phase4:?}, targets={targets:?}, \
+         audio_trace={audio_trace:?}"
     );
 }
 
@@ -1665,8 +1772,6 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     #[case] backend: DecoderBackend,
     #[case] target_variant: usize,
 ) {
-    use kithara_platform::time::sleep;
-
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
@@ -1676,7 +1781,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     // (fLaC, fmp4). Track ≈ 220 s, 37 segments each (~6 s).
 
     let temp_dir = TestTempDir::new();
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
 
     let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1686,11 +1791,13 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         loop {
             match applied_rx.recv().await {
                 Ok(Event::Abr(AbrEvent::VariantApplied { to, .. })) => {
-                    applied_bg.lock_sync().push(to.get());
+                    applied_bg.lock().push(to.get());
                 }
                 Ok(_) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    continue;
+                }
+                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
     });
@@ -1748,11 +1855,19 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         .set_mode(AbrMode::manual(target_variant))
         .expect("Manual target valid");
 
-    // Mirror the production gap between `set_mode` and seek so the
-    // scheduler has time to emit V_new init + a few media segments
-    // around the current reader_pos (matches the app.log emit
-    // sequence preceding the hang).
-    sleep(Duration::from_millis(300)).await;
+    // Deterministic ordering (no wall nap, no event race): `set_mode` only sets
+    // the pending Manual decision — it does NOT wake the HLS peer's downloader
+    // poll, and phase 1's reader has stopped, so the peer is parked and has not
+    // committed the switch (active is still V0). Seeking now forces the bug's
+    // interleaving every time: the worker resolves the seek anchor in V0's byte
+    // space (`apply_seek` calls `seek_time_anchor` BEFORE `arm_peer_wake`),
+    // THEN wakes the peer, which commits the Manual switch to the target and
+    // re-maps the reader into the target's byte space. The PostSeek gate is then
+    // left waiting on the stale V0 anchor offset, interpreted against the target
+    // variant's byte_map — a segment the producer (aimed at the real reader
+    // position) never fetches. The previous `wait_for_event(enqueue)` forced a
+    // peer poll here that sometimes committed the switch BEFORE the seek (anchor
+    // then resolved in the target's space → no hang), making the repro ~30%.
 
     // Phase 3 — seek BACKWARDS to a non-zero offset (37 s, as in
     // app.log run 1). reader_pos ends up at ≈ seg 6 byte-coords of
@@ -1792,7 +1907,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     .await
     .expect("phase 4 join");
 
-    let targets = applied_targets.lock_sync().clone();
+    let targets = applied_targets.lock().clone();
     info!(
         ?backend,
         target_variant,

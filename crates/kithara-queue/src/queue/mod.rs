@@ -1,6 +1,6 @@
 //! AVQueuePlayer-analogue orchestration facade.
 //!
-//! See `crates/kithara-queue/README.md` for the public API contract.
+//! See `crates/kithara-queue/CONTEXT.md` for the public API contract.
 //! This module groups the implementation by responsibility:
 //!
 //! - [`mod@state`] — the [`Queue`] struct, its constructor, and the

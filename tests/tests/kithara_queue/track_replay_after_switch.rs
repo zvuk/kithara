@@ -1,10 +1,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{fmt::Write, sync::Arc, time::Duration};
+use std::{fmt::Write, sync::Arc};
 
 use kithara_assets::StoreOptions;
-use kithara_events::{AbrMode, TrackId, TrackStatus};
+use kithara_events::{AbrMode, Event, QueueEvent, TrackId, TrackStatus};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
@@ -13,11 +13,13 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancelToken,
+    time::{self, Duration, sleep},
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::time::sleep;
 use url::Url;
 
 /// Reproduces the bug the user keeps hitting manually: play track A, switch
@@ -49,8 +51,6 @@ impl Consts {
     /// the bug is observed as a budget-exhaustion failure inside the
     /// loader long before this fires.
     const LOAD_DEADLINE: Duration = Duration::from_secs(20);
-    /// Settle window after `select(...)` before issuing the next select.
-    const SELECT_SETTLE: Duration = Duration::from_secs(2);
     /// AES-128 key/IV used by the encrypted variant. Matches the
     /// "0123456789abcdef" + zero-IV pair already used elsewhere in the
     /// integration suite (see `local_track_plays.rs`).
@@ -134,11 +134,8 @@ fn build_queue_with_tick_cf(
         }
     });
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
     let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
@@ -149,7 +146,7 @@ async fn wait_for_loader_done(
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<TrackStatus, String> {
-    let start = std::time::Instant::now();
+    let start = time::Instant::now();
     loop {
         if let Some(entry) = queue.track(track_id) {
             match &entry.status {
@@ -170,6 +167,31 @@ async fn wait_for_loader_done(
         }
         sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// Wait until the queue reports the given track as the current playing
+/// item via [`QueueEvent::CurrentTrackChanged`]. The receiver must be
+/// subscribed *before* the triggering `select(...)` so the event is not
+/// missed. Bounded by a safety deadline so a stuck switch fails fast
+/// instead of hanging.
+async fn wait_for_current_track(
+    rx: &mut kithara_events::EventReceiver,
+    expected: TrackId,
+    deadline: Duration,
+) {
+    let wait = async {
+        while let Ok(ev) = rx.recv().await {
+            if let Event::Queue(QueueEvent::CurrentTrackChanged { id: Some(id) }) = ev
+                && id == expected
+            {
+                return;
+            }
+        }
+        panic!("event bus closed before CurrentTrackChanged({expected:?})");
+    };
+    time::timeout(deadline, wait)
+        .await
+        .unwrap_or_else(|_| panic!("timeout waiting for CurrentTrackChanged({expected:?})"));
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
@@ -202,13 +224,14 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
         .await
         .unwrap_or_else(|e| panic!("[{mode:?}] initial load B: {e}"));
 
+    let mut events = queue.subscribe();
     queue
         .select(id_a, Transition::None)
         .expect("select A (first)");
-    sleep(Consts::SELECT_SETTLE).await;
+    wait_for_current_track(&mut events, id_a, Consts::LOAD_DEADLINE).await;
 
     queue.select(id_b, Transition::None).expect("select B");
-    sleep(Consts::SELECT_SETTLE).await;
+    wait_for_current_track(&mut events, id_b, Consts::LOAD_DEADLINE).await;
 
     queue
         .select(id_a, Transition::None)
@@ -243,7 +266,7 @@ async fn wait_for_position(
     label: &str,
     pred: impl Fn(f64) -> bool,
 ) -> f64 {
-    let start = std::time::Instant::now();
+    let start = time::Instant::now();
     loop {
         let pos = queue.position_seconds().unwrap_or(0.0);
         if pred(pos) {
@@ -361,7 +384,7 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
 
 /// Wait until `pred(queue)` holds, panicking past `deadline`.
 async fn wait_for(queue: &Queue, deadline: Duration, label: &str, pred: &dyn Fn(&Queue) -> bool) {
-    let start = std::time::Instant::now();
+    let start = time::Instant::now();
     while !pred(queue) {
         assert!(
             start.elapsed() < deadline,

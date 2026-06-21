@@ -12,27 +12,29 @@ import KitharaFFI
 /// let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
 /// try player.insert(item)
 /// ```
-public final class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
-    /// Monotonic identifier shared with the queue. Mirrors iOS
-    /// `AudioPlayerItemProtocol.audioId: TrackId`. Also used as
-    /// `Identifiable.id` so `ForEach`/`List` keying works out of the
-    /// box.
-    public nonisolated var id: TrackId { audioId }
+///
+/// `open` for additive subclassing (extra state, methods, protocol
+/// conformances). Methods stay `public`, not `open`, so item behavior cannot
+/// be overridden. Subclasses construct via the public `init(url:…)` and must
+/// preserve the `@unchecked Sendable` contract: no non-`Sendable` mutable state.
+open class KitharaPlayerItem: KitharaPlayerItemProtocol, @unchecked Sendable {
+    /// Unique queue-item identity for SwiftUI lists.
+    public nonisolated var id: Int64 { uuid }
 
-    /// Stable per-item identifier as required by `AudioPlayerItemProtocol`.
+    /// Caller-facing content track id.
     public nonisolated let audioId: TrackId
 
-    /// Secondary handle derived from `url + audioId` (UUIDv5 → first
-    /// 64 bits). Distinct from ``audioId`` for two items with the same
-    /// URL but different queue insertions. Mirrors iOS
-    /// `AudioPlayerItemProtocol.uuid: Int64`.
+    /// Internal id allocated by the Rust queue layer.
+    nonisolated let ffiTrackId: KitharaFFI.TrackId
+
+    /// Unique queue-item handle. Distinct from ``audioId`` when the same
+    /// content track is inserted more than once.
     public nonisolated var uuid: Int64 { _inner.uuidI64() }
 
     /// The source URL — `file://…` for absolute local paths.
     public nonisolated let url: URL
 
-    /// Caller-declared live-stream flag, mirrored from the construction
-    /// parameter.
+    /// Whether the source is an endless live stream.
     public nonisolated var isLiveStream: Bool { _inner.isLiveStream() }
 
     /// Cached duration in seconds. Defaults to `0` until the underlying
@@ -48,7 +50,7 @@ public final class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendab
         _eventSubject.eraseToAnyPublisher()
     }
 
-    // MARK: - Discrete publishers (AudioPlayerItemProtocol)
+    // MARK: - Discrete publishers (KitharaPlayerItemProtocol)
 
     /// Buffered byte ranges. Each emission is the full set. Combine
     /// equivalent of iOS `rxLoadedRanges`.
@@ -205,20 +207,23 @@ public final class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendab
     ///
     /// - Parameters:
     ///   - url: The audio source URL.
+    ///   - audioId: Caller-facing content track id. If `nil`, Kithara
+    ///     uses the internally allocated queue id converted to `Int`.
+    ///   - uuid: Caller-facing queue item id. If `nil`, Kithara uses
+    ///     its legacy generated handle.
     ///   - additionalHeaders: Optional HTTP headers included in all requests for this item.
     ///   - preferredPeakBitrate: Peak bitrate ceiling in bits/sec. `0` means no cap.
     ///   - preferredPeakBitrateForExpensiveNetworks: Peak bitrate ceiling on
     ///     expensive networks (cellular). `0` means no cap.
     ///   - abrMode: Optional per-item ABR mode override.
-    ///   - isLiveStream: `true` for live HLS feeds; reported through
-    ///     ``isLiveStream`` and consumed by ``isPlayable(progress:ranges:)``.
     public init(
         url: String,
+        audioId: TrackId? = nil,
+        uuid: Int64? = nil,
         additionalHeaders: [String: String]? = nil,
         preferredPeakBitrate: Double = 0,
         preferredPeakBitrateForExpensiveNetworks: Double = 0,
-        abrMode: AbrMode? = nil,
-        isLiveStream: Bool = false
+        abrMode: AbrMode? = nil
     ) {
         let ffiAbrMode: FfiAbrMode? = abrMode.map {
             switch $0 {
@@ -228,14 +233,17 @@ public final class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendab
         }
         let config = FfiItemConfig(
             abrMode: ffiAbrMode,
+            audioId: audioId.map { Self.ffiTrackId(from: $0) },
             headers: additionalHeaders,
+            uuidI64: uuid,
             url: url,
-            isLiveStream: isLiveStream,
+            isLiveStream: false,
             preferredPeakBitrate: preferredPeakBitrate,
             preferredPeakBitrateExpensive: preferredPeakBitrateForExpensiveNetworks
         )
         self._inner = AudioPlayerItem(config: config)
-        self.audioId = _inner.audioId()
+        self.ffiTrackId = _inner.queueId()
+        self.audioId = TrackId(ffi: _inner.audioId())
         self.url = URL(string: url) ?? URL(fileURLWithPath: url)
 
         let observer = ItemObserverBridge(subject: _eventSubject)
@@ -245,7 +253,8 @@ public final class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendab
     /// Internal init wrapping an existing FFI item (used by ``KitharaPlayer/items``).
     init(inner: AudioPlayerItem) {
         self._inner = inner
-        self.audioId = inner.audioId()
+        self.ffiTrackId = inner.queueId()
+        self.audioId = TrackId(ffi: inner.audioId())
         let urlString = inner.url()
         self.url = URL(string: urlString) ?? URL(fileURLWithPath: urlString)
 
@@ -253,13 +262,18 @@ public final class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendab
         inner.setObserver(observer: observer)
     }
 
+    private static func ffiTrackId(from id: TrackId) -> KitharaFFI.TrackId {
+        guard let converted = KitharaFFI.TrackId(exactly: id) else {
+            preconditionFailure("Kithara TrackId \(id) cannot be represented as KitharaFFI.TrackId")
+        }
+        return converted
+    }
+
     // MARK: - Load / playability
 
     /// Resolve a ``ItemLoadResult`` describing the item's current load
     /// status. The result reflects cached state — `KitharaPlayer.insert`
-    /// already kicks off background loading. This method mirrors the
-    /// iOS `AudioPlayerItemProtocol.load()` Observable contract,
-    /// translated to Swift's `async`/`await`.
+    /// already kicks off background loading.
     public func load() async -> ItemLoadResult {
         await withCheckedContinuation { continuation in
             let bridge = ItemLoadCallbackBridge { result in
@@ -279,11 +293,40 @@ public final class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendab
         return _inner.isPlayable(progress: progress, ranges: ffiRanges)
     }
 
-    /// `and:`-labelled overload mirroring the iOS
-    /// `AudioPlayerItemProtocol.isPlayable(progress:and:)` signature.
+    /// `and:`-labelled overload for call sites that prefer that spelling.
     /// Delegates to ``isPlayable(progress:ranges:)``.
     public func isPlayable(progress: Double, and ranges: [ItemLoadedRange]) -> Bool {
         isPlayable(progress: progress, ranges: ranges)
+    }
+
+    /// Whether the item is playable for a structured playback progress.
+    public func isPlayable(progress: PlaybackProgress, ranges: [ItemLoadedRange]) -> Bool {
+        isPlayable(progress: progress, ranges: ranges, startTolerance: .zero)
+    }
+
+    /// Whether the item is playable for a structured playback progress.
+    ///
+    /// `startTolerance` accepts a buffered range whose start lands slightly
+    /// after `progress.time`, which is useful for HLS seek readiness policies.
+    public func isPlayable(
+        progress: PlaybackProgress,
+        ranges: [ItemLoadedRange],
+        startTolerance: TimeInterval
+    ) -> Bool {
+        if isLiveStream {
+            return true
+        }
+        if progress.value >= 1, !ranges.isEmpty {
+            return true
+        }
+        let tolerance = max(TimeInterval.zero, startTolerance)
+        let adjustedRanges = ranges.map { range in
+            ItemLoadedRange(
+                start: range.start - tolerance,
+                duration: range.duration + tolerance
+            )
+        }
+        return isPlayable(progress: progress.time, ranges: adjustedRanges)
     }
 }
 
@@ -319,7 +362,48 @@ public struct ItemLoadedRange: Sendable, Equatable {
         self.start = ffi.startSeconds
         self.duration = ffi.durationSeconds
     }
+
+    public init<Source: ItemLoadedRangeSource>(_ source: Source) {
+        self.start = source.start
+        self.duration = source.duration
+    }
 }
+
+/// Structured playback progress for queue-readiness checks.
+public struct PlaybackProgress: Sendable, Equatable {
+    /// Normalised playback position in `[0, 1]`.
+    public let value: TimeInterval
+    /// Playback position in seconds.
+    public let time: TimeInterval
+    /// Item duration in seconds.
+    public let duration: TimeInterval
+
+    public init(value: TimeInterval, time: TimeInterval, duration: TimeInterval) {
+        self.value = value
+        self.time = time
+        self.duration = duration
+    }
+
+    public init<Source: PlaybackProgressSource>(_ source: Source) {
+        self.value = source.value
+        self.time = source.time
+        self.duration = source.duration
+    }
+}
+
+public protocol ItemLoadedRangeSource {
+    var start: TimeInterval { get }
+    var duration: TimeInterval { get }
+}
+
+public protocol PlaybackProgressSource {
+    var value: TimeInterval { get }
+    var time: TimeInterval { get }
+    var duration: TimeInterval { get }
+}
+
+extension ItemLoadedRange: ItemLoadedRangeSource {}
+extension PlaybackProgress: PlaybackProgressSource {}
 
 // MARK: - ItemObserver bridge (single on_event callback)
 

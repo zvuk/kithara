@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 use kithara_queue::Transition;
 
 use crate::{
@@ -42,13 +42,13 @@ type QueueView = Vec<(kithara_queue::TrackId, Arc<AudioPlayerItem>)>;
 /// worker and the local cache so the infallible facade getters can answer
 /// synchronously without a worker round-trip.
 pub(crate) struct WasmInner {
-    bridge: WorkerBridge,
     queue_view: Arc<Mutex<QueueView>>,
-    observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
-    volume: AtomicU32,
     crossfade_secs: AtomicU32,
     playing_rate: AtomicU32,
+    volume: AtomicU32,
     muted: Mutex<bool>,
+    observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
+    bridge: WorkerBridge,
     eq_gains: [AtomicU32; EQ_BANDS],
 }
 
@@ -56,12 +56,12 @@ impl Default for WasmInner {
     fn default() -> Self {
         Self {
             bridge: WorkerBridge::default(),
-            queue_view: Arc::new(Mutex::new(Vec::new())),
-            observer: Mutex::new(None),
+            queue_view: Arc::new(Mutex::default()),
+            observer: Mutex::default(),
             volume: AtomicU32::new(Self::DEFAULT_VOLUME.to_bits()),
             crossfade_secs: AtomicU32::new(Self::DEFAULT_CROSSFADE_SECONDS.to_bits()),
             playing_rate: AtomicU32::new(Self::DEFAULT_PLAYING_RATE.to_bits()),
-            muted: Mutex::new(false),
+            muted: Mutex::default(),
             eq_gains: [const { AtomicU32::new(0) }; EQ_BANDS],
         }
     }
@@ -76,44 +76,17 @@ fn store_f32(a: &AtomicU32, v: f32) {
 }
 
 impl WasmInner {
-    /// Default output volume, matching the legacy wasm player.
-    const DEFAULT_VOLUME: f32 = 0.5;
     /// Default crossfade window in seconds, matching the worker default.
     const DEFAULT_CROSSFADE_SECONDS: f32 = 5.0;
     /// Default target playback rate.
     const DEFAULT_PLAYING_RATE: f32 = 1.0;
+    /// Default output volume, matching the legacy wasm player.
+    const DEFAULT_VOLUME: f32 = 0.5;
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
     pub(crate) fn new(_config: FfiPlayerConfig) -> Self {
         Self::default()
-    }
-
-    /// Forward a command to the worker, mapping a channel failure to a
-    /// typed [`FfiError`]. Used by the fallible facade methods that should
-    /// surface a real error when the worker link is down.
-    fn try_send(&self, cmd: WorkerCmd) -> Result<(), FfiError> {
-        self.bridge.send(cmd).map_err(|err| into_internal(&err))
-    }
-
-    /// Forward a command for the infallible facade methods (play / pause /
-    /// volume / …), logging a dropped command rather than propagating —
-    /// these have no error channel in the facade signature.
-    fn send(&self, cmd: WorkerCmd) {
-        if let Err(err) = self.bridge.send(cmd) {
-            tracing::warn!(?err, "wasm worker command dropped: channel unavailable");
-        }
-    }
-
-    fn next_request_id() -> u32 {
-        crate::web::interop::next_request_id()
-    }
-
-    fn id_at(&self, index: u32) -> Option<kithara_queue::TrackId> {
-        self.queue_view
-            .lock_sync()
-            .get(index as usize)
-            .map(|(id, _)| *id)
     }
 
     pub(crate) fn advance_to_next_item(&self) {
@@ -126,16 +99,16 @@ impl WasmInner {
         };
         let next = self
             .queue_view
-            .lock_sync()
+            .lock()
             .iter()
             .position(|(id, _)| *id == current)
-            .and_then(|idx| self.queue_view.lock_sync().get(idx + 1).map(|(id, _)| *id));
+            .and_then(|idx| self.queue_view.lock().get(idx + 1).map(|(id, _)| *id));
         if let Some(next) = next {
             let request_id = Self::next_request_id();
             self.send(WorkerCmd::SelectQueue {
+                request_id,
                 id: next,
                 transition: Transition::None,
-                request_id,
             });
         }
     }
@@ -146,8 +119,8 @@ impl WasmInner {
             id,
             url: item.url(),
         })?;
-        *item.inserted.lock_sync() = true;
-        self.queue_view.lock_sync().push((id, Arc::clone(item)));
+        *item.inserted.lock() = true;
+        self.queue_view.lock().push((id, Arc::clone(item)));
         item.restart_bridge();
         Ok(())
     }
@@ -159,7 +132,7 @@ impl WasmInner {
     pub(crate) fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
         let current = self.bridge.current_track_id()?;
         self.queue_view
-            .lock_sync()
+            .lock()
             .iter()
             .find(|(id, _)| *id == current)
             .map(|(_, item)| Arc::clone(item))
@@ -181,6 +154,13 @@ impl WasmInner {
         self.eq_gains.get(band as usize).map_or(0.0, load_f32)
     }
 
+    fn id_at(&self, index: u32) -> Option<kithara_queue::TrackId> {
+        self.queue_view
+            .lock()
+            .get(index as usize)
+            .map(|(id, _)| *id)
+    }
+
     pub(crate) fn insert(
         &self,
         item: &Arc<AudioPlayerItem>,
@@ -191,12 +171,12 @@ impl WasmInner {
         let request_id = Self::next_request_id();
         self.send(WorkerCmd::Insert {
             id,
+            request_id,
             url: item.url(),
             after: after_id,
-            request_id,
         });
 
-        let mut view = self.queue_view.lock_sync();
+        let mut view = self.queue_view.lock();
         let pos = match after_id {
             None => 0,
             Some(after_id) => view
@@ -210,17 +190,17 @@ impl WasmInner {
         view.insert(pos, (id, Arc::clone(item)));
         drop(view);
 
-        *item.inserted.lock_sync() = true;
+        *item.inserted.lock() = true;
         item.restart_bridge();
         Ok(())
     }
 
     pub(crate) fn is_muted(&self) -> bool {
-        *self.muted.lock_sync()
+        *self.muted.lock()
     }
 
     pub(crate) fn item_count(&self) -> u32 {
-        let len = self.queue_view.lock_sync().len();
+        let len = self.queue_view.lock().len();
         u32::try_from(len).unwrap_or_else(|_| {
             tracing::error!(queue_len = len, "BUG: queue length exceeds u32::MAX");
             0
@@ -229,14 +209,22 @@ impl WasmInner {
 
     pub(crate) fn items(&self) -> Vec<Arc<AudioPlayerItem>> {
         self.queue_view
-            .lock_sync()
+            .lock()
             .iter()
             .map(|(_, item)| Arc::clone(item))
             .collect()
     }
 
+    fn next_request_id() -> u32 {
+        crate::web::interop::next_request_id()
+    }
+
     pub(crate) fn pause(&self) {
         self.send(WorkerCmd::Pause);
+    }
+
+    pub(crate) fn notify_audio_route_changed(&self, _reason: &str) -> Result<(), FfiError> {
+        Ok(())
     }
 
     pub(crate) fn play(&self) {
@@ -256,7 +244,7 @@ impl WasmInner {
     }
 
     pub(crate) fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {
-        if !*item.inserted.lock_sync() {
+        if !*item.inserted.lock() {
             return Err(FfiError::InvalidArgument {
                 reason: format!("item {} not in queue", item.audio_id()),
             });
@@ -265,17 +253,17 @@ impl WasmInner {
         let request_id = Self::next_request_id();
         self.send(WorkerCmd::Remove { id, request_id });
         self.queue_view
-            .lock_sync()
+            .lock()
             .retain(|(existing, _)| *existing != id);
-        *item.inserted.lock_sync() = false;
+        *item.inserted.lock() = false;
         Ok(())
     }
 
     pub(crate) fn remove_all_items(&self) {
         self.send(WorkerCmd::RemoveAll);
-        let mut view = self.queue_view.lock_sync();
+        let mut view = self.queue_view.lock();
         for (_, item) in view.drain(..) {
-            *item.inserted.lock_sync() = false;
+            *item.inserted.lock() = false;
         }
     }
 
@@ -288,7 +276,7 @@ impl WasmInner {
         let new_id = item.track_id();
         let request_id = Self::next_request_id();
 
-        let mut view = self.queue_view.lock_sync();
+        let mut view = self.queue_view.lock();
         if idx >= view.len() {
             return Err(FfiError::InvalidArgument {
                 reason: format!("item index {idx} out of range (len: {})", view.len()),
@@ -296,17 +284,17 @@ impl WasmInner {
         }
         self.send(WorkerCmd::Replace {
             index,
+            request_id,
             id: new_id,
             url: item.url(),
-            request_id,
         });
         if let Some((_, old)) = view.get(idx) {
-            *old.inserted.lock_sync() = false;
+            *old.inserted.lock() = false;
         }
         view[idx] = (new_id, Arc::clone(item));
         drop(view);
 
-        *item.inserted.lock_sync() = true;
+        *item.inserted.lock() = true;
         item.restart_bridge();
         Ok(())
     }
@@ -344,16 +332,25 @@ impl WasmInner {
         let id = self.id_at(index).ok_or_else(|| FfiError::InvalidArgument {
             reason: format!(
                 "item index {index} out of range (len: {})",
-                self.queue_view.lock_sync().len()
+                self.queue_view.lock().len()
             ),
         })?;
         let request_id = Self::next_request_id();
         self.send(WorkerCmd::SelectQueue {
             id,
-            transition: Transition::from(transition),
             request_id,
+            transition: Transition::from(transition),
         });
         Ok(())
+    }
+
+    /// Forward a command for the infallible facade methods (play / pause /
+    /// volume / …), logging a dropped command rather than propagating —
+    /// these have no error channel in the facade signature.
+    fn send(&self, cmd: WorkerCmd) {
+        if let Err(err) = self.bridge.send(cmd) {
+            tracing::warn!(?err, "wasm worker command dropped: channel unavailable");
+        }
     }
 
     pub(crate) fn set_abr_mode(&self, mode: FfiAbrMode) {
@@ -377,14 +374,14 @@ impl WasmInner {
     }
 
     pub(crate) fn set_muted(&self, muted: bool) {
-        *self.muted.lock_sync() = muted;
+        *self.muted.lock() = muted;
         let volume = if muted { 0.0 } else { load_f32(&self.volume) };
         self.send(WorkerCmd::SetVolume(volume));
     }
 
     pub(crate) fn set_observer(&self, observer: Arc<dyn PlayerObserver>) {
         crate::web::observer::router::install(Arc::clone(&observer), Arc::clone(&self.queue_view));
-        *self.observer.lock_sync() = Some(observer);
+        *self.observer.lock() = Some(observer);
     }
 
     pub(crate) fn set_playing_rate(&self, rate: f32) {
@@ -393,7 +390,7 @@ impl WasmInner {
 
     pub(crate) fn set_volume(&self, volume: f32) {
         store_f32(&self.volume, volume);
-        if !*self.muted.lock_sync() {
+        if !*self.muted.lock() {
             self.send(WorkerCmd::SetVolume(volume));
         }
     }
@@ -435,12 +432,19 @@ impl WasmInner {
             rate: self.rate(),
             playing_rate: load_f32(&self.playing_rate),
             volume: load_f32(&self.volume),
-            is_muted: *self.muted.lock_sync(),
+            is_muted: *self.muted.lock(),
         }
     }
 
     pub(crate) fn stop(&self) {
         self.send(WorkerCmd::Stop);
+    }
+
+    /// Forward a command to the worker, mapping a channel failure to a
+    /// typed [`FfiError`]. Used by the fallible facade methods that should
+    /// surface a real error when the worker link is down.
+    fn try_send(&self, cmd: WorkerCmd) -> Result<(), FfiError> {
+        self.bridge.send(cmd).map_err(|err| into_internal(&err))
     }
 
     pub(crate) fn update_peak_bitrate(&self, wifi_bps: f64, cellular_bps: f64) {

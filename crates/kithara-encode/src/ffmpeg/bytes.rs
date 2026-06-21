@@ -103,10 +103,12 @@ fn encode_direct_pcm(
     let mut octx = av_format::output(output_path)?;
     let mut encoder = DirectEncoder::new(
         &mut octx,
-        output_path,
-        target,
-        pcm.sample_rate(),
-        pcm.channels(),
+        DirectEncodeConfig {
+            output_path,
+            target,
+            sample_rate: pcm.sample_rate(),
+            channels: pcm.channels(),
+        },
     )?;
 
     octx.write_header()?;
@@ -131,14 +133,28 @@ struct DirectEncoder {
     filter: ffmpeg::filter::Graph,
 }
 
+/// Codec/format config for [`DirectEncoder::new`], separate from the
+/// mutable `octx`: the `output_path` (drives codec lookup), the
+/// `target` format, and the source `sample_rate` / `channels`.
+#[derive(Clone, Copy)]
+struct DirectEncodeConfig<'a> {
+    target: &'a EncodeTarget,
+    output_path: &'a Path,
+    channels: u16,
+    sample_rate: u32,
+}
+
 impl DirectEncoder {
     fn new(
         octx: &mut av_format::context::Output,
-        output_path: &Path,
-        target: &EncodeTarget,
-        sample_rate: u32,
-        channels: u16,
+        config: DirectEncodeConfig<'_>,
     ) -> Result<Self, EncodeError> {
+        let DirectEncodeConfig {
+            output_path,
+            target,
+            sample_rate,
+            channels,
+        } = config;
         let codec_id = octx.format().codec(output_path, MediaType::Audio);
         let output_codec = find_encoder(codec_id)
             .ok_or_else(|| {

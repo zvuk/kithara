@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Unified asset store: disk or memory backend.
-
 use std::{
     fmt::Debug,
     hash::Hash,
@@ -11,7 +9,7 @@ use std::{
 };
 
 #[cfg(test)]
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 use rangemap::RangeSet;
 
 use crate::{
@@ -21,6 +19,7 @@ use crate::{
     identity::RequestIdentity,
     index::{AvailabilityIndex, DemandEntry, DemandIndex, DemandLease, ProducerHandle},
     key::ResourceKey,
+    naming::AssetScopeDelegate,
     scope::AssetScope,
     store::{AssetReader, AssetResource, MemStore},
 };
@@ -80,15 +79,6 @@ impl<Ctx> AssetStore<Ctx>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
-    /// Bind this store to one `asset_root`, returning a scoped handle
-    /// that drops the per-call `asset_root` argument. Cheap to clone --
-    /// the backing store is shared, so many scopes over distinct asset
-    /// roots cooperate on one store.
-    #[must_use]
-    pub fn scope<R: Into<Arc<str>>>(&self, asset_root: R) -> AssetScope<Ctx> {
-        AssetScope::new(self.clone(), asset_root.into())
-    }
-
     /// Acquire a resource explicitly for mutation.
     ///
     /// # Errors
@@ -121,7 +111,7 @@ where
     /// file as fast as possible. Returns a [`DemandLease`] the consumer
     /// must hold for the lifetime of its demand, plus a
     /// [`ProducerHandle`] to the single CAS-winning attacher only -- the
-    /// winner drives the shared download task. See `README.md`
+    /// winner drives the shared download task. See `CONTEXT.md`
     /// "Consumer Demand".
     pub fn attach_demand(
         &self,
@@ -139,15 +129,6 @@ where
             #[cfg(not(target_arch = "wasm32"))]
             Self::Disk { availability, .. } => availability,
             Self::Mem { availability, .. } => availability,
-        }
-    }
-
-    /// Return the crate-private aggregate demand handle.
-    fn demand(&self) -> &DemandIndex {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { demand, .. } => demand,
-            Self::Mem { demand, .. } => demand,
         }
     }
 
@@ -220,18 +201,21 @@ where
         false
     }
 
-    /// Whether this backend is ephemeral (in-memory).
-    #[must_use]
-    pub fn is_ephemeral(&self) -> bool {
-        matches!(self, Self::Mem { .. })
-    }
-
     /// Delete the entire asset directory.
     ///
     /// # Errors
     /// Returns `AssetsError` if the directory cannot be removed.
     pub(crate) fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
         delegate_to_store!(self, delete_asset, asset_root)
+    }
+
+    /// Return the crate-private aggregate demand handle.
+    fn demand(&self) -> &DemandIndex {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk { demand, .. } => demand,
+            Self::Mem { demand, .. } => demand,
+        }
     }
 
     /// Return the committed final length of the resource, if known.
@@ -247,6 +231,12 @@ where
             return Some(len);
         }
         None
+    }
+
+    /// Whether this backend is ephemeral (in-memory).
+    #[must_use]
+    pub fn is_ephemeral(&self) -> bool {
+        matches!(self, Self::Mem { .. })
     }
 
     /// Open a resource by key (no processing context).
@@ -304,6 +294,28 @@ where
     pub fn root_dir(&self) -> &Path {
         delegate_to_store!(self, root_dir)
     }
+
+    /// Bind this store to one `asset_root`, returning a scoped handle
+    /// that drops the per-call `asset_root` argument. Cheap to clone --
+    /// the backing store is shared, so many scopes over distinct asset
+    /// roots cooperate on one store.
+    #[must_use]
+    pub fn scope<R: Into<Arc<str>>>(&self, asset_root: R) -> AssetScope<Ctx> {
+        AssetScope::new(self.clone(), asset_root.into())
+    }
+
+    /// Bind this store to one `asset_root` and protocol-specific naming
+    /// policy. The default [`Self::scope`] keeps the historical mapping;
+    /// use this when a protocol owns a safer on-disk representation for
+    /// URL resources.
+    #[must_use]
+    pub fn scope_with_delegate<R: Into<Arc<str>>>(
+        &self,
+        asset_root: R,
+        delegate: Arc<dyn AssetScopeDelegate>,
+    ) -> AssetScope<Ctx> {
+        AssetScope::with_delegate(self.clone(), asset_root.into(), delegate)
+    }
 }
 
 // Test-only conversions from a bare store chain (no shared cancel, no
@@ -322,7 +334,7 @@ where
         Self::Disk {
             store,
             availability: AvailabilityIndex::new(),
-            demand: DemandIndex::new(CancellationToken::default()),
+            demand: DemandIndex::new(CancelToken::never()),
             base: None,
         }
     }
@@ -337,7 +349,7 @@ where
         Self::Mem {
             store,
             availability: AvailabilityIndex::new(),
-            demand: DemandIndex::new(CancellationToken::default()),
+            demand: DemandIndex::new(CancelToken::never()),
         }
     }
 }

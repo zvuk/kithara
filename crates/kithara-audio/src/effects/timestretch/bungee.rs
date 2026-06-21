@@ -16,17 +16,17 @@ const MAX_INPUT_FRAMES: usize = 8192;
 /// `Stream::process` argument.
 pub(crate) struct BungeeBackend {
     inner: Option<Stream>,
-    channels: usize,
-    ratio: f64,
-    pitch: f64,
     in_planar: Vec<Vec<f32>>,
     out_planar: Vec<Vec<f32>>,
+    pitch: f64,
+    ratio: f64,
+    channels: usize,
 }
 
 impl BungeeBackend {
     pub(crate) fn new(spec: PcmSpec) -> Self {
         let channels = usize::from(spec.channels.max(1));
-        let sample_rate = usize::try_from(spec.sample_rate.max(1)).unwrap_or(1);
+        let sample_rate: usize = spec.sample_rate.get().as_();
         let inner = match Stream::new(sample_rate, channels, MAX_INPUT_FRAMES) {
             Ok(stream) => Some(stream),
             Err(e) => {
@@ -50,6 +50,22 @@ impl BungeeBackend {
 }
 
 impl StretchBackend for BungeeBackend {
+    fn flush(&mut self, _out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
+        // No-op: bungee's high-level `Stream` exposes no tail drain, and
+        // feeding muted input would emit stretched *silence*, not the real
+        // buffered tail — inflating duration. We drop the final ~latency of
+        // audio at EOS instead (a minor end-of-track artifact). A real drain
+        // would need the low-level granular `Stretcher` API.
+        Ok(())
+    }
+
+    fn max_output_samples(&self, input_frames: usize) -> usize {
+        let frames_f64: f64 = input_frames.as_();
+        let out_frames: usize =
+            num_traits::cast((frames_f64 * self.ratio).ceil()).unwrap_or(usize::MAX);
+        out_frames.saturating_mul(self.channels)
+    }
+
     fn process(&mut self, input: &[f32], out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
         let Self {
             inner,
@@ -63,7 +79,7 @@ impl StretchBackend for BungeeBackend {
         let Some(stream) = inner.as_mut() else {
             // Stream::new failed at construction (already warned once); emit
             // nothing rather than erroring per chunk. Unreachable for a valid
-            // spec — see the bungee note in the crate README.
+            // spec — see the bungee note in the crate CONTEXT.md.
             return Ok(());
         };
         let ch = *channels;
@@ -98,12 +114,19 @@ impl StretchBackend for BungeeBackend {
         Ok(())
     }
 
-    fn flush(&mut self, _out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
-        // No-op: bungee's high-level `Stream` exposes no tail drain, and
-        // feeding muted input would emit stretched *silence*, not the real
-        // buffered tail — inflating duration. We drop the final ~latency of
-        // audio at EOS instead (a minor end-of-track artifact). A real drain
-        // would need the low-level granular `Stretcher` API.
+    fn reset(&mut self) {
+        if let Some(spec_channels) = self.inner.as_ref().map(|s| s.num_channels()) {
+            // Recreate the stream to clear internal state (no reset on Stream).
+            let sample_rate = self.inner.as_ref().map_or(1, Stream::sample_rate);
+            self.inner = Stream::new(sample_rate, spec_channels, MAX_INPUT_FRAMES).ok();
+        }
+    }
+
+    fn set_pitch(&mut self, scale: f64) -> Result<(), StretchBackendError> {
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err(StretchBackendError::Param(format!("pitch scale {scale}")));
+        }
+        self.pitch = scale;
         Ok(())
     }
 
@@ -115,28 +138,5 @@ impl StretchBackend for BungeeBackend {
         }
         self.ratio = stretch;
         Ok(())
-    }
-
-    fn set_pitch(&mut self, scale: f64) -> Result<(), StretchBackendError> {
-        if !scale.is_finite() || scale <= 0.0 {
-            return Err(StretchBackendError::Param(format!("pitch scale {scale}")));
-        }
-        self.pitch = scale;
-        Ok(())
-    }
-
-    fn max_output_samples(&self, input_frames: usize) -> usize {
-        let frames_f64: f64 = input_frames.as_();
-        let out_frames: usize =
-            num_traits::cast((frames_f64 * self.ratio).ceil()).unwrap_or(usize::MAX);
-        out_frames.saturating_mul(self.channels)
-    }
-
-    fn reset(&mut self) {
-        if let Some(spec_channels) = self.inner.as_ref().map(|s| s.num_channels()) {
-            // Recreate the stream to clear internal state (no reset on Stream).
-            let sample_rate = self.inner.as_ref().map_or(1, Stream::sample_rate);
-            self.inner = Stream::new(sample_rate, spec_channels, MAX_INPUT_FRAMES).ok();
-        }
     }
 }

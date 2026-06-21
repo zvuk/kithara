@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{fmt::Write, sync::Arc, time::Duration};
+use std::{fmt::Write, sync::Arc};
 
 use kithara_app::{config::AppConfig, sources::build_source};
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
@@ -12,14 +12,16 @@ use kithara_integration_tests::{
     offline::OfflineSession, temp_dir,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, sleep},
+};
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::{
     AudioCodec,
     dl::{Downloader, DownloaderConfig},
 };
-use tokio::time::sleep;
 use url::Url;
 
 use super::{
@@ -398,11 +400,8 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     .await;
     let temp = temp_dir();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::default(),
-        ))
-        .build(),
+        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
+            .build(),
     );
     let store = StoreOptions::new(temp.path());
     let cfg = kithara_play::ResourceConfig::for_src(spec.url.as_str())
@@ -419,9 +418,13 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let q_for_tick = Arc::clone(&queue);
-    let tick = tokio::spawn(async move {
+    // Platform spawn chokepoint, NOT raw `tokio::spawn`: under flash
+    // this makes the tick driver a quiescence participant with a
+    // virtual `sleep`, so the virtual clock cannot race past the ticks
+    // that drive loading. A raw spawn runs uncounted on real time.
+    let tick = kithara_platform::tokio::task::spawn(async move {
         loop {
-            sleep(Duration::from_millis(50)).await;
+            time::sleep(Duration::from_millis(50)).await;
             if q_for_tick.tick().is_err() {
                 break;
             }
@@ -586,7 +589,7 @@ async fn user_sim_three_track_bounce_with_seeks(#[case] kinds: &[TrackKind]) {
 // ─── Apple decoder backend (macOS/iOS) ─────────────────────────────────────
 // Hardware-decoder path. Production users on Mac/iOS see the
 // AudioToolbox path — repro the seek bugs on this backend too.
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod apple_backend {
     use super::*;
 
@@ -662,10 +665,10 @@ struct ProdCtx {
 fn build_prod_ctx() -> ProdCtx {
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::default())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
-    let flush_hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, CancellationToken::default());
+    let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
+    let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
     ProdCtx {
         config,
         cache: TestTempDir::new(),
@@ -732,7 +735,7 @@ async fn apply_action_to_queue(queue: &Arc<Queue>, action: &Action) {
             if matches!(outcome, SeekOutcome::PastEof { .. }) {
                 return;
             }
-            let started = std::time::Instant::now();
+            let started = kithara_platform::time::Instant::now();
             let budget = Duration::from_secs(10);
             let mut landed = false;
             while started.elapsed() < budget {
@@ -941,6 +944,7 @@ async fn user_sim_prod_drm_seek_immediately_after_loaded_low() {
 /// `wait_for_loaded` mirrors the GUI's "loading…" placeholder before
 /// the track resource is constructed; in `app` the slider is dead
 /// until that point. After `Loaded` we scrub with no further warmup.
+// flash(false): prod-CDN e2e; raw tokio::spawn ticker + wall-clock scrub/settle windows.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
 async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
@@ -954,7 +958,7 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     let q_for_tick = Arc::clone(&queue);
     let tick = tokio::spawn(async move {
         loop {
-            sleep(Duration::from_millis(50)).await;
+            time::sleep(Duration::from_millis(50)).await;
             if q_for_tick.tick().is_err() {
                 break;
             }
@@ -988,11 +992,11 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     for target in scrub_targets {
         let _ = queue.seek(target);
         check_not_advanced(&format!("after seek({target:.2}s)"));
-        sleep(Duration::from_millis(120)).await;
+        time::sleep(Duration::from_millis(120)).await;
         check_not_advanced(&format!("post-seek({target:.2}s)+120ms"));
     }
 
-    sleep(Duration::from_secs(5)).await;
+    time::sleep(Duration::from_secs(5)).await;
     check_not_advanced("after 5s settle");
 
     tick.abort();
@@ -1037,12 +1041,12 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     // ratio of the track. Before mvhd parsing `duration_seconds()`
     // returns `None`, which is the deliberate "unknown" signal. Without
     // this wait, the test would race the demuxer.
-    let dur_deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let dur_deadline = kithara_platform::time::Instant::now() + Duration::from_secs(30);
     let duration = loop {
         if let Some(d) = queue.duration_seconds() {
             break d;
         }
-        if std::time::Instant::now() >= dur_deadline {
+        if kithara_platform::time::Instant::now() >= dur_deadline {
             panic!("duration never became known within 30 s after Loaded");
         }
         sleep(Duration::from_millis(50)).await;
@@ -1061,7 +1065,7 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
              reported_dur={reported_dur:?} queue.duration={duration:.2}s"
         );
     }
-    let started = std::time::Instant::now();
+    let started = kithara_platform::time::Instant::now();
     let budget = Duration::from_secs(15);
     let mut landed = false;
     while started.elapsed() < budget {

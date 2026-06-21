@@ -38,16 +38,16 @@ impl<D: DriverIo> Atomic<D> {
         self.inner.contains_range(range)
     }
 
-    /// Committed length, if known.
-    #[must_use]
-    pub fn len(&self) -> Option<u64> {
-        self.inner.len()
-    }
-
     /// Returns `true` if the resource has been committed with zero length.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == Some(0)
+    }
+
+    /// Committed length, if known.
+    #[must_use]
+    pub fn len(&self) -> Option<u64> {
+        self.inner.len()
     }
 
     /// Backing file path, if any.

@@ -1,7 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::time::{Duration, Instant};
-
 use kithara_app::{config::AppConfig, sources::build_source};
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_decode::DecoderBackend;
@@ -10,12 +8,11 @@ use kithara_integration_tests::{
     TestTempDir, kithara, offline::OfflinePlayer, swallow_detector::assert_no_committed_swallow,
 };
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_play::Resource;
 use kithara_queue::TrackSource;
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::probe::capture as probe_capture;
-use tokio::time::sleep;
 use tracing::info;
 
 /// Production zvuk DRM track with a FLAC lossless top variant (a zvuk
@@ -45,7 +42,7 @@ const MAX_COMMITTED_STEP_SECS: f64 = 1.5;
 /// `committed_position` runs ahead of decoded content with no seek (app.log
 /// 2026-05-27: committed +10.4 s in one step, ~50 s ahead of decoded).
 ///
-/// Detector: the `committed_ns` USDT probe on `Timeline::write_playhead`
+/// Detector: the `committed_ns` USDT probe on `PlayheadState::write_playhead`
 /// fires on every playhead commit. We capture the firing sequence and fail if
 /// the committed playhead ever jumps forward by more than
 /// [`MAX_COMMITTED_STEP_SECS`] in a single commit. The player's served-frame
@@ -65,6 +62,7 @@ const MAX_COMMITTED_STEP_SECS: f64 = 1.5;
 /// KITHARA_DRM_PROD_SP_ZV_TOKEN=... \
 ///     cargo nextest run -E 'test(zvuk_prod_flac_no_swallow)' --run-ignored=only
 /// ```
+// flash(false): real-time paced on purpose (see doc) — sleep paces render at 1x wall clock vs prod CDN.
 #[kithara::test(tokio, timeout(Duration::from_secs(180)))]
 #[ignore = "requires zvuk prod creds baked at build (KITHARA_DRM_PROD_*) + VPN + usdt-probes — run with --run-ignored=only"]
 #[case::symphonia(DecoderBackend::Symphonia)]
@@ -78,10 +76,10 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
 
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::default())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
-    let flush_hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, CancellationToken::default());
+    let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
+    let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
     let temp = TestTempDir::new();
 
     let TrackSource::Config(mut cfg) = build_source(PROD_TRACK, &config) else {
@@ -111,8 +109,10 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
         .iter()
         .find(|v| is_flac(&v.codecs) || is_flac(&v.container))
         .or_else(|| variants.iter().max_by_key(|v| v.bandwidth_bps.unwrap_or(0)))
-        .map(|v| v.variant_index.get())
-        .unwrap_or_else(|| panic!("no lossless/top variant among {} variants", variants.len()));
+        .map_or_else(
+            || panic!("no lossless/top variant among {} variants", variants.len()),
+            |v| v.variant_index.get(),
+        );
     abr.set_mode(AbrMode::manual(flac_idx))
         .unwrap_or_else(|e| panic!("pin lossless variant {flac_idx} failed: {e:?}"));
     info!(
@@ -139,7 +139,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
         }
         let elapsed = started.elapsed().as_secs_f64();
         if window_secs > elapsed {
-            sleep(Duration::from_secs_f64(window_secs - elapsed)).await;
+            time::sleep(Duration::from_secs_f64(window_secs - elapsed)).await;
         }
     }
 

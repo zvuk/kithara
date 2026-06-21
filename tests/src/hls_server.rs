@@ -1,5 +1,6 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
+use kithara_platform::time::Duration;
 use url::Url;
 
 use crate::{
@@ -246,11 +247,44 @@ impl HlsTestServer {
             .create_hls(builder_from_config(&config))
             .await
             .expect("create configurable HLS fixture");
+        // Arm virtual-time delay gates from this (flash-ambient) setup context so
+        // the per-segment server delay manifests as VIRTUAL elapsed time the
+        // client observes — keeping the real socket while consuming zero real
+        // wall-clock (see `TestServerHelper::arm_delay_gates`).
+        helper.arm_delay_gates(
+            created.token(),
+            config.variant_count,
+            config.segments_per_variant,
+            &config.delay_rules,
+        );
         Self {
             config,
             created,
             _helper: helper,
         }
+    }
+
+    /// Build a configurable HLS server that withholds the GET (body)
+    /// response for one `(variant, segment)` until the returned handle
+    /// releases it. The HEAD (size) response stays unblocked, so the
+    /// up-front size-estimation pass still learns the segment size while
+    /// the body is parked.
+    ///
+    /// Deterministic, network-free, timer-free seam for "this segment has
+    /// not arrived yet" scenarios over the WAV/`HlsTestServer` fixture path
+    /// (the AAC fMP4 analogue is [`PackagedTestServer::with_segment_gate`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub async fn with_segment_gate(
+        config: HlsTestServerConfig,
+        variant: usize,
+        segment: usize,
+    ) -> (Self, crate::SegmentGateHandle) {
+        let server = Self::new(config).await;
+        let handle = server
+            ._helper
+            .register_segment_gate(server.created.token(), variant, segment);
+        (server, handle)
     }
 
     #[must_use]
@@ -425,6 +459,57 @@ impl PackagedTestServer {
             encrypted,
             _helper: helper,
         }
+    }
+
+    /// Build a packaged server whose `plain` (3-variant AAC fMP4) fixture
+    /// withholds the GET response for one `(variant, segment)` until the
+    /// returned handle releases it. The HEAD (size) response stays unblocked,
+    /// so the consumer still learns the segment size while the body is parked.
+    ///
+    /// This is the deterministic, network-free, timer-free seam for
+    /// "segment not yet loaded" / early-seek scenarios: a test seeks into the
+    /// withheld segment, asserts the reader makes no false progress while
+    /// withheld, then `release()`s and asserts playback resumes.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub async fn with_segment_gate(
+        variant: usize,
+        segment: usize,
+    ) -> (Self, crate::SegmentGateHandle) {
+        let server = Self::new().await;
+        let handle = server
+            ._helper
+            .register_segment_gate(server.plain.token(), variant, segment);
+        (server, handle)
+    }
+
+    /// Build a packaged server whose `plain` fixture withholds the **size**
+    /// (HEAD) of one `(variant, segment)` from construction: the up-front
+    /// `loading::size_estimation` pass learns `Content-Length: 0` for it, so
+    /// the segment's bytes are unaccounted-for in `total_bytes`. Models a seek
+    /// that lands BEFORE the segment's size is known — the genuinely-immediate
+    /// seek the body-only [`Self::with_segment_gate`] cannot model (a body
+    /// withhold would instead block `Audio::new()`, since estimation HEADs
+    /// every segment synchronously at construction).
+    ///
+    /// The body GET stays unblocked. The returned handle can `release_head()`
+    /// to reveal the true size, and `withhold_head()` / `release()` give
+    /// independent control of the size and body seams respectively.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub async fn with_segment_size_gate(
+        variant: usize,
+        segment: usize,
+    ) -> (Self, crate::SegmentGateHandle) {
+        let server = Self::new().await;
+        let handle = server
+            ._helper
+            .register_segment_gate(server.plain.token(), variant, segment);
+        handle.withhold_head();
+        // A registered gate parks the body GET by default; this constructor
+        // withholds only the size, so open the body up front.
+        handle.release();
+        (server, handle)
     }
 }
 
@@ -686,4 +771,135 @@ fn aes128_plaintext_segment() -> Vec<u8> {
 
 fn test_key_data() -> Vec<u8> {
     b"TEST_KEY_DATA_123456".to_vec()
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use kithara_platform::{flash::real_io, time::Duration};
+
+    use super::PackagedTestServer;
+    use crate::kithara;
+
+    /// The withhold gate parks a segment GET at the server until the test
+    /// releases it, and the in-process `requested()` counter lets the test
+    /// observe that the GET actually arrived. Polling that counter under a
+    /// hard timeout is synchronization on an observable — a real stall fails
+    /// the budget rather than being masked.
+    //
+    // This drives raw `reqwest`/`tokio::spawn` over a real socket against the
+    // shared test server (a real-time island, no flash ambient). The in-flight
+    // request and its response live on the REAL clock, invisible to the flash
+    // engine (no downloader `real_io` bracket wraps them). Hold a `RealIoScope`
+    // across every wait on that real transit — the gated GET reaching the server
+    // and the released GET completing — so the virtual clock is PACED to real
+    // time while held: each `time::timeout` budget then fires only after the
+    // equivalent REAL time, never spuriously ahead of bytes still on the wire.
+    // The budget is preserved as a real stall oracle (a genuinely stuck request
+    // still exhausts the paced 5s), not relaxed. Off the `flash` feature the
+    // scope is a ZST no-op and the clock is already real.
+    #[kithara::test(tokio)]
+    async fn segment_gate_withholds_get_until_release() {
+        let (server, gate) = PackagedTestServer::with_segment_gate(0, 1).await;
+        let url = server.url("/seg/v0_1.m4s");
+        assert_eq!(gate.requested(), 0, "no GET before the test fires one");
+
+        let _real_io = real_io();
+
+        let fetch = tokio::spawn(async move { reqwest::get(url).await.map(|r| r.status()) });
+
+        time::timeout(Duration::from_secs(5), async {
+            while gate.requested() == 0 {
+                time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("withheld segment GET should reach the server within budget");
+
+        assert!(
+            !fetch.is_finished(),
+            "withheld segment GET must not complete before release"
+        );
+
+        gate.release();
+
+        let status = time::timeout(Duration::from_secs(5), fetch)
+            .await
+            .expect("released GET should complete within budget")
+            .expect("segment GET task joins")
+            .expect("segment GET succeeds");
+        assert!(
+            status.is_success() || status.as_u16() == 206,
+            "released segment GET should succeed, got {status}"
+        );
+        assert_eq!(gate.requested(), 1, "exactly one GET parked on the gate");
+    }
+
+    /// The size/HEAD gate makes HEAD report `Content-Length: 0` while
+    /// withheld (and counts the HEAD), then the true size after
+    /// `release_head()` — without ever parking the HEAD (which would block
+    /// stream construction). The body GET stays unblocked throughout.
+    //
+    // Same raw-reqwest-over-real-socket shape as above: hold a `RealIoScope`
+    // across every real HEAD/GET so the virtual clock is paced to real time and
+    // no `time::timeout` budget collapses ahead of the in-flight response. The
+    // budget stays a real stall oracle, not relaxed (see the sibling test).
+    #[kithara::test(tokio)]
+    async fn segment_size_gate_reports_zero_until_release_head() {
+        let (server, gate) = PackagedTestServer::with_segment_size_gate(0, 1).await;
+        let url = server.url("/seg/v0_1.m4s");
+        assert_eq!(
+            gate.head_requested(),
+            0,
+            "no HEAD before the test fires one"
+        );
+
+        let _real_io = real_io();
+
+        let withheld = time::timeout(
+            Duration::from_secs(5),
+            reqwest::Client::new().head(url.clone()).send(),
+        )
+        .await
+        .expect("HEAD must not park while size is withheld")
+        .expect("withheld-size HEAD succeeds");
+        assert!(withheld.status().is_success());
+        assert_eq!(
+            withheld
+                .headers()
+                .get("content-length")
+                .and_then(|v| v.to_str().ok()),
+            Some("0"),
+            "withheld size must be reported as Content-Length: 0"
+        );
+        assert_eq!(gate.head_requested(), 1, "HEAD reached the gate");
+
+        gate.release_head();
+        let revealed = time::timeout(
+            Duration::from_secs(5),
+            reqwest::Client::new().head(url).send(),
+        )
+        .await
+        .expect("HEAD completes")
+        .expect("revealed-size HEAD succeeds");
+        let revealed_len: u64 = revealed
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok())
+            .expect("revealed HEAD carries a content-length");
+        assert!(
+            revealed_len > 0,
+            "released size must report the true (non-zero) length, got {revealed_len}"
+        );
+
+        // The body GET is independent of the size gate and stays unblocked.
+        let body = time::timeout(
+            Duration::from_secs(5),
+            reqwest::get(server.url("/seg/v0_1.m4s")),
+        )
+        .await
+        .expect("body GET completes (never parked by the size gate)")
+        .expect("body GET succeeds");
+        assert!(body.status().is_success() || body.status().as_u16() == 206);
+    }
 }

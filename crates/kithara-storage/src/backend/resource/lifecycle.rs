@@ -16,7 +16,7 @@ impl<D: DriverIo> ResourceCore<D> {
         self.inner.committed.store(true, Ordering::Release);
 
         {
-            let mut state = self.inner.state.lock_sync();
+            let mut state = self.inner.gate.lock();
             state.committed = true;
             state.final_len = final_len;
             if let Some(len) = final_len
@@ -33,7 +33,7 @@ impl<D: DriverIo> ResourceCore<D> {
                 }
             }
         }
-        self.inner.condvar.notify_all();
+        self.inner.gate.notify_all();
 
         if let Some(len) = final_len
             && let Some(observer) = self.inner.observer.as_ref()
@@ -51,20 +51,19 @@ impl<D: DriverIo> ResourceCore<D> {
         // Lock-free committed fast path. A published committed snapshot covers the
         // whole `[0, committed_len)` (both drivers are linear — `valid_window()` is
         // `None`, no eviction — so a snapshot implies no gaps), so coverage reduces
-        // to a bound check.
         if let Some(committed_len) = self.inner.driver.committed_len() {
             return range.end <= committed_len;
         }
-        let state = self.inner.state.lock_sync();
+        let state = self.inner.gate.lock();
         range_covered_by(&state.available, &range)
     }
 
     pub(super) fn fail_inner(&self, reason: String) {
         {
-            let mut state = self.inner.state.lock_sync();
+            let mut state = self.inner.gate.lock();
             state.failed = Some(reason);
         }
-        self.inner.condvar.notify_all();
+        self.inner.gate.notify_all();
     }
 
     pub(super) fn len_inner(&self) -> Option<u64> {
@@ -77,12 +76,12 @@ impl<D: DriverIo> ResourceCore<D> {
         {
             return Some(committed_len);
         }
-        let state = self.inner.state.lock_sync();
+        let state = self.inner.gate.lock();
         state.final_len
     }
 
     pub(super) fn next_gap_inner(&self, from: u64, limit: u64) -> Option<Range<u64>> {
-        let state = self.inner.state.lock_sync();
+        let state = self.inner.gate.lock();
         let total = state.final_len.unwrap_or(limit);
         let upper = limit.min(total);
         if from >= upper {
@@ -108,12 +107,12 @@ impl<D: DriverIo> ResourceCore<D> {
         self.inner.committed.store(false, Ordering::Release);
 
         {
-            let mut state = self.inner.state.lock_sync();
+            let mut state = self.inner.gate.lock();
             state.committed = false;
             state.final_len = None;
             state.failed = None;
         }
-        self.inner.condvar.notify_all();
+        self.inner.gate.notify_all();
         Ok(())
     }
 
@@ -124,12 +123,12 @@ impl<D: DriverIo> ResourceCore<D> {
         if self.inner.cancel.is_cancelled() {
             return false;
         }
-        let state = self.inner.state.lock_sync();
+        let state = self.inner.gate.lock();
         !state.committed && state.failed.is_none()
     }
 
     pub(super) fn status_inner(&self) -> ResourceStatus {
-        let state = self.inner.state.lock_sync();
+        let state = self.inner.gate.lock();
         if let Some(ref reason) = state.failed {
             ResourceStatus::Failed(reason.clone())
         } else if state.committed {

@@ -14,16 +14,6 @@ use crate::{
     theme::gui::{GuiPalette, WAVE_HIGH, WAVE_LOW, WAVE_MID},
 };
 
-/// Movement past this (in px) turns a press into a pan; a release within it
-/// reads as a click and seeks.
-const DRAG_THRESHOLD_PX: f32 = 3.0;
-
-/// Zoom multiplier per wheel line notch.
-const WHEEL_BASE: f32 = 1.2;
-
-/// Trackpad pixel deltas are normalized to line-equivalents.
-const WHEEL_PIXELS_PER_LINE: f32 = 50.0;
-
 /// Beat-grid overlay data for the deck waveform: positions as track fractions
 /// in `[0, 1]`, derived from the track's analysed beat grid.
 pub(crate) struct BeatMarks {
@@ -33,13 +23,13 @@ pub(crate) struct BeatMarks {
 
 /// Deck waveform: three concentric mirrored band bars over a grid + playhead.
 struct WaveformCanvas {
-    wave: Waveform,
     beats: Arc<[f32]>,
     downbeats: Arc<[f32]>,
+    p: GuiPalette,
+    view: Viewport,
+    wave: Waveform,
     progress: f32,
     duration: f64,
-    view: Viewport,
-    p: GuiPalette,
 }
 
 /// Dim a played-past band color so the playhead split reads at a glance.
@@ -53,6 +43,9 @@ fn dim(c: Color) -> Color {
 }
 
 fn wheel_factor(delta: ScrollDelta) -> f32 {
+    const WHEEL_BASE: f32 = 1.2;
+    const WHEEL_PIXELS_PER_LINE: f32 = 50.0;
+
     let lines = match delta {
         ScrollDelta::Lines { y, .. } => y,
         ScrollDelta::Pixels { y, .. } => y / WHEEL_PIXELS_PER_LINE,
@@ -62,21 +55,15 @@ fn wheel_factor(delta: ScrollDelta) -> f32 {
 
 #[derive(Clone, Copy)]
 struct Press {
-    start_x: f32,
-    last_x: f32,
     moved: bool,
+    last_x: f32,
+    start_x: f32,
 }
 
 #[derive(Default)]
 struct PointerState {
     press: Option<Press>,
 }
-
-/// Minimum on-screen gap (px) between drawn downbeat lines; closer ones are culled.
-const DOWNBEAT_MIN_GAP_PX: f32 = 6.0;
-
-/// Minimum on-screen gap (px) between drawn beat ticks; closer ones are culled.
-const BEAT_MIN_GAP_PX: f32 = 5.0;
 
 impl WaveformCanvas {
     fn draw_beatgrid(&self, frame: &mut Frame, w: f32, h: f32) {
@@ -85,6 +72,8 @@ impl WaveformCanvas {
     }
 
     fn draw_beats(&self, frame: &mut Frame, w: f32, h: f32) {
+        const BEAT_MIN_GAP_PX: f32 = 5.0;
+
         if self.beats.is_empty() {
             return;
         }
@@ -107,6 +96,8 @@ impl WaveformCanvas {
     }
 
     fn draw_downbeats(&self, frame: &mut Frame, w: f32, h: f32) {
+        const DOWNBEAT_MIN_GAP_PX: f32 = 6.0;
+
         let downbeats = &self.downbeats;
         let len = downbeats.len();
         if len == 0 {
@@ -115,9 +106,7 @@ impl WaveformCanvas {
 
         let accent = self.p.accent;
         let accent_strong = self.p.accent_strong;
-        let active = downbeats
-            .iter()
-            .rposition(|&d| d <= self.progress + 1e-4);
+        let active = downbeats.iter().rposition(|&d| d <= self.progress + 1e-4);
 
         let mut last_x = f32::NEG_INFINITY;
         for i in 0..len {
@@ -154,7 +143,9 @@ impl WaveformCanvas {
             };
             frame.stroke(
                 &Path::line(Point::new(x, 0.0), Point::new(x, h)),
-                Stroke::default().with_color(marker_color).with_width(marker_w),
+                Stroke::default()
+                    .with_color(marker_color)
+                    .with_width(marker_w),
             );
             let tab = Path::new(|b| {
                 b.move_to(Point::new(x - 4.0, 0.0));
@@ -169,60 +160,6 @@ impl WaveformCanvas {
 
 impl canvas::Program<Message> for WaveformCanvas {
     type State = PointerState;
-
-    fn update(
-        &self,
-        state: &mut PointerState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<Message>> {
-        match event {
-            Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
-                let factor = wheel_factor(*delta);
-                let cursor_x = cursor.position().map_or(bounds.x, |p| p.x);
-                let anchor = ((cursor_x - bounds.x) / bounds.width).clamp(0.0, 1.0);
-                ((factor - 1.0).abs() >= f32::EPSILON)
-                    .then(|| zoom_action(WaveMsg::ZoomBy { factor, anchor }))
-            }
-            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
-                cursor.position_over(bounds).map(|pos| {
-                    state.press = Some(Press {
-                        start_x: pos.x,
-                        last_x: pos.x,
-                        moved: false,
-                    });
-                    Action::capture()
-                })
-            }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                let press = state.press.as_mut()?;
-                let pos = cursor.position()?;
-                let dx = pos.x - press.last_x;
-                press.last_x = pos.x;
-                if (pos.x - press.start_x).abs() > DRAG_THRESHOLD_PX {
-                    press.moved = true;
-                }
-                if press.moved {
-                    Some(zoom_action(WaveMsg::Pan(dx / bounds.width)))
-                } else {
-                    Some(Action::capture())
-                }
-            }
-            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => {
-                let press = state.press.take()?;
-                if press.moved || self.duration <= 0.0 {
-                    return Some(Action::capture());
-                }
-                let x = cursor.position().map_or(press.last_x, |p| p.x);
-                let frac = ((x - bounds.x) / bounds.width).clamp(0.0, 1.0);
-                let secs =
-                    (f64::from(self.view.track_frac(frac)) * self.duration).clamp(0.0, self.duration);
-                Some(Action::publish(Message::SeekTo(secs)).and_capture())
-            }
-            _ => None,
-        }
-    }
 
     fn draw(
         &self,
@@ -330,6 +267,62 @@ impl canvas::Program<Message> for WaveformCanvas {
             mouse::Interaction::default()
         }
     }
+
+    fn update(
+        &self,
+        state: &mut PointerState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<Message>> {
+        const DRAG_THRESHOLD_PX: f32 = 3.0;
+
+        match event {
+            Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
+                let factor = wheel_factor(*delta);
+                let cursor_x = cursor.position().map_or(bounds.x, |p| p.x);
+                let anchor = ((cursor_x - bounds.x) / bounds.width).clamp(0.0, 1.0);
+                ((factor - 1.0).abs() >= f32::EPSILON)
+                    .then(|| zoom_action(WaveMsg::ZoomBy { factor, anchor }))
+            }
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
+                cursor.position_over(bounds).map(|pos| {
+                    state.press = Some(Press {
+                        start_x: pos.x,
+                        last_x: pos.x,
+                        moved: false,
+                    });
+                    Action::capture()
+                })
+            }
+            Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                let press = state.press.as_mut()?;
+                let pos = cursor.position()?;
+                let dx = pos.x - press.last_x;
+                press.last_x = pos.x;
+                if (pos.x - press.start_x).abs() > DRAG_THRESHOLD_PX {
+                    press.moved = true;
+                }
+                if press.moved {
+                    Some(zoom_action(WaveMsg::Pan(dx / bounds.width)))
+                } else {
+                    Some(Action::capture())
+                }
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => {
+                let press = state.press.take()?;
+                if press.moved || self.duration <= 0.0 {
+                    return Some(Action::capture());
+                }
+                let x = cursor.position().map_or(press.last_x, |p| p.x);
+                let frac = ((x - bounds.x) / bounds.width).clamp(0.0, 1.0);
+                let secs = (f64::from(self.view.track_frac(frac)) * self.duration)
+                    .clamp(0.0, self.duration);
+                Some(Action::publish(Message::SeekTo(secs)).and_capture())
+            }
+            _ => None,
+        }
+    }
 }
 
 fn zoom_action(msg: WaveMsg) -> Action<Message> {
@@ -347,13 +340,13 @@ pub(crate) fn waveform<'a>(
     p: GuiPalette,
 ) -> Element<'a, Message> {
     Canvas::new(WaveformCanvas {
+        p,
         wave,
-        beats: marks.beats,
-        downbeats: marks.downbeats,
         progress,
         duration,
         view,
-        p,
+        beats: marks.beats,
+        downbeats: marks.downbeats,
     })
     .width(Length::Fill)
     .height(Length::Fixed(height))

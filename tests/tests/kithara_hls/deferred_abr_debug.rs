@@ -9,7 +9,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{TestTempDir, hls_server::TestServer, rt_cancel, temp_dir};
-use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 /// Diagnostic version with detailed logging and safety limits
@@ -20,7 +20,7 @@ use tracing::info;
     env(KITHARA_HANG_TIMEOUT_SECS = "1"),
     tracing("kithara_hls=debug,kithara_stream=debug,kithara_decode=debug")
 )]
-async fn debug_sequential_read(temp_dir: TestTempDir, rt_cancel: CancellationToken) {
+async fn debug_sequential_read(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     info!("=== Starting debug_sequential_read test ===");
 
     let server = TestServer::new().await;

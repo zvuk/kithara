@@ -1,0 +1,46 @@
+id: arch.no-raw-tokio-sync
+message: |
+  Direct use of a raw `tokio::sync` async wait primitive. Route through
+  `kithara_platform` so every async wait participates in the quiescence engine
+  under `sim-time` (a raw one parks on the tokio runtime, invisible to the
+  virtual clock, so the clock races past it or the test crawls):
+  - `tokio::sync::Notify`    → `kithara_platform::sync::Notify`
+  - `tokio::sync::mpsc`      → `kithara_platform::tokio::sync::mpsc`
+  - `tokio::sync::oneshot`   → `kithara_platform::tokio::sync::oneshot`
+  - `tokio::sync::Semaphore` → `kithara_platform::tokio::sync::Semaphore`
+  - `tokio::sync::{Mutex, RwLock, watch, broadcast, Barrier}` are not yet
+    wrapped: do not introduce them on a sim-relevant path — add a
+    `kithara_platform` wrapper first (see crate README "sim-time").
+
+      // ❌  use tokio::sync::Notify;   tokio::sync::mpsc::channel(8);
+      // ✅  use kithara_platform::sync::Notify;
+      // ✅  use kithara_platform::tokio::sync::mpsc;
+
+  This is an ERROR gate covering ALL workspace Rust — production AND tests.
+
+  Suppress with `// ast-grep-ignore: arch.no-raw-tokio-sync` ONLY when the
+  primitive is provably off every sim path (document why on the line).
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+ignores:
+  # The platform crate OWNS the async wait primitives (binds them to the engine).
+  - crates/kithara-platform/**
+rule:
+  any:
+    # Imports where `tokio` is the CRATE ROOT (`use tokio::...`), never the
+    # platform alias `use kithara_platform::tokio::...`.
+    - kind: use_declaration
+      regex: '\buse\s+tokio::sync::(Notify|mpsc|oneshot|Semaphore|Mutex|RwLock|watch|broadcast|Barrier)\b'
+    - kind: use_declaration
+      regex: '\buse\s+tokio::sync::\{[\s\S]*\b(Notify|mpsc|oneshot|Semaphore|Mutex|RwLock|watch|broadcast|Barrier)\b'
+    - kind: use_declaration
+      regex: '\buse\s+tokio::\{[\s\S]*\bsync::(Notify|mpsc|oneshot|Semaphore|Mutex|RwLock|watch|broadcast|Barrier)\b'
+    # Qualified construction sites (root-crate `tokio::`, structural match).
+    - pattern: tokio::sync::mpsc::channel($$$REST)
+    - pattern: tokio::sync::mpsc::unbounded_channel($$$REST)
+    - pattern: tokio::sync::oneshot::channel($$$REST)
+    - pattern: tokio::sync::Notify::new($$$REST)
+    - pattern: tokio::sync::Semaphore::new($$$REST)

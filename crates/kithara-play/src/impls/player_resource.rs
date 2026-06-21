@@ -1,7 +1,8 @@
-use std::{num::NonZeroU32, ops::Range, sync::Arc, time::Duration};
+use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
 use kithara_audio::ServiceClass;
 use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_platform::time::Duration;
 use tracing::warn;
 
 #[rustfmt::skip]
@@ -27,7 +28,11 @@ pub struct PlayerResource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadOutcome {
     /// The requested range was filled completely.
-    Full,
+    ///
+    /// `frames` counts real PCM frames copied out of the wrapped reader or
+    /// scratch buffer. The remainder may be zero-filled during a non-terminal
+    /// underrun and must not advance playback position.
+    Full { frames: usize },
     /// A strict prefix of the requested range was written.
     ///
     /// The payload is the number of written frames. This outcome is reserved
@@ -59,7 +64,7 @@ impl PlayerResource {
     pub fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
         let spec = resource.spec();
         let channels = spec.channels as usize;
-        let buffer_len = (spec.sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
+        let buffer_len = (spec.sample_rate.get() as usize / Self::BUFFER_DURATION_DIVISOR)
             * channels.max(Self::STEREO_CHANNELS);
 
         let channel_buffers = std::array::from_fn(|_| {
@@ -186,14 +191,18 @@ impl PlayerResource {
             }
 
             if frames_to_write == frames_to_read {
-                ReadOutcome::Full
+                ReadOutcome::Full {
+                    frames: frames_to_write,
+                }
             } else if eof_reached {
                 ReadOutcome::Partial(frames_to_write)
             } else {
                 for ch in output.iter_mut() {
                     ch[frames_to_write..frames_to_read].fill(0.0);
                 }
-                ReadOutcome::Full
+                ReadOutcome::Full {
+                    frames: frames_to_write,
+                }
             }
         } else if eof_reached {
             ReadOutcome::Eof
@@ -202,7 +211,7 @@ impl PlayerResource {
             for ch in output.iter_mut() {
                 ch[..range_len].fill(0.0);
             }
-            ReadOutcome::Full
+            ReadOutcome::Full { frames: 0 }
         }
     }
 

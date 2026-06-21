@@ -15,12 +15,18 @@ const HANDLE: f32 = 18.0;
 /// the handle, snaps to 0 within `range * 0.012`, and rounds to 0.01. Five
 /// ticks with a taller centre tick; an 18x18 glowing square handle.
 struct TsSlider {
-    tempo: f32,
-    range: f32,
     p: GuiPalette,
+    range: f32,
+    tempo: f32,
 }
 
 impl TsSlider {
+    fn to_x(&self, w: f32, v: f32) -> f32 {
+        let pad = HANDLE / 2.0;
+        let usable = (w - HANDLE).max(1.0);
+        pad + (((v + self.range) / (2.0 * self.range)).clamp(0.0, 1.0)) * usable
+    }
+
     fn value_at(&self, bounds: Rectangle, pos: Point) -> f32 {
         let pad = HANDLE / 2.0;
         let usable = (bounds.width - HANDLE).max(1.0);
@@ -31,50 +37,10 @@ impl TsSlider {
         }
         (v * 100.0).round() / 100.0
     }
-
-    fn to_x(&self, w: f32, v: f32) -> f32 {
-        let pad = HANDLE / 2.0;
-        let usable = (w - HANDLE).max(1.0);
-        pad + (((v + self.range) / (2.0 * self.range)).clamp(0.0, 1.0)) * usable
-    }
 }
 
 impl canvas::Program<Message> for TsSlider {
     type State = bool;
-
-    fn update(
-        &self,
-        dragging: &mut bool,
-        event: &canvas::Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<Message>> {
-        match event {
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                let pos = cursor.position_in(bounds)?;
-                *dragging = true;
-                let abs = Point::new(bounds.x + pos.x, bounds.y + pos.y);
-                Some(
-                    Action::publish(Message::Dj(DjMsg::SetTempo(self.value_at(bounds, abs))))
-                        .and_capture(),
-                )
-            }
-            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) if *dragging => {
-                let pos = cursor.position()?;
-                Some(
-                    Action::publish(Message::Dj(DjMsg::SetTempo(self.value_at(bounds, pos))))
-                        .and_capture(),
-                )
-            }
-            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
-                if *dragging =>
-            {
-                *dragging = false;
-                Some(Action::capture())
-            }
-            _ => None,
-        }
-    }
 
     fn draw(
         &self,
@@ -181,11 +147,45 @@ impl canvas::Program<Message> for TsSlider {
             mouse::Interaction::default()
         }
     }
+
+    fn update(
+        &self,
+        dragging: &mut bool,
+        event: &canvas::Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<Message>> {
+        match event {
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                let pos = cursor.position_in(bounds)?;
+                *dragging = true;
+                let abs = Point::new(bounds.x + pos.x, bounds.y + pos.y);
+                Some(
+                    Action::publish(Message::Dj(DjMsg::SetTempo(self.value_at(bounds, abs))))
+                        .and_capture(),
+                )
+            }
+            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) if *dragging => {
+                let pos = cursor.position()?;
+                Some(
+                    Action::publish(Message::Dj(DjMsg::SetTempo(self.value_at(bounds, pos))))
+                        .and_capture(),
+                )
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+                if *dragging =>
+            {
+                *dragging = false;
+                Some(Action::capture())
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Build the interactive timestretch slider for the DJ deck.
 pub(crate) fn ts_slider<'a>(tempo: f32, range: f32, p: GuiPalette) -> Element<'a, Message> {
-    Canvas::new(TsSlider { tempo, range, p })
+    Canvas::new(TsSlider { p, range, tempo })
         .width(Length::Fill)
         .height(Length::Fixed(30.0))
         .into()

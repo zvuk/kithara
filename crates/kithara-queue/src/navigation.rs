@@ -41,10 +41,23 @@ impl NavigationState {
         self.current_index
     }
 
+    /// Mark the queue exhausted without selecting a successor.
+    pub(crate) fn finish(&mut self) {
+        if let Some(current) = self.current_index {
+            add_to_history(&mut self.history, current);
+        }
+        self.current_index = None;
+    }
+
     /// Shuffle flag.
     #[must_use]
     pub fn is_shuffle_enabled(&self) -> bool {
         self.shuffle_enabled
+    }
+
+    /// Current index, or the last selected index after [`Self::finish`].
+    pub(crate) fn last_selected_index(&self) -> Option<usize> {
+        self.current_index.or_else(|| self.history.back().copied())
     }
 
     /// Advance to the next track.
@@ -190,6 +203,22 @@ mod tests {
         let mut nav = NavigationState::new();
         nav.select(2);
         assert_eq!(nav.next(3), None);
+    }
+
+    #[kithara::test]
+    fn finish_clears_current() {
+        let mut nav = NavigationState::new();
+        nav.select(2);
+        nav.finish();
+        assert_eq!(nav.current_index(), None);
+    }
+
+    #[kithara::test]
+    fn finish_preserves_last_selected_index() {
+        let mut nav = NavigationState::new();
+        nav.select(2);
+        nav.finish();
+        assert_eq!(nav.last_selected_index(), Some(2));
     }
 
     #[kithara::test]

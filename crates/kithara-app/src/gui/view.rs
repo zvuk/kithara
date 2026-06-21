@@ -59,6 +59,8 @@ impl Consts {
     const ALPHA_TAB_INACTIVE_HOVER: f32 = 0.8;
     const ALPHA_TAB_INACTIVE_PRESSED: f32 = 0.12;
     const ALPHA_TAB_STRIP_FILL: f32 = 0.5;
+    const ALPHA_TRANSPORT_HOVER: f32 = 0.6;
+    const ALPHA_TRANSPORT_PRESSED: f32 = 0.45;
     const BLINK_DIVISOR: u8 = 5;
     const BLINK_PERIOD: u64 = 2;
     const BORDER_RADIUS: f32 = 12.0;
@@ -86,6 +88,7 @@ impl Consts {
     const EQ_LABEL_FONT: f32 = 11.0;
     const EQ_MAX_DB: f32 = 6.0;
     const EQ_MIN_DB: f32 = -24.0;
+
     const EQ_RESET_FONT: f32 = 12.0;
     const EQ_RESET_PADDING_X: f32 = 8.0;
 
@@ -94,27 +97,26 @@ impl Consts {
 
     const EQ_STEP: f32 = 0.5;
     const EQ_VALUE_FONT: f32 = 9.0;
-
     const EQ_ZERO_THRESHOLD: f32 = 0.05;
     const HEADING_FONT: f32 = 16.0;
     const NOW_BITRATE_DOT_SIZE: f32 = 4.0;
     const NOW_BITRATE_FONT: f32 = 10.0;
     const NOW_COVER_SIZE: f32 = 88.0;
+
     const NOW_GRADIENT_END_ALPHA: f32 = 0.9;
     const NOW_GRADIENT_START_ALPHA: f32 = 0.8;
-
     const OUTER_PADDING: f32 = 18.0;
+    const PILL_PADDING_X: f32 = 8.0;
+
+    const PILL_PADDING_Y: f32 = 4.0;
+
     const PLAYLIST_INDEX_FONT: f32 = 13.0;
     const PLAYLIST_ITEM_PADDING_X: f32 = 10.0;
     const PLAYLIST_ITEM_PADDING_Y: f32 = 8.0;
-
     const PLAYLIST_MAX_NAME_CHARS: usize = 40;
 
-    const PILL_PADDING_X: f32 = 8.0;
-    const PILL_PADDING_Y: f32 = 4.0;
     const PLAYLIST_TRACK_FONT: f32 = 15.0;
     const SECONDS_PER_MINUTE: u32 = 60;
-
     const SECTION_PADDING: f32 = 12.0;
     const SEEK_STEP: f32 = 0.1;
     const SETTINGS_BODY_FONT: f32 = 13.0;
@@ -138,8 +140,6 @@ impl Consts {
     const TRANSPORT_GAP: f32 = 14.0;
     const TRANSPORT_PRIMARY_ICON: f32 = 22.0;
     const TRANSPORT_TOGGLE_ICON: f32 = 18.0;
-    const ALPHA_TRANSPORT_HOVER: f32 = 0.6;
-    const ALPHA_TRANSPORT_PRESSED: f32 = 0.45;
 
     const VOLUME_ICON_SIZE: f32 = 20.0;
     const VOLUME_LOW_THRESHOLD: f32 = 0.5;
@@ -328,36 +328,44 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
 
     let transport_row = row![
         transport_square_button(
-            Icon::Shuffle,
-            Consts::TRANSPORT_TOGGLE_ICON,
-            Consts::TRANSPORT_BTN_BASE,
-            p,
-            shuffle_active,
+            TransportButton {
+                icon: Icon::Shuffle,
+                icon_size: Consts::TRANSPORT_TOGGLE_ICON,
+                box_size: Consts::TRANSPORT_BTN_BASE,
+                p,
+                active: shuffle_active,
+            },
             Message::ToggleShuffle,
         ),
         transport_square_button(
-            Icon::SkipPrev,
-            Consts::TRANSPORT_PRIMARY_ICON,
-            Consts::TRANSPORT_BTN_LG,
-            p,
-            false,
+            TransportButton {
+                icon: Icon::SkipPrev,
+                icon_size: Consts::TRANSPORT_PRIMARY_ICON,
+                box_size: Consts::TRANSPORT_BTN_LG,
+                p,
+                active: false,
+            },
             Message::Prev,
         ),
         widgets::play_button(state.ui_state.playing, p, Message::TogglePlayPause),
         transport_square_button(
-            Icon::SkipNext,
-            Consts::TRANSPORT_PRIMARY_ICON,
-            Consts::TRANSPORT_BTN_LG,
-            p,
-            false,
+            TransportButton {
+                icon: Icon::SkipNext,
+                icon_size: Consts::TRANSPORT_PRIMARY_ICON,
+                box_size: Consts::TRANSPORT_BTN_LG,
+                p,
+                active: false,
+            },
             Message::Next,
         ),
         transport_square_button(
-            repeat_icon,
-            Consts::TRANSPORT_TOGGLE_ICON,
-            Consts::TRANSPORT_BTN_BASE,
-            p,
-            repeat_active,
+            TransportButton {
+                icon: repeat_icon,
+                icon_size: Consts::TRANSPORT_TOGGLE_ICON,
+                box_size: Consts::TRANSPORT_BTN_BASE,
+                p,
+                active: repeat_active,
+            },
             Message::ToggleRepeat,
         ),
     ]
@@ -372,7 +380,6 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
 
 fn view_speed(state: &Kithara) -> Element<'_, Message> {
     // A dead-band around 1.0x keeps the RESET pill from flickering while
-    // dragging through unity.
     const RESET_DEADBAND: f32 = 0.06;
     let p = state.palette;
     let rate = state.ui_state.selected_rate;
@@ -439,14 +446,16 @@ fn view_volume(state: &Kithara) -> Element<'_, Message> {
     container(
         row![
             icon_button(
-                volume_icon,
-                Consts::VOLUME_ICON_SIZE,
-                if state.ui_state.volume <= Consts::VOLUME_MUTE_THRESHOLD {
-                    p.muted
-                } else {
-                    p.accent
+                IconButtonStyle {
+                    icon: volume_icon,
+                    size: Consts::VOLUME_ICON_SIZE,
+                    color: if state.ui_state.volume <= Consts::VOLUME_MUTE_THRESHOLD {
+                        p.muted
+                    } else {
+                        p.accent
+                    },
+                    padding: Consts::TOGGLE_ICON_PADDING,
                 },
-                Consts::TOGGLE_ICON_PADDING,
                 Message::ToggleMute
             ),
             slider,
@@ -753,13 +762,22 @@ fn truncate_name(name: &str, max_chars: usize) -> String {
     }
 }
 
-fn icon_button(
-    icon: Icon,
-    size: f32,
+/// Glyph, size, tint, and padding for a ghost [`icon_button`].
+#[derive(Clone, Copy)]
+struct IconButtonStyle {
     color: Color,
+    icon: Icon,
     padding: f32,
-    message: Message,
-) -> Element<'static, Message> {
+    size: f32,
+}
+
+fn icon_button(style: IconButtonStyle, message: Message) -> Element<'static, Message> {
+    let IconButtonStyle {
+        icon,
+        size,
+        color,
+        padding,
+    } = style;
     let p = GuiPalette::from(crate::theme::Palette::default());
     button(icon.view(size, color))
         .padding(padding)
@@ -768,17 +786,27 @@ fn icon_button(
         .into()
 }
 
+/// Glyph, sizing, palette, and toggle state for a [`transport_square_button`].
+#[derive(Clone, Copy)]
+struct TransportButton {
+    p: GuiPalette,
+    icon: Icon,
+    active: bool,
+    box_size: f32,
+    icon_size: f32,
+}
+
 /// Secondary / toggle transport button: a fixed-size rounded square. `active`
 /// drives the toggle highlight (accent fill) for shuffle and repeat; prev/next
 /// pass `false`. Hover paints a faint panel fill so the target reads as live.
-fn transport_square_button(
-    icon: Icon,
-    icon_size: f32,
-    box_size: f32,
-    p: GuiPalette,
-    active: bool,
-    message: Message,
-) -> Element<'static, Message> {
+fn transport_square_button(cfg: TransportButton, message: Message) -> Element<'static, Message> {
+    let TransportButton {
+        icon,
+        icon_size,
+        box_size,
+        p,
+        active,
+    } = cfg;
     let icon_color = if active { p.accent } else { p.text_dim };
     button(
         container(icon.view(icon_size, icon_color))

@@ -15,6 +15,16 @@ workspace_exclude = ["kithara-fuzz"]
 workspace_hack_crate = "kithara-workspace-hack"
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
 
+[release]
+# Apple release flow (cargo xtask release prepare|publish).
+github_repo = "zvuk/kithara"
+gitlab_host = "gitlab.zvq.me"
+gitlab_project = "disrupt/kithara"
+gitlab_package = "kithara"
+asset = "KitharaFFIInternal.xcframework.zip"
+single_asset = "Kithara.xcframework.zip"
+podspec = "Kithara.podspec"
+
 [lint_exclude]
 # Test code dropped from EVERY lint namespace (arch, style, idioms) so baselines
 # show production debt only. `#[cfg(test)]` blocks (inline `mod tests {}`, test
@@ -34,3 +44,11 @@ paths = [
     "crates/kithara-fuzz/**",
 ]
 modules = []
+# Hard-correctness rules that must scan the FULL tree (tests included),
+# bypassing the `paths` exclusions above. Each runs in a second ast-grep pass
+# with no exclude globs; the rule's own `files:`/`ignores:` scope it.
+scan_all_rules = [
+    "arch.no-direct-time",
+    "arch.no-direct-thread-wait",
+    "arch.no-flash-time-hacks",
+]

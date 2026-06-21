@@ -5,7 +5,7 @@ use std::{
 };
 
 use firewheel::FirewheelCtx;
-use kithara_platform::{Mutex, sync::mpsc};
+use kithara_platform::sync::{Mutex, mpsc};
 use tracing::warn;
 
 use super::{
@@ -37,17 +37,17 @@ impl SessionClient {
                 Ok(run_cmd(state, cmd))
             })
         } else {
-            let guard = wasm_worker_bridge::TX.lock_sync();
+            let guard = wasm_worker_bridge::TX.lock();
             let Some(ref tx) = *guard else {
                 return Err(PlayError::Internal("worker channel not initialised".into()));
             };
             let tx = tx.clone();
             drop(guard);
             let (reply_tx, reply_rx) = mpsc::channel();
-            tx.send_sync(CmdMsg { cmd, reply_tx })
+            tx.send(CmdMsg { cmd, reply_tx })
                 .map_err(|_| PlayError::Internal("session host gone".into()))?;
             reply_rx
-                .recv_sync()
+                .recv()
                 .map_err(|_| PlayError::Internal("session host gone (reply)".into()))
         }
     }
@@ -89,7 +89,7 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
             return client.clone();
         }
 
-        let is_local = wasm_worker_bridge::TX.lock_sync().is_none();
+        let is_local = wasm_worker_bridge::TX.lock().is_none();
 
         if is_local {
             WASM_SESSION_STATE.with(|state| {
@@ -112,8 +112,8 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
 /// Must be called **once** on the main thread **before** any Worker is spawned.
 pub(crate) fn init_worker_channel() {
     let (tx, rx) = mpsc::channel();
-    *wasm_worker_bridge::TX.lock_sync() = Some(tx);
-    *wasm_worker_bridge::RX.lock_sync() = Some(rx);
+    *wasm_worker_bridge::TX.lock() = Some(tx);
+    *wasm_worker_bridge::RX.lock() = Some(rx);
 }
 
 /// Poll pending session commands from Workers and run graph tick.
@@ -126,17 +126,17 @@ pub(crate) fn tick_and_poll_remote() {
             return;
         };
 
-        let rx_guard = wasm_worker_bridge::RX.lock_sync();
+        let rx_guard = wasm_worker_bridge::RX.lock();
 
         if let Some(ref rx) = *rx_guard {
-            while let Ok(msg) = rx.try_recv() {
+            for msg in rx.try_iter() {
                 let reply = run_cmd(state, msg.cmd);
                 if let Reply::SlotAllocated(_, _, ref shared, _) = reply {
                     BRIDGE_PLAYER_STATE.with(|ps| {
                         *ps.borrow_mut() = Some(Arc::clone(shared));
                     });
                 }
-                let _ = msg.reply_tx.send_sync(reply);
+                let _ = msg.reply_tx.send(reply);
             }
         }
         drop(rx_guard);

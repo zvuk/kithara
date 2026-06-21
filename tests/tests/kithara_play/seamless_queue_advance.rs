@@ -9,7 +9,7 @@ use kithara_integration_tests::{
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
     temp_dir,
 };
-use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_platform::time::{self, Duration, Instant};
 use kithara_play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig};
 
 use super::offline_player_harness::OfflinePlayerHarness;
@@ -55,7 +55,7 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
         harness.player(),
         &server,
         temp_dir.path(),
-        PackagedSignal::Sine { freq_hz: 1_000.0 },
+        PackagedSignal::Sine { freq_hz: 3_000.0 },
         u64::try_from(expected_visible_frames).expect("visible frame count fits u64"),
     )
     .await;
@@ -266,7 +266,7 @@ async fn create_gapless_hls_resource(
     let mut resource = Resource::new(config)
         .await
         .expect("open HLS resource for seamless queue fixture");
-    resource.preload().await;
+    let _ = resource.preload().await;
     resource
 }
 
@@ -285,6 +285,13 @@ async fn render_until_second_item_end(
     harness: &OfflinePlayerHarness,
 ) -> (Vec<f32>, Vec<TimedPlayerEvent>) {
     let deadline = Instant::now() + Duration::from_secs(10);
+    // Pace each rendered block at its real audio duration so the decode worker
+    // stays ahead and the ring never underruns. Under flash a fixed sub-block
+    // sleep (e.g. 5 ms) advances virtual time faster than one block of audio is
+    // consumed, so the render loop outruns the producer — most visibly at the
+    // gapless handover, inflating the second track with underrun zero-fill.
+    let block_budget =
+        Duration::from_secs_f64(f64::from(BLOCK_FRAMES) / f64::from(GAPLESS_SAMPLE_RATE));
     let mut rendered = Vec::new();
     let mut rendered_frames = 0usize;
     let mut events = Vec::new();
@@ -325,7 +332,7 @@ async fn render_until_second_item_end(
             Instant::now() <= deadline,
             "timed out waiting for queue to finish; events={events:?}"
         );
-        sleep(Duration::from_millis(5)).await;
+        time::sleep(block_budget).await;
     }
 }
 

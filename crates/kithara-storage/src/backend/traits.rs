@@ -139,7 +139,7 @@ pub struct DriverState {
 /// — the duplication is intentional: `MmapOptions` is the canonical
 /// constructor type users reach via `kithara_storage::MmapOptions`, while
 /// the trait associated type is the bound that lets `Resource::open`
-/// stay generic. See `crates/kithara-storage/README.md` for the rationale.
+/// stay generic. See `crates/kithara-storage/CONTEXT.md` for the rationale.
 pub trait Driver: DriverIo {
     /// Configuration needed to open/create a driver instance.
     type Options: Send;

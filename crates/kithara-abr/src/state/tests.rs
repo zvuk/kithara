@@ -1,9 +1,12 @@
-use std::{sync::Arc, time::Duration as StdDuration};
+use std::sync::Arc;
 
 use kithara_events::{
     AbrMode, AbrReason, BandwidthSource, VariantDuration, VariantIndex, VariantInfo,
 };
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, Duration as StdDuration, Instant},
+};
 use kithara_test_utils::kithara;
 use proptest::prelude::*;
 
@@ -353,6 +356,76 @@ fn apply_decision_after_unlock_applies_still_pending_intent() {
     assert_eq!(state.current_variant_index(), VariantIndex::new(2));
 }
 
+/// Ping-pong root (#107): a queued `Manual(w)` boundary switch must die
+/// the moment the user re-pins to another variant. Without the supersede
+/// rule the slot is only cleared by `apply_decision` or a seek, so a
+/// later boundary commits the superseded pin against the user's latest
+/// choice.
+#[kithara::test]
+fn set_mode_clears_superseded_pending() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.set_mode(AbrMode::Manual(VariantIndex::new(2)));
+    state.request_target(VariantIndex::new(2), AbrReason::ManualOverride);
+    state.set_mode(AbrMode::Manual(VariantIndex::new(0)));
+    assert_eq!(
+        state.pending_target(),
+        None,
+        "explicit set_mode must supersede the queued switch intent"
+    );
+    assert!(
+        state
+            .peek_pending_decision(state.current_variant_index())
+            .is_none(),
+        "no boundary commit may surface a superseded pin"
+    );
+}
+
+/// Same supersede rule when the re-pin lands mid-seek (state locked):
+/// the queued intent dies at `set_mode`, not at unlock — otherwise the
+/// post-unlock boundary would commit the stale pin.
+#[kithara::test]
+fn set_mode_under_lock_clears_superseded_pending() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.set_mode(AbrMode::Manual(VariantIndex::new(2)));
+    state.request_target(VariantIndex::new(2), AbrReason::ManualOverride);
+    state.lock();
+    state.set_mode(AbrMode::Manual(VariantIndex::new(0)));
+    state.unlock();
+    assert_eq!(
+        state.pending_target(),
+        None,
+        "post-unlock boundary must not commit a pin superseded during the lock"
+    );
+}
+
+/// Race half of the supersede rule: a tick that read the old mode can
+/// reach `request_target` after `set_mode` already cleared the slot. A
+/// manual pin admits exactly one pending target — its own index — so a
+/// conflicting write is refused instead of resurrecting the stale intent
+/// (`Stay` arms never clean the slot, so it would stay polluted).
+#[kithara::test]
+fn request_target_refuses_target_conflicting_with_manual_pin() {
+    let state = AbrState::new(AbrMode::Manual(VariantIndex::new(0)));
+    state.request_target(VariantIndex::new(2), AbrReason::ManualOverride);
+    assert_eq!(
+        state.pending_target(),
+        None,
+        "a request derived from a superseded mode must not enter the slot"
+    );
+}
+
+#[kithara::test]
+fn request_target_accepts_manual_pin_target() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.set_mode(AbrMode::Manual(VariantIndex::new(2)));
+    state.request_target(VariantIndex::new(2), AbrReason::ManualOverride);
+    assert_eq!(
+        state.pending_target(),
+        Some(VariantIndex::new(2)),
+        "the pinned target itself must queue normally"
+    );
+}
+
 #[kithara::test]
 fn min_switch_interval_prevents_oscillation() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
@@ -448,7 +521,7 @@ async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
         .min_switch_interval(Duration::ZERO)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
-    let controller = AbrController::new(settings);
+    let controller = AbrController::new(settings, CancelToken::never());
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         state: Arc::clone(&state),
@@ -476,7 +549,7 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
         min_buffer_for_up_switch: Duration::ZERO,
         ..AbrSettings::default()
     };
-    let controller = AbrController::new(settings);
+    let controller = AbrController::new(settings, CancelToken::never());
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         state: Arc::clone(&state),
@@ -489,11 +562,48 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
     drop(handle);
 }
 
+/// Full production path of the #107 ping-pong: pinning to 2 queues a
+/// boundary switch via the synchronous tick inside `set_mode`; re-pinning
+/// back to the current variant must kill that queued switch instead of
+/// leaving it to commit at the next boundary against the user's latest
+/// choice.
+#[kithara::test(tokio)]
+async fn set_mode_back_to_current_kills_queued_switch() {
+    let controller = AbrController::new(settings_fast(), CancelToken::never());
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        state: Arc::clone(&state),
+        variants: test_variants_3(),
+    });
+    let handle = controller.register(&peer);
+    handle
+        .set_mode(AbrMode::Manual(VariantIndex::new(2)))
+        .expect("variant 2 exists");
+    assert_eq!(
+        state.pending_target(),
+        Some(VariantIndex::new(2)),
+        "manual pin must queue a boundary switch"
+    );
+    handle
+        .set_mode(AbrMode::Manual(VariantIndex::new(0)))
+        .expect("variant 0 exists");
+    assert_eq!(
+        state.pending_target(),
+        None,
+        "re-pin to the current variant must supersede the queued switch"
+    );
+    assert!(handle.peek_pending_decision().is_none());
+    drop(handle);
+}
+
 #[kithara::test(tokio)]
 async fn lock_refcount_holds_across_record_bandwidth() {
     let settings = settings_fast();
-    let controller =
-        AbrController::with_estimator(settings, Arc::new(ThroughputEstimator::new()) as Arc<_>);
+    let controller = AbrController::with_estimator(
+        settings,
+        Arc::new(ThroughputEstimator::new()) as Arc<_>,
+        CancelToken::never(),
+    );
 
     struct LockedPeer {
         state: Arc<AbrState>,

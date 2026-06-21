@@ -1,4 +1,4 @@
-use std::{io::Read, time::Duration};
+use std::io::Read;
 
 use kithara::{
     assets::StoreOptions,
@@ -10,7 +10,7 @@ use kithara_integration_tests::{
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
-use kithara_platform::{CancellationToken, time::sleep, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 
 #[kithara::test(
     tokio,
@@ -27,7 +27,7 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
     .await;
 
     let url = server.url("/master.m3u8");
-    let cancel_token = CancellationToken::default();
+    let cancel_token = CancelToken::never();
 
     let config = HlsConfig::for_url(url.clone())
         .cancel(cancel_token.clone())
@@ -36,8 +36,6 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
         .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
-
-    sleep(Duration::from_secs(2)).await;
 
     let mut all_bytes = Vec::new();
     let mut read_buf = vec![0u8; 64 * 1024];

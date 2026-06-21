@@ -5,7 +5,7 @@ use std::io::{Read, Seek, SeekFrom};
 use kithara_integration_tests::{
     TestTempDir, hls_fixture::HlsStreamBuilder, hls_server::TestServer, rt_cancel, temp_dir,
 };
-use kithara_platform::{CancellationToken, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
@@ -43,7 +43,7 @@ fn variant_from_data(data: &[u8]) -> Option<usize> {
 #[case(2)]
 async fn manual_variant_returns_correct_data(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
     #[case] variant: usize,
 ) {
     let server = TestServer::new().await;
@@ -85,7 +85,7 @@ async fn manual_variant_returns_correct_data(
 )]
 async fn sequential_read_across_segments_maintains_variant(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
@@ -150,7 +150,7 @@ async fn sequential_read_across_segments_maintains_variant(
 )]
 async fn after_seek_sequential_reads_maintain_variant(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
 ) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
@@ -197,10 +197,7 @@ async fn after_seek_sequential_reads_maintain_variant(
     timeout(Duration::from_secs(15)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn multiple_seeks_maintain_correct_variant(
-    temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
-) {
+async fn multiple_seeks_maintain_correct_variant(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
         .build(&server, temp_dir.path(), rt_cancel)
@@ -282,7 +279,7 @@ async fn multiple_seeks_maintain_correct_variant(
 #[cfg_attr(not(target_arch = "wasm32"), case(400_000))]
 async fn seek_to_segment_boundary_reads_correct_segment(
     temp_dir: TestTempDir,
-    rt_cancel: CancellationToken,
+    rt_cancel: CancelToken,
     #[case] position: u64,
 ) {
     let server = TestServer::new().await;

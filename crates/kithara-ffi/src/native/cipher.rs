@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use kithara_drm::UniqueBinaryCipher as RustCipher;
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 
 use crate::observer::FfiKeyProcessor;
 
@@ -33,7 +33,7 @@ impl FfiCipher {
 
     /// Decrypt data using this cipher.
     pub fn decrypt(&self, data: Vec<u8>) -> Vec<u8> {
-        self.inner.lock_sync().decrypt(&Bytes::from(data)).to_vec()
+        self.inner.lock().decrypt(&Bytes::from(data)).to_vec()
     }
 }
 

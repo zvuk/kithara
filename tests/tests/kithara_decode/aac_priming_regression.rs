@@ -54,12 +54,12 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk() {
     let outcome = decoder.next_chunk().expect("decode chunk 0");
     let chunk = PcmChunk::try_from(outcome).expect("chunk 0 must be a PCM chunk, not EOS");
     assert!(
-        !chunk.pcm.is_empty(),
+        !chunk.samples.is_empty(),
         "AAC chunk 0 must not be empty after priming strip",
     );
 
     let max_abs = chunk
-        .pcm
+        .samples
         .iter()
         .map(|sample| sample.abs())
         .fold(0.0f32, f32::max);

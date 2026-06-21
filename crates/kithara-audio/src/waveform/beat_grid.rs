@@ -6,14 +6,14 @@ use crate::blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer};
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct BeatGrid {
-    /// Stable-window tempo of the track, beats per minute.
-    pub bpm: f64,
     /// Beat positions in source frames, ascending.
     pub beats: Vec<u64>,
     /// Downbeat (bar start) positions in source frames, ascending.
     pub downbeats: Vec<u64>,
     /// Piecewise-constant stretch segments, sorted and non-overlapping.
     pub segments: Vec<GridSegment>,
+    /// Stable-window tempo of the track, beats per minute.
+    pub bpm: f64,
 }
 
 /// Wire/disk format version for the [`BeatGrid`] blob. Bump when the
@@ -25,47 +25,36 @@ impl BeatGrid {
     #[must_use]
     pub fn new(bpm: f64, beats: Vec<u64>, downbeats: Vec<u64>, segments: Vec<GridSegment>) -> Self {
         Self {
-            bpm,
             beats,
             downbeats,
             segments,
+            bpm,
         }
     }
+}
 
-    /// Serialize to a versioned little-endian blob: `u32` version, `f64`
-    /// bpm, then the three length-prefixed position/segment lists.
-    #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        blob::to_bytes(self)
+/// Serialize to a versioned little-endian blob: `u32` version, `f64`
+/// bpm, then the three length-prefixed position/segment lists.
+impl From<&BeatGrid> for Vec<u8> {
+    fn from(grid: &BeatGrid) -> Self {
+        blob::to_bytes(grid)
     }
+}
 
-    /// Parse a blob produced by [`Self::to_bytes`].
-    ///
-    /// # Errors
-    /// [`BlobError::Version`] on a stale header, [`BlobError::Corrupt`] on a
-    /// malformed body.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, BlobError> {
+/// Parse a blob produced by `Vec::<u8>::from(&BeatGrid)`.
+///
+/// Yields [`BlobError::Version`] on a stale header, [`BlobError::Corrupt`] on a
+/// malformed body.
+impl TryFrom<&[u8]> for BeatGrid {
+    type Error = BlobError;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, BlobError> {
         blob::from_bytes(bytes)
     }
 }
 
 impl Blob for BeatGrid {
     const VERSION: u32 = BEAT_GRID_BYTES_VERSION;
-
-    fn encode(&self, w: &mut Writer<'_>) {
-        w.reserve(
-            8 + 3 * 8 + 8 * (self.beats.len() + self.downbeats.len()) + 24 * self.segments.len(),
-        );
-        w.write_f64(self.bpm);
-        w.write_frames(&self.beats);
-        w.write_frames(&self.downbeats);
-        w.write_len(self.segments.len());
-        for segment in &self.segments {
-            w.write_u64(segment.start_frame);
-            w.write_u64(segment.end_frame);
-            w.write_f64(segment.ratio_correction);
-        }
-    }
 
     fn decode(r: &mut Reader<'_>) -> Result<Self, BlobError> {
         let bpm = read_finite(r)?;
@@ -81,11 +70,26 @@ impl Blob for BeatGrid {
             });
         }
         Ok(Self {
-            bpm,
             beats,
             downbeats,
             segments,
+            bpm,
         })
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) {
+        w.reserve(
+            8 + 3 * 8 + 8 * (self.beats.len() + self.downbeats.len()) + 24 * self.segments.len(),
+        );
+        w.write_f64(self.bpm);
+        w.write_frames(&self.beats);
+        w.write_frames(&self.downbeats);
+        w.write_len(self.segments.len());
+        for segment in &self.segments {
+            w.write_u64(segment.start_frame);
+            w.write_u64(segment.end_frame);
+            w.write_f64(segment.ratio_correction);
+        }
     }
 }
 
@@ -104,10 +108,10 @@ fn read_finite(r: &mut Reader<'_>) -> Result<f64, BlobError> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct GridSegment {
-    pub start_frame: u64,
-    pub end_frame: u64,
     /// `nominal_bar / fitted_bar`; 1.0 = the region already sits on the grid.
     pub ratio_correction: f64,
+    pub end_frame: u64,
+    pub start_frame: u64,
 }
 
 impl GridSegment {
@@ -115,9 +119,9 @@ impl GridSegment {
     #[must_use]
     pub fn new(start_frame: u64, end_frame: u64, ratio_correction: f64) -> Self {
         Self {
-            start_frame,
-            end_frame,
             ratio_correction,
+            end_frame,
+            start_frame,
         }
     }
 }
@@ -151,7 +155,8 @@ mod bytes_tests {
     #[kithara::test]
     fn round_trips() {
         let grid = sample();
-        let back = BeatGrid::from_bytes(&grid.to_bytes()).expect("valid blob round-trips");
+        let bytes = Vec::<u8>::from(&grid);
+        let back = BeatGrid::try_from(bytes.as_slice()).expect("valid blob round-trips");
         assert_eq!(back, grid);
     }
 
@@ -163,30 +168,31 @@ mod bytes_tests {
             downbeats: Vec::new(),
             segments: Vec::new(),
         };
-        let back = BeatGrid::from_bytes(&grid.to_bytes()).expect("empty blob round-trips");
+        let bytes = Vec::<u8>::from(&grid);
+        let back = BeatGrid::try_from(bytes.as_slice()).expect("empty blob round-trips");
         assert_eq!(back, grid);
     }
 
     #[kithara::test]
     fn rejects_wrong_version() {
-        let mut bytes = sample().to_bytes();
+        let mut bytes = Vec::<u8>::from(&sample());
         bytes[0] = bytes[0].wrapping_add(1);
         assert!(matches!(
-            BeatGrid::from_bytes(&bytes),
+            BeatGrid::try_from(bytes.as_slice()),
             Err(BlobError::Version { .. })
         ));
     }
 
     #[kithara::test]
     fn rejects_corrupt_blobs() {
-        let corrupt = |bytes: &[u8]| matches!(BeatGrid::from_bytes(bytes), Err(BlobError::Corrupt));
+        let corrupt = |bytes: &[u8]| matches!(BeatGrid::try_from(bytes), Err(BlobError::Corrupt));
         assert!(corrupt(&[0, 0]), "shorter than the version header");
 
-        let mut truncated = sample().to_bytes();
+        let mut truncated = Vec::<u8>::from(&sample());
         truncated.pop();
         assert!(corrupt(&truncated), "truncated body");
 
-        let mut trailing = sample().to_bytes();
+        let mut trailing = Vec::<u8>::from(&sample());
         trailing.push(0);
         assert!(corrupt(&trailing), "trailing garbage");
     }

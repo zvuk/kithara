@@ -1,21 +1,25 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use kithara_app::{baked, config::AppConfig, sources::build_source};
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_integration_tests::{TestTempDir, Xorshift64, kithara, offline::OfflineSession};
+use kithara_integration_tests::{
+    TestTempDir, Xorshift64, kithara,
+    offline::OfflineSession,
+    waits::{wait_for_position_at_least, wait_for_position_near},
+};
 use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancellationToken;
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, sleep, timeout},
+};
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::{
-    sync::OnceCell,
-    time::{sleep, timeout},
-};
+use tokio::sync::OnceCell;
 
 /// Per-process singleton: one offline audio session, one Downloader,
 /// one Queue. `#[case]` tests inside this file share it, so init cost
@@ -61,11 +65,11 @@ async fn shared_test_ctx() -> &'static TestCtx {
             let net = NetOptions::builder().is_insecure(true).build();
             let downloader = Downloader::new(
                 DownloaderConfig::builder()
-                    .client(HttpClient::new(net, CancellationToken::default()))
+                    .client(HttpClient::new(net, CancelToken::never()))
                     .build(),
             );
-            let flush_hub = FlushHub::new(CancellationToken::default(), FlushPolicy::default());
-            let config = AppConfig::new(downloader, flush_hub, CancellationToken::default());
+            let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
+            let config = AppConfig::new(downloader, flush_hub, CancelToken::never());
             let player = Arc::new(PlayerImpl::new(
                 PlayerConfig::builder()
                     .session(OfflineSession::arc_auto())
@@ -136,53 +140,6 @@ async fn wait_for_status(
     }
 }
 
-async fn wait_for_position_at_least(
-    queue: &Queue,
-    min_secs: f64,
-    deadline: Duration,
-) -> Result<(), String> {
-    let start = std::time::Instant::now();
-    loop {
-        if let Some(pos) = queue.position_seconds()
-            && pos >= min_secs
-        {
-            return Ok(());
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "position stayed below {min_secs:.2}s for {:?} (last: {:?})",
-                deadline,
-                queue.position_seconds()
-            ));
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
-}
-
-async fn wait_for_position_near(
-    queue: &Queue,
-    target: f64,
-    tolerance: f64,
-    deadline: Duration,
-) -> Result<(), String> {
-    let start = std::time::Instant::now();
-    loop {
-        if let Some(pos) = queue.position_seconds()
-            && (pos - target).abs() < tolerance
-        {
-            return Ok(());
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "position never reached {target:.2}s (±{tolerance:.2}) in {:?} (last: {:?})",
-                deadline,
-                queue.position_seconds()
-            ));
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
-}
-
 async fn sample_positions(queue: &Queue, count: usize, interval: Duration) -> Vec<f64> {
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
@@ -204,6 +161,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
 /// For each URL in the production playlist: load → play → seek ×3
 /// random → position consistency. Isolates track-specific regressions
 /// (DRM 403, MP3 seek-near-end hang, position drift).
+// flash(false): real-CDN e2e; sleeps are wall-clock gain windows racing real sockets.
 #[kithara::test(tokio)]
 #[ignore = "requires silvercomet.top real network — run with --include-ignored"]
 #[case::silvercomet_mp3_symphonia(
@@ -551,16 +509,18 @@ async fn track_plays_end_to_end(
             .await
             .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail [{url}]: {e}"));
         let before = ctx.queue.position_seconds().unwrap_or(0.0);
-        sleep(Duration::from_secs(2)).await;
+        wait_for_position_at_least(&ctx.queue, before + 0.5, Duration::from_secs(5))
+            .await
+            .unwrap_or_else(|e| panic!("seek #{i} hang [{url}]: {e}"));
         let after = ctx.queue.position_seconds().unwrap_or(0.0);
         assert!(
             after - before >= 0.5,
-            "seek #{i} hang [{url}]: {before:.2}→{after:.2} over 2s"
+            "seek #{i} hang [{url}]: {before:.2}→{after:.2}"
         );
     }
 
     let start_pos = ctx.queue.position_seconds().unwrap_or(0.0);
-    sleep(Duration::from_secs(2)).await;
+    time::sleep(Duration::from_secs(2)).await;
     let end_pos = ctx.queue.position_seconds().unwrap_or(0.0);
     let gain = end_pos - start_pos;
     assert!(
@@ -602,6 +562,7 @@ where
 /// failures are collected and reported in a structured final panic
 /// so DRM regressions surface as a list instead of killing the whole
 /// test at the first bad entry.
+// flash(false): real-CDN e2e; sleeps are wall-clock pause/gain windows racing real sockets.
 #[kithara::test(tokio)]
 #[ignore = "requires AppConfig::DEFAULT_TRACKS real-network URLs (incl. silvercomet + DRM) — run with --include-ignored"]
 #[case::symphonia(DecoderBackend::Symphonia)]
@@ -647,14 +608,16 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
 
     let before_pause = ctx.queue.position_seconds().unwrap_or(0.0);
     ctx.queue.pause();
-    sleep(Duration::from_secs(2)).await;
+    time::sleep(Duration::from_secs(2)).await;
     let during_pause = ctx.queue.position_seconds().unwrap_or(0.0);
     assert!(
         (during_pause - before_pause).abs() < 0.5,
         "position drifted during pause: {before_pause:.2} → {during_pause:.2}"
     );
     ctx.queue.play();
-    sleep(Duration::from_millis(500)).await;
+    wait_for_position_at_least(&ctx.queue, during_pause + 0.01, Duration::from_secs(5))
+        .await
+        .expect("resume did not advance position");
     let after_resume = ctx.queue.position_seconds().unwrap_or(0.0);
     assert!(
         after_resume >= during_pause - 0.1,

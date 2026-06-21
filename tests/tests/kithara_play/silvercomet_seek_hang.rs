@@ -13,8 +13,8 @@ use kithara::{
 use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{offline::OfflinePlayer, temp_dir};
 use kithara_platform::{
-    CancellationToken, thread,
-    time::{Duration, Instant},
+    CancelToken, thread,
+    time::{Duration, Instant, timeout},
 };
 
 use crate::common::test_defaults::Consts as Shared;
@@ -108,7 +108,7 @@ fn fresh_downloader() -> Downloader {
     let net = NetOptions::builder().is_insecure(true).build();
     Downloader::new(
         DownloaderConfig::builder()
-            .client(HttpClient::new(net, CancellationToken::default()))
+            .client(HttpClient::new(net, CancelToken::never()))
             .build(),
     )
 }
@@ -132,7 +132,7 @@ async fn build_resource(
     let mut resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));
-    tokio::time::timeout(Duration::from_secs(15), resource.preload())
+    timeout(Duration::from_secs(15), resource.preload())
         .await
         .unwrap_or_else(|_| panic!("Resource::preload({url}) timed out after 15s"))
         .unwrap_or_else(|err| panic!("Resource::preload({url}) failed: {err}"));
@@ -333,8 +333,12 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             );
         }
 
-        let wav_path =
-            std::env::temp_dir().join(format!("kithara_silvercomet_seek_iter_{iter}.wav"));
+        // Per-process debug dump path (nextest is process-per-test) so parallel
+        // tests and stale runs never write the same fixed scratch file.
+        let wav_path = std::env::temp_dir().join(format!(
+            "kithara_silvercomet_seek_iter_{iter}_{}.wav",
+            std::process::id()
+        ));
         write_wav_f32(
             &wav_path,
             &iteration_samples,

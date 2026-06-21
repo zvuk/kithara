@@ -17,7 +17,9 @@ final class SeekHandler: SeekCallback, @unchecked Sendable {
 
 @MainActor
 final class PlaygroundModel: ObservableObject {
-    @Published var url = "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview116/v4/42/1e/0d/421e0d16-0bc4-f4d6-7ad9-9b16810639bc/mzaf_16772981048115664645.plus.aac.p.m4a"
+    @Published var url = "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview116/" +
+        "v4/42/1e/0d/421e0d16-0bc4-f4d6-7ad9-9b16810639bc/" +
+        "mzaf_16772981048115664645.plus.aac.p.m4a"
     @Published var status = "unknown"
     @Published var currentTime: Double = 0
     @Published var duration: Double = 1
@@ -41,7 +43,7 @@ final class PlaygroundModel: ObservableObject {
                 case let .durationChanged(seconds):
                     self.duration = max(seconds, 1)
                 case let .statusChanged(value):
-                    self.status = "\(PlayerStatus(ffi: value))"
+                    self.status = "\(value)"
                 case let .rateChanged(value):
                     self.rate = value
                 case let .error(message):
@@ -62,8 +64,6 @@ final class PlaygroundModel: ObservableObject {
                 self?.log = "Item error: \(message)"
             }
             .store(in: &cancellables)
-
-        item.load()
 
         do {
             player.removeAllItems()
@@ -87,7 +87,7 @@ final class PlaygroundModel: ObservableObject {
 
     func seek() {
         let target = currentTime
-        player.seek(to: target, callback: SeekHandler { [weak self] done in
+        player.seek(to: target, tolerance: nil, completionHandler: SeekHandler { [weak self] done in
             Task { @MainActor in
                 self?.log = done ? "Seek done: \(Int(target))s" : "Seek failed"
             }
@@ -104,7 +104,7 @@ final class PlaygroundModel: ObservableObject {
     }
 
     func setRate(_ value: Float) {
-        player.defaultRate = value
+        player.playingRate = value
         player.play()
         rate = value
     }

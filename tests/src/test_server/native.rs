@@ -1,10 +1,16 @@
 use std::{env, sync::Arc};
 
 use axum::{Router, routing::get};
+use kithara_platform::{
+    time::{Duration, sleep},
+    tokio::task::spawn,
+};
 use tower_http::cors::CorsLayer;
+use tracing::trace;
 use url::Url;
 
 use crate::{
+    fixture_protocol::DelayRule,
     hls_url::HlsSpec,
     http_server::TestHttpServer,
     routes::{
@@ -15,7 +21,7 @@ use crate::{
     signal_spec::{SignalKind as InternalSignalKind, parse_signal_request},
     signal_url::{SignalKind, SignalSpec, signal_path},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
-    test_server_state::{FixtureBehavior, TestServerState},
+    test_server_state::{DelayGate, FixtureBehavior, InitGate, SegmentGate, TestServerState},
 };
 
 /// Facade over the process-global shared test server.
@@ -150,6 +156,161 @@ impl TestServerHelper {
             base_url: self.base_url.clone(),
             token,
         }
+    }
+
+    /// Register a withhold gate for one media segment of the fixture behind
+    /// `hls_token`, returning a handle that releases it and reports how many
+    /// segment GETs it has parked. The matching GET response is withheld until
+    /// [`SegmentGateHandle::release`] — a deterministic, release-driven seam
+    /// (no timers) for "this segment has not arrived yet" scenarios.
+    #[must_use]
+    pub fn register_segment_gate(
+        &self,
+        hls_token: &str,
+        variant: usize,
+        segment: usize,
+    ) -> SegmentGateHandle {
+        let gate = self
+            .state
+            .register_segment_gate(hls_token, variant, segment);
+        SegmentGateHandle { gate }
+    }
+
+    /// Register a withhold gate for the init (`EXT-X-MAP`) segment of one
+    /// variant of the fixture behind `hls_token`, returning a handle that
+    /// releases it and reports how many init GETs it has parked. The matching
+    /// init GET response is withheld until [`InitGateHandle::release`].
+    ///
+    /// The off-RT blocking construction read (`Audio::new`, inside
+    /// `Resource::new`) reads the init body, so a held init gate parks that read
+    /// and keeps the owning track's loader in `TrackStatus::Loading` — a
+    /// release-driven lever (no timers, no wall-clock segment delays) for "this
+    /// track is still constructing" scenarios.
+    #[must_use]
+    pub fn register_init_gate(&self, hls_token: &str, variant: usize) -> InitGateHandle {
+        let gate = self.state.register_init_gate(hls_token, variant);
+        InitGateHandle { gate }
+    }
+
+    /// Arm a virtual-time delay gate for every `(variant, segment)` of `hls_token`
+    /// whose `delay_rules` resolve to a non-zero delay, and spawn its flash-aware
+    /// releaser. Called from the test's flash-ambient setup (`HlsTestServer::new`),
+    /// so each releaser inherits `FLASH_AMBIENT` via the platform async [`spawn`]
+    /// chokepoint and its `sleep` runs on VIRTUAL time — the slow-variant delay
+    /// the client observes is engine-backed, not real wall-clock.
+    pub fn arm_delay_gates(
+        &self,
+        hls_token: &str,
+        variant_count: usize,
+        segments_per_variant: usize,
+        delay_rules: &[DelayRule],
+    ) {
+        if delay_rules.is_empty() {
+            return;
+        }
+        for variant in 0..variant_count {
+            for segment in 0..segments_per_variant {
+                let Some(delay_ms) = delay_rules
+                    .iter()
+                    .find_map(|rule| rule.matches(variant, segment))
+                    .filter(|&ms| ms > 0)
+                else {
+                    continue;
+                };
+                let gate = self.state.register_delay_gate(hls_token, variant, segment);
+                spawn_delay_releaser(gate, delay_ms, variant, segment);
+            }
+        }
+    }
+}
+
+/// Release one delay gate after `delay_ms` of (virtual under flash) time.
+///
+/// The `#[kithara::flash]` guard makes the body's `sleep` engine-backed inside an
+/// ambient flash test — it awaits the segment GET's arrival, burns `delay_ms` of
+/// VIRTUAL time, then frees the parked body. Off the `flash` feature or under
+/// `flash(false)` (ambient off) the guard is inert and the `sleep` is a real
+/// `tokio` timer, matching the legacy real-delay behaviour.
+#[kithara::flash(true)]
+async fn release_after_delay(gate: Arc<DelayGate>, delay_ms: u64, variant: usize, segment: usize) {
+    gate.wait_requested().await;
+    trace!(
+        variant,
+        segment, delay_ms, "delay gate: request arrived, starting virtual countdown"
+    );
+    sleep(Duration::from_millis(delay_ms)).await;
+    gate.release();
+    trace!(
+        variant,
+        segment, delay_ms, "delay gate: released after virtual delay"
+    );
+}
+
+/// Spawn the releaser for one delay gate. The test's flash-ambient mode
+/// propagates into the spawned task via the platform async [`spawn`], and the
+/// `#[kithara::flash]` guard on [`release_after_delay`] makes its `sleep`
+/// engine-backed under an ambient flash test (a real `tokio` timer otherwise).
+fn spawn_delay_releaser(gate: Arc<DelayGate>, delay_ms: u64, variant: usize, segment: usize) {
+    drop(spawn(release_after_delay(gate, delay_ms, variant, segment)));
+}
+
+/// Handle to a registered init-segment withhold gate on the shared server.
+#[derive(Clone)]
+pub struct InitGateHandle {
+    gate: Arc<InitGate>,
+}
+
+impl InitGateHandle {
+    /// Release the withheld init segment so its parked GET (body) response
+    /// completes, letting `Hls::create` (and the owning track's loader) proceed.
+    pub fn release(&self) {
+        self.gate.release();
+    }
+
+    /// Number of init GET (body) requests this gate has parked, observed
+    /// in-process.
+    #[must_use]
+    pub fn requested(&self) -> u64 {
+        self.gate.requested()
+    }
+}
+
+/// Handle to a registered segment withhold gate on the shared server.
+#[derive(Clone)]
+pub struct SegmentGateHandle {
+    gate: Arc<SegmentGate>,
+}
+
+impl SegmentGateHandle {
+    /// Release the withheld segment so its parked GET (body) response completes.
+    pub fn release(&self) {
+        self.gate.release();
+    }
+
+    /// Number of segment GET (body) requests this gate has parked, observed
+    /// in-process.
+    #[must_use]
+    pub fn requested(&self) -> u64 {
+        self.gate.requested()
+    }
+
+    /// Withhold the segment's size: subsequent HEAD (size) requests report
+    /// `Content-Length: 0`, so the up-front size-estimation pass learns a zero
+    /// size for it. Models "seek before this segment's size is known".
+    /// Independent of the body [`Self::release`] withhold.
+    pub fn withhold_head(&self) {
+        self.gate.withhold_head();
+    }
+
+    /// Reveal the true size on subsequent HEAD (size) requests.
+    pub fn release_head(&self) {
+        self.gate.release_head();
+    }
+
+    /// Number of HEAD (size) requests this gate has observed in-process.
+    #[must_use]
+    pub fn head_requested(&self) -> u64 {
+        self.gate.head_requested()
     }
 }
 

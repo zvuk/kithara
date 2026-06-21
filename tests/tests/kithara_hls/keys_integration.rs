@@ -31,10 +31,10 @@ async fn fetch_and_cache_key(
     assets_fixture: TestAssets,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let key_manager = test_key_manager(&assets_fixture, None);
+    let key_store = test_key_store(&assets_fixture, None);
     let key_url = server.url("/key.bin");
 
-    let key = key_manager.get_raw_key(&key_url, None).await?;
+    let key = key_store.get_raw_key(&key_url, None).await?;
     assert!(!key.is_empty(), "fetched key must not be empty");
 
     Ok(())
@@ -62,9 +62,9 @@ async fn key_processor_applied(
     let key_url = server.url("/key.bin");
     let host = key_url.host_str().expect("host").to_string();
     let registry = registry_for_host(&host, processor);
-    let key_manager = test_key_manager(&assets_fixture, Some(registry));
+    let key_store = test_key_store(&assets_fixture, Some(registry));
 
-    let key: Bytes = key_manager.get_raw_key(&key_url, None).await?;
+    let key: Bytes = key_store.get_raw_key(&key_url, None).await?;
     assert!(key.starts_with(b"processed:"));
 
     Ok(())
@@ -76,7 +76,7 @@ async fn key_processor_applied(
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn key_manager_with_different_processors(
+async fn key_store_with_different_processors(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
 ) -> HlsResult<()> {
@@ -90,9 +90,9 @@ async fn key_manager_with_different_processors(
     let key_url = server.url("/key.bin");
     let host = key_url.host_str().expect("host").to_string();
     let registry = registry_for_host(&host, uppercase_processor);
-    let key_manager = test_key_manager(&assets_fixture, Some(registry));
+    let key_store = test_key_store(&assets_fixture, Some(registry));
 
-    let key: Bytes = key_manager.get_raw_key(&key_url, None).await?;
+    let key: Bytes = key_store.get_raw_key(&key_url, None).await?;
     assert!(key.is_ascii());
 
     Ok(())
@@ -104,13 +104,13 @@ async fn key_manager_with_different_processors(
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn key_manager_error_handling(assets_fixture: TestAssets) -> HlsResult<()> {
-    let key_manager = test_key_manager(&assets_fixture, None);
+async fn key_store_error_handling(assets_fixture: TestAssets) -> HlsResult<()> {
+    let key_store = test_key_store(&assets_fixture, None);
 
     let invalid_url = Url::parse("http://invalid-domain-that-does-not-exist-12345.com/master.m3u8")
         .map_err(|e| HlsError::InvalidUrl(e.to_string()))?;
 
-    let result: HlsResult<Bytes> = key_manager.get_raw_key(&invalid_url, None).await;
+    let result: HlsResult<Bytes> = key_store.get_raw_key(&invalid_url, None).await;
     assert!(result.is_err(), "invalid URL should fail, got Ok");
 
     Ok(())
@@ -122,16 +122,16 @@ async fn key_manager_error_handling(assets_fixture: TestAssets) -> HlsResult<()>
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn key_manager_caching_behavior(
+async fn key_store_caching_behavior(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let key_manager = test_key_manager(&assets_fixture, None);
+    let key_store = test_key_store(&assets_fixture, None);
     let key_url = server.url("/key.bin");
 
-    let key1: Bytes = key_manager.get_raw_key(&key_url, None).await?;
-    let key2 = key_manager.get_raw_key(&key_url, None).await?;
+    let key1: Bytes = key_store.get_raw_key(&key_url, None).await?;
+    let key2 = key_store.get_raw_key(&key_url, None).await?;
 
     assert_eq!(key1, key2);
 
@@ -153,10 +153,10 @@ async fn unmatched_domain_uses_raw_key(
     let sentinel_processor: kithara::hls::KeyProcessor =
         Arc::new(|_key: Bytes| Ok(Bytes::from_static(b"MODIFIED")));
     let registry = registry_for_host("other.example", sentinel_processor);
-    let key_manager = test_key_manager(&assets_fixture, Some(registry));
+    let key_store = test_key_store(&assets_fixture, Some(registry));
 
     let key_url = server.url("/key.bin");
-    let key = key_manager.get_raw_key(&key_url, None).await?;
+    let key = key_store.get_raw_key(&key_url, None).await?;
     assert_ne!(&key[..], b"MODIFIED");
 
     Ok(())
@@ -175,13 +175,13 @@ async fn aes128_key_decrypts_ciphertext(
 ) -> HlsResult<()> {
     let server = test_server.await;
     let net = net_fixture;
-    let key_manager = test_key_manager(&assets_fixture, None);
+    let key_store = test_key_store(&assets_fixture, None);
 
     let key_url = server.url("/aes/key.bin");
     let cipher_url = server.url("/aes/seg0.bin");
     let iv = aes128_iv();
 
-    let key_bytes = key_manager.get_raw_key(&key_url, Some(iv)).await?;
+    let key_bytes = key_store.get_raw_key(&key_url, Some(iv)).await?;
     let mut key = [0u8; 16];
     key.copy_from_slice(&key_bytes[..16]);
 

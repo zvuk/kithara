@@ -7,7 +7,7 @@ use std::{
 };
 
 use dashmap::DashMap;
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 use kithara_storage::{
     AvailabilityObserver, MemOptions, MemResource, Resource, ResourceStatus, StorageResource,
 };
@@ -28,11 +28,11 @@ use crate::{
 /// Identity is part of the key so distinct request identities under the
 /// same resource key yield distinct inflight handles. The `ResourceKey`
 /// already carries the asset namespace. See the inflight sharing
-/// contract in `README.md`.
+/// contract in `CONTEXT.md`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct MemCacheKey {
-    key: ResourceKey,
     identity: Option<RequestIdentity>,
+    key: ResourceKey,
 }
 
 impl MemCacheKey {
@@ -58,7 +58,7 @@ pub struct MemAssetStore {
     /// See [`crate::deleter`].
     deleter: Arc<dyn AssetDeleter>,
     availability: AvailabilityIndex,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     mem_resource_capacity: Option<usize>,
 }
 
@@ -103,12 +103,23 @@ impl AssetDeleter for MemAssetDeleter {
     }
 }
 
+/// Setup for [`MemAssetStore::with_availability_and_deleter`]: the `cancel`
+/// token, optional `mem_resource_capacity`, the shared `availability` index,
+/// the `active_resources` map, and the canonical `deleter`.
+pub(crate) struct MemStoreSetup {
+    pub(crate) active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
+    pub(crate) deleter: Arc<dyn AssetDeleter>,
+    pub(crate) availability: AvailabilityIndex,
+    pub(crate) cancel: CancelToken,
+    pub(crate) mem_resource_capacity: Option<usize>,
+}
+
 impl MemAssetStore {
     /// Create a new in-memory asset store with its own unshared
     /// [`AvailabilityIndex`].
     #[must_use]
     pub fn new(
-        cancel: CancellationToken,
+        cancel: CancelToken,
         mem_resource_capacity: Option<usize>,
         pool: &kithara_bufpool::BytePool,
     ) -> Self {
@@ -127,7 +138,7 @@ impl MemAssetStore {
     /// Like [`MemAssetStore::new`] but shares the given aggregate
     /// availability handle.
     pub(crate) fn with_availability(
-        cancel: CancellationToken,
+        cancel: CancelToken,
         mem_resource_capacity: Option<usize>,
         availability: AvailabilityIndex,
         pool: &kithara_bufpool::BytePool,
@@ -142,25 +153,26 @@ impl MemAssetStore {
             lru,
             Arc::clone(&active_resources),
         ));
-        Self::with_availability_and_deleter(
-            cancel,
-            mem_resource_capacity,
-            availability,
+        Self::with_availability_and_deleter(MemStoreSetup {
             active_resources,
             deleter,
-        )
+            availability,
+            cancel,
+            mem_resource_capacity,
+        })
     }
 
     /// Like [`Self::with_availability`] but accepts a pre-built
     /// [`AssetDeleter`] so the production builder can share the same
     /// deleter instance with the LRU evictor (`EvictAssets`).
-    pub(crate) fn with_availability_and_deleter(
-        cancel: CancellationToken,
-        mem_resource_capacity: Option<usize>,
-        availability: AvailabilityIndex,
-        active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
-        deleter: Arc<dyn AssetDeleter>,
-    ) -> Self {
+    pub(crate) fn with_availability_and_deleter(setup: MemStoreSetup) -> Self {
+        let MemStoreSetup {
+            cancel,
+            mem_resource_capacity,
+            availability,
+            active_resources,
+            deleter,
+        } = setup;
         Self {
             active_resources,
             deleter,
@@ -282,11 +294,7 @@ mod tests {
     use crate::acquisition::{AcquisitionResult, ReadSide, WriteSide};
 
     fn make_mem_store() -> MemAssetStore {
-        MemAssetStore::new(
-            CancellationToken::default(),
-            None,
-            &crate::BytePool::default(),
-        )
+        MemAssetStore::new(CancelToken::never(), None, &crate::BytePool::default())
     }
 
     fn pending(acq: AcquisitionResult<BaseWriter, BaseReader>) -> BaseWriter {

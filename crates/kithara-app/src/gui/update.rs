@@ -108,7 +108,7 @@ fn handle_seek_to(state: &Kithara, pos: f64) {
         st.is_seeking = false;
         st.seek_position = pos;
     });
-    
+
     if let Err(e) = state.controller.queue().seek(pos) {
         error!("seek failed: {e:?}");
     }

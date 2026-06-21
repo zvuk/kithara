@@ -1,5 +1,6 @@
-use std::{ops::Range, time::Duration};
+use std::ops::Range;
 
+use kithara_platform::time::Duration;
 use kithara_stream::SegmentDescriptor;
 use re_mp4::Mp4;
 

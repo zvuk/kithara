@@ -4,11 +4,11 @@ use std::{
     fs,
     hint::black_box,
     io::{Read, Seek, SeekFrom},
+    num::NonZeroU32,
     sync::{
         Arc,
         atomic::{AtomicU32, Ordering},
     },
-    time::Duration,
 };
 
 use axum::{
@@ -27,7 +27,7 @@ use kithara::{
     bufpool::PcmPool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
     file::{File, FileConfig},
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     stream::{
         Stream,
@@ -37,7 +37,8 @@ use kithara::{
 use kithara_audio::{ResamplerParams, ResamplerProcessor};
 use kithara_integration_tests::{TestHttpServer, auto};
 use kithara_platform::{
-    CancellationToken,
+    CancelToken,
+    time::Duration,
     tokio::runtime::{Builder, Runtime},
 };
 use tempfile::TempDir;
@@ -78,10 +79,7 @@ fn make_pcm(frames: usize, channels: usize) -> Vec<f32> {
 fn make_chunk(sample_rate: u32, channels: u16, frames: usize) -> PcmChunk {
     PcmChunk::new(
         PcmMeta {
-            spec: PcmSpec {
-                channels,
-                sample_rate,
-            },
+            spec: PcmSpec::new(channels, NonZeroU32::new(sample_rate).expect("bench rate")),
             ..Default::default()
         },
         PcmPool::default().attach(make_pcm(frames, usize::from(channels))),
@@ -337,7 +335,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                     let net = NetOptions::builder().pool_max_idle_per_host(8).build();
                     let downloader = Downloader::new(
                         DownloaderConfig::builder()
-                            .client(HttpClient::new(net, CancellationToken::default()))
+                            .client(HttpClient::new(net, CancelToken::never()))
                             .build(),
                     );
                     let store = StoreOptions::builder()

@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::sync::Arc;
+use std::{num::NonZero, sync::Arc};
 
 use kithara_decode::PcmSpec;
 use kithara_events::TrackStatus;
@@ -22,7 +22,7 @@ const BLOCK_BUDGET: usize = 256;
 fn make_resource(label: &str, secs: f64, value: f32) -> Resource {
     let spec = PcmSpec {
         channels: CHANNELS,
-        sample_rate: SAMPLE_RATE,
+        sample_rate: NonZero::new(SAMPLE_RATE).unwrap(),
     };
     resource_from_reader_with_src(
         TestPcmReader::with_value(spec, secs, value),
@@ -62,6 +62,17 @@ fn make_fixture() -> (OfflinePlayerHarness, Queue) {
     config.should_autoplay = false;
     let queue = Queue::new(config);
     (harness, queue)
+}
+
+#[kithara::test]
+fn seek_updates_cached_position_optimistically() {
+    let (_harness, queue) = make_fixture();
+    let id = queue.insert_loaded_for_test(make_resource("seek", 120.0, 0.10));
+    queue.select(id, Transition::None).expect("select track");
+
+    queue.seek(54.689_879_542).expect("seek must land");
+
+    assert_eq!(queue.position_seconds(), Some(54.689_879_542));
 }
 
 /// Track A plays to natural EOF while B is stuck loading, so auto-advance

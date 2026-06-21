@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, OnceLock, Weak, atomic::AtomicBool},
 };
 
-use kithara_platform::Mutex;
+use kithara_platform::sync::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::index::schema::{LruEntryFile, LruIndexFile};
@@ -79,7 +79,7 @@ impl LruIndex {
     pub(crate) fn ephemeral() -> Self {
         Self {
             inner: Arc::new(LruInner {
-                state: Mutex::new(LruState::default()),
+                state: Mutex::default(),
                 #[cfg(not(target_arch = "wasm32"))]
                 persist: None,
                 hub: OnceLock::new(),
@@ -95,7 +95,7 @@ impl LruIndex {
         cfg: &EvictConfig,
         pinned: &HashSet<String>,
     ) -> Vec<String> {
-        let st = self.inner.state.lock_sync();
+        let st = self.inner.state.lock();
         st.eviction_candidates(cfg, pinned)
     }
 
@@ -109,7 +109,7 @@ impl LruIndex {
     /// on-disk flush fails.
     pub(crate) fn remove(&self, asset_root: &str) -> AssetsResult<()> {
         let removed = {
-            let mut st = self.inner.state.lock_sync();
+            let mut st = self.inner.state.lock();
             st.remove(asset_root)
         };
         if removed {
@@ -122,7 +122,7 @@ impl LruIndex {
     pub(crate) fn total_bytes_best_effort(&self) -> u64 {
         self.inner
             .state
-            .lock_sync()
+            .lock()
             .by_root
             .values()
             .filter_map(|e| e.bytes)
@@ -142,7 +142,7 @@ impl LruIndex {
     /// on-disk flush fails.
     pub(crate) fn touch(&self, asset_root: &str, bytes_hint: Option<u64>) -> AssetsResult<bool> {
         let created = {
-            let mut st = self.inner.state.lock_sync();
+            let mut st = self.inner.state.lock();
             st.touch(asset_root, bytes_hint)
         };
         flush_sync(&*self.inner)?;
@@ -163,7 +163,7 @@ impl LruIndex {
     /// on-disk flush fails.
     pub(crate) fn update_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<bool> {
         let changed = {
-            let mut st = self.inner.state.lock_sync();
+            let mut st = self.inner.state.lock();
             st.update_bytes(asset_root, bytes)
         };
         if changed {

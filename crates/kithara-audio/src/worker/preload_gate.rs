@@ -1,9 +1,7 @@
-use std::{
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use kithara_platform::time::sleep;
+use kithara_platform::time::{Duration, sleep};
+use kithara_test_utils::kithara;
 
 /// Decoupled startup gate between the worker thread and the async app task.
 ///
@@ -15,10 +13,19 @@ use kithara_platform::time::sleep;
 /// does not drive the wakeup.
 ///
 /// The contract (signal sites, rearm on seek) lives in
-/// `crates/kithara-audio/README.md`.
-#[derive(Default)]
+/// `crates/kithara-audio/CONTEXT.md`.
 pub struct PreloadGate {
     ready: AtomicBool,
+    ready_epoch: AtomicU64,
+}
+
+impl Default for PreloadGate {
+    fn default() -> Self {
+        Self {
+            ready: AtomicBool::new(false),
+            ready_epoch: AtomicU64::new(0),
+        }
+    }
 }
 
 impl PreloadGate {
@@ -27,11 +34,14 @@ impl PreloadGate {
     /// perceptible budget while keeping the worker store-only.
     const POLL_INTERVAL: Duration = Duration::from_millis(2);
 
-    /// Mark the gate open. Called on the worker thread from every preload
-    /// terminal site (progress threshold, EOF, Failed, cancel). Idempotent
-    /// and lock-free: a single `Release` store.
-    pub(crate) fn signal(&self) {
-        self.ready.store(true, Ordering::Release);
+    /// `true` once [`signal`](PreloadGate::signal) has fired for the current
+    /// epoch.
+    pub(crate) fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn is_ready_for_epoch(&self, epoch: u64) -> bool {
+        self.is_ready() && self.ready_epoch.load(Ordering::Acquire) >= epoch
     }
 
     /// Re-close the gate so a fresh [`wait`](PreloadGate::wait) blocks again.
@@ -40,18 +50,25 @@ impl PreloadGate {
         self.ready.store(false, Ordering::Release);
     }
 
-    /// `true` once [`signal`](PreloadGate::signal) has fired for the current
-    /// epoch.
-    pub(crate) fn is_ready(&self) -> bool {
-        self.ready.load(Ordering::Acquire)
+    pub(crate) fn signal_epoch(&self, epoch: u64) {
+        self.ready_epoch.store(epoch, Ordering::Release);
+        self.ready.store(true, Ordering::Release);
     }
 
-    /// Await the gate opening. Resolves once a worker `signal()` is observed;
-    /// until then the awaiter parks on its own runtime timer. A `signal()`
+    /// Await the gate opening. Resolves once a worker signal is observed;
+    /// until then the awaiter parks on its own runtime timer. A signal
     /// landing during a sleep is observed on the next poll (worst-case
     /// latency one [`POLL_INTERVAL`](Self::POLL_INTERVAL)).
+    #[kithara::flash(true)]
     pub async fn wait(&self) {
         while !self.is_ready() {
+            sleep(Self::POLL_INTERVAL).await;
+        }
+    }
+
+    #[kithara::flash(true)]
+    pub async fn wait_for_epoch(&self, epoch: u64) {
+        while !self.is_ready_for_epoch(epoch) {
             sleep(Self::POLL_INTERVAL).await;
         }
     }
@@ -59,9 +76,9 @@ impl PreloadGate {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
 
-    use kithara_platform::time::timeout;
+    use kithara_platform::{thread, time::Duration};
     use kithara_test_utils::kithara;
 
     use super::PreloadGate;
@@ -72,12 +89,16 @@ mod tests {
         assert!(!gate.is_ready());
 
         let signaller = Arc::clone(&gate);
-        let join = kithara_platform::thread::spawn(move || {
-            kithara_platform::thread::sleep(Duration::from_millis(5));
-            signaller.signal();
+        // spawn_named: the signaller must be engine-visible under flash — a bare
+        // spawn sleeps in REAL time while the waiter's poll loop and the timeout
+        // run on the virtual clock, so the virtual 1s can elapse before the real
+        // 5ms signal lands (mixed-clock race).
+        let join = thread::spawn_named("preload-signal", move || {
+            thread::sleep(Duration::from_millis(5));
+            signaller.signal_epoch(0);
         });
 
-        timeout(Duration::from_secs(1), gate.wait())
+        time::timeout(Duration::from_secs(1), gate.wait())
             .await
             .expect("signal must open the gate");
         assert!(gate.is_ready());
@@ -87,21 +108,36 @@ mod tests {
     #[kithara::test(tokio)]
     async fn rearm_reblocks_a_fresh_wait() {
         let gate = Arc::new(PreloadGate::default());
-        gate.signal();
+        gate.signal_epoch(0);
         gate.wait().await;
 
         gate.rearm();
         assert!(!gate.is_ready());
 
         let re_signaller = Arc::clone(&gate);
-        let join = kithara_platform::thread::spawn(move || {
-            kithara_platform::thread::sleep(Duration::from_millis(5));
-            re_signaller.signal();
+        // spawn_named for the same mixed-clock reason as wait_resolves_after_signal.
+        let join = thread::spawn_named("preload-resignal", move || {
+            thread::sleep(Duration::from_millis(5));
+            re_signaller.signal_epoch(0);
         });
 
-        timeout(Duration::from_secs(1), gate.wait())
+        time::timeout(Duration::from_secs(1), gate.wait())
             .await
             .expect("re-armed gate must reopen on the next signal");
         join.join().expect("re-signaller thread");
+    }
+
+    #[kithara::test]
+    fn old_epoch_signal_does_not_open_new_epoch_wait() {
+        let gate = PreloadGate::default();
+
+        gate.signal_epoch(0);
+        assert!(gate.is_ready_for_epoch(0));
+
+        gate.rearm();
+        gate.signal_epoch(0);
+
+        assert!(gate.is_ready());
+        assert!(!gate.is_ready_for_epoch(1));
     }
 }

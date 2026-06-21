@@ -1,5 +1,5 @@
 use iced::{
-    Alignment, Background, Border, Element, Length, Padding, Theme,
+    Alignment, Background, Border, Color, Element, Length, Padding, Theme,
     alignment::{Horizontal, Vertical},
     font::Weight,
     widget::{
@@ -104,10 +104,12 @@ fn fader_cell(index: usize, total: usize, value: f32, p: GuiPalette) -> Element<
                 .color(p.text_dim),
             widgets::vfader(
                 index,
-                value,
-                EQ_MIN_DB,
-                EQ_MAX_DB,
-                studio_size::FADER_HEIGHT,
+                widgets::VFaderParams {
+                    value,
+                    min: EQ_MIN_DB,
+                    max: EQ_MAX_DB,
+                    height: studio_size::FADER_HEIGHT,
+                },
                 p,
             ),
             text(eq_band_label(index, total))
@@ -194,7 +196,7 @@ fn waveform_cluster(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
         .width(Length::Fill)
         .height(Length::Fixed(studio_size::WAVEFORM_HEIGHT))
         .style(waveform_style(p));
-    
+
     let wave_layer: Element<'_, Message> = if wave.is_some() {
         stack![wave_box, zoom_control(state.dj.wave.zoom(), p)].into()
     } else {
@@ -241,13 +243,17 @@ fn zoom_control(zoom: f32, p: GuiPalette) -> Element<'static, Message> {
     .spacing(gap::INLINE_TIGHT)
     .align_y(Alignment::Center);
 
-    container(container(control).padding([2.0, 6.0]).style(zoom_pill_style(p)))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(Horizontal::Right)
-        .align_y(Vertical::Top)
-        .padding(Padding::from(8.0))
-        .into()
+    container(
+        container(control)
+            .padding([2.0, 6.0])
+            .style(zoom_pill_style(p)),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_x(Horizontal::Right)
+    .align_y(Vertical::Top)
+    .padding(Padding::from(8.0))
+    .into()
 }
 
 fn zoom_button(label: &'static str, msg: WaveMsg, p: GuiPalette) -> Element<'static, Message> {
@@ -284,7 +290,7 @@ fn zoom_button_style(p: GuiPalette, status: ButtonStatus) -> ButtonStyle {
         ButtonStatus::Hovered => Some(Background::Color(with_alpha(p.bg_panel_2, 0.7))),
         ButtonStatus::Pressed => Some(Background::Color(with_alpha(p.bg_panel_2, 0.5))),
         ButtonStatus::Active | ButtonStatus::Disabled => {
-            Some(Background::Color(iced::Color::TRANSPARENT))
+            Some(Background::Color(Color::TRANSPARENT))
         }
     };
 
@@ -350,7 +356,7 @@ fn transport_secondary_style(p: GuiPalette, status: ButtonStatus) -> ButtonStyle
         ButtonStatus::Hovered => Some(Background::Color(with_alpha(p.bg_panel_2, 0.6))),
         ButtonStatus::Pressed => Some(Background::Color(with_alpha(p.bg_panel_2, 0.45))),
         ButtonStatus::Active | ButtonStatus::Disabled => {
-            Some(Background::Color(iced::Color::TRANSPARENT))
+            Some(Background::Color(Color::TRANSPARENT))
         }
     };
 

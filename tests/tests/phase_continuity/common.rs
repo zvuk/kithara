@@ -1,15 +1,19 @@
 use std::{
     f64::consts::{PI, TAU},
     fmt,
-    time::Duration,
 };
 
 use kithara::{
-    audio::{Audio, ReadOutcome},
+    audio::{Audio, PcmReader, ReadOutcome},
     events::EventBus,
     stream::{Stream, StreamType},
 };
 use kithara_integration_tests::Xorshift64;
+use kithara_platform::{
+    thread::paced_backoff,
+    time::{Duration, sleep},
+};
+use num_traits::ToPrimitive;
 use tracing::{info, warn};
 
 pub(crate) const SAMPLE_RATE: u32 = 44_100;
@@ -130,16 +134,56 @@ fn read_block<T>(audio: &mut Audio<Stream<T>>, buf: &mut [f32], label: &str) -> 
 where
     T: StreamType<Events = EventBus>,
 {
+    read_block_with_position(audio, buf, label).map(|(n, _)| n)
+}
+
+fn read_block_with_position<T>(
+    audio: &mut Audio<Stream<T>>,
+    buf: &mut [f32],
+    label: &str,
+) -> Option<(usize, Duration)>
+where
+    T: StreamType<Events = EventBus>,
+{
     let mut retries = 0usize;
     loop {
         match audio.read(buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => return Some(count.get()),
+            Ok(ReadOutcome::Frames { count, position }) => return Some((count.get(), position)),
             Ok(ReadOutcome::Pending { .. }) => {
                 retries += 1;
                 assert!(
                     retries < READ_PENDING_RETRIES,
                     "{label}: pending exceeded {READ_PENDING_RETRIES} retries (decoder starved)",
                 );
+                paced_backoff(Duration::from_millis(1));
+            }
+            Ok(ReadOutcome::Eof { .. }) => return None,
+            Err(e) => panic!("{label}: read error: {e}"),
+        }
+    }
+}
+
+fn start_frame_from_read_position(position: Duration, frames_read: u64) -> u64 {
+    let end_frame = (position.as_secs_f64() * f64::from(SAMPLE_RATE))
+        .round()
+        .to_u64()
+        .unwrap_or(0);
+    end_frame.saturating_sub(frames_read)
+}
+
+async fn read_block_async<T>(
+    audio: &mut Audio<Stream<T>>,
+    buf: &mut [f32],
+    label: &str,
+) -> Option<usize>
+where
+    T: StreamType<Events = EventBus>,
+{
+    loop {
+        match audio.read(buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => return Some(count.get()),
+            Ok(ReadOutcome::Pending { .. }) => {
+                sleep(Duration::from_millis(1)).await;
             }
             Ok(ReadOutcome::Eof { .. }) => return None,
             Err(e) => panic!("{label}: read error: {e}"),
@@ -273,10 +317,11 @@ where
             .unwrap_or_else(|e| panic!("seek #{i} to {pos_secs:.3}s failed: {e}"));
         on_seek(i);
         let label = format!("seek#{i}@{pos_secs:.3}s");
-        let n = read_block(audio, &mut buf, &label).unwrap_or_else(|| {
-            panic!("{label}: unexpected EOF immediately after seek");
-        });
-        let consumed = (pos_secs * f64::from(SAMPLE_RATE)).round() as u64;
+        let (n, position_after) =
+            read_block_with_position(audio, &mut buf, &label).unwrap_or_else(|| {
+                panic!("{label}: unexpected EOF immediately after seek");
+            });
+        let consumed = start_frame_from_read_position(position_after, (n / chan) as u64);
         if let Some(drift) =
             check_against_previous(&mut anchor, consumed, &buf[..n], chan, sine, &label)
         {
@@ -300,11 +345,12 @@ where
 /// continuity and is reported. A forward gap between steps is scanned through
 /// (catches the "periodically swallowed fragment" glitch); a backward gap
 /// degenerates to a single post-seek window (catches the seek glitch).
-pub(crate) fn scripted_phase_scan<T, S, F>(
+pub(crate) async fn scripted_phase_scan<T, S, F>(
     audio: &mut Audio<Stream<T>>,
     sine: SinePhaseSpec,
     total_frames_truth: u64,
     scenario: &[(S, f64)],
+    pace: Option<Duration>,
     mut switch: F,
 ) -> Vec<PhaseDrift>
 where
@@ -333,6 +379,7 @@ where
             .seek(Duration::from_secs_f64(seek_secs))
             .unwrap_or_else(|e| panic!("step #{i} seek to {seek_secs:.3}s failed: {e}"));
         switch(payload);
+        wait_for_preload(audio).await;
 
         let stop_frame = scenario
             .get(i + 1)
@@ -342,9 +389,12 @@ where
         let mut consumed = seek_frame;
         let mut next_scan_at = seek_frame;
         loop {
-            let Some(n) = read_block(audio, &mut buf, &label) else {
+            let Some(n) = read_block_async(audio, &mut buf, &label).await else {
                 break;
             };
+            if let Some(p) = pace {
+                sleep(p).await;
+            }
             let frames_this_read = (n / chan) as u64;
             if consumed >= next_scan_at {
                 if let Some(drift) =
@@ -361,6 +411,15 @@ where
         }
     }
     drifts
+}
+
+async fn wait_for_preload<T>(audio: &Audio<Stream<T>>)
+where
+    T: StreamType<Events = EventBus>,
+{
+    if let Some(gate) = audio.preload_gate() {
+        gate.wait_for_epoch(audio.preload_epoch()).await;
+    }
 }
 
 /// Scan an already-rendered interleaved PCM buffer for phase continuity.
@@ -463,7 +522,7 @@ mod tests {
         sigma * (-2.0 * u1.ln()).sqrt() * (2.0 * PI * u2).cos()
     }
 
-    /// Verifies LS fit error matches theory σ_s ≈ √(2/N)·(σ_n/A)/δ
+    /// Verifies LS fit error matches theory `σ_s` ≈ √(`2/N)·(σ_n/A)/δ`
     /// for additive white Gaussian noise. If this passes, the LS fit is
     /// correct; any larger error from real AAC must come from non-white
     /// noise structure, not a bug in the estimator.
@@ -490,7 +549,7 @@ mod tests {
             let diff_samples = wrap_pi(measured - predicted) / delta;
             sum_sq += diff_samples * diff_samples;
         }
-        let observed_rms = (sum_sq / trials as f64).sqrt();
+        let observed_rms = (sum_sq / f64::from(trials)).sqrt();
         let ratio = observed_rms / theory_sigma_samples;
         assert!(
             (0.85..1.15).contains(&ratio),

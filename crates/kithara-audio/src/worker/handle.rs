@@ -4,11 +4,11 @@ use std::sync::{
 };
 
 use kithara_decode::PcmChunk;
-use kithara_platform::CancellationToken;
+use kithara_platform::CancelToken;
 
 use super::{
     AudioWorkerSource, EngineLoad, PreloadGate,
-    decoder_node::DecoderNode,
+    decoder::DecoderNode,
     hang_observer::HangWatchdogObserver,
     types::{TrackId, TrackIdGen},
 };
@@ -27,11 +27,11 @@ pub(crate) struct TrackRegistration {
     /// Spent-chunk return ring: the real-time consumer ([`crate::Audio`])
     /// hands every consumed `PcmChunk` here instead of dropping it, so the
     /// pooled buffer is freed/recycled on the worker thread rather than on
-    /// the audio thread. See `crates/kithara-audio/README.md`.
+    /// the audio thread. See `crates/kithara-audio/CONTEXT.md`.
     pub(crate) trash_inlet: crate::runtime::Inlet<PcmChunk>,
+    pub(crate) engine_load: Option<Arc<EngineLoad>>,
     pub(crate) outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
     pub(crate) preload_chunks: usize,
-    pub(crate) engine_load: Option<Arc<EngineLoad>>,
 }
 
 /// Clonable handle to a shared audio worker.
@@ -78,18 +78,23 @@ impl AudioWorkerHandle {
         self.inner.unregister(track_id);
     }
 
-    /// Wake the worker (e.g. when new data arrives from downloader).
+    /// Wake the worker so it re-ticks the decoder now. Called by the RT
+    /// consumer after it drains a chunk (ring-space freed) and — via
+    /// [`WorkerWakeBridge`] — by the HLS readiness gate from the downloader
+    /// thread when segment bytes are written/committed, so an underran worker
+    /// re-ticks on data arrival instead of on its 10 ms scheduler poll.
+    /// Wait-free: an atomic bump + `unpark`, safe from any thread.
     pub fn wake(&self) {
         self.inner.wake();
     }
 
-    /// Spawn a new shared worker thread bound to the given [`CancellationToken`] and
+    /// Spawn a new shared worker thread bound to the given [`CancelToken`] and
     /// return a handle. Production callers (e.g. `EngineImpl`) pass a
-    /// `child_token()` of the player master so worker shutdown participates in
+    /// `child()` of the player master so worker shutdown participates in
     /// the unified cancel hierarchy and the produce-core's lock-free
     /// `is_cancelled()` read observes a master cancel.
     #[must_use]
-    pub fn with_cancel(cancel: CancellationToken) -> Self {
+    pub fn with_cancel(cancel: CancelToken) -> Self {
         let id = AUDIO_WORKER_ID.fetch_add(1, Ordering::Relaxed);
         let inner = Scheduler::<Box<dyn crate::runtime::Node>, HangWatchdogObserver>::start(
             format!("kithara-audio-worker-{id}"),
@@ -104,22 +109,32 @@ impl AudioWorkerHandle {
     }
 }
 
+/// Adapts an [`AudioWorkerHandle`] to the [`WorkerWake`](kithara_stream::WorkerWake)
+/// trait so kithara-hls (which does not depend on kithara-audio) can re-tick
+/// the worker on segment data arrival. Installed via `Stream::set_worker_wake`
+/// after the worker exists; the HLS readiness gate calls [`wake`](Self::wake)
+/// from its off-RT downloader write/settle path. Wait-free.
+pub(crate) struct WorkerWakeBridge(pub(crate) AudioWorkerHandle);
+
+impl kithara_stream::WorkerWake for WorkerWakeBridge {
+    fn wake(&self) {
+        self.0.wake();
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        },
-        time::Duration,
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
     };
 
     use kithara_decode::PcmChunk;
     use kithara_platform::{
         thread::sleep as thread_sleep,
-        time::{Instant, timeout as platform_timeout},
+        time::{Duration, Instant, timeout as platform_timeout},
     };
-    use kithara_stream::Timeline;
+    use kithara_stream::{SeekControl, SeekObserve, SeekState};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -130,7 +145,8 @@ mod tests {
     };
 
     struct MockSource {
-        timeline: Timeline,
+        seek: Arc<dyn SeekControl>,
+        seek_obs: Arc<dyn SeekObserve>,
         ready: bool,
         should_panic: bool,
         chunks_to_produce: usize,
@@ -139,8 +155,12 @@ mod tests {
 
     impl MockSource {
         fn new(chunks: usize) -> Self {
+            let state = Arc::new(SeekState::new());
+            let seek = Arc::clone(&state) as Arc<dyn SeekControl>;
+            let seek_obs = Arc::clone(&state) as Arc<dyn SeekObserve>;
             Self {
-                timeline: Timeline::new(),
+                seek,
+                seek_obs,
                 chunks_to_produce: chunks,
                 cursor: 0,
                 ready: true,
@@ -166,11 +186,15 @@ mod tests {
     impl AudioWorkerSource for MockSource {
         type Chunk = PcmChunk;
 
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek_obs)
+        }
+
         fn step_track(&mut self) -> TrackStep<PcmChunk> {
-            if self.timeline.is_seek_pending() || self.timeline.is_flushing() {
-                let epoch = self.timeline.seek_epoch();
-                self.timeline.complete_seek(epoch);
-                self.timeline.clear_seek_pending(epoch);
+            if self.seek_obs.is_pending() || self.seek_obs.is_flushing() {
+                let epoch = self.seek_obs.epoch();
+                self.seek.complete(epoch);
+                self.seek.clear_pending(epoch);
                 return TrackStep::StateChanged;
             }
             if !self.ready {
@@ -185,26 +209,29 @@ mod tests {
             self.cursor += 1;
             TrackStep::Produced(Fetch::new(PcmChunk::default(), false, 0))
         }
-
-        fn timeline(&self) -> &Timeline {
-            &self.timeline
-        }
     }
 
-    #[derive(Default)]
     struct FailingSource {
-        timeline: Timeline,
+        seek_obs: Arc<dyn SeekObserve>,
+    }
+
+    impl Default for FailingSource {
+        fn default() -> Self {
+            Self {
+                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+            }
+        }
     }
 
     impl AudioWorkerSource for FailingSource {
         type Chunk = PcmChunk;
 
-        fn step_track(&mut self) -> TrackStep<PcmChunk> {
-            TrackStep::Failed
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek_obs)
         }
 
-        fn timeline(&self) -> &Timeline {
-            &self.timeline
+        fn step_track(&mut self) -> TrackStep<PcmChunk> {
+            TrackStep::Failed
         }
     }
 
@@ -256,7 +283,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_creates_and_drops_cleanly() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
         thread_sleep(Duration::from_millis(10));
         handle.shutdown();
         thread_sleep(Duration::from_millis(50));
@@ -264,7 +291,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_delivers_chunks() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
         let (reg, mut data_rx, _preload_gate) = make_registration(MockSource::new(10), 32, 3);
 
         let _id = handle.register_track(reg);
@@ -277,7 +304,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_multi_track_round_robin() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(10), 32, 1);
         let (reg_b, mut rx_b, _) = make_registration(MockSource::new(10), 32, 1);
@@ -295,7 +322,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_skips_not_ready_tracks() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(10), 32, 1);
         let (reg_b, mut rx_b, _) = make_registration(MockSource::not_ready(10), 32, 1);
@@ -315,7 +342,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_overflow_on_full_ringbuf() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg, mut rx, _) = make_registration(MockSource::new(5), 1, 1);
 
@@ -336,7 +363,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_panic_isolation() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg_a, _, _) = make_registration(MockSource::panicking(), 32, 1);
         let (reg_b, mut rx_b, _) = make_registration(MockSource::new(10), 32, 1);
@@ -355,10 +382,10 @@ mod tests {
 
     #[kithara::test]
     fn worker_seek_enters_pending_reset() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let source = MockSource::new(100);
-        let timeline = source.timeline.clone();
+        let seek = Arc::clone(&source.seek);
         let (reg, mut rx, _) = make_registration(source, 32, 1);
 
         let _id = handle.register_track(reg);
@@ -366,7 +393,7 @@ mod tests {
         let got = wait_for_chunks(&mut rx, 2, Duration::from_secs(5));
         assert!(got >= 2);
 
-        let _ = timeline.initiate_seek(Duration::from_secs(10));
+        let _ = seek.begin(Duration::from_secs(10));
         handle.wake();
 
         thread_sleep(Duration::from_millis(100));
@@ -379,7 +406,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_fires_on_progress() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg, _rx, preload_gate) = make_registration(MockSource::new(10), 32, 3);
 
@@ -395,7 +422,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_fires_on_eof() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg, _rx, preload_gate) = make_registration(MockSource::new(0), 32, 8);
 
@@ -411,7 +438,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_fires_on_failure() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg, _rx, preload_gate) = make_registration(FailingSource::default(), 32, 8);
 
@@ -427,10 +454,11 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_reopens_after_seek() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
-        let (reg, _rx, preload_gate) = make_registration(MockSource::new(10), 32, 1);
-        let timeline = reg.source.timeline().clone();
+        let source = MockSource::new(10);
+        let seek = Arc::clone(&source.seek);
+        let (reg, _rx, preload_gate) = make_registration(source, 32, 1);
         let _id = handle.register_track(reg);
 
         platform_timeout(Duration::from_secs(1), preload_gate.wait())
@@ -438,10 +466,10 @@ mod tests {
             .expect("initial preload gate must open");
         assert!(preload_gate.is_ready());
 
-        let _ = timeline.initiate_seek(Duration::from_secs(1));
+        let epoch = seek.begin(Duration::from_secs(1));
         handle.wake();
 
-        platform_timeout(Duration::from_secs(1), preload_gate.wait())
+        platform_timeout(Duration::from_secs(1), preload_gate.wait_for_epoch(epoch))
             .await
             .expect("re-armed preload gate must reopen after the seek refills");
 
@@ -450,7 +478,7 @@ mod tests {
 
     #[kithara::test]
     fn worker_unregister_removes_track() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg, mut rx, _) = make_registration(MockSource::new(100), 32, 1);
 
@@ -472,44 +500,57 @@ mod tests {
 
     #[kithara::test]
     fn worker_service_class_prioritises_audible() {
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(100), 4, 0);
-        let class_a = Arc::clone(&reg_a.service_class);
+        reg_a.service_class.store(ServiceClass::Idle);
         let _id_a = handle.register_track(reg_a);
 
         let (reg_b, mut rx_b, _) = make_registration(MockSource::new(100), 4, 0);
-        let class_b = Arc::clone(&reg_b.service_class);
+        reg_b.service_class.store(ServiceClass::Audible);
         let _id_b = handle.register_track(reg_b);
 
-        thread_sleep(Duration::from_millis(30));
-
-        while rx_a.try_pop().is_some() {}
-        while rx_b.try_pop().is_some() {}
-
-        class_a.store(ServiceClass::Idle);
-        class_b.store(ServiceClass::Audible);
         handle.wake();
 
-        thread_sleep(Duration::from_millis(50));
+        // Warm up until the Audible track (B) is clearly being served, then
+        // clear both rings so the measurement starts from steady state.
+        // (Under flash this `wait_for_chunks` cannot false-time-out: the virtual
+        // clock is frozen while the worker is actively producing, so its budget
+        // only accrues during genuine worker-idle time.)
+        assert!(wait_for_chunks(&mut rx_b, 5, Duration::from_secs(5)) >= 5);
+        while rx_b.try_pop().is_some() {}
+        while rx_a.try_pop().is_some() {}
 
-        let got_a = {
-            let mut n = 0;
-            while rx_a.try_pop().is_some() {
-                n += 1;
+        // Drain BOTH rings continuously. A saturated ring caps a track at
+        // ring-capacity regardless of priority, so a fixed-sleep-then-count
+        // measures ring size, not the property the scheduler actually
+        // guarantees: within a pass the Audible track is ticked before the
+        // Idle one. Under continuous drain neither ring saturates, so in steady
+        // state the Audible track (B) is delivered no later than the Idle track
+        // (A) and its running count can never fall behind. The loop is bounded
+        // by the Audible track's delivery count — driven by worker production,
+        // not a wall-clock/virtual deadline that could race the clock under flash.
+        const TARGET: usize = 20;
+        let mut got_a = 0usize;
+        let mut got_b = 0usize;
+        while got_b < TARGET {
+            let mut drained = false;
+            if rx_b.try_pop().is_some() {
+                got_b += 1;
+                drained = true;
             }
-            n
-        };
-        let got_b = {
-            let mut n = 0;
-            while rx_b.try_pop().is_some() {
-                n += 1;
+            if rx_a.try_pop().is_some() {
+                got_a += 1;
+                drained = true;
             }
-            n
-        };
+            if !drained {
+                thread_sleep(Duration::from_millis(1));
+            }
+        }
+
         assert!(
             got_b >= got_a,
-            "Audible track should get at least as many chunks: A={got_a}, B={got_b}"
+            "Audible track must be served no later than Idle in steady state: A={got_a}, B={got_b}"
         );
 
         handle.shutdown();
@@ -528,7 +569,7 @@ mod tests {
     #[kithara::test]
     fn shared_worker_blocking_track_does_not_starve_producing_track() {
         struct BlockingSource {
-            timeline: Timeline,
+            seek_obs: Arc<dyn SeekObserve>,
             blocking: Arc<AtomicBool>,
         }
 
@@ -544,19 +585,19 @@ mod tests {
                 }
             }
 
-            fn timeline(&self) -> &Timeline {
-                &self.timeline
+            fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+                Arc::clone(&self.seek_obs)
             }
         }
 
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(100), 32, 0);
         let _id_a = handle.register_track(reg_a);
 
         let blocking = Arc::new(AtomicBool::new(true));
         let blocking_source = BlockingSource {
-            timeline: Timeline::new(),
+            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
             blocking: Arc::clone(&blocking),
         };
         let (reg_b, _rx_b, _) = make_registration(blocking_source, 32, 0);
@@ -591,7 +632,7 @@ mod tests {
     #[kithara::test]
     fn shared_worker_sync_blocking_step_starves_other_tracks() {
         struct SlowDecodeSource {
-            timeline: Timeline,
+            seek_obs: Arc<dyn SeekObserve>,
             block_ms: u64,
         }
 
@@ -603,18 +644,18 @@ mod tests {
                 TrackStep::Produced(Fetch::new(PcmChunk::default(), false, 0))
             }
 
-            fn timeline(&self) -> &Timeline {
-                &self.timeline
+            fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+                Arc::clone(&self.seek_obs)
             }
         }
 
-        let handle = AudioWorkerHandle::with_cancel(CancellationToken::default());
+        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(1000), 32, 0);
         let _id_a = handle.register_track(reg_a);
 
         let slow_source = SlowDecodeSource {
-            timeline: Timeline::new(),
+            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
             block_ms: 10,
         };
         let (reg_b, mut rx_b, _) = make_registration(slow_source, 32, 0);

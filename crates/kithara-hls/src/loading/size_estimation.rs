@@ -33,11 +33,11 @@ use crate::{
 /// been removed.
 pub(crate) struct SizeEstimator {
     playlist: Arc<PlaylistState>,
-    headers: Option<kithara_net::Headers>,
-    peer: PeerHandle,
     /// Committed-resource lookup: same store the dispatch path consults
     /// before fetching, so estimation and fetch share one source of truth.
     scope: AssetScope<DecryptContext>,
+    headers: Option<kithara_net::Headers>,
+    peer: PeerHandle,
     /// Whether probes are real `HEAD`s or single-byte ranged `GET`s.
     probe_method: SizeProbeMethod,
     media_playlists: Vec<MediaPlaylist>,

@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_bufpool::PooledOwned;
-use kithara_stream::{PendingReason, SegmentLayout, StreamReadError};
+use kithara_stream::{ByteMap, PendingReason, StreamReadError};
 
 use crate::{
     error::{DecodeError, DecodeResult},
@@ -64,16 +64,6 @@ impl SegmentReadState {
         }
     }
 
-    /// Resize `buffer` to the current `total()` and report whether the
-    /// segment is already fully filled. Every fill checkpoint runs this
-    /// after a live-range re-resolve that may have grown or shrunk the
-    /// target.
-    fn sync_buffer_ready(&mut self) -> DecodeResult<bool> {
-        let total = self.total();
-        self.resize_to(total)?;
-        Ok(self.filled >= total)
-    }
-
     /// Set `buffer` length to exactly `total`. Growth goes through the
     /// budget-tracked [`PooledOwned::ensure_len`] (a plain `resize` via
     /// `DerefMut` would leak the pool's byte budget); shrink uses
@@ -91,6 +81,16 @@ impl SegmentReadState {
         Ok(())
     }
 
+    /// Resize `buffer` to the current `total()` and report whether the
+    /// segment is already fully filled. Every fill checkpoint runs this
+    /// after a live-range re-resolve that may have grown or shrunk the
+    /// target.
+    fn sync_buffer_ready(&mut self) -> DecodeResult<bool> {
+        let total = self.total();
+        self.resize_to(total)?;
+        Ok(self.filled >= total)
+    }
+
     pub(crate) fn total(&self) -> usize {
         usize::try_from(self.range.end - self.range.start)
             .expect("BUG: segment range fits usize on supported targets")
@@ -99,15 +99,15 @@ impl SegmentReadState {
 
 /// Which range in the live layout to re-resolve `state.range` against
 /// on each iteration. Init reads (no `segment_index`) must re-query
-/// [`SegmentLayout::init_segment_range`] because the post-decrypt init
+/// [`ByteMap::init_segment_range`] because the post-decrypt init
 /// size on DRM streams can shrink between cursor setup and the actual
 /// read (PKCS7 padding strips up to 16 bytes off the encrypted estimate).
-/// Media reads must re-query [`SegmentLayout::segment_at_index`] for the
+/// Media reads must re-query [`ByteMap::segment_at_index`] for the
 /// same reason on individual segment sizes.
 #[derive(Clone, Copy)]
 pub(crate) enum LiveRange<'a> {
-    Init(&'a dyn SegmentLayout),
-    Segment(&'a dyn SegmentLayout, u32),
+    Init(&'a dyn ByteMap),
+    Segment(&'a dyn ByteMap, u32),
 }
 
 impl<'a> LiveRange<'a> {
@@ -150,10 +150,14 @@ pub(crate) fn fill_segment_buffer(
         source.seek(SeekFrom::Start(abs_offset))?;
         if refresh_range(state, live) {
             let total_after = state.total();
-            if state.buffer.len() != total_after {
-                state.buffer.clear();
-                state.resize_to(total_after)?;
-            }
+            // Resize WITHOUT clearing: `refresh_range` already reset
+            // `state.filled` to 0 on a start shift (whole prefix invalid,
+            // re-read from scratch) and left it intact on an end-only
+            // shrink (prefix still valid). `resize_to` truncates the latter
+            // — keeping the read prefix — and grows the former; a
+            // `buffer.clear()` here would zero a valid prefix and feed
+            // `re_mp4` a 0x00000000 box size.
+            state.resize_to(total_after)?;
             if state.filled >= total_after {
                 return Ok(FillStatus::Ready);
             }
@@ -214,7 +218,10 @@ fn refresh_range(state: &mut SegmentReadState, live: LiveRange<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::{
+        io::{self, Cursor, Read, Seek, SeekFrom},
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use kithara_bufpool::BytePool;
     use kithara_platform::time::Duration;
@@ -231,7 +238,7 @@ mod tests {
         segments: Vec<Range<u64>>,
     }
 
-    impl SegmentLayout for FixedLayout {
+    impl ByteMap for FixedLayout {
         fn init_segment_range(&self) -> Range<u64> {
             0..0
         }
@@ -337,6 +344,137 @@ mod tests {
             pool.stats().alloc_misses,
             warm_misses,
             "warm pool must serve every segment buffer without a fresh malloc",
+        );
+    }
+
+    /// A `Read + Seek` source that hands back at most `chunk` bytes per
+    /// `read`, so draining one segment takes several fill iterations — the
+    /// partial-read shape the live HLS source produces, and the
+    /// precondition for an end-shrink to land *mid-fill* (after some bytes
+    /// are already buffered).
+    struct ChunkSource {
+        data: Vec<u8>,
+        pos: u64,
+        chunk: usize,
+    }
+
+    impl Read for ChunkSource {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let start = usize::try_from(self.pos).unwrap_or(usize::MAX);
+            if start >= self.data.len() {
+                return Ok(0);
+            }
+            let n = self.chunk.min(buf.len()).min(self.data.len() - start);
+            buf[..n].copy_from_slice(&self.data[start..start + n]);
+            self.pos += n as u64;
+            Ok(n)
+        }
+    }
+
+    impl Seek for ChunkSource {
+        fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+            let abs = match from {
+                SeekFrom::Start(s) => s,
+                SeekFrom::Current(d) => self.pos.saturating_add_signed(d),
+                SeekFrom::End(d) => (self.data.len() as u64).saturating_add_signed(d),
+            };
+            self.pos = abs;
+            Ok(abs)
+        }
+    }
+
+    /// Single-segment layout whose end shrinks by a few bytes once
+    /// `segment_at_index` has been polled `shrink_after` times — the
+    /// post-decrypt PKCS7 size correction (`S0 -> S0'`) seen through the
+    /// fill loop's live re-resolve, timed to land between the two
+    /// `refresh_range` calls of one fill iteration.
+    struct ShrinkingLayout {
+        polls: AtomicUsize,
+        full_end: u64,
+        shrunk_end: u64,
+        shrink_after: usize,
+    }
+
+    impl ShrinkingLayout {
+        fn desc(range: Range<u64>) -> SegmentDescriptor {
+            SegmentDescriptor::new(range, Duration::ZERO, Duration::from_secs(1), 0, 0)
+        }
+
+        fn range(&self) -> Range<u64> {
+            let n = self.polls.fetch_add(1, Ordering::SeqCst);
+            let end = if n >= self.shrink_after {
+                self.shrunk_end
+            } else {
+                self.full_end
+            };
+            0..end
+        }
+    }
+
+    impl ByteMap for ShrinkingLayout {
+        fn init_segment_range(&self) -> Range<u64> {
+            0..0
+        }
+
+        fn len(&self) -> Option<u64> {
+            Some(self.full_end)
+        }
+
+        fn segment_after_byte(&self, _byte_offset: u64) -> Option<SegmentDescriptor> {
+            None
+        }
+
+        fn segment_at_index(&self, _idx: u32) -> Option<SegmentDescriptor> {
+            Some(Self::desc(self.range()))
+        }
+
+        fn segment_at_time(&self, _t: Duration) -> Option<SegmentDescriptor> {
+            Some(Self::desc(0..self.full_end))
+        }
+
+        fn segment_count(&self) -> Option<u32> {
+            Some(1)
+        }
+    }
+
+    /// R-fmp4shrink: when a DRM segment's end shrinks mid-fill (PKCS7 trims
+    /// the HEAD estimate after some bytes are already read), the
+    /// already-read prefix `[0, filled)` is valid — `refresh_range` keeps
+    /// `state.filled`, so the prefix MUST survive the buffer resize.
+    /// Regression for the `fill_segment_buffer` bug where the post-seek
+    /// re-resolve called `buffer.clear()` and zeroed that prefix, handing
+    /// `re_mp4` a buffer whose box-size field read `0x00000000` ("invalid
+    /// box size 0 at offset 0" -> decode failure -> producer failed).
+    #[kithara::test]
+    fn mid_fill_end_shrink_keeps_already_read_prefix() {
+        let full = 16usize;
+        let shrunk = 12usize;
+        // Distinct non-zero payload so a zeroed prefix is unambiguous.
+        let blob: Vec<u8> = (1..=u8::try_from(full).unwrap_or(0)).collect();
+        let mut source: BoxedSource = Box::new(ChunkSource {
+            data: blob.clone(),
+            pos: 0,
+            chunk: 6,
+        });
+        // Shrink on the 4th poll: it is the post-seek `refresh_range` of the
+        // second iteration, after 6 bytes are already buffered.
+        let layout = ShrinkingLayout {
+            full_end: full as u64,
+            shrunk_end: shrunk as u64,
+            shrink_after: 3,
+            polls: AtomicUsize::new(0),
+        };
+        let pool = BytePool::new(32, 0);
+        let mut state = SegmentReadState::new(0..full as u64, pool.get());
+
+        let status = fill_segment_buffer(&mut source, &mut state, LiveRange::Segment(&layout, 0))
+            .expect("fill must not error");
+
+        assert_eq!(status, FillStatus::Ready);
+        assert_eq!(
+            &state.buffer[..],
+            &blob[..shrunk],
+            "already-read prefix must survive the end-shrink resize, not be zeroed",
         );
     }
 }

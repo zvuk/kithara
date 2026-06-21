@@ -39,6 +39,11 @@ unparseable = "unparseable"
 wht = "wht"
 ot = "ot"
 nt = "nt"
+mis = "mis"
+fo = "fo"
+aspec = "aspec"
+pendings = "pendings"
+Anc = "Anc"
 
 [files]
 extend-exclude = [

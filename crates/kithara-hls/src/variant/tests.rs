@@ -1,27 +1,26 @@
 use std::sync::{
-    Arc, Barrier,
+    Arc, Barrier, OnceLock,
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
-use kithara_assets::{AssetScope, AssetStoreBuilder, ProcessChunkFn};
+use kithara_assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, ProcessChunkFn, WriteSide};
 use kithara_drm::DecryptContext;
-use kithara_platform::{
-    CancellationToken,
-    time::{Duration, Instant},
-};
+use kithara_platform::{CancelToken, sync::CondvarGate, time::Duration};
 use kithara_storage::WaitOutcome;
-use kithara_stream::{SourceError, StreamError, Timeline};
+use kithara_stream::{
+    ReadOutcome, SeekControl, SeekObserve, SeekState, SourceError, SourcePhase, StreamError,
+};
 use kithara_test_utils::kithara;
 use url::Url;
 
 use super::{
-    HlsVariant, InitEntry, PlanCtx, PlannedFetch, SegmentContent, SegmentEntry, SegmentSlotState,
-    VariantParts,
+    HlsVariant, InitEntry, PlanCtx, PlannedFetch, SegmentActivateParams, SegmentContent,
+    SegmentEntry, SegmentSlotState, VariantInit, VariantParts,
 };
-use crate::playlist::PlaylistState;
+use crate::playlist::{PlaylistState, VariantState};
 
 fn test_ctx(prefetch_budget: usize) -> PlanCtx {
-    let cancel = CancellationToken::default();
+    let cancel = CancelToken::never();
     let passthrough: ProcessChunkFn<DecryptContext> =
         Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
             output[..input.len()].copy_from_slice(input);
@@ -41,22 +40,24 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
         seek_epoch: 0,
         look_ahead_bytes: None,
         headers: None,
+        ready: Arc::new(CondvarGate::<u64>::default()),
+        worker_wake: Arc::new(OnceLock::new()),
     }
 }
 
-fn make_init(size: u64, scope: &AssetScope<DecryptContext>) -> InitEntry {
+fn make_init(size: u64, scope: &AssetScope<DecryptContext>) -> VariantInit {
     if size == 0 {
-        return InitEntry::empty(scope);
+        return VariantInit::NotApplicable;
     }
     let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
     let resource_id = scope.key_from_url(&url);
-    InitEntry {
+    VariantInit::Pending(InitEntry {
         url,
         resource_id,
         state: SegmentSlotState::missing(),
         size: AtomicU64::new(size),
         content: SegmentContent::Plain,
-    }
+    })
 }
 
 fn make_seg(idx: u32, size: u64, scope: &AssetScope<DecryptContext>) -> SegmentEntry {
@@ -76,15 +77,21 @@ fn make_seg(idx: u32, size: u64, scope: &AssetScope<DecryptContext>) -> SegmentE
 }
 
 fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) -> Arc<HlsVariant> {
-    make_var_with_timeline(variant, init_size, media_sizes, ctx, Timeline::new())
+    make_var_with_seek_obs(
+        variant,
+        init_size,
+        media_sizes,
+        ctx,
+        Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+    )
 }
 
-fn make_var_with_timeline(
+fn make_var_with_seek_obs(
     variant: usize,
     init_size: u64,
     media_sizes: &[u64],
     ctx: &PlanCtx,
-    timeline: Timeline,
+    seek_obs: Arc<dyn SeekObserve>,
 ) -> Arc<HlsVariant> {
     let init = make_init(init_size, &ctx.scope);
     let segments: Vec<SegmentEntry> = media_sizes
@@ -103,8 +110,8 @@ fn make_var_with_timeline(
         VariantParts {
             init,
             segments,
+            seek_obs,
             playlist_state: Arc::new(PlaylistState::new(Vec::new())),
-            timeline,
             codec: None,
             container: None,
         },
@@ -113,18 +120,25 @@ fn make_var_with_timeline(
 }
 
 fn push_planned(v: &HlsVariant, seg: u32) {
-    v.queue.lock_sync().push_back(PlannedFetch::Segment(seg));
+    v.queue.lock().push_back(PlannedFetch::Segment(seg));
 }
 
 fn queue_seg_indices(v: &HlsVariant) -> Vec<u32> {
     v.queue
-        .lock_sync()
+        .lock()
         .iter()
         .filter_map(|p| match p {
             PlannedFetch::Segment(seg) => Some(*seg),
             PlannedFetch::Init => None,
         })
         .collect()
+}
+
+fn queue_has_init(v: &HlsVariant) -> bool {
+    v.queue
+        .lock()
+        .iter()
+        .any(|p| matches!(p, PlannedFetch::Init))
 }
 
 #[kithara::test]
@@ -155,7 +169,14 @@ fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
     let from_seg: u32 = 2;
     let seg_boundary: u64 = 1_500;
     let reader_pos: u64 = 1_600;
-    v.activate_at_segment_with_shift(&ctx, from_seg, seg_boundary, reader_pos);
+    v.activate_at_segment_with_shift(
+        &ctx,
+        SegmentActivateParams {
+            from_seg,
+            reader_pos,
+            seg_boundary,
+        },
+    );
 
     assert_eq!(
         v.served_from(),
@@ -177,6 +198,61 @@ fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
         v.get_position(),
         reader_pos,
         "position must follow the requested reader_pos"
+    );
+}
+
+#[kithara::test]
+fn descriptor_at_byte_uses_virtual_shifted_range() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
+
+    v.activate_at_segment_with_shift(
+        &ctx,
+        SegmentActivateParams {
+            from_seg: 2,
+            reader_pos: 1_500,
+            seg_boundary: 1_500,
+        },
+    );
+
+    let descriptor = v
+        .descriptor_at_byte(1_550)
+        .expect("shifted segment 2 resolves");
+
+    assert_eq!(descriptor.segment_index, 2);
+    assert_eq!(
+        descriptor.byte_range,
+        1_500..1_900,
+        "ByteMap descriptors must use the same virtual coordinates as \
+         find_at_offset/read_at/phase_at"
+    );
+}
+
+#[kithara::test]
+fn reset_to_full_range_uses_live_init_size_after_shifted_activation() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 600, &[400, 400], &ctx);
+
+    v.activate_at_segment_with_shift(
+        &ctx,
+        SegmentActivateParams {
+            from_seg: 1,
+            reader_pos: 1_000,
+            seg_boundary: 1_000,
+        },
+    );
+    v.layout.apply_commit(v.store.segments(), || {
+        v.store.apply_loaded_size(PlannedFetch::Init, 588);
+        v.store.init_size()
+    });
+
+    v.reset_to_full_range();
+
+    assert_eq!(
+        v.segment_byte_offset(0),
+        Some(588),
+        "full-range reset must leave shifted/frozen init geometry and use \
+         the committed live init length"
     );
 }
 
@@ -205,7 +281,14 @@ fn concurrent_switch_keeps_coordinate_reads_coherent() {
         v.find_at_offset(2000).is_some(),
         "full frame must serve byte 2000"
     );
-    v.activate_at_segment_with_shift(&ctx, 4, 0, 0);
+    v.activate_at_segment_with_shift(
+        &ctx,
+        SegmentActivateParams {
+            from_seg: 4,
+            seg_boundary: 0,
+            reader_pos: 0,
+        },
+    );
     assert!(
         v.find_at_offset(2000).is_some(),
         "activated frame must serve byte 2000"
@@ -222,7 +305,14 @@ fn concurrent_switch_keeps_coordinate_reads_coherent() {
                 if i % 2 == 0 {
                     v.reset_to_full_range();
                 } else {
-                    v.activate_at_segment_with_shift(&ctx, 4, 0, 0);
+                    v.activate_at_segment_with_shift(
+                        &ctx,
+                        SegmentActivateParams {
+                            from_seg: 4,
+                            seg_boundary: 0,
+                            reader_pos: 0,
+                        },
+                    );
                 }
             }
         });
@@ -394,6 +484,187 @@ fn init_byte_range_empty_when_size_zero() {
     assert!(v.init_byte_range().is_empty());
 }
 
+/// `init_size == 0` (no `#EXT-X-MAP`, byte-range-embedded init, or a failed
+/// init HEAD) is exactly `VariantInit::NotApplicable`: no separate init
+/// resource, no `about:blank` acquire, and `rebuild` never enqueues
+/// `PlannedFetch::Init`.
+#[kithara::test]
+fn variant_init_not_applicable_no_acquire() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[400, 400], &ctx);
+    assert!(
+        matches!(v.store.init(), VariantInit::NotApplicable),
+        "init_size == 0 must construct as NotApplicable"
+    );
+    assert_eq!(v.init_size(), 0);
+    assert!(
+        v.init_resource().is_none(),
+        "NotApplicable carries no init resource"
+    );
+    v.rebuild(&ctx, 0);
+    assert!(
+        !queue_has_init(&v),
+        "NotApplicable must never enqueue PlannedFetch::Init"
+    );
+    let cmds = v.dispatch(&ctx, 10);
+    assert_eq!(cmds.len(), 2, "only the two media segments dispatch");
+    let seg0_url = v.store.segments()[0].url.clone();
+    assert_eq!(cmds[0].url, seg0_url, "first cmd is seg 0, not an init");
+}
+
+/// `init_size > 0` (fMP4 `#EXT-X-MAP` with a known size) is
+/// `VariantInit::Pending`: a real, separately-fetched init segment that is
+/// enqueued first and acquired exactly as before.
+#[kithara::test]
+fn variant_init_pending_for_fmp4() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400, 400], &ctx);
+    let VariantInit::Pending(entry) = v.store.init() else {
+        panic!("init_size > 0 must construct as Pending");
+    };
+    assert_eq!(entry.size.load(Ordering::Acquire), 200);
+    assert_eq!(v.init_size(), 200);
+    let init_url = entry.url.clone();
+    assert!(
+        v.init_resource().is_some(),
+        "Pending init exposes its resource key"
+    );
+    v.rebuild(&ctx, 0);
+    assert!(
+        queue_has_init(&v),
+        "Pending init must enqueue PlannedFetch::Init first"
+    );
+    let cmds = v.dispatch(&ctx, 10);
+    assert_eq!(cmds.len(), 3, "init + two media segments dispatch");
+    assert_eq!(cmds[0].url, init_url, "init dispatched first");
+}
+
+/// Frozen-discriminator guard: `init.size` only ever shrinks post-commit
+/// (HEAD estimate -> committed `final_len`); it never crosses 0 -> positive.
+/// So a `Pending` init constructed with `init_size > 0` stays `Pending`
+/// even after a commit shrink — the enum discriminant is equivalent to the
+/// old dynamic `init_size() > 0` check at every later read.
+#[kithara::test]
+fn variant_init_pending_stays_pending_after_commit_shrink() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400, 400], &ctx);
+
+    v.layout.apply_commit(v.store.segments(), || {
+        v.store.apply_loaded_size(PlannedFetch::Init, 160);
+        v.init_size()
+    });
+
+    assert_eq!(v.init_size(), 160, "init size shrinks on commit");
+    assert!(
+        matches!(v.store.init(), VariantInit::Pending(_)),
+        "a shrink (still > 0) keeps the init Pending — size never crosses to 0"
+    );
+    assert!(v.init_resource().is_some());
+}
+
+/// Regression: an `#EXT-X-MAP` init whose HEAD size estimate is 0 (a failed or
+/// absent init HEAD under load) is still a real init that must be fetched.
+/// Existence follows the EXT-X-MAP URL, not the HEAD size. Misclassifying it as
+/// `NotApplicable` drops the init: `read_at(0)` then routes to the media loop
+/// and serves segment 0's container where the demuxer expects `ftyp`
+/// ("`re_mp4`: ftyp not found"), or the reader wedges ("no progress").
+#[kithara::test]
+fn init_with_url_but_zero_head_size_is_pending() {
+    let ctx = test_ctx(3);
+    let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
+    let playlist = PlaylistState::new(vec![VariantState {
+        codec: None,
+        container: None,
+        init_url: Some(url),
+        size_map: None,
+        segments: Vec::new(),
+    }]);
+
+    let init = HlsVariant::build_init_entry(&playlist, 0, None, &ctx.scope);
+
+    assert!(
+        matches!(init, VariantInit::Pending(_)),
+        "EXT-X-MAP init with a zero HEAD size estimate must stay Pending \
+         (existence follows the URL, not the HEAD size), got {init:?}"
+    );
+}
+
+/// Regression for the `read_at` init-prefix guard. While an `#EXT-X-MAP` init
+/// is declared but not yet sized (`init_size() == 0` — a failed/absent init
+/// HEAD, or the window before the init commits), the offset table seeds
+/// segment 0 at offset 0. A read at offset 0 must NOT serve that media — doing
+/// so hands the demuxer segment 0's container where the init's `ftyp` belongs
+/// ("`re_mp4`: ftyp not found"). The read is held pending until the init sizes
+/// the prefix.
+#[kithara::test]
+fn read_at_zero_holds_pending_while_init_unsized() {
+    let ctx = test_ctx(3);
+    let init_url: Url = "https://example.com/init.mp4".parse().expect("valid url");
+    let init = VariantInit::Pending(InitEntry {
+        resource_id: ctx.scope.key_from_url(&init_url),
+        url: init_url,
+        state: SegmentSlotState::missing(),
+        size: AtomicU64::new(0),
+        content: SegmentContent::Plain,
+    });
+    let v = HlsVariant::from_parts(
+        0,
+        VariantParts {
+            init,
+            segments: vec![make_seg(0, 1024, &ctx.scope)],
+            playlist_state: Arc::new(PlaylistState::new(Vec::new())),
+            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+            codec: None,
+            container: None,
+        },
+        &ctx,
+    );
+
+    assert!(
+        v.has_init() && v.init_size() == 0,
+        "precondition: a declared but unsized init"
+    );
+    assert!(
+        v.find_at_offset(0).is_some(),
+        "the trap: segment 0 is addressable at offset 0 while the init is unsized"
+    );
+
+    // Commit segment 0's bytes so an *unguarded* read_at(0) would serve them.
+    let seg0_key = v.store.segments()[0].resource_id.clone();
+    let AcquisitionResult::Pending(writer) = ctx
+        .scope
+        .store()
+        .acquire_resource(&seg0_key, None)
+        .expect("acquire segment 0")
+    else {
+        panic!("segment 0 resource must be pending");
+    };
+    // Commit a full 1024-byte segment (matching the size atom) so an unguarded
+    // read_at(0) resolves a satisfiable range and returns the bytes — making
+    // this a genuine red-without-the-guard regression, not a range-pending
+    // artifact. The `RIFF` magic stands in for "segment 0's container, not the
+    // init's `ftyp`".
+    let mut media = vec![0u8; 1024];
+    media[..4].copy_from_slice(b"RIFF");
+    writer.write_at(0, &media).expect("write segment 0");
+    writer
+        .commit(Some(media.len() as u64))
+        .expect("commit segment 0");
+
+    let mut buf = [0u8; 64];
+    let outcome = v.read_at(0, &mut buf).expect("read_at(0)");
+    assert!(
+        matches!(outcome, ReadOutcome::Pending(_)),
+        "read_at(0) must hold pending while the init is unsized, not serve \
+         segment 0's container; got {outcome:?}"
+    );
+    assert_ne!(
+        &buf[..4],
+        b"RIFF",
+        "segment 0's container must not have been served at offset 0"
+    );
+}
+
 #[kithara::test]
 fn descriptor_at_time_clamps_to_last() {
     let ctx = test_ctx(3);
@@ -437,7 +708,7 @@ fn rebuild_refills_queue_without_touching_cancel_token() {
 fn dispatch_emits_init_first_then_segments_under_budget() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400], &ctx);
-    let init_url = v.store.init().url.clone();
+    let init_url = v.store.init().expect_pending().url.clone();
     let seg0_url = v.store.segments()[0].url.clone();
     let seg1_url = v.store.segments()[1].url.clone();
     let seg2_url = v.store.segments()[2].url.clone();
@@ -467,9 +738,8 @@ fn dispatch_respects_budget() {
 fn dispatch_skips_non_missing_segments() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
-    v.store.init().state.mark_loaded();
     v.store.segments()[1].state.mark_loaded();
-    v.queue.lock_sync().clear();
+    v.queue.lock().clear();
     for seg in 0..3_u32 {
         push_planned(&v, seg);
     }
@@ -479,15 +749,80 @@ fn dispatch_skips_non_missing_segments() {
 }
 
 #[kithara::test]
+fn dispatch_requeues_orphaned_downloading_segment() {
+    // Root C seek-rebuild race: a seek re-queues the target segment while an
+    // old (now-orphaned) prefetch still holds it `Downloading`. `dispatch`
+    // pops the segment then fails `try_claim` (slot is Downloading) — it must
+    // NOT silently drop the popped-but-unclaimed segment. Once the orphaned
+    // fetch settles back to `Missing`, a later dispatch must re-fetch it, else
+    // the reader blocked on that segment hangs forever (`recv_outcome_blocking`
+    // 5s watchdog). Pinned by `player_worker_hls_then_unavailable_mp3_then_mp3_recovery`.
+    let ctx = test_ctx(5);
+    let v = make_var(0, 0, &[100, 100, 100], &ctx);
+
+    // seg 1 is mid-flight under an orphaned claim (Missing -> Downloading).
+    let orphan = v.store.segments()[1]
+        .state
+        .try_claim(PlannedFetch::Segment(1), Arc::downgrade(&v))
+        .expect("seg 1 must be claimable");
+
+    v.queue.lock().clear();
+    for seg in 0..3_u32 {
+        push_planned(&v, seg);
+    }
+
+    // First dispatch: seg 0 + seg 2 emit; seg 1 is Downloading -> claim fails.
+    let cmds = v.dispatch(&ctx, 10);
+    assert_eq!(
+        cmds.len(),
+        2,
+        "seg 0 and seg 2 dispatch; seg 1 is in-flight"
+    );
+
+    // The orphaned fetch settles back to Missing (cancel before commit) — the
+    // unsettled `DownloadClaim` Drop reverts the slot to Missing.
+    drop(orphan);
+    assert!(
+        !v.store.segments()[1].state.is_loaded(),
+        "orphaned claim drop reverts seg 1 to Missing"
+    );
+
+    // A later dispatch (reader re-aim / next poll) MUST re-fetch seg 1. Before
+    // the fix the segment was popped+dropped from the queue and lost, so this
+    // returned 0 and the reader hung.
+    let cmds2 = v.dispatch(&ctx, 10);
+    assert_eq!(
+        cmds2.len(),
+        1,
+        "seg 1 (orphaned -> Missing) must be re-dispatched, not lost from the queue"
+    );
+}
+
+#[kithara::test]
+fn phase_at_reports_waiting_demand_for_claimed_segment() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    let claim = v.store.segments()[0]
+        .state
+        .try_claim(PlannedFetch::Segment(0), Arc::downgrade(&v))
+        .expect("segment claim");
+
+    assert_eq!(v.phase_at(0..16), SourcePhase::WaitingDemand);
+
+    claim.into_missing();
+    assert_eq!(v.phase_at(0..16), SourcePhase::Waiting);
+}
+
+#[kithara::test]
 fn on_evict_returns_minus_one_for_init() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[100, 100, 100], &ctx);
-    v.store.init().state.mark_loaded();
+    v.store.init().expect_pending().state.mark_loaded();
     v.store.segments()[1].state.mark_loaded();
-    let key = v.store.init().resource_id.clone();
+    let key = v.store.init().expect_pending().resource_id.clone();
     let res = v.on_evict(&key);
     assert_eq!(res, Some(-1));
-    assert!(!v.store.init().state.is_loaded());
+    assert!(!v.store.init().expect_pending().state.is_loaded());
     assert!(
         v.store.segments()[1].state.is_loaded(),
         "init eviction must not touch segment states"
@@ -534,7 +869,6 @@ fn skeleton_types_instantiate() {
 fn dispatch_drm_segment_routes_through_with_ctx() {
     let ctx = test_ctx(3);
     let init = make_init(0, &ctx.scope);
-    init.state.mark_loaded();
     let url: Url = "https://example.com/seg0.m4s".parse().expect("valid url");
     let resource_id = ctx.scope.key_from_url(&url);
     let key = *b"0123456789abcdef";
@@ -552,7 +886,7 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
         VariantParts {
             init,
             playlist_state: Arc::new(PlaylistState::new(Vec::new())),
-            timeline: Timeline::new(),
+            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
             codec: None,
             container: None,
             segments: vec![seg],
@@ -630,7 +964,6 @@ fn position_advances_are_strictly_monotonic() {
 fn dispatch_cmd_cancel_shares_cancellation_with_variant_cancel() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100], &ctx);
-    v.store.init().state.mark_loaded();
     let variant_cancel = v.cancel_handle();
     for seg in 0..2_u32 {
         push_planned(&v, seg);
@@ -655,8 +988,6 @@ fn variant_flip_cancels_v_old_and_keeps_v_new_token_live() {
     let ctx = test_ctx(3);
     let v_old = make_var(0, 0, &[100; 20], &ctx);
     let v_new = make_var(1, 0, &[200; 20], &ctx);
-    v_old.store.init().state.mark_loaded();
-    v_new.store.init().state.mark_loaded();
     let v_old_token = v_old.cancel_handle();
     let v_new_token = v_new.cancel_handle();
 
@@ -724,20 +1055,26 @@ fn wait_range_probes_without_sleeping() {
 }
 
 /// The flush short-circuit remains reachable and immediate after the
-/// non-blocking-pull conversion: a flushing timeline yields `Interrupted`
+/// non-blocking-pull conversion: a flushing seek state yields `Interrupted`
 /// without spinning on the budget signal.
 #[kithara::test]
 fn wait_range_flush_short_circuits_without_sleeping() {
     let ctx = test_ctx(3);
-    let timeline = Timeline::new();
-    let v = make_var_with_timeline(0, 200, &[400], &ctx, timeline.clone());
+    let seek = Arc::new(SeekState::new());
+    let v = make_var_with_seek_obs(
+        0,
+        200,
+        &[400],
+        &ctx,
+        Arc::clone(&seek) as Arc<dyn SeekObserve>,
+    );
 
-    let _ = timeline.initiate_seek(Duration::from_millis(10));
+    let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
     let started = Instant::now();
     let interrupted = v.wait_range(0..1, Some(Duration::from_millis(10)));
     assert!(
         matches!(interrupted, Ok(WaitOutcome::Interrupted)),
-        "flushing timeline must Interrupt the probe, got {interrupted:?}"
+        "flushing seek state must Interrupt the probe, got {interrupted:?}"
     );
     assert!(
         started.elapsed() < Duration::from_millis(2),
