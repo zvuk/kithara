@@ -23,7 +23,6 @@ gitlab_project = "disrupt/kithara"
 gitlab_package = "kithara"
 asset = "KitharaFFIInternal.xcframework.zip"
 single_asset = "Kithara.xcframework.zip"
-podspec = "Kithara.podspec"
 
 [lint_exclude]
 # Test code dropped from EVERY lint namespace (arch, style, idioms) so baselines

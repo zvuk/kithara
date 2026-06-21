@@ -46,11 +46,8 @@ let package = Package(
 )
 ```
 
-For CocoaPods consumers, use the release podspec:
-
-```ruby
-pod 'Kithara', '0.0.1-alpha3'
-```
+For manual integration, download `Kithara.xcframework.zip` from the release
+assets and add the unpacked `Kithara.xcframework` to the app target.
 
 ## Development
 

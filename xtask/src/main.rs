@@ -97,7 +97,7 @@ enum Command {
     /// Publish all public crates to crates.io in dependency order.
     Publish(PublishArgs),
     /// Apple release flow: prepare (stamp manifests) and publish
-    /// (GitHub release + `GitLab` mirror + `CocoaPods` trunk).
+    /// (GitHub release + `GitLab` mirror).
     Release(ReleaseArgs),
     /// Translate scope tokens to tool-specific flags (used by `just audit`).
     Scope(ScopeArgs),

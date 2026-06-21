@@ -67,13 +67,9 @@ pub(crate) struct ReleaseConfig {
     pub(crate) gitlab_package: String,
     /// Primary release asset: the SPM Rust `XCFramework` zip.
     pub(crate) asset: String,
-    /// Optional single self-contained framework zip (`CocoaPods` + manual
-    /// drag-in). Empty disables those channels.
+    /// Optional single self-contained framework zip for manual drag-in. Empty
+    /// disables that channel.
     pub(crate) single_asset: String,
-    /// Optional `CocoaPods` podspec file name; stamped on prepare and
-    /// published (GitHub + `GitLab` mirror + trunk) on publish. Empty
-    /// disables the `CocoaPods` channel.
-    pub(crate) podspec: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
