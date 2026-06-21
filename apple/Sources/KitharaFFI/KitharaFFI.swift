@@ -685,6 +685,11 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * This does not change queue state. If playback is active, the
      * native output stream is recreated so CoreAudio/CPAL cannot keep a
      * stale route after headphones or Bluetooth devices are removed.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the native player cannot schedule the
+     * route invalidation.
      */
     func notifyAudioRouteChanged(reason: String) throws 
     
@@ -1046,6 +1051,11 @@ open func items() -> [AudioPlayerItem]  {
      * This does not change queue state. If playback is active, the
      * native output stream is recreated so CoreAudio/CPAL cannot keep a
      * stale route after headphones or Bluetooth devices are removed.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the native player cannot schedule the
+     * route invalidation.
      */
 open func notifyAudioRouteChanged(reason: String)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_notify_audio_route_changed(
@@ -5126,7 +5136,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_items() != 23485) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 30097) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 14847) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_pause() != 42092) {

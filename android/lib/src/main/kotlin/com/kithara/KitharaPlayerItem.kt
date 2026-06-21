@@ -39,11 +39,15 @@ class KitharaPlayerItem(
     preferredPeakBitrateForExpensiveNetworks: Double = 0.0,
     abrMode: FfiAbrMode? = null,
     isLiveStream: Boolean = false,
+    audioId: ULong? = null,
+    uuid: Long? = null,
 ) {
     internal val inner: FfiAudioPlayerItem = FfiAudioPlayerItem(
         FfiItemConfig(
             abrMode = abrMode,
+            audioId = audioId,
             headers = additionalHeaders,
+            uuidI64 = uuid,
             url = url,
             preferredPeakBitrate = preferredPeakBitrate,
             preferredPeakBitrateExpensive = preferredPeakBitrateForExpensiveNetworks,
