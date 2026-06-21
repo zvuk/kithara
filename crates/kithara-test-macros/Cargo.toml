@@ -12,7 +12,7 @@ categories = ["development-tools::testing"]
 proc-macro = true
 
 [dependencies]
-syn = { workspace = true, features = ["extra-traits"] }
+syn = { workspace = true, features = ["extra-traits", "visit-mut"] }
 quote = { workspace = true }
 proc-macro2 = { workspace = true }
 
