@@ -168,8 +168,8 @@ pub(crate) enum AppleCommand {
         profile: crate::BuildProfile,
     },
     /// Build ONE self-contained `Kithara.xcframework` (Swift API + `UniFFI`
-    /// binding + Rust core merged into a single module) for drag-in /
-    /// `CocoaPods` consumers. See `apple/README.md` "Distribution channels".
+    /// binding + Rust core merged into a single module) for manual drag-in
+    /// consumers. See `apple/README.md` "Distribution channels".
     Single {
         /// Build profile for the underlying Rust `XCFramework`.
         #[arg(long, default_value_t = crate::BuildProfile::Release)]
@@ -503,8 +503,8 @@ struct ArchBuild<'a> {
 ///
 /// The three Swift layers (`KitharaFFI` generated binding, `Kithara` API,
 /// `KitharaRx`) are merged into a single module and the Rust static lib is
-/// merged into the framework binary, so a drag-in / `CocoaPods` consumer needs
-/// no extra modules or flags. See `apple/README.md` for why the merge +
+/// merged into the framework binary, so a manual drag-in consumer needs no
+/// extra modules or flags. See `apple/README.md` for why the merge +
 /// `internal import` post-pass is necessary (`UniFFI` leaks `RustBuffer`).
 fn run_single(profile: crate::BuildProfile) -> Result<()> {
     let metadata = MetadataCommand::new()

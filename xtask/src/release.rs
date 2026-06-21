@@ -96,7 +96,6 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
     println!("Cached artifact: {}", cached.display());
 
     let tag = tag_of(version);
-    let mut single_sha256 = None;
     if !cfg.single_asset.is_empty() {
         let built = env::temp_dir().join(&cfg.single_asset);
         if built.is_file() {
@@ -106,7 +105,6 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
             println!("Cached artifact: {}", dest.display());
             let checksum = sha256(&built)?;
             println!("Checksum {}: {}", cfg.single_asset, checksum);
-            single_sha256 = Some(checksum);
         } else {
             println!(
                 "Note: {} not at {} — single-framework channel skipped (omit --zip to build it)",
@@ -114,21 +112,6 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
                 built.display()
             );
         }
-    }
-    if !cfg.podspec.is_empty() {
-        let checksum = single_sha256.as_deref().with_context(|| {
-            format!(
-                "{} needs {}; run `cargo xtask release prepare {version}` without --zip so \
-                 `cargo xtask apple release` builds both Apple artifacts",
-                cfg.podspec, cfg.single_asset
-            )
-        })?;
-        let source_url = github_asset_url(cfg, &tag, &cfg.single_asset);
-        let content =
-            fs::read_to_string(&cfg.podspec).with_context(|| format!("read {}", cfg.podspec))?;
-        let stamped = stamp_podspec(&content, version, &source_url, checksum)?;
-        fs::write(&cfg.podspec, stamped).with_context(|| format!("write {}", cfg.podspec))?;
-        println!("Stamped {}: version={version}", cfg.podspec);
     }
 
     println!();
@@ -165,9 +148,12 @@ fn publish(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
         false => None,
     };
 
-    publish_github(cfg, &tag, &sha, &checksum, zip.as_deref())?;
-    publish_gitlab(cfg, &tag, &sha, &checksum, zip.as_deref())?;
-    publish_extras(cfg, &tag, &sha)?;
+    let notes = release_notes(cfg, &tag, &sha, &checksum)?;
+
+    publish_github(cfg, &tag, &sha, &notes, zip.as_deref())?;
+    publish_gitlab(cfg, &tag, &sha, &notes, &checksum, zip.as_deref())?;
+    publish_extras(cfg, &tag)?;
+    sync_gitlab_distribution_links(cfg, &tag)?;
 
     println!();
     println!("Release {tag} published:");
@@ -186,23 +172,39 @@ fn publish_github(
     cfg: &ReleaseConfig,
     tag: &str,
     sha: &str,
-    checksum: &str,
+    notes: &str,
     zip: Option<&Path>,
 ) -> Result<()> {
     let repo = &cfg.github_repo;
-    let exists = Command::new("gh")
+    let view = Command::new("gh")
         .args(["release", "view", tag, "--repo", repo])
         .output()
-        .context("run gh release view")?
-        .status
-        .success();
+        .context("run gh release view")?;
+    let exists = if view.status.success() {
+        true
+    } else {
+        let text = command_output_text(&view);
+        if gh_release_missing(&text) {
+            false
+        } else {
+            bail!("gh release view failed: {}", text.trim());
+        }
+    };
 
     if exists {
         println!("[github] release {tag} already exists");
+        println!("[github] updating release notes for {tag}...");
+        let title = release_title(tag);
+        run_step(
+            Command::new("gh").args([
+                "release", "edit", tag, "--repo", repo, "--title", &title, "--notes", notes,
+            ]),
+            "gh release edit",
+        )?;
     } else {
         let zip = zip_required(zip, cfg, tag)?;
-        let notes = release_notes(cfg, tag, checksum);
         println!("[github] creating release {tag}...");
+        let title = release_title(tag);
         run_step(
             Command::new("gh").args([
                 "release",
@@ -213,9 +215,9 @@ fn publish_github(
                 "--target",
                 sha,
                 "--title",
-                tag,
+                &title,
                 "--notes",
-                &notes,
+                notes,
                 &zip.display().to_string(),
             ]),
             "gh release create",
@@ -251,10 +253,11 @@ fn publish_gitlab(
     cfg: &ReleaseConfig,
     tag: &str,
     sha: &str,
+    notes: &str,
     checksum: &str,
     zip: Option<&Path>,
 ) -> Result<()> {
-    let token = gitlab_token()?;
+    let token = gitlab_token(&cfg.gitlab_host)?;
     let api = GitlabApi::new(cfg, &token);
 
     let (code, _) = api.get(&format!("repository/tags/{tag}"))?;
@@ -277,11 +280,8 @@ fn publish_gitlab(
         other => bail!("gitlab tag lookup failed (HTTP {other})"),
     }
 
-    let pkg_url = format!(
-        "packages/generic/{}/{tag}/{}",
-        cfg.gitlab_package, cfg.asset
-    );
-    match api.package_file_sha(tag)? {
+    let pkg_path = gitlab_package_path(cfg, tag, &cfg.asset);
+    match api.package_file_sha(tag, &cfg.asset)? {
         Some(sha256) if sha256 == checksum => {
             println!("[gitlab] package {tag} already in registry");
         }
@@ -292,28 +292,36 @@ fn publish_gitlab(
         None => {
             let zip = zip_required(zip, cfg, tag)?;
             println!("[gitlab] uploading {} to package registry...", cfg.asset);
-            let (code, body) = api.upload(&pkg_url, zip)?;
+            let (code, body) = api.upload(&pkg_path, zip)?;
             if code != 201 {
                 bail!("gitlab package upload failed (HTTP {code}): {body}");
             }
         }
     }
 
+    let links = vec![gitlab_release_link(cfg, tag, &cfg.asset)];
     let (code, _) = api.get(&format!("releases/{tag}"))?;
     match code {
-        200 => println!("[gitlab] release {tag} already exists"),
+        200 => {
+            println!("[gitlab] release {tag} already exists");
+            println!("[gitlab] updating release notes for {tag}...");
+            let payload = json!({
+                "name": release_title(tag),
+                "description": notes,
+            });
+            let (code, body) = api.put(&format!("releases/{tag}"), Some(&payload.to_string()))?;
+            if code != 200 {
+                bail!("gitlab release update failed (HTTP {code}): {body}");
+            }
+            sync_gitlab_release_links(&api, tag, &links)?;
+        }
         404 => {
             println!("[gitlab] creating release {tag}...");
-            let link_url = format!("{}/{pkg_url}", api.project_base());
             let payload = json!({
                 "tag_name": tag,
-                "name": tag,
-                "description": release_notes(cfg, tag, checksum),
-                "assets": { "links": [{
-                    "name": cfg.asset,
-                    "url": link_url,
-                    "link_type": "package",
-                }]},
+                "name": release_title(tag),
+                "description": notes,
+                "assets": { "links": links.iter().map(GitlabReleaseLink::as_json).collect::<Vec<_>>() },
             });
             let (code, body) = api.post("releases", Some(&payload.to_string()))?;
             if code != 201 {
@@ -325,12 +333,10 @@ fn publish_gitlab(
     Ok(())
 }
 
-/// Publish the secondary channels: the single self-contained framework zip
-/// (`CocoaPods` + manual drag-in) and the `CocoaPods` podspec. Both are uploaded
-/// to the GitHub release and mirrored to the `GitLab` generic registry (so
-/// internal builds resolve them via `KITHARA_BINARY_BASE_URL`); the podspec
-/// is also pushed to the public `CocoaPods` trunk.
-fn publish_extras(cfg: &ReleaseConfig, tag: &str, sha: &str) -> Result<()> {
+/// Publish the secondary single self-contained framework zip. It is uploaded
+/// to the GitHub release and mirrored to the `GitLab` generic registry so
+/// manual Apple integrations can download the same bytes.
+fn publish_extras(cfg: &ReleaseConfig, tag: &str) -> Result<()> {
     if !cfg.single_asset.is_empty() {
         let zip = cache_named(tag, &cfg.single_asset)?;
         if !zip.is_file() {
@@ -343,15 +349,14 @@ fn publish_extras(cfg: &ReleaseConfig, tag: &str, sha: &str) -> Result<()> {
         upload_github_asset(&cfg.github_repo, tag, &zip)?;
         upload_gitlab_asset(cfg, tag, &cfg.single_asset, &zip)?;
     }
-    if !cfg.podspec.is_empty() {
-        let content = git_capture(&["show", &format!("{sha}:{}", cfg.podspec)])?;
-        let tmp = env::temp_dir().join(&cfg.podspec);
-        fs::write(&tmp, content).with_context(|| format!("write {}", tmp.display()))?;
-        upload_github_asset(&cfg.github_repo, tag, &tmp)?;
-        upload_gitlab_asset(cfg, tag, &cfg.podspec, &tmp)?;
-        cocoapods_push(&tmp)?;
-    }
     Ok(())
+}
+
+fn sync_gitlab_distribution_links(cfg: &ReleaseConfig, tag: &str) -> Result<()> {
+    let token = gitlab_token(&cfg.gitlab_host)?;
+    let api = GitlabApi::new(cfg, &token);
+    let links = gitlab_release_links(cfg, tag);
+    sync_gitlab_release_links(&api, tag, &links)
 }
 
 /// Upload (or replace) one asset on an existing GitHub release.
@@ -371,27 +376,28 @@ fn upload_github_asset(repo: &str, tag: &str, file: &Path) -> Result<()> {
 
 /// Mirror one asset to the `GitLab` generic package registry under the tag.
 fn upload_gitlab_asset(cfg: &ReleaseConfig, tag: &str, name: &str, file: &Path) -> Result<()> {
-    let token = gitlab_token()?;
+    let token = gitlab_token(&cfg.gitlab_host)?;
     let api = GitlabApi::new(cfg, &token);
-    let path = format!("packages/generic/{}/{tag}/{name}", cfg.gitlab_package);
+    let actual_sha = sha256(file)?;
+    match api.package_file_sha(tag, name)? {
+        Some(existing_sha) if existing_sha == actual_sha => {
+            println!("[gitlab] package asset {name} already uploaded");
+            return Ok(());
+        }
+        Some(existing_sha) => bail!(
+            "gitlab package asset {name} has sha256 {existing_sha}, expected {actual_sha}; \
+             delete the broken package file and re-run"
+        ),
+        None => {}
+    }
+
+    let path = gitlab_package_path(cfg, tag, name);
     println!("[gitlab] uploading {name} to package registry...");
     let (code, body) = api.upload(&path, file)?;
     if code != 200 && code != 201 {
         bail!("gitlab upload of {name} failed (HTTP {code}): {body}");
     }
     Ok(())
-}
-
-/// Push the podspec to the public `CocoaPods` trunk.
-fn cocoapods_push(podspec: &Path) -> Result<()> {
-    check_tool("pod", &["--version"], "sudo gem install cocoapods")?;
-    println!("[cocoapods] pod trunk push {}...", podspec.display());
-    run_step(
-        Command::new("pod")
-            .args(["trunk", "push", "--allow-warnings"])
-            .arg(podspec),
-        "pod trunk push",
-    )
 }
 
 struct GitlabApi {
@@ -413,16 +419,20 @@ impl GitlabApi {
         }
     }
 
-    fn project_base(&self) -> &str {
-        &self.base
-    }
-
     fn get(&self, path: &str) -> Result<(u16, String)> {
         self.curl(&[], path)
     }
 
     fn post(&self, path: &str, body: Option<&str>) -> Result<(u16, String)> {
         let mut extra = vec!["--request", "POST"];
+        if let Some(json) = body {
+            extra.extend(["--header", "Content-Type: application/json", "--data", json]);
+        }
+        self.curl(&extra, path)
+    }
+
+    fn put(&self, path: &str, body: Option<&str>) -> Result<(u16, String)> {
+        let mut extra = vec!["--request", "PUT"];
         if let Some(json) = body {
             extra.extend(["--header", "Content-Type: application/json", "--data", json]);
         }
@@ -477,7 +487,7 @@ impl GitlabApi {
 
     /// sha256 of the asset file in the generic registry for `tag`,
     /// or None when the package or file does not exist yet.
-    fn package_file_sha(&self, tag: &str) -> Result<Option<String>> {
+    fn package_file_sha(&self, tag: &str, name: &str) -> Result<Option<String>> {
         let (code, body) = self.get(&format!("packages?package_version={tag}"))?;
         if code != 200 {
             bail!("gitlab package lookup failed (HTTP {code}): {body}");
@@ -502,6 +512,7 @@ impl GitlabApi {
             .as_array()
             .into_iter()
             .flatten()
+            .filter(|f| f["file_name"].as_str() == Some(name))
             .filter_map(|f| f["file_sha256"].as_str())
             .next_back()
             .map(str::to_string);
@@ -509,18 +520,121 @@ impl GitlabApi {
     }
 }
 
+#[derive(Debug)]
+struct GitlabReleaseLink {
+    name: String,
+    url: String,
+}
+
+impl GitlabReleaseLink {
+    fn as_json(&self) -> Value {
+        json!({
+            "name": &self.name,
+            "url": &self.url,
+            "link_type": "package",
+        })
+    }
+}
+
+fn gitlab_release_links(cfg: &ReleaseConfig, tag: &str) -> Vec<GitlabReleaseLink> {
+    let mut links = vec![gitlab_release_link(cfg, tag, &cfg.asset)];
+    if !cfg.single_asset.is_empty() {
+        links.push(gitlab_release_link(cfg, tag, &cfg.single_asset));
+    }
+    links
+}
+
+fn gitlab_release_link(cfg: &ReleaseConfig, tag: &str, name: &str) -> GitlabReleaseLink {
+    GitlabReleaseLink {
+        name: name.to_string(),
+        url: gitlab_package_url(cfg, tag, name),
+    }
+}
+
+fn sync_gitlab_release_links(
+    api: &GitlabApi,
+    tag: &str,
+    links: &[GitlabReleaseLink],
+) -> Result<()> {
+    let (code, body) = api.get(&format!("releases/{tag}/assets/links"))?;
+    if code != 200 {
+        bail!("gitlab release links lookup failed (HTTP {code}): {body}");
+    }
+    let existing: Value = serde_json::from_str(&body).context("parse release links json")?;
+    for link in links {
+        let existing_link = existing
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|item| item["name"].as_str() == Some(link.name.as_str()));
+        match existing_link {
+            Some(item) if item["url"].as_str() == Some(link.url.as_str()) => {
+                println!(
+                    "[gitlab] release link {} already points to package",
+                    link.name
+                );
+            }
+            Some(item) => {
+                let id = item["id"]
+                    .as_i64()
+                    .with_context(|| format!("gitlab release link {} missing id", link.name))?;
+                println!("[gitlab] updating release link {}...", link.name);
+                let (code, body) = api.put(
+                    &format!("releases/{tag}/assets/links/{id}"),
+                    Some(&link.as_json().to_string()),
+                )?;
+                if code != 200 {
+                    bail!(
+                        "gitlab release link update for {} failed (HTTP {code}): {body}",
+                        link.name
+                    );
+                }
+            }
+            None => {
+                println!("[gitlab] adding release link {}...", link.name);
+                let (code, body) = api.post(
+                    &format!("releases/{tag}/assets/links"),
+                    Some(&link.as_json().to_string()),
+                )?;
+                if code != 201 {
+                    bail!(
+                        "gitlab release link create for {} failed (HTTP {code}): {body}",
+                        link.name
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn gitlab_package_path(cfg: &ReleaseConfig, tag: &str, name: &str) -> String {
+    format!("packages/generic/{}/{tag}/{name}", cfg.gitlab_package)
+}
+
+fn gitlab_package_url(cfg: &ReleaseConfig, tag: &str, name: &str) -> String {
+    format!(
+        "https://{}/api/v4/projects/{}/{}",
+        cfg.gitlab_host,
+        cfg.gitlab_project.replace('/', "%2F"),
+        gitlab_package_path(cfg, tag, name)
+    )
+}
+
 /// `GITLAB_TOKEN` env wins; otherwise reuse the local `glab` session so the
 /// release flow works without extra setup on a developer machine.
-fn gitlab_token() -> Result<String> {
+fn gitlab_token(host: &str) -> Result<String> {
     if let Ok(token) = env::var("GITLAB_TOKEN")
         && !token.trim().is_empty()
     {
         return Ok(token.trim().to_string());
     }
     let output = Command::new("glab")
-        .args(["auth", "status", "--show-token"])
+        .args(["auth", "status", "--hostname", host, "--show-token"])
         .output()
-        .context("run glab auth status (set GITLAB_TOKEN or install glab)")?;
+        .with_context(|| {
+            format!("run glab auth status for {host} (set GITLAB_TOKEN or install glab)")
+        })?;
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -531,30 +645,159 @@ fn gitlab_token() -> Result<String> {
         .find_map(|line| line.split("Token found: ").nth(1))
         .map(str::trim)
         .filter(|t| !t.is_empty() && !t.starts_with('*'))
-        .context("no usable token from glab; set GITLAB_TOKEN or run `glab auth login`")?;
+        .with_context(|| {
+            format!(
+                "no usable token from glab for {host}; set GITLAB_TOKEN or run `glab auth login`"
+            )
+        })?;
     Ok(token.to_string())
 }
 
-fn release_notes(cfg: &ReleaseConfig, tag: &str, checksum: &str) -> String {
-    format!(
-        "## XCFramework checksum\n\n```\n{checksum}\n```\n\n\
-         ## Swift Package Manager\n\n\
-         GitHub: `.package(url: \"https://github.com/{repo}\", from: \"{version}\")`\n\n\
-         GitLab mirror: add the package from `https://{host}/{project}.git` and resolve with\n\n\
-         ```\nKITHARA_BINARY_BASE_URL=https://{host}/api/v4/projects/{project_enc}/packages/generic/{package}\n```\n",
-        repo = cfg.github_repo,
-        version = tag.trim_start_matches('v'),
-        host = cfg.gitlab_host,
-        project = cfg.gitlab_project,
-        project_enc = cfg.gitlab_project.replace('/', "%2F"),
-        package = cfg.gitlab_package,
-    )
+fn release_notes(cfg: &ReleaseConfig, tag: &str, sha: &str, checksum: &str) -> Result<String> {
+    let version = tag.trim_start_matches('v');
+    let body = changelog_section(sha, version)
+        .or_else(|| generated_release_summary(sha, tag).ok())
+        .unwrap_or_else(|| {
+            "This release contains the changes merged since the previous published tag.".to_string()
+        });
+    let single_checksum = if !cfg.single_asset.is_empty() {
+        let single = cache_named(tag, &cfg.single_asset)?;
+        if single.is_file() {
+            Some(sha256(&single)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    Ok(render_release_notes(
+        cfg,
+        tag,
+        body.trim(),
+        checksum,
+        single_checksum.as_deref(),
+    ))
 }
 
-fn github_asset_url(cfg: &ReleaseConfig, tag: &str, asset: &str) -> String {
+fn render_release_notes(
+    cfg: &ReleaseConfig,
+    tag: &str,
+    body: &str,
+    checksum: &str,
+    single_checksum: Option<&str>,
+) -> String {
+    let mut notes = format!("## {}\n\n{}", release_title(tag), body.trim());
+    notes.push_str("\n\n## Artifacts\n\n");
+    notes.push_str(&format!("- `{}` for Swift Package Manager.\n", cfg.asset));
+    if !cfg.single_asset.is_empty() {
+        notes.push_str(&format!(
+            "- `{}` for manual Apple integration.\n",
+            cfg.single_asset
+        ));
+    }
+    notes.push_str("- Rust crates are versioned and published in dependency order.\n");
+
+    notes.push_str("\n## Checksums\n\n```text\n");
+    notes.push_str(&format!("{}\n{}\n", cfg.asset, checksum));
+    if let Some(single_checksum) = single_checksum {
+        notes.push_str(&format!("\n{}\n{}\n", cfg.single_asset, single_checksum));
+    }
+    notes.push_str("```\n");
+
+    notes
+}
+
+fn release_title(tag: &str) -> String {
+    format!("Kithara {}", tag.trim_start_matches('v'))
+}
+
+fn changelog_section(sha: &str, version: &str) -> Option<String> {
+    let Ok(changelog) = git_capture(&["show", &format!("{sha}:CHANGELOG.md")]) else {
+        return None;
+    };
+    let headings = [
+        format!("## [{version}]"),
+        format!("## [v{version}]"),
+        format!("## {version}"),
+        format!("## v{version}"),
+    ];
+    let mut out = Vec::new();
+    let mut in_section = false;
+    for line in changelog.lines() {
+        if line.starts_with("## ") {
+            if in_section {
+                break;
+            }
+            in_section = headings.iter().any(|heading| line.starts_with(heading));
+            continue;
+        }
+        if in_section {
+            out.push(line);
+        }
+    }
+    let section = out.join("\n").trim().to_string();
+    (!section.is_empty()).then_some(section)
+}
+
+fn generated_release_summary(sha: &str, tag: &str) -> Result<String> {
+    let previous = previous_release_tag(sha, tag).ok();
+    let range = previous
+        .as_ref()
+        .map_or_else(|| sha.to_string(), |prev| format!("{prev}..{sha}"));
+    let log = git_capture(&["log", "--first-parent", "--pretty=%s", &range])?;
+    let subjects: Vec<_> = log
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.starts_with("fix(release):"))
+        .map(normalize_release_subject)
+        .collect();
+    if subjects.is_empty() {
+        return Ok("This release contains packaging and release maintenance updates.".to_string());
+    }
+
+    let mut out = String::from(
+        "This release includes the main product and SDK changes merged since the previous published tag.\n\n### Highlights\n",
+    );
+    for subject in subjects {
+        out.push_str("- ");
+        out.push_str(&subject);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+fn previous_release_tag(sha: &str, tag: &str) -> Result<String> {
+    git_capture(&["describe", "--tags", "--abbrev=0", &format!("{sha}^")]).and_then(|prev| {
+        if prev == tag {
+            bail!("previous tag resolved to current release tag");
+        }
+        Ok(prev)
+    })
+}
+
+fn normalize_release_subject(subject: &str) -> String {
+    subject
+        .strip_prefix("feat:")
+        .or_else(|| subject.strip_prefix("fix:"))
+        .or_else(|| subject.strip_prefix("refactor:"))
+        .or_else(|| subject.strip_prefix("chore:"))
+        .map_or(subject, str::trim)
+        .to_string()
+}
+
+fn gh_release_missing(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    text.contains("release not found")
+        || (text.contains("not found") && text.contains("404"))
+        || text.contains("http 404")
+}
+
+fn command_output_text(output: &std::process::Output) -> String {
     format!(
-        "https://github.com/{}/releases/download/{tag}/{asset}",
-        cfg.github_repo
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     )
 }
 
@@ -631,37 +874,6 @@ fn stamp_manifest(manifest: &str, version: &str, checksum: &str) -> Result<Strin
     }
     if !seen_version || !seen_checksum {
         bail!("Package.swift is missing the `let version` / `let checksum` lines");
-    }
-    Ok(out)
-}
-
-/// Replace the podspec release fields. Bails when any line is missing so a
-/// refactor cannot silently ship an unstamped podspec.
-fn stamp_podspec(content: &str, version: &str, source_url: &str, checksum: &str) -> Result<String> {
-    let mut out = String::with_capacity(content.len());
-    let mut seen_version = false;
-    let mut seen_url = false;
-    let mut seen_checksum = false;
-    for line in content.split_inclusive('\n') {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("s.version") {
-            let indent = &line[..line.len() - trimmed.len()];
-            out.push_str(&format!("{indent}s.version = '{version}'\n"));
-            seen_version = true;
-        } else if trimmed.starts_with(":http =>") {
-            let indent = &line[..line.len() - trimmed.len()];
-            out.push_str(&format!("{indent}:http => '{source_url}',\n"));
-            seen_url = true;
-        } else if trimmed.starts_with(":sha256 =>") {
-            let indent = &line[..line.len() - trimmed.len()];
-            out.push_str(&format!("{indent}:sha256 => '{checksum}'\n"));
-            seen_checksum = true;
-        } else {
-            out.push_str(line);
-        }
-    }
-    if !seen_version || !seen_url || !seen_checksum {
-        bail!("podspec is missing `s.version`, `:http`, or `:sha256` release fields");
     }
     Ok(out)
 }
@@ -791,36 +1003,7 @@ mod tests {
     }
 
     #[test]
-    fn stamp_podspec_replaces_release_fields() {
-        let src = "\
-Pod::Spec.new do |s|
-  s.name = 'Kithara'
-  s.version = '0.0.1-alpha3'
-  s.source = {
-    :http => 'old',
-    :sha256 => 'abc'
-  }
-end
-";
-        let out = stamp_podspec(
-            src,
-            "0.0.2",
-            "https://example.test/Kithara.xcframework.zip",
-            "deadbeef",
-        )
-        .unwrap();
-        assert!(out.contains("  s.version = '0.0.2'\n"), "{out}");
-        assert!(
-            out.contains("    :http => 'https://example.test/Kithara.xcframework.zip',\n"),
-            "{out}"
-        );
-        assert!(out.contains("    :sha256 => 'deadbeef'\n"), "{out}");
-        assert!(!out.contains("0.0.1-alpha3"), "{out}");
-        assert!(stamp_podspec("s.name = 'x'\n", "0.0.2", "url", "sha").is_err());
-    }
-
-    #[test]
-    fn release_notes_mention_both_hosts() {
+    fn release_notes_render_release_content() {
         let cfg = ReleaseConfig {
             github_repo: "zvuk/kithara".into(),
             gitlab_host: "gitlab.zvq.me".into(),
@@ -828,12 +1011,66 @@ end
             gitlab_package: "kithara".into(),
             asset: "KitharaFFIInternal.xcframework.zip".into(),
             single_asset: "Kithara.xcframework.zip".into(),
-            podspec: "Kithara.podspec".into(),
         };
-        let notes = release_notes(&cfg, "v0.0.2", "deadbeef");
-        assert!(notes.contains("deadbeef"));
-        assert!(notes.contains("github.com/zvuk/kithara"));
-        assert!(notes.contains("disrupt%2Fkithara/packages/generic/kithara"));
-        assert!(notes.contains("from: \"0.0.2\""));
+        let notes = render_release_notes(
+            &cfg,
+            "v0.0.2",
+            "### Highlights\n- Better release notes.",
+            "internal-sha",
+            Some("single-sha"),
+        );
+        assert!(notes.contains("## Kithara 0.0.2"), "{notes}");
+        assert!(notes.contains("Better release notes"), "{notes}");
+        assert!(
+            notes.contains("KitharaFFIInternal.xcframework.zip\ninternal-sha"),
+            "{notes}"
+        );
+        assert!(
+            notes.contains("Kithara.xcframework.zip\nsingle-sha"),
+            "{notes}"
+        );
+        assert!(notes.contains("manual Apple integration"), "{notes}");
+        assert!(!notes.contains("CocoaPods"), "{notes}");
+        assert!(!notes.contains("Kithara.podspec"), "{notes}");
+        assert!(!notes.contains("gitlab.zvq.me"), "{notes}");
+    }
+
+    #[test]
+    fn gitlab_release_links_include_active_distribution_assets() {
+        let cfg = ReleaseConfig {
+            github_repo: "zvuk/kithara".into(),
+            gitlab_host: "gitlab.zvq.me".into(),
+            gitlab_project: "disrupt/kithara".into(),
+            gitlab_package: "kithara".into(),
+            asset: "KitharaFFIInternal.xcframework.zip".into(),
+            single_asset: "Kithara.xcframework.zip".into(),
+        };
+
+        let links = gitlab_release_links(&cfg, "v0.0.2");
+        let names: Vec<_> = links.iter().map(|link| link.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "KitharaFFIInternal.xcframework.zip",
+                "Kithara.xcframework.zip",
+            ]
+        );
+        assert!(
+            links.iter().all(|link| link.url.contains(
+                "https://gitlab.zvq.me/api/v4/projects/disrupt%2Fkithara/packages/generic/kithara/v0.0.2/"
+            )),
+            "{links:#?}"
+        );
+    }
+
+    #[test]
+    fn gh_release_missing_does_not_hide_auth_failures() {
+        assert!(gh_release_missing("HTTP 404: release not found"));
+        assert!(!gh_release_missing(
+            "Get https://api.github.com/repos/zvuk/kithara/releases/tags/v0.0.1-alpha3: Forbidden"
+        ));
+        assert!(!gh_release_missing(
+            "The token in keyring is invalid. To re-authenticate, run: gh auth refresh"
+        ));
     }
 }
