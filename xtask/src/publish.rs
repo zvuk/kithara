@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -30,6 +30,11 @@ pub(crate) struct PublishArgs {
     #[arg(long)]
     dry_run: bool,
 
+    /// During dry-run, verify publishable crates whose workspace deps are
+    /// already available on crates.io using `cargo publish --dry-run`.
+    #[arg(long, requires = "dry_run")]
+    verify_registry: bool,
+
     /// Delay in seconds between publishes [default: 20].
     /// Skipped during dry-run. For first-time publishing of new crates,
     /// use 610 (crates.io allows 5 new crates burst, then 1 per 10 min).
@@ -59,7 +64,8 @@ pub(crate) fn run(args: &PublishArgs) -> Result<()> {
 
     if args.dry_run {
         println!("Mode: dry-run (validate packaging without upload)");
-        run_dry_run(&order)?;
+        let project = ProjectConfig::load(Path::new("."))?;
+        run_dry_run(&order, args.verify_registry, &project.publish)?;
     } else {
         println!("Mode: publish ({}s delay between crates)", args.delay);
         println!();
@@ -77,7 +83,7 @@ pub(crate) fn run(args: &PublishArgs) -> Result<()> {
 /// Uses `cargo package --list` to verify that each crate can be packaged
 /// (correct metadata, included files, license). Does not resolve deps from
 /// crates.io, so it works even when workspace deps are not yet published.
-fn run_dry_run(order: &[String]) -> Result<()> {
+fn run_dry_run(order: &[String], verify_registry: bool, publish: &PublishConfig) -> Result<()> {
     println!("  Disabling hakari workspace-hack...");
     run_cargo(&["hakari", "disable"], "cargo hakari disable")?;
 
@@ -86,7 +92,13 @@ fn run_dry_run(order: &[String]) -> Result<()> {
     println!("  Re-enabling hakari workspace-hack...");
     run_cargo(&["hakari", "generate"], "cargo hakari generate")?;
 
-    result
+    result?;
+
+    if verify_registry {
+        run_registry_dry_run(order, publish)?;
+    }
+
+    Ok(())
 }
 
 fn run_dry_run_inner(order: &[String]) -> Result<()> {
@@ -145,7 +157,12 @@ fn run_publish(order: &[String], delay: u64, publish: &PublishConfig) -> Result<
 
         println!("[{pos}/{total}] Publishing {name} v{version}...");
         let manifest = &manifests[name];
-        publish_one(name, manifest, &publish.workspace_hack_crate)?;
+        publish_one(
+            name,
+            manifest,
+            &publish.workspace_hack_crate,
+            PublishMode::Upload,
+        )?;
         published_count += 1;
         last_action_was_publish = true;
     }
@@ -155,6 +172,60 @@ fn run_publish(order: &[String], delay: u64, publish: &PublishConfig) -> Result<
         "Published {published_count} crate(s); {} already on crates.io.",
         order.len() - published_count
     );
+    Ok(())
+}
+
+fn run_registry_dry_run(order: &[String], publish: &PublishConfig) -> Result<()> {
+    let manifests = locate_manifests(order)?;
+    let versions = locate_versions(order)?;
+    let deps = locate_publishable_workspace_deps(order)?;
+
+    println!();
+    println!("Registry dry-run (cargo publish --dry-run where dependency state allows):");
+
+    for (i, name) in order.iter().enumerate() {
+        let pos = i + 1;
+        let total = order.len();
+        let version = &versions[name];
+
+        if registry_has(name, version, &publish.user_agent)? {
+            println!("[{pos}/{total}] Skipping {name} v{version} (already on crates.io).");
+            continue;
+        }
+
+        let missing_deps = deps
+            .get(name)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|dep| {
+                let dep_version = &versions[dep];
+                match registry_has(dep, dep_version, &publish.user_agent) {
+                    Ok(true) => None,
+                    Ok(false) => Some(Ok(format!("{dep} v{dep_version}"))),
+                    Err(err) => Some(Err(err)),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        if !missing_deps.is_empty() {
+            println!(
+                "[{pos}/{total}] Skipping registry dry-run for {name} v{version} \
+                 (workspace deps not on crates.io yet: {}).",
+                missing_deps.join(", ")
+            );
+            continue;
+        }
+
+        println!("[{pos}/{total}] Registry dry-run for {name} v{version}...");
+        publish_one(
+            name,
+            &manifests[name],
+            &publish.workspace_hack_crate,
+            PublishMode::DryRun,
+        )?;
+    }
+
     Ok(())
 }
 
@@ -251,11 +322,64 @@ fn locate_manifests(order: &[String]) -> Result<HashMap<String, PathBuf>> {
     Ok(out)
 }
 
-fn publish_one(name: &str, manifest: &Path, hack_crate: &str) -> Result<()> {
+fn locate_publishable_workspace_deps(order: &[String]) -> Result<HashMap<String, Vec<String>>> {
+    let metadata = MetadataCommand::new()
+        .exec()
+        .context("failed to run cargo metadata")?;
+    let workspace_members: HashSet<_> = metadata.workspace_members.iter().collect();
+    let wanted: HashSet<&str> = order.iter().map(String::as_str).collect();
+
+    let mut out = HashMap::new();
+    for pkg in &metadata.packages {
+        if !workspace_members.contains(&pkg.id) {
+            continue;
+        }
+        if !wanted.contains(pkg.name.as_str()) {
+            continue;
+        }
+
+        let deps: BTreeSet<_> = pkg
+            .dependencies
+            .iter()
+            .filter(|dep| dep.path.is_some() && dep.kind != DependencyKind::Development)
+            .map(|dep| dep.name.to_string())
+            .filter(|dep_name| wanted.contains(dep_name.as_str()) && dep_name != pkg.name.as_str())
+            .collect();
+        out.insert(pkg.name.to_string(), deps.into_iter().collect());
+    }
+
+    Ok(out)
+}
+
+#[derive(Clone, Copy)]
+enum PublishMode {
+    DryRun,
+    Upload,
+}
+
+impl PublishMode {
+    fn cargo_args(self, name: &str) -> Vec<&str> {
+        let mut args = vec!["publish", "-p", name, "--allow-dirty"];
+        if matches!(self, Self::DryRun) {
+            args.push("--dry-run");
+        }
+        args
+    }
+
+    fn description(self, name: &str) -> String {
+        match self {
+            Self::DryRun => format!("cargo publish --dry-run -p {name}"),
+            Self::Upload => format!("cargo publish -p {name}"),
+        }
+    }
+}
+
+fn publish_one(name: &str, manifest: &Path, hack_crate: &str, mode: PublishMode) -> Result<()> {
     let original = fs::read_to_string(manifest)
         .with_context(|| format!("read {} for {name}", manifest.display()))?;
     let stripped = strip_workspace_hack(&original, hack_crate);
     let did_strip = stripped != original;
+    let lockfile = PublishLockfile::snapshot()?;
 
     if did_strip {
         fs::write(manifest, &stripped)
@@ -263,19 +387,71 @@ fn publish_one(name: &str, manifest: &Path, hack_crate: &str) -> Result<()> {
         println!("  Temporarily removed {hack_crate} dependency.");
     }
 
-    let result = run_cargo(
-        &["publish", "-p", name, "--allow-dirty"],
-        &format!("cargo publish -p {name}"),
-    );
+    let args = mode.cargo_args(name);
+    let result = run_cargo(&args, &mode.description(name));
 
-    if did_strip && let Err(restore_err) = fs::write(manifest, &original) {
-        eprintln!(
-            "  WARNING: failed to restore {}: {restore_err}",
-            manifest.display()
-        );
+    let restore_result = restore_publish_inputs(manifest, &original, did_strip, lockfile);
+    if let Err(restore_err) = restore_result {
+        return match result {
+            Ok(()) => Err(restore_err),
+            Err(run_err) => Err(run_err)
+                .with_context(|| format!("also failed to restore publish inputs: {restore_err}")),
+        };
     }
 
     result
+}
+
+fn restore_publish_inputs(
+    manifest: &Path,
+    original_manifest: &str,
+    did_strip: bool,
+    lockfile: PublishLockfile,
+) -> Result<()> {
+    let mut errors = Vec::new();
+
+    if did_strip && let Err(err) = fs::write(manifest, original_manifest) {
+        errors.push(format!("restore {}: {err}", manifest.display()));
+    }
+
+    if let Err(err) = lockfile.restore() {
+        errors.push(format!("restore Cargo.lock: {err}"));
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        bail!("{}", errors.join("; "))
+    }
+}
+
+struct PublishLockfile {
+    path: PathBuf,
+    contents: Option<String>,
+}
+
+impl PublishLockfile {
+    fn snapshot() -> Result<Self> {
+        let path = PathBuf::from("Cargo.lock");
+        let contents = match fs::read_to_string(&path) {
+            Ok(contents) => Some(contents),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err).with_context(|| format!("read {}", path.display())),
+        };
+        Ok(Self { path, contents })
+    }
+
+    fn restore(self) -> Result<()> {
+        match self.contents {
+            Some(contents) => fs::write(&self.path, contents)
+                .with_context(|| format!("restore {}", self.path.display())),
+            None => match fs::remove_file(&self.path) {
+                Ok(()) => Ok(()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(err) => Err(err).with_context(|| format!("remove {}", self.path.display())),
+            },
+        }
+    }
 }
 
 /// Remove every `kithara-workspace-hack = { ... }` dependency line, regardless
