@@ -5,6 +5,7 @@ import Testing
 
 @Suite("KitharaPlayer")
 struct KitharaPlayerTests {
+    final class LegacyItem {}
 
     @Test("init creates player with unknown status")
     func initCreatesPlayerWithUnknownStatus() {
@@ -70,6 +71,27 @@ struct KitharaPlayerTests {
         #expect(player.currentAudioItem?.uuid == item.uuid)
         #expect(observed == [nil, item.uuid])
         _ = cancellable
+    }
+
+    @Test("represented item follows queue identity")
+    func representedItemFollowsQueueIdentity() throws {
+        let player = KitharaPlayer()
+        let represented = LegacyItem()
+        let item = KitharaPlayerItem(
+            url: "https://example.com/represented.mp3",
+            audioId: 42,
+            uuid: 123
+        )
+
+        try player.insert(item, representing: represented)
+
+        #expect(player.currentItemRepresentation(as: LegacyItem.self) === represented)
+        #expect(player.itemRepresentations(as: LegacyItem.self).first === represented)
+
+        try player.remove(item)
+
+        #expect(player.currentItemRepresentation(as: LegacyItem.self) == nil)
+        #expect(player.itemRepresentations(as: LegacyItem.self).isEmpty)
     }
 
     @Test("setupNetwork stores auth token")

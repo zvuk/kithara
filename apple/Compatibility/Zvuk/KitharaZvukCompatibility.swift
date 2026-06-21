@@ -12,10 +12,10 @@ final class KitharaZvukAudioPlayer: AudioPlayerProtocol {
     }
 
     var rxCurrentAudioItem: Observable<(any AudioPlayerItemProtocol)?> {
-        kitharaPlayer.currentItem
+        kitharaPlayer.currentItemRepresentationPublisher(as: KitharaZvukAudioPlayerItem.self)
             .asRxObservable()
             .map { item -> (any AudioPlayerItemProtocol)? in
-                item as? KitharaZvukAudioPlayerItem
+                item
             }
     }
 
@@ -30,7 +30,7 @@ final class KitharaZvukAudioPlayer: AudioPlayerProtocol {
     }
 
     var currentAudioItem: (any AudioPlayerItemProtocol)? {
-        kitharaPlayer.currentAudioItem as? KitharaZvukAudioPlayerItem
+        kitharaPlayer.currentItemRepresentation(as: KitharaZvukAudioPlayerItem.self)
     }
 
     var playingRate: Float {
@@ -48,21 +48,25 @@ final class KitharaZvukAudioPlayer: AudioPlayerProtocol {
     }
 
     func items() -> [any AudioPlayerItemProtocol] {
-        kitharaPlayer.items().compactMap { $0 as? KitharaZvukAudioPlayerItem }
+        kitharaPlayer.itemRepresentations(as: KitharaZvukAudioPlayerItem.self)
     }
 
     func insert(_ item: any AudioPlayerItemProtocol, after afterItem: (any AudioPlayerItemProtocol)?) {
-        guard let item = item.kitharaPlayerItem else { return }
-        let after = afterItem?.kitharaPlayerItem
+        guard let item = item as? KitharaZvukAudioPlayerItem else { return }
+        let after = afterItem.flatMap { $0 as? KitharaZvukAudioPlayerItem }
         guard afterItem == nil || after != nil else { return }
 
-        try? kitharaPlayer.insert(item, after: after)
+        try? kitharaPlayer.insert(
+            item.kitharaPlayerItem,
+            representing: item,
+            after: after?.kitharaPlayerItem
+        )
     }
 
     func remove(_ item: any AudioPlayerItemProtocol) {
-        guard let item = item.kitharaPlayerItem else { return }
+        guard let item = item as? KitharaZvukAudioPlayerItem else { return }
 
-        try? kitharaPlayer.remove(item)
+        try? kitharaPlayer.remove(item.kitharaPlayerItem)
     }
 
     func advanceToNextItem() {
@@ -106,13 +110,14 @@ final class KitharaZvukAudioPlayer: AudioPlayerProtocol {
     }
 }
 
-final class KitharaZvukAudioPlayerItem: KitharaPlayerItem, AudioPlayerItemProtocol, @unchecked Sendable {
+final class KitharaZvukAudioPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
+    fileprivate let kitharaPlayerItem: KitharaPlayerItem
     private let playabilityStartTolerance: TimeInterval
 
     init(
         url: URL,
-        audioId: TrackId,
-        uuid: Int64,
+        audioId: TrackId? = nil,
+        uuid: Int64? = nil,
         playabilityStartTolerance: TimeInterval = .zero,
         additionalHeaders: [String: String]? = nil,
         preferredPeakBitrate: Double = 0,
@@ -120,7 +125,7 @@ final class KitharaZvukAudioPlayerItem: KitharaPlayerItem, AudioPlayerItemProtoc
         abrMode: AbrMode? = nil
     ) {
         self.playabilityStartTolerance = playabilityStartTolerance
-        super.init(
+        self.kitharaPlayerItem = KitharaPlayerItem(
             url: url.absoluteString,
             audioId: audioId,
             uuid: uuid,
@@ -131,8 +136,28 @@ final class KitharaZvukAudioPlayerItem: KitharaPlayerItem, AudioPlayerItemProtoc
         )
     }
 
+    var durationSec: Double {
+        kitharaPlayerItem.durationSec
+    }
+
+    var url: URL {
+        kitharaPlayerItem.url
+    }
+
+    var audioId: TrackId {
+        kitharaPlayerItem.audioId
+    }
+
+    var uuid: Int64 {
+        kitharaPlayerItem.uuid
+    }
+
+    var isLiveStream: Bool {
+        kitharaPlayerItem.isLiveStream
+    }
+
     var rxLoadedRanges: Observable<[AudioPlayer.ItemLoadedRange]> {
-        loadedRanges
+        kitharaPlayerItem.loadedRanges
             .asRxObservable()
             .map { ranges in
                 ranges.map { range in
@@ -142,19 +167,19 @@ final class KitharaZvukAudioPlayerItem: KitharaPlayerItem, AudioPlayerItemProtoc
     }
 
     var rxReadyToPlay: Observable<Void> {
-        readyToPlay.asRxObservable()
+        kitharaPlayerItem.readyToPlay.asRxObservable()
     }
 
     var rxDidReachEnd: Observable<Void> {
-        didReachEnd.asRxObservable()
+        kitharaPlayerItem.didReachEnd.asRxObservable()
     }
 
     var rxDidStall: Observable<Void> {
-        didStall.asRxObservable()
+        kitharaPlayerItem.didStall.asRxObservable()
     }
 
     var rxBitrate: Observable<Int32> {
-        bitrate.asRxObservable()
+        kitharaPlayerItem.bitrate.asRxObservable()
     }
 
     func load() -> Observable<AudioPlayer.ItemLoadResult> {
@@ -167,18 +192,16 @@ final class KitharaZvukAudioPlayerItem: KitharaPlayerItem, AudioPlayerItemProtoc
     }
 
     func isPlayable(progress: Progress, and ranges: [AudioPlayer.ItemLoadedRange]) -> Bool {
-        isPlayable(progress: progress, ranges: ranges, startTolerance: playabilityStartTolerance)
+        kitharaPlayerItem.isPlayable(
+            progress: progress,
+            ranges: ranges,
+            startTolerance: playabilityStartTolerance
+        )
     }
 }
 
 extension Player.Progress: PlaybackProgressSource {}
 extension AudioPlayer.ItemLoadedRange: ItemLoadedRangeSource {}
-
-private extension AudioPlayerItemProtocol {
-    var kitharaPlayerItem: KitharaPlayerItem? {
-        self as? KitharaPlayerItem
-    }
-}
 
 private extension PlayerErrorMapper {
     static func map(error: KitharaPlayerError) -> PlayerError? {

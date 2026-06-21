@@ -399,6 +399,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     /// Items inserted via ``insert(_:after:)``, preserving Swift identity.
     private var _knownItems: [KitharaFFI.TrackId: KitharaPlayerItem] = [:]
+    private var _knownRepresentations: [KitharaFFI.TrackId: AnyObject] = [:]
 
     private func syncCurrentItem(with event: FfiPlayerEvent) {
         guard case let .currentItemChanged(itemId) = event else { return }
@@ -432,6 +433,31 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
     }
 
+    /// Current item represented as a caller-owned wrapper type, when the item
+    /// was inserted through ``insert(_:representing:after:)``.
+    public func currentItemRepresentation<T: AnyObject>(as type: T.Type = T.self) -> T? {
+        currentAudioItem.flatMap { _knownRepresentations[$0.ffiTrackId] as? T }
+    }
+
+    /// Current item representation publisher. Emits the caller-owned wrapper
+    /// object registered by ``insert(_:representing:after:)``.
+    public func currentItemRepresentationPublisher<T: AnyObject>(
+        as type: T.Type = T.self
+    ) -> AnyPublisher<T?, Never> {
+        _currentItemSubject
+            .map { [weak self] item -> T? in
+                guard let self, let item else { return nil }
+                return self._knownRepresentations[item.ffiTrackId] as? T
+            }
+            .eraseToAnyPublisher()
+    }
+
+    /// Queue represented as caller-owned wrapper objects, preserving Rust queue
+    /// order.
+    public func itemRepresentations<T: AnyObject>(as type: T.Type = T.self) -> [T] {
+        items().compactMap { _knownRepresentations[$0.ffiTrackId] as? T }
+    }
+
     /// Insert an item into the queue.
     ///
     /// - Parameters:
@@ -453,6 +479,23 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             _knownItems.removeValue(forKey: item.ffiTrackId)
             let error = KitharaError(ffi: ffiError)
             publishCommandError(error, itemId: item.audioId)
+            throw error
+        }
+    }
+
+    /// Insert an item while registering a caller-owned wrapper object for UI /
+    /// legacy protocol surfaces. Playback still uses `item`; representation
+    /// accessors return `representation`.
+    public func insert<T: AnyObject>(
+        _ item: KitharaPlayerItem,
+        representing representation: T,
+        after: KitharaPlayerItem? = nil
+    ) throws {
+        _knownRepresentations[item.ffiTrackId] = representation
+        do {
+            try insert(item, after: after)
+        } catch {
+            _knownRepresentations.removeValue(forKey: item.ffiTrackId)
             throw error
         }
     }
@@ -484,6 +527,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         do {
             try _inner.remove(item: item._inner)
             _knownItems.removeValue(forKey: item.ffiTrackId)
+            _knownRepresentations.removeValue(forKey: item.ffiTrackId)
             if _currentItemSubject.value?.ffiTrackId == item.ffiTrackId {
                 publishQueueHeadAsCurrent()
             }
@@ -498,6 +542,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     public func removeAllItems() {
         _inner.removeAllItems()
         _knownItems.removeAll()
+        _knownRepresentations.removeAll()
         publishCurrentItem(nil)
     }
 
@@ -516,7 +561,12 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         let oldItems = items()
         let replacesCurrent = oldItems.indices.contains(index)
             && oldItems[index].ffiTrackId == _currentItemSubject.value?.ffiTrackId
+        let oldItemId = oldItems.indices.contains(index) ? oldItems[index].ffiTrackId : nil
+        let oldRepresentation = oldItemId.flatMap { _knownRepresentations[$0] }
         _knownItems[item.ffiTrackId] = item
+        if let oldItemId {
+            _knownRepresentations.removeValue(forKey: oldItemId)
+        }
         do {
             try _inner.replaceItem(index: UInt32(index), item: item._inner)
             if replacesCurrent {
@@ -524,6 +574,9 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             }
         } catch let ffiError as FfiError {
             _knownItems.removeValue(forKey: item.ffiTrackId)
+            if let oldItemId, let oldRepresentation {
+                _knownRepresentations[oldItemId] = oldRepresentation
+            }
             let error = KitharaError(ffi: ffiError)
             publishCommandError(error, itemId: item.audioId)
             throw error
