@@ -13,6 +13,20 @@ categories = ["network-programming", "asynchronous"]
 workspace = true
 
 [features]
+default = ["client-reqwest", "tls-rustls"]
+# HTTP client backend. Pick exactly one per target. `client-wreq` (BoringSSL +
+# browser TLS/HTTP2 emulation, native-only) defeats anti-bot WAF JA3
+# fingerprinting and takes precedence when both unify; `client-reqwest`
+# (pure-Rust) is the portable default. `client-wreq` is unavailable on wasm32
+# (BoringSSL has no wasm target). See CONTEXT.md "HTTP client backends".
+client-reqwest = ["dep:reqwest"]
+client-wreq = ["dep:wreq", "dep:wreq-util"]
+# TLS backend for the `client-reqwest` path. No effect on `client-wreq` (always
+# BoringSSL). `tls-rustls` is the default; `tls-native` uses the platform TLS
+# (Apple Secure Transport / SChannel / OpenSSL). Both are no-ops on wasm32,
+# where the browser owns TLS.
+tls-rustls = ["reqwest?/rustls"]
+tls-native = ["reqwest?/native-tls"]
 probe = []
 mock = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
@@ -25,32 +39,45 @@ kithara-test-macros = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 num-traits = { workspace = true }
-reqwest = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 async-trait = { workspace = true }
 unimock = { workspace = true }
 hotpath = { workspace = true, optional = true }
+# `client-reqwest` backend (native + wasm). reqwest gates its own TLS /
+# compression deps behind `cfg(not(wasm32))`, so the compression / cookie / TLS
+# features here are inert on wasm and selected on native.
+reqwest = { workspace = true, optional = true, features = [
+    "stream",
+    "gzip",
+    "brotli",
+    "deflate",
+    "zstd",
+    "cookies",
+] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
-reqwest = { workspace = true, features = [
+# `client-wreq` backend (native only — BoringSSL has no wasm target).
+wreq = { workspace = true, optional = true, features = [
     "brotli",
     "cookies",
     "deflate",
     "gzip",
-    "rustls",
     "stream",
     "zstd",
 ] }
+wreq-util = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-reqwest = { workspace = true, features = ["stream"] }
 gloo-timers = { workspace = true }
 
 [dev-dependencies]
-kithara-net = { path = ".", default-features = false }
+kithara-net = { path = ".", default-features = false, features = [
+    "client-reqwest",
+    "tls-rustls",
+] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
 futures = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -24,6 +24,7 @@ unimock = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
 
 [features]
+default = ["client-reqwest", "tls-rustls"]
 # No-op shim retained so `#[kithara::probe]` macro expansions
 # (which emit `cfg(any(test, feature = "probe"))`) don't trigger
 # `unexpected_cfgs` warnings on this crate. No production code is
@@ -31,6 +32,11 @@ kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspac
 # in plan async-juggling-plum.md.
 probe = []
 mock = []
+# HTTP backend forwarding (kithara-net reached via kithara-events).
+client-reqwest = ["kithara-events/client-reqwest"]
+client-wreq = ["kithara-events/client-wreq"]
+tls-rustls = ["kithara-events/tls-rustls"]
+tls-native = ["kithara-events/tls-native"]
 
 [dev-dependencies]
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }

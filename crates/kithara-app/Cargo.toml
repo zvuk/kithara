@@ -11,6 +11,17 @@ workspace = true
 [features]
 default = ["tui", "gui", "beat-nn"]
 tui = ["dep:ratatui", "dep:crossterm"]
+# HTTP backend forwarding to every kithara-net-reaching production dep
+# (kithara facade + kithara-queue). NOT in `default`: the backend is selected
+# per target (macOS desktop pulls `apple` → client-wreq; other desktops pull
+# client-reqwest via the non-Apple target block below), so exactly one HTTP
+# stack lands in each build. The dev-only kithara-net mirrors the same
+# per-target split (see the target `dev-dependencies` below) so test builds
+# stay single-stack too.
+client-reqwest = ["kithara/client-reqwest", "kithara-queue/client-reqwest"]
+client-wreq = ["kithara/client-wreq", "kithara-queue/client-wreq"]
+tls-rustls = ["kithara/tls-rustls", "kithara-queue/tls-rustls"]
+tls-native = ["kithara/tls-native", "kithara-queue/tls-native"]
 gui = ["dep:iced"]
 # NN beat/downbeat detection.
 beat-nn = ["kithara/beat-nn"]
@@ -25,10 +36,10 @@ stretch-bungee = ["kithara/stretch-bungee"]
 stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 
 [dependencies]
-kithara = { workspace = true, features = ["file", "hls"] }
+kithara = { workspace = true, default-features = false, features = ["file", "hls"] }
 kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
-kithara-queue = { workspace = true, features = ["backend-cpal"] }
+kithara-queue = { workspace = true, default-features = false, features = ["backend-cpal"] }
 kithara-test-utils = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -49,7 +60,7 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-kithara = { workspace = true, features = ["apple"] }
+kithara = { workspace = true, default-features = false, features = ["apple"] }
 
 # Desktop (non-Apple, non-Android, native) — fall back to symphonia
 # software decoding. workspace.dependencies now disables kithara's
@@ -57,15 +68,25 @@ kithara = { workspace = true, features = ["apple"] }
 # `cargo build` on Linux/Windows would leave the binary with no audio
 # backend at all.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
-kithara = { workspace = true, features = ["symphonia", "fdk-aac"] }
+kithara = { workspace = true, default-features = false, features = ["symphonia", "fdk-aac", "client-reqwest", "tls-rustls"] }
 
 [dev-dependencies]
-kithara-net = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 futures = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+# Dev-only kithara-net mirrors the per-target production backend so test
+# builds stay single-stack: macOS tests run wreq (matching the `apple`
+# production path), every other desktop runs client-reqwest. Without this
+# split a fixed client-reqwest dev-dep would unify with the macOS wreq
+# production path and compile both stacks into the test binary.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+kithara-net = { workspace = true, default-features = false, features = ["client-wreq"] }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dev-dependencies]
+kithara-net = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
 
 [build-dependencies]
 serde = { workspace = true }

@@ -16,10 +16,10 @@ workspace = true
 arc-swap = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
-kithara-abr = { workspace = true }
-kithara-decode = { workspace = true }
+kithara-abr = { workspace = true, default-features = false }
+kithara-decode = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
-kithara-stream = { workspace = true }
+kithara-stream = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-beat = { workspace = true, optional = true }
 kithara-test-macros = { workspace = true }
@@ -40,9 +40,34 @@ hotpath = { workspace = true, optional = true }
 unimock = { workspace = true }
 
 [features]
-default = ["symphonia"]
+default = ["symphonia", "client-reqwest", "tls-rustls"]
 probe = []
 mock = []
+# HTTP backend forwarding to every kithara-net-reaching dep.
+client-reqwest = [
+    "kithara-stream/client-reqwest",
+    "kithara-events/client-reqwest",
+    "kithara-abr/client-reqwest",
+    "kithara-decode/client-reqwest",
+]
+client-wreq = [
+    "kithara-stream/client-wreq",
+    "kithara-events/client-wreq",
+    "kithara-abr/client-wreq",
+    "kithara-decode/client-wreq",
+]
+tls-rustls = [
+    "kithara-stream/tls-rustls",
+    "kithara-events/tls-rustls",
+    "kithara-abr/tls-rustls",
+    "kithara-decode/tls-rustls",
+]
+tls-native = [
+    "kithara-stream/tls-native",
+    "kithara-events/tls-native",
+    "kithara-abr/tls-native",
+    "kithara-decode/tls-native",
+]
 # Enable performance monitoring with hotpath-rs (timing only, minimal overhead)
 perf = ["dep:hotpath", "hotpath/hotpath"]
 # Enable memory profiling for examples (includes allocation tracking, adds overhead)
@@ -99,10 +124,12 @@ wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { workspace = true }
-reqwest = { workspace = true, features = ["rustls", "stream"] }
 tracing-subscriber = { workspace = true }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
 kithara-assets = { workspace = true }
-kithara-net = { workspace = true }
+kithara-net = { workspace = true, default-features = false, features = [
+    "client-reqwest",
+    "tls-rustls",
+] }
 hotpath = { workspace = true }

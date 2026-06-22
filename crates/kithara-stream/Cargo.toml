@@ -18,9 +18,9 @@ bon = { workspace = true }
 bytes = { workspace = true }
 delegate = { workspace = true }
 futures = { workspace = true }
-kithara-abr = { workspace = true }
+kithara-abr = { workspace = true, default-features = false }
 kithara-events = { workspace = true, features = ["abr", "downloader"] }
-kithara-net = { workspace = true }
+kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-test-utils = { workspace = true }
@@ -32,9 +32,31 @@ hotpath = { workspace = true, optional = true }
 unimock = { workspace = true }
 
 [features]
+default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 probe = []
 mock = []
+# HTTP backend forwarding to every kithara-net-reaching dep.
+client-reqwest = [
+    "kithara-net/client-reqwest",
+    "kithara-events/client-reqwest",
+    "kithara-abr/client-reqwest",
+]
+client-wreq = [
+    "kithara-net/client-wreq",
+    "kithara-events/client-wreq",
+    "kithara-abr/client-wreq",
+]
+tls-rustls = [
+    "kithara-net/tls-rustls",
+    "kithara-events/tls-rustls",
+    "kithara-abr/tls-rustls",
+]
+tls-native = [
+    "kithara-net/tls-native",
+    "kithara-events/tls-native",
+    "kithara-abr/tls-native",
+]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }

@@ -133,7 +133,9 @@ tools = { rustfmt = "rustfmt.toml", clippy = "clippy.toml", deny = "deny.toml" }
 framework-name = "Kithara"
 bundle-id = "io.zvuk.Kithara"
 short-version = "0.0.1"
-deployment-target = "16.0"
+# iOS 15 floor: consumer apps (e.g. Zvuk) still ship an iOS 15 minimum, and a
+# module built for iOS 16 cannot be imported by an iOS 15 target.
+deployment-target = "15.0"
 autolink-frameworks = [
     "AudioToolbox",
     "CoreAudio",
@@ -157,14 +159,20 @@ homepage = "https://github.com/zvuk/kithara"
 [workspace.dependencies]
 # Backend-bearing crates: default-features disabled at the workspace
 # level so apple / android xcframework builds don't transitively pull
-# symphonia through the default feature set. Consumers that need the
-# software backend (desktop, WASM, tests) opt in explicitly via
-# `features = ["symphonia"]`. Cargo refuses default-features overrides
-# through `workspace = true` inheritance, so the disable has to live
-# here on the workspace declaration.
+# symphonia (decode backend) or reqwest (HTTP backend) through the
+# default feature set. Consumers that need the software decode backend
+# opt in via `features = ["symphonia"]`; the HTTP backend is selected by
+# `client-reqwest` (default) / `client-wreq` (apple/android device) which
+# are global toggles on the single kithara-net package, re-forwarded by
+# each crate's own `client-reqwest`/`client-wreq`/`tls-*` features. Cargo
+# refuses default-features overrides through `workspace = true`
+# inheritance, so the disable has to live here on the workspace
+# declaration. (kithara-events / kithara-test-utils keep their defaults:
+# they carry domain features many consumers rely on implicitly and never
+# put an HTTP backend in their own default, so they cannot leak reqwest.)
 kithara = { path = "crates/kithara", version = "0.0.1-alpha3", default-features = false }
-kithara-abr = { path = "crates/kithara-abr", version = "0.0.1-alpha3" }
-kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha3" }
+kithara-abr = { path = "crates/kithara-abr", version = "0.0.1-alpha3", default-features = false }
+kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha3", default-features = false }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha3" }
 kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha3", default-features = false }
 kithara-beat = { path = "crates/kithara-beat", version = "0.0.1-alpha3" }
@@ -172,14 +180,14 @@ kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha3" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha3", default-features = false }
 kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha3" }
 kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha3" }
-kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha3" }
-kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha3" }
-kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha3" }
+kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha3", default-features = false }
+kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha3", default-features = false }
+kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha3", default-features = false }
 kithara-platform = { path = "crates/kithara-platform", version = "0.0.1-alpha3" }
 kithara-play = { path = "crates/kithara-play", version = "0.0.1-alpha3", default-features = false }
 kithara-queue = { path = "crates/kithara-queue", version = "0.0.1-alpha3", default-features = false }
-kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha3" }
-kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha3" }
+kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha3", default-features = false }
+kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha3", default-features = false }
 kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha3" }
 kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha3" }
 kithara-ffi = { path = "crates/kithara-ffi" }
@@ -203,6 +211,8 @@ slice_ring_buf = "0.3"
 async-stream = "0.3.6"
 crossbeam-queue = "0.3"
 reqwest = { version = "0.13.4", default-features = false }
+wreq = "5"
+wreq-util = "2"
 url = "2.5.8"
 axum = "0.8.9"
 hls_m3u8 = "0.7.0"

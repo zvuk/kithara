@@ -22,6 +22,21 @@ bitflags! {
     }
 }
 
+/// TLS+HTTP fingerprint the native `client-wreq` backend impersonates. The
+/// DRM keyserver sits behind an anti-bot WAF that fingerprints the TLS
+/// `ClientHello` (JA3) and 418-rejects non-browser stacks; presenting a real
+/// browser fingerprint via `wreq` is what gets a 200. Default `Safari` matches
+/// iOS `URLSession`; Android selects a different preset. Inert under the
+/// `client-reqwest` backend and on wasm32 (no emulation; the browser fetch
+/// already carries a real fingerprint).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ImpersonatePreset {
+    #[default]
+    Safari,
+    Chrome,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Headers {
     inner: HashMap<String, String>,
@@ -167,6 +182,11 @@ pub struct NetOptions {
     /// Set to 0 to disable pooling.
     #[builder(default = 8)]
     pub pool_max_idle_per_host: usize,
+    /// Browser TLS+HTTP2 fingerprint the native `client-wreq` backend
+    /// impersonates. Defaults to `Safari`. Ignored by the `client-reqwest`
+    /// backend and on wasm32 (no emulation there).
+    #[builder(default)]
+    pub impersonate: ImpersonatePreset,
 }
 
 impl Default for NetOptions {

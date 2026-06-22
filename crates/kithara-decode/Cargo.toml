@@ -13,7 +13,7 @@ categories = ["multimedia::audio"]
 workspace = true
 
 [dependencies]
-kithara-stream = { workspace = true }
+kithara-stream = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
@@ -49,7 +49,7 @@ ndk-context = { workspace = true }
 # an apple/android hardware-only build set `default-features = false`
 # and enable just the platform feature; consumers explicitly avoiding
 # libfdk-aac (LGPL + patent constraints) keep `["symphonia"]` only.
-default = ["symphonia", "fdk-aac"]
+default = ["symphonia", "fdk-aac", "client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 apple = [
     "dep:core-foundation",
@@ -68,6 +68,11 @@ symphonia = ["dep:symphonia"]
 fdk-aac = ["symphonia", "dep:symphonia-core", "dep:fdk-aac"]
 probe = []
 mock = []
+# HTTP backend forwarding (kithara-net reached via kithara-stream).
+client-reqwest = ["kithara-stream/client-reqwest"]
+client-wreq = ["kithara-stream/client-wreq"]
+tls-rustls = ["kithara-stream/tls-rustls"]
+tls-native = ["kithara-stream/tls-native"]
 
 [dev-dependencies]
 kithara-decode = { path = ".", default-features = false, features = ["symphonia"] }

@@ -13,18 +13,18 @@ categories = ["multimedia::audio"]
 workspace = true
 
 [dependencies]
-kithara-audio = { workspace = true }
-kithara-decode = { workspace = true }
+kithara-audio = { workspace = true, default-features = false }
+kithara-decode = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false, features = ["backend-cpal"] }
-kithara-stream = { workspace = true }
-kithara-file = { workspace = true, optional = true }
-kithara-hls = { workspace = true, optional = true }
+kithara-stream = { workspace = true, default-features = false }
+kithara-file = { workspace = true, optional = true, default-features = false }
+kithara-hls = { workspace = true, optional = true, default-features = false }
 kithara-assets = { workspace = true, optional = true }
 kithara-storage = { workspace = true, optional = true }
-kithara-net = { workspace = true, optional = true }
-kithara-abr = { workspace = true, optional = true }
+kithara-net = { workspace = true, optional = true, default-features = false }
+kithara-abr = { workspace = true, optional = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true, optional = true }
 kithara-test-macros = { workspace = true }
@@ -36,7 +36,55 @@ kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspac
 kithara-play = { workspace = true, default-features = false, features = ["backend-cpal", "wasm-bindgen"] }
 
 [features]
-default = ["file", "hls", "symphonia"]
+default = ["file", "hls", "symphonia", "client-reqwest", "tls-rustls"]
+# HTTP backend forwarding to every kithara-net-reaching dep. Optional deps
+# (kithara-net / kithara-file / kithara-hls / kithara-abr) use the weak `?`
+# form so a backend choice never force-enables them. apple/android already
+# forward `kithara-net?/client-wreq` below.
+client-reqwest = [
+    "kithara-net?/client-reqwest",
+    "kithara-stream/client-reqwest",
+    "kithara-file?/client-reqwest",
+    "kithara-hls?/client-reqwest",
+    "kithara-play/client-reqwest",
+    "kithara-audio/client-reqwest",
+    "kithara-decode/client-reqwest",
+    "kithara-events/client-reqwest",
+    "kithara-abr?/client-reqwest",
+]
+client-wreq = [
+    "kithara-net?/client-wreq",
+    "kithara-stream/client-wreq",
+    "kithara-file?/client-wreq",
+    "kithara-hls?/client-wreq",
+    "kithara-play/client-wreq",
+    "kithara-audio/client-wreq",
+    "kithara-decode/client-wreq",
+    "kithara-events/client-wreq",
+    "kithara-abr?/client-wreq",
+]
+tls-rustls = [
+    "kithara-net?/tls-rustls",
+    "kithara-stream/tls-rustls",
+    "kithara-file?/tls-rustls",
+    "kithara-hls?/tls-rustls",
+    "kithara-play/tls-rustls",
+    "kithara-audio/tls-rustls",
+    "kithara-decode/tls-rustls",
+    "kithara-events/tls-rustls",
+    "kithara-abr?/tls-rustls",
+]
+tls-native = [
+    "kithara-net?/tls-native",
+    "kithara-stream/tls-native",
+    "kithara-file?/tls-native",
+    "kithara-hls?/tls-native",
+    "kithara-play/tls-native",
+    "kithara-audio/tls-native",
+    "kithara-decode/tls-native",
+    "kithara-events/tls-native",
+    "kithara-abr?/tls-native",
+]
 # Enable the Symphonia software decoder path. Disable to compile with
 # only a hardware backend (apple/android) and no software fallback.
 symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia"]
@@ -82,8 +130,16 @@ perf = [
 # decodes HE-AAC v1/v2 natively via kAudioFormatMPEG4AAC_HE / _HE_V2
 # (see crates/kithara-decode/src/apple/codec.rs). fdk-aac stays
 # coupled to symphonia for desktop/WASM software fallback builds only.
-apple = ["kithara-audio/apple", "kithara-play/apple"]
-android = ["kithara-audio/android", "kithara-decode/android"]
+# Device builds default to the `client-wreq` HTTP backend (BoringSSL + browser
+# TLS/HTTP2 emulation): the DRM keyserver sits behind an anti-bot WAF that
+# 418-rejects non-browser TLS fingerprints. Weak (`?`) so it only flips when
+# `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
+apple = ["kithara-audio/apple", "kithara-play/apple", "kithara-net?/client-wreq"]
+android = [
+    "kithara-audio/android",
+    "kithara-decode/android",
+    "kithara-net?/client-wreq",
+]
 full = ["file", "hls", "assets", "net", "bufpool"]
 
 [dev-dependencies]

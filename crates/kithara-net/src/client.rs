@@ -7,19 +7,34 @@ use kithara_platform::{
     CancelToken,
     time::{Duration, timeout},
 };
-use reqwest::Client;
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "client-wreq")))]
+use reqwest::{
+    Client, ClientBuilder as HttpClientBuilder, RequestBuilder as HttpRequestBuilder,
+    Response as HttpResponse,
+};
+#[cfg(target_arch = "wasm32")]
+use reqwest::{Client, RequestBuilder as HttpRequestBuilder, Response as HttpResponse};
 use url::Url;
+#[cfg(all(not(target_arch = "wasm32"), feature = "client-wreq"))]
+use wreq::{
+    Client, ClientBuilder as HttpClientBuilder, RequestBuilder as HttpRequestBuilder,
+    Response as HttpResponse,
+};
 
 mod kithara {
     pub(crate) use kithara_test_macros::flash;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::types::Compression;
+#[cfg(all(not(target_arch = "wasm32"), feature = "client-wreq"))]
+use crate::types::ImpersonatePreset;
 use crate::{
     error::{NetError, NetResult},
     resumable::{Refetch, Resumed, resumable_body},
     retry::{DefaultRetryPolicy, RetryNet},
     traits::{Net, NetExt},
-    types::{Compression, Headers, NetOptions, RangeSpec},
+    types::{Headers, NetOptions, RangeSpec},
 };
 
 /// HTTP 206 Partial Content status code.
@@ -50,7 +65,7 @@ fn truncate_error_body(mut body: String) -> String {
 /// Read an error response's body for [`NetError::Status`] context — a real
 /// socket read, so the fn is one `flash(io)` bracket.
 #[kithara::flash(io)]
-async fn error_body(resp: reqwest::Response) -> String {
+async fn error_body(resp: HttpResponse) -> String {
     truncate_error_body(resp.text().await.unwrap_or_default())
 }
 
@@ -59,7 +74,7 @@ async fn error_body(resp: reqwest::Response) -> String {
 /// themselves: `#[async_trait]` rewrites them into sync constructors of boxed
 /// futures, which would drop the bracket before the I/O starts.
 #[kithara::flash(io)]
-async fn body_bytes(resp: reqwest::Response) -> Result<Bytes, NetError> {
+async fn body_bytes(resp: HttpResponse) -> Result<Bytes, NetError> {
     resp.bytes().await.map_err(NetError::from)
 }
 
@@ -74,11 +89,12 @@ fn status_error(url: Url, status: u16, body: String) -> NetError {
     }
 }
 
-/// Build a `reqwest::Client` with our default configuration. Native
-/// build applies pool / TLS / read-timeout knobs; wasm32 takes the
-/// builder defaults because most options aren't supported there.
+/// A native `ClientBuilder` transform. Used to disable individual
+/// compression algorithms (`no_gzip` etc.) so the advertised
+/// `Accept-Encoding` stays in lockstep with [`Compression`]. The builder
+/// type is the active native backend — `wreq` or `reqwest`.
 #[cfg(not(target_arch = "wasm32"))]
-type ClientBuilderMod = fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder;
+type ClientBuilderMod = fn(HttpClientBuilder) -> HttpClientBuilder;
 
 #[cfg(not(target_arch = "wasm32"))]
 impl From<Compression> for Vec<ClientBuilderMod> {
@@ -86,11 +102,11 @@ impl From<Compression> for Vec<ClientBuilderMod> {
         [
             (
                 Compression::GZIP,
-                reqwest::ClientBuilder::no_gzip as ClientBuilderMod,
+                HttpClientBuilder::no_gzip as ClientBuilderMod,
             ),
-            (Compression::DEFLATE, reqwest::ClientBuilder::no_deflate),
-            (Compression::BROTLI, reqwest::ClientBuilder::no_brotli),
-            (Compression::ZSTD, reqwest::ClientBuilder::no_zstd),
+            (Compression::DEFLATE, HttpClientBuilder::no_deflate),
+            (Compression::BROTLI, HttpClientBuilder::no_brotli),
+            (Compression::ZSTD, HttpClientBuilder::no_zstd),
         ]
         .into_iter()
         .filter(|(flag, _)| !c.contains(*flag))
@@ -99,13 +115,45 @@ impl From<Compression> for Vec<ClientBuilderMod> {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "client-wreq"))]
+impl From<ImpersonatePreset> for wreq_util::Emulation {
+    fn from(p: ImpersonatePreset) -> Self {
+        match p {
+            ImpersonatePreset::Safari => Self::Safari18,
+            ImpersonatePreset::Chrome => Self::Chrome137,
+        }
+    }
+}
+
+/// Build the HTTP `Client` (`client-wreq` backend): `BoringSSL` plus browser
+/// TLS/HTTP2 emulation so anti-bot WAFs that fingerprint the `ClientHello`
+/// (JA3) see a real browser. Applies pool / cert / compression knobs.
+///
+/// No client-level `.read_timeout`: the idle/stall timeout is owned by the
+/// resilient body (`resumable_body`), whose `sleep(inactivity_timeout)` routes
+/// through `kithara_platform::time` and so collapses under `flash`. A
+/// wall-clock client timer would double-own the stall and break simulation
+/// determinism.
+#[cfg(all(not(target_arch = "wasm32"), feature = "client-wreq"))]
+fn build_client(options: &NetOptions) -> wreq::Result<Client> {
+    let base = Client::builder()
+        .emulation(wreq_util::Emulation::from(options.impersonate))
+        .cookie_store(true)
+        .pool_max_idle_per_host(options.pool_max_idle_per_host)
+        .pool_idle_timeout(Some(Duration::from_secs(5)))
+        .cert_verification(!options.is_insecure);
+    Vec::<ClientBuilderMod>::from(options.compression)
+        .into_iter()
+        .fold(base, |b, disable| disable(b))
+        .build()
+}
+
+/// Build the HTTP `Client` (`client-reqwest` backend, native): pure-Rust TLS
+/// (`tls-rustls`/`tls-native`), no browser emulation. The stall timeout lives
+/// in `resumable_body`, not a client-level wall-clock timer (see the
+/// `client-wreq` arm for the `flash` rationale).
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "client-wreq")))]
 fn build_client(options: &NetOptions) -> reqwest::Result<Client> {
-    // No reqwest `.read_timeout`: the idle/stall timeout is owned by the
-    // resilient body (`resumable_body`), whose `sleep(inactivity_timeout)`
-    // routes through `kithara_platform::time` and so collapses under
-    // `flash`. reqwest's timer is real wall-clock and would both
-    // double-own the stall and break simulation determinism.
     let base = Client::builder()
         .cookie_store(true)
         .pool_max_idle_per_host(options.pool_max_idle_per_host)
@@ -117,13 +165,15 @@ fn build_client(options: &NetOptions) -> reqwest::Result<Client> {
         .build()
 }
 
+/// Build the HTTP `Client` (wasm32): the browser `fetch` backend owns TLS,
+/// connection pooling, and compression, so the builder takes its defaults.
 #[cfg(target_arch = "wasm32")]
 fn build_client(_options: &NetOptions) -> reqwest::Result<Client> {
     Client::builder().build()
 }
 
 /// Extract response headers into our [`Headers`] type.
-fn extract_headers(resp: &reqwest::Response) -> Headers {
+fn extract_headers(resp: &HttpResponse) -> Headers {
     let mut headers = Headers::new();
     let str_pairs = resp
         .headers()
@@ -135,7 +185,7 @@ fn extract_headers(resp: &reqwest::Response) -> Headers {
     headers
 }
 
-/// Raw HTTP client (one `reqwest::Client`, no retry layer). Lives
+/// Raw HTTP client (one `Client`, no retry layer). Lives
 /// behind [`HttpClient`]'s [`RetryNet`] decorator — exposed only via
 /// the [`Net`] trait, never constructed by callers directly.
 #[derive(Clone)]
@@ -148,10 +198,7 @@ struct RawHttp {
 }
 
 impl RawHttp {
-    fn apply_headers(
-        mut req: reqwest::RequestBuilder,
-        headers: Option<Headers>,
-    ) -> reqwest::RequestBuilder {
+    fn apply_headers(mut req: HttpRequestBuilder, headers: Option<Headers>) -> HttpRequestBuilder {
         if let Some(headers) = headers {
             for (k, v) in headers.iter() {
                 req = req.header(k, v);
@@ -161,12 +208,12 @@ impl RawHttp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn head_request(&self, url: Url) -> reqwest::RequestBuilder {
+    fn head_request(&self, url: Url) -> HttpRequestBuilder {
         self.inner.head(url)
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn head_request(&self, url: Url) -> reqwest::RequestBuilder {
+    fn head_request(&self, url: Url) -> HttpRequestBuilder {
         self.inner.get(url).header("Range", "bytes=0-0")
     }
 
@@ -192,7 +239,7 @@ impl RawHttp {
     /// Body-chunk awaits on this stream happen inside [`resumable_body`]'s
     /// `flash(io)` bracket (`next_chunk`) — every streaming fetch is wrapped
     /// by [`Self::wrap_resumable`] before it reaches a consumer.
-    fn response_to_stream(resp: reqwest::Response) -> crate::ByteStream {
+    fn response_to_stream(resp: HttpResponse) -> crate::ByteStream {
         let headers = extract_headers(&resp);
         let stream = resp.bytes_stream().map_err(NetError::from);
         crate::ByteStream::new(headers, Box::pin(stream))
@@ -200,11 +247,11 @@ impl RawHttp {
 
     async fn send_checked(
         &self,
-        req: reqwest::RequestBuilder,
+        req: HttpRequestBuilder,
         headers: Option<Headers>,
         url: Url,
         accept_partial: bool,
-    ) -> Result<reqwest::Response, NetError> {
+    ) -> Result<HttpResponse, NetError> {
         let req = Self::apply_headers(req, headers);
         let req = if let Some(total) = self.options.total_timeout {
             req.timeout(total)
@@ -235,10 +282,7 @@ impl RawHttp {
     /// in-flight loopback establish — it measures at least the equivalent real
     /// time, and never fires for a fast healthy fetch.
     #[kithara::flash(io)]
-    async fn send_idle_bounded(
-        &self,
-        req: reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response, NetError> {
+    async fn send_idle_bounded(&self, req: HttpRequestBuilder) -> Result<HttpResponse, NetError> {
         timeout(self.options.inactivity_timeout, req.send())
             .await
             .map_err(|_| NetError::Timeout)?
@@ -285,7 +329,7 @@ impl RawHttp {
 }
 
 /// Production HTTP client used across the workspace. Wraps a raw
-/// `reqwest::Client` with the workspace's [`RetryNet`] decorator so
+/// `Client` with the workspace's [`RetryNet`] decorator so
 /// every [`Net`] method (`head`/`get_bytes`/`get_range`/`stream`) honours
 /// `options.retry_policy` — retryable errors (TLS-close, timeout,
 /// 5xx, IO) are re-issued with exponential backoff; non-retryable
@@ -307,11 +351,11 @@ impl HttpClient {
     ///
     /// # Panics
     ///
-    /// Panics if the `reqwest::Client` builder fails to build.
+    /// Panics if the HTTP `Client` builder fails to build.
     #[must_use]
     pub fn new(options: NetOptions, cancel: CancelToken) -> Self {
-        let inner = build_client(&options)
-            .expect("BUG: reqwest::Client::builder().build() with our defaults cannot fail");
+        let inner =
+            build_client(&options).expect("BUG: HTTP client builder with our defaults cannot fail");
         let raw = RawHttp {
             inner,
             options: options.clone(),

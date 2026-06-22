@@ -47,7 +47,7 @@ tracing-subscriber = { workspace = true }
 # Device builds compile with `--no-default-features` (see `xtask apple`/
 # `xtask android`), so `symphonia` is never pulled into apple/android — the
 # hardware backend is the sole decoder there.
-default = ["uniffi", "symphonia"]
+default = ["uniffi", "symphonia", "client-reqwest", "tls-rustls"]
 uniffi = ["dep:uniffi"]
 apple = ["kithara/apple"]
 android = ["kithara/android"]
@@ -59,9 +59,49 @@ android = ["kithara/android"]
 symphonia = ["kithara/symphonia", "kithara-queue/symphonia"]
 # Marker feature for wasm32 build matrix (parallel to apple/android).
 # Actual wasm-only deps live under [target.'cfg(target_arch = "wasm32")'].
-wasm = []
+# Forwards the reqwest stack so the wasm build (which runs with
+# `--no-default-features --features wasm`) still selects a single HTTP backend
+# (reqwest; wreq has no wasm target). The refs chain through the crate-local
+# client-reqwest/tls-rustls forwarding below.
+wasm = ["client-reqwest", "tls-rustls"]
 probe = []
 mock = []
+# HTTP backend forwarding to every kithara-net-reaching dep. `kithara`
+# (native) and the wasm-only `kithara-hls`/`kithara-abr` are target-gated;
+# their edges are inert on the other target. apple/android forward
+# client-wreq through `kithara/apple` (facade) already.
+client-reqwest = [
+    "kithara/client-reqwest",
+    "kithara-queue/client-reqwest",
+    "kithara-play/client-reqwest",
+    "kithara-events/client-reqwest",
+    "kithara-hls/client-reqwest",
+    "kithara-abr/client-reqwest",
+]
+client-wreq = [
+    "kithara/client-wreq",
+    "kithara-queue/client-wreq",
+    "kithara-play/client-wreq",
+    "kithara-events/client-wreq",
+    "kithara-hls/client-wreq",
+    "kithara-abr/client-wreq",
+]
+tls-rustls = [
+    "kithara/tls-rustls",
+    "kithara-queue/tls-rustls",
+    "kithara-play/tls-rustls",
+    "kithara-events/tls-rustls",
+    "kithara-hls/tls-rustls",
+    "kithara-abr/tls-rustls",
+]
+tls-native = [
+    "kithara/tls-native",
+    "kithara-queue/tls-native",
+    "kithara-play/tls-native",
+    "kithara-events/tls-native",
+    "kithara-hls/tls-native",
+    "kithara-abr/tls-native",
+]
 # Dev-only conveniences enabled in xcframework builds for demo/staging.
 # Currently: accepts TLS certs with invalid hostname / CA / expiry.
 # Not for production use.
@@ -115,8 +155,8 @@ kithara-queue = { workspace = true, default-features = false, features = ["backe
 # The wasm worker reaches the shared DRM key-options, ABR-mode, and
 # key-processor types directly (native reaches the same types through the
 # `kithara` facade and a native-only `kithara-drm` dep).
-kithara-hls = { workspace = true }
-kithara-abr = { workspace = true }
+kithara-hls = { workspace = true, default-features = false }
+kithara-abr = { workspace = true, default-features = false }
 kithara-drm = { workspace = true }
 bytes = { workspace = true }
 console_error_panic_hook = { workspace = true }

@@ -13,8 +13,18 @@ categories = ["caching"]
 workspace = true
 
 [features]
+default = ["client-reqwest", "tls-rustls"]
 probe = []
 mock = []
+# HTTP backend forwarding. kithara-assets reaches the single kithara-net
+# package only through kithara-storage -> kithara-test-utils -> kithara-events
+# (downloader event types). These forwards give kithara-net a backend in
+# standalone builds; workspace-level default-features = false keeps the
+# default off when kithara-assets is a transitive dep (apple/android wreq-only).
+client-reqwest = ["kithara-storage/client-reqwest"]
+client-wreq = ["kithara-storage/client-wreq"]
+tls-rustls = ["kithara-storage/tls-rustls"]
+tls-native = ["kithara-storage/tls-native"]
 
 [dependencies]
 rkyv = { workspace = true }

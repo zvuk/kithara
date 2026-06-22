@@ -16,7 +16,7 @@ workspace = true
 crossbeam-queue = { workspace = true }
 dashmap = { workspace = true }
 delegate = { workspace = true }
-kithara-net = { workspace = true, optional = true }
+kithara-net = { workspace = true, optional = true, default-features = false }
 kithara-platform = { workspace = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }
@@ -37,6 +37,12 @@ audio = []
 player = []
 queue = []
 downloader = ["dep:kithara-net", "dep:url"]
+# HTTP backend forwarding. kithara-net is an optional dep here, so the refs are
+# weak (`?`): enabling a backend never force-enables kithara-net.
+client-reqwest = ["kithara-net?/client-reqwest"]
+client-wreq = ["kithara-net?/client-wreq"]
+tls-rustls = ["kithara-net?/tls-rustls"]
+tls-native = ["kithara-net?/tls-native"]
 
 [dev-dependencies]
 kithara-events = { path = ".", default-features = false }

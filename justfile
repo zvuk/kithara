@@ -676,7 +676,7 @@ wasm MODE="check":
         # kithara-decode on wasm uses symphonia (pure Rust). Its default `fdk-aac`
         # feature is libfdk-aac (C via fdk-aac-sys), which cannot target
         # wasm32-unknown-unknown (no libc/sysroot), so check the realistic wasm set.
-        cargo check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia
+        cargo check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia,client-reqwest,tls-rustls
         cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
       test)

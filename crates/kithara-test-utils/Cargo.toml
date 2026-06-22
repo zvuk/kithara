@@ -17,6 +17,11 @@ flash = ["kithara-platform/flash"]
 hang = ["dep:serde", "dep:serde_json"]
 mock = ["dep:unimock"]
 probe = ["dep:usdt"]
+# HTTP backend forwarding (kithara-net reached via kithara-events).
+client-reqwest = ["kithara-events/client-reqwest"]
+client-wreq = ["kithara-events/client-wreq"]
+tls-rustls = ["kithara-events/tls-rustls"]
+tls-native = ["kithara-events/tls-native"]
 
 [dependencies]
 kithara-events = { workspace = true, features = ["downloader"] }
