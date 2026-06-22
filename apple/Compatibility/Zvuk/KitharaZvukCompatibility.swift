@@ -7,7 +7,7 @@ final class KitharaZvukAudioPlayer: AudioPlayerProtocol {
     let kitharaPlayer: KitharaPlayer
 
     init(player: KitharaPlayer = KitharaPlayer()) {
-        Kithara.initLogging(level: .info)
+        Kithara.initLogging(level: .debug)
         self.kitharaPlayer = player
     }
 
@@ -183,12 +183,19 @@ final class KitharaZvukAudioPlayerItem: AudioPlayerItemProtocol, @unchecked Send
     }
 
     func load() -> Observable<AudioPlayer.ItemLoadResult> {
-        Observable.just(
-            AudioPlayer.ItemLoadResult(
-                hasProtectedContent: false,
-                isPlayable: true
-            )
-        )
+        Observable.create { [kitharaPlayerItem] observer in
+            let task = Task {
+                let result = await kitharaPlayerItem.load()
+                observer.onNext(
+                    AudioPlayer.ItemLoadResult(
+                        hasProtectedContent: result.hasProtectedContent,
+                        isPlayable: result.isPlayable
+                    )
+                )
+                observer.onCompleted()
+            }
+            return Disposables.create { task.cancel() }
+        }
     }
 
     func isPlayable(progress: Progress, and ranges: [AudioPlayer.ItemLoadedRange]) -> Bool {

@@ -40,7 +40,13 @@ final class KitharaZvukPlayerItemService: PlayerItemService {
             additionalHeaders: headers
         )
 
-        return .just(.next(item))
+        // Match the host AVPlayer item lifecycle: start load() inside
+        // makePlayerItem and surface the item once load resolves. For the
+        // Kithara backend the heavy loading is driven by insert(); load()
+        // resolves the current readiness snapshot.
+        return item.load()
+            .mapTo(item as any AudioPlayerItemProtocol)
+            .materialize()
     }
 
     private static func headers(from raw: [AnyHashable: Any]?) throws -> [String: String]? {
