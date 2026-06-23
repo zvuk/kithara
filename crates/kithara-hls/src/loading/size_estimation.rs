@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use kithara_assets::AssetScope;
 use kithara_drm::DecryptContext;
-use kithara_net::RangeSpec;
 use kithara_stream::dl::{FetchCmd, FetchResponse, PeerHandle};
 use tracing::debug;
 use url::Url;
 
 use crate::{
     config::SizeProbeMethod,
+    handle::{SegmentPeer, VariantPeer},
     parsing::MediaPlaylist,
     playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
 };
@@ -36,8 +36,7 @@ pub(crate) struct SizeEstimator {
     /// Committed-resource lookup: same store the dispatch path consults
     /// before fetching, so estimation and fetch share one source of truth.
     scope: AssetScope<DecryptContext>,
-    headers: Option<kithara_net::Headers>,
-    peer: PeerHandle,
+    variant_peer: VariantPeer,
     /// Whether probes are real `HEAD`s or single-byte ranged `GET`s.
     probe_method: SizeProbeMethod,
     media_playlists: Vec<MediaPlaylist>,
@@ -70,8 +69,7 @@ impl SizeEstimator {
     ) -> Self {
         Self {
             playlist,
-            headers,
-            peer,
+            variant_peer: VariantPeer::new(peer, headers),
             scope,
             media_playlists,
             probe_method,
@@ -131,17 +129,12 @@ impl SizeEstimator {
         VariantSizeMap::default()
     }
 
-    /// Build the probe command for `url`. Strategy is driven by
-    /// [`Self::probe_method`].
-    fn probe_cmd(&self, url: Url) -> FetchCmd {
+    /// Build the probe command for `url` via `seg_peer`. Strategy is driven
+    /// by [`Self::probe_method`].
+    fn probe_cmd(&self, seg_peer: &SegmentPeer, url: Url) -> FetchCmd {
         match self.probe_method {
-            SizeProbeMethod::Head => FetchCmd::head(url)
-                .maybe_headers(self.headers.clone())
-                .build(),
-            SizeProbeMethod::RangeGet => FetchCmd::get(url)
-                .range(RangeSpec::new(0, Some(0)))
-                .maybe_headers(self.headers.clone())
-                .build(),
+            SizeProbeMethod::Head => seg_peer.head(url),
+            SizeProbeMethod::RangeGet => seg_peer.range_probe(url),
         }
     }
 
@@ -200,6 +193,7 @@ impl SizeEstimator {
         }
 
         let store = self.scope.store();
+        let seg_peer = self.variant_peer.segment_peer();
         let mut sizes: Vec<u64> = Vec::with_capacity(urls.len());
         let mut probe_slots: Vec<usize> = Vec::new();
         let mut cmds: Vec<FetchCmd> = Vec::new();
@@ -210,7 +204,7 @@ impl SizeEstimator {
             } else {
                 sizes.push(0);
                 probe_slots.push(slot);
-                cmds.push(self.probe_cmd(url.clone()));
+                cmds.push(self.probe_cmd(&seg_peer, url.clone()));
             }
         }
         debug!(
@@ -221,13 +215,7 @@ impl SizeEstimator {
             "size_estimation: cache-first split"
         );
 
-        let mut results: Vec<_> = Vec::with_capacity(cmds.len());
-        let mut remaining = cmds;
-        while !remaining.is_empty() {
-            let take = self.concurrency.min(remaining.len());
-            let chunk: Vec<FetchCmd> = remaining.drain(..take).collect();
-            results.extend(self.peer.batch(chunk).await);
-        }
+        let results = self.variant_peer.probe_batch(cmds, self.concurrency).await;
         for (slot, resp) in probe_slots.into_iter().zip(results.iter()) {
             sizes[slot] = resp.as_ref().ok().map_or(0, Self::content_length);
         }
