@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use kithara_platform::sync::RwLock;
 
-use super::SegmentEntry;
+use crate::segment::Segment;
 
 /// One coherent coordinate frame: the cross-variant byte-address-space
 /// geometry. Held behind a single `RwLock` so every reader observes the
@@ -53,14 +53,14 @@ impl Frame {
 
     /// Binary search in **natural** byte space — no shift, no served-range
     /// gate. Returns `(idx, natural_offset, size)`.
-    fn find_natural(&self, byte: u64, segments: &[SegmentEntry]) -> Option<(u32, u64, u64)> {
+    fn find_natural(&self, byte: u64, segments: &[Segment]) -> Option<(u32, u64, u64)> {
         let mut lo = 0_usize;
         let mut hi = self.offsets.len();
         let mut hit = None;
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let off = self.offsets[mid];
-            let size = segments[mid].size.load(Ordering::Acquire);
+            let size = segments[mid].len();
             if byte < off {
                 hi = mid;
             } else if byte >= off + size {
@@ -79,11 +79,7 @@ impl Frame {
     /// against `[served_from, served_until)` and re-shifts. All four fields
     /// (`byte_shift`, `offsets`, `served_from`, `served_until`) come from
     /// the same locked frame.
-    fn find_virtual(
-        &self,
-        byte_virtual: u64,
-        segments: &[SegmentEntry],
-    ) -> Option<(u32, u64, u64)> {
+    fn find_virtual(&self, byte_virtual: u64, segments: &[Segment]) -> Option<(u32, u64, u64)> {
         let byte_natural = i64::try_from(byte_virtual)
             .ok()?
             .checked_sub(self.byte_shift)?;
@@ -100,7 +96,7 @@ impl Frame {
         Some((idx, off_virtual, size))
     }
 
-    fn recompute(&mut self, init_size: u64, segments: &[SegmentEntry]) {
+    fn recompute(&mut self, init_size: u64, segments: &[Segment]) {
         self.offsets.resize(segments.len(), 0);
         let mut cum = if self.init_seed > 0 {
             self.init_seed
@@ -109,7 +105,7 @@ impl Frame {
         };
         for (i, s) in segments.iter().enumerate() {
             self.offsets[i] = cum;
-            cum += s.size.load(Ordering::Acquire);
+            cum += s.len();
         }
     }
 
@@ -126,7 +122,7 @@ impl Frame {
     /// `total_bytes` is a lower bound, NOT the authoritative stream end, and
     /// must not be used to mint EOF (an in-range offset would falsely look
     /// past-the-end against the under-count).
-    fn sizes_complete(&self, segments: &[SegmentEntry]) -> bool {
+    fn sizes_complete(&self, segments: &[Segment]) -> bool {
         let start = self.served_from as usize;
         let end = (self.served_until as usize).min(segments.len());
         if start >= end {
@@ -134,27 +130,21 @@ impl Frame {
             // alone bounds the stream; treat as complete.
             return true;
         }
-        segments[start..end]
-            .iter()
-            .all(|s| s.size.load(Ordering::Acquire) > 0)
+        segments[start..end].iter().all(|s| s.size().is_exact())
     }
 
     /// Materialise the lock-free EOF snapshot (`total_bytes` +
     /// `sizes_complete`) in one read so the caller can drop the write-lock
     /// guard before publishing the atomics.
-    fn snapshot(&self, segments: &[SegmentEntry], init_size: u64) -> FrameSnapshot {
+    fn snapshot(&self, segments: &[Segment], init_size: u64) -> FrameSnapshot {
         FrameSnapshot {
             total: self.total_bytes(segments, init_size),
             sizes_complete: self.sizes_complete(segments),
         }
     }
 
-    fn total_bytes(&self, segments: &[SegmentEntry], init_size: u64) -> u64 {
-        let seg_size = |idx: usize| {
-            segments
-                .get(idx)
-                .map_or(0, |s| s.size.load(Ordering::Acquire))
-        };
+    fn total_bytes(&self, segments: &[Segment], init_size: u64) -> u64 {
+        let seg_size = |idx: usize| segments.get(idx).map_or(0, Segment::len);
         let last_idx = (self.served_until as usize).saturating_sub(1);
         let natural = if let (Some(off), Some(_seg)) =
             (self.offsets.get(last_idx).copied(), segments.get(last_idx))
@@ -207,7 +197,7 @@ pub(super) struct Layout {
 }
 
 impl Layout {
-    pub(super) fn new(init_size: u64, segments: &[SegmentEntry]) -> Self {
+    pub(super) fn new(init_size: u64, segments: &[Segment]) -> Self {
         let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
         let mut frame = Frame {
             byte_shift: 0,
@@ -229,7 +219,7 @@ impl Layout {
     /// `[from_seg, num_segments)`. The seed, offset recompute, shift and
     /// served bounds are published under one write-lock so no reader sees a
     /// half-built frame.
-    pub(super) fn activate_with_shift(&self, params: ActivateParams, segments: &[SegmentEntry]) {
+    pub(super) fn activate_with_shift(&self, params: ActivateParams, segments: &[Segment]) {
         let ActivateParams {
             from_seg,
             seg_boundary,
@@ -261,7 +251,7 @@ impl Layout {
     /// `store` performs the caller-owned size store (init or segment atom)
     /// and returns the post-store `init_size` to seed the recompute — so a
     /// reader never observes a new size against a stale offset table.
-    pub(super) fn apply_commit(&self, segments: &[SegmentEntry], store: impl FnOnce() -> u64) {
+    pub(super) fn apply_commit(&self, segments: &[Segment], store: impl FnOnce() -> u64) {
         let mut frame = self.frame.write();
         let init_size = store();
         frame.recompute(init_size, segments);
@@ -281,16 +271,12 @@ impl Layout {
     pub(super) fn find_at_offset(
         &self,
         byte_virtual: u64,
-        segments: &[SegmentEntry],
+        segments: &[Segment],
     ) -> Option<(u32, u64, u64)> {
         self.frame.read().find_virtual(byte_virtual, segments)
     }
 
-    pub(super) fn find_natural(
-        &self,
-        byte: u64,
-        segments: &[SegmentEntry],
-    ) -> Option<(u32, u64, u64)> {
+    pub(super) fn find_natural(&self, byte: u64, segments: &[Segment]) -> Option<(u32, u64, u64)> {
         self.frame.read().find_natural(byte, segments)
     }
 
@@ -321,7 +307,7 @@ impl Layout {
     /// Collapse to a single-variant layout: `byte_shift = 0`,
     /// `served = [0, num_segments)`, offsets recomputed from the existing
     /// seed.
-    pub(super) fn reset(&self, init_size: u64, segments: &[SegmentEntry]) {
+    pub(super) fn reset(&self, init_size: u64, segments: &[Segment]) {
         let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
         let mut frame = self.frame.write();
         frame.byte_shift = 0;
@@ -342,7 +328,7 @@ impl Layout {
         self.frame.read().served_from
     }
 
-    pub(super) fn set_served_until(&self, until: u32, segments: &[SegmentEntry], init_size: u64) {
+    pub(super) fn set_served_until(&self, until: u32, segments: &[Segment], init_size: u64) {
         let mut frame = self.frame.write();
         frame.served_until = until;
         let snapshot = frame.snapshot(segments, init_size);

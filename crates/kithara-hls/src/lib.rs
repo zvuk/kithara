@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 
 mod coord;
+mod handle;
 mod ids;
 mod invalidation;
 mod loading;
@@ -12,6 +13,8 @@ mod parsing;
 mod peer;
 mod playlist;
 mod reader;
+mod segment;
+mod signal;
 mod source;
 mod stream;
 mod variant;

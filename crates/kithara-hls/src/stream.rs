@@ -26,6 +26,7 @@ use crate::{
     parsing::{MediaPlaylist, VariantStream, variant_info_from_master},
     peer::HlsPeer,
     playlist::PlaylistState,
+    signal::SizeSignal,
     source::HlsSource,
     variant::{HlsVariant, PlanCtx},
 };
@@ -145,13 +146,17 @@ impl StreamType for Hls {
 
         playhead.set_duration(playlist_state.track_duration());
 
-        // Shared readiness gate for the off-RT `wait_range(_, None)` park (CONTEXT.md "Seek and wait_range Contract").
-        let ready = Arc::new(CondvarGate::<u64>::default());
-        // Late-bound audio-worker wake, filled by `HlsSource::set_worker_wake`
-        // once the worker exists; fired alongside `ready` on the two
-        // downloader write/settle sites so the RT decoder re-ticks on data
-        // arrival, not on its 10 ms scheduler poll. `None` until set.
-        let worker_wake = Arc::new(OnceLock::new());
+        // Unified reader-wake handle: the shared readiness gate for the off-RT
+        // `wait_range(_, None)` park (CONTEXT.md "Seek and wait_range Contract")
+        // paired with the late-bound audio-worker wake. The wake is filled by
+        // `HlsSource::set_worker_wake` once the worker exists; `SizeSignal::fire`
+        // fires both on the two downloader write/settle sites so the RT decoder
+        // re-ticks on data arrival, not on its 10 ms scheduler poll. Built once
+        // here and cloned down into every consumer.
+        let signal = SizeSignal::new(
+            Arc::new(CondvarGate::<u64>::default()),
+            Arc::new(OnceLock::new()),
+        );
 
         let plan_ctx = PlanCtx {
             master_cancel: cancel.clone(),
@@ -164,8 +169,7 @@ impl StreamType for Hls {
                     .look_ahead_bytes
                     .unwrap_or(HlsConfig::DEFAULT_LOOK_AHEAD_BYTES),
             ),
-            ready: Arc::clone(&ready),
-            worker_wake: Arc::clone(&worker_wake),
+            signal: signal.clone(),
         };
 
         let variants: Vec<Arc<HlsVariant>> = media_playlists
@@ -188,8 +192,7 @@ impl StreamType for Hls {
 
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {
-                ready,
-                worker_wake,
+                signal,
                 cancel: cancel.clone(),
                 scope: scope.clone(),
                 headers: config.headers.clone(),

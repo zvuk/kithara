@@ -28,7 +28,8 @@ use kithara_test_utils::kithara;
 
 use crate::{
     playlist::{PlaylistAccess, PlaylistState},
-    variant::{HlsVariant, PlanCtx, SegmentActivateParams, WorkerWakeCell, wake_worker},
+    signal::SizeSignal,
+    variant::{HlsVariant, PlanCtx, SegmentActivateParams},
 };
 
 /// Watchdog timeout for the off-RT blocking `wait_range(_, None)`: must exceed
@@ -43,21 +44,19 @@ const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 /// and the per-track [`AssetStore`] used by reader paths and by every
 /// variant's `dispatch` closures.
 pub(crate) struct HlsCoordEnv {
-    /// Shared readiness gate: every transition that can flip a blocked
+    /// Unified reader-wake handle: the shared readiness gate paired with the
+    /// late-bound audio-worker wake. Every transition that can flip a blocked
     /// reader's `wait_range` predicate (segment write/commit/fail, fence
-    /// raise/clear, seek reset, cancel) `signal`s it; the off-RT
-    /// `wait_range(_, None)` parks on it instead of polling a wall-clock
-    /// timer. See `CONTEXT.md` "Event-driven read wait".
-    pub(crate) ready: Arc<CondvarGate<u64>>,
+    /// raise/clear, seek reset, cancel) signals the gate; the off-RT
+    /// `wait_range(_, None)` parks on it instead of polling a wall-clock timer.
+    /// The two downloader write/settle sites additionally re-tick the audio
+    /// worker via [`SizeSignal::fire`]; the coord's RT-reachable fence/seek
+    /// signals use [`SizeSignal::fire_ready_only`]. See `CONTEXT.md`
+    /// "Event-driven read wait".
+    pub(crate) signal: SizeSignal,
     pub(crate) scope: AssetScope<DecryptContext>,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
-    /// Late-bound audio-worker wake, vended to peer `PlanCtx`-builders via
-    /// [`HlsCoord::worker_wake_cell`] and filled once by
-    /// [`HlsCoord::set_worker_wake`]. Fired only at the two downloader
-    /// write/settle sites (NOT the coord's RT-reachable fence/seek
-    /// `ready.signal()`s), so the RT decoder's worker re-ticks on data arrival.
-    pub(crate) worker_wake: WorkerWakeCell,
 }
 
 /// Thin router over a fixed `Vec<Arc<HlsVariant>>`. Every `Source`-side
@@ -80,10 +79,11 @@ pub(crate) struct HlsCoord {
     /// Used by internal methods that only need committed position reads.
     playhead_read: Arc<dyn PlayheadRead>,
     playlist_state: Arc<PlaylistState>,
-    /// Readiness gate for the off-RT blocking `wait_range(_, None)`. Shared
-    /// with every variant's fetch closures (write/commit/fail signal it) and
-    /// signalled by the coord on fence/seek transitions. See [`HlsCoordEnv::ready`].
-    ready: Arc<CondvarGate<u64>>,
+    /// Unified reader-wake handle for the off-RT blocking `wait_range(_, None)`.
+    /// Shared with every variant's fetch closures (write/commit/fail
+    /// [`SizeSignal::fire`] it) and signalled by the coord on fence/seek
+    /// transitions ([`SizeSignal::fire_ready_only`]). See [`HlsCoordEnv::signal`].
+    signal: SizeSignal,
     /// Backing seek/activity state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
     seek: Arc<SeekState>,
@@ -112,9 +112,6 @@ pub(crate) struct HlsCoord {
     /// no format diff is observable there, so without the target the
     /// fence would never clear.
     fence_target: AtomicUsize,
-    /// Late-bound audio-worker wake (see [`HlsCoordEnv::worker_wake`]). Vended
-    /// to peer re-plans and set once via [`Self::set_worker_wake`].
-    worker_wake: WorkerWakeCell,
 }
 
 impl HlsCoord {
@@ -160,8 +157,7 @@ impl HlsCoord {
             variant_generation: AtomicU64::new(0),
             fence_at: AtomicU64::new(0),
             fence_target: AtomicUsize::new(0),
-            ready: env.ready,
-            worker_wake: env.worker_wake,
+            signal: env.signal,
         }
     }
 
@@ -214,7 +210,7 @@ impl HlsCoord {
         self.fence_at.swap(current_gen, Ordering::AcqRel);
         // The fence gate opened: wake a reader parked in `wait_range(_, None)`
         // (it short-circuited on `variant_change_pending`) so it re-probes.
-        self.ready.signal();
+        self.signal.fire_ready_only();
     }
 
     /// Commit any ABR pending decision at the reader's segment boundary.
@@ -309,9 +305,9 @@ impl HlsCoord {
             .notify_commit(decision, current_before, reader_pt, Instant::now());
         // Variant switched (fence raised on the structured-container branch, or
         // a byte-continuity reactivation): wake a parked reader to re-probe /
-        // observe the new `Interrupted`(VariantChange) gate.
-        self.ready.signal();
-        wake_worker(&ctx.worker_wake);
+        // observe the new `Interrupted`(VariantChange) gate, and re-tick the RT
+        // decoder's audio worker so it observes the new gate off its scheduler poll.
+        self.signal.fire();
         true
     }
 
@@ -406,10 +402,17 @@ impl HlsCoord {
         self.variant_serving(offset).read_at(offset, buf)
     }
 
-    /// The shared readiness gate, handed to [`PlanCtx`] so variant fetch
-    /// closures can signal segment write/commit/fail.
+    /// The unified reader-wake handle, handed to [`PlanCtx`] so variant fetch
+    /// closures can [`SizeSignal::fire`] on segment write/commit/fail.
+    pub(crate) fn signal(&self) -> SizeSignal {
+        self.signal.clone()
+    }
+
+    /// The bare readiness gate, captured by the cancel waker's `on_cancel`
+    /// closure (which needs a hard-`Send + Sync` handle). Re-vended from
+    /// [`Self::signal`].
     pub(crate) fn ready_gate(&self) -> Arc<CondvarGate<u64>> {
-        Arc::clone(&self.ready)
+        self.signal.ready_gate()
     }
 
     /// Reset the active variant to a "fresh" single-variant layout on
@@ -430,7 +433,7 @@ impl HlsCoord {
         self.abr.invalidate_pending();
         // A seek repositioned the active variant: wake a reader parked on the
         // pre-seek range so it re-probes against the new position / flush gate.
-        self.ready.signal();
+        self.signal.fire_ready_only();
     }
 
     pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl> {
@@ -449,7 +452,7 @@ impl HlsCoord {
     /// first set sticks). Called by `HlsSource::set_worker_wake` once the
     /// worker exists; downloader fetch closures read it lock-free thereafter.
     pub(crate) fn set_worker_wake(&self, wake: Arc<dyn kithara_stream::WorkerWake>) {
-        let _ = self.worker_wake.set(wake);
+        self.signal.set_worker_wake(wake);
     }
 
     /// Mirror `abr.lock()` state to `seek_obs.is_pending()`.
@@ -608,7 +611,7 @@ impl HlsCoord {
             // Snapshot the gate BEFORE the probe: a signal landing between the
             // probe and the park advances the counter, so the park returns at
             // once and we re-probe — no lost wakeup.
-            let since = self.ready.current();
+            let since = self.signal.current();
             match self.probe_range(range.clone(), Some(Duration::from_millis(0))) {
                 Ok(WaitOutcome::Ready) => return Ok(WaitOutcome::Ready),
                 Ok(WaitOutcome::Eof) => return Ok(WaitOutcome::Eof),
@@ -625,20 +628,13 @@ impl HlsCoord {
             // after a seek; yield so the off-RT reader re-asserts its prefetch
             // aim and re-enters (mirrors the old per-iteration `notify_peer_wake`
             // without the wall-clock data poll).
-            if self.ready.wait_timeout(since, Self::READER_REAIM_INTERVAL) {
+            if self.signal.wait_timeout(since, Self::READER_REAIM_INTERVAL) {
                 // Woke from a signal — activity, not a wedge: reset the watchdog.
                 hang_reset!();
             } else {
                 return Err(StreamError::Source(SourceError::WaitBudgetExceeded));
             }
         }
-    }
-
-    /// The late-bound audio-worker wake cell, handed to [`PlanCtx`] so variant
-    /// fetch closures can re-tick the worker on write/settle. Empty until
-    /// [`Self::set_worker_wake`] fills it.
-    pub(crate) fn worker_wake_cell(&self) -> WorkerWakeCell {
-        Arc::clone(&self.worker_wake)
     }
 
     delegate! {
