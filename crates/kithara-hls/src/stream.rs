@@ -22,11 +22,12 @@ use crate::{
     coord::{HlsCoord, HlsCoordEnv},
     handle::StreamPeer,
     invalidation::{HlsInvalidationGuard, HlsInvalidationRegistry, HlsStore},
-    loading::{KeyStore, PlaylistCache},
     naming::HlsAssetScopeDelegate,
-    parsing::{MediaPlaylist, VariantStream, variant_info_from_master},
     peer::HlsPeer,
-    playlist::PlaylistState,
+    playlist::{
+        KeyStore, MediaPlaylist, PlaylistCache, PlaylistState, VariantStream,
+        variant_info_from_master,
+    },
     signal::SizeSignal,
     source::HlsSource,
     variant::{HlsVariant, PlanCtx},
@@ -134,7 +135,7 @@ impl StreamType for Hls {
             .await
             .map_err(SourceError::from)?;
 
-        let estimation = crate::loading::size_estimation::SizeEstimator::new(
+        let estimation = crate::playlist::size_estimation::SizeEstimator::new(
             stream_peer.variant_peer(),
             stream_peer.scope(),
             Arc::clone(&playlist_state),
@@ -247,7 +248,7 @@ async fn fetch_media_playlists(
     for variant in variants {
         let media_url = cache.resolve_url(master_url, &variant.uri)?;
         let playlist = cache
-            .media_playlist(&media_url, crate::parsing::VariantId(variant.id.0))
+            .media_playlist(&media_url, crate::playlist::VariantId(variant.id.0))
             .await?;
         playlists.push(playlist);
     }

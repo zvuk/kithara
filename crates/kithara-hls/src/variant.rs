@@ -168,7 +168,7 @@ impl HlsVariant {
     /// hierarchy. `decrypt_contexts[i]` carries the pre-resolved
     /// [`DecryptContext`] for segment `i` (or `None` for cleartext
     /// segments) — the caller resolves AES-128 keys through [`KeyStore`](
-    /// crate::loading::KeyStore) before construction.
+    /// crate::playlist::KeyStore) before construction.
     #[must_use]
     pub(crate) fn new(
         variant: usize,

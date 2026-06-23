@@ -10,13 +10,11 @@ use kithara_platform::{sync::RwLock, tokio::sync::OnceCell};
 use kithara_stream::dl::PeerHandle;
 use url::Url;
 
-use super::atomic_fetch::fetch_atomic_body;
-use crate::{
-    HlsError, HlsResult,
-    parsing::{
-        MasterPlaylist, MediaPlaylist, VariantId, parse_master_playlist, parse_media_playlist,
-    },
+use super::{
+    atomic_fetch::fetch_atomic_body,
+    parse::{MediaPlaylist, ParsedMaster, VariantId, parse_master_playlist, parse_media_playlist},
 };
+use crate::{HlsError, HlsResult};
 
 /// Playlist fetch + parse + disk cache.
 ///
@@ -28,7 +26,7 @@ pub struct PlaylistCache {
     /// behind `Arc<RwLock<...>>` so clones see the same builder
     /// mutations.
     config: Arc<RwLock<PlaylistConfig>>,
-    master: Arc<OnceCell<MasterPlaylist>>,
+    master: Arc<OnceCell<ParsedMaster>>,
     /// Per-variant media-playlist `OnceCell` buckets. `DashMap`
     /// fine-grained locks keep parallel variants out of each other's
     /// critical sections.
@@ -93,7 +91,7 @@ impl PlaylistCache {
     ///
     /// # Errors
     /// Returns an error when fetching or parsing fails.
-    pub async fn master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
+    pub async fn master_playlist(&self, url: &Url) -> HlsResult<ParsedMaster> {
         let master = self
             .master
             .get_or_try_init(|| async { self.fetch_and_parse(url, parse_master_playlist).await })

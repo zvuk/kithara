@@ -38,7 +38,7 @@ impl KeyOptions {
     }
 }
 
-/// Method used by [`crate::loading::size_estimation`] to probe segment
+/// Method used by [`crate::playlist::size_estimation`] to probe segment
 /// sizes when `#EXT-X-BYTERANGE` is absent.
 ///
 /// `Head` is the spec-correct default. Some WAFs (notably zvuk's stage

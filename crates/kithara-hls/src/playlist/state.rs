@@ -79,8 +79,8 @@ impl PlaylistState {
     /// playlist URL; failures fall back to the media URL itself.
     #[must_use]
     pub fn assemble(
-        variants: &[crate::parsing::VariantStream],
-        media_playlists: &[crate::parsing::MediaPlaylist],
+        variants: &[crate::playlist::parse::VariantStream],
+        media_playlists: &[crate::playlist::parse::MediaPlaylist],
     ) -> Self {
         let variant_states: Vec<VariantState> = variants
             .iter()
@@ -343,7 +343,7 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::parsing::{
+    use crate::playlist::parse::{
         CodecInfo, InitSegment, MediaPlaylist, MediaSegment, VariantId, VariantStream,
     };
 

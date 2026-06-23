@@ -76,12 +76,15 @@ impl KeyStore {
         }
     }
 
-    fn aes128_key_urls(media_playlists: &[crate::parsing::MediaPlaylist]) -> HashSet<Url> {
+    fn aes128_key_urls(media_playlists: &[crate::playlist::parse::MediaPlaylist]) -> HashSet<Url> {
         let mut urls: HashSet<Url> = HashSet::new();
         for playlist in media_playlists {
             for segment in &playlist.segments {
                 if let Some(ref seg_key) = segment.key
-                    && matches!(seg_key.method, crate::parsing::EncryptionMethod::Aes128)
+                    && matches!(
+                        seg_key.method,
+                        crate::playlist::parse::EncryptionMethod::Aes128
+                    )
                     && let Some(ref key_info) = seg_key.key_info
                     && let Ok(seg_url) = playlist.url.join(&segment.uri)
                     && let Ok(key_url) = Self::resolve_key_url(key_info, &seg_url)
@@ -94,7 +97,7 @@ impl KeyStore {
     }
 
     pub(crate) fn derive_iv(
-        key_info: &crate::parsing::KeyInfo,
+        key_info: &crate::playlist::parse::KeyInfo,
         sequence: u64,
     ) -> [u8; Self::AES_KEY_LEN] {
         if let Some(iv) = key_info.iv {
@@ -274,7 +277,7 @@ impl KeyStore {
     /// Returns the first [`HlsError`] from an underlying key fetch.
     pub(crate) async fn prefetch_aes128_keys(
         &self,
-        media_playlists: &[crate::parsing::MediaPlaylist],
+        media_playlists: &[crate::playlist::parse::MediaPlaylist],
     ) -> HlsResult<()> {
         let urls = Self::aes128_key_urls(media_playlists);
         let futs = urls
@@ -288,7 +291,7 @@ impl KeyStore {
     /// `resolve_key_url` + `get_cached_key` + `derive_iv` into a single
     /// sync step that runs after [`Self::get_raw_key`] has populated the
     /// cache. Caller invokes this only for AES-128 segments — the
-    /// presence of [`KeyInfo`](crate::parsing::KeyInfo) means a key is
+    /// presence of [`KeyInfo`](crate::playlist::parse::KeyInfo) means a key is
     /// required, so every failure path here is a real error.
     ///
     /// # Errors
@@ -297,7 +300,7 @@ impl KeyStore {
     ///   empty, or not 16 bytes (AES-128 size).
     pub(crate) fn resolve_decrypt_ctx(
         &self,
-        key_info: &crate::parsing::KeyInfo,
+        key_info: &crate::playlist::parse::KeyInfo,
         segment_url: &Url,
         sequence: u64,
     ) -> HlsResult<DecryptContext> {
@@ -322,11 +325,11 @@ impl KeyStore {
     /// fails (same fallback policy as media segments).
     pub(crate) fn resolve_init_decrypt_ctx(
         &self,
-        playlist: &crate::parsing::MediaPlaylist,
+        playlist: &crate::playlist::parse::MediaPlaylist,
     ) -> Option<DecryptContext> {
         let init = playlist.init_segment.as_ref()?;
         let key = init.key.as_ref()?;
-        if !matches!(key.method, crate::parsing::EncryptionMethod::Aes128) {
+        if !matches!(key.method, crate::playlist::parse::EncryptionMethod::Aes128) {
             return None;
         }
         let key_info = key.key_info.as_ref()?;
@@ -345,7 +348,7 @@ impl KeyStore {
     }
 
     pub(crate) fn resolve_key_url(
-        key_info: &crate::parsing::KeyInfo,
+        key_info: &crate::playlist::parse::KeyInfo,
         segment_url: &Url,
     ) -> HlsResult<Url> {
         let key_uri = key_info
@@ -365,10 +368,10 @@ impl KeyStore {
     fn resolve_segment_decrypt_ctx(
         &self,
         media_url: &Url,
-        segment: &crate::parsing::MediaSegment,
+        segment: &crate::playlist::parse::MediaSegment,
     ) -> Option<DecryptContext> {
         let key = segment.key.as_ref()?;
-        if !matches!(key.method, crate::parsing::EncryptionMethod::Aes128) {
+        if !matches!(key.method, crate::playlist::parse::EncryptionMethod::Aes128) {
             return None;
         }
         let key_info = key.key_info.as_ref()?;
@@ -396,7 +399,7 @@ impl KeyStore {
     /// shipping garbage bytes.
     pub(crate) fn resolve_variant_decrypt_contexts(
         &self,
-        playlist: &crate::parsing::MediaPlaylist,
+        playlist: &crate::playlist::parse::MediaPlaylist,
     ) -> Vec<Option<DecryptContext>> {
         playlist
             .segments

@@ -1,12 +1,12 @@
 #![forbid(unsafe_code)]
 
-use kithara::hls::{MasterPlaylist, parse_master_playlist};
+use kithara::hls::{ParsedMaster, parse_master_playlist};
 use kithara_abr::{AbrController, AbrMode, AbrSettings};
 use kithara_events::{VariantDuration, VariantIndex, VariantInfo};
 use kithara_platform::{CancelToken, time::Duration};
 
 /// Convert HLS master playlist variants to ABR variant list (test helper).
-fn variants_from_master(master: &MasterPlaylist) -> Vec<VariantInfo> {
+fn variants_from_master(master: &ParsedMaster) -> Vec<VariantInfo> {
     master
         .variants
         .iter()
@@ -41,13 +41,13 @@ video/360p/playlist.m3u8
 }
 
 #[kithara::fixture]
-fn parsed_master_playlist(test_master_playlist_data: &str) -> MasterPlaylist {
+fn parsed_master_playlist(test_master_playlist_data: &str) -> ParsedMaster {
     parse_master_playlist(test_master_playlist_data.as_bytes())
         .expect("Failed to parse master playlist")
 }
 
 #[kithara::fixture]
-fn variants_from_parsed_playlist(parsed_master_playlist: MasterPlaylist) -> Vec<VariantInfo> {
+fn variants_from_parsed_playlist(parsed_master_playlist: ParsedMaster) -> Vec<VariantInfo> {
     variants_from_master(&parsed_master_playlist)
 }
 
@@ -102,7 +102,7 @@ fn test_abr_decision_with_different_conditions(
 }
 
 #[kithara::test]
-fn test_variants_from_master_structure(parsed_master_playlist: MasterPlaylist) {
+fn test_variants_from_master_structure(parsed_master_playlist: ParsedMaster) {
     let variants = variants_from_master(&parsed_master_playlist);
 
     assert_eq!(variants.len(), 3);

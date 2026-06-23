@@ -74,7 +74,7 @@ pub struct SegmentKey {
 
 /// Parsed master playlist.
 #[derive(Debug, Clone)]
-pub struct MasterPlaylist {
+pub struct ParsedMaster {
     /// List of available variants (renditions).
     pub variants: Vec<VariantStream>,
 }
@@ -160,11 +160,11 @@ fn detect_container_from_codecs(codecs: &str) -> Option<ContainerFormat> {
         })
 }
 
-/// Parses a master playlist (M3U8) into [`MasterPlaylist`].
+/// Parses a master playlist (M3U8) into [`ParsedMaster`].
 ///
 /// # Errors
 /// Returns an error when UTF-8 decoding or playlist parsing fails.
-pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
+pub fn parse_master_playlist(data: &[u8]) -> HlsResult<ParsedMaster> {
     let input = str::from_utf8(data).map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?;
     let hls_master = HlsMasterPlaylist::try_from(input)
         .map_err(|e| crate::HlsError::PlaylistParse(truncate_error(&e.to_string())))?
@@ -213,7 +213,7 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
         })
         .collect();
 
-    Ok(MasterPlaylist { variants })
+    Ok(ParsedMaster { variants })
 }
 
 /// Parses a media playlist (M3U8) into [`MediaPlaylist`]. `url` is the
@@ -330,7 +330,7 @@ pub fn parse_media_playlist(url: Url, data: &[u8]) -> HlsResult<MediaPlaylist> {
 /// segments are present, otherwise `Unknown`.
 #[must_use]
 pub fn variant_info_from_master(
-    master: &MasterPlaylist,
+    master: &ParsedMaster,
     media_playlists: &[MediaPlaylist],
 ) -> Vec<VariantInfo> {
     master

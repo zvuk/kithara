@@ -6,11 +6,10 @@ use kithara_stream::dl::{FetchCmd, FetchResponse};
 use tracing::debug;
 use url::Url;
 
+use super::{PlaylistAccess, PlaylistState, VariantSizeMap, parse::MediaPlaylist};
 use crate::{
     config::SizeProbeMethod,
     handle::{SegmentPeer, VariantPeer},
-    parsing::MediaPlaylist,
-    playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
 };
 
 /// Owns the inputs required to compute [`VariantSizeMap`]s. Pure: the
