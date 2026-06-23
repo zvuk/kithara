@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use kithara_assets::AssetScope;
 use kithara_drm::DecryptContext;
-use kithara_stream::dl::{FetchCmd, FetchResponse, PeerHandle};
+use kithara_stream::dl::{FetchCmd, FetchResponse};
 use tracing::debug;
 use url::Url;
 
@@ -59,17 +59,16 @@ pub(crate) struct Estimation {
 
 impl SizeEstimator {
     pub(crate) fn new(
-        peer: PeerHandle,
+        variant_peer: VariantPeer,
         scope: AssetScope<DecryptContext>,
         playlist: Arc<PlaylistState>,
         media_playlists: Vec<MediaPlaylist>,
-        headers: Option<kithara_net::Headers>,
         concurrency: usize,
         probe_method: SizeProbeMethod,
     ) -> Self {
         Self {
             playlist,
-            variant_peer: VariantPeer::new(peer, headers),
+            variant_peer,
             scope,
             media_playlists,
             probe_method,

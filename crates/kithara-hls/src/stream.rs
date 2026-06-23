@@ -20,6 +20,7 @@ use url::Url;
 use crate::{
     config::HlsConfig,
     coord::{HlsCoord, HlsCoordEnv},
+    handle::StreamPeer,
     invalidation::{HlsInvalidationGuard, HlsInvalidationRegistry, HlsStore},
     loading::{KeyStore, PlaylistCache},
     naming::HlsAssetScopeDelegate,
@@ -93,22 +94,30 @@ impl StreamType for Hls {
             Arc::clone(&seek) as Arc<dyn Activity>,
             config.initial_abr_mode,
         ));
-        let peer_handle = downloader
-            .register(Arc::clone(&hls_peer) as Arc<dyn Peer>)
-            .with_bus(bus.clone());
+        let stream_peer = StreamPeer::register(
+            &downloader,
+            Arc::clone(&hls_peer) as Arc<dyn Peer>,
+            bus.clone(),
+            scope,
+            byte_pool,
+            config.headers.clone(),
+        );
 
-        let playlist_cache =
-            PlaylistCache::new(scope.clone(), peer_handle.clone(), byte_pool.clone());
+        let playlist_cache = PlaylistCache::new(
+            stream_peer.scope(),
+            stream_peer.peer_handle(),
+            stream_peer.byte_pool(),
+        );
         playlist_cache.set_master_url(config.url.clone());
         playlist_cache.set_base_url(config.base_url.clone());
         playlist_cache.set_headers(config.headers.clone());
 
         let key_store = KeyStore::with_options(
-            peer_handle.clone(),
-            scope.clone(),
+            stream_peer.peer_handle(),
+            stream_peer.scope(),
             config.headers.clone(),
             config.keys.clone(),
-            byte_pool.clone(),
+            stream_peer.byte_pool(),
         );
 
         let master = playlist_cache.master_playlist(&config.url).await?;
@@ -126,11 +135,10 @@ impl StreamType for Hls {
             .map_err(SourceError::from)?;
 
         let estimation = crate::loading::size_estimation::SizeEstimator::new(
-            peer_handle.clone(),
-            scope.clone(),
+            stream_peer.variant_peer(),
+            stream_peer.scope(),
             Arc::clone(&playlist_state),
             media_playlists,
-            config.headers.clone(),
             config.head_estimation_concurrency,
             config.size_probe_method,
         )
@@ -160,7 +168,7 @@ impl StreamType for Hls {
 
         let plan_ctx = PlanCtx {
             master_cancel: cancel.clone(),
-            scope: scope.clone(),
+            scope: stream_peer.scope(),
             headers: config.headers.clone(),
             prefetch_budget: config.download_batch_size.max(1),
             seek_epoch: seek_obs.epoch(),
@@ -194,12 +202,12 @@ impl StreamType for Hls {
             HlsCoordEnv {
                 signal,
                 cancel: cancel.clone(),
-                scope: scope.clone(),
+                scope: stream_peer.scope(),
                 headers: config.headers.clone(),
             },
             playhead,
             seek,
-            peer_handle.abr().clone(),
+            stream_peer.peer_handle().abr().clone(),
             Arc::clone(&variants),
             Arc::clone(&playlist_state),
         ));
@@ -217,7 +225,7 @@ impl StreamType for Hls {
             ),
         );
 
-        source.set_peer_handle(peer_handle);
+        source.set_peer_handle(stream_peer.peer_handle());
         source.set_hls_peer(hls_peer);
         source.set_invalidation_guard(invalidation_guard);
 
