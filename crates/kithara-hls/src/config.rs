@@ -95,7 +95,7 @@ pub struct HlsConfig {
     #[builder(name = events)]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown. The master `CancelToken` whose
-    /// shared atomic mirror reaches [`HlsCoord`](crate::coord::HlsCoord)'s
+    /// shared atomic mirror reaches [`HlsCoord`](crate::stream::HlsCoord)'s
     /// lock-free `is_cancelled()` read on the produce-core; the async-only
     /// downloader / net / asset paths derive children from its inner
     /// [`CancelToken`](kithara_platform::CancelToken).

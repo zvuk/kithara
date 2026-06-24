@@ -11,9 +11,8 @@ use kithara_stream::{
     ReadOutcome, SeekControl, SeekObserve, Source, SourcePhase, StreamResult,
 };
 
-use crate::{
-    coord::HlsCoord, invalidation::HlsInvalidationGuard, peer::HlsPeer, reader::HlsReaderEventSink,
-};
+use super::coord::HlsCoord;
+use crate::{invalidation::HlsInvalidationGuard, peer::HlsPeer, reader::HlsReaderEventSink};
 
 /// HLS source: thin façade over [`HlsCoord`].
 ///

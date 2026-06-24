@@ -16,10 +16,13 @@ use kithara_stream::{
     dl::{Downloader, DownloaderConfig, Peer},
 };
 
+use super::{
+    coord::{HlsCoord, HlsCoordEnv},
+    source::HlsSource,
+};
 use crate::{
     config::HlsConfig,
     conv::FromWithParams,
-    coord::{HlsCoord, HlsCoordEnv},
     handle::StreamPeer,
     invalidation::{HlsInvalidationGuard, HlsInvalidationRegistry, HlsStore},
     naming::HlsAssetScopeDelegate,
@@ -29,7 +32,6 @@ use crate::{
         load_variant_playlists,
     },
     signal::SizeSignal,
-    source::HlsSource,
     variant::{HlsVariant, PlanCtx, VariantParams},
 };
 

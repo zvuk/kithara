@@ -23,7 +23,7 @@ use kithara_stream::{
 };
 use kithara_test_utils::kithara;
 
-use crate::{coord::HlsCoord, ids::duration_prefix, variant::PlanCtx};
+use crate::{ids::duration_prefix, stream::HlsCoord, variant::PlanCtx};
 
 struct HlsTrackState {
     coord: Arc<HlsCoord>,
