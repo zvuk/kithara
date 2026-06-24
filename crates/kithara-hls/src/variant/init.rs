@@ -138,7 +138,7 @@ impl HlsVariant {
     /// Committed on-disk length of the (separately fetched) init segment, as
     /// [`committed_final_len`](Self::committed_final_len) for media.
     pub(super) fn init_committed_final_len(&self) -> Option<u64> {
-        self.init_handle()?.committed_len()
+        self.init.as_ref()?.committed_len(&self.scope)
     }
 
     pub(super) fn init_downloading(&self) -> bool {

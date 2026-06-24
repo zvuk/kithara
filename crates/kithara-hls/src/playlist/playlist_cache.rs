@@ -10,11 +10,10 @@ use kithara_platform::{sync::RwLock, tokio::sync::OnceCell};
 use kithara_stream::dl::PeerHandle;
 use url::Url;
 
-use super::{
-    atomic_fetch::fetch_atomic_body,
-    parse::{MediaPlaylist, ParsedMaster, VariantId, parse_master_playlist, parse_media_playlist},
+use super::parse::{
+    MediaPlaylist, ParsedMaster, VariantId, parse_master_playlist, parse_media_playlist,
 };
-use crate::{HlsError, HlsResult};
+use crate::{HlsError, HlsResult, handle::PlaylistPeer};
 
 /// Playlist fetch + parse + disk cache.
 ///
@@ -31,10 +30,8 @@ pub struct PlaylistCache {
     /// fine-grained locks keep parallel variants out of each other's
     /// critical sections.
     media: Arc<DashMap<VariantId, Arc<OnceCell<MediaPlaylist>>>>,
-    scope: AssetScope<DecryptContext>,
-    /// Byte buffer pool for reading cached playlist bodies.
-    byte_pool: kithara_bufpool::BytePool,
-    downloader: PeerHandle,
+    /// Cache-first + downloader pipeline for `.m3u8` playlist bodies.
+    fetch: PlaylistPeer,
 }
 
 #[derive(Default, Clone)]
@@ -45,9 +42,6 @@ struct PlaylistConfig {
 }
 
 impl PlaylistCache {
-    /// Asset-store / tracing tag for `.m3u8` playlist resources.
-    pub(crate) const RESOURCE_KIND: &str = "playlist";
-
     #[must_use]
     pub fn new(
         scope: AssetScope<DecryptContext>,
@@ -55,9 +49,7 @@ impl PlaylistCache {
         byte_pool: kithara_bufpool::BytePool,
     ) -> Self {
         Self {
-            scope,
-            downloader,
-            byte_pool,
+            fetch: PlaylistPeer::new(downloader, scope, byte_pool),
             config: Arc::new(RwLock::default()),
             master: Arc::new(OnceCell::default()),
             media: Arc::new(DashMap::new()),
@@ -69,15 +61,7 @@ impl PlaylistCache {
         F: Fn(&[u8]) -> HlsResult<T>,
     {
         let headers = self.headers();
-        let bytes = fetch_atomic_body(
-            &self.downloader,
-            &self.scope,
-            &self.byte_pool,
-            headers,
-            url,
-            Self::RESOURCE_KIND,
-        )
-        .await?;
+        let bytes = self.fetch.fetch(url, headers).await?;
         parse(&bytes)
     }
 

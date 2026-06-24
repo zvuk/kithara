@@ -1,5 +1,6 @@
 pub(crate) mod core;
 pub(crate) mod fetch;
+pub(crate) mod resolve;
 pub(crate) mod size;
 pub(crate) mod state;
 

@@ -2,7 +2,6 @@
 
 //! Playlist fetch, parse, and parsed-state subsystem.
 
-pub(crate) mod atomic_fetch;
 pub(crate) mod keys;
 pub(crate) mod master;
 pub(crate) mod parse;

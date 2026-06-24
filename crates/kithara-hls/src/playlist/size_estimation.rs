@@ -2,14 +2,14 @@ use std::sync::Arc;
 
 use kithara_assets::AssetScope;
 use kithara_drm::DecryptContext;
-use kithara_stream::dl::{FetchCmd, FetchResponse};
+use kithara_stream::dl::FetchCmd;
 use tracing::debug;
 use url::Url;
 
 use super::{PlaylistAccess, PlaylistState, VariantSizeMap, parse::MediaPlaylist};
 use crate::{
     config::SizeProbeMethod,
-    handle::{SegmentPeer, VariantPeer},
+    handle::{SegmentPeer, VariantPeer, segment_peer::parse_size},
 };
 
 /// Owns the inputs required to compute [`VariantSizeMap`]s. Pure: the
@@ -73,24 +73,6 @@ impl SizeEstimator {
             probe_method,
             concurrency: concurrency.max(1),
         }
-    }
-
-    fn content_length(resp: &FetchResponse) -> u64 {
-        if let Some(total) = resp
-            .headers
-            .get("content-range")
-            .or_else(|| resp.headers.get("Content-Range"))
-            .and_then(|h| h.split('/').nth(1))
-            .filter(|s| *s != "*")
-            .and_then(|s| s.parse::<u64>().ok())
-        {
-            return total;
-        }
-        resp.headers
-            .get("content-length")
-            .or_else(|| resp.headers.get("Content-Length"))
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(0)
     }
 
     /// Estimate every variant. The returned `size_maps` is indexed by
@@ -215,7 +197,7 @@ impl SizeEstimator {
 
         let results = self.variant_peer.probe_batch(cmds, self.concurrency).await;
         for (slot, resp) in probe_slots.into_iter().zip(results.iter()) {
-            sizes[slot] = resp.as_ref().ok().map_or(0, Self::content_length);
+            sizes[slot] = resp.as_ref().ok().map_or(0, parse_size);
         }
 
         let mut iter = sizes.into_iter();

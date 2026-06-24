@@ -7,14 +7,13 @@ use std::{
 
 use bytes::Bytes;
 use dashmap::DashMap;
-use kithara_assets::{AcquisitionResult, AssetScope, ReadSide};
+use kithara_assets::{AssetScope, ReadSide};
 use kithara_drm::{DecryptContext, KeyProcessorRegistry};
 use kithara_net::Headers;
 use kithara_stream::dl::{FetchCmd, PeerHandle};
 use url::Url;
 
-use super::atomic_fetch::{fetch_atomic_body, rel_path_for_log};
-use crate::{HlsError, HlsResult};
+use crate::{HlsError, HlsResult, handle::KeyPeer};
 
 /// DRM key fetch + processor pipeline.
 ///
@@ -41,7 +40,8 @@ pub struct KeyStore {
     /// Cache-wide headers (typically equal to `HlsConfig::headers`).
     base_headers: Option<Headers>,
     key_registry: Option<KeyProcessorRegistry>,
-    downloader: PeerHandle,
+    /// Cache-first + downloader pipeline for HLS-AES / DRM key bodies.
+    key_peer: KeyPeer,
 }
 
 impl KeyStore {
@@ -50,13 +50,6 @@ impl KeyStore {
 
     /// Start offset for sequence number in the 16-byte IV.
     const IV_SEQUENCE_OFFSET: usize = 8;
-
-    /// Asset-store / tracing tag for HLS-AES key resources — used for
-    /// plain and DRM (registry-matched, decrypted-on-read) keys alike.
-    /// They share a single `ResourceKey::from_url(key_url)` slot in
-    /// the asset store; emitting the same kind everywhere keeps
-    /// cache-hit / cache-miss telemetry grouped under one label.
-    pub(crate) const RESOURCE_KIND: &str = "key";
 
     #[must_use]
     pub fn new(
@@ -67,7 +60,7 @@ impl KeyStore {
         byte_pool: kithara_bufpool::BytePool,
     ) -> Self {
         Self {
-            downloader,
+            key_peer: KeyPeer::new(downloader, scope.clone(), byte_pool.clone()),
             scope,
             base_headers,
             key_registry,
@@ -167,15 +160,7 @@ impl KeyStore {
         let rule = self.key_registry.as_ref().and_then(|r| r.find(url));
         if rule.is_none() {
             let headers = self.merged_headers(None);
-            return fetch_atomic_body(
-                &self.downloader,
-                &self.scope,
-                &self.byte_pool,
-                headers,
-                url,
-                Self::RESOURCE_KIND,
-            )
-            .await;
+            return self.key_peer.fetch(url, headers).await;
         }
 
         if let Some(cached) = self.decrypted_keys.get(url).map(|r| r.value().clone()) {
@@ -183,16 +168,7 @@ impl KeyStore {
             return Ok(cached);
         }
 
-        let cache_key = self.scope.key_from_url(url);
-        let rel_path = rel_path_for_log(&cache_key);
-        if let Some(bytes) = super::atomic_fetch::try_read_cached(
-            &self.scope,
-            &self.byte_pool,
-            &cache_key,
-            url,
-            rel_path,
-            Self::RESOURCE_KIND,
-        )? {
+        if let Some(bytes) = self.key_peer.try_cached(url)? {
             tracing::info!(%url, bytes = bytes.len(), "drm key: served from disk cache");
             self.decrypted_keys.insert(url.clone(), bytes.clone());
             return Ok(bytes);
@@ -214,7 +190,7 @@ impl KeyStore {
 
         tracing::info!(%url, "drm key: fetching from network");
         let cmd = FetchCmd::get(fetch_url).maybe_headers(headers).build();
-        let resp = self.downloader.execute(cmd).await.map_err(|e| {
+        let resp = self.key_peer.execute(cmd).await.map_err(|e| {
             tracing::warn!(%url, error = %e, "drm key: network fetch failed");
             HlsError::from(e)
         })?;
@@ -233,18 +209,7 @@ impl KeyStore {
             "drm key: fetched + decrypted, caching to asset store"
         );
 
-        if let AcquisitionResult::Pending(writer) =
-            self.scope.store().acquire_resource(&cache_key, None)?
-        {
-            super::atomic_fetch::write_back_cache(
-                writer.retain(),
-                &decrypted,
-                &self.scope,
-                url,
-                rel_path,
-                Self::RESOURCE_KIND,
-            );
-        }
+        self.key_peer.write_back(url, &decrypted)?;
 
         self.decrypted_keys.insert(url.clone(), decrypted.clone());
         Ok(decrypted)
