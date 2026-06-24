@@ -2,7 +2,11 @@ use kithara_platform::{sync::RwLock, time::Duration};
 use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;
 
-use crate::ids::{SegmentIndex, VariantIndex};
+use crate::{
+    conv::FromWithParams,
+    ids::{SegmentIndex, VariantIndex},
+    playlist::parse::{MediaPlaylist, VariantStream},
+};
 
 /// Per-segment parsed data (from media playlist).
 #[derive(Debug, Clone)]
@@ -71,17 +75,15 @@ impl PlaylistState {
             variants: variants.into_iter().map(RwLock::new).collect(),
         }
     }
+}
 
-    /// Build from parsed playlists (master variants + media playlists).
-    ///
+/// Build the live [`PlaylistState`] from parsed master variants + media
+/// playlists.
+impl FromWithParams<&[VariantStream], &[MediaPlaylist]> for PlaylistState {
     /// Each entry in `media_playlists` corresponds to the variant at the same
     /// index in `variants`. Segment URIs are resolved against the media
     /// playlist URL; failures fall back to the media URL itself.
-    #[must_use]
-    pub fn assemble(
-        variants: &[crate::playlist::parse::VariantStream],
-        media_playlists: &[crate::playlist::parse::MediaPlaylist],
-    ) -> Self {
+    fn build(variants: &[VariantStream], media_playlists: &[MediaPlaylist]) -> Self {
         let variant_states: Vec<VariantState> = variants
             .iter()
             .zip(media_playlists.iter())
@@ -129,7 +131,9 @@ impl PlaylistState {
 
         Self::new(variant_states)
     }
+}
 
+impl PlaylistState {
     /// Number of segments in a variant's media playlist.
     #[must_use]
     pub fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
@@ -624,7 +628,7 @@ mod tests {
         };
 
         let media_playlists = vec![playlist];
-        let state = PlaylistState::assemble(&variants, &media_playlists);
+        let state = PlaylistState::build(&variants[..], &media_playlists[..]);
 
         assert_eq!(state.num_variants(), 1);
 

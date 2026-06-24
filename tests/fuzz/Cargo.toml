@@ -16,6 +16,7 @@ libfuzzer-sys = { workspace = true }
 arbitrary = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-assets = { workspace = true }
+kithara-events = { workspace = true }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true, features = ["probe"] }
 kithara-platform = { workspace = true }

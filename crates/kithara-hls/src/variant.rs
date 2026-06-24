@@ -29,6 +29,7 @@ use url::Url;
 
 use crate::{
     HlsError,
+    conv::FromWithParams,
     playlist::{PlaylistAccess, PlaylistState},
     segment::{
         Downloading, FetchClaim, FetchSlot, InitSegment, Loaded, MediaSegment, PlannedFetch,
@@ -162,39 +163,48 @@ fn init_size_of(init: &Option<Segment>) -> u64 {
     init.as_ref().map_or(0, Segment::len)
 }
 
-impl HlsVariant {
-    /// Production constructor. Reads parsed playlist metadata and assembles
-    /// the per-variant index, init/segment entries, queue, and cancel
-    /// hierarchy. `decrypt_contexts[i]` carries the pre-resolved
-    /// [`DecryptContext`] for segment `i` (or `None` for cleartext
-    /// segments) — the caller resolves AES-128 keys through [`KeyStore`](
-    /// crate::playlist::KeyStore) before construction.
-    #[must_use]
-    pub(crate) fn new(
-        variant: usize,
-        playlist_state: &Arc<PlaylistState>,
-        seek_obs: Arc<dyn SeekObserve>,
-        init_decrypt_ctx: Option<DecryptContext>,
-        decrypt_contexts: &[Option<DecryptContext>],
-        ctx: &PlanCtx,
-    ) -> Arc<Self> {
-        let init = Self::build_init_entry(
+/// Per-variant construction parameters: the runtime context a parsed
+/// [`PlaylistState`] cannot carry, folded in via [`FromWithParams`].
+/// `decrypt_contexts[i]` carries the pre-resolved [`DecryptContext`] for
+/// segment `i` (or `None` for cleartext segments) — the caller resolves
+/// AES-128 keys through [`KeyStore`](crate::playlist::KeyStore) before
+/// construction.
+pub(crate) struct VariantParams<'a> {
+    pub(crate) variant_idx: usize,
+    pub(crate) seek_obs: Arc<dyn SeekObserve>,
+    pub(crate) init_decrypt_ctx: Option<DecryptContext>,
+    pub(crate) decrypt_contexts: &'a [Option<DecryptContext>],
+    pub(crate) ctx: &'a PlanCtx,
+}
+
+/// Production constructor: read parsed playlist metadata and assemble the
+/// per-variant index, init/segment entries, queue, and cancel hierarchy.
+impl FromWithParams<&Arc<PlaylistState>, VariantParams<'_>> for Arc<HlsVariant> {
+    fn build(playlist_state: &Arc<PlaylistState>, params: VariantParams<'_>) -> Self {
+        let VariantParams {
+            variant_idx,
+            seek_obs,
+            init_decrypt_ctx,
+            decrypt_contexts,
+            ctx,
+        } = params;
+        let init = HlsVariant::build_init_entry(
             playlist_state.as_ref(),
-            variant,
+            variant_idx,
             init_decrypt_ctx,
             &ctx.scope,
         );
-        let segments = Self::build_segment_entries(
+        let segments = HlsVariant::build_segment_entries(
             playlist_state.as_ref(),
             decrypt_contexts,
-            variant,
+            variant_idx,
             init_size_of(&init),
             &ctx.scope,
         );
-        let codec = playlist_state.variant_codec(variant);
-        let container = playlist_state.variant_container(variant);
-        Self::from_parts(
-            variant,
+        let codec = playlist_state.variant_codec(variant_idx);
+        let container = playlist_state.variant_container(variant_idx);
+        HlsVariant::from_parts(
+            variant_idx,
             VariantParts {
                 codec,
                 container,
@@ -206,7 +216,9 @@ impl HlsVariant {
             ctx,
         )
     }
+}
 
+impl HlsVariant {
     /// Auto-mode switch activation. Two byte positions matter:
     ///
     /// - `seg_boundary` — the **virtual** byte where this variant's

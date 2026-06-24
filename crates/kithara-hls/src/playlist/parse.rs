@@ -11,7 +11,7 @@ use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;
 
-use crate::HlsResult;
+use crate::{HlsResult, conv::FromWithParams};
 
 /// Cap error messages to avoid dumping binary data into logs.
 fn truncate_error(msg: &str) -> String {
@@ -322,47 +322,46 @@ pub fn parse_media_playlist(url: Url, data: &[u8]) -> HlsResult<MediaPlaylist> {
     })
 }
 
-/// Extract variant metadata from master playlist + parsed media playlists.
-///
-/// `media_playlists` must align with `master.variants` by index. Each
-/// produced [`VariantInfo`] carries duration shape derived from the
-/// matching media playlist's segments — `Segmented(per-segment)` when
-/// segments are present, otherwise `Unknown`.
-#[must_use]
-pub fn variant_info_from_master(
-    master: &ParsedMaster,
-    media_playlists: &[MediaPlaylist],
-) -> Vec<VariantInfo> {
-    master
-        .variants
-        .iter()
-        .enumerate()
-        .map(|(idx, v)| {
-            let duration = media_playlists
-                .get(idx)
-                .map_or(VariantDuration::Unknown, |playlist| {
-                    if playlist.segments.is_empty() {
-                        VariantDuration::Unknown
-                    } else {
-                        VariantDuration::Segmented(
-                            playlist.segments.iter().map(|s| s.duration).collect(),
-                        )
-                    }
-                });
-            VariantInfo {
-                duration,
-                variant_index: VariantIndex::new(v.id.0),
-                bandwidth_bps: v.bandwidth,
-                name: v.name.clone(),
-                codecs: v.codec.as_ref().and_then(|c| c.codecs.clone()),
-                container: v
-                    .codec
-                    .as_ref()
-                    .and_then(|c| c.container)
-                    .map(|fmt| format!("{fmt:?}")),
-            }
-        })
-        .collect()
+/// Extract ABR variant metadata from a parsed master playlist plus its
+/// per-variant media playlists.
+impl FromWithParams<&ParsedMaster, &[MediaPlaylist]> for Vec<VariantInfo> {
+    /// `media_playlists` must align with `master.variants` by index. Each
+    /// produced [`VariantInfo`] carries duration shape derived from the
+    /// matching media playlist's segments — `Segmented(per-segment)` when
+    /// segments are present, otherwise `Unknown`.
+    fn build(master: &ParsedMaster, media_playlists: &[MediaPlaylist]) -> Self {
+        master
+            .variants
+            .iter()
+            .enumerate()
+            .map(|(idx, v)| {
+                let duration =
+                    media_playlists
+                        .get(idx)
+                        .map_or(VariantDuration::Unknown, |playlist| {
+                            if playlist.segments.is_empty() {
+                                VariantDuration::Unknown
+                            } else {
+                                VariantDuration::Segmented(
+                                    playlist.segments.iter().map(|s| s.duration).collect(),
+                                )
+                            }
+                        });
+                VariantInfo {
+                    duration,
+                    variant_index: VariantIndex::new(v.id.0),
+                    bandwidth_bps: v.bandwidth,
+                    name: v.name.clone(),
+                    codecs: v.codec.as_ref().and_then(|c| c.codecs.clone()),
+                    container: v
+                        .codec
+                        .as_ref()
+                        .and_then(|c| c.container)
+                        .map(|fmt| format!("{fmt:?}")),
+                }
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

@@ -1,7 +1,8 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use kithara_hls::{parse_master_playlist, parse_media_playlist, variant_info_from_master};
+use kithara_events::VariantInfo;
+use kithara_hls::{FromWithParams, parse_master_playlist, parse_media_playlist};
 use libfuzzer_sys::fuzz_target;
 use url::Url;
 
@@ -15,7 +16,7 @@ fuzz_target!(|input: Input| {
     data.truncate(16 * 1024);
 
     if let Ok(master) = parse_master_playlist(&data) {
-        let infos = variant_info_from_master(&master, &[]);
+        let infos: Vec<VariantInfo> = FromWithParams::build(&master, &[][..]);
         assert_eq!(infos.len(), master.variants.len());
     }
 

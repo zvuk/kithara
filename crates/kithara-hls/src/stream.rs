@@ -8,7 +8,7 @@ use kithara_assets::{
     OnInvalidatedFn, ProcessChunkFn, ResourceKey, StoreOptions,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
-use kithara_events::EventBus;
+use kithara_events::{EventBus, VariantInfo};
 use kithara_net::HttpClient;
 use kithara_platform::{CancelScope, CancelToken, sync::CondvarGate, tokio::sync::mpsc};
 use kithara_stream::{
@@ -18,6 +18,7 @@ use kithara_stream::{
 
 use crate::{
     config::HlsConfig,
+    conv::FromWithParams,
     coord::{HlsCoord, HlsCoordEnv},
     handle::StreamPeer,
     invalidation::{HlsInvalidationGuard, HlsInvalidationRegistry, HlsStore},
@@ -25,11 +26,11 @@ use crate::{
     peer::HlsPeer,
     playlist::{
         KeyStore, MasterPlaylist, MediaPlaylist, ParsedMaster, PlaylistCache, PlaylistState,
-        load_variant_playlists, variant_info_from_master,
+        load_variant_playlists,
     },
     signal::SizeSignal,
     source::HlsSource,
-    variant::{HlsVariant, PlanCtx},
+    variant::{HlsVariant, PlanCtx, VariantParams},
 };
 
 /// Marker type for HLS streaming.
@@ -113,9 +114,13 @@ impl StreamType for Hls {
             stream_peer.byte_pool(),
         );
 
-        let playlist_state = Arc::new(PlaylistState::assemble(&master.variants, &media_playlists));
+        let playlist_state = Arc::new(PlaylistState::build(
+            &master.variants[..],
+            &media_playlists[..],
+        ));
 
-        hls_peer.set_abr_variants(variant_info_from_master(&master, &media_playlists));
+        let abr_variants: Vec<VariantInfo> = FromWithParams::build(&master, &media_playlists[..]);
+        hls_peer.set_abr_variants(abr_variants);
 
         key_store
             .prefetch_aes128_keys(&media_playlists)
@@ -174,13 +179,15 @@ impl StreamType for Hls {
             .map(|(idx, mp)| {
                 let init_decrypt_ctx = key_store.resolve_init_decrypt_ctx(mp);
                 let decrypt_contexts = key_store.resolve_variant_decrypt_contexts(mp);
-                HlsVariant::new(
-                    idx,
+                FromWithParams::build(
                     &playlist_state,
-                    Arc::clone(&seek_obs),
-                    init_decrypt_ctx,
-                    &decrypt_contexts,
-                    &plan_ctx,
+                    VariantParams {
+                        variant_idx: idx,
+                        seek_obs: Arc::clone(&seek_obs),
+                        init_decrypt_ctx,
+                        decrypt_contexts: &decrypt_contexts,
+                        ctx: &plan_ctx,
+                    },
                 )
             })
             .collect();

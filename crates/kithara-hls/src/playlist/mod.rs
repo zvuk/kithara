@@ -15,7 +15,7 @@ pub use keys::KeyStore;
 pub(crate) use master::MasterPlaylist;
 pub use parse::{
     MediaPlaylist, ParsedMaster, VariantId, VariantStream, parse_master_playlist,
-    parse_media_playlist, variant_info_from_master,
+    parse_media_playlist,
 };
 pub use playlist_cache::PlaylistCache;
 pub(crate) use state::PlaylistAccess;
