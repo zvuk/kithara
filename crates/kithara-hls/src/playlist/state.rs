@@ -590,7 +590,7 @@ mod tests {
 
     #[kithara::test]
     fn test_from_parsed_basic() {
-        let variants = vec![VariantStream {
+        let variants = [VariantStream {
             id: VariantId(0),
             uri: "v0.m3u8".to_string(),
             bandwidth: Some(128_000),
@@ -627,7 +627,7 @@ mod tests {
             detected_container: Some(ContainerFormat::Fmp4),
         };
 
-        let media_playlists = vec![playlist];
+        let media_playlists = [playlist];
         let state = PlaylistState::build(&variants[..], &media_playlists[..]);
 
         assert_eq!(state.num_variants(), 1);
