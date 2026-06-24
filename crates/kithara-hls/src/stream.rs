@@ -15,7 +15,6 @@ use kithara_stream::{
     Activity, PlayheadState, PlayheadWrite, SeekObserve, SeekState, SourceError, StreamType,
     dl::{Downloader, DownloaderConfig, Peer},
 };
-use url::Url;
 
 use crate::{
     config::HlsConfig,
@@ -25,8 +24,8 @@ use crate::{
     naming::HlsAssetScopeDelegate,
     peer::HlsPeer,
     playlist::{
-        KeyStore, MediaPlaylist, PlaylistCache, PlaylistState, VariantStream,
-        variant_info_from_master,
+        KeyStore, MasterPlaylist, MediaPlaylist, ParsedMaster, PlaylistCache, PlaylistState,
+        load_variant_playlists, variant_info_from_master,
     },
     signal::SizeSignal,
     source::HlsSource,
@@ -104,14 +103,7 @@ impl StreamType for Hls {
             config.headers.clone(),
         );
 
-        let playlist_cache = PlaylistCache::new(
-            stream_peer.scope(),
-            stream_peer.peer_handle(),
-            stream_peer.byte_pool(),
-        );
-        playlist_cache.set_master_url(config.url.clone());
-        playlist_cache.set_base_url(config.base_url.clone());
-        playlist_cache.set_headers(config.headers.clone());
+        let (master, media_playlists) = load_playlists(&stream_peer, &config).await?;
 
         let key_store = KeyStore::with_options(
             stream_peer.peer_handle(),
@@ -120,11 +112,6 @@ impl StreamType for Hls {
             config.keys.clone(),
             stream_peer.byte_pool(),
         );
-
-        let master = playlist_cache.master_playlist(&config.url).await?;
-
-        let media_playlists =
-            fetch_media_playlists(&playlist_cache, &config.url, &master.variants).await?;
 
         let playlist_state = Arc::new(PlaylistState::assemble(&master.variants, &media_playlists));
 
@@ -238,21 +225,39 @@ impl StreamType for Hls {
     }
 }
 
-/// Fetch each variant's media playlist for `master`, in master order.
-async fn fetch_media_playlists(
-    cache: &PlaylistCache,
-    master_url: &Url,
-    variants: &[VariantStream],
-) -> Result<Vec<MediaPlaylist>, SourceError> {
-    let mut playlists = Vec::with_capacity(variants.len());
-    for variant in variants {
-        let media_url = cache.resolve_url(master_url, &variant.uri)?;
-        let playlist = cache
-            .media_playlist(&media_url, crate::playlist::VariantId(variant.id.0))
-            .await?;
-        playlists.push(playlist);
-    }
-    Ok(playlists)
+/// Build the playlist cache and load the master plus every variant media
+/// playlist (master order). Folds the general→specific playlist load out of
+/// `Hls::create` so the master and media playlists arrive together.
+async fn load_playlists(
+    stream_peer: &StreamPeer,
+    config: &HlsConfig,
+) -> Result<(ParsedMaster, Vec<MediaPlaylist>), SourceError> {
+    let playlist_cache = PlaylistCache::new(
+        stream_peer.scope(),
+        stream_peer.peer_handle(),
+        stream_peer.byte_pool(),
+    );
+    playlist_cache.set_master_url(config.url.clone());
+    playlist_cache.set_base_url(config.base_url.clone());
+    playlist_cache.set_headers(config.headers.clone());
+
+    let master = MasterPlaylist::new(
+        playlist_cache.clone(),
+        &stream_peer.scope(),
+        config.url.clone(),
+    )
+    .load()
+    .await?;
+
+    let media_playlists = load_variant_playlists(
+        &playlist_cache,
+        &stream_peer.scope(),
+        &config.url,
+        &master.variants,
+    )
+    .await?;
+
+    Ok((master, media_playlists))
 }
 
 /// Default transport when the caller injects none: a private `Downloader`
