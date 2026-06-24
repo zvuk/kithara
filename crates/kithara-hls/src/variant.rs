@@ -30,6 +30,7 @@ use url::Url;
 use crate::{
     HlsError,
     conv::FromWithParams,
+    handle::ResourceHandle,
     playlist::{PlaylistAccess, PlaylistState},
     segment::{
         Downloading, FetchClaim, FetchSlot, InitSegment, Loaded, MediaSegment, PlannedFetch,
@@ -41,11 +42,9 @@ use crate::{
 mod cancel_epoch;
 mod offsets;
 mod reader_runtime;
-mod segment_store;
 use cancel_epoch::CancelEpoch;
 use offsets::{ActivateParams, Layout};
 use reader_runtime::ReaderRuntime;
-use segment_store::SegmentStore;
 
 #[cfg(test)]
 mod tests;
@@ -132,14 +131,21 @@ pub(crate) struct HlsVariant {
     /// timeline consulted for `is_flushing` gating. The probe-tagged
     /// `get_position` / `set_position` stay on the facade and delegate here.
     reader: ReaderRuntime,
-    /// Segment/init content domain: the asset scope plus the init and
-    /// media entry tables. It vends a narrow `ResourceHandle` per
-    /// segment/init (`segment_handle` / `init_handle`); the produce-core's
-    /// disk read and acquire flow through that handle, and it is the home
-    /// for the `WS5d` held-resource lease. The fetch path on this facade
-    /// borrows its `init()` / `segments()` to claim slots and build
-    /// `FetchCmd`s.
-    store: SegmentStore,
+    /// Per-track asset store. The single source-of-truth clone: each vended
+    /// [`ResourceHandle`] gets a cheap clone of it, and the fetch path
+    /// acquires *writable* resources via the same clone in `PlanCtx::scope`.
+    /// Vends a narrow `ResourceHandle` per segment/init (`segment_handle` /
+    /// `init_handle`); the produce-core's disk read and acquire flow through
+    /// that handle, and it is the home for the `WS5d` held-resource lease.
+    scope: AssetScope<DecryptContext>,
+    /// Init slot: `Some(Segment::Init)` for a variant that advertises a
+    /// separately fetched `#EXT-X-MAP` init, `None` otherwise. Its existence
+    /// is keyed on the playlist `#EXT-X-MAP` URL, never on the init HEAD size
+    /// — see [`Self::build_init_entry`].
+    init: Option<Segment>,
+    /// Media entry table — the fetch path and descriptor builders index it
+    /// for `url` / `content` / `decode_time`.
+    segments: Vec<Segment>,
     variant: usize,
 }
 
@@ -253,7 +259,7 @@ impl HlsVariant {
                 seg_boundary,
                 init_size: self.init_size(),
             },
-            self.store.segments(),
+            &self.segments,
         );
         self.set_position(reader_pos);
         self.rebuild(ctx, from_seg);
@@ -276,10 +282,9 @@ impl HlsVariant {
     /// `range_ready`. The closure performs the caller-owned size store and
     /// reports the post-store `init_size` to seed the recompute.
     pub(crate) fn apply_commit(&self, loaded: &FetchClaim<Loaded>) {
-        self.layout.apply_commit(self.store.segments(), || {
-            self.store
-                .apply_loaded_size(loaded.planned(), loaded.final_len());
-            self.store.init_size()
+        self.layout.apply_commit(&self.segments, || {
+            self.apply_loaded_size(loaded.planned(), loaded.final_len());
+            self.init_size()
         });
     }
 
@@ -354,8 +359,8 @@ impl HlsVariant {
         ctx: &PlanCtx,
         handle: FetchClaim<Downloading>,
     ) -> Option<FetchCmd> {
-        let init = self.store.init()?;
-        let resource_handle = self.store.init_handle()?;
+        let init = self.init()?;
+        let resource_handle = self.init_handle()?;
         let resource = resource_handle
             .acquire(init.content())
             .expect("acquire_resource for init must succeed");
@@ -456,10 +461,10 @@ impl HlsVariant {
     }
 
     pub(crate) fn descriptor(&self, idx: usize) -> Option<SegmentDescriptor> {
-        let entry = self.store.segments().get(idx)?.as_media()?;
+        let entry = self.segments.get(idx)?.as_media()?;
         let seg_idx_u32 = u32::try_from(idx).ok()?;
         let byte_offset = self.layout.natural_offset(idx)?;
-        let size = self.store.segment_size(idx)?;
+        let size = self.segment_size(idx)?;
         Some(SegmentDescriptor::new(
             byte_offset..byte_offset + size,
             entry.decode_time(),
@@ -472,14 +477,14 @@ impl HlsVariant {
     #[kithara::probe(variant = self.variant as u64, byte)]
     pub(crate) fn descriptor_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
         let mut idx = self.layout.bisect_left(byte);
-        if idx >= self.store.segments().len() {
+        if idx >= self.segments.len() {
             return None;
         }
         let off = self.layout.natural_offset(idx)?;
         if off < byte {
             idx += 1;
         }
-        if idx >= self.store.segments().len() {
+        if idx >= self.segments.len() {
             return None;
         }
         self.descriptor(idx)
@@ -488,7 +493,7 @@ impl HlsVariant {
     #[kithara::probe(variant = self.variant as u64, byte)]
     pub(crate) fn descriptor_at_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
         let (idx, off, size) = self.find_at_offset(byte)?;
-        let entry = self.store.segments().get(idx as usize)?.as_media()?;
+        let entry = self.segments.get(idx as usize)?.as_media()?;
         Some(SegmentDescriptor::new(
             off..off + size,
             entry.decode_time(),
@@ -500,7 +505,7 @@ impl HlsVariant {
 
     #[kithara::probe(variant = self.variant as u64)]
     pub(crate) fn descriptor_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
-        self.descriptor(self.store.index_at_time(t)?)
+        self.descriptor(self.index_at_time(t)?)
     }
 
     #[kithara::probe(
@@ -550,7 +555,7 @@ impl HlsVariant {
                     // Only a present init is ever enqueued (the `rebuild`
                     // gate skips a `None` init), so a missing slot here is
                     // unreachable; skip defensively rather than claim a slot
-                    let Some(init) = self.store.init() else {
+                    let Some(init) = self.init() else {
                         continue;
                     };
                     let Some(handle) = init
@@ -562,14 +567,13 @@ impl HlsVariant {
                         }
                         continue;
                     };
-                    if let Some(actual) = self.store.init_committed_final_len() {
+                    if let Some(actual) = self.init_committed_final_len() {
                         handle.into_loaded(actual);
                         ctx.signal.fire();
                         continue;
                     }
                     let Some(cmd) = self.build_init_cmd(ctx, handle) else {
                         if self
-                            .store
                             .init()
                             .is_some_and(|i| !i.state().is_loaded() && !i.state().is_failed())
                         {
@@ -580,7 +584,7 @@ impl HlsVariant {
                     out.push(cmd);
                 }
                 PlannedFetch::Segment(seg_idx) => {
-                    let Some(entry) = self.store.segments().get(seg_idx as usize) else {
+                    let Some(entry) = self.segments.get(seg_idx as usize) else {
                         continue;
                     };
                     let Some(handle) = entry
@@ -596,7 +600,7 @@ impl HlsVariant {
                         }
                         continue;
                     };
-                    if let Some(actual) = self.store.committed_final_len(seg_idx) {
+                    if let Some(actual) = self.committed_final_len(seg_idx) {
                         handle.into_loaded(actual);
                         ctx.signal.fire();
                         continue;
@@ -626,7 +630,12 @@ impl HlsVariant {
     /// when every segment is `Loaded`. Scans linearly; cheap because it
     /// only runs from `Abr::progress` (ABR tick cadence).
     pub(crate) fn download_head(&self) -> u32 {
-        self.store.download_head()
+        let head = self
+            .segments
+            .iter()
+            .position(|s| !s.state().is_loaded())
+            .unwrap_or(self.segments.len());
+        u32::try_from(head).unwrap_or(u32::MAX)
     }
 
     #[kithara::probe(
@@ -640,8 +649,8 @@ impl HlsVariant {
         seg_idx: u32,
         handle: FetchClaim<Downloading>,
     ) -> Option<FetchCmd> {
-        let entry = &self.store.segments()[seg_idx as usize];
-        let Some(resource_handle) = self.store.segment_handle(seg_idx) else {
+        let entry = &self.segments[seg_idx as usize];
+        let Some(resource_handle) = self.segment_handle(seg_idx) else {
             let _ = handle.into_missing();
             return None;
         };
@@ -677,12 +686,11 @@ impl HlsVariant {
         byte_offset,
         found_seg = self
             .layout
-            .find_at_offset(byte_offset, self.store.segments())
+            .find_at_offset(byte_offset, &self.segments)
             .map_or(u64::MAX, |(i, _, _)| u64::from(i))
     )]
     pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
-        self.layout
-            .find_at_offset(byte_offset, self.store.segments())
+        self.layout.find_at_offset(byte_offset, &self.segments)
     }
 
     /// Header byte range for format-change resync — alias for
@@ -704,10 +712,11 @@ impl HlsVariant {
         } = parts;
         let init_size = init_size_of(&init);
         let layout = Layout::new(init_size, &segments);
-        let store = SegmentStore::new(ctx.scope.clone(), init, segments);
         Arc::new(Self {
             variant,
-            store,
+            scope: ctx.scope.clone(),
+            init,
+            segments,
             playlist_state,
             layout,
             codec,
@@ -728,7 +737,7 @@ impl HlsVariant {
     /// Whether this variant declares a separately fetched `#EXT-X-MAP` init,
     /// regardless of whether its size is yet known.
     pub(crate) fn has_init(&self) -> bool {
-        self.store.has_init()
+        self.init.is_some()
     }
 
     /// Byte range a demuxer reads to re-establish container state after a
@@ -741,17 +750,14 @@ impl HlsVariant {
         if self.served_from() != 0 {
             return Err(StreamError::Source(SourceError::FormatChangeNotApplicable));
         }
-        if self.store.init().is_some() {
+        if self.init().is_some() {
             return Ok(self.init_byte_range());
         }
-        let (_, off, size) = self
-            .layout
-            .find_natural(0, self.store.segments())
-            .ok_or_else(|| {
-                StreamError::Source(SourceError::Other(Box::new(IoError::other(
-                    "variant has no segments — cannot derive header range",
-                ))))
-            })?;
+        let (_, off, size) = self.layout.find_natural(0, &self.segments).ok_or_else(|| {
+            StreamError::Source(SourceError::Other(Box::new(IoError::other(
+                "variant has no segments — cannot derive header range",
+            ))))
+        })?;
         Ok(off..(off + size))
     }
 
@@ -775,9 +781,9 @@ impl HlsVariant {
     /// addressable* init range — the init only counts when
     /// `served_from() == 0` (post-commit, init is orphaned in natural
     /// space). Reads/`contains` for that range route through the init
-    /// [`Segment`] (`SegmentStore::init_read_at` / `init_contains`).
+    /// [`Segment`] ([`Self::init_read_at`] / [`Self::init_contains`]).
     pub(crate) fn init_descriptor_at(&self, byte_offset: u64) -> Option<Range<u64>> {
-        if self.served_from() != 0 || !self.store.has_init() {
+        if self.served_from() != 0 || !self.has_init() {
             return None;
         }
         let range = self.init_byte_range();
@@ -789,23 +795,31 @@ impl HlsVariant {
 
     /// Whether the declared init settled terminally (`Failed`).
     pub(crate) fn init_failed(&self) -> bool {
-        self.store.init_failed()
+        self.init
+            .as_ref()
+            .is_some_and(|seg| seg.state().is_failed())
     }
 
     /// Resource key for the variant's init segment — `None` when the
     /// playlist has no `#EXT-X-MAP` (raw TS/AAC). Test-only assertion helper;
-    /// the reader paths read the init through [`SegmentStore::init_handle`].
+    /// the reader paths read the init through [`Self::init_handle`].
     #[cfg(test)]
     pub(crate) fn init_resource(&self) -> Option<ResourceKey> {
-        self.store.init_resource()
+        Some(self.init.as_ref()?.resource_id().clone())
     }
 
     pub(crate) fn init_size(&self) -> u64 {
-        self.store.init_size()
+        self.init.as_ref().map_or(0, Segment::len)
     }
 
+    /// Flip the init slot to `Missing`, clearing the Layout seed when the
+    /// variant actually carries an init segment.
     pub(crate) fn invalidate_init(&self) {
-        if self.store.invalidate_init() {
+        let had_init = self.init.as_ref().is_some_and(|seg| {
+            seg.state().mark_missing();
+            true
+        });
+        if had_init {
             self.layout.clear_init_seed();
         }
     }
@@ -844,12 +858,14 @@ impl HlsVariant {
     /// (CMAF `EXT-X-MAP`) — true only if the variant advertises a
     /// non-zero init segment that hasn't been loaded yet.
     fn needs_init_fetch(&self) -> bool {
-        self.store.needs_init_fetch()
+        self.init
+            .as_ref()
+            .is_some_and(|seg| !seg.state().is_loaded())
     }
 
     #[must_use]
     pub(crate) fn num_segments(&self) -> u32 {
-        self.store.num_segments()
+        u32::try_from(self.segments.len()).unwrap_or(u32::MAX)
     }
 
     /// Returns evicted `seg_idx` (`-1` for init), or `None` if `key` doesn't belong to this variant.
@@ -859,7 +875,19 @@ impl HlsVariant {
     /// next ABR flip).
     #[kithara::probe(variant = self.variant as u64)]
     pub(crate) fn on_evict(&self, key: &ResourceKey) -> Option<i32> {
-        self.store.on_evict(key)
+        if let Some(init) = self.init.as_ref()
+            && init.resource_id() == key
+        {
+            init.state().mark_missing();
+            return Some(-1);
+        }
+        for (seg_idx, seg) in self.segments.iter().enumerate() {
+            if seg.resource_id() == key {
+                seg.state().mark_missing();
+                return i32::try_from(seg_idx).ok();
+            }
+        }
+        None
     }
 
     pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
@@ -905,7 +933,7 @@ impl HlsVariant {
         // after checking the init's own terminal state, exactly as
         // `range_ready` walks init then media.
         if let Some(init_range) = self.init_descriptor_at(cursor) {
-            if self.store.init_failed() {
+            if self.init_failed() {
                 return true;
             }
             cursor = init_range.end;
@@ -914,7 +942,7 @@ impl HlsVariant {
             let Some((seg_idx, seg_off, seg_size)) = self.find_at_offset(cursor) else {
                 break;
             };
-            if self.store.segment_failed(seg_idx) {
+            if self.segment_failed(seg_idx) {
                 return true;
             }
             cursor = (seg_off + seg_size).max(cursor + 1);
@@ -949,7 +977,7 @@ impl HlsVariant {
             let slice_end = end.min(init_range.end);
             let local_start = cursor - init_range.start;
             let local_end = slice_end - init_range.start;
-            if !self.store.init_contains(local_start..local_end) {
+            if !self.init_contains(local_start..local_end) {
                 return false;
             }
             cursor = slice_end;
@@ -969,7 +997,7 @@ impl HlsVariant {
             let slice_end = end.min(seg_end);
             let local_start = cursor - seg_off;
             let local_end = slice_end - seg_off;
-            if !self.store.segment_contains(seg_idx, local_start..local_end) {
+            if !self.segment_contains(seg_idx, local_start..local_end) {
                 return false;
             }
             cursor = slice_end;
@@ -980,8 +1008,8 @@ impl HlsVariant {
     fn range_wait_phase(&self, range: &Range<u64>) -> SourcePhase {
         let total = self.total_bytes();
         if total > 0 && range.start >= total && !self.sizes_complete() {
-            let head = self.store.download_head();
-            return if self.store.segment_downloading(head) {
+            let head = self.download_head();
+            return if self.segment_downloading(head) {
                 SourcePhase::WaitingDemand
             } else {
                 SourcePhase::Waiting
@@ -1006,8 +1034,8 @@ impl HlsVariant {
             let slice_end = end.min(init_range.end);
             let local_start = cursor - init_range.start;
             let local_end = slice_end - init_range.start;
-            if !self.store.init_contains(local_start..local_end) {
-                if !self.store.init_downloading() {
+            if !self.init_contains(local_start..local_end) {
+                if !self.init_downloading() {
                     return SourcePhase::Waiting;
                 }
                 waiting_on_demand = true;
@@ -1030,8 +1058,8 @@ impl HlsVariant {
             let slice_end = end.min(seg_end);
             let local_start = cursor - seg_off;
             let local_end = slice_end - seg_off;
-            if !self.store.segment_contains(seg_idx, local_start..local_end) {
-                if !self.store.segment_downloading(seg_idx) {
+            if !self.segment_contains(seg_idx, local_start..local_end) {
+                if !self.segment_downloading(seg_idx) {
                     return SourcePhase::Waiting;
                 }
                 waiting_on_demand = true;
@@ -1068,7 +1096,7 @@ impl HlsVariant {
             let local_end = slice_end - init_range.start;
             let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
             let dst = &mut buf[written..written + take];
-            match self.store.init_read_at(local_start..local_end, dst)? {
+            match self.init_read_at(local_start..local_end, dst)? {
                 Some(n) => {
                     written += n;
                     cursor += n as u64;
@@ -1117,10 +1145,7 @@ impl HlsVariant {
             let local_end = slice_end - seg_off;
             let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
             let dst = &mut buf[written..written + take];
-            match self
-                .store
-                .segment_read_at(seg_idx, local_start..local_end, dst)?
-            {
+            match self.segment_read_at(seg_idx, local_start..local_end, dst)? {
                 Some(n) => {
                     written += n;
                     cursor += n as u64;
@@ -1208,7 +1233,7 @@ impl HlsVariant {
     /// natural offsets. Subsequent ABR commits at boundary will re-build
     /// the layering as usual.
     pub(crate) fn reset_to_full_range(&self) {
-        self.layout.reset(self.init_size(), self.store.segments());
+        self.layout.reset(self.init_size(), &self.segments);
         self.rearm_cancel();
     }
 
@@ -1271,8 +1296,7 @@ impl HlsVariant {
     }
 
     pub(crate) fn segment_index_at_time(&self, t: Duration) -> Option<u32> {
-        self.store
-            .index_at_time(t)
+        self.index_at_time(t)
             .and_then(|idx| u32::try_from(idx).ok())
     }
 
@@ -1299,7 +1323,7 @@ impl HlsVariant {
     /// emit when the reader cursor lingers in the boundary segment.
     pub(crate) fn set_served_until(&self, until: u32) {
         self.layout
-            .set_served_until(until, self.store.segments(), self.init_size());
+            .set_served_until(until, &self.segments, self.init_size());
     }
 
     /// Whether every served segment's byte size is known. While `false`,
@@ -1365,4 +1389,158 @@ impl HlsVariant {
             ReadOutcome::Bytes,
         )
     }
+
+    /// Settle-side size store: shrink the appropriate atom to `final_len`.
+    /// The caller runs this inside [`Layout::apply_commit`](
+    /// offsets::Layout::apply_commit)'s write-lock so a reader never
+    /// observes a new size against a stale offset table.
+    fn apply_loaded_size(&self, planned: PlannedFetch, final_len: u64) {
+        match planned {
+            PlannedFetch::Init => {
+                // Only a `Some(Init)` slot is ever settled (it is the only init
+                // that gets fetched). A `None` init has no size atom; a stray
+                // settle is a no-op rather than resurrecting an init.
+                if let Some(init) = self.init.as_ref() {
+                    init.size().set_exact(final_len);
+                }
+            }
+            PlannedFetch::Segment(idx) => {
+                if let Some(slot) = self.segments.get(idx as usize) {
+                    slot.size().set_exact(final_len);
+                }
+            }
+        }
+    }
+
+    /// Committed on-disk length for media segment `seg_idx` when its resource
+    /// is `Committed` with a known `final_len` — the skip-fetch guard's size
+    /// source. `None` when the index is out of range.
+    fn committed_final_len(&self, seg_idx: u32) -> Option<u64> {
+        self.segment_handle(seg_idx)?.committed_len()
+    }
+
+    /// Whether every byte in `range` is already present on disk for media
+    /// segment `seg_idx` — routed through the [`Segment`] cascade.
+    fn segment_contains(&self, seg_idx: u32, range: Range<u64>) -> bool {
+        self.segments
+            .get(seg_idx as usize)
+            .is_some_and(|seg| seg.contains(&self.scope, range))
+    }
+
+    /// Read `range` of media segment `seg_idx` into `dst` via the [`Segment`]
+    /// cascade. `Ok(None)` when the segment is out of range or its bytes are
+    /// not on disk yet.
+    fn segment_read_at(
+        &self,
+        seg_idx: u32,
+        range: Range<u64>,
+        dst: &mut [u8],
+    ) -> StreamResult<Option<usize>> {
+        self.segments
+            .get(seg_idx as usize)
+            .map_or_else(|| Ok(None), |seg| seg.read_at(&self.scope, range, dst))
+    }
+
+    /// Whether every byte in `range` is present on disk for the init segment.
+    fn init_contains(&self, range: Range<u64>) -> bool {
+        self.init
+            .as_ref()
+            .is_some_and(|seg| seg.contains(&self.scope, range))
+    }
+
+    /// Read `range` of the init segment into `dst` via the [`Segment`]
+    /// cascade. `Ok(None)` when there is no init or its bytes are not on disk
+    /// yet.
+    fn init_read_at(&self, range: Range<u64>, dst: &mut [u8]) -> StreamResult<Option<usize>> {
+        self.init
+            .as_ref()
+            .map_or_else(|| Ok(None), |seg| seg.read_at(&self.scope, range, dst))
+    }
+
+    /// Clamped segment index whose decode-time window contains `t`, or
+    /// `None` when the variant has no segments.
+    fn index_at_time(&self, t: Duration) -> Option<usize> {
+        if self.segments.is_empty() {
+            return None;
+        }
+        let idx = bisect_right_decode_time(&self.segments, t).saturating_sub(1);
+        Some(idx.min(self.segments.len() - 1))
+    }
+
+    /// Borrow the init slot — the fetch path matches on it, reading the init
+    /// `Segment`'s `url` / `content` / `resource_id` and claiming its state
+    /// atom. `None` for a variant with no separate init.
+    fn init(&self) -> Option<&Segment> {
+        self.init.as_ref()
+    }
+
+    /// Committed on-disk length of the (separately fetched) init segment, as
+    /// [`committed_final_len`](Self::committed_final_len) for media.
+    fn init_committed_final_len(&self) -> Option<u64> {
+        self.init_handle()?.committed_len()
+    }
+
+    fn init_downloading(&self) -> bool {
+        self.init
+            .as_ref()
+            .is_some_and(|seg| seg.state().is_downloading())
+    }
+
+    /// Narrow disk handle for the variant's separately fetched init segment,
+    /// or `None` for a variant with no `#EXT-X-MAP` init.
+    fn init_handle(&self) -> Option<ResourceHandle> {
+        Some(self.init.as_ref()?.resource(&self.scope))
+    }
+
+    fn segment_downloading(&self, seg_idx: u32) -> bool {
+        self.segments
+            .get(seg_idx as usize)
+            .is_some_and(|s| s.state().is_downloading())
+    }
+
+    /// Whether media segment `seg_idx` settled terminally (`Failed`): the
+    /// downloader exhausted its retry budget, so the segment will never
+    /// load. Readers surface a terminal error on it.
+    fn segment_failed(&self, seg_idx: u32) -> bool {
+        self.segments
+            .get(seg_idx as usize)
+            .is_some_and(|s| s.state().is_failed())
+    }
+
+    /// Narrow disk handle for media segment `seg_idx`, or `None` when the
+    /// index is out of range. Cheap: clones the shared scope plus the
+    /// segment's key and url.
+    fn segment_handle(&self, seg_idx: u32) -> Option<ResourceHandle> {
+        Some(self.segments.get(seg_idx as usize)?.resource(&self.scope))
+    }
+
+    /// Media size of segment `idx` — pure media only; the init prefix lives
+    /// in its own `[0, init.size)` range.
+    fn segment_size(&self, idx: usize) -> Option<u64> {
+        Some(self.segments.get(idx)?.len())
+    }
+
+    /// Borrow the media table — the fetch path and the descriptor builders
+    /// index it for `url` / `content` / `decode_time`.
+    #[cfg(test)]
+    fn segments(&self) -> &[Segment] {
+        &self.segments
+    }
+}
+
+fn bisect_right_decode_time(segments: &[Segment], t: Duration) -> usize {
+    let mut lo = 0_usize;
+    let mut hi = segments.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let decode_time = segments[mid]
+            .as_media()
+            .map_or(Duration::ZERO, MediaSegment::decode_time);
+        if decode_time <= t {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
 }

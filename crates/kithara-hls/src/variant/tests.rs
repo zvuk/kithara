@@ -247,9 +247,9 @@ fn reset_to_full_range_uses_live_init_size_after_shifted_activation() {
             seg_boundary: 1_000,
         },
     );
-    v.layout.apply_commit(v.store.segments(), || {
-        v.store.apply_loaded_size(PlannedFetch::Init, 588);
-        v.store.init_size()
+    v.layout.apply_commit(v.segments(), || {
+        v.apply_loaded_size(PlannedFetch::Init, 588);
+        v.init_size()
     });
 
     v.reset_to_full_range();
@@ -397,8 +397,8 @@ fn find_at_offset_reflects_post_commit_size_shrink() {
     let (idx, off, size) = v.find_at_offset(450).expect("seg 1 before shrink");
     assert_eq!((idx, off, size), (1, 400, 400));
 
-    v.layout.apply_commit(v.store.segments(), || {
-        v.store.segments()[0].size().set_exact(384);
+    v.layout.apply_commit(v.segments(), || {
+        v.segments()[0].size().set_exact(384);
         v.init_size()
     });
 
@@ -427,8 +427,8 @@ fn total_bytes_lock_free_tracks_commit_and_served_until() {
     let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
     assert_eq!(v.total_bytes(), 200 + 400 * 4, "init + 4 media segments");
 
-    v.layout.apply_commit(v.store.segments(), || {
-        v.store.segments()[0].size().set_exact(384);
+    v.layout.apply_commit(v.segments(), || {
+        v.segments()[0].size().set_exact(384);
         v.init_size()
     });
     assert_eq!(
@@ -499,7 +499,7 @@ fn variant_init_not_applicable_no_acquire() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[400, 400], &ctx);
     assert!(
-        v.store.init().is_none(),
+        v.init().is_none(),
         "init_size == 0 must construct as a None init slot (old NotApplicable)"
     );
     assert_eq!(v.init_size(), 0);
@@ -514,7 +514,7 @@ fn variant_init_not_applicable_no_acquire() {
     );
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 2, "only the two media segments dispatch");
-    let seg0_url = v.store.segments()[0].url().clone();
+    let seg0_url = v.segments()[0].url().clone();
     assert_eq!(cmds[0].url, seg0_url, "first cmd is seg 0, not an init");
 }
 
@@ -525,7 +525,7 @@ fn variant_init_not_applicable_no_acquire() {
 fn variant_init_pending_for_fmp4() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400], &ctx);
-    let Some(entry @ Segment::Init(_)) = v.store.init() else {
+    let Some(entry @ Segment::Init(_)) = v.init() else {
         panic!("init_size > 0 must construct as Some(Segment::Init)");
     };
     assert_eq!(entry.size().get(), 200);
@@ -555,14 +555,14 @@ fn variant_init_pending_stays_pending_after_commit_shrink() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400], &ctx);
 
-    v.layout.apply_commit(v.store.segments(), || {
-        v.store.apply_loaded_size(PlannedFetch::Init, 160);
+    v.layout.apply_commit(v.segments(), || {
+        v.apply_loaded_size(PlannedFetch::Init, 160);
         v.init_size()
     });
 
     assert_eq!(v.init_size(), 160, "init size shrinks on commit");
     assert!(
-        matches!(v.store.init(), Some(Segment::Init(_))),
+        matches!(v.init(), Some(Segment::Init(_))),
         "a shrink (still > 0) keeps the init present — size never crosses to 0"
     );
     assert!(v.init_resource().is_some());
@@ -636,7 +636,7 @@ fn read_at_zero_holds_pending_while_init_unsized() {
     );
 
     // Commit segment 0's bytes so an *unguarded* read_at(0) would serve them.
-    let seg0_key = v.store.segments()[0].resource_id().clone();
+    let seg0_key = v.segments()[0].resource_id().clone();
     let AcquisitionResult::Pending(writer) = ctx
         .scope
         .store()
@@ -714,10 +714,10 @@ fn rebuild_refills_queue_without_touching_cancel_token() {
 fn dispatch_emits_init_first_then_segments_under_budget() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400], &ctx);
-    let init_url = v.store.init().expect("init is present").url().clone();
-    let seg0_url = v.store.segments()[0].url().clone();
-    let seg1_url = v.store.segments()[1].url().clone();
-    let seg2_url = v.store.segments()[2].url().clone();
+    let init_url = v.init().expect("init is present").url().clone();
+    let seg0_url = v.segments()[0].url().clone();
+    let seg1_url = v.segments()[1].url().clone();
+    let seg2_url = v.segments()[2].url().clone();
     v.rebuild(&ctx, 0);
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 4);
@@ -744,14 +744,14 @@ fn dispatch_respects_budget() {
 fn dispatch_skips_non_missing_segments() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
-    v.store.segments()[1].state().mark_loaded();
+    v.segments()[1].state().mark_loaded();
     v.queue.lock().clear();
     for seg in 0..3_u32 {
         push_planned(&v, seg);
     }
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 2);
-    assert!(v.store.segments()[1].state().is_loaded());
+    assert!(v.segments()[1].state().is_loaded());
 }
 
 #[kithara::test]
@@ -767,7 +767,7 @@ fn dispatch_requeues_orphaned_downloading_segment() {
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
 
     // seg 1 is mid-flight under an orphaned claim (Missing -> Downloading).
-    let orphan = v.store.segments()[1]
+    let orphan = v.segments()[1]
         .state()
         .try_claim(PlannedFetch::Segment(1), Arc::downgrade(&v))
         .expect("seg 1 must be claimable");
@@ -789,7 +789,7 @@ fn dispatch_requeues_orphaned_downloading_segment() {
     // unsettled `DownloadClaim` Drop reverts the slot to Missing.
     drop(orphan);
     assert!(
-        !v.store.segments()[1].state().is_loaded(),
+        !v.segments()[1].state().is_loaded(),
         "orphaned claim drop reverts seg 1 to Missing"
     );
 
@@ -808,7 +808,7 @@ fn dispatch_requeues_orphaned_downloading_segment() {
 fn phase_at_reports_waiting_demand_for_claimed_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
-    let claim = v.store.segments()[0]
+    let claim = v.segments()[0]
         .state()
         .try_claim(PlannedFetch::Segment(0), Arc::downgrade(&v))
         .expect("segment claim");
@@ -823,15 +823,15 @@ fn phase_at_reports_waiting_demand_for_claimed_segment() {
 fn on_evict_returns_minus_one_for_init() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[100, 100, 100], &ctx);
-    let init = v.store.init().expect("init is present");
+    let init = v.init().expect("init is present");
     init.state().mark_loaded();
-    v.store.segments()[1].state().mark_loaded();
+    v.segments()[1].state().mark_loaded();
     let key = init.resource_id().clone();
     let res = v.on_evict(&key);
     assert_eq!(res, Some(-1));
-    assert!(!v.store.init().expect("init is present").state().is_loaded());
+    assert!(!v.init().expect("init is present").state().is_loaded());
     assert!(
-        v.store.segments()[1].state().is_loaded(),
+        v.segments()[1].state().is_loaded(),
         "init eviction must not touch segment states"
     );
 }
@@ -840,11 +840,11 @@ fn on_evict_returns_minus_one_for_init() {
 fn on_evict_returns_seg_idx_for_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
-    v.store.segments()[1].state().mark_loaded();
-    let key = v.store.segments()[1].resource_id().clone();
+    v.segments()[1].state().mark_loaded();
+    let key = v.segments()[1].resource_id().clone();
     let res = v.on_evict(&key);
     assert_eq!(res, Some(1));
-    assert!(!v.store.segments()[1].state().is_loaded());
+    assert!(!v.segments()[1].state().is_loaded());
 }
 
 #[kithara::test]
@@ -1019,12 +1019,12 @@ fn variant_flip_cancels_v_old_and_keeps_v_new_token_live() {
 fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100; 20], &ctx);
-    v.store.segments()[10].state().mark_loaded();
+    v.segments()[10].state().mark_loaded();
 
     v.rebuild(&ctx, 10);
     let cmds = v.dispatch(&ctx, 3);
     assert_eq!(cmds.len(), 3);
-    let seg10_url = v.store.segments()[10].url().clone();
+    let seg10_url = v.segments()[10].url().clone();
     assert!(
         cmds.iter().all(|c| c.url != seg10_url),
         "Loaded seg 10 must not be re-emitted"
