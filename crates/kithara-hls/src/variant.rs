@@ -39,11 +39,11 @@ use crate::{
 };
 
 mod cancel_epoch;
-mod layout;
+mod offsets;
 mod reader_runtime;
 mod segment_store;
 use cancel_epoch::CancelEpoch;
-use layout::{ActivateParams, Layout};
+use offsets::{ActivateParams, Layout};
 use reader_runtime::ReaderRuntime;
 use segment_store::SegmentStore;
 

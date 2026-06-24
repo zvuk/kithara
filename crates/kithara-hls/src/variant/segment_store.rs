@@ -27,7 +27,7 @@ use crate::{
 /// super::HlsVariant::build_init_entry).
 ///
 /// Coordinate geometry (offsets, shift, served range) lives in the sibling
-/// [`Layout`](super::layout::Layout); read methods that bridge bytes and
+/// [`Layout`](super::offsets::Layout); read methods that bridge bytes and
 /// content (`read_at`, `range_ready`, the descriptors) stay on the
 /// `HlsVariant` facade and orchestrate across both.
 pub(super) struct SegmentStore {
@@ -54,7 +54,7 @@ impl SegmentStore {
 
     /// Settle-side size store: shrink the appropriate atom to `final_len`.
     /// The caller runs this inside [`Layout::apply_commit`](
-    /// super::layout::Layout::apply_commit)'s write-lock so a reader never
+    /// super::offsets::Layout::apply_commit)'s write-lock so a reader never
     /// observes a new size against a stale offset table.
     pub(super) fn apply_loaded_size(&self, planned: PlannedFetch, final_len: u64) {
         match planned {
