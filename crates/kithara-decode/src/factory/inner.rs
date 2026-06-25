@@ -5,7 +5,9 @@ use std::{
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_stream::{AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo};
+use kithara_stream::{
+    AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, needs_exact_byte_sizes,
+};
 
 use super::probe::{
     ProbeHint, codec_from_mp4_fourcc, container_from_extension, probe_codec,
@@ -569,10 +571,7 @@ fn should_use_segment_aware(
 /// ask the same question without a [`DecoderConfig`]. AAC / FLAC in fMP4 is
 /// the only segment-aware path; everything else reads incrementally.
 fn segment_aware_container(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
-    matches!(
-        codec,
-        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac
-    ) && matches!(container, Some(ContainerFormat::Fmp4))
+    !needs_exact_byte_sizes(Some(codec), container)
 }
 
 #[cfg(feature = "symphonia")]

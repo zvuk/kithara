@@ -33,6 +33,10 @@ impl ReaderRuntime {
         self.seek_obs.is_flushing()
     }
 
+    pub(super) fn is_seek_active(&self) -> bool {
+        self.seek_obs.is_flushing() || self.seek_obs.is_pending()
+    }
+
     pub(super) fn position(&self) -> u64 {
         self.position.load(Ordering::Acquire)
     }

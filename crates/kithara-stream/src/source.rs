@@ -72,7 +72,7 @@ pub enum SourcePhase {
     /// Default: data not yet available, no specific sub-state.
     #[default]
     Waiting,
-    /// On-demand request already in flight for this seek epoch.
+    /// On-demand request is queued or already in flight for this seek epoch.
     WaitingDemand,
     /// Metadata lookup needed before data can be requested.
     WaitingMetadata,

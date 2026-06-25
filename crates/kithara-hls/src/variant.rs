@@ -5,7 +5,7 @@ use std::{
     ops::Range,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
     },
 };
 
@@ -20,6 +20,7 @@ use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, SeekObserve, SourceSeekAnchor, StreamError,
     StreamResult,
     dl::{FetchCmd, OnCompleteFn, WriterFn},
+    needs_exact_byte_sizes,
 };
 use kithara_test_utils::kithara;
 use url::Url;
@@ -49,6 +50,14 @@ use reader_runtime::ReaderRuntime;
 
 #[cfg(test)]
 mod tests;
+
+const INIT_PLACEHOLDER_BYTES: u64 = 16 * 1024;
+
+#[derive(Clone, Copy)]
+struct SeekAlias {
+    segment: u32,
+    anchor: u64,
+}
 
 pub(crate) struct PlanCtx {
     /// Unified reader-wake handle (owned by [`HlsCoord`]). Every `FetchCmd` this
@@ -103,6 +112,14 @@ pub(crate) struct HlsVariant {
     /// `seek_time_anchor` (`find_seek_point_for_time`) and as the
     /// source for the cached [`Self::codec`] / [`Self::container`].
     playlist_state: Arc<PlaylistState>,
+    /// Per-track asset store. The single source-of-truth clone: each vended
+    /// [`ResourceHandle`] gets a cheap clone of it, and the fetch path
+    /// acquires *writable* resources via the same clone in `PlanCtx::scope`.
+    /// Vends a narrow `ResourceHandle` per segment/init (`segment_handle` /
+    /// `init_handle`); the produce-core's disk read and acquire flow through
+    /// that handle, and it is the home for the `WS5d` held-resource lease.
+    scope: AssetScope<DecryptContext>,
+    segment_aware_seek_tail: AtomicU32,
     prefetch_anchor: AtomicU64,
     /// The variant's cancel epoch: the per-track parent (mirror of
     /// `coord.cancel` = `PlanCtx::master_cancel`) plus the rotating
@@ -117,6 +134,7 @@ pub(crate) struct HlsVariant {
     /// the shift of one activation with the served bounds of the next.
     layout: Layout,
     queue: Mutex<VecDeque<PlannedFetch>>,
+    seek_alias: Mutex<Option<SeekAlias>>,
     /// Cached audio codec — pulled from `playlist_state` at construction
     /// time. The reader's hot path (`media_info`) reads this without
     /// taking the playlist's per-variant `RwLock`.
@@ -128,22 +146,15 @@ pub(crate) struct HlsVariant {
     /// resource-wide auth (e.g. zvuk `X-Auth-Token`) so segment GETs
     /// reach the same authenticated endpoint as the playlist load.
     headers: Option<Headers>,
-    /// Reader-side runtime: the shared byte cursor, peer wake handle, and the
-    /// timeline consulted for `is_flushing` gating. The probe-tagged
-    /// `get_position` / `set_position` stay on the facade and delegate here.
-    reader: ReaderRuntime,
-    /// Per-track asset store. The single source-of-truth clone: each vended
-    /// [`ResourceHandle`] gets a cheap clone of it, and the fetch path
-    /// acquires *writable* resources via the same clone in `PlanCtx::scope`.
-    /// Vends a narrow `ResourceHandle` per segment/init (`segment_handle` /
-    /// `init_handle`); the produce-core's disk read and acquire flow through
-    /// that handle, and it is the home for the `WS5d` held-resource lease.
-    scope: AssetScope<DecryptContext>,
     /// Init slot: `Some(Segment::Init)` for a variant that advertises a
     /// separately fetched `#EXT-X-MAP` init, `None` otherwise. Its existence
     /// is keyed on the playlist `#EXT-X-MAP` URL, never on the init HEAD size
     /// — see [`Self::build_init_entry`].
     init: Option<Segment>,
+    /// Reader-side runtime: the shared byte cursor, peer wake handle, and the
+    /// timeline consulted for `is_flushing` gating. The probe-tagged
+    /// `get_position` / `set_position` stay on the facade and delegate here.
+    reader: ReaderRuntime,
     /// Media entry table — the fetch path and descriptor builders index it
     /// for `url` / `content` / `decode_time`.
     segments: Vec<Segment>,
@@ -168,6 +179,39 @@ pub(crate) struct VariantParts {
 /// (possibly post-commit shrunk) size atom.
 fn init_size_of(init: &Option<Segment>) -> u64 {
     init.as_ref().map_or(0, Segment::len)
+}
+
+/// Route-only non-exact media placeholder for segment-aware fMP4. `EXTINF`
+/// shapes a deliberately small synthetic byte step; `BANDWIDTH` can only lower
+/// it because master ladder bandwidths are often peak/variant labels rather
+/// than actual audio payload sizes. The exactness gate still prevents reads
+/// until the segment body commit publishes `final_len`, so this must optimize
+/// for stable routing geometry, not payload-size prediction.
+fn segment_placeholder_size(duration: Duration, bandwidth_bps: Option<u64>) -> u64 {
+    const MIN_BYTES: u64 = 4 * 1024;
+    const MAX_PRECOMMIT_BYTES: u64 = 256 * 1024;
+    const PLACEHOLDER_BYTES_PER_SEC: u128 = 4 * 1024;
+    const NANOS_PER_SEC: u128 = 1_000_000_000;
+    const BITS_PER_BYTE: u128 = 8;
+
+    let duration_nanos = duration.as_nanos();
+    if duration_nanos == 0 {
+        return MIN_BYTES;
+    }
+    let duration_bytes = duration_nanos
+        .saturating_mul(PLACEHOLDER_BYTES_PER_SEC)
+        .div_ceil(NANOS_PER_SEC);
+    let estimated_bytes = bandwidth_bps
+        .filter(|bps| *bps > 0)
+        .map_or(duration_bytes, |bps| {
+            let bandwidth_bytes = u128::from(bps)
+                .saturating_mul(duration_nanos)
+                .div_ceil(BITS_PER_BYTE * NANOS_PER_SEC);
+            duration_bytes.min(bandwidth_bytes)
+        });
+    u64::try_from(estimated_bytes)
+        .unwrap_or(u64::MAX)
+        .clamp(MIN_BYTES, MAX_PRECOMMIT_BYTES)
 }
 
 /// Per-variant construction parameters: the runtime context a parsed
@@ -226,6 +270,8 @@ impl FromWithParams<&Arc<PlaylistState>, VariantParams<'_>> for Arc<HlsVariant> 
 }
 
 impl HlsVariant {
+    const NO_SEEK_TAIL: u32 = u32::MAX;
+
     /// Auto-mode switch activation. Two byte positions matter:
     ///
     /// - `seg_boundary` — the **virtual** byte where this variant's
@@ -269,6 +315,9 @@ impl HlsVariant {
     #[kithara::probe(variant = self.variant as u64, n)]
     pub(crate) fn advance(&self, n: u64) {
         self.reader.advance(n);
+        if !self.reader.is_seek_active() {
+            self.clear_seek_alias_if_moved(self.reader.position());
+        }
     }
 
     /// Settle hook: shrinks the appropriate size atom to `actual` and
@@ -371,6 +420,12 @@ impl HlsVariant {
         let Some(num) = playlist_state.num_segments(variant_idx) else {
             return Vec::new();
         };
+        let needs_exact = needs_exact_byte_sizes(
+            playlist_state.variant_codec(variant_idx),
+            playlist_state.variant_container(variant_idx),
+        );
+        let use_placeholder = !needs_exact && !playlist_state.has_size_map(variant_idx);
+        let bandwidth_bps = playlist_state.variant_bandwidth_bps(variant_idx);
         let mut decode_time = Duration::ZERO;
         let mut entries = Vec::with_capacity(num);
         for seg_idx in 0..num {
@@ -394,11 +449,16 @@ impl HlsVariant {
                 .segment_decode_range(variant_idx, seg_idx)
                 .map_or(Duration::ZERO, |(start, end)| end.saturating_sub(start));
             let decrypt_ctx = decrypt_contexts.get(seg_idx).cloned().flatten();
+            let size = if use_placeholder {
+                SegmentSize::placeholder(segment_placeholder_size(duration, bandwidth_bps))
+            } else {
+                SegmentSize::seed(media_size)
+            };
             entries.push(Segment::Media(MediaSegment {
                 resource_id: scope.key_from_url(&url),
                 url,
                 state: SegmentSlotState::missing(),
-                size: SegmentSize::seed(media_size),
+                size,
                 content: SegmentContent::from(decrypt_ctx),
                 decode_time,
                 duration,
@@ -444,7 +504,8 @@ impl HlsVariant {
             .map_or(u64::MAX, |(i, _, _)| u64::from(i))
     )]
     pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
-        self.layout.find_at_offset(byte_offset, &self.segments)
+        self.seek_alias_at(byte_offset)
+            .or_else(|| self.layout.find_at_offset(byte_offset, &self.segments))
     }
 
     /// Bare assembly used by unit tests inside this module.
@@ -462,14 +523,16 @@ impl HlsVariant {
         let layout = Layout::new(init_size, &segments);
         Arc::new(Self {
             variant,
-            scope: ctx.scope.clone(),
             init,
             segments,
             playlist_state,
             layout,
             codec,
             container,
+            scope: ctx.scope.clone(),
             reader: ReaderRuntime::new(seek_obs),
+            seek_alias: Mutex::default(),
+            segment_aware_seek_tail: AtomicU32::new(Self::NO_SEEK_TAIL),
             prefetch_anchor: AtomicU64::new(0),
             queue: Mutex::default(),
             cancel_epoch: CancelEpoch::new(ctx.master_cancel.clone()),
@@ -578,6 +641,10 @@ impl HlsVariant {
         old_queue_len = self.queue.lock().len() as u64
     )]
     pub(crate) fn rebuild(&self, _ctx: &PlanCtx, from_seg: u32) {
+        self.rebuild_queue(from_seg);
+    }
+
+    fn rebuild_queue(&self, from_seg: u32) {
         let segs_len = self.num_segments();
         let init = self
             .needs_init_fetch()
@@ -631,8 +698,21 @@ impl HlsVariant {
     /// natural offsets. Subsequent ABR commits at boundary will re-build
     /// the layering as usual.
     pub(crate) fn reset_to_full_range(&self) {
-        self.layout.reset(self.init_size(), &self.segments);
+        self.clear_seek_alias();
+        self.clear_segment_aware_seek_tail();
+        self.reset_layout_to_full_range();
         self.rearm_cancel();
+    }
+
+    fn reset_layout_to_full_range(&self) {
+        self.layout.reset(self.init_size(), &self.segments);
+    }
+
+    /// Seek reset is layout-only. Active body fetches stay live: segment-aware
+    /// decoders re-resolve media ranges by segment index, and canceling the
+    /// in-flight target segment would put a streaming seek behind tail prefetch.
+    pub(crate) fn reset_for_seek(&self) {
+        self.reset_layout_to_full_range();
     }
 
     pub(crate) fn seek_time_anchor(
@@ -675,6 +755,10 @@ impl HlsVariant {
             .variant_index(variant)
             .build();
         self.set_position(byte_offset);
+        self.set_prefetch_anchor(byte_offset);
+        self.set_seek_alias(byte_offset, seg_idx_u32);
+        self.set_segment_aware_seek_tail(seg_idx_u32);
+        self.rebuild_queue(seg_idx_u32);
         Ok(Some(anchor))
     }
 
@@ -704,6 +788,9 @@ impl HlsVariant {
 
     #[kithara::probe(variant = self.variant as u64, pos)]
     pub(crate) fn set_position(&self, pos: u64) {
+        if !self.reader.is_seek_active() {
+            self.clear_seek_alias_if_moved(pos);
+        }
         self.reader.set_position(pos);
     }
 
@@ -731,6 +818,10 @@ impl HlsVariant {
     /// against the under-count.
     pub(crate) fn sizes_complete(&self) -> bool {
         self.layout.sizes_complete()
+    }
+
+    pub(crate) fn eof_ready(&self) -> bool {
+        self.sizes_complete() || self.segment_aware_seek_tail_complete()
     }
 
     #[kithara::probe(
@@ -777,7 +868,7 @@ impl HlsVariant {
     fn segment_contains(&self, seg_idx: u32, range: Range<u64>) -> bool {
         self.segments
             .get(seg_idx as usize)
-            .is_some_and(|seg| seg.contains(&self.scope, range))
+            .is_some_and(|seg| seg.size().is_exact() && seg.contains(&self.scope, range))
     }
 
     /// Read `range` of media segment `seg_idx` into `dst` via the [`Segment`]
@@ -789,9 +880,16 @@ impl HlsVariant {
         range: Range<u64>,
         dst: &mut [u8],
     ) -> StreamResult<Option<usize>> {
-        self.segments
-            .get(seg_idx as usize)
-            .map_or_else(|| Ok(None), |seg| seg.read_at(&self.scope, range, dst))
+        self.segments.get(seg_idx as usize).map_or_else(
+            || Ok(None),
+            |seg| {
+                if seg.size().is_exact() {
+                    seg.read_at(&self.scope, range, dst)
+                } else {
+                    Ok(None)
+                }
+            },
+        )
     }
 
     /// Clamped segment index whose decode-time window contains `t`, or
@@ -808,6 +906,56 @@ impl HlsVariant {
         self.segments
             .get(seg_idx as usize)
             .is_some_and(|s| s.state().is_downloading())
+    }
+
+    fn clear_seek_alias(&self) {
+        *self.seek_alias.lock() = None;
+    }
+
+    fn clear_segment_aware_seek_tail(&self) {
+        self.segment_aware_seek_tail
+            .store(Self::NO_SEEK_TAIL, Ordering::Release);
+    }
+
+    fn clear_seek_alias_if_moved(&self, pos: u64) {
+        let mut alias = self.seek_alias.lock();
+        if alias.is_some_and(|entry| entry.anchor != pos) {
+            *alias = None;
+        }
+    }
+
+    fn seek_alias_at(&self, byte: u64) -> Option<(u32, u64, u64)> {
+        let alias = *self.seek_alias.lock();
+        let alias = alias?;
+        let size = self.segment_size(alias.segment as usize)?;
+        let end = alias.anchor.saturating_add(size);
+        (byte >= alias.anchor && byte < end).then_some((alias.segment, alias.anchor, size))
+    }
+
+    fn set_seek_alias(&self, anchor: u64, segment: u32) {
+        *self.seek_alias.lock() = Some(SeekAlias { segment, anchor });
+    }
+
+    fn set_segment_aware_seek_tail(&self, segment: u32) {
+        if !needs_exact_byte_sizes(self.codec, self.container) {
+            self.segment_aware_seek_tail
+                .store(segment, Ordering::Release);
+        }
+    }
+
+    fn segment_aware_seek_tail_complete(&self) -> bool {
+        if needs_exact_byte_sizes(self.codec, self.container) {
+            return false;
+        }
+        let start = self.segment_aware_seek_tail.load(Ordering::Acquire);
+        if start == Self::NO_SEEK_TAIL {
+            return false;
+        }
+        let start = start as usize;
+        let Some(tail) = self.segments.get(start..) else {
+            return false;
+        };
+        !tail.is_empty() && tail.iter().all(|segment| segment.size().is_exact())
     }
 
     /// Whether media segment `seg_idx` settled terminally (`Failed`): the

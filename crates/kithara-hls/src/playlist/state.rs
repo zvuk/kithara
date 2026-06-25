@@ -65,13 +65,21 @@ pub struct VariantState {
 
 /// Holds all parsed playlist data with interior mutability for size map updates.
 pub struct PlaylistState {
+    bandwidths_bps: Vec<Option<u64>>,
     variants: Vec<RwLock<VariantState>>,
 }
 
 impl PlaylistState {
     /// Create a new playlist state from parsed variants.
+    #[must_use]
     pub fn new(variants: Vec<VariantState>) -> Self {
+        let bandwidths_bps = vec![None; variants.len()];
+        Self::with_bandwidths(variants, bandwidths_bps)
+    }
+
+    fn with_bandwidths(variants: Vec<VariantState>, bandwidths_bps: Vec<Option<u64>>) -> Self {
         Self {
+            bandwidths_bps,
             variants: variants.into_iter().map(RwLock::new).collect(),
         }
     }
@@ -84,10 +92,12 @@ impl FromWithParams<&[VariantStream], &[MediaPlaylist]> for PlaylistState {
     /// index in `variants`. Segment URIs are resolved against the media
     /// playlist URL; failures fall back to the media URL itself.
     fn build(variants: &[VariantStream], media_playlists: &[MediaPlaylist]) -> Self {
+        let mut bandwidths_bps = Vec::with_capacity(variants.len());
         let variant_states: Vec<VariantState> = variants
             .iter()
             .zip(media_playlists.iter())
             .map(|(variant, playlist)| {
+                bandwidths_bps.push(variant.bandwidth);
                 let media_url = &playlist.url;
                 let codec = variant.codec.as_ref().and_then(|ci| ci.audio_codec);
                 let container = variant
@@ -129,7 +139,7 @@ impl FromWithParams<&[VariantStream], &[MediaPlaylist]> for PlaylistState {
             })
             .collect();
 
-        Self::new(variant_states)
+        Self::with_bandwidths(variant_states, bandwidths_bps)
     }
 }
 
@@ -307,6 +317,12 @@ impl PlaylistAccess for PlaylistState {
 }
 
 impl PlaylistState {
+    /// Advertised variant bandwidth from the master playlist, in bits per
+    /// second.
+    pub(crate) fn variant_bandwidth_bps(&self, variant: VariantIndex) -> Option<u64> {
+        self.bandwidths_bps.get(variant).copied().flatten()
+    }
+
     /// Audio codec for a variant.
     pub(crate) fn variant_codec(&self, variant: VariantIndex) -> Option<AudioCodec> {
         let lock = self.variants.get(variant)?;

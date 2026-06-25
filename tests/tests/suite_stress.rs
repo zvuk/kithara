@@ -20,6 +20,7 @@ mod kithara_hls {
     mod live_stress_real_stream;
     mod red_flaky_small_cache_hot_refetch;
     mod red_leak_native_drm_seek_resume;
+    mod startup_no_eager_size_probe_storm;
     mod stress_seek_abr;
     mod stress_seek_abr_audio;
     mod stress_seek_audio;

@@ -25,7 +25,7 @@ pub mod mock;
 
 pub use error::{SourceError, StreamError, StreamResult};
 pub use hooks::{BoxedEventSink, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
-pub use media::{AudioCodec, ContainerFormat, MediaInfo};
+pub use media::{AudioCodec, ContainerFormat, MediaInfo, needs_exact_byte_sizes};
 pub use playhead::{ChunkPosition, PlayheadRead, PlayheadState, PlayheadWrite};
 pub use preroll::PrerollHint;
 pub use seek_state::{Activity, SeekControl, SeekObserve, SeekState};

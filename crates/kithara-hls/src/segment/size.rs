@@ -1,9 +1,9 @@
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
-/// `bytes > 0` is known/complete: the EXACT flag is set iff the segment's
-/// byte length has been established (HEAD-seeded with a positive estimate, or
-/// shrunk to a committed `final_len`). Mirrors the old `size.load() > 0`
-/// completeness convention.
+/// The EXACT flag is set iff the segment's byte length has been established
+/// (HEAD-seeded with a positive estimate, a byterange seed, or a committed
+/// `final_len`). Non-exact placeholders may still carry a non-zero byte count
+/// for routing, so completeness is the flag, not `bytes > 0`.
 const EXACT: u8 = 0b01;
 
 /// A per-segment byte length paired with a validity flag, replacing the bare
@@ -30,6 +30,25 @@ impl Default for SegmentSize {
 }
 
 impl SegmentSize {
+    /// Raw byte value (seed, placeholder, or committed). Used for offset /
+    /// total math.
+    pub(crate) fn get(&self) -> u64 {
+        self.bytes.load(Ordering::Acquire)
+    }
+
+    /// Whether the byte length is known and can be used for readiness/EOF.
+    pub(crate) fn is_exact(&self) -> bool {
+        self.flags.load(Ordering::Acquire) & EXACT != 0
+    }
+
+    /// Seed a routeable size that is not yet exact. Used by segment-aware
+    /// containers whose final size will be learned from the body commit.
+    pub(crate) fn placeholder(n: u64) -> Self {
+        let size = Self::default();
+        size.bytes.store(n, Ordering::Release);
+        size
+    }
+
     /// Seed the size from a HEAD estimate (or the cumulative-offset table).
     /// Stores `n` then sets EXACT iff `n > 0` — preserving the parity that a
     /// non-zero seed counts as "known" exactly as the old `size > 0` did.
@@ -48,16 +67,5 @@ impl SegmentSize {
     pub(crate) fn set_exact(&self, n: u64) {
         self.bytes.store(n, Ordering::Release);
         self.flags.store(EXACT, Ordering::Release);
-    }
-
-    /// Raw byte value (seed or committed). Used for offset / total math.
-    pub(crate) fn get(&self) -> u64 {
-        self.bytes.load(Ordering::Acquire)
-    }
-
-    /// Whether the byte length is known. Identical to the old `size > 0`
-    /// completeness predicate at this stage.
-    pub(crate) fn is_exact(&self) -> bool {
-        self.flags.load(Ordering::Acquire) & EXACT != 0
     }
 }

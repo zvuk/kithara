@@ -428,7 +428,7 @@ impl HlsCoord {
     /// before the new-variant cache is warm (a `HangDetector` trip).
     pub(crate) fn reset_for_seek(&self) {
         if let Some(active) = self.active() {
-            active.reset_to_full_range();
+            active.reset_for_seek();
         }
         self.abr.invalidate_pending();
         // A seek repositioned the active variant: wake a reader parked on the

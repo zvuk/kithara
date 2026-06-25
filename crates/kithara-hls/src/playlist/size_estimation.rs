@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use kithara_assets::AssetScope;
 use kithara_drm::DecryptContext;
-use kithara_stream::dl::FetchCmd;
+use kithara_stream::{dl::FetchCmd, needs_exact_byte_sizes};
 use tracing::debug;
 use url::Url;
 
@@ -18,11 +18,12 @@ use crate::{
 /// is moved in and returned by value alongside the maps so the caller
 /// can keep using it after estimation.
 ///
-/// Two strategies are tried in order, per variant:
+/// Two strategies are considered in order, per variant:
 /// 1. Byte-range from the media playlist (`#EXT-X-BYTERANGE`) — offline.
-/// 2. Cache-first probes against init/media URLs: sizes of resources
-///    already committed in the asset store come from `final_len`;
-///    only cache misses go to the network (HEAD / ranged GET).
+/// 2. For file-like decoder paths that need exact byte sizes, cache-first
+///    probes against init/media URLs: sizes of resources already committed in
+///    the asset store come from `final_len`; only cache misses go to the
+///    network (HEAD / ranged GET).
 ///
 /// The previous "init segment average-bitrate" strategy required the init
 /// segment to already be cached. In the pull-driven architecture init
@@ -101,6 +102,14 @@ impl SizeEstimator {
         if let Some(map) = self.try_byte_range(variant, num_segments) {
             debug!(variant, "size_map: from EXT-X-BYTERANGE");
             return map;
+        }
+        let needs_exact = needs_exact_byte_sizes(
+            self.playlist.variant_codec(variant),
+            self.playlist.variant_container(variant),
+        );
+        if !needs_exact {
+            debug!(variant, "size_map: skipped probes for segment-aware media");
+            return VariantSizeMap::default();
         }
         if let Some(map) = self.try_probe_sizes(variant, num_segments).await {
             debug!(variant, "size_map: from cache-first probes");

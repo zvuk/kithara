@@ -105,6 +105,26 @@ impl MediaInfo {
     }
 }
 
+/// Whether a decoder path needs exact byte sizes before it can safely route
+/// reads and seeks through a segmented stream.
+///
+/// AAC / FLAC in fMP4 is segment-aware: it reads by segment index and learns
+/// final byte lengths from body commits, so startup does not need network size
+/// probes. Unknown metadata and every file-like container stay conservative.
+#[must_use]
+pub fn needs_exact_byte_sizes(
+    codec: Option<AudioCodec>,
+    container: Option<ContainerFormat>,
+) -> bool {
+    !matches!(
+        (codec, container),
+        (
+            Some(AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac),
+            Some(ContainerFormat::Fmp4),
+        )
+    )
+}
+
 /// Build `MediaInfo` from a codec alone, filling the container when it is
 /// implied by the codec for standalone (non-HLS) sources. AAC and Adpcm
 /// have ambiguous containers and leave `container = None`.
@@ -321,6 +341,35 @@ mod tests {
         assert_eq!(info.codec, None);
         assert_eq!(info.sample_rate, None);
         assert_eq!(info.channels, None);
+    }
+
+    #[kithara::test]
+    fn fmp4_aac_and_flac_do_not_need_exact_byte_sizes() {
+        for codec in [
+            AudioCodec::AacLc,
+            AudioCodec::AacHe,
+            AudioCodec::AacHeV2,
+            AudioCodec::Flac,
+        ] {
+            assert!(!needs_exact_byte_sizes(
+                Some(codec),
+                Some(ContainerFormat::Fmp4)
+            ));
+        }
+    }
+
+    #[kithara::test]
+    fn unknown_or_file_like_media_needs_exact_byte_sizes() {
+        assert!(needs_exact_byte_sizes(None, Some(ContainerFormat::Fmp4)));
+        assert!(needs_exact_byte_sizes(Some(AudioCodec::Pcm), None));
+        assert!(needs_exact_byte_sizes(
+            Some(AudioCodec::Pcm),
+            Some(ContainerFormat::Wav)
+        ));
+        assert!(needs_exact_byte_sizes(
+            Some(AudioCodec::AacLc),
+            Some(ContainerFormat::Adts)
+        ));
     }
 
     #[kithara::test(wasm)]

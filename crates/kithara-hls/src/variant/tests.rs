@@ -820,6 +820,16 @@ fn phase_at_reports_waiting_demand_for_claimed_segment() {
 }
 
 #[kithara::test]
+fn phase_at_reports_waiting_demand_for_queued_segment() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+
+    push_planned(&v, 0);
+
+    assert_eq!(v.phase_at(0..16), SourcePhase::WaitingDemand);
+}
+
+#[kithara::test]
 fn on_evict_returns_minus_one_for_init() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[100, 100, 100], &ctx);

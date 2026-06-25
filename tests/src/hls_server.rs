@@ -292,6 +292,33 @@ impl HlsTestServer {
         &self.config
     }
 
+    /// Size-probes (`HEAD` + single-byte ranged `GET`) the server has served
+    /// for one `(variant, segment)` of this fixture.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn size_probe_count(&self, variant: usize, segment: usize) -> u64 {
+        self._helper
+            .size_probe_count(self.created.token(), variant, segment)
+    }
+
+    /// Total size-probes served across every segment of one variant.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn variant_size_probe_count(&self, variant: usize) -> u64 {
+        (0..self.config.segments_per_variant)
+            .map(|segment| self.size_probe_count(variant, segment))
+            .sum()
+    }
+
+    /// Total size-probes served across every segment of every variant.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn total_size_probe_count(&self) -> u64 {
+        (0..self.config.variant_count)
+            .map(|variant| self.variant_size_probe_count(variant))
+            .sum()
+    }
+
     #[must_use]
     pub fn expected_byte_at(&self, variant: usize, offset: u64) -> u8 {
         let init_len = self

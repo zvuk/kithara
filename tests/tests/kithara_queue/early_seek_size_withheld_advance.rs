@@ -10,9 +10,10 @@
 //!
 //! Determinism: no `sleep`, no real-time pacing. The
 //! [`PackagedTestServer`] withhold gate controls the seek-target segment's
-//! **size** (HEAD → `Content-Length: 0`) and/or **body** (GET parked)
-//! independently; the audio graph is pulled one block at a time via the manual
-//! [`OfflineSession`] and the queue is ticked synchronously between blocks.
+//! **body** (GET parked); segment-aware fMP4 deliberately does not use startup
+//! HEAD size probes. The audio graph is pulled one block at a time via the
+//! manual [`OfflineSession`] and the queue is ticked synchronously between
+//! blocks.
 //! Auto-advance is observed as a `Queue::current_index()` change against a
 //! multi-track queue.
 
@@ -50,19 +51,18 @@ const WARMUP_BLOCKS: usize = 40;
 ///
 /// MUST stay strictly below the genuine post-seek remainder. The packaged
 /// track is 537600 frames (12.19s); seeking to 5.5s leaves ~576 blocks of
-/// real audio. In the size-withheld/body-open mode the gated segment is
-/// still *delivered* (only its HEAD lies), delivery legitimately completes
-/// `sizes_complete`, and a producer that keeps pace lets the track reach its
-/// genuine end — a correct `ItemDidPlayToEnd` + advance that must not be
-/// misread as the premature-terminal cascade. 500 blocks (5.8s, max position
-/// 11.3s) keeps the genuine end unreachable in-window under any scheduling
-/// while still being orders of magnitude above the few blocks a premature
-/// byte-EOF needs to surface.
+/// real audio. In the body-open mode the gated segment is still delivered and
+/// a producer that keeps pace can legitimately reach the track's genuine end.
+/// That correct `ItemDidPlayToEnd` + advance must not be misread as the
+/// premature-terminal cascade. 500 blocks (5.8s, max position 11.3s) keeps the
+/// genuine end unreachable in-window under any scheduling while still being
+/// orders of magnitude above the few blocks a premature byte-EOF needs to
+/// surface.
 const OBSERVE_BLOCKS: usize = 500;
 
 #[derive(Clone, Copy, Debug)]
 struct GateMode {
-    withhold_size: bool,
+    withhold_head: bool,
     withhold_body: bool,
 }
 
@@ -122,7 +122,8 @@ enum Trigger {
 // pins — and is owned by the seek-stall workstream. Mixing it in would make
 // this otherwise-deterministic guard flaky.
 
-/// Size withheld, body open: seek lands where `total_bytes` under-counts.
+/// No eager exact size, body open: seek lands while only placeholder geometry
+/// is available.
 #[kithara::test(
     tokio,
     multi_thread,
@@ -133,14 +134,14 @@ enum Trigger {
 )]
 async fn immediate_seek_size_withheld() {
     run_case(GateMode {
-        withhold_size: true,
+        withhold_head: true,
         withhold_body: false,
     })
     .await;
 }
 
-/// Both withheld: seek lands on an unsized, undelivered segment — the closest
-/// model of the genuinely-immediate user seek.
+/// Body withheld: seek lands on an undelivered segment — the closest model of
+/// the genuinely-immediate user seek.
 #[kithara::test(
     tokio,
     multi_thread,
@@ -151,7 +152,7 @@ async fn immediate_seek_size_withheld() {
 )]
 async fn immediate_seek_size_and_body_withheld() {
     run_case(GateMode {
-        withhold_size: true,
+        withhold_head: true,
         withhold_body: true,
     })
     .await;
@@ -161,7 +162,7 @@ async fn run_case(mode: GateMode) {
     let (server, gate): (PackagedTestServer, SegmentGateHandle) =
         PackagedTestServer::with_segment_gate(GATED_VARIANT, GATED_SEGMENT).await;
     // `with_segment_gate` parks the body by default. Apply the requested mode.
-    if mode.withhold_size {
+    if mode.withhold_head {
         gate.withhold_head();
     }
     if !mode.withhold_body {
@@ -202,13 +203,15 @@ async fn run_case(mode: GateMode) {
         let _ = queue.tick();
         let _ = harness.render(BLOCK_FRAMES);
     }
-    assert!(
-        gate.head_requested() >= 1,
-        "size estimation must have HEAD-probed the gated segment (mode={mode:?})"
+    assert_eq!(
+        gate.head_requested(),
+        0,
+        "segment-aware fMP4 must not HEAD-probe the gated segment at startup \
+         (mode={mode:?})"
     );
 
     // The user taps the slider immediately: seek into the gated segment's time
-    // region while its size/body is still withheld.
+    // region while exact size is unavailable and the body may still be withheld.
     queue
         .seek(SEEK_TARGET_SECS)
         .expect("seek accepted by player");
@@ -241,8 +244,8 @@ async fn run_case(mode: GateMode) {
         }
     }
 
-    // Release size + body so a healthy pipeline can resume (after observation,
-    // so a bug — if present — is already captured).
+    // Release gates so a healthy pipeline can resume (after observation, so a
+    // bug — if present — is already captured).
     gate.release_head();
     gate.release();
 
@@ -252,11 +255,11 @@ async fn run_case(mode: GateMode) {
                 queue.current_index(),
                 Some(0),
                 "queue must stay on track 0 while the seek target segment is \
-                 unsized/undelivered (mode={mode:?})"
+                 placeholder-sized/undelivered (mode={mode:?})"
             );
             // (Post-release behaviour — eventually advancing at the track's
-            // genuine end once all segments are sized/delivered — is correct
-            // and intentionally NOT asserted here: this guard pins the
+            // genuine end once needed segments are delivered — is correct and
+            // intentionally NOT asserted here: this guard pins the
             // *in-withheld-window* contract only.)
         }
         Outcome::AutoAdvanced { new_index, trigger } => {
@@ -266,7 +269,7 @@ async fn run_case(mode: GateMode) {
             panic!(
                 "PRODUCTION CASCADE REPRODUCED (mode={mode:?}): an immediate seek to \
                  {SEEK_TARGET_SECS}s into a non-final segment that was not yet \
-                 sized/delivered caused the queue to advance 0 -> {new_index} (triggered by \
+                 ready/delivered caused the queue to advance 0 -> {new_index} (triggered by \
                  {trigger:?}). The user never asked for a track switch. The audio source \
                  minted a premature terminal for an in-range segment instead of holding \
                  Pending."

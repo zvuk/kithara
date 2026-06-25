@@ -115,13 +115,10 @@ impl Frame {
         u64::try_from(virt).ok()
     }
 
-    /// Whether every served segment `[served_from, served_until)` has a
-    /// known (non-zero) byte size. A `0` size means "unknown" — the size
-    /// estimate's HEAD failed (or has not run) for that segment, so its
-    /// bytes are unaccounted-for in `total_bytes`. Until this holds,
-    /// `total_bytes` is a lower bound, NOT the authoritative stream end, and
-    /// must not be used to mint EOF (an in-range offset would falsely look
-    /// past-the-end against the under-count).
+    /// Whether every served segment `[served_from, served_until)` has an
+    /// exact byte size. Non-exact placeholders may contribute to routing
+    /// geometry, but until this holds `total_bytes` is not the authoritative
+    /// stream end and must not be used to mint EOF.
     fn sizes_complete(&self, segments: &[Segment]) -> bool {
         let start = self.served_from as usize;
         let end = (self.served_until as usize).min(segments.len());

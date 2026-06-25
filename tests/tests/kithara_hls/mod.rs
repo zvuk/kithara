@@ -23,6 +23,7 @@ mod seek_variant_switch_after_eof;
 mod segment_boundary_strand;
 mod smoke_test;
 mod source_seek;
+mod startup_no_eager_size_probe_storm;
 mod stress_chunk_integrity;
 mod stress_seek_abr;
 mod stress_seek_abr_audio;

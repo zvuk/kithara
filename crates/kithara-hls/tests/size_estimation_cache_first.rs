@@ -36,8 +36,11 @@ const MEDIA_PATHS: [&str; 5] = ["init.mp4", "seg0.m4s", "seg1.m4s", "seg2.m4s", 
 const COMMIT_DEADLINE: Duration = Duration::from_secs(15);
 const COMMIT_POLL: Duration = Duration::from_millis(20);
 
+// File-like media keeps the exact-size estimator. Segment-aware fMP4 skips
+// network probes at startup, so cache-first estimator behavior is pinned here
+// with the test-server's explicit `wav` CODECS marker.
 const MASTER_PLAYLIST: &str = "#EXTM3U\n\
-    #EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS=\"mp4a.40.2\"\n\
+    #EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS=\"wav\"\n\
     media.m3u8\n";
 
 const MEDIA_PLAYLIST: &str = "#EXTM3U\n\

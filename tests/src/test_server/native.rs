@@ -176,6 +176,15 @@ impl TestServerHelper {
         SegmentGateHandle { gate }
     }
 
+    /// Size-probes (`HEAD` + single-byte ranged `GET`) the server has served
+    /// for one `(hls token, variant, segment)`. Always live (no gate needed),
+    /// so a test can observe the up-front size-estimation storm at
+    /// `Audio::new()` versus the lazy per-segment resolve.
+    #[must_use]
+    pub fn size_probe_count(&self, hls_token: &str, variant: usize, segment: usize) -> u64 {
+        self.state.size_probe_count(hls_token, variant, segment)
+    }
+
     /// Register a withhold gate for the init (`EXT-X-MAP`) segment of one
     /// variant of the fixture behind `hls_token`, returning a handle that
     /// releases it and reports how many init GETs it has parked. The matching

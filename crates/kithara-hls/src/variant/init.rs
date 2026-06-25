@@ -4,9 +4,9 @@ use kithara_assets::AssetScope;
 #[cfg(test)]
 use kithara_assets::ResourceKey;
 use kithara_drm::DecryptContext;
-use kithara_stream::{StreamResult, dl::FetchCmd};
+use kithara_stream::{StreamResult, dl::FetchCmd, needs_exact_byte_sizes};
 
-use super::{HlsVariant, PlanCtx};
+use super::{HlsVariant, INIT_PLACEHOLDER_BYTES, PlanCtx};
 use crate::{
     handle::ResourceHandle,
     playlist::{PlaylistAccess, PlaylistState},
@@ -53,11 +53,21 @@ impl HlsVariant {
         scope: &AssetScope<DecryptContext>,
     ) -> Option<Segment> {
         let url = playlist_state.init_url(variant_idx)?;
+        let init_size = playlist_state.init_size(variant_idx);
+        let needs_exact = needs_exact_byte_sizes(
+            playlist_state.variant_codec(variant_idx),
+            playlist_state.variant_container(variant_idx),
+        );
+        let size = if !needs_exact && init_size == 0 {
+            SegmentSize::placeholder(INIT_PLACEHOLDER_BYTES)
+        } else {
+            SegmentSize::seed(init_size)
+        };
         Some(Segment::Init(InitSegment {
             resource_id: scope.key_from_url(&url),
             url,
             state: SegmentSlotState::missing(),
-            size: SegmentSize::seed(playlist_state.init_size(variant_idx)),
+            size,
             content: SegmentContent::from(decrypt_ctx),
         }))
     }
@@ -112,7 +122,7 @@ impl HlsVariant {
     pub(super) fn init_contains(&self, range: Range<u64>) -> bool {
         self.init
             .as_ref()
-            .is_some_and(|seg| seg.contains(&self.scope, range))
+            .is_some_and(|seg| seg.size().is_exact() && seg.contains(&self.scope, range))
     }
 
     /// Read `range` of the init segment into `dst` via the [`Segment`]
@@ -123,9 +133,16 @@ impl HlsVariant {
         range: Range<u64>,
         dst: &mut [u8],
     ) -> StreamResult<Option<usize>> {
-        self.init
-            .as_ref()
-            .map_or_else(|| Ok(None), |seg| seg.read_at(&self.scope, range, dst))
+        self.init.as_ref().map_or_else(
+            || Ok(None),
+            |seg| {
+                if seg.size().is_exact() {
+                    seg.read_at(&self.scope, range, dst)
+                } else {
+                    Ok(None)
+                }
+            },
+        )
     }
 
     /// Borrow the init slot — the fetch path matches on it, reading the init

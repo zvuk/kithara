@@ -6,13 +6,13 @@ use kithara_stream::{PendingReason, ReadOutcome, SourcePhase, StreamError, Strea
 use kithara_test_utils::kithara;
 
 use super::HlsVariant;
-use crate::HlsError;
+use crate::{HlsError, segment::PlannedFetch};
 
 impl HlsVariant {
     #[kithara::hang_watchdog]
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         let total = self.total_bytes();
-        if total > 0 && offset >= total && self.sizes_complete() {
+        if total > 0 && offset >= total && self.eof_ready() {
             return Ok(ReadOutcome::Eof);
         }
 
@@ -109,30 +109,33 @@ impl HlsVariant {
         // reader polling on phase spins. A seek in flight may pull the
         // position back into the stream, so let the flush path win first.
         let total = self.total_bytes();
-        if total > 0 && range.start >= total && self.sizes_complete() && !self.reader.is_flushing()
-        {
-            return Ok(WaitOutcome::Eof);
-        }
-        if self.range_ready(&range) {
-            hang_reset!();
-            return Ok(WaitOutcome::Ready);
-        }
-        if self.reader.is_flushing() {
-            return Ok(WaitOutcome::Interrupted);
-        }
+        let eof =
+            total > 0 && range.start >= total && self.eof_ready() && !self.reader.is_flushing();
+        let ready = !eof && self.range_ready(&range);
+        let flushing = !eof && !ready && self.reader.is_flushing();
         // A segment covering this range settled terminally (the downloader
         // exhausted its retries): the bytes will never arrive, so surface a
         // terminal error instead of `WaitBudgetExceeded` — the reader stops
         // here rather than spinning. Checked AFTER flushing/EOF: a seek in
         // flight may be moving the read position off the failed range, and
-        // the failed check is scoped to the requested range so seeking to a
-        if self.range_has_failed(&range) {
-            return Err(StreamError::Source(HlsError::SegmentUnavailable.into()));
+        // the failed check is scoped to the requested range so seeking away
+        // from it can clear the terminal range.
+        let failed = !eof && !ready && !flushing && self.range_has_failed(&range);
+        match (eof, ready, flushing, failed) {
+            (true, _, _, _) => Ok(WaitOutcome::Eof),
+            (_, true, _, _) => {
+                hang_reset!();
+                Ok(WaitOutcome::Ready)
+            }
+            (_, _, true, _) => Ok(WaitOutcome::Interrupted),
+            (_, _, _, true) => Err(StreamError::Source(HlsError::SegmentUnavailable.into())),
+            (false, false, false, false) => {
+                // Not ready: the reader driver (`Stream::probe_read` / `read` /
+                // `prime_seek_range`) wakes the peer for this range, per its own
+                // on-core/off-core context — this method stays wake-free.
+                Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()))
+            }
         }
-        // Not ready: the reader driver (`Stream::probe_read` / `read` /
-        // `prime_seek_range`) wakes the peer for this range, per its own
-        // on-core/off-core context — this method stays wake-free.
-        Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()))
     }
 
     fn wrap(written: usize) -> ReadOutcome {
@@ -147,8 +150,7 @@ impl HlsVariant {
         // total` so the phase is observable as `Eof` at the stream end (see
         // `wait_range`); a flush in flight takes precedence.
         let total = self.total_bytes();
-        if total > 0 && range.start >= total && self.sizes_complete() && !self.reader.is_flushing()
-        {
+        if total > 0 && range.start >= total && self.eof_ready() && !self.reader.is_flushing() {
             return SourcePhase::Eof;
         }
         if self.range_ready(&range) {
@@ -170,7 +172,8 @@ impl HlsVariant {
     /// only fires on a real terminal settle, never on a transient gap.
     fn range_has_failed(&self, range: &Range<u64>) -> bool {
         let total = self.total_bytes();
-        let end = if total > 0 {
+        let uses_seek_alias = self.seek_alias_at(range.start).is_some();
+        let end = if !uses_seek_alias && total > 0 {
             range.end.min(total)
         } else {
             range.end
@@ -198,17 +201,30 @@ impl HlsVariant {
         false
     }
 
+    fn fetch_is_planned(&self, planned: PlannedFetch) -> bool {
+        self.queue.lock().contains(&planned)
+    }
+
+    fn init_has_demand(&self) -> bool {
+        self.init_downloading() || self.fetch_is_planned(PlannedFetch::Init)
+    }
+
+    fn segment_has_demand(&self, seg_idx: u32) -> bool {
+        self.segment_downloading(seg_idx) || self.fetch_is_planned(PlannedFetch::Segment(seg_idx))
+    }
+
     pub(crate) fn range_ready(&self, range: &Range<u64>) -> bool {
         let total = self.total_bytes();
+        let uses_seek_alias = self.seek_alias_at(range.start).is_some();
         // When a served segment's size is still unknown, `total` is a lower
         // bound, not the stream end. An offset at/past it is NOT "ready"
         // (clamping `end` to the under-count would falsely report a zero-width
         // ready range and let the reader spin past a real, not-yet-sized
         // segment) — treat it as not-ready so the gate holds Waiting.
-        if total > 0 && range.start >= total && !self.sizes_complete() {
+        if !uses_seek_alias && total > 0 && range.start >= total && !self.sizes_complete() {
             return false;
         }
-        let end = if total > 0 {
+        let end = if !uses_seek_alias && total > 0 {
             range.end.min(total)
         } else {
             range.end
@@ -255,16 +271,17 @@ impl HlsVariant {
 
     fn range_wait_phase(&self, range: &Range<u64>) -> SourcePhase {
         let total = self.total_bytes();
-        if total > 0 && range.start >= total && !self.sizes_complete() {
+        let uses_seek_alias = self.seek_alias_at(range.start).is_some();
+        if !uses_seek_alias && total > 0 && range.start >= total && !self.sizes_complete() {
             let head = self.download_head();
-            return if self.segment_downloading(head) {
+            return if self.segment_has_demand(head) {
                 SourcePhase::WaitingDemand
             } else {
                 SourcePhase::Waiting
             };
         }
 
-        let end = if total > 0 {
+        let end = if !uses_seek_alias && total > 0 {
             range.end.min(total)
         } else {
             range.end
@@ -272,7 +289,6 @@ impl HlsVariant {
         if range.start >= end {
             return SourcePhase::Waiting;
         }
-
         let mut waiting_on_demand = false;
         let mut cursor = range.start;
         while let Some(init_range) = self.init_descriptor_at(cursor) {
@@ -283,7 +299,7 @@ impl HlsVariant {
             let local_start = cursor - init_range.start;
             let local_end = slice_end - init_range.start;
             if !self.init_contains(local_start..local_end) {
-                if !self.init_downloading() {
+                if !self.init_has_demand() {
                     return SourcePhase::Waiting;
                 }
                 waiting_on_demand = true;
@@ -307,7 +323,7 @@ impl HlsVariant {
             let local_start = cursor - seg_off;
             let local_end = slice_end - seg_off;
             if !self.segment_contains(seg_idx, local_start..local_end) {
-                if !self.segment_downloading(seg_idx) {
+                if !self.segment_has_demand(seg_idx) {
                     return SourcePhase::Waiting;
                 }
                 waiting_on_demand = true;
