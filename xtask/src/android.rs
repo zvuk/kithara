@@ -164,7 +164,7 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         // symphonia gives the host bindgen build a DecoderBackend
         // variant (the android MediaCodec variant is target_os-gated
         // and absent when compiling the bindgen bin for the host).
-        "uniffi,symphonia",
+        "uniffi-bindgen-cli,symphonia",
     ]);
     if matches!(profile, BuildProfile::Release) {
         cmd.arg("--release");

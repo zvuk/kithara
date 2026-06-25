@@ -287,7 +287,7 @@ tower-http = { version = "0.7", features = ["cors", "fs", "set-header"] }
 tempfile = "3.27.0"
 
 # FFI
-uniffi = { version = "0.31.2" }
+uniffi = { version = "0.31.2", default-features = false }
 jni = "0.22"
 ndk-context = "0.1.1"
 rustls-platform-verifier = "0.7.0"

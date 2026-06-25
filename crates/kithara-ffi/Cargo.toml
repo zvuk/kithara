@@ -14,7 +14,7 @@ crate-type = ["lib", "staticlib", "cdylib"]
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/uniffi_bindgen.rs"
-required-features = ["uniffi"]
+required-features = ["uniffi-bindgen-cli"]
 
 [lints]
 workspace = true
@@ -49,6 +49,7 @@ tracing-subscriber = { workspace = true }
 # hardware backend is the sole decoder there.
 default = ["uniffi", "symphonia", "client-reqwest", "tls-rustls"]
 uniffi = ["dep:uniffi"]
+uniffi-bindgen-cli = ["uniffi", "uniffi/cli", "uniffi/cargo-metadata"]
 apple = ["kithara/apple"]
 android = ["kithara/android"]
 # Cross-platform software decode backend. Not part of apple/android
@@ -131,7 +132,7 @@ rand = { workspace = true }
 unimock = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-uniffi = { workspace = true, optional = true, features = ["cli"] }
+uniffi = { workspace = true, optional = true, default-features = false }
 # Pulled in by firewheel-cpal transitively; surfaced as a direct dep under
 # `test` so the probe JNI can enumerate host/device configs without
 # touching the production firewheel backend types.
