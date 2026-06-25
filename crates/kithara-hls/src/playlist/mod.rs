@@ -6,7 +6,6 @@ pub(crate) mod keys;
 pub(crate) mod master;
 pub(crate) mod parse;
 pub(crate) mod playlist_cache;
-pub(crate) mod size_estimation;
 pub(crate) mod state;
 pub(crate) mod variant_playlist;
 
@@ -18,5 +17,5 @@ pub use parse::{
 };
 pub use playlist_cache::PlaylistCache;
 pub(crate) use state::PlaylistAccess;
-pub use state::{PlaylistState, SegmentState, VariantSizeMap, VariantState};
+pub use state::{PlaylistState, SegmentState, VariantState};
 pub(crate) use variant_playlist::load_variant_playlists;

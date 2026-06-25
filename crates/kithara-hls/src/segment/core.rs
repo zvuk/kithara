@@ -89,11 +89,16 @@ impl Segment {
         }
     }
 
-    /// Byte length: `size().get()` — the raw seed/committed value. The SEED of a
-    /// not-yet-downloaded segment is a legal length here (req 5/6); the
-    /// completeness gate is `size().is_exact()`, not a non-zero `len()`.
+    /// Route byte length: `size().get()`. The route length is stable virtual
+    /// geometry; the completeness gate is `size().is_exact()`.
     pub(crate) fn len(&self) -> u64 {
         self.size().get()
+    }
+
+    /// Read byte length: exact committed/probed length when known, otherwise
+    /// the route length so descriptors remain addressable before commit.
+    pub(crate) fn read_len(&self) -> u64 {
+        self.size().read_len()
     }
 
     /// Narrow disk handle for this slot, built from the variant's shared scope
@@ -143,10 +148,8 @@ pub(crate) struct MediaSegment {
     /// settles (cancelled before completion) are gated by
     /// `FetchSlot.cancel` and leave the slot untouched.
     pub(crate) state: Arc<SegmentSlotState>,
-    /// Encrypted media size from HEAD, shrunk to the actual post-decrypt
-    /// length by [`HlsVariant::apply_commit`](crate::variant::HlsVariant::apply_commit) when `commit` reports
-    /// the resource's `final_len`. Reader queries
-    /// (`segment_size`, `total_bytes`) read through this value.
+    /// Media size state. Non-exact placeholders are routeable before commit;
+    /// committed lengths update the contiguous HLS byte map.
     pub(crate) size: SegmentSize,
     pub(crate) decode_time: Duration,
     pub(crate) duration: Duration,
@@ -172,8 +175,7 @@ pub(crate) struct InitSegment {
     /// Shared with the init segment's `FetchSlot` handle; see
     /// [`MediaSegment::state`].
     pub(crate) state: Arc<SegmentSlotState>,
-    /// Encrypted init size from HEAD, shrunk on commit — see
-    /// [`MediaSegment::size`].
+    /// Init size state — see [`MediaSegment::size`].
     pub(crate) size: SegmentSize,
     pub(crate) resource_id: ResourceKey,
     /// Decryption disposition for the init segment. HLS init segments

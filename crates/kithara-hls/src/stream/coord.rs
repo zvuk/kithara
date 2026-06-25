@@ -23,6 +23,7 @@ use kithara_stream::{
     Activity, ByteMap, ContainerFormat, MediaInfo, PendingReason, PlayheadRead, PlayheadState,
     PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState, SegmentDescriptor,
     SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantControl,
+    dl::FetchCmd,
 };
 use kithara_test_utils::kithara;
 
@@ -165,6 +166,23 @@ impl HlsCoord {
         self.variants.get(self.variant_index())
     }
 
+    pub(crate) fn dispatch_pending_size_demands(
+        &self,
+        ctx: &PlanCtx,
+        budget: usize,
+    ) -> Vec<FetchCmd> {
+        let Some(decision) = self.abr.peek_pending_decision() else {
+            return Vec::new();
+        };
+        let target = decision.target().get();
+        if target == self.variant_index() {
+            return Vec::new();
+        }
+        self.variants
+            .get(target)
+            .map_or_else(Vec::new, |variant| variant.dispatch_size_only(ctx, budget))
+    }
+
     /// `AbrState` always returns a valid index (constructor asserts
     /// stateful handle), and `variants` is non-empty (asserted in
     /// [`Self::new`]). This lookup therefore always succeeds. Used by
@@ -261,6 +279,9 @@ impl HlsCoord {
         );
         if needs_byte_continuity {
             let switch_at = switch_at.min(v_new.num_segments());
+            if !v_new.prepare_exact_prefix_for_boundary(switch_at) {
+                return false;
+            }
             let reader_pos = self.position();
             let seg_boundary = v_old
                 .and_then(|v| v.segment_byte_offset(switch_at))
@@ -343,8 +364,7 @@ impl HlsCoord {
 
     /// Total bytes are >0 — the value used by `Source::len` accessor.
     pub(crate) fn len(&self) -> Option<u64> {
-        let total = self.total_bytes();
-        (total > 0).then_some(total)
+        self.active()?.stream_len()
     }
 
     /// Active variant's media info. `HlsCoord` is constructed
@@ -482,14 +502,13 @@ impl HlsCoord {
     /// - the target is a WAV byte-continuity variant — the structured
     ///   recreate path reseeds by time and is not subject to this
     ///   circular dependency;
-    /// - `download_head` is strictly ahead of the reader's current
-    ///   segment (`reader_seg`). This keeps the switch on a clean
-    ///   segment boundary the reader has not begun consuming: the
-    ///   reader finishes its fully-loaded current segment on `v_old`,
-    ///   `v_new` takes over at `download_head`. When
-    ///   `download_head == reader_seg` the reader is mid an undelivered
-    ///   segment, so handing it to `v_new` would be a mid-segment
-    ///   cross-bitrate switch (sample shift) — never rescue there;
+    /// - `download_head` is ahead of the reader's current segment, or
+    ///   exactly equals it while the byte cursor is still pinned to that
+    ///   segment boundary. This keeps the switch on a clean boundary:
+    ///   the reader finishes `v_old`'s loaded prefix and `v_new` takes
+    ///   over at `download_head`. If the cursor has advanced inside
+    ///   `download_head`, rescue is unsafe because it would become a
+    ///   mid-segment cross-bitrate switch;
     /// - `download_head < num_segments`, i.e. `v_old` genuinely has
     ///   un-downloaded tail (otherwise there is nothing to rescue from).
     pub(crate) fn urgent_rescue_boundary(&self, reader_seg: u32) -> Option<u32> {
@@ -506,7 +525,12 @@ impl HlsCoord {
         }
         let head = self.download_head();
         let active = self.active()?;
-        if head >= active.num_segments() || head <= reader_seg {
+        if head >= active.num_segments() {
+            return None;
+        }
+        let at_head_boundary =
+            head == reader_seg && active.segment_byte_offset(head) == Some(self.position());
+        if head < reader_seg || (head == reader_seg && !at_head_boundary) {
             return None;
         }
         Some(head.saturating_sub(1))
@@ -643,7 +667,6 @@ impl HlsCoord {
             pub(crate) fn position(&self) -> u64;
             pub(crate) fn advance(&self, n: u64);
             pub(crate) fn set_position(&self, pos: u64);
-            pub(crate) fn total_bytes(&self) -> u64;
             pub(crate) fn download_head(&self) -> u32;
             pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
             pub(crate) fn seek_time_anchor(
@@ -725,7 +748,7 @@ impl ByteMap for HlsCoord {
     }
 
     fn len(&self) -> Option<u64> {
-        Some(self.active()?.total_bytes())
+        self.active()?.stream_len()
     }
 
     fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {

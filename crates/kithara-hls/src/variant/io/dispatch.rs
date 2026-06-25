@@ -11,7 +11,7 @@ impl HlsVariant {
     #[kithara::probe(
         variant = self.variant as u64,
         budget = budget as u64,
-        queue_len = self.queue.lock().len() as u64
+        queue_len = self.flow.queue.lock().len() as u64
     )]
     #[kithara::hang_watchdog]
     pub(crate) fn dispatch(self: &Arc<Self>, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
@@ -27,6 +27,7 @@ impl HlsVariant {
         // `player_worker_hls_then_unavailable_mp3_then_mp3_recovery` deadlock).
         let mut deferred: Vec<PlannedFetch> = Vec::new();
         let mut remaining = budget;
+        self.dispatch_size_demands(ctx, &mut out, &mut remaining);
         let prefetch_base = self.get_position().max(self.prefetch_anchor());
         let prefetch_byte_cap = ctx
             .look_ahead_bytes
@@ -34,7 +35,7 @@ impl HlsVariant {
         while remaining > 0 {
             hang_tick!();
             let planned = {
-                let mut queue = self.queue.lock();
+                let mut queue = self.flow.queue.lock();
                 match queue.front().copied() {
                     None => break,
                     Some(PlannedFetch::Init) => queue.pop_front(),
@@ -117,7 +118,7 @@ impl HlsVariant {
             remaining -= 1;
         }
         if !deferred.is_empty() {
-            let mut queue = self.queue.lock();
+            let mut queue = self.flow.queue.lock();
             for planned in deferred.into_iter().rev() {
                 queue.push_front(planned);
             }

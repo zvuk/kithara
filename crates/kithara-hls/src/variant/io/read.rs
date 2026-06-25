@@ -2,7 +2,9 @@ use std::{num::NonZeroUsize, ops::Range};
 
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
-use kithara_stream::{PendingReason, ReadOutcome, SourcePhase, StreamError, StreamResult};
+use kithara_stream::{
+    PendingReason, ReadOutcome, SourcePhase, StreamError, StreamResult, needs_exact_byte_sizes,
+};
 use kithara_test_utils::kithara;
 
 use super::HlsVariant;
@@ -14,6 +16,10 @@ impl HlsVariant {
         let total = self.total_bytes();
         if total > 0 && offset >= total && self.eof_ready() {
             return Ok(ReadOutcome::Eof);
+        }
+        if self.exact_seek_metadata_phase().is_some() || self.exact_byte_metadata_phase().is_some()
+        {
+            return Ok(Self::wrap(0));
         }
 
         let buf_len = u64::try_from(buf.len()).unwrap_or(u64::MAX);
@@ -48,8 +54,8 @@ impl HlsVariant {
 
         // An `#EXT-X-MAP` init occupies the virtual prefix `[0, init_size)`.
         // While the init is declared (`has_init`) but not yet sized
-        // (`init_size() == 0` — a failed/absent init HEAD, or the window before
-        // the init commits), the offset table transiently seeds segment 0 at
+        // (`init_size() == 0` — before lazy probe or body commit resolves it),
+        // the offset table transiently seeds segment 0 at
         // offset 0. Serving media here would hand the demuxer segment 0's
         // container where the init's `ftyp`/`moov` belongs
         // ("re_mp4: ftyp not found"), or wedge the reader. Hold the read
@@ -109,10 +115,15 @@ impl HlsVariant {
         // reader polling on phase spins. A seek in flight may pull the
         // position back into the stream, so let the flush path win first.
         let total = self.total_bytes();
-        let eof =
-            total > 0 && range.start >= total && self.eof_ready() && !self.reader.is_flushing();
-        let ready = !eof && self.range_ready(&range);
-        let flushing = !eof && !ready && self.reader.is_flushing();
+        let eof = total > 0
+            && range.start >= total
+            && self.eof_ready()
+            && !self.flow.reader.is_flushing();
+        let metadata_pending = !eof
+            && (self.exact_seek_metadata_phase().is_some()
+                || self.exact_byte_metadata_phase().is_some());
+        let ready = !metadata_pending && !eof && self.range_ready(&range);
+        let flushing = !eof && !ready && self.flow.reader.is_flushing();
         // A segment covering this range settled terminally (the downloader
         // exhausted its retries): the bytes will never arrive, so surface a
         // terminal error instead of `WaitBudgetExceeded` — the reader stops
@@ -150,13 +161,25 @@ impl HlsVariant {
         // total` so the phase is observable as `Eof` at the stream end (see
         // `wait_range`); a flush in flight takes precedence.
         let total = self.total_bytes();
-        if total > 0 && range.start >= total && self.eof_ready() && !self.reader.is_flushing() {
+        let uses_seek_alias = self.seek_alias_at(range.start).is_some();
+        if !uses_seek_alias
+            && total > 0
+            && range.start >= total
+            && self.eof_ready()
+            && !self.flow.reader.is_flushing()
+        {
             return SourcePhase::Eof;
+        }
+        if let Some(phase) = self.exact_seek_metadata_phase() {
+            return phase;
+        }
+        if let Some(phase) = self.exact_byte_metadata_phase() {
+            return phase;
         }
         if self.range_ready(&range) {
             return SourcePhase::Ready;
         }
-        if self.reader.is_flushing() {
+        if self.flow.reader.is_flushing() {
             return SourcePhase::Seeking;
         }
         self.range_wait_phase(&range)
@@ -202,7 +225,7 @@ impl HlsVariant {
     }
 
     fn fetch_is_planned(&self, planned: PlannedFetch) -> bool {
-        self.queue.lock().contains(&planned)
+        self.flow.queue.lock().contains(&planned)
     }
 
     fn init_has_demand(&self) -> bool {
@@ -216,6 +239,9 @@ impl HlsVariant {
     pub(crate) fn range_ready(&self, range: &Range<u64>) -> bool {
         let total = self.total_bytes();
         let uses_seek_alias = self.seek_alias_at(range.start).is_some();
+        let clamp_alias_to_eof = uses_seek_alias
+            && !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
+            && self.eof_ready();
         // When a served segment's size is still unknown, `total` is a lower
         // bound, not the stream end. An offset at/past it is NOT "ready"
         // (clamping `end` to the under-count would falsely report a zero-width
@@ -224,7 +250,7 @@ impl HlsVariant {
         if !uses_seek_alias && total > 0 && range.start >= total && !self.sizes_complete() {
             return false;
         }
-        let end = if !uses_seek_alias && total > 0 {
+        let end = if total > 0 && (!uses_seek_alias || clamp_alias_to_eof) {
             range.end.min(total)
         } else {
             range.end
@@ -272,6 +298,9 @@ impl HlsVariant {
     fn range_wait_phase(&self, range: &Range<u64>) -> SourcePhase {
         let total = self.total_bytes();
         let uses_seek_alias = self.seek_alias_at(range.start).is_some();
+        let clamp_alias_to_eof = uses_seek_alias
+            && !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
+            && self.eof_ready();
         if !uses_seek_alias && total > 0 && range.start >= total && !self.sizes_complete() {
             let head = self.download_head();
             return if self.segment_has_demand(head) {
@@ -281,7 +310,7 @@ impl HlsVariant {
             };
         }
 
-        let end = if !uses_seek_alias && total > 0 {
+        let end = if total > 0 && (!uses_seek_alias || clamp_alias_to_eof) {
             range.end.min(total)
         } else {
             range.end

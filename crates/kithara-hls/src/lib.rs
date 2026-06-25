@@ -27,6 +27,6 @@ pub use kithara_drm::{KeyProcessor, KeyProcessorRegistry, KeyProcessorRule};
 pub use naming::HlsAssetScopeDelegate;
 pub use playlist::{
     KeyStore, MediaPlaylist, ParsedMaster, PlaylistCache, PlaylistState, SegmentState, VariantId,
-    VariantSizeMap, VariantState, VariantStream, parse_master_playlist, parse_media_playlist,
+    VariantState, VariantStream, parse_master_playlist, parse_media_playlist,
 };
 pub use stream::{Hls, HlsSource, build_shared_asset_store};

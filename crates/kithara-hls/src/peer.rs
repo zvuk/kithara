@@ -23,7 +23,7 @@ use kithara_stream::{
 };
 use kithara_test_utils::kithara;
 
-use crate::{ids::duration_prefix, stream::HlsCoord, variant::PlanCtx};
+use crate::{config::SizeProbeMethod, ids::duration_prefix, stream::HlsCoord, variant::PlanCtx};
 
 struct HlsTrackState {
     coord: Arc<HlsCoord>,
@@ -39,6 +39,7 @@ struct HlsTrackState {
     /// Mirrors `HlsConfig::look_ahead_bytes` — capped idle prefetch
     /// budget threaded into every `PlanCtx` constructed for `dispatch`.
     look_ahead_bytes: Option<u64>,
+    size_probe_method: SizeProbeMethod,
     /// Target segment of an in-flight forward seek, held until the reader's
     /// physical byte cursor catches up to it. `coord.position()` only
     /// advances when the reader actually reads at the new offset, so right
@@ -125,6 +126,7 @@ impl HlsPeer {
         eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
         prefetch_budget: usize,
         look_ahead_bytes: Option<u64>,
+        size_probe_method: SizeProbeMethod,
     ) {
         let reader_advanced = Arc::clone(&self.reader_advanced);
         let cancel = coord.cancel.clone();
@@ -141,6 +143,7 @@ impl HlsPeer {
                 headers: coord.headers.clone(),
                 seek_epoch: self.seek_obs.epoch(),
                 signal: coord.signal(),
+                size_probe_method,
             };
             active.rebuild(&plan_ctx, initial_seg);
         }
@@ -156,6 +159,7 @@ impl HlsPeer {
                 eviction_rx,
                 prefetch_budget,
                 look_ahead_bytes,
+                size_probe_method,
                 last_seek_epoch: 0,
                 seek_settle_floor: None,
                 reader_segment: Arc::clone(&self.reader_segment),
@@ -305,11 +309,19 @@ impl Peer for HlsPeer {
                 .broadcast_eviction(&outcome.ctx, &key, outcome.seg_at_reader);
         }
 
-        let cmds = outcome
+        let mut cmds = outcome
             .coord
-            .active()
-            .map(|active| active.dispatch(&outcome.ctx, outcome.ctx.prefetch_budget))
-            .unwrap_or_default();
+            .dispatch_pending_size_demands(&outcome.ctx, outcome.ctx.prefetch_budget);
+        let remaining = outcome.ctx.prefetch_budget.saturating_sub(cmds.len());
+        if remaining > 0 {
+            cmds.extend(
+                outcome
+                    .coord
+                    .active()
+                    .map(|active| active.dispatch(&outcome.ctx, remaining))
+                    .unwrap_or_default(),
+            );
+        }
         if cmds.is_empty() {
             return Poll::Pending;
         }
@@ -467,12 +479,10 @@ impl HlsTrackState {
             self.reader_segment.store(resolved_us, Ordering::Release);
         }
         let manual_mode = matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_)));
-        let switch_landed = if boundary_crossed || manual_mode {
-            coord.commit_variant_switch(ctx, resolved)
-        } else if let Some(rescue_seg) = coord.urgent_rescue_boundary(resolved) {
-            coord.commit_variant_switch(ctx, rescue_seg)
-        } else {
-            false
+        let switch_landed = match coord.urgent_rescue_boundary(resolved) {
+            Some(rescue_seg) => coord.commit_variant_switch(ctx, rescue_seg),
+            None if boundary_crossed || manual_mode => coord.commit_variant_switch(ctx, resolved),
+            None => false,
         };
         let prev_u32 = u32::try_from(prev).unwrap_or(0);
         let discontinuous_advance = boundary_crossed && resolved != prev_u32.saturating_add(1);
@@ -545,6 +555,7 @@ impl HlsTrackState {
             seek_epoch: self.seek_obs.epoch(),
             look_ahead_bytes: self.look_ahead_bytes,
             signal: self.coord.signal(),
+            size_probe_method: self.size_probe_method,
         }
     }
 

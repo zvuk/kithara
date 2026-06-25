@@ -103,7 +103,6 @@ impl StreamType for Hls {
             bus.clone(),
             scope,
             byte_pool,
-            config.headers.clone(),
         );
 
         let (master, media_playlists) = load_playlists(&stream_peer, &config).await?;
@@ -128,24 +127,6 @@ impl StreamType for Hls {
             .prefetch_aes128_keys(&media_playlists)
             .await
             .map_err(SourceError::from)?;
-
-        let estimation = crate::playlist::size_estimation::SizeEstimator::new(
-            stream_peer.variant_peer(),
-            stream_peer.scope(),
-            Arc::clone(&playlist_state),
-            media_playlists,
-            config.head_estimation_concurrency,
-            config.size_probe_method,
-        )
-        .estimate()
-        .await;
-        let media_playlists = estimation.media_playlists;
-        estimation
-            .size_maps
-            .into_iter()
-            .enumerate()
-            .filter(|(_, map)| !map.is_empty())
-            .for_each(|(variant, map)| playlist_state.set_size_map(variant, map));
 
         playhead.set_duration(playlist_state.track_duration());
 
@@ -173,6 +154,7 @@ impl StreamType for Hls {
                     .unwrap_or(HlsConfig::DEFAULT_LOOK_AHEAD_BYTES),
             ),
             signal: signal.clone(),
+            size_probe_method: config.size_probe_method,
         };
 
         let variants: Vec<Arc<HlsVariant>> = media_playlists
@@ -220,6 +202,7 @@ impl StreamType for Hls {
                     .look_ahead_bytes
                     .unwrap_or(HlsConfig::DEFAULT_LOOK_AHEAD_BYTES),
             ),
+            config.size_probe_method,
         );
 
         source.set_peer_handle(stream_peer.peer_handle());

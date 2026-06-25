@@ -322,7 +322,7 @@ impl FetchSlot {
     fn settle_success(self, bytes_written: u64) {
         let Self { handle, writer, .. } = self;
         // Consume-self commit returns the Ready reader; read `final_len` off it
-        // (PKCS7 unpad shrinks DRM segments below the HEAD estimate).
+        // (PKCS7 unpad shrinks DRM segments below the announced size).
         match writer.commit(Some(bytes_written)) {
             Ok(reader) => {
                 debug!(target: "kithara_hls::settle", bytes_written, "success");

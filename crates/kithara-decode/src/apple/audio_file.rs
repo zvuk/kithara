@@ -4,7 +4,7 @@ use std::{
     cell::Cell,
     convert::identity,
     ffi::c_void,
-    io::{Error, Read, Seek, SeekFrom},
+    io::{Error, ErrorKind, Read, Seek, SeekFrom},
     ptr,
 };
 
@@ -64,14 +64,19 @@ impl AppleAudioFile {
     /// `kAudioFile*Type` four-cc constants in [`Consts`]; pass `None`
     /// to let `AudioFileServices` auto-detect.
     pub(crate) fn open(mut source: BoxedSource, hint: Option<u32>) -> DecodeResult<Self> {
-        let end = source
-            .seek(SeekFrom::End(0))
-            .map_err(DecodeError::backend)?;
+        let end = match source.seek(SeekFrom::End(0)) {
+            Ok(end) => Some(end),
+            Err(err) if err.kind() == ErrorKind::Unsupported => None,
+            Err(err) => return Err(DecodeError::backend(err)),
+        };
         source
             .seek(SeekFrom::Start(0))
             .map_err(DecodeError::backend)?;
-        let size = i64::try_from(end).map_err(DecodeError::backend)?;
-        Self::open_inner(source, hint, Some(size))
+        let size = end
+            .map(i64::try_from)
+            .transpose()
+            .map_err(DecodeError::backend)?;
+        Self::open_inner(source, hint, size)
     }
 
     fn open_inner(source: BoxedSource, hint: Option<u32>, size: Option<i64>) -> DecodeResult<Self> {
