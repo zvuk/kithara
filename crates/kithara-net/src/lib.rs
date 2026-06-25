@@ -13,6 +13,7 @@ compile_error!(
     "kithara-net: wasm32 requires `client-reqwest` (`client-wreq`/BoringSSL is native-only)"
 );
 
+mod backend;
 mod client;
 mod error;
 mod resumable;
@@ -22,7 +23,10 @@ mod traits;
 mod types;
 
 #[cfg(any(test, feature = "mock"))]
-pub mod mock;
+pub mod mock {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use crate::traits::NetMock;
+}
 
 pub use crate::{
     client::HttpClient,

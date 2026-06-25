@@ -35,6 +35,27 @@ which pulls BoringSSL — a C toolchain not every open-source consumer wants) mu
 opt-in, and the portable one (`reqwest`) the default. Device SDK builds opt in via
 the `kithara` facade's `apple` / `android` features (`kithara-net?/client-wreq`).
 
+Backend layout:
+
+- `client.rs` owns the shared `RawHttp` / `HttpClient` logic and consumes only
+  the uniform `backend` seam. It has no backend selection logic.
+- `backend/mod.rs` selects the active platform folder: `native/` for
+  non-wasm targets and `wasm/` for wasm32.
+- `backend/native/mod.rs` selects the active native backend (`reqwest` unless
+  `client-wreq` is enabled), owns native-only compression builder
+  transforms, and provides native `HEAD`.
+- `backend/native/reqwest.rs` builds the native reqwest client.
+- `backend/native/wreq.rs` builds the native wreq client and maps
+  `ImpersonatePreset` to `wreq_util::Emulation`.
+- `backend/wasm/fetch.rs` builds the wasm reqwest-fetch client and maps
+  `head` to a one-byte ranged `GET`.
+
+The seam re-exported by `backend` is exactly `Client`, `RequestBuilder`,
+`Response`, `BackendError`, `build_client(&NetOptions)`, and
+`head_request(&Client, Url)`. `ClientBuilder` and compression transforms stay
+under `backend/native/`; shared HTTP code must not import backend crates
+directly.
+
 ## Decorators
 
 `TimeoutNet<N>` wraps all methods with `tokio::time::timeout` and is exported in the public API. A retry decorator with exponential backoff (retries on 5xx, 429, 408, timeouts; does not retry on other 4xx) is also available, but only via the `NetExt` builder methods — the wrapper type itself is not part of the public surface.

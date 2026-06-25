@@ -1,11 +1,9 @@
 use std::{fmt::Write, num::NonZeroU16};
 
-#[cfg(not(all(not(target_arch = "wasm32"), feature = "client-wreq")))]
-use reqwest::Error as ReqwestError;
 use thiserror::Error;
 use url::Url;
-#[cfg(all(not(target_arch = "wasm32"), feature = "client-wreq"))]
-use wreq::Error as ReqwestError;
+
+use crate::backend::BackendError as ReqwestError;
 
 pub type NetResult<T> = Result<T, NetError>;
 
