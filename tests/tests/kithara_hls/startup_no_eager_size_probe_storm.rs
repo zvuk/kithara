@@ -5,7 +5,9 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_integration_tests::{HlsFixtureBuilder, TestServerHelper, TestTempDir};
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DataMode,
+};
 use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
@@ -15,34 +17,65 @@ const ACTIVE_VARIANT: usize = 0;
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 
+#[derive(Clone, Copy, Debug)]
+enum StartupFixture {
+    WavFileLike,
+    FlacFmp4,
+}
+
+impl StartupFixture {
+    fn build(self) -> HlsFixtureBuilder {
+        let builder = HlsFixtureBuilder::new()
+            .variant_count(VARIANT_COUNT)
+            .segments_per_variant(SEGMENTS_PER_VARIANT)
+            .segment_duration_secs(0.25)
+            .variant_bandwidths(vec![128_000, 192_000, 256_000]);
+        match self {
+            Self::WavFileLike => builder.data_mode(DataMode::SawWav {
+                sample_rate: SAMPLE_RATE,
+                channels: CHANNELS,
+            }),
+            Self::FlacFmp4 => builder.packaged_audio_flac(SAMPLE_RATE, CHANNELS),
+        }
+    }
+
+    fn media_info(self) -> MediaInfo {
+        match self {
+            Self::WavFileLike => MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav)),
+            Self::FlacFmp4 => MediaInfo::new(Some(AudioCodec::Flac), Some(ContainerFormat::Fmp4)),
+        }
+    }
+}
+
 fn variant_size_probe_count(helper: &TestServerHelper, token: &str, variant: usize) -> u64 {
     (0..SEGMENTS_PER_VARIANT)
         .map(|segment| helper.size_probe_count(token, variant, segment))
         .sum()
 }
 
-/// Guard for the S13e-1 segment-aware startup HEAD-storm fix.
+/// Guard for the S13 lazy-size startup contract.
 ///
-/// fMP4 AAC routes through `Fmp4SegmentDemuxer`, which reads by segment index
-/// and learns exact byte sizes from body commits. Startup must therefore issue
-/// zero eager size probes, including for inactive variants.
+/// Startup must not issue eager size probes for either file-like WAV or
+/// segment-aware fMP4. Exact sizes are resolved only when a seek/read path
+/// actually needs them.
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(30)))]
+#[case::wav_file_like(StartupFixture::WavFileLike)]
+#[case::flac_fmp4(StartupFixture::FlacFmp4)]
 #[cfg(not(target_arch = "wasm32"))]
-async fn startup_issues_no_eager_size_probe_storm() {
+async fn startup_issues_no_eager_size_probe_storm(#[case] fixture: StartupFixture) {
     let helper = TestServerHelper::new().await;
     let created = helper
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(VARIANT_COUNT)
-                .segments_per_variant(SEGMENTS_PER_VARIANT)
-                .segment_duration_secs(0.25)
-                .variant_bandwidths(vec![128_000, 192_000, 256_000])
-                .packaged_audio_aac_lc(SAMPLE_RATE, CHANNELS),
-        )
+        .create_hls(fixture.build())
         .await
-        .expect("create packaged fMP4 HLS fixture");
+        .expect("create HLS fixture");
     let url = created.master_url();
-    info!(%url, variants = VARIANT_COUNT, segments = SEGMENTS_PER_VARIANT, "HLS server ready");
+    info!(
+        ?fixture,
+        %url,
+        variants = VARIANT_COUNT,
+        segments = SEGMENTS_PER_VARIANT,
+        "HLS server ready"
+    );
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
@@ -53,15 +86,15 @@ async fn startup_issues_no_eager_size_probe_storm() {
         .initial_abr_mode(AbrMode::manual(ACTIVE_VARIANT))
         .build();
 
-    let media_info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4));
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .media_info(media_info)
+        .media_info(fixture.media_info())
         .decoder_backend(DecoderBackend::Symphonia)
         .block_on_underrun(true)
         .build();
 
-    // NOTE: `Audio::new()` runs the eager size estimator synchronously, so any
-    // storm is already recorded by the time construction returns.
+    // NOTE: this is the historical storm seam. Keep creation and first-frame
+    // decode ahead of the counter read so both construction-time and startup
+    // read-time probes are visible.
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
@@ -115,6 +148,7 @@ async fn startup_issues_no_eager_size_probe_storm() {
     assert!(
         total < storm_bound,
         "eager size-probe storm: server saw {total} size-probes before first audio \
+         for {fixture:?} \
          (active variant {ACTIVE_VARIANT} = {active}, non-active = {non_active:?}); \
          expected < {storm_bound} (= {VARIANT_COUNT} variants * {SEGMENTS_PER_VARIANT} segments). \
          The startup estimator is probing every segment of every variant.",
@@ -122,7 +156,8 @@ async fn startup_issues_no_eager_size_probe_storm() {
 
     assert_eq!(
         total, 0,
-        "segment-aware fMP4 startup must not issue size-probes before first audio \
+        "HLS startup must not issue eager size-probes before first audio \
+         for {fixture:?} \
          (active variant {ACTIVE_VARIANT} = {active}, non-active = {non_active:?})",
     );
 

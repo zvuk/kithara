@@ -165,10 +165,9 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use std::num::NonZeroU16;
+    use std::{num::NonZeroU16, task::Poll};
 
-    use futures::stream;
-    use kithara_platform::time::timeout;
+    use futures::{pin_mut, poll, stream};
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
@@ -456,10 +455,7 @@ mod tests {
         assert_eq!(retry_policy.delay_for_attempt(1), Duration::from_millis(50));
     }
 
-    // Real-clock: the body drives a raw `tokio::spawn` task (invisible to
-    // flash ambient propagation) and bounds it with wall-time waits; flip
-    // together with the raw-tokio migration (#86).
-    #[kithara::test(tokio, flash(false))]
+    #[kithara::test(tokio)]
     async fn test_retry_net_cancel_interrupts_sleep() {
         let mock = Unimock::new(
             NetMock::get_bytes
@@ -475,15 +471,16 @@ mod tests {
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy), cancel.clone());
 
         let url = test_url();
-        let handle = tokio::task::spawn(async move { retry_net.get_bytes(url, None).await });
+        let result = retry_net.get_bytes(url, None);
+        pin_mut!(result);
 
-        sleep(Duration::from_millis(50)).await;
+        assert!(
+            matches!(poll!(result.as_mut()), Poll::Pending),
+            "retry must park in the retry-delay branch before cancellation"
+        );
         cancel.cancel();
 
-        let result = timeout(Duration::from_millis(200), handle)
-            .await
-            .expect("BUG: spawned retry task must finish within 200ms in this test")
-            .expect("BUG: spawned retry task must not panic in this test");
+        let result = result.await;
 
         assert!(matches!(result, Err(NetError::Cancelled)));
     }

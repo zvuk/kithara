@@ -38,6 +38,9 @@ pub(crate) enum Action {
     /// the reported position advances during the window — Bug #6 (silent
     /// hang after backward-seek) lives here.
     PlayFor(Duration),
+    /// Drive the offline backend for this much media time without making the
+    /// test wait for the same wall-clock duration.
+    RenderFor(Duration),
 }
 
 impl Action {
@@ -55,6 +58,7 @@ impl Action {
             Self::Pause => "Pause".into(),
             Self::Resume => "Resume".into(),
             Self::PlayFor(d) => format!("PlayFor({}ms)", d.as_millis()),
+            Self::RenderFor(d) => format!("RenderFor({}ms)", d.as_millis()),
         }
     }
 }

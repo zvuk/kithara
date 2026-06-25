@@ -81,12 +81,12 @@ impl HlsVariant {
 
     pub(crate) fn rebuild_at_time(&self, ctx: &PlanCtx, target: Duration) -> Option<u32> {
         let seg = self.segment_index_at_time(target)?;
-        let byte = self.segment_byte_offset(seg);
-        if let Some(byte) = byte {
+        let fetch_start = self.seek_readahead_start_segment(seg);
+        if let Some(byte) = self.segment_byte_offset(fetch_start) {
             self.set_prefetch_anchor(byte);
         }
-        self.rebuild(ctx, seg);
-        if let Some(byte) = byte {
+        self.rebuild(ctx, fetch_start);
+        if let Some(byte) = self.segment_byte_offset(seg) {
             self.set_exact_seek_demand(byte, seg);
         }
         Some(seg)
@@ -102,6 +102,8 @@ impl HlsVariant {
         old_queue_len = self.flow.queue.lock().len() as u64
     )]
     pub(crate) fn rebuild_with_decoder_probe(&self, _ctx: &PlanCtx, from_seg: u32) {
+        let from_seg = self.seek_readahead_start_segment(from_seg);
+        self.set_segment_aware_seek_tail(from_seg);
         let segs_len = self.num_segments();
         let init = self
             .needs_init_fetch()

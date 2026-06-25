@@ -19,7 +19,8 @@ use super::{
 };
 use crate::{
     config::SizeProbeMethod,
-    playlist::{PlaylistState, VariantState},
+    ids::SegmentIndex,
+    playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
         InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
         SegmentSlotState,
@@ -143,6 +144,32 @@ fn make_var_with_seek_obs(
     .into_variant(variant, ctx)
 }
 
+fn make_playlist_state(
+    codec: Option<AudioCodec>,
+    container: Option<ContainerFormat>,
+    count: usize,
+) -> Arc<PlaylistState> {
+    let segments = (0..count)
+        .map(|idx| {
+            let url: Url = format!("https://example.com/media{idx}.m4s")
+                .parse()
+                .expect("valid url");
+            SegmentState {
+                duration: Duration::from_secs(2),
+                byte_range_len: None,
+                url,
+                index: SegmentIndex::try_new(idx, count).expect("in-bounds segment"),
+            }
+        })
+        .collect();
+    Arc::new(PlaylistState::new(vec![VariantState {
+        codec,
+        container,
+        init_url: None,
+        segments,
+    }]))
+}
+
 fn push_planned(v: &HlsVariant, seg: u32) {
     v.flow.queue.lock().push_back(PlannedFetch::Segment(seg));
 }
@@ -214,6 +241,28 @@ fn range_ready_clamps_tail_seek_alias_to_eof() {
         v.range_ready(&(anchor..anchor + 64)),
         "tail range that starts in a seek alias must clamp to ready EOF"
     );
+}
+
+#[kithara::test]
+fn segment_aware_seek_alias_routes_tail_by_segment_index() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..4).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
+        codec: Some(AudioCodec::Flac),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    let anchor = 1_000;
+
+    v.set_seek_alias(anchor, 2);
+
+    assert_eq!(v.find_at_offset(anchor), Some((2, anchor, 100)));
+    assert_eq!(v.find_at_offset(anchor + 99), Some((2, anchor, 100)));
+    assert_eq!(v.find_at_offset(anchor + 100), Some((3, anchor + 100, 100)));
+    assert_eq!(v.find_at_offset(anchor + 200), None);
 }
 
 #[kithara::test]
@@ -777,6 +826,140 @@ fn rebuild_refills_queue_without_touching_cancel_token() {
         "rebuild must NOT cancel the variant token — that's reserved for variant deactivation"
     );
     assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5]);
+}
+
+#[kithara::test]
+fn segment_aware_rebuild_at_time_prefetches_seek_preroll_segment() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+
+    let target = v
+        .rebuild_at_time(&ctx, Duration::from_secs(4))
+        .expect("target segment");
+
+    assert_eq!(target, 2, "time seek still lands on the target segment");
+    assert_eq!(
+        queue_seg_indices(&v),
+        vec![1, 2, 3, 4],
+        "segment-aware seek must fetch the codec pre-roll segment too"
+    );
+    assert_eq!(
+        v.prefetch_anchor(),
+        v.segment_byte_offset(1).expect("pre-roll segment offset")
+    );
+}
+
+#[kithara::test]
+fn segment_aware_seek_time_anchor_fetches_preroll_segment() {
+    let ctx = test_ctx(3);
+    let playlist_state =
+        make_playlist_state(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4), 5);
+    let v = VariantParts {
+        init: None,
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        playlist_state,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+
+    let anchor = v
+        .seek_time_anchor(Duration::from_secs(4))
+        .expect("seek anchor")
+        .expect("segment-aware anchor");
+
+    assert_eq!(anchor.segment_index, Some(2));
+    assert_eq!(
+        anchor.byte_offset, 200,
+        "decoder anchor remains the target segment boundary"
+    );
+    assert_eq!(
+        v.get_position(),
+        200,
+        "reader position remains the decoder anchor"
+    );
+    assert_eq!(
+        queue_seg_indices(&v),
+        vec![1, 2, 3, 4],
+        "fetch queue includes the segment a codec warmup backoff may read"
+    );
+    assert_eq!(v.prefetch_anchor(), 100);
+}
+
+#[kithara::test]
+fn segment_aware_rebuild_with_decoder_probe_fetches_recreate_preroll_segment() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: make_init(48, &ctx.scope),
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+
+    v.rebuild_with_decoder_probe(&ctx, 2);
+
+    assert!(queue_has_init(&v));
+    assert_eq!(
+        queue_seg_indices(&v),
+        vec![0, 1, 2, 3, 4],
+        "format-boundary decoder seek must fetch the codec pre-roll segment"
+    );
+}
+
+#[kithara::test]
+fn exact_size_rebuild_at_time_starts_at_target_segment() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+
+    let target = v
+        .rebuild_at_time(&ctx, Duration::from_secs(4))
+        .expect("target segment");
+
+    assert_eq!(target, 2);
+    assert_eq!(queue_seg_indices(&v), vec![2, 3, 4]);
+    assert_eq!(
+        v.prefetch_anchor(),
+        v.segment_byte_offset(2).expect("target segment offset")
+    );
+}
+
+#[kithara::test]
+fn exact_size_rebuild_with_decoder_probe_starts_tail_at_target_segment() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: make_init(48, &ctx.scope),
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+
+    v.rebuild_with_decoder_probe(&ctx, 2);
+
+    assert!(queue_has_init(&v));
+    assert_eq!(queue_seg_indices(&v), vec![0, 2, 3, 4]);
 }
 
 #[kithara::test]

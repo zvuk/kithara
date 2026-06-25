@@ -32,7 +32,7 @@ use kithara_integration_tests::{
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
-    time::{Duration, sleep, timeout},
+    time::{Duration, sleep},
     tokio::sync::broadcast::error::RecvError,
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
@@ -112,7 +112,7 @@ fn build_queue_with_tick(
     Arc<Queue>,
     Downloader,
     StoreOptions,
-    tokio::task::JoinHandle<()>,
+    kithara_platform::tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
@@ -121,20 +121,23 @@ fn build_queue_with_tick(
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = kithara_platform::tokio::task::spawn(run_tick_driver(queue_for_tick));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
     let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
+}
+
+#[kithara::flash(true)]
+async fn run_tick_driver(queue: Arc<Queue>) {
+    loop {
+        sleep(Duration::from_millis(50)).await;
+        if queue.tick().is_err() {
+            break;
+        }
+    }
 }
 
 /// Build a queue WITHOUT the auto-advance tick loop. Auto-advance is driven
@@ -163,6 +166,9 @@ fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, Store
 /// `deadline` as a hard safety cap. Returns the matched event, or `None` on
 /// timeout / bus closure. Lagged is non-fatal (the per-test bus has ample
 /// capacity); we re-loop to keep draining, mirroring the sibling-test idiom.
+/// The helper is flash-active so deadlines are virtual in flash runs; otherwise
+/// every absence window would consume real wall time.
+#[kithara::flash(true)]
 async fn next_queue_event<F>(
     rx: &mut EventReceiver,
     deadline: Duration,
@@ -177,7 +183,7 @@ where
         if remaining.is_zero() {
             return None;
         }
-        match timeout(remaining, rx.recv()).await {
+        match kithara_platform::time::timeout(remaining, rx.recv()).await {
             Ok(Ok(Event::Queue(ev))) if pred(&ev) => return Some(ev),
             Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => continue,
             Ok(Err(RecvError::Closed)) | Err(_) => return None,
