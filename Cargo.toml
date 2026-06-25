@@ -240,7 +240,7 @@ audioadapter-buffers = "3.0"
 smallvec = "1"
 num-traits = { version = "0.2", default-features = false }
 cpal = { version = "0.18", default-features = false }
-firewheel = { version = "0.10.0", default-features = false, features = ["std", "pool", "all_nodes", "musical_transport", "scheduled_events", "tracing"] }
+firewheel = { version = "0.10.0", default-features = false, features = ["std", "tracing"] }
 firewheel-web-audio = { version = "0.4.0", default-features = false }
 bevy_platform = { version = "0.19", default-features = false, features = ["alloc", "std", "web"] }
 biquad = "0.6.0"

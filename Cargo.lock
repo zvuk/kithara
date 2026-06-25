@@ -2718,18 +2718,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fft-convolver"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdcf0473d3952d710173f7f2acc8ff88065928e01b7d5467ec28449a3abae4fc"
-dependencies = [
- "num",
- "realfft",
- "rustfft",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "filedescriptor"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2861,12 +2849,8 @@ dependencies = [
  "bevy_ecs",
  "bevy_platform 0.18.1",
  "bevy_reflect",
- "fft-convolver",
  "firewheel-core",
- "fixed-resample",
  "num-traits",
- "smallvec",
- "triple_buffer",
 ]
 
 [[package]]
@@ -2931,7 +2915,6 @@ dependencies = [
  "arrayvec",
  "fast-interleave",
  "ringbuf 0.4.8",
- "rubato 0.16.2",
 ]
 
 [[package]]
@@ -4507,7 +4490,7 @@ dependencies = [
  "portable-atomic",
  "realfft",
  "ringbuf 0.5.0",
- "rubato 3.0.0",
+ "rubato",
  "signalsmith-stretch",
  "smallvec",
  "tempfile",
@@ -5033,10 +5016,12 @@ name = "kithara-workspace-hack"
 version = "0.0.1-alpha3"
 dependencies = [
  "aho-corasick",
+ "arrayvec",
  "bit-set 0.8.0",
  "bit-vec 0.8.0",
  "bitflags 2.13.0",
  "bytemuck",
+ "cc",
  "clang-sys",
  "clap",
  "clap_builder",
@@ -5078,7 +5063,6 @@ dependencies = [
  "miniz_oxide",
  "mio",
  "num-integer",
- "num-rational",
  "num-traits",
  "once_cell",
  "percent-encoding",
@@ -5089,9 +5073,12 @@ dependencies = [
  "regex",
  "regex-automata",
  "regex-syntax",
+ "reqwest",
+ "ringbuf 0.4.8",
  "rustc-hash 1.1.0",
  "rustfft",
  "rustix 1.1.4",
+ "rustls-pki-types",
  "semver",
  "serde",
  "serde_core",
@@ -5107,14 +5094,18 @@ dependencies = [
  "thunderdome",
  "time",
  "tokio",
+ "tokio-util",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
  "tower",
  "tracing",
- "tracing-core",
+ "tracing-subscriber",
  "usdt-impl",
  "winnow 1.0.3",
  "zerocopy",
+ "zstd",
+ "zstd-safe",
+ "zstd-sys",
 ]
 
 [[package]]
@@ -5763,20 +5754,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "num"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
-dependencies = [
- "num-bigint",
- "num-complex",
- "num-integer",
- "num-iter",
- "num-rational",
- "num-traits",
-]
-
-[[package]]
 name = "num-bigint"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5818,17 +5795,6 @@ version = "0.1.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f"
 dependencies = [
- "num-traits",
-]
-
-[[package]]
-name = "num-iter"
-version = "0.1.45"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1429034a0490724d0075ebb2bc9e875d6503c3cf69e235a8941aa757d83ef5bf"
-dependencies = [
- "autocfg",
- "num-integer",
  "num-traits",
 ]
 
@@ -7678,18 +7644,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91957a630a24c9d05d1a841d2a02d12ebf261f075fa204c5f3879a922b86db09"
 dependencies = [
  "bevy_platform 0.18.1",
-]
-
-[[package]]
-name = "rubato"
-version = "0.16.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5258099699851cfd0082aeb645feb9c084d9a5e1f1b8d5372086b989fc5e56a1"
-dependencies = [
- "num-complex",
- "num-integer",
- "num-traits",
- "realfft",
 ]
 
 [[package]]

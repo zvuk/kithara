@@ -15,9 +15,10 @@ publish = false
 
 ### BEGIN HAKARI SECTION
 [dependencies]
+arrayvec = { version = "0.7" }
 cpal = { version = "0.17", default-features = false, features = ["wasm-bindgen"] }
 crossbeam-utils = { version = "0.8" }
-firewheel = { version = "0.10", default-features = false, features = ["all_nodes", "cpal", "musical_transport", "pool", "tracing", "wasm-bindgen"] }
+firewheel = { version = "0.10", default-features = false, features = ["cpal", "tracing", "wasm-bindgen"] }
 firewheel-cpal = { version = "0.10", default-features = false, features = ["tracing", "wasm-bindgen"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
@@ -26,10 +27,8 @@ futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
 hotpath = { version = "0.17", features = ["hotpath", "hotpath-alloc"] }
 indexmap = { version = "2", features = ["serde"] }
-log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 num-integer = { version = "0.1", features = ["i128"] }
-num-rational = { version = "0.4", features = ["num-bigint-std", "serde"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1" }
 portable-atomic = { version = "1", default-features = false, features = ["fallback", "float", "require-cas", "std"] }
@@ -37,6 +36,8 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
+reqwest = { version = "0.13", default-features = false, features = ["brotli", "cookies", "deflate", "gzip", "native-tls", "rustls", "stream", "zstd"] }
+ringbuf = { version = "0.4", features = ["portable-atomic"] }
 rustfft = { version = "6" }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive"] }
@@ -48,12 +49,13 @@ thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 toml_parser = { version = "1" }
-tracing-core = { version = "0.1" }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 
 [build-dependencies]
+arrayvec = { version = "0.7" }
 cpal = { version = "0.17", default-features = false, features = ["wasm-bindgen"] }
 crossbeam-utils = { version = "0.8" }
-firewheel = { version = "0.10", default-features = false, features = ["all_nodes", "cpal", "musical_transport", "pool", "tracing", "wasm-bindgen"] }
+firewheel = { version = "0.10", default-features = false, features = ["cpal", "tracing", "wasm-bindgen"] }
 firewheel-cpal = { version = "0.10", default-features = false, features = ["tracing", "wasm-bindgen"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
@@ -62,10 +64,8 @@ futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
 hotpath = { version = "0.17", features = ["hotpath", "hotpath-alloc"] }
 indexmap = { version = "2", features = ["serde"] }
-log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 num-integer = { version = "0.1", features = ["i128"] }
-num-rational = { version = "0.4", features = ["num-bigint-std", "serde"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1" }
 portable-atomic = { version = "1", default-features = false, features = ["fallback", "float", "require-cas", "std"] }
@@ -73,6 +73,8 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
+reqwest = { version = "0.13", default-features = false, features = ["brotli", "cookies", "deflate", "gzip", "native-tls", "rustls", "stream", "zstd"] }
+ringbuf = { version = "0.4", features = ["portable-atomic"] }
 rustfft = { version = "6" }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive"] }
@@ -84,7 +86,7 @@ thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 toml_parser = { version = "1" }
-tracing-core = { version = "0.1" }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 aho-corasick = { version = "1" }
@@ -115,6 +117,7 @@ idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
+log = { version = "0.4", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
@@ -127,12 +130,16 @@ slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["fs", "io-util", "net", "signal"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
 toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
 winnow = { version = "1" }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
+zstd = { version = "0.13" }
+zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
+zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 aho-corasick = { version = "1" }
@@ -140,6 +147,7 @@ bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
+cc = { version = "1", default-features = false, features = ["parallel"] }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
@@ -166,6 +174,7 @@ idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
+log = { version = "0.4", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
@@ -179,12 +188,16 @@ slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["fs", "io-util", "net", "signal"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
 toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
 winnow = { version = "1" }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
+zstd = { version = "0.13" }
+zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
+zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
 
 [target.x86_64-apple-darwin.dependencies]
 aho-corasick = { version = "1" }
@@ -212,23 +225,30 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+log = { version = "0.4", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+rustls-pki-types = { version = "1", features = ["std"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
+slab = { version = "0.4" }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 symphonia-metadata = { version = "0.6", default-features = false, features = ["ape", "flac", "id3v1", "riff-id3", "riff-info", "vorbis"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["fs", "io-util", "net", "signal"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
+zstd = { version = "0.13" }
+zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
+zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
 aho-corasick = { version = "1" }
@@ -236,6 +256,7 @@ bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
+cc = { version = "1", default-features = false, features = ["parallel"] }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
@@ -259,6 +280,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+log = { version = "0.4", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
@@ -266,17 +288,23 @@ prettyplease = { version = "0.2", default-features = false, features = ["verbati
 regex = { version = "1" }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+rustls-pki-types = { version = "1", features = ["std"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
+slab = { version = "0.4" }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 symphonia-metadata = { version = "0.6", default-features = false, features = ["ape", "flac", "id3v1", "riff-id3", "riff-info", "vorbis"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["fs", "io-util", "net", "signal"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
+zstd = { version = "0.13" }
+zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
+zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
 
 [target.aarch64-apple-darwin.dependencies]
 aho-corasick = { version = "1" }
@@ -304,23 +332,30 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+log = { version = "0.4", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+rustls-pki-types = { version = "1", features = ["std"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
+slab = { version = "0.4" }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 symphonia-metadata = { version = "0.6", default-features = false, features = ["ape", "flac", "id3v1", "riff-id3", "riff-info", "vorbis"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["fs", "io-util", "net", "signal"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
+zstd = { version = "0.13" }
+zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
+zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
 
 [target.aarch64-apple-darwin.build-dependencies]
 aho-corasick = { version = "1" }
@@ -328,6 +363,7 @@ bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
+cc = { version = "1", default-features = false, features = ["parallel"] }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
@@ -351,6 +387,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+log = { version = "0.4", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
@@ -358,16 +395,22 @@ prettyplease = { version = "0.2", default-features = false, features = ["verbati
 regex = { version = "1" }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
+rustls-pki-types = { version = "1", features = ["std"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
+slab = { version = "0.4" }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 symphonia-metadata = { version = "0.6", default-features = false, features = ["ape", "flac", "id3v1", "riff-id3", "riff-info", "vorbis"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["fs", "io-util", "net", "signal"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
+zstd = { version = "0.13" }
+zstd-safe = { version = "7", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
+zstd-sys = { version = "2", default-features = false, features = ["legacy", "std", "zdict_builder"] }
 
 ### END HAKARI SECTION
