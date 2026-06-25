@@ -46,6 +46,5 @@ tls-native = ["kithara-net?/tls-native"]
 
 [dev-dependencies]
 kithara-events = { path = ".", default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
-

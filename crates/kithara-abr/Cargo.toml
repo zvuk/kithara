@@ -39,7 +39,7 @@ tls-rustls = ["kithara-events/tls-rustls"]
 tls-native = ["kithara-events/tls-native"]
 
 [dev-dependencies]
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
 proptest = { workspace = true }
 

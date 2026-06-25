@@ -79,7 +79,7 @@ kithara-net = { workspace = true, default-features = false, features = [
     "client-reqwest",
     "tls-rustls",
 ] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 tempfile = { workspace = true }
 serial_test = { workspace = true }
 wasm-bindgen-test = { workspace = true }

@@ -78,7 +78,7 @@ kithara-net = { path = ".", default-features = false, features = [
     "client-reqwest",
     "tls-rustls",
 ] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 futures = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true }

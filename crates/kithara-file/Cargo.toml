@@ -69,7 +69,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspac
 
 [dev-dependencies]
 tempfile = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

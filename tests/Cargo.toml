@@ -26,7 +26,7 @@ kithara-events = { workspace = true }
 kithara-hls = { workspace = true, features = ["probe"] }
 kithara-queue = { workspace = true, features = ["backend-cpal", "probe"] }
 kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
-kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 rkyv = { workspace = true }
 kithara-net = { workspace = true, features = ["mock", "probe"] }
 kithara-platform = { workspace = true }

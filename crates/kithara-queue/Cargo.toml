@@ -62,5 +62,5 @@ kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-platform = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }

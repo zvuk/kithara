@@ -167,9 +167,11 @@ homepage = "https://github.com/zvuk/kithara"
 # each crate's own `client-reqwest`/`client-wreq`/`tls-*` features. Cargo
 # refuses default-features overrides through `workspace = true`
 # inheritance, so the disable has to live here on the workspace
-# declaration. (kithara-events / kithara-test-utils keep their defaults:
-# they carry domain features many consumers rely on implicitly and never
-# put an HTTP backend in their own default, so they cannot leak reqwest.)
+# declaration. kithara-events keeps its defaults because it never puts
+# an HTTP backend in its own default, so it cannot leak reqwest.
+# kithara-test-utils disables defaults at the workspace level so
+# framework builds inherit the noop hang/test surface; test/dev edges
+# opt back into `hang`.
 kithara = { path = "crates/kithara", version = "0.0.1-alpha3", default-features = false }
 kithara-abr = { path = "crates/kithara-abr", version = "0.0.1-alpha3", default-features = false }
 kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha3", default-features = false }
@@ -189,7 +191,7 @@ kithara-queue = { path = "crates/kithara-queue", version = "0.0.1-alpha3", defau
 kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha3", default-features = false }
 kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha3", default-features = false }
 kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha3" }
-kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha3" }
+kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha3", default-features = false }
 kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-app = { path = "crates/kithara-app", default-features = false }
 kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha3" }
@@ -247,7 +249,7 @@ portable-atomic = { version = "1.13.1", default-features = false, features = ["f
 thiserror = "2.0.18"
 usdt = { version = "0.6", default-features = false, features = ["asm"] }
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "registry"] }
 tracing-wasm = "0.2"
 tracing-android = "0.2.0"
 tracing-log = "0.2"

@@ -41,10 +41,19 @@ impl<C: HangDump> HangDetector<C> {
     pub fn reset(&mut self) {}
 
     #[inline(always)]
+    pub fn reset_from(&mut self, _file: &'static str, _line: u32) {}
+
+    #[inline(always)]
     pub fn tick(&mut self) {}
 
     #[inline(always)]
+    pub fn tick_from(&mut self, _file: &'static str, _line: u32) {}
+
+    #[inline(always)]
     pub fn tick_with(&mut self, _ctx: C) {}
+
+    #[inline(always)]
+    pub fn tick_with_from(&mut self, _ctx: C, _file: &'static str, _line: u32) {}
 
     #[inline(always)]
     #[must_use]

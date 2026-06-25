@@ -45,7 +45,7 @@ console_error_panic_hook = { workspace = true }
 [dev-dependencies]
 kithara-platform = { path = ".", default-features = false }
 kithara-test-macros = { path = "../kithara-test-macros" }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
 
 # Native-only: criterion pulls a native-only toolchain, never wasm.
