@@ -13,9 +13,9 @@ default = ["tui", "gui", "beat-nn"]
 tui = ["dep:ratatui", "dep:crossterm"]
 # HTTP backend forwarding to every kithara-net-reaching production dep
 # (kithara facade + kithara-queue). NOT in `default`: the backend is selected
-# per target (macOS desktop pulls `apple` → client-wreq; other desktops pull
-# client-reqwest via the non-Apple target block below), so exactly one HTTP
-# stack lands in each build. The dev-only kithara-net mirrors the same
+# per target (macOS desktop pulls `apple` + `client-wreq`; other desktops
+# pull client-reqwest via the non-Apple target block below), so exactly one
+# HTTP stack lands in each build. The dev-only kithara-net mirrors the same
 # per-target split (see the target `dev-dependencies` below) so test builds
 # stay single-stack too.
 client-reqwest = ["kithara/client-reqwest", "kithara-queue/client-reqwest"]
@@ -60,7 +60,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 url = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-kithara = { workspace = true, default-features = false, features = ["apple"] }
+kithara = { workspace = true, default-features = false, features = ["apple", "client-wreq"] }
 
 # Desktop (non-Apple, non-Android, native) — fall back to symphonia
 # software decoding. workspace.dependencies now disables kithara's

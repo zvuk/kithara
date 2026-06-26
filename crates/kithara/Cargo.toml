@@ -39,8 +39,8 @@ kithara-play = { workspace = true, default-features = false, features = ["backen
 default = ["file", "hls", "symphonia", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep. Optional deps
 # (kithara-net / kithara-file / kithara-hls / kithara-abr) use the weak `?`
-# form so a backend choice never force-enables them. apple/android already
-# forward `kithara-net?/client-wreq` below.
+# form so a backend choice never force-enables them. Android forwards
+# `kithara-net?/client-wreq` below; Apple HTTP is a separate opt-in feature.
 client-reqwest = [
     "kithara-net?/client-reqwest",
     "kithara-stream/client-reqwest",
@@ -126,15 +126,18 @@ perf = [
     "kithara-hls/perf",
     "kithara-net/perf",
 ]
-# Apple HW backend. Does NOT include `fdk-aac` — Apple AudioToolbox
+# Apple HW decoder. Does NOT include `fdk-aac` — Apple AudioToolbox
 # decodes HE-AAC v1/v2 natively via kAudioFormatMPEG4AAC_HE / _HE_V2
 # (see crates/kithara-decode/src/apple/codec.rs). fdk-aac stays
-# coupled to symphonia for desktop/WASM software fallback builds only.
-# Device builds default to the `client-wreq` HTTP backend (BoringSSL + browser
-# TLS/HTTP2 emulation): the DRM keyserver sits behind an anti-bot WAF that
-# 418-rejects non-browser TLS fingerprints. Weak (`?`) so it only flips when
-# `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
-apple = ["kithara-audio/apple", "kithara-play/apple", "kithara-net?/client-wreq"]
+# coupled to symphonia for desktop/WASM software fallback builds only. HTTP
+# backend selection is separate so macOS desktop/tests can use the decoder
+# without pulling the real-clock NSURLSession backend.
+apple = ["kithara-audio/apple", "kithara-play/apple"]
+# Apple HTTP backend for the shipped FFI framework build. It uses NSURLSession,
+# which passes the DRM keyserver anti-bot WAF natively and removes the wreq /
+# BoringSSL TLS stack from Apple framework builds. Weak (`?`) so it only flips
+# when `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
+apple-net = ["kithara-net?/client-apple"]
 android = [
     "kithara-audio/android",
     "kithara-decode/android",
@@ -147,4 +150,3 @@ kithara = { path = ".", default-features = false }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
-

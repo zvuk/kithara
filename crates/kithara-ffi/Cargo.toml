@@ -28,7 +28,6 @@ workspace = true
 # the web-audio backend in the wasm32 target block.
 kithara-platform = { workspace = true }
 kithara-events = { workspace = true }
-kithara-test-macros = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -50,7 +49,7 @@ tracing-subscriber = { workspace = true }
 default = ["uniffi", "symphonia", "client-reqwest", "tls-rustls"]
 uniffi = ["dep:uniffi"]
 uniffi-bindgen-cli = ["uniffi", "uniffi/cli", "uniffi/cargo-metadata"]
-apple = ["kithara/apple"]
+apple = ["kithara/apple", "kithara/apple-net"]
 android = ["kithara/android"]
 # Cross-platform software decode backend. Not part of apple/android
 # (those own hardware decode on-device). Used for the host-side
@@ -69,8 +68,9 @@ probe = []
 mock = []
 # HTTP backend forwarding to every kithara-net-reaching dep. `kithara`
 # (native) and the wasm-only `kithara-hls`/`kithara-abr` are target-gated;
-# their edges are inert on the other target. apple/android forward
-# client-wreq through `kithara/apple` (facade) already.
+# their edges are inert on the other target. The framework `apple` feature
+# selects NSURLSession through `kithara/apple-net`; Android still resolves
+# wreq through the facade `android` feature.
 client-reqwest = [
     "kithara/client-reqwest",
     "kithara-queue/client-reqwest",
@@ -151,6 +151,7 @@ rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+kithara-test-macros = { workspace = true }
 kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen", "symphonia"] }
 kithara-queue = { workspace = true, default-features = false, features = ["backend-web-audio", "symphonia"] }
 # The wasm worker reaches the shared DRM key-options, ABR-mode, and

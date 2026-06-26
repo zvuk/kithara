@@ -120,7 +120,7 @@ tokio-stream = { workspace = true }
 # `feature = "apple"` + matching `target_os`, so without these entries
 # the test crate cannot reference it.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara = { workspace = true, features = ["apple"] }
+kithara = { workspace = true, features = ["apple", "client-wreq"] }
 kithara-audio = { workspace = true, features = ["apple"] }
 kithara-decode = { workspace = true, features = ["apple"] }
 kithara-play = { workspace = true, features = ["apple"] }
