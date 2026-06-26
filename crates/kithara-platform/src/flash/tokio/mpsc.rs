@@ -8,7 +8,6 @@ use std::{
 
 use error::{SendError, TryRecvError, TrySendError};
 use parking_lot::Mutex;
-pub use tokio_with_wasm::alias::sync::mpsc::error;
 
 pub use super::unbounded::UnboundedSender;
 use crate::flash::{
@@ -16,6 +15,7 @@ use crate::flash::{
     ids::{CvId, trace_native_from_ambient},
     system,
 };
+pub use crate::native::tokio::sync::mpsc::error;
 
 pub(super) struct Inner<T> {
     /// Real-wake slot for the single receiver (off the flash path), mirroring

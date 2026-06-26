@@ -55,6 +55,7 @@ bon = { workspace = true }
 crossterm = { workspace = true, optional = true }
 iced = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
+kithara-platform = { workspace = true, features = ["signal"] }
 num-traits = { workspace = true }
 obfstr = { workspace = true }
 rand = { workspace = true }
@@ -80,7 +81,7 @@ kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 futures = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
 
 # Dev-only kithara-net mirrors the per-target production backend so test
 # builds stay single-stack: macOS tests run wreq (matching the `apple`

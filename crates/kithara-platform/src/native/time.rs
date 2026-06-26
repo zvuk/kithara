@@ -1,6 +1,5 @@
-use tokio_alias::time as tokio_time;
+use tokio::time as tokio_time;
 pub use tokio_time::sleep;
-use tokio_with_wasm::alias as tokio_alias;
 
 pub use crate::common::time::{Duration, Instant, SystemTime, TimeoutError};
 

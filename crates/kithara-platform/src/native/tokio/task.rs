@@ -1,4 +1,4 @@
-pub use tokio_with_wasm::alias::task::*;
+pub use tokio::task::*;
 
 use super::runtime::Handle;
 

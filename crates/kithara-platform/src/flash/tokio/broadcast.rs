@@ -9,12 +9,14 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use tokio_with_wasm::alias::sync::broadcast as inner;
 
-use crate::flash::{
-    flash_ambient,
-    ids::{Backend, trace_native_from_ambient},
-    system,
+use crate::{
+    flash::{
+        flash_ambient,
+        ids::{Backend, trace_native_from_ambient},
+        system,
+    },
+    native::tokio::sync::broadcast as inner,
 };
 
 /// Receive errors, mirroring `tokio::broadcast::error` variant-for-variant so

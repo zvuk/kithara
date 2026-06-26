@@ -2,10 +2,12 @@
 //! Enumerated on purpose: a glob re-export is how flash-blind primitives
 //! leak in unnoticed (see design doc §2). `time`/`fs`/`io`/`process` and the
 //! root `spawn`/`spawn_blocking` are intentionally ABSENT. `runtime`,
-//! `ensure_thread_pool`, `signal` and `task_local!` add no flash semantics and
-//! are re-imported from `native`; the channels and `task` are flash-aware.
+//! `ensure_thread_pool` and `task_local!` add no flash semantics and are
+//! re-imported from `native`; the channels and `task` are flash-aware.
 
-pub use crate::native::tokio::{join, net, pin, select, signal, task_local, try_join};
+#[cfg(feature = "signal")]
+pub use crate::native::tokio::signal;
+pub use crate::native::tokio::{join, pin, select, task_local, try_join};
 
 pub mod broadcast;
 pub mod mpsc;

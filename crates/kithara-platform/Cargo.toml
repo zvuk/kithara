@@ -20,21 +20,22 @@ workspace = true
 # run warm-cache offline tests at CPU speed (compared against the real-time run
 # as ground truth).
 flash = []
+signal = ["tokio/signal"]
 
 [dependencies]
 delegate = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
 web-time = { workspace = true }
-tokio_with_wasm = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
 parking_lot = { workspace = true }
 pin-project-lite = { workspace = true }
-tokio = { workspace = true, features = ["time", "sync", "rt", "signal"] }
+tokio = { workspace = true, features = ["time", "sync", "rt", "macros"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+tokio_with_wasm = { workspace = true }
 wasm_safe_thread = { workspace = true }
 js-sys = { workspace = true }
 web-sys = { workspace = true }
