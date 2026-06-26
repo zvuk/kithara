@@ -6,8 +6,9 @@
 //! `signal` is opt-in for desktop binaries that own process shutdown.
 
 #[cfg(feature = "signal")]
-pub use tokio::signal;
-pub use tokio::{join, pin, select, task_local, try_join};
+pub use backend::signal;
+pub use backend::{join, pin, select, task_local, try_join};
+pub(crate) use tokio as backend;
 
 pub mod runtime;
 pub mod sync;

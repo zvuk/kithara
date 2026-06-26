@@ -1,1 +1,1 @@
-pub use tokio::sync::Notify;
+pub use crate::native::tokio::backend::sync::Notify;

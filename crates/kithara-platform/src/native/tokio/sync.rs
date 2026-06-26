@@ -1,1 +1,1 @@
-pub use tokio::sync::{OnceCell, Semaphore, broadcast, mpsc, oneshot, watch};
+pub use super::backend::sync::{OnceCell, Semaphore, broadcast, mpsc, oneshot, watch};

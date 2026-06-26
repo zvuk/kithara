@@ -5,9 +5,9 @@ use std::{
 };
 
 use futures::channel::oneshot;
-use tokio_with_wasm::alias as tww_alias;
-pub use tokio_with_wasm::alias::task::*;
-use tww_alias::task as tww_task;
+
+use super::backend::task as tww_task;
+pub use super::backend::task::*;
 
 /// Forward a `tokio_with_wasm` JoinHandle into our own oneshot-backed
 /// channel, converting any tww join error into our cancelled `JoinError`.
