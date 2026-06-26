@@ -1,21 +1,14 @@
-#![forbid(unsafe_code)]
-
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    not(feature = "client-wreq"),
-    not(feature = "client-reqwest")
-))]
-compile_error!(
-    "kithara-net: enable one HTTP client backend — `client-reqwest` (default) or `client-wreq`"
-);
-#[cfg(all(target_arch = "wasm32", not(feature = "client-reqwest")))]
-compile_error!(
-    "kithara-net: wasm32 requires `client-reqwest` (`client-wreq`/BoringSSL is native-only)"
-);
+// NOTE: deny instead of forbid to allow unsafe in platform-specific FFI modules (apple)
+#![deny(unsafe_code)]
 
 mod backend;
+#[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
 mod client;
 mod error;
+#[cfg(any(
+    test,
+    not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios")))
+))]
 mod resumable;
 mod retry;
 mod timeout;
@@ -29,7 +22,7 @@ pub mod mock {
 }
 
 pub use crate::{
-    client::HttpClient,
+    backend::HttpClient,
     error::{NetError, NetResult, Retryability},
     timeout::TimeoutNet,
     traits::{ByteStream, Net, NetExt},

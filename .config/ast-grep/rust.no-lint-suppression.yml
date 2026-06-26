@@ -63,6 +63,7 @@ ignores:
   # requirement (raw `extern` blocks, JNI/CoreAudio handles). The
   # `#[deny(unsafe_code)]` ratchet at crate root keeps non-FFI code
   # honest; these directories own the carve-out.
+  - "**/kithara-net/src/backend/apple/**"
   - "**/kithara-decode/src/apple/**"
   - "**/kithara-decode/src/android/**"
   # Crate root file holds two lint allows that quiet `unimock`-generated

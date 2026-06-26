@@ -13,6 +13,7 @@ use kithara_platform::{
 };
 use url::Url;
 
+#[cfg(not(target_arch = "wasm32"))]
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
 }

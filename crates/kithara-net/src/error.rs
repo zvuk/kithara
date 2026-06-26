@@ -1,8 +1,11 @@
-use std::{fmt::Write, num::NonZeroU16};
+#[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
+use std::fmt::Write;
+use std::num::NonZeroU16;
 
 use thiserror::Error;
 use url::Url;
 
+#[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
 use crate::backend::BackendError as ReqwestError;
 
 pub type NetResult<T> = Result<T, NetError>;
@@ -89,6 +92,7 @@ impl From<&NetError> for Retryability {
     }
 }
 
+#[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
 impl From<ReqwestError> for NetError {
     fn from(e: ReqwestError) -> Self {
         if e.is_timeout() {
@@ -108,6 +112,7 @@ impl From<ReqwestError> for NetError {
     }
 }
 
+#[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
 fn error_chain(e: &ReqwestError) -> String {
     let mut msg = e.to_string();
     let mut current: &dyn std::error::Error = e;

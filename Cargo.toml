@@ -335,8 +335,11 @@ criterion = "0.8.2"
 fast-interleave = "0.1"
 
 # Apple platform support
+block2 = "0.6.2"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false }
 
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
 

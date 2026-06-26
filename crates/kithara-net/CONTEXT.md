@@ -12,35 +12,40 @@ active per target; the choice is invisible above the `Net` trait — `HttpClient
 |---|---|---|---|---|
 | `client-reqwest` (**default**) | `reqwest` | `tls-rustls` (default) / `tls-native` | native + wasm | Pure-Rust, portable. The only backend on wasm32. |
 | `client-wreq` | `wreq` | `BoringSSL` (fixed) | native only | Browser TLS/HTTP2 emulation (`ImpersonatePreset`) to defeat anti-bot WAF JA3 fingerprinting. |
+| `client-apple` | `NSURLSession` | Apple platform trust | macOS + iOS only | Native Apple backend for SDK size reduction. Objective-C FFI is isolated under `src/backend/apple/`. |
 
 Rules:
 
-- **Exactly one backend.** A `compile_error!` (in `lib.rs`) fires if no backend is
-  selected for the target. This is a contract, not a fallback — there is no silent
+- **Exactly one backend.** A `compile_error!` (in `backend/mod.rs`) fires if no backend
+  is selected for the target. This is a contract, not a fallback — there is no silent
   default-to-reqwest when a misconfigured build drops every client feature.
-- **`client-wreq` wins when both unify.** Cargo features are additive, so a build
-  that pulls both (e.g. the Apple/Android SDK) compiles both crates but the code
-  picks `wreq` via `cfg` priority (`cfg(all(not(wasm32), feature = "client-wreq"))`).
+- **Backend features are mutually exclusive.** Cargo features are additive, so a
+  build that pulls two client backends is a configuration bug. The crate rejects
+  that shape at compile time instead of picking a fallback backend.
 - **wasm32 is always `client-reqwest`.** `wreq`/BoringSSL has no wasm target, so
   the `client-wreq` dep is gated to `cfg(not(wasm32))` and the wasm guard requires
-  `client-reqwest`. TLS features are inert on wasm (the browser owns TLS).
+  `client-reqwest`. `client-apple` is also native-only and rejected on wasm32.
+  TLS features are inert on wasm (the browser owns TLS).
 - **TLS axis applies only to `client-reqwest`.** `tls-rustls` / `tls-native` map to
   `reqwest`'s `rustls` / `native-tls`; they are no-ops under `client-wreq` (always
-  BoringSSL) and on wasm (reqwest gates its TLS deps to `cfg(not(wasm32))`).
+  BoringSSL), `client-apple` (platform trust), and on wasm (the browser owns TLS).
 
 Why reqwest is the default and wreq is opt-in: Cargo feature unification makes
 "disable a transitive default" effectively impossible across the dependency graph,
 while "add a forwarded feature" composes cleanly. So the special backend (`wreq`,
 which pulls BoringSSL — a C toolchain not every open-source consumer wants) must be
 opt-in, and the portable one (`reqwest`) the default. Device SDK builds opt in via
-the `kithara` facade's `apple` / `android` features (`kithara-net?/client-wreq`).
+the facade feature-forwarding chain; this crate only enforces the selected backend
+once it arrives.
 
 Backend layout:
 
 - `client.rs` owns the shared `RawHttp` / `HttpClient` logic and consumes only
   the uniform `backend` seam. It has no backend selection logic.
-- `backend/mod.rs` selects the active platform folder: `native/` for
-  non-wasm targets and `wasm/` for wasm32.
+- `backend/mod.rs` owns backend selection, compile-time guard failures, and the
+  public `HttpClient` re-export.
+- When `client-apple` is not selected, `backend/mod.rs` selects the active
+  platform folder: `native/` for non-wasm targets and `wasm/` for wasm32.
 - `backend/native/mod.rs` selects the active native backend (`reqwest` unless
   `client-wreq` is enabled), owns native-only compression builder
   transforms, and provides native `HEAD`.
@@ -49,12 +54,54 @@ Backend layout:
   `ImpersonatePreset` to `wreq_util::Emulation`.
 - `backend/wasm/fetch.rs` builds the wasm reqwest-fetch client and maps
   `head` to a one-byte ranged `GET`.
+- `backend/apple/mod.rs` is declaration/re-export only for the Apple adapter.
+- `backend/apple/client.rs` owns the safe `AppleNet` implementation for
+  `client-apple`; it bypasses the reqwest/wreq backend seam because
+  `NSURLSession` streams through a delegate rather than a Rust HTTP response type.
+- `backend/apple/session.rs` configures `NSURLSession`, starts data/stream tasks,
+  and owns task identity/resume/cancel handles.
+- `backend/apple/delegate.rs` owns the Objective-C delegate class and callbacks.
+- `backend/apple/request.rs` owns request construction, URL validation, header
+  application, and accepted-content-encoding selection.
+- `backend/apple/response.rs` owns HTTP response/header conversion, NSError
+  mapping, and shared completion/terminal helpers.
+- `backend/apple/stream.rs` owns body stream polling, cancel wake registration,
+  and startup/data task guards.
 
-The seam re-exported by `backend` is exactly `Client`, `RequestBuilder`,
-`Response`, `BackendError`, `build_client(&NetOptions)`, and
-`head_request(&Client, Url)`. `ClientBuilder` and compression transforms stay
-under `backend/native/`; shared HTTP code must not import backend crates
-directly.
+`client-apple` timeout note: `NSURLSession` buffers small data on open
+connections, so Rust-side stream-poll deadlines cannot reliably model
+inactivity. The Apple backend configures native timers instead:
+`timeoutIntervalForRequest` is set from `NetOptions::inactivity_timeout` and
+`timeoutIntervalForResource` from `total_timeout` when present. Request timeout
+errors flow through `didCompleteWithError` and map to `NetError::Timeout` for
+both pre-response stalls and body-phase inactivity. Cancellation is still driven
+by `CancelToken`: startup cancels the task directly, and the body stream holds a
+cancel waker so a parked poll is woken promptly.
+
+When `client-apple` is not selected, the seam re-exported by `backend` is exactly
+`Client`, `RequestBuilder`, `Response`, `BackendError`,
+`build_client(&NetOptions)`, and `head_request(&Client, Url)`. `ClientBuilder`
+and compression transforms stay under `backend/native/`; shared HTTP code must
+not import backend crates directly.
+
+## `client-apple` unsafe carve-out
+
+The crate root uses `#![deny(unsafe_code)]`; the only production unsafe exception
+for the Apple networking backend is the focused Objective-C bridge under
+`src/backend/apple/`, following the same unsafe-isolated Apple-module precedent
+as `kithara-decode`. Unsafe is limited to the files that cross Foundation /
+Objective-C boundaries: session setup, delegate class registration, completion
+blocks, challenge handling, Objective-C selectors skipped by generated bindings,
+and `NSData`/`NSHTTPURLResponse` casts.
+
+The carve-out is intentionally leaf-scoped:
+
+- Safe Rust code calls `AppleNet` / `AppleSession`; it does not import objc2 types.
+- `src/backend/apple/**` is listed in
+  `.config/ast-grep/rust.no-lint-suppression.yml`; only files that actually use
+  unsafe carry `#![allow(unsafe_code)]`.
+- New unsafe selectors, raw pointer casts, or unsafe trait impls for the Apple
+  client belong in the owning Apple bridge file with local `SAFETY:` comments.
 
 ## Decorators
 
@@ -90,4 +137,4 @@ The `TimeoutNet` decorator can wrap any `Net` with an additional
 - `HashMap<String, String>` → `Headers` (`From`) — build header set from a map
 - `Compression` → `Vec<ClientBuilderMod>` (`From`) — map compression flags to native-backend (`wreq`/`reqwest`) builder mods
 - `ImpersonatePreset` → `wreq_util::Emulation` (`From`) — only under `client-wreq`
-- `ReqwestError` → `NetError` (`From`) — wrap transport errors into typed `NetError` (`ReqwestError` aliases the active backend's error type)
+- `ReqwestError` → `NetError` (`From`) — wrap reqwest/wreq transport errors into typed `NetError`; Apple maps `NSError` inside `backend/apple/response.rs`
