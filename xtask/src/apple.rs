@@ -44,6 +44,9 @@ impl Consts {
     /// Positive proof — at least one of these must appear in every slice
     /// to confirm the Apple HW dispatcher is actually linked in.
     const APPLE_PROOF_NEEDLES: &[&str] = &["AppleCodec", "AppleAudioFileDemuxer"];
+    /// Apple App Store uploads no longer require bitcode, and embedding it
+    /// bloats every Rust object stored in the release static archive.
+    const RELEASE_RUSTFLAGS: &[&str] = &["-C", "embed-bitcode=no"];
     /// Slice subdirectories inside the `*.xcframework` we expect to find.
     const XCFRAMEWORK_SLICES: &[&str] =
         &["ios-arm64", Self::IOS_SIMULATOR_SLICE, "macos-arm64_x86_64"];
@@ -405,6 +408,7 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     cmd.args(["swift", "package", "-p", "ios", "macos", "-n", "KitharaFFI"]);
     if matches!(profile, crate::BuildProfile::Release) {
         cmd.arg("--release");
+        set_release_rustflags(&mut cmd);
     }
     cmd.args([
         "--lib-type",
@@ -473,6 +477,17 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn set_release_rustflags(cmd: &mut Command) {
+    let mut flags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
+    for flag in Consts::RELEASE_RUSTFLAGS {
+        if !flags.is_empty() {
+            flags.push('\x1f');
+        }
+        flags.push_str(flag);
+    }
+    cmd.env("CARGO_ENCODED_RUSTFLAGS", flags);
 }
 
 fn run_release() -> Result<()> {
@@ -674,13 +689,16 @@ fn run_single(profile: crate::BuildProfile) -> Result<()> {
     let apple_dir = root.join("apple");
     let internal = apple_dir.join("KitharaFFIInternal.xcframework");
 
-    if !internal.exists() {
+    let built_internal = if internal.exists() {
+        false
+    } else {
         println!("==> KitharaFFIInternal.xcframework not found — building it first");
         run_build(profile)?;
-    }
+        true
+    };
     require_dir(&internal)?;
     keep_arm64_ios_simulator_only(&internal)?;
-    if matches!(profile, crate::BuildProfile::Release) {
+    if matches!(profile, crate::BuildProfile::Release) && !built_internal {
         strip_xcframework(&internal)?;
     }
 
