@@ -1,11 +1,14 @@
-pub(crate) use ::reqwest::{Client, RequestBuilder, Response};
+pub(crate) use ::reqwest::{Client, RequestBuilder, Response, StatusCode};
 use url::Url;
 
-use crate::types::NetOptions;
+use crate::{metrics::ConnectionMetrics, types::NetOptions};
 
 pub(crate) type BackendError = ::reqwest::Error;
 
-pub(crate) fn build_client(_options: &NetOptions) -> Result<Client, BackendError> {
+pub(crate) fn build_client(
+    _options: &NetOptions,
+    _metrics: &ConnectionMetrics,
+) -> Result<Client, BackendError> {
     Client::builder().build()
 }
 

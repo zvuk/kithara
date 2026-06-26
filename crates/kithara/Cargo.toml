@@ -137,7 +137,7 @@ apple = ["kithara-audio/apple", "kithara-play/apple"]
 # which passes the DRM keyserver anti-bot WAF natively and removes the wreq /
 # BoringSSL TLS stack from Apple framework builds. Weak (`?`) so it only flips
 # when `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
-apple-net = ["kithara-net?/client-apple"]
+apple-net = ["kithara-net?/client-apple", "kithara-stream/client-apple"]
 android = [
     "kithara-audio/android",
     "kithara-decode/android",

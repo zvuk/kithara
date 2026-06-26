@@ -1,23 +1,22 @@
 use std::{
+    collections::VecDeque,
     pin::Pin,
-    sync::{Arc, Mutex},
-    task::{Context, Poll},
+    sync::Arc,
+    task::{Context, Poll, Waker},
 };
 
 use bytes::Bytes;
 use futures::Stream;
 use kithara_platform::{
     CancelToken, CancelWakerGuard,
-    tokio::{
-        select,
-        sync::{mpsc, oneshot},
-    },
+    sync::Mutex,
+    tokio::{select, sync::oneshot},
 };
 use objc2::rc::Retained;
 
 use super::{
     delegate::AppleSessionDelegate,
-    response::{AppleDataResponse, StreamHead, take_terminal},
+    response::{AppleDataResponse, HTTP_PARTIAL_CONTENT, StreamHead},
     session::{AppleTask, TaskId},
 };
 use crate::{ByteStream, error::NetError, types::Headers};
@@ -25,10 +24,10 @@ use crate::{ByteStream, error::NetError, types::Headers};
 pub(crate) struct AppleStreamResponse {
     pub(crate) headers: Headers,
     pub(crate) status: Option<u16>,
+    partial: bool,
+    body_queue: Arc<AppleBodyQueue>,
     task: AppleTask,
-    terminal: Arc<Mutex<Option<NetError>>>,
     cancel: CancelToken,
-    receiver: mpsc::Receiver<Result<Bytes, NetError>>,
 }
 
 impl AppleStreamResponse {
@@ -39,33 +38,43 @@ impl AppleStreamResponse {
 
 impl From<AppleStreamResponse> for ByteStream {
     fn from(response: AppleStreamResponse) -> Self {
+        let AppleStreamResponse {
+            headers,
+            partial,
+            body_queue,
+            task,
+            cancel,
+            ..
+        } = response;
+        let expected_len = content_length(&headers);
         let stream = AppleBodyStream {
-            task: response.task,
-            terminal: response.terminal,
-            cancel: response.cancel,
+            body_queue,
+            task,
+            cancel,
             cancel_wake: None,
-            receiver: response.receiver,
             done: false,
+            expected_len,
+            received: 0,
         };
-        Self::new(response.headers, Box::pin(stream))
+        Self::with_partial(headers, Box::pin(stream), partial)
     }
 }
 
 pub(super) struct StartedStream {
+    pub(super) body_queue: Arc<AppleBodyQueue>,
     pub(super) task: AppleTask,
-    pub(super) terminal: Arc<Mutex<Option<NetError>>>,
-    pub(super) body_receiver: mpsc::Receiver<Result<Bytes, NetError>>,
     pub(super) head_receiver: oneshot::Receiver<Result<StreamHead, NetError>>,
     pub(super) task_id: TaskId,
 }
 
 struct AppleBodyStream {
+    body_queue: Arc<AppleBodyQueue>,
     task: AppleTask,
-    terminal: Arc<Mutex<Option<NetError>>>,
     cancel: CancelToken,
     cancel_wake: Option<CancelWakerGuard>,
-    receiver: mpsc::Receiver<Result<Bytes, NetError>>,
     done: bool,
+    expected_len: Option<u64>,
+    received: u64,
 }
 
 impl Stream for AppleBodyStream {
@@ -77,19 +86,18 @@ impl Stream for AppleBodyStream {
             return Poll::Ready(None);
         }
         if this.cancel.is_cancelled() {
+            if this.body_complete() {
+                this.cancel_wake = None;
+                this.done = true;
+                return Poll::Ready(None);
+            }
             this.cancel_wake = None;
             this.done = true;
             this.task.cancel();
             return Poll::Ready(Some(Err(NetError::Cancelled)));
         }
-        if let Some(error) = take_terminal(&this.terminal) {
-            this.cancel_wake = None;
-            this.done = true;
-            this.task.cancel();
-            return Poll::Ready(Some(Err(error)));
-        }
 
-        match Pin::new(&mut this.receiver).poll_recv(cx) {
+        match this.body_queue.poll_next(cx) {
             Poll::Ready(None) => {
                 this.cancel_wake = None;
                 this.done = true;
@@ -97,6 +105,14 @@ impl Stream for AppleBodyStream {
             }
             Poll::Ready(Some(item)) => {
                 this.cancel_wake = None;
+                match &item {
+                    Ok(bytes) => this.record_received(bytes.len()),
+                    Err(NetError::Cancelled) if this.body_complete() => {
+                        this.done = true;
+                        return Poll::Ready(None);
+                    }
+                    Err(_) => {}
+                }
                 if item.is_err() {
                     this.done = true;
                 }
@@ -117,6 +133,109 @@ impl Stream for AppleBodyStream {
     }
 }
 
+pub(super) struct AppleBodyQueue {
+    inner: Mutex<AppleBodyQueueInner>,
+    task: AppleTask,
+    capacity: usize,
+    resume_at: usize,
+}
+
+struct AppleBodyQueueInner {
+    closed: bool,
+    items: VecDeque<Result<Bytes, NetError>>,
+    suspended: bool,
+    waker: Option<Waker>,
+}
+
+impl AppleBodyQueue {
+    pub(super) fn new(task: AppleTask, capacity: usize, resume_at: usize) -> Self {
+        Self {
+            task,
+            capacity,
+            resume_at,
+            inner: Mutex::new(AppleBodyQueueInner {
+                closed: false,
+                items: VecDeque::new(),
+                suspended: false,
+                waker: None,
+            }),
+        }
+    }
+
+    pub(super) fn close(&self, terminal: Option<NetError>) {
+        let (resume, waker) = {
+            let mut inner = self.inner.lock();
+            if let Some(error) = terminal {
+                inner.items.push_back(Err(error));
+            }
+            inner.closed = true;
+            let resume = inner.suspended;
+            inner.suspended = false;
+            (resume, inner.waker.take())
+        };
+        if resume {
+            self.task.resume();
+        }
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    pub(super) fn push(&self, bytes: Bytes) {
+        let (suspend, waker) = {
+            let mut inner = self.inner.lock();
+            if inner.closed {
+                return;
+            }
+            inner.items.push_back(Ok(bytes));
+            let suspend =
+                self.capacity > 0 && inner.items.len() >= self.capacity && !inner.suspended;
+            if suspend {
+                inner.suspended = true;
+            }
+            (suspend, inner.waker.take())
+        };
+        if suspend {
+            self.task.suspend();
+        }
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, NetError>>> {
+        let mut inner = self.inner.lock();
+        if let Some(item) = inner.items.pop_front() {
+            let resume = inner.suspended && inner.items.len() <= self.resume_at;
+            if resume {
+                inner.suspended = false;
+            }
+            drop(inner);
+            if resume {
+                self.task.resume();
+            }
+            return Poll::Ready(Some(item));
+        }
+        if inner.closed {
+            return Poll::Ready(None);
+        }
+        inner.waker = Some(cx.waker().clone());
+        Poll::Pending
+    }
+}
+
+impl AppleBodyStream {
+    fn body_complete(&self) -> bool {
+        self.expected_len
+            .is_some_and(|expected| self.received >= expected)
+    }
+
+    fn record_received(&mut self, len: usize) {
+        let len = u64::try_from(len).unwrap_or(u64::MAX);
+        self.received = self.received.saturating_add(len);
+    }
+}
+
 impl Drop for AppleBodyStream {
     fn drop(&mut self) {
         if !self.done {
@@ -125,23 +244,30 @@ impl Drop for AppleBodyStream {
     }
 }
 
+fn content_length(headers: &Headers) -> Option<u64> {
+    headers
+        .get("content-length")
+        .or_else(|| headers.get("Content-Length"))
+        .and_then(|value| value.parse().ok())
+}
+
 pub(super) async fn wait_for_data(
     receiver: oneshot::Receiver<Result<AppleDataResponse, NetError>>,
     task: AppleTask,
     cancel: CancelToken,
 ) -> Result<AppleDataResponse, NetError> {
-    let mut task = DataTaskGuard::new(task);
+    let mut guard = DataTaskGuard::new(task);
     select! {
         biased;
         () = cancel.cancelled() => {
-            task.cancel();
+            guard.cancel();
             Err(NetError::Cancelled)
         }
         result = receiver => {
             let result = result.unwrap_or_else(
                 |_| Err(NetError::Network("NSURLSession data task closed without completion".to_string())),
             );
-            task.disarm();
+            guard.disarm();
             result
         }
     }
@@ -153,13 +279,12 @@ pub(super) async fn wait_for_stream_head(
     cancel: CancelToken,
 ) -> Result<AppleStreamResponse, NetError> {
     let StartedStream {
+        body_queue,
         task,
-        terminal,
-        body_receiver,
         head_receiver,
         task_id,
     } = started;
-    let mut guard = StreamStartGuard::new(task, delegate, task_id);
+    let mut guard = StreamStartGuard::new(task, delegate.clone(), task_id);
 
     select! {
         biased;
@@ -173,14 +298,14 @@ pub(super) async fn wait_for_stream_head(
                     let task = guard.disarm_task();
                     let headers = head.headers;
                     let status = head.status;
-                    let receiver = body_receiver;
+                    let partial = status == Some(HTTP_PARTIAL_CONTENT);
                     Ok(AppleStreamResponse {
                         headers,
                         status,
+                        partial,
+                        body_queue,
                         task,
-                        terminal,
                         cancel,
-                        receiver,
                     })
                 }
                 Ok(Err(error)) => {

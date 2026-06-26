@@ -182,6 +182,16 @@ pub struct NetOptions {
     /// Set to 0 to disable pooling.
     #[builder(default = 8)]
     pub pool_max_idle_per_host: usize,
+    /// Apple `NSURLSession` streaming body queue capacity, measured in
+    /// delivered data chunks waiting for Rust consumption. Set to 0 to disable
+    /// `URLSession` task suspension for queued body chunks.
+    #[builder(default = 32)]
+    pub body_queue_capacity: usize,
+    /// Queue length at or below which a suspended Apple streaming task resumes.
+    /// Values greater than or equal to [`Self::body_queue_capacity`] are valid:
+    /// they resume as soon as the consumer drains one chunk.
+    #[builder(default = 16)]
+    pub body_queue_resume_at: usize,
     /// Browser TLS+HTTP2 fingerprint the native `client-wreq` backend
     /// impersonates. Defaults to `Safari`. Ignored by the `client-reqwest`
     /// backend and on wasm32 (no emulation there).

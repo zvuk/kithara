@@ -45,6 +45,7 @@ type RawByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>>>>;
 pub struct ByteStream {
     /// Response headers from the HTTP request that produced this stream.
     pub headers: Headers,
+    partial: bool,
     inner: RawByteStream,
 }
 
@@ -52,7 +53,23 @@ impl ByteStream {
     /// Create a new `ByteStream` from response headers and a raw body stream.
     #[must_use]
     pub fn new(headers: Headers, inner: RawByteStream) -> Self {
-        Self { headers, inner }
+        Self::with_partial(headers, inner, false)
+    }
+
+    /// Create a new `ByteStream` and record whether the response was partial.
+    #[must_use]
+    pub fn with_partial(headers: Headers, inner: RawByteStream, partial: bool) -> Self {
+        Self {
+            headers,
+            partial,
+            inner,
+        }
+    }
+
+    /// Whether this stream was produced by an HTTP partial-content response.
+    #[must_use]
+    pub fn is_partial(&self) -> bool {
+        self.partial
     }
 
     /// Consume the wrapper, returning just the raw byte stream.

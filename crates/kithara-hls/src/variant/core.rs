@@ -58,6 +58,11 @@ pub(crate) struct PlanCtx {
     /// `Init` is always emitted regardless — the fMP4 demuxer needs
     /// it before any segment can decode.
     pub(crate) look_ahead_bytes: Option<u64>,
+    /// Max media segments the downloader may keep ahead of the reader.
+    /// This is derived from small ephemeral cache capacity, where byte-only
+    /// lookahead can otherwise prefetch more resources than the cache can retain
+    /// and trigger eviction/rebuild thrash.
+    pub(crate) look_ahead_segments: Option<usize>,
     /// Snapshot of `SeekObserve::epoch()` at plan-time. Tagged on
     /// every emitted `FetchCmd`'s probe so integration tests can
     /// distinguish fetches that pre-date a user seek from those that

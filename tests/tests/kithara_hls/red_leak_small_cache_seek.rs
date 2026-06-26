@@ -57,6 +57,8 @@ impl Consts {
     const STREAM_ITERATIONS: usize = 4;
     const SEEKS_PER_STREAM: usize = 8;
     const PACKAGED_SEGMENT_SIZE: u64 = Shared::SEGMENT_SIZE as u64;
+    const WARMUP_MAX_STREAMS: usize = 8;
+    const WARMUP_STABLE_SAMPLES: usize = 2;
 }
 
 async fn build_small_cache_stream(
@@ -97,6 +99,37 @@ fn exercise_stream_blocking(mut stream: Stream<Hls>) {
     drop(stream);
 }
 
+async fn run_small_cache_seek_cycle(server: &TestServer, temp_path: &std::path::Path) -> usize {
+    let cancel = CancelToken::never();
+    let stream = build_small_cache_stream(server, temp_path, cancel.clone()).await;
+    spawn_blocking(move || exercise_stream_blocking(stream))
+        .await
+        .expect("blocking join");
+    cancel.cancel();
+    wait_thread_count_quiesced(4, Duration::from_secs(5)).await
+}
+
+async fn stable_live_thread_baseline(server: &TestServer, temp_path: &std::path::Path) -> usize {
+    let mut last = None;
+    let mut stable = 0usize;
+
+    for _ in 0..Consts::WARMUP_MAX_STREAMS {
+        run_small_cache_seek_cycle(server, temp_path).await;
+        let now = live_thread_count();
+        if Some(now) == last {
+            stable += 1;
+        } else {
+            stable = 0;
+        }
+        last = Some(now);
+        if stable >= Consts::WARMUP_STABLE_SAMPLES {
+            return now;
+        }
+    }
+
+    last.unwrap_or_else(live_thread_count)
+}
+
 #[kithara::test(
     native,
     tokio,
@@ -108,30 +141,12 @@ async fn red_small_cache_seek_stress_does_not_leak_threads(
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServer::new().await;
 
-    {
-        let cancel = CancelToken::never();
-        let stream = build_small_cache_stream(&server, temp_dir.path(), cancel.clone()).await;
-        spawn_blocking(move || exercise_stream_blocking(stream))
-            .await
-            .expect("warmup blocking join");
-        cancel.cancel();
-        // Wait until warmup-stream reaping quiesces before sampling the
-        // baseline, instead of sleeping a fixed pace and assuming it settled.
-        wait_thread_count_quiesced(4, Duration::from_secs(5)).await;
-    }
-
-    let threads_baseline = live_thread_count();
+    let threads_baseline = stable_live_thread_baseline(&server, temp_dir.path()).await;
 
     for i in 0..Consts::STREAM_ITERATIONS {
-        let cancel = CancelToken::never();
-        let stream = build_small_cache_stream(&server, temp_dir.path(), cancel.clone()).await;
-        spawn_blocking(move || exercise_stream_blocking(stream))
-            .await
-            .expect("iteration blocking join");
-        cancel.cancel();
         // Wait until this iteration's per-stream tasks are reaped (thread count
         // stops dropping) before logging — not a fixed pacing delay.
-        let threads = wait_thread_count_quiesced(4, Duration::from_secs(5)).await;
+        let threads = run_small_cache_seek_cycle(&server, temp_dir.path()).await;
         tracing::info!(iter = i, threads, "post-drop");
     }
 

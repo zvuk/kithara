@@ -18,6 +18,7 @@ mod release;
 mod scope;
 mod similarity;
 mod style;
+mod test;
 mod typos;
 mod util;
 mod viz;
@@ -34,6 +35,7 @@ use quality::QualityCommand;
 use release::ReleaseArgs;
 use scope::ScopeArgs;
 use similarity::SimilarityArgs;
+use test::TestArgs;
 use typos::TyposArgs;
 use viz::VizArgs;
 use wasm::WasmCommand;
@@ -101,6 +103,8 @@ enum Command {
     Release(ReleaseArgs),
     /// Translate scope tokens to tool-specific flags (used by `just audit`).
     Scope(ScopeArgs),
+    /// Run workspace tests through `cargo nextest`.
+    Test(TestArgs),
     /// Thin wrapper around `ast-grep scan` that bakes in the policy filter list.
     AstGrep(AstGrepArgs),
     /// Thin wrapper around `typos` that pins the workspace config.
@@ -132,6 +136,7 @@ fn main() -> anyhow::Result<()> {
         Command::Publish(ref args) => publish::run(args),
         Command::Release(ref args) => release::run(args),
         Command::Scope(ref args) => scope::run(args),
+        Command::Test(ref args) => test::run(args),
         Command::AstGrep(ref args) => ast_grep::run(args),
         Command::Typos(ref args) => typos::run(args),
         Command::Similarity(ref args) => similarity::run(args),

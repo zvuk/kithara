@@ -18,8 +18,8 @@ default = ["client-reqwest", "tls-rustls"]
 # (pure-Rust) is the portable default; `client-wreq` (BoringSSL + browser
 # TLS/HTTP2 emulation) and `client-apple` (NSURLSession) are native-only
 # opt-ins. See CONTEXT.md "HTTP client backends".
-client-reqwest = ["dep:reqwest"]
-client-wreq = ["dep:wreq", "dep:wreq-util"]
+client-reqwest = ["dep:reqwest", "dep:tower-layer", "dep:tower-service"]
+client-wreq = ["dep:tower-layer", "dep:tower-service", "dep:wreq", "dep:wreq-util"]
 client-apple = ["dep:block2", "dep:dashmap", "dep:objc2", "dep:objc2-foundation"]
 # TLS backend for the `client-reqwest` path. No effect on `client-wreq` (always
 # BoringSSL) or `client-apple` (URLSession owns TLS). `tls-rustls` is the
@@ -60,6 +60,8 @@ reqwest = { workspace = true, optional = true, features = [
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
+tower-layer = { workspace = true, optional = true }
+tower-service = { workspace = true, optional = true }
 # `client-wreq` backend (native only — BoringSSL has no wasm target).
 wreq = { workspace = true, optional = true, features = [
     "brotli",
@@ -84,6 +86,7 @@ objc2-foundation = { workspace = true, optional = true, features = [
     "NSOperation",
     "NSObject",
     "NSString",
+    "NSArray",
     "NSURL",
     "NSURLAuthenticationChallenge",
     "NSURLCredential",
@@ -106,5 +109,4 @@ wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { workspace = true }
-tower = { workspace = true }
 memory-stats = { workspace = true }

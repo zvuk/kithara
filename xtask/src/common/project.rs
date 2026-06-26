@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -14,6 +14,7 @@ const CONFIG_REL: &str = ".config/xtask.toml";
 pub(crate) struct ProjectConfig {
     pub(crate) project: ProjectIdentity,
     pub(crate) health: HealthConfig,
+    pub(crate) test: TestCommandConfig,
     pub(crate) publish: PublishConfig,
     pub(crate) release: ReleaseConfig,
     pub(crate) lint_exclude: LintExcludeConfig,
@@ -52,6 +53,50 @@ pub(crate) struct HealthConfig {
     pub(crate) feature_powerset_exclude: Vec<String>,
     /// Crates excluded from whole-workspace stages (semver, nextest, doc-test).
     pub(crate) workspace_exclude: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct TestCommandConfig {
+    pub(crate) default_lane: String,
+    pub(crate) default_backend: String,
+    pub(crate) feature_arg: String,
+    pub(crate) flash: TestFlashConfig,
+    pub(crate) lanes: BTreeMap<String, TestLaneConfig>,
+    pub(crate) net_backends: BTreeMap<String, TestNetBackendConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct TestFlashConfig {
+    pub(crate) features: Vec<String>,
+    pub(crate) default: bool,
+}
+
+impl Default for TestFlashConfig {
+    fn default() -> Self {
+        Self {
+            features: Vec::new(),
+            default: true,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct TestNetBackendConfig {
+    pub(crate) features: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct TestLaneConfig {
+    pub(crate) program: String,
+    pub(crate) prefix_args: Vec<String>,
+    pub(crate) suffix_args: Vec<String>,
+    pub(crate) default_features: Vec<String>,
+    pub(crate) default_flash: Option<bool>,
+    pub(crate) passthrough: String,
 }
 
 #[derive(Debug, Default, Deserialize)]

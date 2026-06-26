@@ -1,16 +1,15 @@
 #![allow(unsafe_code)]
 
-use std::{
-    ptr,
-    sync::{Mutex, MutexGuard},
-};
+use std::ptr;
 
 use bytes::Bytes;
-use kithara_platform::tokio::sync::oneshot;
+use kithara_platform::{sync::Mutex, tokio::sync::oneshot};
 use objc2::{ClassType, runtime::NSObjectProtocol};
 use objc2_foundation::{NSData, NSError, NSHTTPURLResponse, NSInteger, NSString, NSURLResponse};
 
 use crate::{error::NetError, types::Headers};
+
+pub(super) const HTTP_PARTIAL_CONTENT: u16 = 206;
 
 pub(crate) struct AppleDataResponse {
     pub(crate) body: Bytes,
@@ -82,26 +81,8 @@ pub(super) fn error_from_nserror(error: &NSError) -> NetError {
 }
 
 pub(super) fn send_once<T>(slot: &Mutex<Option<oneshot::Sender<T>>>, value: T) {
-    if let Some(sender) = lock_or_recover(slot).take() {
+    if let Some(sender) = slot.lock().take() {
         sender.send(value).ok();
-    }
-}
-
-pub(super) fn store_terminal(slot: &Mutex<Option<NetError>>, error: NetError) {
-    let mut terminal = lock_or_recover(slot);
-    if terminal.is_none() {
-        *terminal = Some(error);
-    }
-}
-
-pub(super) fn take_terminal(slot: &Mutex<Option<NetError>>) -> Option<NetError> {
-    lock_or_recover(slot).take()
-}
-
-pub(super) fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
     }
 }
 

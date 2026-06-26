@@ -177,19 +177,11 @@ fn build_stages(project: &ProjectConfig) -> Vec<Stage> {
         ),
         Stage::new("workspace-unused-pub", "cargo", &["workspace-unused-pub"]),
         Stage::new(
-            "test-nextest",
+            "workspace-tests",
             "cargo",
-            &[
-                "nextest",
-                "run",
-                "--workspace",
-                "--cargo-profile",
-                "test-release",
-            ],
-        )
-        .exclude_crates(&project.health.workspace_exclude),
-        Stage::new("test-doc", "cargo", &["test", "--doc", "--workspace"])
-            .exclude_crates(&project.health.workspace_exclude),
+            &["xtask", "test", "--lane=workspace"],
+        ),
+        Stage::new("doc-tests", "cargo", &["xtask", "test", "--lane=doc"]),
     ]
 }
 
@@ -308,7 +300,9 @@ fn write_report(
     ));
     out.push_str(&format!("- per-stage logs: `{}/`\n\n", logs_dir.display()));
     out.push_str("Excluded by design (run separately): `mutants`, `coverage`, `dead`, ");
-    out.push_str("`test-e2e`, `test-selenium`, `wasm`, `bench`, `perf`, `memory-check`.\n\n");
+    out.push_str(
+        "`test --lane=e2e`, `test --lane=selenium`, `wasm`, `bench`, `perf`, `memory-check`.\n\n",
+    );
 
     out.push_str("## Summary\n\n");
     out.push_str("| # | Stage | Status | Duration | Notes |\n");

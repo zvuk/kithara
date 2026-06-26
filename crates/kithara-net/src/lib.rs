@@ -5,10 +5,7 @@ mod backend;
 #[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
 mod client;
 mod error;
-#[cfg(any(
-    test,
-    not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios")))
-))]
+mod metrics;
 mod resumable;
 mod retry;
 mod timeout;

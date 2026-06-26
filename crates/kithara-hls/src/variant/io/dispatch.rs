@@ -32,6 +32,7 @@ impl HlsVariant {
         let prefetch_byte_cap = ctx
             .look_ahead_bytes
             .map(|n| prefetch_base.saturating_add(n));
+        let prefetch_segment_cap = self.prefetch_segment_cap(ctx, prefetch_base);
         while remaining > 0 {
             hang_tick!();
             let planned = {
@@ -43,6 +44,11 @@ impl HlsVariant {
                         if let Some(cap) = prefetch_byte_cap
                             && let Some(seg_off) = self.segment_byte_offset(seg_idx)
                             && seg_off > cap
+                        {
+                            break;
+                        }
+                        if let Some(cap) = prefetch_segment_cap
+                            && seg_idx > cap
                         {
                             break;
                         }
@@ -124,6 +130,13 @@ impl HlsVariant {
             }
         }
         out
+    }
+
+    fn prefetch_segment_cap(&self, ctx: &PlanCtx, prefetch_base: u64) -> Option<u32> {
+        let window = ctx.look_ahead_segments?;
+        let window = u32::try_from(window.max(1)).unwrap_or(u32::MAX);
+        let base = self.descriptor_after_byte(prefetch_base)?.segment_index;
+        Some(base.saturating_add(window.saturating_sub(1)))
     }
 
     #[kithara::probe(

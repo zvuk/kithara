@@ -48,6 +48,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
         scope: backend.scope("test"),
         seek_epoch: 0,
         look_ahead_bytes: None,
+        look_ahead_segments: None,
         headers: None,
         size_probe_method: SizeProbeMethod::Head,
         signal: SizeSignal::new(
@@ -990,6 +991,19 @@ fn dispatch_respects_budget() {
     let cmds = v.dispatch(&ctx, 3);
     assert_eq!(cmds.len(), 3);
     assert_eq!(queue_seg_indices(&v), vec![3, 4, 5, 6, 7, 8, 9]);
+}
+
+#[kithara::test]
+fn dispatch_respects_segment_lookahead_cap() {
+    let mut ctx = test_ctx(10);
+    ctx.look_ahead_segments = Some(2);
+    let v = make_var(0, 0, &[100; 6], &ctx);
+    v.rebuild(&ctx, 0);
+
+    let cmds = v.dispatch(&ctx, 10);
+
+    assert_eq!(cmds.len(), 2);
+    assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5]);
 }
 
 #[kithara::test]

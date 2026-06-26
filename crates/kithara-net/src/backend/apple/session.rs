@@ -1,14 +1,13 @@
 #![allow(unsafe_code)]
 
-use std::{
-    future::Future,
-    sync::{Arc, Mutex},
-};
+use std::{future::Future, sync::Arc};
 
 use block2::RcBlock;
 use kithara_platform::{
     CancelToken,
-    tokio::sync::{mpsc, oneshot},
+    sync::{Mutex, OnceLock},
+    time::Duration,
+    tokio::sync::oneshot,
 };
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{
@@ -20,14 +19,15 @@ use super::{
     delegate::{AppleSessionDelegate, StreamState},
     request::{AppleRequest, accept_encoding_value},
     response::{AppleDataResponse, completion_result, send_once},
-    stream::{AppleStreamResponse, StartedStream, wait_for_data, wait_for_stream_head},
+    stream::{
+        AppleBodyQueue, AppleStreamResponse, StartedStream, wait_for_data, wait_for_stream_head,
+    },
 };
 use crate::{
     error::{NetError, NetResult},
+    metrics::ConnectionMetrics,
     types::NetOptions,
 };
-
-const STREAM_BUFFER_CHUNKS: usize = 32;
 
 pub(super) type TaskId = NSUInteger;
 type DataStart = (
@@ -35,50 +35,44 @@ type DataStart = (
     AppleTask,
 );
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SharedSessionKey {
+    total_timeout: Option<Duration>,
+    max_connections_per_host: usize,
+    is_insecure: bool,
+}
+
+#[derive(Clone)]
+struct SharedSession {
+    key: SharedSessionKey,
+    delegate: Retained<AppleSessionDelegate>,
+    session: Retained<NSURLSession>,
+}
+
 /// SAFETY: Apple documents `NSURLSession` as thread-safe
 /// (<https://developer.apple.com/documentation/foundation/nsurlsession>);
 /// moving `Retained<NSURLSession>` across Tokio worker threads is sound because
 /// the retained Objective-C object is itself thread-safe.
 #[derive(Clone)]
 pub(crate) struct AppleSession {
-    delegate: Retained<AppleSessionDelegate>,
-    session: Retained<NSURLSession>,
     accept_encoding: String,
+    body_queue_capacity: usize,
+    body_queue_resume_at: usize,
+    connection_metrics: ConnectionMetrics,
+    shared: SharedSession,
 }
 
 impl AppleSession {
-    pub(crate) fn new(options: &NetOptions) -> Self {
-        let delegate = AppleSessionDelegate::new(options.is_insecure);
-        let configuration = NSURLSessionConfiguration::ephemeralSessionConfiguration();
-        configuration.setTimeoutIntervalForRequest(options.inactivity_timeout.as_secs_f64());
-        if let Some(total_timeout) = options.total_timeout {
-            configuration.setTimeoutIntervalForResource(total_timeout.as_secs_f64());
-        }
-        if let Ok(limit) = NSInteger::try_from(options.pool_max_idle_per_host) {
-            configuration.setHTTPMaximumConnectionsPerHost(limit);
-        }
+    pub(crate) fn new(options: &NetOptions, connection_metrics: ConnectionMetrics) -> Self {
+        let shared = shared_session(options);
         let accept_encoding = accept_encoding_value(options.compression);
 
-        let queue = NSOperationQueue::new();
-        queue.setMaxConcurrentOperationCount(1);
-        let delegate_obj: &AppleSessionDelegate = &delegate;
-        let delegate_ref: &ProtocolObject<dyn NSURLSessionDelegate> =
-            ProtocolObject::from_ref(delegate_obj);
-        // SAFETY: `AppleSessionDelegate` implements `NSURLSessionDelegate` and
-        // stores only Send/Sync Rust state. The delegate queue
-        // is retained by the session and may invoke callbacks off the main thread.
-        let session = unsafe {
-            NSURLSession::sessionWithConfiguration_delegate_delegateQueue(
-                &configuration,
-                Some(delegate_ref),
-                Some(&queue),
-            )
-        };
-
         Self {
-            delegate,
-            session,
             accept_encoding,
+            body_queue_capacity: options.body_queue_capacity,
+            body_queue_resume_at: options.body_queue_resume_at,
+            connection_metrics,
+            shared,
         }
     }
 
@@ -106,40 +100,48 @@ impl AppleSession {
         );
 
         let request = request.into_ns_request(&self.accept_encoding)?;
-        // SAFETY: The block captures only an Arc<Mutex<Option<oneshot::Sender<_>>>>,
+        // SAFETY: The block captures only an Arc<platform Mutex<Option<Sender>>>,
         // which is Send + Sync. NSURLSession copies the completion block before
         // returning the task, so the local RcBlock can be dropped before await.
         let data_task = unsafe {
-            self.session
+            self.shared
+                .session
                 .dataTaskWithRequest_completionHandler(&request, &completion)
         };
         let task: AppleTask = data_task.into();
+        self.shared
+            .delegate
+            .register_metrics(task.id(), self.connection_metrics.clone());
         task.resume();
         Ok((receiver, task))
     }
 
     fn start_stream(&self, request: AppleRequest) -> NetResult<StartedStream> {
         let (head_sender, head_receiver) = oneshot::channel();
-        let (body_sender, body_receiver) = mpsc::channel(STREAM_BUFFER_CHUNKS);
-        let terminal = Arc::new(Mutex::new(None));
         let request = request.into_ns_request(&self.accept_encoding)?;
-        let data_task = self.session.dataTaskWithRequest(&request);
+        let data_task = self.shared.session.dataTaskWithRequest(&request);
         let task: AppleTask = data_task.into();
+        let body_queue = Arc::new(AppleBodyQueue::new(
+            task.clone(),
+            self.body_queue_capacity,
+            self.body_queue_resume_at,
+        ));
         let task_id = task.id();
-        self.delegate.register_stream(
+        self.shared
+            .delegate
+            .register_metrics(task_id, self.connection_metrics.clone());
+        self.shared.delegate.register_stream(
             task_id,
             StreamState {
-                terminal: Arc::clone(&terminal),
-                body_sender: Some(body_sender),
+                body_queue: Some(Arc::clone(&body_queue)),
                 head_sender: Some(head_sender),
             },
         );
         task.resume();
 
         Ok(StartedStream {
+            body_queue,
             task,
-            terminal,
-            body_receiver,
             head_receiver,
             task_id,
         })
@@ -151,12 +153,74 @@ impl AppleSession {
         cancel: CancelToken,
     ) -> impl Future<Output = NetResult<AppleStreamResponse>> + Send {
         let started = self.start_stream(request);
-        let delegate = self.delegate.clone();
+        let delegate = self.shared.delegate.clone();
         async move {
             let started = started?;
             wait_for_stream_head(started, delegate, cancel).await
         }
     }
+}
+
+impl From<&NetOptions> for SharedSessionKey {
+    fn from(options: &NetOptions) -> Self {
+        Self {
+            total_timeout: options.total_timeout,
+            max_connections_per_host: options.pool_max_idle_per_host,
+            is_insecure: options.is_insecure,
+        }
+    }
+}
+
+impl SharedSession {
+    fn new(key: SharedSessionKey) -> Self {
+        let delegate = AppleSessionDelegate::new(key.is_insecure);
+        let configuration = NSURLSessionConfiguration::ephemeralSessionConfiguration();
+        if let Some(total_timeout) = key.total_timeout {
+            configuration.setTimeoutIntervalForResource(total_timeout.as_secs_f64());
+        }
+        if let Ok(max_connections) = NSInteger::try_from(key.max_connections_per_host)
+            && max_connections > 0
+        {
+            configuration.setHTTPMaximumConnectionsPerHost(max_connections);
+        }
+
+        let queue = NSOperationQueue::new();
+        queue.setMaxConcurrentOperationCount(1);
+        let delegate_obj: &AppleSessionDelegate = &delegate;
+        let delegate_ref: &ProtocolObject<dyn NSURLSessionDelegate> =
+            ProtocolObject::from_ref(delegate_obj);
+        // SAFETY: `AppleSessionDelegate` implements `NSURLSessionDelegate` and
+        // stores only Send/Sync Rust state. The delegate queue is retained by
+        // the session and may invoke callbacks off the main thread.
+        let session = unsafe {
+            NSURLSession::sessionWithConfiguration_delegate_delegateQueue(
+                &configuration,
+                Some(delegate_ref),
+                Some(&queue),
+            )
+        };
+
+        Self {
+            key,
+            delegate,
+            session,
+        }
+    }
+}
+
+fn shared_session(options: &NetOptions) -> SharedSession {
+    static SESSIONS: OnceLock<Mutex<Vec<SharedSession>>> = OnceLock::new();
+
+    let key = SharedSessionKey::from(options);
+    let sessions = SESSIONS.get_or_init(Mutex::default);
+    let mut sessions = sessions.lock();
+    if let Some(session) = sessions.iter().find(|session| session.key == key) {
+        return session.clone();
+    }
+
+    let session = SharedSession::new(key);
+    sessions.push(session.clone());
+    session
 }
 
 /// SAFETY: `AppleTask` wraps an `NSURLSessionDataTask` through its
@@ -185,7 +249,11 @@ impl AppleTask {
         self.task.taskIdentifier()
     }
 
-    fn resume(&self) {
+    pub(super) fn resume(&self) {
         self.task.resume();
+    }
+
+    pub(super) fn suspend(&self) {
+        self.task.suspend();
     }
 }

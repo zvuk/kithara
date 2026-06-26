@@ -6,7 +6,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use error::{SendError, TryRecvError};
+use error::{SendError, TryRecvError, TrySendError};
 use parking_lot::Mutex;
 pub use tokio_with_wasm::alias::sync::mpsc::error;
 
@@ -131,10 +131,12 @@ enum Parked {
 /// `tokio`). A full channel makes `send().await` park until a receive frees a slot.
 #[must_use]
 pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
-    let shared = Shared::new(Some(capacity.max(1)));
+    let capacity = capacity.max(1);
+    let shared = Shared::new(Some(capacity));
     (
         Sender {
             shared: Arc::clone(&shared),
+            capacity,
         },
         Receiver {
             shared,
@@ -290,6 +292,7 @@ pub(super) fn drop_sender<T>(shared: &Shared<T>) {
 /// Bounded sender (clone for multi-producer).
 pub struct Sender<T> {
     shared: Arc<Shared<T>>,
+    capacity: usize,
 }
 
 impl<T> Sender<T> {
@@ -301,6 +304,26 @@ impl<T> Sender<T> {
             pending: None,
         }
     }
+
+    /// Try to send `value` without parking on capacity.
+    ///
+    /// # Errors
+    /// [`TrySendError::Full`] when the bounded queue has no free slot,
+    /// [`TrySendError::Closed`] when the receiver has been dropped.
+    pub fn try_send(&self, value: T) -> Result<(), TrySendError<T>> {
+        let mut inner = self.shared.inner.lock();
+        if !inner.receiver_alive {
+            return Err(TrySendError::Closed(value));
+        }
+        if inner.queue.len() >= self.capacity {
+            return Err(TrySendError::Full(value));
+        }
+        inner.queue.push_back(value);
+        let waker = inner.data_waker.take();
+        drop(inner);
+        self.shared.wake_data(waker);
+        Ok(())
+    }
 }
 
 impl<T> Clone for Sender<T> {
@@ -308,6 +331,7 @@ impl<T> Clone for Sender<T> {
         self.shared.add_sender();
         Self {
             shared: Arc::clone(&self.shared),
+            capacity: self.capacity,
         }
     }
 }
@@ -491,7 +515,7 @@ impl<T> Future for Recv<'_, T> {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{channel, unbounded_channel};
+    use super::{channel, error::TrySendError, unbounded_channel};
     use crate::{flash, tokio::task::spawn};
 
     struct Consts;
@@ -573,5 +597,17 @@ mod tests {
         assert_eq!(rx.recv().await, Some(2));
         assert_eq!(rx.recv().await, None);
         handle.await.expect("producer joined");
+    }
+
+    #[kithara::test(tokio, multi_thread)]
+    async fn bounded_try_send_reports_full_and_closed() {
+        flash::reset();
+        let (tx, mut rx) = channel::<usize>(1);
+
+        tx.try_send(1).expect("receiver alive");
+        assert!(matches!(tx.try_send(2), Err(TrySendError::Full(2))));
+        assert_eq!(rx.try_recv(), Ok(1));
+        drop(rx);
+        assert!(matches!(tx.try_send(3), Err(TrySendError::Closed(3))));
     }
 }

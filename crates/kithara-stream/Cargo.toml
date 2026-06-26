@@ -47,6 +47,7 @@ client-wreq = [
     "kithara-events/client-wreq",
     "kithara-abr/client-wreq",
 ]
+client-apple = ["kithara-net/client-apple"]
 tls-rustls = [
     "kithara-net/tls-rustls",
     "kithara-events/tls-rustls",

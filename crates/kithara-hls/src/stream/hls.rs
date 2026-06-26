@@ -50,6 +50,18 @@ fn eviction_callback(
     })
 }
 
+fn effective_look_ahead_segments(config: &HlsConfig) -> Option<usize> {
+    if !config.store.is_ephemeral {
+        return None;
+    }
+    let capacity = config.store.cache_capacity?;
+    let bounded = capacity
+        .get()
+        .saturating_sub(config.ephemeral_cache_non_media_reserve)
+        .max(config.ephemeral_cache_min_media_window);
+    Some(capacity.get().min(bounded))
+}
+
 impl StreamType for Hls {
     type Config = HlsConfig;
     type Events = EventBus;
@@ -127,6 +139,12 @@ impl StreamType for Hls {
             .prefetch_aes128_keys(&media_playlists)
             .await
             .map_err(SourceError::from)?;
+        let look_ahead_bytes = Some(
+            config
+                .look_ahead_bytes
+                .unwrap_or(HlsConfig::DEFAULT_LOOK_AHEAD_BYTES),
+        );
+        let look_ahead_segments = effective_look_ahead_segments(&config);
 
         playhead.set_duration(playlist_state.track_duration());
 
@@ -148,11 +166,8 @@ impl StreamType for Hls {
             headers: config.headers.clone(),
             prefetch_budget: config.download_batch_size.max(1),
             seek_epoch: seek_obs.epoch(),
-            look_ahead_bytes: Some(
-                config
-                    .look_ahead_bytes
-                    .unwrap_or(HlsConfig::DEFAULT_LOOK_AHEAD_BYTES),
-            ),
+            look_ahead_bytes,
+            look_ahead_segments,
             signal: signal.clone(),
             size_probe_method: config.size_probe_method,
         };
@@ -197,11 +212,8 @@ impl StreamType for Hls {
             coord,
             evict_rx,
             config.download_batch_size.max(1),
-            Some(
-                config
-                    .look_ahead_bytes
-                    .unwrap_or(HlsConfig::DEFAULT_LOOK_AHEAD_BYTES),
-            ),
+            look_ahead_bytes,
+            look_ahead_segments,
             config.size_probe_method,
         );
 

@@ -11,16 +11,14 @@ mod kithara {
 }
 
 use crate::{
-    backend::{Client, RequestBuilder, Response, build_client, head_request},
+    backend::{Client, RequestBuilder, Response, StatusCode, build_client, head_request},
     error::{NetError, NetResult},
+    metrics::ConnectionMetrics,
     resumable::{Refetch, Resumed, resumable_body},
     retry::{DefaultRetryPolicy, RetryNet},
     traits::{Net, NetExt},
     types::{Headers, NetOptions, RangeSpec},
 };
-
-/// HTTP 206 Partial Content status code.
-const HTTP_PARTIAL_CONTENT: u16 = 206;
 
 /// Truncate an HTTP error body so it stays useful in logs without dumping
 /// kilobytes of HTML (rate-limit stubs, anti-bot challenges). Preserves
@@ -119,14 +117,13 @@ impl RawHttp {
         range: Option<RangeSpec>,
         headers: Option<Headers>,
         accept_partial: bool,
-    ) -> Result<(crate::ByteStream, bool), NetError> {
+    ) -> Result<crate::ByteStream, NetError> {
         let mut req = self.inner.get(url.clone());
         if let Some(range) = &range {
             req = req.header("Range", range.to_string());
         }
         let resp = self.send_checked(req, headers, url, accept_partial).await?;
-        let partial = resp.status().as_u16() == HTTP_PARTIAL_CONTENT;
-        Ok((Self::response_to_stream(resp), partial))
+        Ok(Self::response_to_stream(resp))
     }
 
     /// Body-chunk awaits on this stream happen inside [`resumable_body`]'s
@@ -134,8 +131,9 @@ impl RawHttp {
     /// by [`Self::wrap_resumable`] before it reaches a consumer.
     fn response_to_stream(resp: Response) -> crate::ByteStream {
         let headers = extract_headers(&resp);
+        let partial = resp.status() == StatusCode::PARTIAL_CONTENT;
         let stream = resp.bytes_stream().map_err(NetError::from);
-        crate::ByteStream::new(headers, Box::pin(stream))
+        crate::ByteStream::with_partial(headers, Box::pin(stream), partial)
     }
 
     async fn send_checked(
@@ -154,7 +152,7 @@ impl RawHttp {
         let resp = self.send_idle_bounded(req).await?;
         let status = resp.status();
 
-        let ok = status.is_success() || (accept_partial && status.as_u16() == HTTP_PARTIAL_CONTENT);
+        let ok = status.is_success() || (accept_partial && status == StatusCode::PARTIAL_CONTENT);
         if !ok {
             let body = error_body(resp).await;
             return Err(status_error(url, status.as_u16(), body));
@@ -195,6 +193,7 @@ impl RawHttp {
         headers: Option<Headers>,
     ) -> crate::ByteStream {
         let out_headers = first.headers.clone();
+        let partial = first.is_partial();
         let me = self.clone();
         let refetch: Refetch = Box::new(move |consumed| {
             let me = me.clone();
@@ -203,10 +202,10 @@ impl RawHttp {
             let abs = base_start.saturating_add(consumed);
             let resume = RangeSpec::new(abs, end);
             Box::pin(async move {
-                let (stream, partial) = me.raw_body(url, Some(resume), headers, true).await?;
+                let stream = me.raw_body(url, Some(resume), headers, true).await?;
                 // `206` → body already starts at `abs` (skip 0); `200` → server
                 // ignored Range and re-sent from zero, drop the consumed prefix.
-                let skip = if partial { 0 } else { abs };
+                let skip = if stream.is_partial() { 0 } else { abs };
                 Ok(Resumed { stream, skip })
             })
         });
@@ -217,7 +216,7 @@ impl RawHttp {
             self.options.retry_policy.clone(),
             self.cancel.clone(),
         );
-        crate::ByteStream::new(out_headers, body)
+        crate::ByteStream::with_partial(out_headers, body, partial)
     }
 }
 
@@ -230,6 +229,7 @@ impl RawHttp {
 #[derive(Clone)]
 pub struct HttpClient {
     net: Arc<RetryNet<RawHttp, DefaultRetryPolicy>>,
+    connection_metrics: ConnectionMetrics,
     options: NetOptions,
 }
 
@@ -247,15 +247,20 @@ impl HttpClient {
     /// Panics if the HTTP `Client` builder fails to build.
     #[must_use]
     pub fn new(options: NetOptions, cancel: CancelToken) -> Self {
-        let inner =
-            build_client(&options).expect("BUG: HTTP client builder with our defaults cannot fail");
+        let connection_metrics = ConnectionMetrics::default();
+        let inner = build_client(&options, &connection_metrics)
+            .expect("BUG: HTTP client builder with our defaults cannot fail");
         let raw = RawHttp {
             inner,
             options: options.clone(),
             cancel: cancel.clone(),
         };
         let net = Arc::new(raw.with_retry(options.retry_policy.clone(), cancel));
-        Self { net, options }
+        Self {
+            net,
+            connection_metrics,
+            options,
+        }
     }
 
     /// # Errors
@@ -287,6 +292,11 @@ impl HttpClient {
     #[must_use]
     pub fn options(&self) -> &NetOptions {
         &self.options
+    }
+
+    #[must_use]
+    pub fn connection_count(&self) -> usize {
+        self.connection_metrics.connection_count()
     }
 
     /// # Errors
@@ -351,7 +361,7 @@ impl Net for RawHttp {
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> Result<crate::ByteStream, NetError> {
-        let (first, _partial) = self
+        let first = self
             .raw_body(url.clone(), Some(range.clone()), headers.clone(), true)
             .await?;
         Ok(self.wrap_resumable(first, url, range.start, range.end, headers))
@@ -370,7 +380,7 @@ impl Net for RawHttp {
 
         let status = resp.status();
 
-        if !status.is_success() && status.as_u16() != HTTP_PARTIAL_CONTENT {
+        if !status.is_success() && status != StatusCode::PARTIAL_CONTENT {
             let body = error_body(resp).await;
             return Err(status_error(url, status.as_u16(), body));
         }
@@ -404,7 +414,7 @@ impl Net for RawHttp {
         url: Url,
         headers: Option<Headers>,
     ) -> Result<crate::ByteStream, NetError> {
-        let (first, _partial) = self
+        let first = self
             .raw_body(url.clone(), None, headers.clone(), false)
             .await?;
         // Full GET; a resume re-fetches `bytes=consumed-` (base 0).

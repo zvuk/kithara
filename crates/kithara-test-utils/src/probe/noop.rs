@@ -20,8 +20,12 @@ macro_rules! impl_int_probe_arg_noop {
     ($($ty:ty),* $(,)?) => {
         $(
             impl IntoProbeArg for $ty {
-                fn into_probe_arg(self) -> u64 { self as u64 }
-                fn from_probe_arg(packed: u64) -> Self { packed as $ty }
+                fn into_probe_arg(self) -> u64 {
+                    num_traits::AsPrimitive::<u64>::as_(self)
+                }
+                fn from_probe_arg(packed: u64) -> Self {
+                    num_traits::AsPrimitive::<Self>::as_(packed)
+                }
             }
         )*
     };
@@ -89,7 +93,7 @@ impl IntoProbeArg for CancelReason {
 
 impl IntoProbeArg for AbrMode {
     fn into_probe_arg(self) -> u64 {
-        usize::from(self) as u64
+        num_traits::AsPrimitive::<u64>::as_(usize::from(self))
     }
 }
 

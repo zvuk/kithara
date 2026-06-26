@@ -39,6 +39,8 @@ struct HlsTrackState {
     /// Mirrors `HlsConfig::look_ahead_bytes` — capped idle prefetch
     /// budget threaded into every `PlanCtx` constructed for `dispatch`.
     look_ahead_bytes: Option<u64>,
+    /// Effective media-segment cap used for small ephemeral stores.
+    look_ahead_segments: Option<usize>,
     size_probe_method: SizeProbeMethod,
     /// Target segment of an in-flight forward seek, held until the reader's
     /// physical byte cursor catches up to it. `coord.position()` only
@@ -126,6 +128,7 @@ impl HlsPeer {
         eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
         prefetch_budget: usize,
         look_ahead_bytes: Option<u64>,
+        look_ahead_segments: Option<usize>,
         size_probe_method: SizeProbeMethod,
     ) {
         let reader_advanced = Arc::clone(&self.reader_advanced);
@@ -144,6 +147,7 @@ impl HlsPeer {
                 seek_epoch: self.seek_obs.epoch(),
                 signal: coord.signal(),
                 size_probe_method,
+                look_ahead_segments,
             };
             active.rebuild(&plan_ctx, initial_seg);
         }
@@ -159,6 +163,7 @@ impl HlsPeer {
                 eviction_rx,
                 prefetch_budget,
                 look_ahead_bytes,
+                look_ahead_segments,
                 size_probe_method,
                 last_seek_epoch: 0,
                 seek_settle_floor: None,
@@ -554,6 +559,7 @@ impl HlsTrackState {
             prefetch_budget: self.prefetch_budget,
             seek_epoch: self.seek_obs.epoch(),
             look_ahead_bytes: self.look_ahead_bytes,
+            look_ahead_segments: self.look_ahead_segments,
             signal: self.coord.signal(),
             size_probe_method: self.size_probe_method,
         }

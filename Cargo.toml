@@ -285,6 +285,8 @@ cbc = "0.2.1"
 uuid = { version = "1", features = ["v5"] }
 sha2 = "0.11"
 tower = "0.5.3"
+tower-layer = "0.3.3"
+tower-service = "0.3.3"
 tower-http = { version = "0.7", features = ["cors", "fs", "set-header"] }
 tempfile = "3.27.0"
 
@@ -409,6 +411,13 @@ opt-level = 3
 [patch.crates-io]
 firewheel-web-audio = { git = "https://github.com/gerasim13/firewheel-web-audio", rev = "1a5e383af4d5d318f93d6d25e617cc95d7b20aef" }
 
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
 # Best-of-both-worlds profile for maximum testing speed.
 # Combines release-grade runtime performance (opt-level 3) with fast
 # parallel compilation (codegen-units 16, LTO off).
@@ -420,6 +429,8 @@ debug-assertions = true
 overflow-checks = true
 lto = false
 codegen-units = 16
+panic = "unwind"
+strip = "none"
 
 [profile.wasm-release]
 inherits = "release"

@@ -1,15 +1,10 @@
 #![allow(unsafe_code)]
 
-use std::{
-    ffi::c_void,
-    ptr,
-    sync::{Arc, Mutex},
-};
+use std::{ffi::c_void, ptr, sync::Arc};
 
 use block2::DynBlock;
-use bytes::Bytes;
 use dashmap::DashMap;
-use kithara_platform::tokio::sync::{mpsc, oneshot};
+use kithara_platform::tokio::sync::oneshot;
 use objc2::{
     AnyThread, ClassType, DefinedClass, define_class, msg_send,
     rc::Retained,
@@ -20,23 +15,24 @@ use objc2_foundation::{
     NSURLCredential, NSURLProtectionSpace, NSURLResponse, NSURLSession,
     NSURLSessionAuthChallengeDisposition, NSURLSessionDataDelegate, NSURLSessionDataTask,
     NSURLSessionDelegate, NSURLSessionResponseDisposition, NSURLSessionTask,
-    NSURLSessionTaskDelegate,
+    NSURLSessionTaskDelegate, NSURLSessionTaskMetrics,
 };
 
 use super::{
-    response::{StreamHead, copy_data, error_from_nserror, http_parts, store_terminal},
+    response::{StreamHead, copy_data, error_from_nserror, http_parts},
     session::TaskId,
+    stream::AppleBodyQueue,
 };
-use crate::error::NetError;
+use crate::{error::NetError, metrics::ConnectionMetrics};
 
 pub(super) struct DelegateIvars {
     streams: DashMap<TaskId, StreamState>,
+    task_metrics: DashMap<TaskId, ConnectionMetrics>,
     is_insecure: bool,
 }
 
 pub(super) struct StreamState {
-    pub(super) terminal: Arc<Mutex<Option<NetError>>>,
-    pub(super) body_sender: Option<mpsc::Sender<Result<Bytes, NetError>>>,
+    pub(super) body_queue: Option<Arc<AppleBodyQueue>>,
     pub(super) head_sender: Option<oneshot::Sender<Result<StreamHead, NetError>>>,
 }
 
@@ -95,6 +91,8 @@ define_class!(
                 && let Some(sender) = state.head_sender.take()
             {
                 let _ = sender.send(head);
+                completion_handler.call((NSURLSessionResponseDisposition::Allow,));
+                return;
             }
             completion_handler.call((NSURLSessionResponseDisposition::Allow,));
         }
@@ -107,34 +105,13 @@ define_class!(
             data: &NSData,
         ) {
             let task_id = data_task.taskIdentifier();
-            let stream = {
-                self.ivars().streams.get(&task_id).and_then(|state| {
-                    state
-                        .body_sender
-                        .as_ref()
-                        .map(|sender| (sender.clone(), Arc::clone(&state.terminal)))
-                })
-            };
-            if let Some((sender, terminal)) = stream {
-                // CONTEXT: NSURLSession invokes this on the session's
-                // NSOperationQueue delegate thread. Delegate callbacks must
-                // never block that thread or depend on Tokio runtime context,
-                // so body backpressure is handled with try_send and task
-                // cancellation instead of blocking_send.
-                match sender.try_send(Ok(copy_data(data))) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(Ok(_))) => {
-                        store_terminal(&terminal, NetError::Timeout);
-                        data_task.cancel();
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        data_task.cancel();
-                    }
-                    Err(mpsc::error::TrySendError::Full(Err(error))) => {
-                        store_terminal(&terminal, error);
-                        data_task.cancel();
-                    }
-                }
+            let queue = self
+                .ivars()
+                .streams
+                .get(&task_id)
+                .and_then(|state| state.body_queue.as_ref().map(Arc::clone));
+            if let Some(queue) = queue {
+                queue.push(copy_data(data));
             }
         }
 
@@ -146,31 +123,45 @@ define_class!(
             error: Option<&NSError>,
         ) {
             let task_id = task.taskIdentifier();
-            let Some(mut state) = self.take_stream(task_id) else {
-                return;
-            };
             let terminal = error.map(error_from_nserror);
-            if let Some(sender) = state.head_sender.take() {
-                let result = terminal.clone().map_or_else(
-                    || Err(NetError::Network("NSURLSession completed before response headers".to_string())),
-                    Err,
-                );
-                let _ = sender.send(result);
-            }
-            if let Some(error) = terminal
-                && let Some(sender) = state.body_sender.take()
-            {
-                // CONTEXT: Completion also runs on the NSURLSession delegate
-                // queue, outside Tokio's async task context. try_send keeps
-                // the queue unblocked; if the bounded channel is full, the
-                // stream observes the stored terminal error on its next poll.
-                if let Err(mpsc::error::TrySendError::Full(Err(error))) =
-                    sender.try_send(Err(error))
-                {
-                    store_terminal(&state.terminal, error);
+
+            if let Some(mut state) = self.take_stream(task_id) {
+                if let Some(sender) = state.head_sender.take() {
+                    let result = terminal.clone().map_or_else(
+                        || {
+                            Err(NetError::Network(
+                                "NSURLSession completed before response headers".to_string(),
+                            ))
+                        },
+                        Err,
+                    );
+                    let _ = sender.send(result);
+                }
+                if let Some(queue) = state.body_queue.take() {
+                    queue.close(terminal);
                 }
             }
         }
+
+        #[unsafe(method(URLSession:task:didFinishCollectingMetrics:))]
+        fn collect_metrics(
+            &self,
+            _session: &NSURLSession,
+            task: &NSURLSessionTask,
+            metrics: &NSURLSessionTaskMetrics,
+        ) {
+            let task_id = task.taskIdentifier();
+            let Some((_, connection_metrics)) = self.ivars().task_metrics.remove(&task_id) else {
+                return;
+            };
+            let transactions = metrics.transactionMetrics();
+            for transaction in &transactions {
+                if !transaction.isReusedConnection() {
+                    connection_metrics.record_opened_connection();
+                }
+            }
+        }
+
     }
 
     // SAFETY: NSObjectProtocol has no additional invariants for this delegate.
@@ -190,8 +181,10 @@ define_class!(
 impl AppleSessionDelegate {
     pub(super) fn new(is_insecure: bool) -> Retained<Self> {
         let streams = DashMap::new();
+        let task_metrics = DashMap::new();
         let this = Self::alloc().set_ivars(DelegateIvars {
             streams,
+            task_metrics,
             is_insecure,
         });
         // SAFETY: The ivars were initialized before calling NSObject init.
@@ -223,6 +216,10 @@ impl AppleSessionDelegate {
 
     pub(super) fn register_stream(&self, task_id: TaskId, state: StreamState) {
         self.ivars().streams.insert(task_id, state);
+    }
+
+    pub(super) fn register_metrics(&self, task_id: TaskId, metrics: ConnectionMetrics) {
+        self.ivars().task_metrics.insert(task_id, metrics);
     }
 
     pub(super) fn remove_stream(&self, task_id: TaskId) {

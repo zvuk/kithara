@@ -2,30 +2,42 @@ use std::{num::NonZeroU16, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_platform::CancelToken;
+use kithara_platform::{
+    CancelToken,
+    time::{sleep, timeout},
+    tokio,
+};
 use url::Url;
 
 use super::{
     request::{AppleRequest, Method},
-    response::AppleDataResponse,
+    response::{AppleDataResponse, HTTP_PARTIAL_CONTENT},
     session::AppleSession,
 };
 use crate::{
     ByteStream,
-    error::{NetError, NetResult},
+    error::{NetError, NetResult, Retryability},
+    metrics::ConnectionMetrics,
+    resumable::{Refetch, Resumed, exhausted, resumable_body},
     retry::{DefaultRetryPolicy, RetryNet},
     traits::{Net, NetExt},
     types::{Headers, NetOptions, RangeSpec},
 };
 
+mod kithara {
+    pub(crate) use kithara_test_macros::flash;
+}
+
 #[derive(Clone)]
 struct RawAppleNet {
     session: AppleSession,
     cancel: CancelToken,
+    options: NetOptions,
 }
 
 impl RawAppleNet {
-    async fn body_stream(
+    #[kithara::flash(io)]
+    async fn raw_body(
         &self,
         url: Url,
         range: Option<RangeSpec>,
@@ -34,9 +46,13 @@ impl RawAppleNet {
     ) -> Result<ByteStream, NetError> {
         let response = {
             let request = AppleRequest::new(&url, Method::Get, range, headers)?;
-            self.session.stream(request, self.cancel.clone())
+            timeout(
+                self.options.inactivity_timeout,
+                self.session.stream(request, self.cancel.clone()),
+            )
         }
-        .await?;
+        .await
+        .map_err(|_| NetError::Timeout)??;
         if let Err(error) = check_status(url, response.status, &Bytes::new(), accept_partial) {
             response.cancel();
             return Err(error);
@@ -44,6 +60,78 @@ impl RawAppleNet {
         Ok(response.into())
     }
 
+    async fn body_stream(
+        &self,
+        url: Url,
+        range: Option<RangeSpec>,
+        headers: Option<Headers>,
+        accept_partial: bool,
+    ) -> Result<ByteStream, NetError> {
+        let base_start = range.as_ref().map_or(0, |range| range.start);
+        let end = range.as_ref().and_then(|range| range.end);
+        let first = self
+            .open_first_body(
+                url.clone(),
+                range,
+                headers.clone(),
+                accept_partial,
+                base_start,
+                end,
+            )
+            .await?;
+        Ok(self.wrap_resumable(first, url, base_start, end, headers))
+    }
+
+    async fn open_first_body(
+        &self,
+        url: Url,
+        mut range: Option<RangeSpec>,
+        headers: Option<Headers>,
+        mut accept_partial: bool,
+        base_start: u64,
+        end: Option<u64>,
+    ) -> Result<ByteStream, NetError> {
+        let mut attempt = 0;
+        loop {
+            let error = match self
+                .raw_body(url.clone(), range.clone(), headers.clone(), accept_partial)
+                .await
+            {
+                Ok(stream) => return Ok(stream),
+                Err(error) => error,
+            };
+            if error.retryability() != Retryability::Transient
+                || attempt >= self.options.retry_policy.max_retries
+            {
+                return Err(
+                    if self.options.retry_policy.max_retries > 0
+                        && error.retryability() == Retryability::Transient
+                    {
+                        exhausted(self.options.retry_policy.max_retries, error)
+                    } else {
+                        error
+                    },
+                );
+            }
+            let delay = self.options.retry_policy.delay_for_attempt(attempt);
+            if delay.is_zero() {
+                if self.cancel.is_cancelled() {
+                    return Err(NetError::Cancelled);
+                }
+            } else {
+                tokio::select! {
+                    biased;
+                    () = self.cancel.cancelled() => return Err(NetError::Cancelled),
+                    () = sleep(delay) => {}
+                }
+            }
+            attempt += 1;
+            range = Some(RangeSpec::new(base_start, end));
+            accept_partial = true;
+        }
+    }
+
+    #[kithara::flash(io)]
     async fn data(
         &self,
         method: Method,
@@ -54,29 +142,73 @@ impl RawAppleNet {
     ) -> Result<AppleDataResponse, NetError> {
         let response = {
             let request = AppleRequest::new(&url, method, range, headers)?;
-            self.session.data(request, self.cancel.clone())
+            timeout(
+                self.options.inactivity_timeout,
+                self.session.data(request, self.cancel.clone()),
+            )
         }
-        .await?;
+        .await
+        .map_err(|_| NetError::Timeout)??;
         check_status(url, response.status, &response.body, accept_partial)?;
         Ok(response)
+    }
+
+    fn wrap_resumable(
+        &self,
+        first: ByteStream,
+        url: Url,
+        base_start: u64,
+        end: Option<u64>,
+        headers: Option<Headers>,
+    ) -> ByteStream {
+        let out_headers = first.headers.clone();
+        let partial = first.is_partial();
+        let me = self.clone();
+        let refetch: Refetch = Box::new(move |consumed| {
+            let me = me.clone();
+            let url = url.clone();
+            let headers = headers.clone();
+            let abs = base_start.saturating_add(consumed);
+            let resume = RangeSpec::new(abs, end);
+            Box::pin(async move {
+                let stream = me.raw_body(url, Some(resume), headers, true).await?;
+                let skip = if stream.is_partial() { 0 } else { abs };
+                Ok(Resumed { stream, skip })
+            })
+        });
+        let body = resumable_body(
+            first,
+            refetch,
+            self.options.inactivity_timeout,
+            self.options.retry_policy.clone(),
+            self.cancel.clone(),
+        );
+        ByteStream::with_partial(out_headers, body, partial)
     }
 }
 
 #[derive(Clone)]
 pub struct AppleNet {
     net: Arc<RetryNet<RawAppleNet, DefaultRetryPolicy>>,
+    connection_metrics: ConnectionMetrics,
     options: NetOptions,
 }
 
 impl AppleNet {
     #[must_use]
     pub fn new(options: NetOptions, cancel: CancelToken) -> Self {
+        let connection_metrics = ConnectionMetrics::default();
         let raw = RawAppleNet {
-            session: AppleSession::new(&options),
+            session: AppleSession::new(&options, connection_metrics.clone()),
             cancel: cancel.clone(),
+            options: options.clone(),
         };
         let net = Arc::new(raw.with_retry(options.retry_policy.clone(), cancel));
-        Self { net, options }
+        Self {
+            net,
+            connection_metrics,
+            options,
+        }
     }
 
     /// # Errors
@@ -108,6 +240,11 @@ impl AppleNet {
     #[must_use]
     pub fn options(&self) -> &NetOptions {
         &self.options
+    }
+
+    #[must_use]
+    pub fn connection_count(&self) -> usize {
+        self.connection_metrics.connection_count()
     }
 
     /// # Errors
@@ -184,8 +321,6 @@ fn check_status(
     body: &Bytes,
     accept_partial: bool,
 ) -> Result<(), NetError> {
-    const HTTP_PARTIAL_CONTENT: u16 = 206;
-
     let Some(status) = status else {
         return Err(NetError::Network(format!(
             "NSURLSession returned a non-HTTP response for {url}"

@@ -1,7 +1,11 @@
-pub(crate) use ::wreq::{Client, ClientBuilder, RequestBuilder, Response};
+pub(crate) use ::wreq::{Client, ClientBuilder, RequestBuilder, Response, StatusCode};
 use kithara_platform::time::Duration;
 
-use crate::types::{ImpersonatePreset, NetOptions};
+use super::metrics::CountConnectionsLayer;
+use crate::{
+    metrics::ConnectionMetrics,
+    types::{ImpersonatePreset, NetOptions},
+};
 
 pub(crate) type BackendError = ::wreq::Error;
 
@@ -23,8 +27,12 @@ impl From<ImpersonatePreset> for ::wreq_util::Emulation {
 /// through `kithara_platform::time` and so collapses under `flash`. A
 /// wall-clock client timer would double-own the stall and break simulation
 /// determinism.
-pub(crate) fn build_client(options: &NetOptions) -> Result<Client, BackendError> {
+pub(crate) fn build_client(
+    options: &NetOptions,
+    metrics: &ConnectionMetrics,
+) -> Result<Client, BackendError> {
     let base = Client::builder()
+        .connector_layer(CountConnectionsLayer::new(metrics.clone()))
         .emulation(::wreq_util::Emulation::from(options.impersonate))
         .cookie_store(true)
         .pool_max_idle_per_host(options.pool_max_idle_per_host)

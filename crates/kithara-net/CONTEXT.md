@@ -68,21 +68,42 @@ Backend layout:
 - `backend/apple/stream.rs` owns body stream polling, cancel wake registration,
   and startup/data task guards.
 
-`client-apple` timeout note: `NSURLSession` buffers small data on open
-connections, so Rust-side stream-poll deadlines cannot reliably model
-inactivity. The Apple backend configures native timers instead:
-`timeoutIntervalForRequest` is set from `NetOptions::inactivity_timeout` and
-`timeoutIntervalForResource` from `total_timeout` when present. Request timeout
-errors flow through `didCompleteWithError` and map to `NetError::Timeout` for
-both pre-response stalls and body-phase inactivity. Cancellation is still driven
-by `CancelToken`: startup cancels the task directly, and the body stream holds a
+`client-apple` timeout note: keep timeout ownership aligned with
+`client-wreq`/`client-reqwest`. The Apple backend wraps data/header establishment
+in the Rust-side `inactivity_timeout`, and streaming body inactivity is still
+owned by `resumable_body`. `NSURLSession` only receives
+`timeoutIntervalForResource` from `total_timeout` when present, so Foundation
+does not race the flash-aware idle timers. Cancellation is still driven by
+`CancelToken`: startup cancels the task directly, and the body stream holds a
 cancel waker so a parked poll is woken promptly.
+
+`AppleSession` owns exactly one Foundation `NSURLSession` per `HttpClient`.
+Apple's public pooling controls are not isomorphic to reqwest/wreq: `NetOptions`
+`pool_max_idle_per_host` is an idle-pool budget, while Foundation's
+`HTTPMaximumConnectionsPerHost` is a cap on simultaneous persistent connections
+per host. The Apple backend uses that documented Foundation control as the
+closest per-host pool knob and sets it only when `pool_max_idle_per_host`
+converts to a positive `NSInteger`; otherwise Foundation's default remains in
+effect. Do not substitute `NSInteger::MAX` or another sentinel. Connection reuse
+is managed by keeping all `head`, `get_bytes`, `stream`, and `get_range` tasks on
+the same session so every `HttpClient` clone shares the same Foundation
+connection pool. Do not split data and streaming requests into separate sessions
+unless there is a new explicit pooling contract. `HttpClient::connection_count()`
+is the client-level opened-connection counter used by shared-pool regression
+tests: reqwest/wreq count successful native connector-layer opens through the
+backend-owned metrics adapter, Apple counts
+`NSURLSessionTaskMetrics.transactionMetrics` entries where Foundation reports
+`isReusedConnection == false`, and wasm fetch reports zero because browsers do
+not expose socket creation. Server-side TCP instrumentation, if needed for a
+specific test, belongs in test-server support rather than downloader or stream
+production code.
 
 When `client-apple` is not selected, the seam re-exported by `backend` is exactly
 `Client`, `RequestBuilder`, `Response`, `BackendError`,
-`build_client(&NetOptions)`, and `head_request(&Client, Url)`. `ClientBuilder`
-and compression transforms stay under `backend/native/`; shared HTTP code must
-not import backend crates directly.
+`build_client(&NetOptions, &ConnectionMetrics)`, and
+`head_request(&Client, Url)`. `ClientBuilder`, compression transforms, and
+native connector metrics stay under `backend/native/`; shared HTTP code must not
+import backend crates directly.
 
 ## `client-apple` unsafe carve-out
 

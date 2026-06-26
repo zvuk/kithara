@@ -13,11 +13,7 @@ use std::{
 
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep},
-    tokio::task::spawn,
-};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -114,7 +110,7 @@ async fn collect(mut stream: crate::ByteStream) -> Result<Bytes, NetError> {
     Ok(Bytes::from(out))
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_get_bytes_retries_503_until_ok() {
     let counter = Arc::new(AtomicU32::new(0));
     let seen = Arc::clone(&counter);
@@ -141,7 +137,7 @@ async fn apple_get_bytes_retries_503_until_ok() {
     assert_eq!(counter.load(Ordering::SeqCst), 3);
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_head_backfills_content_length_from_content_range() {
     let url = spawn_server(|socket, _request| async move {
             write_raw(
@@ -158,7 +154,7 @@ async fn apple_head_backfills_content_length_from_content_range() {
     assert_eq!(headers.get("content-length"), Some("1234"));
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_open_ended_stream_delivers_chunks() {
     let url = spawn_server(|socket, _request| async move {
             write_raw(
@@ -175,14 +171,45 @@ async fn apple_open_ended_stream_delivers_chunks() {
     assert_eq!(&collect(stream).await.expect("body")[..], b"abcdef");
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn apple_short_body_yields_before_premature_eof_under_flash() {
+    let url = spawn_server(|mut socket, request| async move {
+        if request.contains("Range: bytes=0-") {
+            write_raw(
+                socket,
+                b"HTTP/1.1 206 Partial Content\r\nContent-Length: 6\r\nContent-Range: bytes 0-5/6\r\nConnection: close\r\n\r\nabcdef",
+            )
+            .await;
+        } else if request.contains("Range: bytes=3-") {
+            write_raw(
+                socket,
+                b"HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 3-5/6\r\nConnection: close\r\n\r\ndef",
+            )
+            .await;
+        } else {
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\nabc")
+                .await
+                .expect("write short body");
+        }
+    })
+    .await;
+
+    let client = AppleNet::new(fast_options(1), CancelToken::never());
+    let stream = client.stream(url, None).await.expect("stream");
+    let body = collect(stream).await.expect("body");
+
+    assert_eq!(&body[..], b"abcdef");
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_stream_head_stall_times_out() {
     let url = spawn_server(|mut socket, _request| async move {
         socket
             .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
             .await
             .expect("write head");
-        sleep(Duration::from_secs(2)).await;
+        kithara_platform::time::sleep(Duration::from_secs(2)).await;
     })
     .await;
 
@@ -195,14 +222,14 @@ async fn apple_stream_head_stall_times_out() {
     }
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_stream_observes_cancellation() {
     let url = spawn_server(|mut socket, _request| async move {
         socket
             .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
             .await
             .expect("write head");
-        sleep(Duration::from_secs(3)).await;
+        kithara_platform::time::sleep(Duration::from_secs(3)).await;
     })
     .await;
 
@@ -210,7 +237,7 @@ async fn apple_stream_observes_cancellation() {
     let client = AppleNet::new(stream_options(5000), cancel.clone());
     let cancel_task = cancel.clone();
     drop(spawn(async move {
-        sleep(Duration::from_millis(50)).await;
+        kithara_platform::time::sleep(Duration::from_millis(50)).await;
         cancel_task.cancel();
     }));
     let result = client.stream(url, None).await;

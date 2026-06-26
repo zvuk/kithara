@@ -159,6 +159,55 @@ impl Drop for TempWorkDir {
     }
 }
 
+struct HakariDisableGuard {
+    manifest: PathBuf,
+    original_manifest: String,
+    active: bool,
+}
+
+impl HakariDisableGuard {
+    fn disable(workspace_root: &Path) -> Result<Self> {
+        let manifest = workspace_root.join("crates/kithara-workspace-hack/Cargo.toml");
+        let original_manifest = fs::read_to_string(&manifest)
+            .with_context(|| format!("read {}", manifest.display()))?;
+        let mut guard = Self {
+            manifest,
+            original_manifest,
+            active: true,
+        };
+
+        println!("==> Temporarily disabling hakari workspace-hack for release build");
+        let status = Command::new("cargo")
+            .args(["hakari", "disable"])
+            .current_dir(workspace_root)
+            .status()
+            .context("failed to run cargo hakari disable")?;
+        if !status.success() {
+            guard.restore().context(
+                "cargo hakari disable failed, then restoring kithara-workspace-hack also failed",
+            )?;
+            bail!("cargo hakari disable failed");
+        }
+
+        Ok(guard)
+    }
+
+    fn restore(&mut self) -> Result<()> {
+        if self.active {
+            fs::write(&self.manifest, &self.original_manifest)
+                .with_context(|| format!("restore {}", self.manifest.display()))?;
+            self.active = false;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for HakariDisableGuard {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
 #[derive(Clone, Debug, clap::Subcommand)]
 pub(crate) enum AppleCommand {
     /// Build `XCFramework` for Apple platforms.
@@ -311,6 +360,11 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     let root = metadata.workspace_root.as_std_path();
     let crate_dir = root.join("crates/kithara-ffi");
     let apple_dir = root.join("apple");
+    let mut hakari_guard = if matches!(profile, crate::BuildProfile::Release) {
+        Some(HakariDisableGuard::disable(root)?)
+    } else {
+        None
+    };
 
     println!("==> Building KitharaFFI with cargo-swift");
 
@@ -376,6 +430,10 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     println!();
     println!("To build and test:");
     println!("  cd {} && swift build && swift test", apple_dir.display());
+
+    if let Some(guard) = &mut hakari_guard {
+        guard.restore()?;
+    }
 
     Ok(())
 }

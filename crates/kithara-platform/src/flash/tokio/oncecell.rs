@@ -16,7 +16,7 @@ use crate::flash::{
 /// Init-coordination state, separate from the value's [`OnceLock`]: whether a
 /// caller currently owns the init, plus the real-wake slots for callers parked
 /// behind it (off the flash path; empty on the engine path).
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Init {
     wakers: Vec<Waker>,
     in_progress: bool,
@@ -131,6 +131,8 @@ impl<T> Default for OnceCell<T> {
 impl<T> std::fmt::Debug for OnceCell<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OnceCell")
+            .field("backend", &self.backend)
+            .field("init", &self.init)
             .field("initialized", &self.value.get().is_some())
             .finish()
     }

@@ -11,6 +11,90 @@ feature_powerset_exclude = ["kithara-play", "kithara-app", "kithara-fuzz"]
 # Crates excluded from whole-workspace stages (fuzz target needs cargo-fuzz).
 workspace_exclude = ["kithara-fuzz"]
 
+[test]
+default_lane = "workspace"
+default_backend = "wreq"
+feature_arg = "--features"
+
+[test.flash]
+default = true
+features = ["flash"]
+
+[test.net_backends.wreq]
+features = []
+
+[test.net_backends.apple]
+features = ["kithara-integration-tests/apple-net"]
+
+[test.lanes.workspace]
+program = "cargo"
+prefix_args = [
+    "nextest",
+    "run",
+    "--workspace",
+    "--exclude",
+    "kithara-fuzz",
+    "--cargo-profile",
+    "test-release",
+]
+
+[test.lanes.cached]
+program = "cargo"
+prefix_args = [
+    "nextest",
+    "run",
+    "--profile",
+    "cache",
+    "--workspace",
+    "--exclude",
+    "kithara-fuzz",
+    "--cargo-profile",
+    "test-release",
+]
+
+[test.lanes.doc]
+program = "cargo"
+prefix_args = [
+    "test",
+    "--doc",
+    "--workspace",
+    "--exclude",
+    "kithara-fuzz",
+]
+default_flash = false
+
+[test.lanes.e2e]
+program = "cargo"
+prefix_args = [
+    "nextest",
+    "run",
+    "-p",
+    "kithara-integration-tests",
+    "--cargo-profile",
+    "test-release",
+    "--test",
+    "suite_e2e",
+    "--run-ignored",
+    "all",
+]
+default_features = ["e2e"]
+default_flash = false
+
+[test.lanes.selenium]
+program = "cargo"
+prefix_args = [
+    "+nightly",
+    "test",
+    "-p",
+    "kithara-integration-tests",
+    "--test",
+    "suite_heavy",
+]
+default_features = ["selenium"]
+suffix_args = ["selenium", "--", "--nocapture"]
+passthrough = "after-suffix"
+default_flash = false
+
 [publish]
 workspace_hack_crate = "kithara-workspace-hack"
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
