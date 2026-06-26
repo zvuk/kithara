@@ -47,6 +47,13 @@ impl Consts {
     /// Apple App Store uploads no longer require bitcode, and embedding it
     /// bloats every Rust object stored in the release static archive.
     const RELEASE_RUSTFLAGS: &[&str] = &["-C", "embed-bitcode=no"];
+    const RELEASE_CARGO_ARGS: &[&str] = &[
+        "+nightly",
+        "-Z",
+        "build-std=std,panic_abort",
+        "-Z",
+        "build-std-features=panic_immediate_abort",
+    ];
     /// Slice subdirectories inside the `*.xcframework` we expect to find.
     const XCFRAMEWORK_SLICES: &[&str] =
         &["ios-arm64", Self::IOS_SIMULATOR_SLICE, "macos-arm64_x86_64"];
@@ -165,17 +172,24 @@ impl Drop for TempWorkDir {
 struct HakariDisableGuard {
     manifest: PathBuf,
     original_manifest: String,
+    lockfile: PathBuf,
+    original_lockfile: String,
     active: bool,
 }
 
 impl HakariDisableGuard {
     fn disable(workspace_root: &Path) -> Result<Self> {
         let manifest = workspace_root.join("crates/kithara-workspace-hack/Cargo.toml");
+        let lockfile = workspace_root.join("Cargo.lock");
         let original_manifest = fs::read_to_string(&manifest)
             .with_context(|| format!("read {}", manifest.display()))?;
+        let original_lockfile = fs::read_to_string(&lockfile)
+            .with_context(|| format!("read {}", lockfile.display()))?;
         let mut guard = Self {
             manifest,
             original_manifest,
+            lockfile,
+            original_lockfile,
             active: true,
         };
 
@@ -199,6 +213,8 @@ impl HakariDisableGuard {
         if self.active {
             fs::write(&self.manifest, &self.original_manifest)
                 .with_context(|| format!("restore {}", self.manifest.display()))?;
+            fs::write(&self.lockfile, &self.original_lockfile)
+                .with_context(|| format!("restore {}", self.lockfile.display()))?;
             self.active = false;
         }
         Ok(())
@@ -218,6 +234,9 @@ pub(crate) enum AppleCommand {
         /// Build profile.
         #[arg(long, default_value_t = crate::BuildProfile::Release)]
         profile: crate::BuildProfile,
+        /// Build one Rust target triple instead of all Apple platforms.
+        #[arg(long)]
+        target: Option<String>,
     },
     /// Build ONE self-contained `Kithara.xcframework` (Swift API + `UniFFI`
     /// binding + Rust core merged into a single module) for manual drag-in
@@ -265,7 +284,7 @@ pub(crate) enum AppleCommand {
 
 pub(crate) fn run(cmd: AppleCommand) -> Result<()> {
     match cmd {
-        AppleCommand::Build { profile } => run_build(profile),
+        AppleCommand::Build { profile, target } => run_build(profile, target.as_deref()),
         AppleCommand::Single { profile } => run_single(profile),
         AppleCommand::Run {
             simulator,
@@ -379,7 +398,7 @@ fn archive_strings(lib: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn run_build(profile: crate::BuildProfile) -> Result<()> {
+fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
     match Command::new("cargo")
         .args(["swift", "--help"])
         .stdout(Stdio::null())
@@ -405,7 +424,16 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     println!("==> Building KitharaFFI with cargo-swift");
 
     let mut cmd = Command::new("cargo");
-    cmd.args(["swift", "package", "-p", "ios", "macos", "-n", "KitharaFFI"]);
+    if matches!(profile, crate::BuildProfile::Release) {
+        cmd.args(Consts::RELEASE_CARGO_ARGS);
+    }
+    cmd.args(["swift", "package"]);
+    if let Some(target) = target {
+        cmd.args(["--target", target]);
+    } else {
+        cmd.args(["-p", "ios", "macos"]);
+    }
+    cmd.args(["-n", "KitharaFFI"]);
     if matches!(profile, crate::BuildProfile::Release) {
         cmd.arg("--release");
         set_release_rustflags(&mut cmd);
@@ -442,7 +470,9 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     }
     copy_dir_all(&xcf_src, &xcf_dst)
         .with_context(|| format!("copy {} -> {}", xcf_src.display(), xcf_dst.display()))?;
-    keep_arm64_ios_simulator_only(&xcf_dst)?;
+    if target.is_none() {
+        keep_arm64_ios_simulator_only(&xcf_dst)?;
+    }
     if matches!(profile, crate::BuildProfile::Release) {
         strip_xcframework(&xcf_dst)?;
     }
@@ -507,7 +537,7 @@ fn run_release() -> Result<()> {
     let apple_dir = root.join("apple");
     let internal = apple_dir.join("KitharaFFIInternal.xcframework");
 
-    run_build(crate::BuildProfile::Release)?;
+    run_build(crate::BuildProfile::Release, None)?;
     audit_symbols(&internal)?;
     run_single(crate::BuildProfile::Release)?;
 
@@ -693,7 +723,7 @@ fn run_single(profile: crate::BuildProfile) -> Result<()> {
         false
     } else {
         println!("==> KitharaFFIInternal.xcframework not found — building it first");
-        run_build(profile)?;
+        run_build(profile, None)?;
         true
     };
     require_dir(&internal)?;
@@ -1251,7 +1281,7 @@ fn run_app(
         // The demo links `KitharaFFIInternal.xcframework`, so the
         // XCFramework must exist before xcodebuild can resolve the
         // package graph; refresh it the same way `run_build` does.
-        run_build(profile)?;
+        run_build(profile, None)?;
     }
 
     let uuid = resolve_simulator_uuid(&simulator)?;
