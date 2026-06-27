@@ -1,5 +1,6 @@
 use std::{
     future::Future,
+    panic::Location,
     pin::Pin,
     sync::OnceLock,
     task::{Context, Poll, Waker},
@@ -8,6 +9,7 @@ use std::{
 use parking_lot::Mutex;
 
 use crate::flash::{
+    diag::PrimKind,
     flash_ambient,
     ids::{Backend, trace_native_from_ambient},
     system,
@@ -115,12 +117,15 @@ impl<T> OnceCell<T> {
 }
 
 impl<T> Default for OnceCell<T> {
+    #[track_caller]
     fn default() -> Self {
         Self {
             value: OnceLock::new(),
             init: Mutex::new(Init::default()),
             backend: if flash_ambient() {
-                Backend::Engine(system::next_condvar_id())
+                let cvid = system::next_condvar_id();
+                system::describe_cvid(cvid, PrimKind::OnceCell, Location::caller());
+                Backend::Engine(cvid)
             } else {
                 Backend::Native
             },

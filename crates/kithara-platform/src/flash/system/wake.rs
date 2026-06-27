@@ -1,4 +1,5 @@
 use std::{
+    panic::Location,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -61,6 +62,14 @@ pub(crate) enum Wake {
     Task {
         waker: Waker,
         granted: Arc<AtomicBool>,
+        /// Identity of the async task that registered this waiter — `(task id,
+        /// spawn site)` captured from
+        /// [`ctx::cur_async`](crate::flash::ctx::cur_async) at registration. The
+        /// task releases its `active_async` slot when it parks, so it is gone from
+        /// the holder map by dump time; this preserved copy is what names WHICH
+        /// task is parked on this primitive. `None` when no task context was
+        /// active (e.g. a non-participated `block_on`).
+        task: Option<(u64, &'static Location<'static>)>,
     },
 }
 
@@ -79,6 +88,16 @@ impl Wake {
     /// real OS-scheduling latency the bump must cover).
     pub(crate) fn is_task(&self) -> bool {
         matches!(self, Self::Task { .. })
+    }
+
+    /// Identity of the async task parked on this waiter (`(task id, spawn site)`),
+    /// for the hang dump. `None` for a sync OS-thread waiter or when no task
+    /// context was captured at registration.
+    pub(crate) fn task(&self) -> Option<(u64, &'static Location<'static>)> {
+        match self {
+            Self::Task { task, .. } => *task,
+            Self::Sync(_) => None,
+        }
     }
 
     /// Mark an async-task wake as granted an `active` slot. MUST run under the

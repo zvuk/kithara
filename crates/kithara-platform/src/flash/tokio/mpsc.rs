@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     future::Future,
+    panic::Location,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll, Waker},
@@ -11,6 +12,7 @@ use parking_lot::Mutex;
 
 pub use super::unbounded::UnboundedSender;
 use crate::flash::{
+    diag::PrimKind,
     flash_ambient,
     ids::{CvId, trace_native_from_ambient},
     system,
@@ -60,6 +62,7 @@ pub(super) struct Shared<T> {
 }
 
 impl<T> Shared<T> {
+    #[track_caller]
     fn new(capacity: Option<usize>) -> Arc<Self> {
         Arc::new(Self {
             capacity,
@@ -71,10 +74,11 @@ impl<T> Shared<T> {
                 space_wakers: Vec::new(),
             }),
             backend: if flash_ambient() {
-                Backend::Engine {
-                    data: system::next_condvar_id(),
-                    space: system::next_condvar_id(),
-                }
+                let data = system::next_condvar_id();
+                let space = system::next_condvar_id();
+                system::describe_cvid(data, PrimKind::MpscData, Location::caller());
+                system::describe_cvid(space, PrimKind::MpscSpace, Location::caller());
+                Backend::Engine { data, space }
             } else {
                 Backend::Native
             },
@@ -130,6 +134,7 @@ enum Parked {
 /// Create a bounded channel with room for `capacity` queued items (min 1, like
 /// `tokio`). A full channel makes `send().await` park until a receive frees a slot.
 #[must_use]
+#[track_caller]
 pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
     let capacity = capacity.max(1);
     let shared = Shared::new(Some(capacity));
@@ -147,6 +152,7 @@ pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
 
 /// Create an unbounded channel: `send` never blocks on capacity.
 #[must_use]
+#[track_caller]
 pub fn unbounded_channel<T>() -> (UnboundedSender<T>, UnboundedReceiver<T>) {
     let shared = Shared::new(None);
     (

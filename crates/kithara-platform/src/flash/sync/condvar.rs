@@ -1,8 +1,12 @@
+use std::panic::Location;
+
 use super::mutex::MutexGuard;
 use crate::{
     common::time::Instant as RealInstant,
     flash::{
-        Instant, flash_ambient,
+        Instant,
+        diag::PrimKind,
+        flash_ambient,
         ids::{Backend, trace_native_from_ambient},
         system,
     },
@@ -128,10 +132,13 @@ impl Condvar {
 }
 
 impl Default for Condvar {
+    #[track_caller]
     fn default() -> Self {
         Self {
             backend: if flash_ambient() {
-                Backend::Engine(system::next_condvar_id())
+                let cvid = system::next_condvar_id();
+                system::describe_cvid(cvid, PrimKind::Condvar, Location::caller());
+                Backend::Engine(cvid)
             } else {
                 Backend::Native
             },

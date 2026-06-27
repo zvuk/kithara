@@ -1,5 +1,6 @@
 use std::{
     future::Future,
+    panic::Location,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll, Waker},
@@ -8,6 +9,7 @@ use std::{
 use parking_lot::Mutex;
 
 use crate::flash::{
+    diag::PrimKind,
     flash_ambient,
     ids::{Backend, trace_native_from_ambient},
     system,
@@ -62,6 +64,7 @@ enum Parked {
 
 /// Create a one-shot channel.
 #[must_use]
+#[track_caller]
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     let shared = Arc::new(Shared {
         inner: Mutex::new(Inner {
@@ -71,7 +74,9 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
             real_waker: None,
         }),
         backend: if flash_ambient() {
-            Backend::Engine(system::next_condvar_id())
+            let cvid = system::next_condvar_id();
+            system::describe_cvid(cvid, PrimKind::Oneshot, Location::caller());
+            Backend::Engine(cvid)
         } else {
             Backend::Native
         },

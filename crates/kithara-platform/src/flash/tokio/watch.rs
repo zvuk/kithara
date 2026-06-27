@@ -1,6 +1,7 @@
 use std::{
     future::Future,
     ops::Deref,
+    panic::Location,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll, Waker},
@@ -9,6 +10,7 @@ use std::{
 use parking_lot::{Mutex, MutexGuard};
 
 use crate::flash::{
+    diag::PrimKind,
     flash_ambient,
     ids::{Backend, trace_native_from_ambient},
     system,
@@ -74,6 +76,7 @@ impl<T> Shared<T> {
 
 /// Create a watch channel seeded with `init` (version `0`).
 #[must_use]
+#[track_caller]
 pub fn channel<T>(init: T) -> (Sender<T>, Receiver<T>) {
     let shared = Arc::new(Shared {
         state: Mutex::new(State {
@@ -84,7 +87,9 @@ pub fn channel<T>(init: T) -> (Sender<T>, Receiver<T>) {
         }),
         senders: Mutex::new(1),
         backend: if flash_ambient() {
-            Backend::Engine(system::next_condvar_id())
+            let cvid = system::next_condvar_id();
+            system::describe_cvid(cvid, PrimKind::Watch, Location::caller());
+            Backend::Engine(cvid)
         } else {
             Backend::Native
         },

@@ -16,6 +16,15 @@ use crate::{flash::ids::ThreadKey, native::sync::Mutex};
 pub(in crate::flash) enum PrimKind {
     Mutex,
     RwLock,
+    Condvar,
+    Notify,
+    MpscData,
+    MpscSpace,
+    Oneshot,
+    Semaphore,
+    Watch,
+    Broadcast,
+    OnceCell,
 }
 
 /// A thread currently blocked trying to acquire a lock.
