@@ -180,6 +180,7 @@ fn run_grouped(args: &AstGrepArgs) -> Result<()> {
     print_grouped(&by_rule);
 
     if !ok {
+        print_failing_rules(&by_rule, args.strict);
         bail!("ast-grep failed");
     }
     Ok(())
@@ -204,6 +205,38 @@ fn severity_rank(s: &str) -> u8 {
         "info" => 2,
         "hint" => 3,
         _ => 4,
+    }
+}
+
+/// Print ONLY the rules that FAIL the run — error-severity always, plus
+/// warning-severity under `--strict` (the severities ast-grep exits non-zero
+/// on) — to stderr with each hit's `file:line:col`, so the actionable subset
+/// stands out from the full grouped dump above instead of being buried in it.
+/// Mirrors the arch ratchet's focused-failure block.
+fn print_failing_rules(groups: &BTreeMap<String, RuleGroup>, strict: bool) {
+    let threshold = if strict { 1 } else { 0 };
+    let mut failing: Vec<(&String, &RuleGroup)> = groups
+        .iter()
+        .filter(|(_, g)| severity_rank(&g.severity) <= threshold)
+        .collect();
+    if failing.is_empty() {
+        return;
+    }
+    failing.sort_by(|a, b| {
+        severity_rank(&a.1.severity)
+            .cmp(&severity_rank(&b.1.severity))
+            .then_with(|| a.0.cmp(b.0))
+    });
+    let total: usize = failing.iter().map(|(_, g)| g.hits.len()).sum();
+    eprintln!(
+        "\n🛑 ast-grep: {total} failing hit(s) across {} rule(s) — fix these:",
+        failing.len(),
+    );
+    for (rule_id, group) in failing {
+        eprintln!("  [{}] {rule_id}", group.severity);
+        for h in &group.hits {
+            eprintln!("      ▸ {}:{}:{}", h.file, h.line, h.column);
+        }
     }
 }
 
