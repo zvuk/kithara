@@ -1,5 +1,6 @@
 use std::sync::{Arc, atomic::Ordering};
 
+use futures::StreamExt;
 use kithara_abr::{AbrController, AbrPeerId};
 use kithara_events::{
     BandwidthSource, CancelReason, DownloaderEvent, EventBus, RequestId, RequestMethod,
@@ -141,44 +142,57 @@ impl BatchGroup {
         self.epochs.is_empty()
     }
 
-    /// Process all epoch groups. Skip cancelled groups entirely.
-    /// Respects `max_concurrent` — waits when at capacity. Returns the
-    /// number of fetches actually spawned (cancelled cmds don't count),
-    /// so [`Registry::tick`](super::registry::Registry::tick) can treat
-    /// a non-zero dispatch as forward progress for the hang watchdog.
+    /// Spawn every live fetch in FIFO order, gating on `max_concurrent`, and
+    /// deliver-cancel the rest. Returns the number of fetches actually spawned
+    /// (cancelled cmds don't count), so
+    /// [`Registry::tick`](super::registry::Registry::tick) can treat a non-zero
+    /// dispatch as forward progress for the hang watchdog.
+    ///
+    /// Epoch grouping keys on the same cancel token each entry carries, so one
+    /// flattened pass with a per-entry cancel check reproduces both the
+    /// group-level and per-entry cancellation of the grouped form.
+    ///
+    /// The `batch_size` / `first_request_id` probe values are written as
+    /// `name = expr`: the macro gates them behind `cfg(any(test, feature =
+    /// "probe"))`, so the metric computation is free in production builds.
     #[kithara::flash(true)]
+    #[kithara::probe(
+        batch_size = self.epochs.iter().map(|group| group.entries.len()).sum::<usize>(),
+        first_request_id = self
+            .epochs
+            .first()
+            .and_then(|group| group.entries.first())
+            .map_or(0, |entry| entry.cmd.request_id.get())
+    )]
     pub(super) async fn process(self, inner: &DownloaderInner) -> usize {
-        let mut dispatched: usize = 0;
-        for group in self.epochs {
-            if group.cancel.is_cancelled() {
-                for entry in group.entries {
-                    deliver_cancelled_with_event(entry.cmd, &entry.peer_cancel);
-                }
-                continue;
-            }
-            for entry in group.entries {
-                if entry.cmd.cancel.is_cancelled() {
-                    deliver_cancelled_with_event(entry.cmd, &entry.peer_cancel);
-                    continue;
-                }
-                // Backpressure is the capacity gate alone: `spawn_fetch` bumps
-                // `inflight` synchronously (`start_request`), so the next
-                // iteration sees the updated count. No unconditional per-spawn
-                // yield: under `flash` this fn runs on the virtual clock while
-                // the spawned fetch tasks run real-socket I/O, and an engine
-                // `yield_now` only resolves on a clock advance (grant needs
-                // `active_async == 0`). The in-flight fetches' `fetch_waker`
-                // churn keeps `active_async` non-zero, so a mid-batch yield can
-                // never be granted — it strands the rest of the batch (a popped
-                // segment that the peer no longer holds is then lost forever).
-                while inner.inflight.load(Ordering::Relaxed) >= inner.max_concurrent {
-                    task::yield_now().await;
-                }
-                spawn_fetch(inner, entry.cmd, entry.peer_cancel);
-                dispatched += 1;
-            }
-        }
-        dispatched
+        let entries = self.epochs.into_iter().flat_map(|group| group.entries);
+        futures::stream::iter(entries)
+            .fold(
+                0_usize,
+                move |dispatched, SlotEntry { cmd, peer_cancel }| async move {
+                    if cmd.cancel.is_cancelled() {
+                        deliver_cancelled_with_event(cmd, &peer_cancel);
+                        dispatched
+                    } else {
+                        // Backpressure is the capacity gate alone: `spawn_fetch` bumps
+                        // `inflight` synchronously (`start_request`), so the next
+                        // iteration sees the updated count. No unconditional per-spawn
+                        // yield: under `flash` this loop runs on the virtual clock while
+                        // the spawned fetch tasks run real-socket I/O, and an engine
+                        // `yield_now` only resolves on a clock advance (grant needs
+                        // `active_async == 0`). The in-flight fetches' `fetch_waker`
+                        // churn keeps `active_async` non-zero, so a mid-batch yield can
+                        // never be granted — it strands the rest of the batch (a popped
+                        // segment that the peer no longer holds is then lost forever).
+                        while inner.inflight.load(Ordering::Relaxed) >= inner.max_concurrent {
+                            task::yield_now().await;
+                        }
+                        spawn_fetch(inner, cmd, peer_cancel);
+                        dispatched + 1
+                    }
+                },
+            )
+            .await
     }
 }
 

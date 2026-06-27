@@ -58,9 +58,9 @@ impl VariantPlaylist {
 }
 
 /// Load every variant's media playlist for `master`, in master order, by
-/// constructing one [`VariantPlaylist`] per variant and loading it. Order,
-/// per-variant `VariantId(variant.id.0)`, and `resolve_url` semantics match the
-/// inline loop they replace.
+/// constructing one [`VariantPlaylist`] per variant and loading variants
+/// concurrently via `try_join_all`. `try_join_all` preserves input order, so
+/// the returned playlists stay in master order.
 ///
 /// # Errors
 /// Returns an error when any variant URL fails to resolve or any media playlist
@@ -71,10 +71,9 @@ pub(crate) async fn load_variant_playlists(
     master_url: &Url,
     variants: &[VariantStream],
 ) -> HlsResult<Vec<MediaPlaylist>> {
-    let mut playlists = Vec::with_capacity(variants.len());
-    for variant in variants {
-        let loadable = VariantPlaylist::for_variant(cache, scope, master_url, variant)?;
-        playlists.push(loadable.load().await?);
-    }
-    Ok(playlists)
+    let loadables = variants
+        .iter()
+        .map(|variant| VariantPlaylist::for_variant(cache, scope, master_url, variant))
+        .collect::<HlsResult<Vec<_>>>()?;
+    futures::future::try_join_all(loadables.iter().map(VariantPlaylist::load)).await
 }
