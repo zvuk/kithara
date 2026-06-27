@@ -68,7 +68,14 @@ impl Condvar {
             }
             Backend::Native => {
                 trace_native_from_ambient("condvar", "wait");
-                self.native.wait(guard)
+                if let Some(m) = guard.meta() {
+                    m.released();
+                }
+                self.native.wait_ref(guard.native_mut());
+                if let Some(m) = guard.meta() {
+                    m.acquired(guard.site());
+                }
+                guard
             }
         }
     }
@@ -105,9 +112,16 @@ impl Condvar {
             }
             Backend::Native => {
                 trace_native_from_ambient("condvar", "wait_timeout");
+                if let Some(m) = guard.meta() {
+                    m.released();
+                }
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 self.native
-                    .wait_timeout(guard, RealInstant::now() + remaining)
+                    .wait_timeout_ref(guard.native_mut(), RealInstant::now() + remaining);
+                if let Some(m) = guard.meta() {
+                    m.acquired(guard.site());
+                }
+                guard
             }
         }
     }

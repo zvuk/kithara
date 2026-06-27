@@ -7,6 +7,9 @@ mod api;
 /// The single flash thread-local (`ThreadCtx`: mode + credit + poll depth +
 /// dedicated flag) and its accessors.
 mod ctx;
+/// Sync-primitive diagnostics registry (provenance + holder/waiter state) for
+/// the hang dump. Runtime-gated by `KITHARA_FLASH_SYNC_TRACE`.
+mod diag;
 /// Typed engine ids (`CvId` / `WaiterId` / `ThreadKey`) plus the
 /// stateful-primitive `Backend` construction latch.
 mod ids;

@@ -185,7 +185,7 @@ pub(crate) fn emit_async_timeout_test(
                              (runtime shutdown blocked). Aborting process.\n",
                             __fn, __timeout_dur,
                         );
-                        ::kithara_test_utils::kithara_platform::flash::dump_to_stderr("hard-timeout");
+                        ::kithara_test_utils::kithara_platform::flash::log_hang_dump("hard-timeout");
                         ::std::process::abort();
                     }
                 });
@@ -235,7 +235,7 @@ pub(crate) fn emit_async_timeout_test(
                                     )
                                     .await
                                     .unwrap_or_else(|_| {
-                                        ::kithara_test_utils::kithara_platform::flash::dump_to_stderr(
+                                        ::kithara_test_utils::kithara_platform::flash::log_hang_dump(
                                             "virtual-timeout",
                                         );
                                         panic!(
