@@ -34,11 +34,11 @@ where
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr: SocketAddr = listener.local_addr().expect("local_addr");
     let handler = Arc::new(handler);
-    tokio::spawn(async move {
+    spawn(async move {
         loop {
             let (mut socket, _) = listener.accept().await.expect("accept");
             let handler = Arc::clone(&handler);
-            tokio::spawn(async move {
+            spawn(async move {
                 let request = read_request(&mut socket).await;
                 handler(socket, request).await;
             });

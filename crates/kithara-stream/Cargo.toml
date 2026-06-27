@@ -74,5 +74,6 @@ tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-memory-stats = { workspace = true }
 axum = { workspace = true }
+memory-stats = { workspace = true }
+tokio = { workspace = true, features = ["net"] }

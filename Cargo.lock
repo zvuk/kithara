@@ -4976,6 +4976,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "thunderdome",
+ "tokio",
  "tracing",
  "unimock",
  "url",

@@ -20,9 +20,10 @@ use kithara_platform::{
     CancelToken,
     sync::{Mutex, Notify},
     time::{self, Duration},
-    tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
+    tokio::task::spawn as tokio_spawn,
 };
 use kithara_test_utils::kithara;
+use tokio::net::TcpListener as TokioTcpListener;
 use url::Url;
 
 use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority};
