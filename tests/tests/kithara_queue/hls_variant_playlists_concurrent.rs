@@ -212,7 +212,12 @@ fn format_variant_request_ids(request_ids: &HashSet<u64>) -> String {
 }
 
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
-async fn variant_media_playlists_load_concurrently() {
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBackend) {
     let recorder = probe_capture::install();
 
     let helper = TestServerHelper::new().await;
@@ -228,7 +233,7 @@ async fn variant_media_playlists_load_concurrently() {
         .downloader(downloader.clone())
         .store(store)
         .initial_abr_mode(AbrMode::Auto(None))
-        .decoder_backend(DecoderBackend::Symphonia)
+        .decoder_backend(decoder)
         .build();
 
     let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
