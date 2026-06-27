@@ -171,6 +171,26 @@ fn make_playlist_state(
     }]))
 }
 
+#[kithara::test]
+fn media_info_carries_playlist_container() {
+    let ctx = test_ctx(1);
+    let playlist_state =
+        make_playlist_state(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4), 1);
+    let v = VariantParts {
+        init: None,
+        segments: vec![make_seg(0, 10, &ctx.scope)],
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: playlist_state.variant_codec(0),
+        container: playlist_state.variant_container(0),
+        playlist_state: Arc::clone(&playlist_state),
+    }
+    .into_variant(0, &ctx);
+
+    let info = v.media_info();
+    assert_eq!(info.codec, Some(AudioCodec::AacLc));
+    assert_eq!(info.container, Some(ContainerFormat::Fmp4));
+}
+
 fn push_planned(v: &HlsVariant, seg: u32) {
     v.flow.queue.lock().push_back(PlannedFetch::Segment(seg));
 }

@@ -11,7 +11,7 @@ use kithara_stream::{
 
 use super::probe::{
     ProbeHint, codec_from_mp4_fourcc, container_from_extension, probe_codec,
-    resolve_codec_container,
+    resolve_codec_container, sniff_container_from_source,
 };
 use crate::{
     Decoder, InputRequirement,
@@ -220,11 +220,14 @@ impl DecoderFactory {
     }
 
     pub(super) fn dispatch_backend(
-        source: BoxedSource,
+        mut source: BoxedSource,
         hint: &ProbeHint,
         config: DecoderConfig,
     ) -> DecodeResult<Box<dyn Decoder>> {
-        let (codec, container) = resolve_codec_container(hint)?;
+        let (codec, mut container) = resolve_codec_container(hint)?;
+        if container.is_none() {
+            container = sniff_container_from_source(&mut source);
+        }
 
         tracing::debug!(
             ?codec,
@@ -639,4 +642,44 @@ where
         },
     );
     Ok(Box::new(decoder))
+}
+
+/// RED (device repro): on the size-reduced apple-only build (no symphonia
+/// fallback), `MediaInfo { codec: AacLc, container: None }` over real fMP4
+/// bytes must resolve the shared container hint before backend dispatch.
+#[cfg(all(test, feature = "apple", any(target_os = "macos", target_os = "ios")))]
+mod apple_factory_tests {
+    use std::{io::Cursor, sync::Arc};
+
+    use kithara_stream::{AudioCodec, ByteMap, MediaInfo};
+    use kithara_test_utils::kithara;
+
+    use super::{DecoderBackend, DecoderConfig, DecoderFactory};
+    use crate::{
+        DecodeError,
+        fmp4::test_layout::{TestLayoutCodec, build_test_layout},
+    };
+
+    #[kithara::test]
+    fn apple_aac_lc_metadata_probe_is_not_rejected_as_unsupported_codec() {
+        let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 1);
+        let source = Cursor::new(blob);
+        let byte_map: Arc<dyn ByteMap> = Arc::new(segmented);
+        let media_info = MediaInfo::new(Some(AudioCodec::AacLc), None);
+        let config = DecoderConfig {
+            backend: DecoderBackend::Apple,
+            byte_map: Some(byte_map),
+            ..DecoderConfig::default()
+        };
+
+        let result = DecoderFactory::create_from_media_info(source, &media_info, config);
+
+        assert!(
+            !matches!(
+                result,
+                Err(DecodeError::UnsupportedCodec(AudioCodec::AacLc))
+            ),
+            "apple-only AAC-LC fMP4 metadata probe was rejected as UnsupportedCodec"
+        );
+    }
 }

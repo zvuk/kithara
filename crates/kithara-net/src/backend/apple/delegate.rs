@@ -1,12 +1,12 @@
 #![allow(unsafe_code)]
 
-use std::{ffi::c_void, ptr, sync::Arc};
+use std::{ptr, sync::Arc};
 
 use block2::DynBlock;
 use dashmap::DashMap;
 use kithara_platform::tokio::sync::oneshot;
 use objc2::{
-    AnyThread, ClassType, DefinedClass, define_class, msg_send,
+    AnyThread, ClassType, DefinedClass, Encoding, RefEncode, define_class, msg_send,
     rc::Retained,
     runtime::{NSObject, NSObjectProtocol},
 };
@@ -34,6 +34,17 @@ pub(super) struct DelegateIvars {
 pub(super) struct StreamState {
     pub(super) body_queue: Option<Arc<AppleBodyQueue>>,
     pub(super) head_sender: Option<oneshot::Sender<Result<StreamHead, NetError>>>,
+}
+
+#[repr(C)]
+pub(crate) struct SecTrust {
+    _opaque: [u8; 0],
+}
+
+// SAFETY: SecTrustRef is an opaque CoreFoundation pointer whose Objective-C
+// encoding is `^{__SecTrust=}`.
+unsafe impl RefEncode for SecTrust {
+    const ENCODING_REF: Encoding = Encoding::Pointer(&Encoding::Struct("__SecTrust", &[]));
 }
 
 define_class!(
@@ -253,7 +264,7 @@ fn server_trust_credential(challenge: &NSURLAuthenticationChallenge) -> *mut NSU
     unsafe { msg_send![NSURLCredential::class(), credentialForTrust: trust] }
 }
 
-fn server_trust(space: &NSURLProtectionSpace) -> *mut c_void {
+fn server_trust(space: &NSURLProtectionSpace) -> *mut SecTrust {
     // SAFETY: `serverTrust` is skipped by objc2-foundation. It is valid only
     // for server-trust protection spaces, which callers check before this.
     unsafe { msg_send![space, serverTrust] }

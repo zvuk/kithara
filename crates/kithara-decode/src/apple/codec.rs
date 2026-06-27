@@ -766,3 +766,74 @@ mod priming_table_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod aac_lc_decode_tests {
+    use kithara_bufpool::PcmPool;
+    use kithara_platform::time::Duration;
+    use kithara_stream::AudioCodec;
+    use kithara_test_utils::kithara;
+
+    use super::AppleCodec;
+    use crate::{
+        codec::FrameCodec,
+        demuxer::TrackInfo,
+        fmp4::parsing::{CodecConfig, parse_init, parse_segment_frames},
+    };
+
+    fn read_fixture(name: &str) -> Vec<u8> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/hls")
+            .join(name);
+        std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+    }
+
+    /// RED (device repro): the Apple AAC-LC decoder must turn real fMP4
+    /// access units into finite PCM with no symphonia fallback compiled in
+    /// — the exact decode path the size-reduced iOS framework exercises.
+    /// The module already lives under the `apple` + macOS/iOS gate, so no
+    /// per-item `cfg` is needed.
+    #[kithara::test]
+    fn apple_aac_lc_decode_produces_finite_pcm() {
+        let init_bytes = read_fixture("init-slq-a1.mp4");
+        let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
+        assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
+        let extra_data = match &init.config {
+            CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
+        };
+        let track = TrackInfo {
+            extra_data,
+            codec: init.codec,
+            sample_rate: init.sample_rate,
+            channels: init.channels,
+            duration: None,
+            gapless: init.gapless,
+        };
+
+        let seg = read_fixture("segment-1-slq-a1.m4s");
+        let ranges: Vec<(usize, usize)> = parse_segment_frames(&init, &seg)
+            .expect("BUG: parse segment frames")
+            .iter()
+            .map(|f| (f.offset, f.size))
+            .collect();
+        assert!(!ranges.is_empty(), "segment yielded no AAC frames");
+
+        let pool = PcmPool::default();
+        let mut codec =
+            AppleCodec::open_with_config(&track, false).expect("BUG: open Apple AAC-LC codec");
+        let mut pcm = Vec::new();
+        for &(offset, size) in &ranges {
+            let mut buf = pool.get();
+            codec
+                .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
+                .expect("BUG: decode Apple AAC-LC frame");
+            pcm.extend_from_slice(&buf[..]);
+        }
+
+        assert!(!pcm.is_empty(), "Apple AAC-LC decode produced no PCM");
+        assert!(
+            pcm.iter().all(|sample| sample.is_finite()),
+            "Apple AAC-LC decode produced non-finite PCM",
+        );
+    }
+}

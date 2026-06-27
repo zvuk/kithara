@@ -5,5 +5,5 @@ mod scan;
 
 pub(crate) use scan::{
     ItunSmpb, Mp4EditListEntry, Mp4MediaTiming, Mp4MetadataError, Mp4Visitor, scan_mp4,
-    sniff_mp4_codec,
+    sniff_mp4_codec, sniff_mp4_fragmented,
 };

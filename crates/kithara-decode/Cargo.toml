@@ -73,7 +73,6 @@ tls-rustls = ["kithara-stream/tls-rustls"]
 tls-native = ["kithara-stream/tls-native"]
 
 [dev-dependencies]
-kithara-decode = { path = ".", default-features = false, features = ["symphonia"] }
 kithara-storage = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 wasm-bindgen-test = { workspace = true }

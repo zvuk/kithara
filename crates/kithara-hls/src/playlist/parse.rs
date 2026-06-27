@@ -285,7 +285,7 @@ pub fn parse_media_playlist(url: Url, data: &[u8]) -> HlsResult<MediaPlaylist> {
         })
         .collect();
 
-    let init_segment = hls_media.segments.iter().next().and_then(|(_, seg)| {
+    let init_segment = hls_media.segments.iter().find_map(|(_, seg)| {
         seg.map.as_ref().map(|m| {
             let map_key: Option<SegmentKey> = m
                 .keys()
@@ -403,6 +403,17 @@ segment1.ts
 segment0.m4s
 #EXT-X-ENDLIST";
 
+        pub(super) const MEDIA_PLAYLIST_WITH_LATER_INIT_MAP: &[u8] = b"#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:0
+#EXTINF:4.0,
+segment0.m4s
+#EXT-X-MAP:URI=\"init.mp4\"
+#EXTINF:4.0,
+segment1.m4s
+#EXT-X-ENDLIST";
+
         pub(super) const INVALID_PLAYLIST: &[u8] = b"NOT A VALID PLAYLIST";
 
         pub(super) const EMPTY_MASTER_PLAYLIST: &[u8] = b"#EXTM3U
@@ -484,6 +495,17 @@ audio_flac.m3u8";
 
         let init = media.init_segment.unwrap();
         assert_eq!(init.uri, "init.mp4");
+    }
+
+    #[kithara::test]
+    fn test_parse_media_playlist_detects_later_init_map_container() {
+        let url: Url = "http://example.com/v0.m3u8".parse().expect("test url");
+        let media = parse_media_playlist(url, fixtures::MEDIA_PLAYLIST_WITH_LATER_INIT_MAP)
+            .expect("playlist parses");
+
+        let init = media.init_segment.expect("init segment");
+        assert_eq!(init.uri, "init.mp4");
+        assert_eq!(media.detected_container, Some(ContainerFormat::Fmp4));
     }
 
     #[kithara::test]
