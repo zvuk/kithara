@@ -3,7 +3,7 @@ use std::sync::Arc;
 use kithara_assets::{AcquisitionResult, AssetResource, ReadSide, WriteSide};
 use kithara_drm::DecryptContext;
 use kithara_storage::ResourceStatus;
-use kithara_stream::dl::{FetchCmd, OnCompleteFn, WriterFn};
+use kithara_stream::dl::{FetchCmd, OnCompleteFn, OnSlowFn, WriterFn};
 use url::Url;
 
 use super::HlsVariant;
@@ -55,6 +55,11 @@ impl HlsVariant {
             cancel: cancel.clone(),
             signal: signal.clone(),
         };
+        // Capture the slot's CAS cell before the claim moves into `on_complete`
+        // so the slow hook can flag this in-flight fetch when it crosses the
+        // downloader's `soft_timeout`. The ABR stalled-escape gate reads it.
+        let slow_slot = slot.handle.slot_state();
+        let on_slow: OnSlowFn = Box::new(move || slow_slot.mark_slow());
         let mut inner_writer = slot.writer();
         // Per-chunk write signal: wake a reader parked in `wait_range(_, None)`
         // the moment bytes land (not only on commit), so a sub-segment range
@@ -74,6 +79,7 @@ impl HlsVariant {
                 .cancel(cancel)
                 .maybe_headers(self.profile.headers.clone())
                 .writer(writer_fn)
+                .on_slow(on_slow)
                 .on_complete(OnCompleteFn::from(slot))
                 .build(),
         )

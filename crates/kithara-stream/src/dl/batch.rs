@@ -212,6 +212,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     let writer = cmd.writer.take();
     let on_complete_cb = cmd.on_complete.take();
     let on_response_cb = cmd.on_response.take();
+    let on_slow_cb = cmd.on_slow.take();
     let bus = internal.bus;
     let cancel = internal.cancel.clone();
     let epoch_cancel = cmd.cancel.clone();
@@ -219,7 +220,16 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     start_request(bus.as_ref(), &inflight, request_id, wait_in_queue);
 
     task::spawn(async move {
-        let result = establish(&client, soft_timeout, &cancel, bus.clone(), cmd, request_id).await;
+        let result = establish(
+            &client,
+            soft_timeout,
+            &cancel,
+            bus.clone(),
+            cmd,
+            request_id,
+            on_slow_cb,
+        )
+        .await;
         deliver(
             request_id,
             DeliveryContext {
@@ -271,6 +281,7 @@ async fn with_soft_timeout<F, T>(
     soft: Duration,
     bus: Option<&EventBus>,
     request_id: RequestId,
+    on_slow: Option<super::cmd::OnSlowFn>,
 ) -> T
 where
     F: Future<Output = T>,
@@ -286,6 +297,9 @@ where
                     elapsed: started.elapsed(),
                 });
             }
+            if let Some(on_slow) = on_slow {
+                on_slow();
+            }
             fut.await
         }
     }
@@ -300,6 +314,7 @@ async fn establish(
     bus: Option<EventBus>,
     cmd: FetchCmd,
     request_id: RequestId,
+    on_slow: Option<super::cmd::OnSlowFn>,
 ) -> Result<FetchResponse, NetError> {
     let FetchCmd {
         method,
@@ -321,7 +336,7 @@ async fn establish(
     if method == RequestMethod::Head {
         let resp_headers = tokio::select! {
             () = cancel.cancelled() => return Err(NetError::Cancelled),
-            r = with_soft_timeout(client.head(url, headers), soft_timeout, bus.as_ref(), request_id) => r?,
+            r = with_soft_timeout(client.head(url, headers), soft_timeout, bus.as_ref(), request_id, on_slow) => r?,
         };
         return Ok(FetchResponse {
             headers: resp_headers,
@@ -338,7 +353,7 @@ async fn establish(
     };
     let byte_stream = tokio::select! {
         () = cancel.cancelled() => return Err(NetError::Cancelled),
-        r = with_soft_timeout(fetch, soft_timeout, bus.as_ref(), request_id) => r?,
+        r = with_soft_timeout(fetch, soft_timeout, bus.as_ref(), request_id, on_slow) => r?,
     };
 
     if let Some(validate) = validator

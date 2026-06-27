@@ -88,6 +88,13 @@ impl FetchClaim<Downloading> {
         self.data.settled = true;
     }
 
+    /// Share the slot's CAS cell so the `on_slow` hook can flag the in-flight
+    /// fetch slow without owning the claim. Cloned before the claim moves into
+    /// the `FetchSlot`'s `on_complete`.
+    pub(crate) fn slot_state(&self) -> Arc<SegmentSlotState> {
+        Arc::clone(&self.data.slot)
+    }
+
     /// `Downloading -> Failed` terminal settle: the downloader exhausted
     /// its retry budget (the net layer's resilient body already retried
     /// the stall/transient errors), so the slot is parked permanently —

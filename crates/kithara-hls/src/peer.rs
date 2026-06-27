@@ -382,9 +382,16 @@ impl HlsPeer {
 
         state.apply_seek_change(&coord, &ctx);
         let seg_at_reader = state.apply_boundary_crossing(&coord, &ctx);
+        // Reconcile the ABR escape flag under the guard (atomic-only). A rising
+        // edge wants a controller re-tick, which reads `peer.progress()` and
+        // re-locks `state` — so defer it until after `drop(guard)`.
+        let needs_retick = coord.reconcile_escape(seg_at_reader);
         let evictions = state.drain_evictions();
         drop(guard);
         coord.sync_abr_lock();
+        if needs_retick {
+            coord.abr.reevaluate();
+        }
 
         PollPhase::Continue(Box::new(PollOutcome {
             coord,
@@ -486,6 +493,13 @@ impl HlsTrackState {
         let manual_mode = matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_)));
         let switch_landed = match coord.urgent_rescue_boundary(resolved) {
             Some(rescue_seg) => coord.commit_variant_switch(ctx, rescue_seg),
+            // Reader pinned at a clean boundary on a non-delivering segment with
+            // a pending switch — the current variant cannot cross the boundary,
+            // so commit the target AT the stalled segment instead of waiting for
+            // a reader advance that can never happen (startup/stall livelock).
+            None if coord.stalled_escape(resolved) => {
+                coord.commit_variant_switch_at_segment(ctx, resolved)
+            }
             None if boundary_crossed || manual_mode => coord.commit_variant_switch(ctx, resolved),
             None => false,
         };

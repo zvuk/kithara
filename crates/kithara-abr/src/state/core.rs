@@ -1,8 +1,9 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, AtomicUsize, Ordering},
+    atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering},
 };
 
+use bitflags::bitflags;
 use kithara_events::{AbrMode, AbrReason, VariantIndex};
 use kithara_platform::{
     sync::Mutex,
@@ -11,6 +12,21 @@ use kithara_platform::{
 use num_traits::ToPrimitive;
 
 use super::{decision::AbrDecision, view::AbrView};
+
+bitflags! {
+    /// Composable boolean control-state for [`AbrState`], orthogonal to the
+    /// `mode` (Auto/Manual, carries an index) and the reentrant `lock` count.
+    /// Lives in its own [`AtomicU8`] — room to grow as more escape-class
+    /// states are added.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct AbrFlags: u8 {
+        /// The active variant cannot deliver the segment the reader is blocked
+        /// on (set by the HLS stall detector). While set, `evaluate()` excludes
+        /// the current variant from candidacy and skips the buffer-too-low
+        /// up-switch gate — staying cannot grow the buffer.
+        const ESCAPE = 1 << 0;
+    }
+}
 
 /// Per-peer ABR state owned by a peer and shared with the controller.
 ///
@@ -24,6 +40,7 @@ pub struct AbrState {
     max_bandwidth_bps: AtomicU64,
     lock_count: AtomicUsize,
     mode: AtomicUsize,
+    flags: AtomicU8,
     reference_instant: Instant,
     /// Phase 2 boundary-commit slot. `Some` means a switch has been
     /// requested via [`request_target`](AbrState::request_target) and
@@ -50,7 +67,10 @@ struct PendingApply {
 fn is_throughput_driven(reason: AbrReason) -> bool {
     matches!(
         reason,
-        AbrReason::UpSwitch | AbrReason::DownSwitch | AbrReason::UrgentDownSwitch
+        AbrReason::UpSwitch
+            | AbrReason::DownSwitch
+            | AbrReason::UrgentDownSwitch
+            | AbrReason::EscapeStalled
     )
 }
 
@@ -86,6 +106,7 @@ impl AbrState {
             max_bandwidth_bps: AtomicU64::new(Self::NO_BANDWIDTH_CAP),
             lock_count: AtomicUsize::new(0),
             mode: AtomicUsize::new(mode.into()),
+            flags: AtomicU8::new(AbrFlags::empty().bits()),
             reference_instant: Instant::now(),
             pending: Mutex::default(),
         }
@@ -112,6 +133,11 @@ impl AbrState {
             *slot = None;
         }
         drop(slot);
+        // Clear escape BEFORE publishing the new variant: a concurrent tick
+        // that observes the new `current_variant` (Acquire) is then guaranteed
+        // to observe the cleared flag, so it cannot immediately re-escape off
+        // the freshly chosen variant before it has had a chance to deliver.
+        self.clear_escape();
         self.current_variant.store(target.get(), Ordering::Release);
         self.record_switch(now);
     }
@@ -172,6 +198,31 @@ impl AbrState {
         {
             *slot = None;
         }
+    }
+
+    /// Clear the escape condition — the active variant is delivering again, or
+    /// a switch off it has been published. Idempotent.
+    pub fn clear_escape(&self) {
+        self.flags
+            .fetch_and(!AbrFlags::ESCAPE.bits(), Ordering::AcqRel);
+    }
+
+    /// `true` while the active variant is flagged non-delivering. Read by
+    /// `evaluate()` to exclude the variant and skip the buffer up-switch gate.
+    #[must_use]
+    pub fn is_escaping(&self) -> bool {
+        AbrFlags::from_bits_truncate(self.flags.load(Ordering::Acquire)).contains(AbrFlags::ESCAPE)
+    }
+
+    /// Flag the active variant as non-delivering — set by the HLS stall
+    /// detector when the reader is parked at a clean boundary on a segment
+    /// whose in-flight fetch has crossed the downloader's `soft_timeout`.
+    /// Idempotent. The caller triggers an out-of-band re-tick (see
+    /// [`AbrHandle::reevaluate`](crate::AbrHandle::reevaluate)) so `evaluate()`
+    /// observes it.
+    pub fn mark_escape(&self) {
+        self.flags
+            .fetch_or(AbrFlags::ESCAPE.bits(), Ordering::AcqRel);
     }
 
     #[must_use]

@@ -10,6 +10,7 @@ keywords = ["abr", "streaming", "hls", "audio", "bitrate"]
 categories = ["multimedia::audio", "network-programming"]
 
 [dependencies]
+bitflags = { workspace = true }
 bon = { workspace = true }
 dashmap = { workspace = true }
 kithara-events = { workspace = true }

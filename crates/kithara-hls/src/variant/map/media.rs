@@ -82,6 +82,21 @@ impl HlsVariant {
             .is_some_and(|s| s.state().is_failed())
     }
 
+    /// ABR stalled-escape gate: media segment `seg_idx` is the reader's
+    /// current segment at a clean boundary (`reader_pos` sits exactly at the
+    /// segment's start byte — nothing read past it), and its in-flight fetch
+    /// has crossed the downloader's `soft_timeout` (`on_slow` fired) without
+    /// settling. True ⇒ this variant cannot deliver the byte range the reader
+    /// is parked on, so a pending switch is safe to commit off the boundary
+    /// gate (no mid-segment splice).
+    pub(crate) fn segment_stalled_at_boundary(&self, seg_idx: u32, reader_pos: u64) -> bool {
+        self.segment_byte_offset(seg_idx) == Some(reader_pos)
+            && self
+                .segments
+                .get(seg_idx as usize)
+                .is_some_and(|s| s.state().is_slow() && s.state().is_downloading())
+    }
+
     /// Narrow disk handle for media segment `seg_idx`, or `None` when the
     /// index is out of range. Cheap: clones the shared scope plus the
     /// segment's key and url.

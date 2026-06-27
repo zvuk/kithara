@@ -4372,6 +4372,7 @@ dependencies = [
 name = "kithara-abr"
 version = "0.0.1-alpha3"
 dependencies = [
+ "bitflags 2.13.0",
  "bon",
  "criterion",
  "dashmap",
@@ -4709,6 +4710,7 @@ version = "0.0.1-alpha3"
 dependencies = [
  "aes",
  "axum",
+ "bitflags 2.13.0",
  "bon",
  "bytes",
  "cbc",

@@ -18,6 +18,7 @@ mod keys_integration;
 mod live_stress_real_stream;
 mod playlist_integration;
 mod probe_not_ready_at_creation;
+mod red_abr_no_escape_from_stalled_variant;
 mod seek_past_eof;
 mod seek_variant_switch_after_eof;
 mod segment_boundary_strand;

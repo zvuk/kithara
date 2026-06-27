@@ -536,6 +536,47 @@ impl HlsCoord {
         Some(head.saturating_sub(1))
     }
 
+    /// Generalised boundary-free escape for the startup/stall livelock: the
+    /// reader is parked at a clean segment boundary on the active variant, that
+    /// segment's in-flight fetch has crossed `soft_timeout` without settling
+    /// (the variant cannot deliver the byte range the reader needs), and a
+    /// switch is pending. Unlike [`Self::urgent_rescue_boundary`] this is
+    /// direction- and container-agnostic: the commit reseeds the target at the
+    /// stalled segment (recreate path reseeds by playhead time, byte-continuity
+    /// at the boundary — both continuity-safe with nothing read past it).
+    /// Distinct from a normal startup, where the needed segment settles before
+    /// `soft_timeout` and the slow flag never sets.
+    pub(crate) fn stalled_escape(&self, reader_seg: u32) -> bool {
+        self.abr.peek_pending_decision().is_some()
+            && self.active().is_some_and(|active| {
+                active.segment_stalled_at_boundary(reader_seg, self.position())
+            })
+    }
+
+    /// Reconcile the ABR escape flag against the live stall geometry. Edge-
+    /// detected against [`AbrHandle::is_escaping`]: a rising edge — the reader
+    /// is newly parked at a clean boundary on a non-delivering segment — marks
+    /// escape and returns `true`, signalling the caller to trigger a controller
+    /// re-tick OUTSIDE the HLS state lock (the tick reads `peer.progress()`,
+    /// which re-locks it, so a synchronous tick here would deadlock). A falling
+    /// edge — the segment now delivers, or a switch was published — clears it.
+    /// Idempotent in the steady state.
+    pub(crate) fn reconcile_escape(&self, reader_seg: u32) -> bool {
+        let stalled = self
+            .active()
+            .is_some_and(|active| active.segment_stalled_at_boundary(reader_seg, self.position()));
+        let was = self.abr.is_escaping();
+        if stalled && !was {
+            self.abr.mark_escape();
+            true
+        } else {
+            if !stalled && was {
+                self.abr.clear_escape();
+            }
+            false
+        }
+    }
+
     fn variant_change_pending(&self) -> bool {
         self.variant_generation.load(Ordering::Acquire) > self.fence_at.load(Ordering::Acquire)
     }

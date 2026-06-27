@@ -139,6 +139,12 @@ pub enum AbrReason {
     BufferTooLowForUpSwitch,
     /// Buffer ahead below urgent-threshold; force down-switch.
     UrgentDownSwitch,
+    /// The active variant cannot deliver the segment the reader is blocked on
+    /// (its in-flight fetch crossed the downloader's `soft_timeout`). Staying
+    /// cannot grow the buffer, so ABR escapes to a bandwidth-viable variant —
+    /// the buffer-too-low up-switch gate does not apply to a non-delivering
+    /// variant.
+    EscapeStalled,
     AlreadyOptimal,
     Locked,
 }

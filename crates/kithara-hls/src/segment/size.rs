@@ -1,10 +1,18 @@
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
-/// The EXACT flag is set iff the segment's byte length has been established
-/// (HEAD-seeded with a positive estimate, a byterange seed, or a committed
-/// `final_len`). Non-exact placeholders may still carry a non-zero byte count
-/// for routing, so completeness is the flag, not `bytes > 0`.
-const EXACT: u8 = 0b01;
+use bitflags::bitflags;
+
+bitflags! {
+    /// Validity flags for a [`SegmentSize`], packed into one `AtomicU8`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct SizeFlags: u8 {
+        /// Set iff the segment's byte length has been established (HEAD-seeded
+        /// with a positive estimate, a byterange seed, or a committed
+        /// `final_len`). Non-exact placeholders may still carry a non-zero byte
+        /// count for routing, so completeness is the flag, not `bytes > 0`.
+        const EXACT = 1 << 0;
+    }
+}
 
 /// Per-segment byte lengths paired with a validity flag, replacing the bare
 /// `AtomicU64` + the `> 0`-means-known convention. Route and read lengths are
@@ -27,7 +35,7 @@ impl Default for SegmentSize {
         Self {
             route_bytes: AtomicU64::new(0),
             read_bytes: AtomicU64::new(0),
-            flags: AtomicU8::new(0),
+            flags: AtomicU8::new(SizeFlags::empty().bits()),
         }
     }
 }
@@ -51,7 +59,7 @@ impl SegmentSize {
 
     /// Whether the byte length is known and can be used for readiness/EOF.
     pub(crate) fn is_exact(&self) -> bool {
-        self.flags.load(Ordering::Acquire) & EXACT != 0
+        SizeFlags::from_bits_truncate(self.flags.load(Ordering::Acquire)).contains(SizeFlags::EXACT)
     }
 
     /// Seed a routeable size that is not yet exact. Used by segment-aware
@@ -70,7 +78,8 @@ impl SegmentSize {
         size.route_bytes.store(n, Ordering::Release);
         size.read_bytes.store(n, Ordering::Release);
         if n > 0 {
-            size.flags.fetch_or(EXACT, Ordering::Release);
+            size.flags
+                .fetch_or(SizeFlags::EXACT.bits(), Ordering::Release);
         }
         size
     }
@@ -81,7 +90,7 @@ impl SegmentSize {
     pub(crate) fn set_exact(&self, n: u64) {
         self.route_bytes.store(n, Ordering::Release);
         self.read_bytes.store(n, Ordering::Release);
-        self.flags.store(EXACT, Ordering::Release);
+        self.flags.store(SizeFlags::EXACT.bits(), Ordering::Release);
     }
 
     /// Store a probe-resolved exact size only while no exact value exists.
