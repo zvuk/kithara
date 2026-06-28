@@ -107,6 +107,70 @@ gitlab_project = "disrupt/kithara"
 gitlab_package = "kithara"
 asset = "KitharaFFIInternal.xcframework.zip"
 single_asset = "Kithara.xcframework.zip"
+# Documentation channel: DocC archive (`just apple doc`) zipped + uploaded as a
+# release asset.
+docs_asset = "Kithara-docs.zip"
+docs_archive = "docs-build/Kithara.doccarchive"
+# WebAssembly channel: trunk dist (`cargo xtask wasm build`) zipped + deployed
+# to GitHub Pages classic on the gh-pages branch.
+wasm_asset = "kithara-wasm-pages.zip"
+wasm_dist = "crates/kithara-ffi/dist"
+pages_branch = "gh-pages"
+
+[orphans]
+# Packages excluded from the default `cargo modules orphans` sweep.
+exclude_packages = [
+    "kithara-workspace-hack",
+    "kithara-test-utils",
+    "kithara-test-macros",
+    "kithara-ffi",
+    "kithara-fuzz",
+    "kithara-decode",
+    "kithara-platform",
+    "xtask",
+]
+
+[android]
+# Cargo package compiled into the Android JNI libraries.
+ffi_crate = "kithara-ffi"
+# AAR artifacts the Gradle export is expected to produce.
+aars = ["kithara.aar", "rust-tls.aar"]
+
+[wasm]
+# wasm-bindgen JS artifact patched by the trunk post-build hook.
+js_artifact = "kithara-ffi.js"
+
+[quality]
+# Trait directory whose every `pub trait` must carry `#[unimock]`.
+unimock_traits_dir = "crates/kithara-play/src/traits"
+
+[apple.docgen]
+# DocC documentation-extension pages generated from Rust rustdoc JSON so the
+# Swift facade docs stay a projection of the Rust `///` source of truth.
+# Cargo package whose rustdoc JSON is the doc source (JSON stem = dashes→underscores).
+package = "kithara-ffi"
+# Features enabled for the rustdoc JSON build.
+features = ["uniffi"]
+# DocC module the extension headers target: `# ``<module>/<symbol>```.
+module = "Kithara"
+# Workspace-relative dir the generated `.md` extensions land in (gitignored).
+output_dir = "apple/Sources/Kithara/Kithara.docc"
+# Swift source dirs whose every public/open symbol must carry a `///` doc
+# comment (the completeness gate enforced by `apple docgen --check`).
+swift_dirs = ["apple/Sources/Kithara", "apple/Sources/KitharaRx"]
+
+# facade DocC symbol → Rust type in the rustdoc JSON (the allowlist).
+[[apple.docgen.symbols]]
+docc = "TrackStatus"
+rust = "FfiTrackStatus"
+
+[[apple.docgen.symbols]]
+docc = "ItemEvent"
+rust = "FfiItemEvent"
+
+[[apple.docgen.symbols]]
+docc = "PlayerSnapshot"
+rust = "FfiPlayerSnapshot"
 
 [lint_exclude]
 # Test code dropped from EVERY lint namespace (arch, style, idioms) so baselines

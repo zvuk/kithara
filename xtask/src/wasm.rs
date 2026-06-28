@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
 use regex::Regex;
 
-use crate::util::check_tool;
+use crate::{common::project::ProjectConfig, util::check_tool};
 
 #[derive(Debug, clap::Subcommand)]
 pub(crate) enum WasmCommand {
@@ -226,19 +226,24 @@ fn run_postbuild(staging_dir: &str) -> Result<()> {
     let dir = Path::new(staging_dir);
     anyhow::ensure!(dir.is_dir(), "staging dir does not exist: {staging_dir}");
 
+    let metadata = MetadataCommand::new().exec().context("cargo metadata")?;
+    let js_name = ProjectConfig::load(metadata.workspace_root.as_std_path())?
+        .wasm
+        .js_artifact;
+
     let index = dir.join("index.html");
     let content = fs::read_to_string(&index).context("read index.html")?;
     let content = strip_html_attrs(&content);
     let content = rewrite_paths(&content);
     fs::write(&index, content).context("write index.html")?;
 
-    let js = dir.join("kithara-ffi.js");
+    let js = dir.join(&js_name);
     if js.exists() {
-        let content = fs::read_to_string(&js).context("read kithara-ffi.js")?;
+        let content = fs::read_to_string(&js).with_context(|| format!("read {js_name}"))?;
         let content = apply_text_decoder_polyfill(&content);
         let content = content + Consts::CHECK_RUNTIME_JS;
-        fs::write(&js, content).context("write kithara-ffi.js")?;
-        println!("post-build: kithara-ffi.js patched");
+        fs::write(&js, content).with_context(|| format!("write {js_name}"))?;
+        println!("post-build: {js_name} patched");
     }
 
     let pattern = format!("{}/snippets/wasm_safe_thread-*/inline0.js", dir.display());

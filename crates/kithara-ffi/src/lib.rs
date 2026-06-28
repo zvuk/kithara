@@ -2,10 +2,10 @@
 //!
 //! Wraps `kithara-play` types behind an FFI-friendly API. Native targets
 //! (Apple / Android) use `UniFFI` to generate Swift / Kotlin bindings; wasm32
-//! uses wasm-bindgen under [`crate::web`]. `src/lib.rs` is the single
+//! uses wasm-bindgen under `web`. `src/lib.rs` is the single
 //! structural boundary where target-conditional `cfg` gates live: shared
 //! FFI data types live in `core`, native-only bridges/runtime in `native`,
-//! and the wasm surface in [`crate::web`].
+//! and the wasm surface in `web`.
 
 #[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
 uniffi::setup_scaffolding!();

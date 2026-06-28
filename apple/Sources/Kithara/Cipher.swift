@@ -26,6 +26,9 @@ public final class Cipher: KeyProcessor, @unchecked Sendable {
 
     // MARK: - KeyProcessor
 
+    /// ``KeyProcessor`` entry point. Decrypts `key` with the fixed secret;
+    /// the per-call `salt` is ignored because this cipher's secret is bound
+    /// at construction.
     public func processKey(_ key: Data, salt: String) -> Data {
         // Cipher's secret is fixed at init; salt is not consumed here.
         _ = salt

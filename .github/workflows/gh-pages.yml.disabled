@@ -38,14 +38,14 @@ jobs:
           key: wasm-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build WASM
-        working-directory: crates/kithara-wasm
+        working-directory: crates/kithara-ffi
         run: RUSTUP_TOOLCHAIN=nightly trunk build --release --config Trunk.toml
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: crates/kithara-wasm/dist
+          publish_dir: crates/kithara-ffi/dist
           force_orphan: true
 
   wasm-size:

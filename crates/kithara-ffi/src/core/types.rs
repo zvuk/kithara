@@ -221,20 +221,26 @@ impl From<TimeControlStatus> for FfiTimeControlStatus {
     }
 }
 
-/// FFI-friendly mirror of [`kithara_events::TrackStatus`].
+/// Track lifecycle state for a queued item.
 ///
-/// Mirrors the Queue-side track lifecycle: pending -> loading -> slow ->
-/// loaded -> consumed, or `failed` on error. `Cancelled` covers
-/// loads that were overridden by a later `select` of a different track.
+/// Emitted by the native engine as the queue loads, plays, consumes,
+/// fails, or cancels an item.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiTrackStatus {
+    /// The item is known to the queue but loading has not started.
     Pending,
+    /// The item is actively loading.
     Loading,
+    /// Loading is progressing slowly enough to be user-visible.
     Slow,
+    /// The item is loaded and ready for playback.
     Loaded,
+    /// Loading or playback failed with a native error message.
     Failed { reason: String },
+    /// The item has already been consumed by playback.
     Consumed,
+    /// Loading was cancelled by a newer queue selection.
     Cancelled,
 }
 
@@ -269,7 +275,7 @@ impl From<TimeRange> for FfiTimeRange {
     }
 }
 
-/// Typed player event dispatched through [`PlayerObserver::on_event`].
+/// Typed player event dispatched through [`crate::observer::PlayerObserver::on_event`].
 ///
 /// Replaces raw integer status codes with typed enums. Swift receives
 /// a single callback with a discriminated union instead of 7 separate methods.
@@ -336,7 +342,7 @@ impl From<FfiTransition> for kithara_queue::Transition {
     }
 }
 
-/// Typed item event dispatched through [`ItemObserver::on_event`].
+/// Typed item event dispatched through [`crate::observer::ItemObserver::on_event`].
 #[derive(Debug)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiItemEvent {
@@ -409,7 +415,7 @@ pub enum FfiAbrMode {
     Manual { variant_index: u32 },
 }
 
-/// Snapshot of the player's current state, returned by [`AudioPlayer::snapshot`].
+/// Snapshot of the player's current state, returned by [`crate::player::AudioPlayer::snapshot`].
 ///
 /// Fields are `Option` when no current item is loaded — callers should
 /// not assume defaults.

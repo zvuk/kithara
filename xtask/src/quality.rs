@@ -8,7 +8,7 @@ use cargo_metadata::MetadataCommand;
 use clap::Subcommand;
 use regex::Regex;
 
-use crate::common::{timestamp::utc_timestamp, walker::walk_rs_files};
+use crate::common::{project::ProjectConfig, timestamp::utc_timestamp, walker::walk_rs_files};
 
 #[derive(Clone, Copy, Debug, Subcommand)]
 pub(crate) enum QualityCommand {
@@ -511,11 +511,12 @@ fn run_trait_mock_exceptions() -> Result<()> {
 
 fn run_unimock_check() -> Result<()> {
     let root = workspace_root()?;
-    let traits_dir = root.join("crates/kithara-play/src/traits");
+    let traits_rel = ProjectConfig::load(&root)?.quality.unimock_traits_dir;
+    let traits_dir = root.join(&traits_rel);
 
     if !traits_dir.exists() {
         bail!(
-            "kithara-play traits directory not found: {}",
+            "unimock traits directory not found: {}",
             traits_dir.display()
         );
     }
@@ -550,12 +551,12 @@ fn run_unimock_check() -> Result<()> {
     }
 
     if !missing.is_empty() {
-        println!("FAILED: traits without unimock in kithara-play:");
+        println!("FAILED: traits without unimock in {traits_rel}:");
         for path in &missing {
             println!("  - {path}");
         }
         bail!(
-            "{} kithara-play trait file(s) without unimock",
+            "{} trait file(s) without unimock in {traits_rel}",
             missing.len()
         );
     }

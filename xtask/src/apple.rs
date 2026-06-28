@@ -10,7 +10,7 @@ use cargo_metadata::MetadataCommand;
 use plist::Value as PlistValue;
 use regex::Regex;
 
-use crate::common::project::ProjectConfig;
+use crate::{apple_docgen, common::project::ProjectConfig};
 
 /// Module constants for `cargo xtask apple run`. Grouped per the
 /// `style.multiple-private-module-consts` lint.
@@ -277,6 +277,12 @@ pub(crate) enum AppleCommand {
         /// `apple/KitharaFFIInternal.xcframework`).
         path: PathBuf,
     },
+    /// Generate DocC documentation-extension pages from Rust rustdoc JSON.
+    Docgen {
+        /// Verify rustdoc JSON compatibility and allowlist coverage without writing files.
+        #[arg(long)]
+        check: bool,
+    },
     /// Build release Apple artifacts, strip/audit them, zip them, and print
     /// the SPM checksum for the Rust `XCFramework` binary target.
     Release,
@@ -300,6 +306,7 @@ pub(crate) fn run(cmd: AppleCommand) -> Result<()> {
             skip_framework,
         ),
         AppleCommand::Audit { path } => audit_symbols(&path),
+        AppleCommand::Docgen { check } => apple_docgen::run(check),
         AppleCommand::Release => run_release(),
     }
 }
@@ -735,7 +742,7 @@ fn run_single(profile: crate::BuildProfile) -> Result<()> {
     let rx_src = resolve_rxswift(&root)?;
     println!("==> RxSwift source: {}", rx_src.display());
 
-    let temp = TempWorkDir::create("kithara-apple-single")?;
+    let temp = TempWorkDir::create(&format!("{}-apple-single", crate::util::project_name()))?;
     let work = temp.path().to_path_buf();
     let merged = work.join("merged");
     fs::create_dir_all(&merged)?;

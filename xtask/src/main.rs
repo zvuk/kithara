@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 
 mod android;
 mod apple;
+mod apple_docgen;
 mod arch;
 mod ast_grep;
 mod common;

@@ -8,11 +8,11 @@ use crate::{
 };
 
 /// FFI-facing audio player. A thin facade over the platform-selected
-/// [`Inner`] engine (`NativeInner` on Apple / Android, `WasmInner` on
+/// `Inner` engine (`NativeInner` on Apple / Android, `WasmInner` on
 /// wasm32). Every exported method delegates straight to `inner`; the
 /// facade only owns the object identity and (on native) the `Drop`
 /// shutdown pulse. The JS control surface lives in
-/// [`crate::web::surface`].
+/// `crate::web::surface`.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct AudioPlayer {
@@ -31,7 +31,7 @@ impl AudioPlayer {
     }
 
     /// Advance to the next item in the queue, no-op if already on the
-    /// last item or the queue is empty. Uses [`FfiTransition::None`]
+    /// last item or the queue is empty. Uses [`crate::types::FfiTransition::None`]
     /// for an immediate cut.
     pub fn advance_to_next_item(&self) {
         self.inner.advance_to_next_item();
@@ -44,7 +44,7 @@ impl AudioPlayer {
     /// # Errors
     ///
     /// Returns [`FfiError`] when the source URL cannot be resolved into
-    /// a queue-owned [`kithara::play::Source`] — same failure surface as
+    /// a queue-owned `kithara::play::Source` — same failure surface as
     /// [`Self::insert`].
     #[cfg_attr(
         all(),
@@ -64,15 +64,15 @@ impl AudioPlayer {
     /// Currently playing item (if any). Resolves the queue's current
     /// track id against the player's Swift-owned item registry so
     /// callers get back the same `AudioPlayerItem` instance they passed
-    /// to [`insert`].
+    /// to [`Self::insert`].
     #[must_use]
     pub fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
         self.inner.current_item()
     }
 
     /// Live playback position in seconds, or `0.0` if no item is loaded.
-    /// Convenience over [`snapshot().current_time`] for hot-path UI
-    /// updates.
+    /// Convenience over [`Self::snapshot`] and
+    /// [`FfiPlayerSnapshot::current_time`] for hot-path UI updates.
     #[must_use]
     pub fn current_time(&self) -> f64 {
         self.inner.current_time()
@@ -284,7 +284,7 @@ impl AudioPlayer {
     /// `processor.process_key(key, salt)` on each decrypt.
     ///
     /// Items already in the queue keep their original key registry —
-    /// re-call this method *before* [`insert`] for the new processor
+    /// re-call this method *before* [`Self::insert`] for the new processor
     /// to apply.
     pub fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
         self.inner.setup_hls_aes(processor);
@@ -301,7 +301,7 @@ impl AudioPlayer {
 
     /// Player-wide auth header. Stores `auth_token` under
     /// `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
-    /// every subsequent [`insert`]. Pass an empty string to clear.
+    /// every subsequent [`Self::insert`]. Pass an empty string to clear.
     pub fn setup_network(&self, auth_token: String) {
         self.inner.setup_network(auth_token);
     }

@@ -1,9 +1,32 @@
 use std::{
     io::{BufRead, BufReader},
+    path::Path,
     process::{Command, Stdio},
+    sync::OnceLock,
 };
 
 use anyhow::{Context, Result, bail};
+
+use crate::common::project::ProjectConfig;
+
+/// Project name from `.config/xtask.toml` (`[project] name`), used to namespace
+/// scratch / cache / temp dirs so the reusable xtask carries no project-name
+/// literals. Resolved once from the working dir; falls back to `xtask` when
+/// unset or unreadable.
+pub(crate) fn project_name() -> &'static str {
+    static NAME: OnceLock<String> = OnceLock::new();
+    NAME.get_or_init(|| {
+        let resolved = ProjectConfig::load(Path::new("."))
+            .map(|cfg| cfg.project.name)
+            .unwrap_or_default();
+        if resolved.is_empty() {
+            "xtask".to_string()
+        } else {
+            resolved
+        }
+    })
+    .as_str()
+}
 
 /// Check that an external tool is available.
 pub(crate) fn check_tool(tool: &str, args: &[&str], install_hint: &str) -> Result<()> {

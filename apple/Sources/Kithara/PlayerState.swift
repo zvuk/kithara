@@ -60,6 +60,7 @@ public enum KitharaPlayerError: Error, Sendable {
     case playback(PlayerError, itemId: TrackId?)
     case command(KitharaError, itemId: TrackId?)
 
+    /// The queue item this error is attributed to, if any.
     public var itemId: TrackId? {
         switch self {
         case .playback(_, let itemId),
@@ -68,6 +69,8 @@ public enum KitharaPlayerError: Error, Sendable {
         }
     }
 
+    /// The wrapped error — a ``PlayerError`` for `.playback`, a
+    /// ``KitharaError`` for `.command`.
     public var underlying: Error {
         switch self {
         case .playback(let error, _):
@@ -110,6 +113,7 @@ public struct Variant: Identifiable, Sendable, Equatable {
     /// Human-readable name, if available.
     public let name: String?
 
+    /// Stable identity for `Identifiable` — the variant ``index``.
     public var id: Int { index }
 
     init(ffi: FfiVariant) {

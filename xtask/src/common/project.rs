@@ -18,6 +18,43 @@ pub(crate) struct ProjectConfig {
     pub(crate) publish: PublishConfig,
     pub(crate) release: ReleaseConfig,
     pub(crate) lint_exclude: LintExcludeConfig,
+    pub(crate) apple: AppleConfig,
+    pub(crate) orphans: OrphansConfig,
+    pub(crate) android: AndroidConfig,
+    pub(crate) wasm: WasmConfig,
+    pub(crate) quality: QualityConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct OrphansConfig {
+    /// Packages excluded from the default `cargo modules orphans` sweep
+    /// (generated/helper/macro crates and per-target-gated crates that the
+    /// default rust-analyzer view flags as false-positive orphans).
+    pub(crate) exclude_packages: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct AndroidConfig {
+    /// Cargo package compiled into the Android JNI libraries.
+    pub(crate) ffi_crate: String,
+    /// AAR artifacts the Gradle export is expected to produce.
+    pub(crate) aars: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct WasmConfig {
+    /// wasm-bindgen JS artifact patched by the trunk post-build hook.
+    pub(crate) js_artifact: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct QualityConfig {
+    /// Trait directory whose every `pub trait` must carry `#[unimock]`.
+    pub(crate) unimock_traits_dir: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -115,6 +152,21 @@ pub(crate) struct ReleaseConfig {
     /// Optional single self-contained framework zip for manual drag-in. Empty
     /// disables that channel.
     pub(crate) single_asset: String,
+    /// Documentation channel: zip name for the DocC archive uploaded as a
+    /// release asset. Empty disables the docs channel.
+    pub(crate) docs_asset: String,
+    /// Workspace-relative DocC archive dir zipped into [`Self::docs_asset`]
+    /// (the `just apple doc` output).
+    pub(crate) docs_archive: String,
+    /// WebAssembly channel: zip name for the trunk `dist` bundle deployed to
+    /// GitHub Pages classic. Empty disables the wasm channel.
+    pub(crate) wasm_asset: String,
+    /// Workspace-relative trunk `dist` dir zipped into [`Self::wasm_asset`]
+    /// (the `cargo xtask wasm build` output).
+    pub(crate) wasm_dist: String,
+    /// Branch GitHub Pages classic serves from (force-orphan deploy of the
+    /// wasm bundle). Empty disables the pages deploy.
+    pub(crate) pages_branch: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -124,6 +176,42 @@ pub(crate) struct PublishConfig {
     pub(crate) workspace_hack_crate: String,
     /// User-agent sent to the registry when checking crate availability.
     pub(crate) user_agent: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct AppleConfig {
+    pub(crate) docgen: DocgenConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct DocgenConfig {
+    /// Cargo package whose rustdoc JSON is the documentation source. The JSON
+    /// filename stem is this name with dashes replaced by underscores.
+    pub(crate) package: String,
+    /// Features enabled for the rustdoc JSON build.
+    pub(crate) features: Vec<String>,
+    /// DocC module name used in the generated extension page headers.
+    pub(crate) module: String,
+    /// Workspace-relative directory the generated `.md` extensions are written
+    /// to (a `.docc` catalog subfolder; gitignored, rebuilt by `just apple doc`).
+    pub(crate) output_dir: String,
+    /// facade DocC symbol → Rust type allowlist/mapping.
+    pub(crate) symbols: Vec<DocgenSymbol>,
+    /// Workspace-relative Swift source dirs whose every `public`/`open`
+    /// declaration must carry a `///` doc comment. Enforced by
+    /// `apple docgen --check` so no public symbol ships undocumented.
+    pub(crate) swift_dirs: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DocgenSymbol {
+    /// DocC symbol name in the facade module (e.g. `TrackStatus`).
+    pub(crate) docc: String,
+    /// Rust type name in the rustdoc JSON (e.g. `FfiTrackStatus`).
+    pub(crate) rust: String,
 }
 
 impl ProjectConfig {

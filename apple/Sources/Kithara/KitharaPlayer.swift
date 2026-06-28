@@ -24,6 +24,7 @@ import AVFoundation
 /// cannot be overridden. Subclasses must preserve the `@unchecked Sendable`
 /// contract: do not add non-`Sendable` mutable state.
 open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
+    /// Convenience alias for the queue's item type, ``KitharaPlayerItem``.
     public typealias Item = KitharaPlayerItem
 
     private let _inner: AudioPlayer

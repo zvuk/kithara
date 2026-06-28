@@ -734,6 +734,7 @@ apple MODE="xcframework" *ARGS:
             -scheme "$scheme" -destination "$destination" build
         ;;
       doc)
+        cargo xtask apple docgen
         mkdir -p docs-build
         KITHARA_LOCAL_DEV=1 swift package --allow-writing-to-directory ./docs-build \
             generate-documentation \
@@ -749,6 +750,27 @@ apple MODE="xcframework" *ARGS:
         exit 2
         ;;
     esac
+
+# Release artifacts (framework + docs + wasm), staged for upload + Pages deploy.
+#   just release-artifacts VERSION   # build all artifacts, stamp Package.swift, cache them
+#   just release-publish [REF]       # upload framework + docs to GitHub + GitLab
+#   just release-pages [REF]         # deploy the wasm bundle to GitHub Pages classic
+# Build every release artifact ahead of time and cache it under the tag:
+#   - framework (fpm + single) built by `release prepare`
+#   - DocC archive built here, zipped + cached as the docs asset
+#   - wasm dist built here, zipped + cached for the Pages deploy
+release-artifacts VERSION:
+    just apple doc
+    cargo xtask wasm build --profile release
+    cargo xtask release prepare {{VERSION}}
+
+# Upload the cached framework + docs assets to GitHub and the GitLab mirror.
+release-publish REF="HEAD":
+    cargo xtask release publish --ref {{REF}}
+
+# Deploy the cached wasm bundle to GitHub Pages classic (gh-pages, force-orphan).
+release-pages REF="HEAD":
+    cargo xtask release pages --ref {{REF}}
 
 # Temporarily patch project.yml to use local package path for xcodegen.
 [private]
