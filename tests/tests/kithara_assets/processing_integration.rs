@@ -38,7 +38,7 @@ fn build_test_processing_scope(
     asset_root: &str,
     process_fn: ProcessChunkFn<TestContext>,
 ) -> AssetScope<TestContext> {
-    let builder = AssetStoreBuilder::new().process_fn(process_fn);
+    let builder = AssetStoreBuilder::default().process_fn(process_fn);
     #[cfg(not(target_arch = "wasm32"))]
     {
         builder
@@ -63,7 +63,7 @@ fn build_test_scope_no_processing(
 ) -> AssetScope {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        AssetStoreBuilder::new()
+        AssetStoreBuilder::<()>::default()
             .root_dir(temp_dir.path())
             .evict_config(EvictConfig {
                 max_assets: None,
@@ -75,7 +75,7 @@ fn build_test_scope_no_processing(
     #[cfg(target_arch = "wasm32")]
     {
         let _ = temp_dir;
-        AssetStoreBuilder::new()
+        AssetStoreBuilder::<()>::default()
             .ephemeral(true)
             .build()
             .scope(asset_root)

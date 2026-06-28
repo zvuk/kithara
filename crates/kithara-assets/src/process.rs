@@ -966,7 +966,7 @@ mod tests {
             },
         );
 
-        let store = AssetStoreBuilder::new()
+        let store = AssetStoreBuilder::default()
             .process_fn(process_fn)
             .ephemeral(true)
             .build();

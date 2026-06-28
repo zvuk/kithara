@@ -8,7 +8,7 @@ use kithara_integration_tests::{TestTempDir, temp_dir};
 use kithara_platform::time::Duration;
 
 fn asset_scope_with_root(temp_dir: &TestTempDir, asset_root: &str) -> AssetScope {
-    AssetStoreBuilder::new()
+    AssetStoreBuilder::<()>::default()
         .root_dir(temp_dir.path())
         .evict_config(EvictConfig {
             max_assets: None,

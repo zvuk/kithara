@@ -16,7 +16,7 @@ use kithara_decode::{DecodeError, DecoderBackend};
 use kithara_events::EventBus;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::{HlsConfig, HlsStore, KeyOptions, SizeProbeMethod};
-use kithara_net::{Headers, HttpClient};
+use kithara_net::{Headers, HttpClient, NetOptions};
 use kithara_platform::{CancelScope, CancelToken};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use portable_atomic::AtomicF32;
@@ -34,6 +34,21 @@ fn derive_extension_hint(segment: &str) -> Option<String> {
         return None;
     }
     Some(extension.to_lowercase())
+}
+
+fn store_options_with_flush_hub(
+    store: &StoreOptions,
+    flush_hub: Option<Arc<FlushHub>>,
+) -> StoreOptions {
+    StoreOptions::builder()
+        .cache_dir(store.cache_dir.clone())
+        .maybe_cache_capacity(store.cache_capacity)
+        .maybe_flush_hub(flush_hub.or_else(|| store.flush_hub.clone()))
+        .maybe_max_assets(store.max_assets)
+        .maybe_max_bytes(store.max_bytes)
+        .maybe_on_invalidated(store.on_invalidated.clone())
+        .is_ephemeral(store.is_ephemeral)
+        .build()
 }
 
 /// Source of an audio resource: either a URL or a local file path.
@@ -175,6 +190,7 @@ impl ResourceConfig {
 
     /// Build an `AudioConfig<File>` from this resource configuration.
     pub(crate) fn build_file_config(self) -> AudioConfig<kithara_file::File> {
+        let byte_pool = self.byte_pool.clone();
         let (file_src, derived_hint) = match self.src {
             ResourceSrc::Url(ref url) => {
                 (FileSrc::Remote(url.clone()), derive_remote_file_hint(url))
@@ -186,17 +202,13 @@ impl ResourceConfig {
                     .map(str::to_lowercase),
             ),
         };
-        let store = StoreOptions::builder()
-            .cache_dir(self.store.cache_dir.clone())
-            .maybe_flush_hub(
-                self.flush_hub
-                    .clone()
-                    .or_else(|| self.store.flush_hub.clone()),
-            )
-            .build();
+        let store = store_options_with_flush_hub(&self.store, self.flush_hub.clone());
         let downloader = self.downloader.clone().unwrap_or_else(|| {
             let dl_cancel = CancelScope::new(self.cancel.clone()).token();
-            let client = HttpClient::new(kithara_net::NetOptions::default(), dl_cancel.child());
+            let net_options = NetOptions::builder()
+                .maybe_byte_pool(byte_pool.clone())
+                .build();
+            let client = HttpClient::new(net_options, dl_cancel.child());
             Downloader::new(
                 DownloaderConfig::for_client(client)
                     .cancel(dl_cancel)
@@ -210,13 +222,14 @@ impl ResourceConfig {
             .maybe_look_ahead_bytes(self.look_ahead_bytes)
             .maybe_headers(self.headers.clone())
             .maybe_name(self.name.clone())
+            .maybe_pool(byte_pool.clone())
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
             .build();
         AudioConfig::<kithara_file::File>::for_stream(file_config)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint.or(derived_hint))
-            .maybe_byte_pool(self.byte_pool)
+            .maybe_byte_pool(byte_pool)
             .maybe_pcm_pool(self.pcm_pool)
             .maybe_host_sample_rate(self.host_sample_rate)
             .resampler_quality(self.resampler_quality)
@@ -232,6 +245,7 @@ impl ResourceConfig {
 
     /// Build an `AudioConfig<Hls>` from this resource configuration.
     pub(crate) fn build_hls_config(self) -> Result<AudioConfig<kithara_hls::Hls>, DecodeError> {
+        let byte_pool = self.byte_pool.clone();
         let url = match self.src {
             ResourceSrc::Url(ref url) => url.clone(),
             ResourceSrc::Path(ref p) => {
@@ -241,14 +255,7 @@ impl ResourceConfig {
                 )));
             }
         };
-        let store = StoreOptions::builder()
-            .cache_dir(self.store.cache_dir.clone())
-            .maybe_flush_hub(
-                self.flush_hub
-                    .clone()
-                    .or_else(|| self.store.flush_hub.clone()),
-            )
-            .build();
+        let store = store_options_with_flush_hub(&self.store, self.flush_hub.clone());
         let hls_config = HlsConfig::for_url(url)
             .store(store)
             .maybe_asset_store(self.hls_asset_store)
@@ -259,6 +266,7 @@ impl ResourceConfig {
             .maybe_headers(self.headers)
             .maybe_name(self.name)
             .maybe_base_url(self.hls_base_url)
+            .maybe_pool(byte_pool.clone())
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
             .size_probe_method(self.size_probe_method)
@@ -266,7 +274,7 @@ impl ResourceConfig {
         Ok(AudioConfig::<kithara_hls::Hls>::for_stream(hls_config)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint)
-            .maybe_byte_pool(self.byte_pool)
+            .maybe_byte_pool(byte_pool)
             .maybe_pcm_pool(self.pcm_pool)
             .maybe_host_sample_rate(self.host_sample_rate)
             .resampler_quality(self.resampler_quality)

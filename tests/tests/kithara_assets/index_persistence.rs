@@ -99,7 +99,7 @@ fn read_archived_availability(path: &Path, asset_root: &str, key: &str) -> Archi
 }
 
 fn build_scope(temp_dir: &kithara_integration_tests::TestTempDir, asset_root: &str) -> AssetScope {
-    AssetStoreBuilder::new()
+    AssetStoreBuilder::<()>::default()
         .root_dir(temp_dir.path())
         .evict_config(EvictConfig {
             max_assets: None,

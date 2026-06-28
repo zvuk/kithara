@@ -3,6 +3,7 @@
 use std::ptr;
 
 use bytes::Bytes;
+use kithara_bufpool::{BudgetExhausted, BytePool, PooledOwned};
 use kithara_platform::{sync::Mutex, tokio::sync::oneshot};
 use objc2::{ClassType, runtime::NSObjectProtocol};
 use objc2_foundation::{NSData, NSError, NSHTTPURLResponse, NSInteger, NSString, NSURLResponse};
@@ -22,10 +23,21 @@ pub(super) struct StreamHead {
     pub(super) status: Option<u16>,
 }
 
+struct PooledBytes {
+    bytes: PooledOwned<32, Vec<u8>>,
+}
+
+impl AsRef<[u8]> for PooledBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+}
+
 pub(super) fn completion_result(
     data: *mut NSData,
     response: *mut NSURLResponse,
     error: *mut NSError,
+    byte_pool: &BytePool,
 ) -> Result<AppleDataResponse, NetError> {
     // SAFETY: NSURLSession provides these pointers for the duration of the
     // completion callback; null is represented as None.
@@ -40,7 +52,7 @@ pub(super) fn completion_result(
     // SAFETY: NSURLSession provides these pointers for the duration of the
     // completion callback; null is represented as None.
     let response = unsafe { response.as_ref() };
-    let body = data.map_or_else(Bytes::new, copy_data);
+    let body = data.map_or_else(|| Ok(Bytes::new()), |data| copy_data(data, byte_pool))?;
     let (status, headers) = response
         .and_then(http_parts)
         .unwrap_or_else(|| (None, Headers::new()));
@@ -58,8 +70,25 @@ pub(super) fn http_parts(response: &NSURLResponse) -> Option<(Option<u16>, Heade
     Some((status, headers_from_response(http)))
 }
 
-pub(super) fn copy_data(data: &NSData) -> Bytes {
-    Bytes::from(data.to_vec())
+pub(super) fn copy_data(data: &NSData, byte_pool: &BytePool) -> Result<Bytes, NetError> {
+    let len = data.len();
+    if len == 0 {
+        return Ok(Bytes::new());
+    }
+
+    let mut bytes = byte_pool.get();
+    bytes.ensure_len(len).map_err(byte_budget_error)?;
+    bytes.truncate(len);
+    // SAFETY: NSURLSession supplies immutable NSData for the duration of the
+    // callback. We copy it into a pooled Rust buffer before returning.
+    bytes
+        .as_mut_slice()
+        .copy_from_slice(unsafe { data.as_bytes_unchecked() });
+    Ok(Bytes::from_owner(PooledBytes { bytes }))
+}
+
+fn byte_budget_error(_error: BudgetExhausted) -> NetError {
+    NetError::Network("byte budget exhausted".to_string())
 }
 
 pub(super) fn error_from_nserror(error: &NSError) -> NetError {

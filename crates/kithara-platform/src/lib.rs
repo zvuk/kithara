@@ -38,10 +38,13 @@ pub mod flash;
 
 // W3 propagate-down cancel — the workspace's only cancel surface (the legacy
 // runtime-backed roots were dropped in 3.4).
-pub use common::cancel::{CancelGroup, CancelScope, CancelToken, CancelWakerGuard, Cancelled};
 // `kithara_platform::flash::*` (macro emissions, prod attributes) must resolve
 // in every configuration: inert forms off the engine.
 #[cfg(not(all(not(target_arch = "wasm32"), feature = "flash")))]
 pub use common::flash_inert as flash;
+pub use common::{
+    cancel::{CancelGroup, CancelScope, CancelToken, CancelWakerGuard, Cancelled},
+    traits,
+};
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub use flash::*;

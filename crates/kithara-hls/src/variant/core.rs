@@ -9,7 +9,7 @@ use std::{
 
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
-use kithara_platform::{CancelToken, sync::Mutex, time::Duration};
+use kithara_platform::{CancelToken, sync::Mutex, time::Duration, traits::FromWithParams};
 use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve};
 
 use super::{
@@ -21,7 +21,6 @@ use super::{
 };
 use crate::{
     config::SizeProbeMethod,
-    conv::FromWithParams,
     playlist::{PlaylistAccess, PlaylistState},
     segment::{MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize, SegmentSlotState},
     signal::SizeSignal,

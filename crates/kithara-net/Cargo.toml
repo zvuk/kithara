@@ -35,6 +35,7 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 bitflags = { workspace = true }
 bon = { workspace = true }
 kithara-platform = { workspace = true }
+kithara-bufpool = { workspace = true }
 kithara-test-macros = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true, optional = true }

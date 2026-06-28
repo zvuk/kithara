@@ -4828,6 +4828,7 @@ dependencies = [
  "futures",
  "gloo-timers",
  "hotpath",
+ "kithara-bufpool",
  "kithara-net",
  "kithara-platform",
  "kithara-test-macros",

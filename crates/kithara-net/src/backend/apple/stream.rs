@@ -7,16 +7,18 @@ use std::{
 
 use bytes::Bytes;
 use futures::Stream;
+use kithara_bufpool::BytePool;
 use kithara_platform::{
     CancelToken, CancelWakerGuard,
     sync::Mutex,
     tokio::{select, sync::oneshot},
 };
 use objc2::rc::Retained;
+use objc2_foundation::NSData;
 
 use super::{
     delegate::AppleSessionDelegate,
-    response::{AppleDataResponse, HTTP_PARTIAL_CONTENT, StreamHead},
+    response::{AppleDataResponse, HTTP_PARTIAL_CONTENT, StreamHead, copy_data},
     session::{AppleTask, TaskId},
 };
 use crate::{ByteStream, error::NetError, types::Headers};
@@ -134,6 +136,7 @@ impl Stream for AppleBodyStream {
 }
 
 pub(super) struct AppleBodyQueue {
+    byte_pool: BytePool,
     inner: Mutex<AppleBodyQueueInner>,
     task: AppleTask,
     capacity: usize,
@@ -148,8 +151,14 @@ struct AppleBodyQueueInner {
 }
 
 impl AppleBodyQueue {
-    pub(super) fn new(task: AppleTask, capacity: usize, resume_at: usize) -> Self {
+    pub(super) fn new(
+        task: AppleTask,
+        capacity: usize,
+        resume_at: usize,
+        byte_pool: BytePool,
+    ) -> Self {
         Self {
+            byte_pool,
             task,
             capacity,
             resume_at,
@@ -165,6 +174,9 @@ impl AppleBodyQueue {
     pub(super) fn close(&self, terminal: Option<NetError>) {
         let (resume, waker) = {
             let mut inner = self.inner.lock();
+            if inner.closed {
+                return;
+            }
             if let Some(error) = terminal {
                 inner.items.push_back(Err(error));
             }
@@ -178,6 +190,16 @@ impl AppleBodyQueue {
         }
         if let Some(waker) = waker {
             waker.wake();
+        }
+    }
+
+    pub(super) fn push_data(&self, data: &NSData) {
+        match copy_data(data, &self.byte_pool) {
+            Ok(bytes) => self.push(bytes),
+            Err(error) => {
+                self.task.cancel();
+                self.close(Some(error));
+            }
         }
     }
 

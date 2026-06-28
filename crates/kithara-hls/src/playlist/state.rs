@@ -1,9 +1,8 @@
-use kithara_platform::{sync::RwLock, time::Duration};
+use kithara_platform::{sync::RwLock, time::Duration, traits::FromWithParams};
 use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;
 
 use crate::{
-    conv::FromWithParams,
     ids::{SegmentIndex, VariantIndex},
     playlist::parse::{MediaPlaylist, VariantStream},
 };

@@ -35,7 +35,7 @@ fn load_pins(root_dir: &Path) -> HashSet<String> {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
     let dir = tempdir().unwrap();
-    let scope = AssetStoreBuilder::new()
+    let scope = AssetStoreBuilder::<()>::default()
         .root_dir(dir.path())
         .build()
         .scope("disk-asset");
@@ -84,7 +84,7 @@ fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
     let dir = tempdir().unwrap();
-    let scope = AssetStoreBuilder::new()
+    let scope = AssetStoreBuilder::<()>::default()
         .root_dir(dir.path())
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build()
@@ -113,7 +113,7 @@ fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
     let dir = tempdir().unwrap();
-    let scope = AssetStoreBuilder::new()
+    let scope = AssetStoreBuilder::<()>::default()
         .root_dir(dir.path())
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build()
@@ -139,7 +139,7 @@ fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_open_resource_on_missing_key_does_not_create_ghost_file() {
     let dir = tempdir().unwrap();
-    let scope = AssetStoreBuilder::new()
+    let scope = AssetStoreBuilder::<()>::default()
         .root_dir(dir.path())
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build()
@@ -177,7 +177,7 @@ fn disk_open_resource_on_missing_key_does_not_create_ghost_file() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
-    let scope = AssetStoreBuilder::new()
+    let scope = AssetStoreBuilder::<()>::default()
         .cache_capacity(NonZeroUsize::new(3).unwrap())
         .ephemeral(true)
         .build()
@@ -252,7 +252,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         max_bytes: None,
     };
 
-    let scope_a = AssetStoreBuilder::new()
+    let scope_a = AssetStoreBuilder::default()
         .root_dir(dir.path())
         .evict_config(evict.clone())
         .process_fn(xor_process_fn())
@@ -292,7 +292,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     reopened.read_into(&mut processed).unwrap();
     assert_eq!(processed, vec![0x45, 0x75, 0x65]);
 
-    let scope_b = AssetStoreBuilder::new()
+    let scope_b = AssetStoreBuilder::default()
         .root_dir(dir.path())
         .evict_config(evict.clone())
         .process_fn(xor_process_fn())
@@ -321,7 +321,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         "dropping the last user handle must eagerly unpin even while the store stays alive"
     );
 
-    let scope_c = AssetStoreBuilder::new()
+    let scope_c = AssetStoreBuilder::default()
         .root_dir(dir.path())
         .evict_config(evict.clone())
         .process_fn(xor_process_fn())
@@ -338,7 +338,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     let res_c = res_c.commit(Some(3)).unwrap();
     drop(res_c);
 
-    let scope_a_probe = AssetStoreBuilder::new()
+    let scope_a_probe = AssetStoreBuilder::default()
         .root_dir(dir.path())
         .evict_config(evict.clone())
         .process_fn(xor_process_fn())

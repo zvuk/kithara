@@ -1,7 +1,7 @@
 use std::{fmt, path::PathBuf, sync::Arc};
 
 use bon::Builder;
-use kithara_assets::{AssetStore, StoreOptions};
+use kithara_assets::{AssetStore, BytePool, StoreOptions};
 use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::CancelToken;
@@ -56,6 +56,8 @@ pub struct FileConfig {
     pub look_ahead_bytes: Option<u64>,
     /// Optional name for cache disambiguation.
     pub name: Option<String>,
+    /// Shared byte pool for cache and fallback network buffers.
+    pub pool: Option<BytePool>,
     /// Storage configuration.
     ///
     /// Honoured only when [`Self::asset_store`] is `None` (standalone
@@ -78,6 +80,7 @@ impl fmt::Debug for FileConfig {
             .field("headers", &self.headers)
             .field("look_ahead_bytes", &self.look_ahead_bytes)
             .field("name", &self.name)
+            .field("pool", &self.pool)
             .field("store", &self.store)
             .field("asset_store", &self.asset_store.is_some())
             .field("event_channel_capacity", &self.event_channel_capacity)

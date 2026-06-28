@@ -27,7 +27,7 @@ fn asset_scope_with_root(
 ) -> AssetScope {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        AssetStoreBuilder::new()
+        AssetStoreBuilder::<()>::default()
             .root_dir(temp_dir.path())
             .evict_config(EvictConfig {
                 max_assets: None,
@@ -39,7 +39,7 @@ fn asset_scope_with_root(
     #[cfg(target_arch = "wasm32")]
     {
         let _ = temp_dir;
-        AssetStoreBuilder::new()
+        AssetStoreBuilder::<()>::default()
             .ephemeral(true)
             .build()
             .scope(asset_root)

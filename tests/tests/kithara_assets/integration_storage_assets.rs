@@ -55,7 +55,7 @@ fn asset_scope_with_root(
     temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
 ) -> AssetScope {
-    AssetStoreBuilder::new()
+    AssetStoreBuilder::<()>::default()
         .root_dir(temp_dir.path())
         .evict_config(EvictConfig {
             max_assets: None,

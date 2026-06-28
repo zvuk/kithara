@@ -7,11 +7,11 @@ use hls_m3u8::{
 };
 use kithara_abr::VariantInfo;
 use kithara_events::{VariantDuration, VariantIndex};
-use kithara_platform::time::Duration;
+use kithara_platform::{time::Duration, traits::FromWithParams};
 use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;
 
-use crate::{HlsResult, conv::FromWithParams};
+use crate::HlsResult;
 
 /// Cap error messages to avoid dumping binary data into logs.
 fn truncate_error(msg: &str) -> String {

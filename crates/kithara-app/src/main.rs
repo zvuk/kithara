@@ -8,7 +8,7 @@ use std::{
 
 use clap::Parser;
 use kithara::{
-    assets::{FlushHub, FlushPolicy},
+    assets::{BytePool, FlushHub, FlushPolicy, StoreOptions},
     audio::generate_log_spaced_bands,
     net::{HttpClient, NetOptions},
     play::{PlayerConfig, PlayerImpl, StretchControls},
@@ -103,17 +103,39 @@ fn main() -> AppResult {
     // every subsystem derives from `shutdown.child()`, so a frontend
     // `config.shutdown.cancel()` propagates down the shutdown subtree to all of
     let shutdown = CancelToken::root();
+    let byte_pool = BytePool::default();
     let net = NetOptions::builder()
         .is_insecure(args.insecure || baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)
         .compression(baked::BAKED_COMPRESSION)
+        .byte_pool(byte_pool.clone())
         .build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, shutdown.child())).build(),
     );
     let flush_hub = FlushHub::new(shutdown.child(), FlushPolicy::default());
-    let config = AppConfig::new(downloader, flush_hub, shutdown.clone())
-        .with_tracks(args.tracks)
-        .with_should_accept_invalid_certs(args.insecure);
+    let store_options = StoreOptions::builder()
+        .flush_hub(Arc::clone(&flush_hub))
+        .build();
+    let file_asset_store = kithara::file::build_shared_asset_store(
+        &store_options,
+        Some(byte_pool.clone()),
+        shutdown.child(),
+    );
+    let hls_asset_store = kithara::hls::build_shared_asset_store(
+        &store_options,
+        Some(byte_pool.clone()),
+        shutdown.child(),
+    );
+    let config = AppConfig::builder()
+        .downloader(downloader)
+        .flush_hub(flush_hub)
+        .shutdown(shutdown.clone())
+        .byte_pool(byte_pool)
+        .file_asset_store(file_asset_store)
+        .hls_asset_store(hls_asset_store)
+        .maybe_tracks((!args.tracks.is_empty()).then_some(args.tracks))
+        .should_accept_invalid_certs(args.insecure)
+        .build();
 
     let timestretch = StretchControls::new(1.0);
     let player_config = PlayerConfig::builder()

@@ -3,6 +3,7 @@
 use std::{future::Future, sync::Arc};
 
 use block2::RcBlock;
+use kithara_bufpool::BytePool;
 use kithara_platform::{
     CancelToken,
     sync::{Mutex, OnceLock},
@@ -56,6 +57,7 @@ struct SharedSession {
 #[derive(Clone)]
 pub(crate) struct AppleSession {
     accept_encoding: String,
+    byte_pool: BytePool,
     body_queue_capacity: usize,
     body_queue_resume_at: usize,
     connection_metrics: ConnectionMetrics,
@@ -66,9 +68,14 @@ impl AppleSession {
     pub(crate) fn new(options: &NetOptions, connection_metrics: ConnectionMetrics) -> Self {
         let shared = shared_session(options);
         let accept_encoding = accept_encoding_value(options.compression);
+        let byte_pool = options
+            .byte_pool
+            .clone()
+            .unwrap_or_else(|| BytePool::default().clone());
 
         Self {
             accept_encoding,
+            byte_pool,
             body_queue_capacity: options.body_queue_capacity,
             body_queue_resume_at: options.body_queue_resume_at,
             connection_metrics,
@@ -92,9 +99,10 @@ impl AppleSession {
         let (sender, receiver) = oneshot::channel();
         let sender = Arc::new(Mutex::new(Some(sender)));
         let block_sender = Arc::clone(&sender);
+        let byte_pool = self.byte_pool.clone();
         let completion = RcBlock::new(
             move |data: *mut NSData, response: *mut NSURLResponse, error: *mut NSError| {
-                let result = completion_result(data, response, error);
+                let result = completion_result(data, response, error, &byte_pool);
                 send_once(&block_sender, result);
             },
         );
@@ -125,6 +133,7 @@ impl AppleSession {
             task.clone(),
             self.body_queue_capacity,
             self.body_queue_resume_at,
+            self.byte_pool.clone(),
         ));
         let task_id = task.id();
         self.shared
@@ -255,5 +264,41 @@ impl AppleTask {
 
     pub(super) fn suspend(&self) {
         self.task.suspend();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_bufpool::ByteBudget;
+    use objc2_foundation::NSData;
+
+    use super::{super::response::copy_data, *};
+
+    #[test]
+    fn configured_byte_pool_reaches_response_copy_path() {
+        let pool = BytePool::with_byte_budget(usize::MAX, 0, ByteBudget(64));
+        let options = NetOptions::builder().byte_pool(pool.clone()).build();
+        let session = AppleSession::new(&options, ConnectionMetrics::default());
+        let data = NSData::with_bytes(b"abc");
+
+        let bytes = copy_data(&data, &session.byte_pool).expect("copy into configured pool");
+        assert_eq!(&bytes[..], b"abc");
+        assert!(pool.allocated_bytes() > 0);
+        drop(bytes);
+
+        let before = pool.stats();
+        let bytes = copy_data(&data, &session.byte_pool).expect("reuse configured pool");
+        assert_eq!(&bytes[..], b"abc");
+        let after = pool.stats();
+        assert!(after.home_hits + after.steal_hits > before.home_hits + before.steal_hits);
+    }
+
+    #[test]
+    fn response_copy_reports_byte_budget_exhaustion() {
+        let pool = BytePool::with_byte_budget(usize::MAX, 0, ByteBudget(1));
+        let data = NSData::with_bytes(b"ab");
+
+        let error = copy_data(&data, &pool).expect_err("budget must reject two-byte body");
+        assert!(matches!(error, NetError::Network(message) if message == "byte budget exhausted"));
     }
 }

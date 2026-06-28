@@ -2,7 +2,8 @@ use std::{cmp::min, collections::HashMap, fmt};
 
 use bitflags::bitflags;
 use bon::Builder;
-use kithara_platform::time::Duration;
+use kithara_bufpool::BytePool;
+use kithara_platform::{time::Duration, traits::FromWithParams};
 
 bitflags! {
     /// HTTP `Accept-Encoding` algorithms the client advertises and is
@@ -192,6 +193,9 @@ pub struct NetOptions {
     /// they resume as soon as the consumer drains one chunk.
     #[builder(default = 16)]
     pub body_queue_resume_at: usize,
+    /// Shared byte buffer pool used by backends that must copy platform-owned
+    /// response buffers before handing bytes to Rust consumers.
+    pub byte_pool: Option<BytePool>,
     /// Browser TLS+HTTP2 fingerprint the native `client-wreq` backend
     /// impersonates. Defaults to `Safari`. Ignored by the `client-reqwest`
     /// backend and on wasm32 (no emulation there).
@@ -203,6 +207,23 @@ impl Default for NetOptions {
     fn default() -> Self {
         Self::builder()
             .total_timeout(Duration::from_secs(120))
+            .build()
+    }
+}
+
+impl FromWithParams<Self, Option<BytePool>> for NetOptions {
+    fn build(options: Self, byte_pool: Option<BytePool>) -> Self {
+        Self::builder()
+            .compression(options.compression)
+            .inactivity_timeout(options.inactivity_timeout)
+            .maybe_total_timeout(options.total_timeout)
+            .retry_policy(options.retry_policy)
+            .is_insecure(options.is_insecure)
+            .pool_max_idle_per_host(options.pool_max_idle_per_host)
+            .body_queue_capacity(options.body_queue_capacity)
+            .body_queue_resume_at(options.body_queue_resume_at)
+            .maybe_byte_pool(options.byte_pool.or(byte_pool))
+            .impersonate(options.impersonate)
             .build()
     }
 }

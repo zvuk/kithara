@@ -36,7 +36,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
             Ok(input.len())
         });
     let backend = Arc::new(
-        AssetStoreBuilder::new()
+        AssetStoreBuilder::default()
             .ephemeral(true)
             .cancel(cancel.clone())
             .process_fn(passthrough)
@@ -248,7 +248,9 @@ fn range_ready_clamps_tail_seek_alias_to_eof() {
         else {
             panic!("segment resource must be pending");
         };
-        let bytes = vec![0u8; segment.len() as usize];
+        let segment_len =
+            usize::try_from(segment.len()).expect("test segment length must fit usize");
+        let bytes = vec![0u8; segment_len];
         writer.write_at(0, &bytes).expect("write segment");
         writer
             .commit(Some(bytes.len() as u64))

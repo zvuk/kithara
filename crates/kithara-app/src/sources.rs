@@ -74,6 +74,7 @@ pub(crate) fn build_resource_config(url: &str, config: &AppConfig) -> Option<Res
             .flush_hub(config.flush_hub.clone())
             .file_asset_store(config.file_asset_store.clone())
             .hls_asset_store(config.hls_asset_store.clone())
+            .byte_pool(config.byte_pool.clone())
             .keys(keys)
             .maybe_headers(headers)
             .size_probe_method(config.size_probe_method)

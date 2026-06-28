@@ -2,7 +2,7 @@ use std::{fmt, sync::Arc};
 
 use bon::Builder;
 use kithara::{
-    assets::{AssetStore, FlushHub, StoreOptions},
+    assets::{AssetStore, BytePool, FlushHub, StoreOptions},
     hls::{HlsStore, SizeProbeMethod},
     stream::dl::Downloader,
 };
@@ -16,8 +16,8 @@ use crate::{baked, theme::Palette};
 /// Downloader and flush hub are the only mandatory fields; every
 /// other knob defaults to the value baked at compile time from
 /// `app.toml`. Callers typically do
-/// `AppConfig::new(dl, hub).with_tracks(cli_tracks)` and override
-/// anything else via the generated `with_*` setters.
+/// `AppConfig::builder()` and override anything else via the generated
+/// builder setters.
 #[derive(Clone, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
@@ -35,6 +35,9 @@ pub struct AppConfig {
     pub shutdown: CancelToken,
     /// Shared HTTP downloader for every track.
     pub downloader: Downloader,
+    /// App-wide shared byte pool for network and cache buffers.
+    #[builder(default = BytePool::default())]
+    pub byte_pool: BytePool,
     /// App-wide shared HLS store (shared cache + DRM `process_fn` +
     /// per-`asset_root` eviction routing).
     pub hls_asset_store: HlsStore,
@@ -79,6 +82,7 @@ impl fmt::Debug for AppConfig {
             .field("palette", &self.palette)
             .field("log_directives", &self.log_directives)
             .field("tracks", &self.tracks)
+            .field("byte_pool", &self.byte_pool)
             .field(
                 "should_accept_invalid_certs",
                 &self.should_accept_invalid_certs,
@@ -99,35 +103,27 @@ impl AppConfig {
     /// setters.
     #[must_use]
     pub fn new(downloader: Downloader, flush_hub: Arc<FlushHub>, cancel: CancelToken) -> Self {
-        let store_options = StoreOptions::default_builder()
+        let byte_pool = BytePool::default();
+        let store_options = StoreOptions::builder()
             .flush_hub(Arc::clone(&flush_hub))
             .build();
-        let file_asset_store =
-            kithara::file::build_shared_asset_store(&store_options, cancel.child());
-        let hls_asset_store =
-            kithara::hls::build_shared_asset_store(&store_options, None, cancel.child());
+        let file_asset_store = kithara::file::build_shared_asset_store(
+            &store_options,
+            Some(byte_pool.clone()),
+            cancel.child(),
+        );
+        let hls_asset_store = kithara::hls::build_shared_asset_store(
+            &store_options,
+            Some(byte_pool.clone()),
+            cancel.child(),
+        );
         Self::builder()
             .downloader(downloader)
             .flush_hub(flush_hub)
             .shutdown(cancel)
+            .byte_pool(byte_pool)
             .file_asset_store(file_asset_store)
             .hls_asset_store(hls_asset_store)
             .build()
-    }
-
-    /// Fluent alias to set `should_accept_invalid_certs`.
-    #[must_use]
-    pub fn with_should_accept_invalid_certs(mut self, value: bool) -> Self {
-        self.should_accept_invalid_certs = value;
-        self
-    }
-
-    /// Override the default track list. Empty input is ignored.
-    #[must_use]
-    pub fn with_tracks(mut self, tracks: Vec<String>) -> Self {
-        if !tracks.is_empty() {
-            self.tracks = tracks;
-        }
-        self
     }
 }

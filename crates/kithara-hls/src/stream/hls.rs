@@ -9,8 +9,10 @@ use kithara_assets::{
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, VariantInfo};
-use kithara_net::HttpClient;
-use kithara_platform::{CancelScope, CancelToken, sync::CondvarGate, tokio::sync::mpsc};
+use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::{
+    CancelScope, CancelToken, sync::CondvarGate, tokio::sync::mpsc, traits::FromWithParams,
+};
 use kithara_stream::{
     Activity, PlayheadState, PlayheadWrite, SeekObserve, SeekState, SourceError, StreamType,
     dl::{Downloader, DownloaderConfig, Peer},
@@ -22,7 +24,6 @@ use super::{
 };
 use crate::{
     config::HlsConfig,
-    conv::FromWithParams,
     handle::StreamPeer,
     invalidation::{HlsInvalidationGuard, HlsInvalidationRegistry, HlsStore},
     naming::HlsAssetScopeDelegate,
@@ -268,7 +269,9 @@ async fn load_playlists(
 /// rooted at a child of the stream's cancel token.
 fn default_downloader(config: &HlsConfig, cancel: &CancelToken) -> Downloader {
     let dl_cancel = cancel.child();
-    let client = HttpClient::new(config.net_options.clone(), dl_cancel.child());
+    let net_options: NetOptions =
+        FromWithParams::build(config.net_options.clone(), config.pool.clone());
+    let client = HttpClient::new(net_options, dl_cancel.child());
     let dl_config = DownloaderConfig::for_client(client)
         .cancel(dl_cancel)
         .build();
@@ -286,23 +289,17 @@ fn build_asset_store(
         });
     let on_invalidated = eviction_callback(evict_tx, config.store.on_invalidated.clone());
 
-    let mut builder = AssetStoreBuilder::new()
+    AssetStoreBuilder::default()
         .process_fn(drm_process_fn)
         .cancel(cancel)
         .on_invalidated(on_invalidated)
         .root_dir(&config.store.cache_dir)
         .evict_config(EvictConfig::from(&config.store))
-        .ephemeral(config.store.is_ephemeral);
-    if let Some(ref pool) = config.pool {
-        builder = builder.pool(pool.clone());
-    }
-    if let Some(cap) = config.store.cache_capacity {
-        builder = builder.cache_capacity(cap);
-    }
-    if let Some(ref hub) = config.store.flush_hub {
-        builder = builder.flush_hub(Arc::clone(hub));
-    }
-    builder.build()
+        .ephemeral(config.store.is_ephemeral)
+        .maybe_pool(config.pool.clone())
+        .maybe_cache_capacity(config.store.cache_capacity)
+        .maybe_flush_hub(config.store.flush_hub.clone())
+        .build()
 }
 
 fn shared_hls_scope(
@@ -340,26 +337,21 @@ pub fn build_shared_asset_store(
     let on_invalidated =
         registry_eviction_callback(Arc::clone(&registry), store.on_invalidated.clone());
 
-    let mut builder = AssetStoreBuilder::new()
+    let backend = AssetStoreBuilder::default()
         .process_fn(drm_process_fn)
         .cancel(cancel)
         .on_invalidated(on_invalidated)
         .root_dir(&store.cache_dir)
         .evict_config(EvictConfig::from(store))
-        .ephemeral(store.is_ephemeral);
-    if let Some(pool) = pool {
-        builder = builder.pool(pool);
-    }
-    if let Some(cap) = store.cache_capacity {
-        builder = builder.cache_capacity(cap);
-    }
-    if let Some(ref hub) = store.flush_hub {
-        builder = builder.flush_hub(Arc::clone(hub));
-    }
+        .ephemeral(store.is_ephemeral)
+        .maybe_pool(pool)
+        .maybe_cache_capacity(store.cache_capacity)
+        .maybe_flush_hub(store.flush_hub.clone())
+        .build();
 
     HlsStore {
         registry,
-        backend: Arc::new(builder.build()),
+        backend: Arc::new(backend),
     }
 }
 

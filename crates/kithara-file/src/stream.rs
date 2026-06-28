@@ -1,11 +1,12 @@
 use std::{path::PathBuf, sync::Arc};
 
 use kithara_assets::{
-    AcquisitionResult, AssetReader, AssetScopeDelegate, AssetStore, AssetStoreBuilder, AssetsError,
-    EvictConfig, ReadSide, ResourceKey, StoreOptions, WriteSide, safe_path_component,
+    AcquisitionResult, AssetReader, AssetScopeDelegate, AssetStore, AssetStoreBuilder, AssetWriter,
+    AssetsError, BytePool, EvictConfig, ReadSide, ResourceKey, StoreOptions, WriteSide,
+    safe_path_component,
 };
 use kithara_events::EventBus;
-use kithara_net::{HttpClient, NetOptions};
+use kithara_net::{Headers, HttpClient, NetOptions};
 use kithara_platform::{
     CancelScope, CancelToken,
     sync::Mutex,
@@ -33,6 +34,17 @@ pub struct File;
 #[derive(Debug)]
 struct FileAssetScopeDelegate {
     extension_hint: Option<String>,
+}
+
+struct RemoteFileOpen {
+    backend: Arc<AssetStore>,
+    bus: EventBus,
+    cancel: CancelToken,
+    downloader: Downloader,
+    headers: Option<Headers>,
+    key: ResourceKey,
+    look_ahead_bytes: Option<u64>,
+    url: url::Url,
 }
 
 impl FileAssetScopeDelegate {
@@ -64,6 +76,111 @@ fn extension_hint(segment: &str) -> Option<String> {
     Some(ext.to_ascii_lowercase())
 }
 
+fn local_key(path: PathBuf) -> Result<ResourceKey, SourceError> {
+    if path.exists() {
+        return Ok(ResourceKey::absolute(path));
+    }
+    Err(SourceError::InvalidPath(format!(
+        "file not found: {}",
+        path.display()
+    )))
+}
+
+fn coord_with_total(len: Option<u64>) -> Arc<FileCoord> {
+    let coord = Arc::new(FileCoord::new(
+        Arc::new(PlayheadState::new()),
+        Arc::new(SeekState::new()),
+    ));
+    coord.set_total_bytes(len);
+    coord
+}
+
+fn completed_coord(len: Option<u64>) -> Arc<FileCoord> {
+    let coord = coord_with_total(len);
+    coord.set_download_pos(len.unwrap_or(0));
+    coord
+}
+
+fn cached_source(
+    reader: AssetReader,
+    bus: EventBus,
+    backend: Arc<AssetStore>,
+    key: ResourceKey,
+    cancel: CancelToken,
+) -> FileSource {
+    let coord = completed_coord(reader.len());
+    let cached_codec = sniff_codec(&reader);
+    FileSource::local(reader, coord, bus, backend, key, cancel, cached_codec)
+}
+
+fn remote_scope_parts(url: &url::Url, name: Option<&str>) -> (Arc<dyn AssetScopeDelegate>, String) {
+    let name_or_query = name
+        .or_else(|| url.query())
+        .filter(|value| !value.is_empty());
+    let naming: Arc<dyn AssetScopeDelegate> = Arc::new(FileAssetScopeDelegate::new(url, name));
+    let asset_root = naming.asset_root_for_url(url, name_or_query);
+    (naming, asset_root)
+}
+
+fn fallback_downloader(cancel: &CancelToken, pool: Option<BytePool>) -> Downloader {
+    let cancel_for_dl = cancel.child();
+    let net_options = NetOptions::builder().maybe_byte_pool(pool).build();
+    let client = HttpClient::new(net_options, cancel_for_dl.child());
+    Downloader::new(
+        DownloaderConfig::for_client(client)
+            .cancel(cancel_for_dl)
+            .build(),
+    )
+}
+
+impl RemoteFileOpen {
+    fn into_source(self, writer: AssetWriter) -> FileSource {
+        let Self {
+            backend,
+            bus,
+            cancel,
+            downloader,
+            headers,
+            key,
+            look_ahead_bytes,
+            url,
+        } = self;
+
+        let reader = writer.reader();
+        let raw = writer.raw_write_handle();
+        let coord = coord_with_total(reader.len());
+        let (demand_lease, producer) =
+            backend.attach_demand(&key, coord.read_pos_handle(), look_ahead_bytes);
+
+        let inner = Arc::new(FileInner::new(
+            FileSourceCtx {
+                cancel,
+                coord: Arc::clone(&coord),
+                bus: bus.clone(),
+            },
+            FileAssetCtx {
+                url,
+                reader,
+                headers,
+                backend,
+                writer: Mutex::new(Some(writer)),
+                raw: Some(raw),
+                key,
+            },
+            FilePhase::Init,
+            Some(demand_lease),
+        ));
+
+        let peer_handle = downloader
+            .register(Arc::new(FilePeer::new(Arc::clone(&inner), producer)))
+            .with_bus(bus);
+
+        let mut source = FileSource::with_inner(inner, coord);
+        source.set_peer_handle(peer_handle);
+        source
+    }
+}
+
 impl StreamType for File {
     type Config = FileConfig;
     type Events = EventBus;
@@ -93,44 +210,21 @@ impl File {
         config: FileConfig,
         cancel: &CancelToken,
     ) -> Result<FileSource, SourceError> {
-        if !path.exists() {
-            return Err(SourceError::InvalidPath(format!(
-                "file not found: {}",
-                path.display()
-            )));
-        }
-
-        let store = Arc::new(AssetStoreBuilder::new().cancel(cancel.clone()).build());
-
-        let key = ResourceKey::absolute(path);
+        let key = local_key(path)?;
+        let store = Arc::new(
+            AssetStoreBuilder::<()>::default()
+                .cancel(cancel.clone())
+                .maybe_pool(config.pool.clone())
+                .build(),
+        );
         let reader = store
             .open_resource(&key, None)
             .map_err(SourceError::Assets)?;
-        let len = reader.len();
-
         let bus = config
             .bus
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
-        let coord = Arc::new(FileCoord::new(
-            Arc::new(PlayheadState::new()),
-            Arc::new(SeekState::new()),
-        ));
-        coord.set_total_bytes(len);
-        let total = len.unwrap_or(0);
-        coord.set_download_pos(total);
-
-        let cached_codec = sniff_codec(&reader);
-
-        Ok(FileSource::local(
-            reader,
-            coord,
-            bus,
-            store,
-            key,
-            cancel.child(),
-            cached_codec,
-        ))
+        Ok(cached_source(reader, bus, store, key, cancel.child()))
     }
 
     /// Create a source for a remote file.
@@ -144,27 +238,22 @@ impl File {
         config: FileConfig,
         cancel: CancelToken,
     ) -> Result<FileSource, SourceError> {
-        let from_config = config.name.as_deref();
-        let from_query = url.query();
-        let name_or_query = from_config.or(from_query).filter(|s| !s.is_empty());
-        let naming: Arc<dyn AssetScopeDelegate> =
-            Arc::new(FileAssetScopeDelegate::new(&url, from_config));
-        let asset_root = naming.asset_root_for_url(&url, name_or_query);
-
-        let downloader = config.downloader.clone().unwrap_or_else(|| {
-            let cancel_for_dl = cancel.child();
-            let client = HttpClient::new(NetOptions::default(), cancel_for_dl.child());
-            Downloader::new(
-                DownloaderConfig::for_client(client)
-                    .cancel(cancel_for_dl)
-                    .build(),
-            )
-        });
-
-        let backend = config
-            .asset_store
-            .clone()
-            .unwrap_or_else(|| build_shared_asset_store(&config.store, cancel.clone()));
+        let FileConfig {
+            asset_store,
+            bus,
+            downloader,
+            event_channel_capacity,
+            headers,
+            look_ahead_bytes,
+            name,
+            pool,
+            store,
+            ..
+        } = config;
+        let (naming, asset_root) = remote_scope_parts(&url, name.as_deref());
+        let downloader = downloader.unwrap_or_else(|| fallback_downloader(&cancel, pool.clone()));
+        let backend =
+            asset_store.unwrap_or_else(|| build_shared_asset_store(&store, pool, cancel.clone()));
 
         let key = backend
             .scope_with_delegate(asset_root.as_str(), Arc::clone(&naming))
@@ -174,80 +263,29 @@ impl File {
             acq,
             bus,
             key,
-        } = FileStreamState::create(
-            &backend,
-            key,
-            config.bus.clone(),
-            config.event_channel_capacity,
-        )?;
-
-        let coord = Arc::new(FileCoord::new(
-            Arc::new(PlayheadState::new()),
-            Arc::new(SeekState::new()),
-        ));
+        } = FileStreamState::create(&backend, key, bus, event_channel_capacity)?;
 
         // `Ready` means the file is already committed in the cache — no
         // download. `Pending` hands the single non-Clone commit owner to the
         // download path. The phase replaces the old runtime `status()` probe.
-        let writer = match acq {
+        match acq {
             AcquisitionResult::Ready(reader) => {
                 tracing::debug!("file already cached, skipping download");
-                coord.set_total_bytes(reader.len());
-                let total = coord.total_bytes().unwrap_or(0);
-                coord.set_download_pos(total);
-                let cached_codec = sniff_codec(&reader);
-                return Ok(FileSource::local(
-                    reader,
-                    coord,
-                    bus,
-                    backend,
-                    key,
-                    cancel.child(),
-                    cached_codec,
-                ));
+                Ok(cached_source(reader, bus, backend, key, cancel.child()))
             }
-            AcquisitionResult::Pending(writer) => writer,
-            _ => unreachable!("AcquisitionResult is Pending | Ready"),
-        };
-
-        let reader = writer.reader();
-        let raw = writer.raw_write_handle();
-        coord.set_total_bytes(reader.len());
-
-        // Attach this consumer's download demand on the shared resource.
-        // The CAS winner gets the producer handle and drives the GET; a
-        // concurrent consumer of the same URL (e.g. a waveform analyzer)
-        // loses and reads the shared bytes instead of issuing its own
-        // download. With a private per-stream store this is a single
-        let (demand_lease, producer) =
-            backend.attach_demand(&key, coord.read_pos_handle(), config.look_ahead_bytes);
-
-        let inner = Arc::new(FileInner::new(
-            FileSourceCtx {
+            AcquisitionResult::Pending(writer) => Ok(RemoteFileOpen {
+                backend,
+                bus,
                 cancel,
-                coord: Arc::clone(&coord),
-                bus: bus.clone(),
-            },
-            FileAssetCtx {
+                downloader,
+                headers,
+                key,
+                look_ahead_bytes,
                 url,
-                reader,
-                headers: config.headers,
-                backend: Arc::clone(&backend),
-                writer: Mutex::new(Some(writer)),
-                raw: Some(raw),
-                key: key.clone(),
-            },
-            FilePhase::Init,
-            Some(demand_lease),
-        ));
-
-        let peer_handle = downloader
-            .register(Arc::new(FilePeer::new(Arc::clone(&inner), producer)))
-            .with_bus(bus.clone());
-
-        let mut source = FileSource::with_inner(inner, coord);
-        source.set_peer_handle(peer_handle);
-        Ok(source)
+            }
+            .into_source(writer)),
+            _ => Err(SourceError::UnexpectedAcquisitionState),
+        }
     }
 
     /// Wait for a sibling `AssetStore` to release the atomic-chunked
@@ -307,19 +345,22 @@ impl File {
 /// master so a shutdown cascades through the store. Also the standalone
 /// fallback when no store is injected (single consumer).
 #[must_use]
-pub fn build_shared_asset_store(store: &StoreOptions, cancel: CancelToken) -> Arc<AssetStore<()>> {
-    let mut builder = AssetStoreBuilder::new()
-        .cancel(cancel)
-        .root_dir(&store.cache_dir)
-        .evict_config(EvictConfig::from(store))
-        .ephemeral(store.is_ephemeral);
-    if let Some(cap) = store.cache_capacity {
-        builder = builder.cache_capacity(cap);
-    }
-    if let Some(ref hub) = store.flush_hub {
-        builder = builder.flush_hub(Arc::clone(hub));
-    }
-    Arc::new(builder.build())
+pub fn build_shared_asset_store(
+    store: &StoreOptions,
+    pool: Option<BytePool>,
+    cancel: CancelToken,
+) -> Arc<AssetStore<()>> {
+    Arc::new(
+        AssetStoreBuilder::<()>::default()
+            .cancel(cancel)
+            .root_dir(&store.cache_dir)
+            .evict_config(EvictConfig::from(store))
+            .ephemeral(store.is_ephemeral)
+            .maybe_pool(pool)
+            .maybe_cache_capacity(store.cache_capacity)
+            .maybe_flush_hub(store.flush_hub.clone())
+            .build(),
+    )
 }
 
 /// Probe the first bytes of a committed `AssetResource` and try to

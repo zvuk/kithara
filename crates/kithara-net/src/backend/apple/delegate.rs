@@ -19,7 +19,7 @@ use objc2_foundation::{
 };
 
 use super::{
-    response::{StreamHead, copy_data, error_from_nserror, http_parts},
+    response::{StreamHead, error_from_nserror, http_parts},
     session::TaskId,
     stream::AppleBodyQueue,
 };
@@ -122,7 +122,7 @@ define_class!(
                 .get(&task_id)
                 .and_then(|state| state.body_queue.as_ref().map(Arc::clone));
             if let Some(queue) = queue {
-                queue.push(copy_data(data));
+                queue.push_data(data);
             }
         }
 
@@ -185,7 +185,7 @@ define_class!(
     // SAFETY: Task callbacks share the same synchronized delegate state.
     unsafe impl NSURLSessionTaskDelegate for AppleSessionDelegate {}
 
-    // SAFETY: Data callbacks copy NSData into Bytes before crossing into Rust.
+    // SAFETY: Data callbacks copy NSData into pooled Bytes before crossing into Rust.
     unsafe impl NSURLSessionDataDelegate for AppleSessionDelegate {}
 );
 

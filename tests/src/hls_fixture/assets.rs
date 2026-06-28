@@ -50,7 +50,7 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     let temp_dir = TestTempDir::new();
     let temp_dir = Arc::new(temp_dir);
 
-    let assets = AssetStoreBuilder::new()
+    let assets = AssetStoreBuilder::default()
         .process_fn(drm_process_fn())
         .root_dir(temp_dir.path().to_path_buf())
         .evict_config(EvictConfig::default())
@@ -67,7 +67,7 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 /// Create test assets with custom asset root (WASM: ephemeral in-memory store)
 #[cfg(target_arch = "wasm32")]
 pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
-    let assets = AssetStoreBuilder::new()
+    let assets = AssetStoreBuilder::default()
         .process_fn(drm_process_fn())
         .cancel(CancelToken::never())
         .build();
