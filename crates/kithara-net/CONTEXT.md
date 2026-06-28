@@ -128,6 +128,8 @@ The carve-out is intentionally leaf-scoped:
 
 `TimeoutNet<N>` wraps all methods with `tokio::time::timeout` and is exported in the public API. A retry decorator with exponential backoff (retries on 5xx, 429, 408, timeouts; does not retry on other 4xx) is also available, but only via the `NetExt` builder methods — the wrapper type itself is not part of the public surface.
 
+`post_bytes` (POST a body, read the full response body) flows through the same retry and timeout layers as the read methods. It is therefore retried on transient errors like the rest, so it is **at-least-once**: a transient failure after the server already accepted the write can re-send it. Callers issuing non-idempotent requests must carry their own dedup or idempotency key. The caller owns `Content-Type` (and any auth) via the `headers` argument — the layer stays body-agnostic.
+
 Decorators compose via the `NetExt` extension trait:
 ```rust
 use kithara_net::{HttpClient, Net, NetExt, NetOptions, RetryPolicy};
@@ -142,7 +144,7 @@ let client = HttpClient::new(NetOptions::default(), CancelToken::never())
 ## Timeout Behavior
 
 Two independent limits in `NetOptions`, applied to **all** methods (`get_bytes`,
-`head`, `get_range`, `stream`):
+`post_bytes`, `head`, `get_range`, `stream`):
 
 - `inactivity_timeout` (default 30s) — max gap between reads (reqwest
   `read_timeout`); guards against stalled connections, not total duration.

@@ -1,5 +1,6 @@
+use bytes::Bytes;
 use objc2::rc::Retained;
-use objc2_foundation::{NSMutableURLRequest, NSString, NSURL};
+use objc2_foundation::{NSData, NSMutableURLRequest, NSString, NSURL};
 use url::Url;
 
 use crate::{
@@ -11,6 +12,7 @@ use crate::{
 pub(super) enum Method {
     Get,
     Head,
+    Post,
 }
 
 impl Method {
@@ -18,11 +20,13 @@ impl Method {
         match self {
             Self::Get => "GET",
             Self::Head => "HEAD",
+            Self::Post => "POST",
         }
     }
 }
 
 pub(super) struct AppleRequest {
+    body: Option<Bytes>,
     method: Method,
     headers: Option<Headers>,
     range: Option<RangeSpec>,
@@ -35,9 +39,11 @@ impl AppleRequest {
         method: Method,
         range: Option<RangeSpec>,
         headers: Option<Headers>,
+        body: Option<Bytes>,
     ) -> NetResult<Self> {
         validate_url(url)?;
         Ok(Self {
+            body,
             method,
             headers,
             range,
@@ -52,6 +58,10 @@ impl AppleRequest {
         let ns_url = ns_url(&self.url)?;
         let request = NSMutableURLRequest::requestWithURL(&ns_url);
         request.setHTTPMethod(&NSString::from_str(self.method.as_str()));
+        if let Some(body) = self.body {
+            let body = NSData::with_bytes(&body);
+            request.setHTTPBody(Some(&body));
+        }
 
         let mut has_accept_encoding = false;
         if let Some(headers) = self.headers {

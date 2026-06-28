@@ -99,6 +99,14 @@ pub trait Net: MaybeSend + MaybeSync {
     /// Get all bytes from a URL
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError>;
 
+    /// POST `body` to a URL and return the full response body.
+    async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> Result<Bytes, NetError>;
+
     /// Get a range of bytes from a URL
     async fn get_range(
         &self,

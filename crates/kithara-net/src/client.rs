@@ -11,7 +11,9 @@ mod kithara {
 }
 
 use crate::{
-    backend::{Client, RequestBuilder, Response, StatusCode, build_client, head_request},
+    backend::{
+        Client, RequestBuilder, Response, StatusCode, build_client, head_request, post_request,
+    },
     error::{NetError, NetResult},
     metrics::ConnectionMetrics,
     resumable::{Refetch, Resumed, resumable_body},
@@ -222,7 +224,7 @@ impl RawHttp {
 
 /// Production HTTP client used across the workspace. Wraps a raw
 /// `Client` with the workspace's [`RetryNet`] decorator so
-/// every [`Net`] method (`head`/`get_bytes`/`get_range`/`stream`) honours
+/// every [`Net`] method (`head`/`get_bytes`/`post_bytes`/`get_range`/`stream`) honours
 /// `options.retry_policy` — retryable errors (TLS-close, timeout,
 /// 5xx, IO) are re-issued with exponential backoff; non-retryable
 /// errors (HTTP 4xx, cancellation) propagate immediately.
@@ -268,6 +270,18 @@ impl HttpClient {
     /// Returns [`NetError`] on HTTP failure, timeout, or network error.
     pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes> {
         self.net.get_bytes(url, headers).await
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure, timeout, or network error.
+    pub async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> NetResult<Bytes> {
+        self.net.post_bytes(url, body, headers).await
     }
 
     /// # Errors
@@ -322,6 +336,15 @@ impl Net for HttpClient {
         self.net.get_bytes(url, headers).await
     }
 
+    async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> Result<Bytes, NetError> {
+        self.net.post_bytes(url, body, headers).await
+    }
+
     async fn get_range(
         &self,
         url: Url,
@@ -350,6 +373,18 @@ impl Net for RawHttp {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         let req = self.inner.get(url.clone());
+        let resp = self.send_checked(req, headers, url, false).await?;
+        body_bytes(resp).await
+    }
+
+    #[cfg_attr(feature = "perf", hotpath::measure)]
+    async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> Result<Bytes, NetError> {
+        let req = post_request(&self.inner, url.clone(), body);
         let resp = self.send_checked(req, headers, url, false).await?;
         body_bytes(resp).await
     }
@@ -439,7 +474,11 @@ mod tests {
 
     // `::tokio` (the real crate) — `super::*` re-exports `kithara_platform::tokio`.
     use ::tokio::net::TcpListener;
-    use axum::{Router, http::StatusCode, routing::get};
+    use axum::{
+        Router,
+        http::StatusCode,
+        routing::{get, post},
+    };
     use kithara_platform::time::Duration;
 
     use super::*;
@@ -474,6 +513,36 @@ mod tests {
                 .expect("serve");
         });
         let url = Url::parse(&format!("http://{addr}/probe")).expect("url");
+        (url, counter)
+    }
+
+    /// Spawn an axum server whose `/echo` POST route returns 503 for the
+    /// first `fail_count` requests, then echoes the request body with 200.
+    async fn server_post_echo_failing_first_n(fail_count: u32) -> (Url, Arc<AtomicU32>) {
+        let counter = Arc::new(AtomicU32::new(0));
+        let counter_c = Arc::clone(&counter);
+        let app = Router::new().route(
+            "/echo",
+            post(move |body: Bytes| {
+                let counter = Arc::clone(&counter_c);
+                async move {
+                    let seen = counter.fetch_add(1, Ordering::SeqCst);
+                    if seen < fail_count {
+                        (StatusCode::SERVICE_UNAVAILABLE, Bytes::from_static(b"busy"))
+                    } else {
+                        (StatusCode::OK, body)
+                    }
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr: SocketAddr = listener.local_addr().expect("local_addr");
+        ::tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service())
+                .await
+                .expect("serve");
+        });
+        let url = Url::parse(&format!("http://{addr}/echo")).expect("url");
         (url, counter)
     }
 
@@ -528,5 +597,21 @@ mod tests {
         let client = HttpClient::new(fast_options(2), CancelToken::never());
         client.head(url, None).await.expect("HEAD must retry");
         assert_eq!(counter.load(Ordering::SeqCst), 2);
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn http_client_post_retries_then_echoes_body() {
+        let (url, counter) = server_post_echo_failing_first_n(1).await;
+        let client = HttpClient::new(fast_options(2), CancelToken::never());
+        let echoed = client
+            .post_bytes(url, Bytes::from_static(b"ping"), None)
+            .await
+            .expect("post_bytes must succeed after retry");
+        assert_eq!(&echoed[..], b"ping", "server must echo the posted body");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            2,
+            "exactly 2 attempts: 1 failed (503) + 1 ok"
+        );
     }
 }

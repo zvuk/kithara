@@ -23,4 +23,5 @@ pub use self::selected::HttpClient;
 #[cfg(not(all(feature = "client-apple", any(target_os = "macos", target_os = "ios"))))]
 pub(crate) use self::selected::{
     BackendError, Client, RequestBuilder, Response, StatusCode, build_client, head_request,
+    post_request,
 };

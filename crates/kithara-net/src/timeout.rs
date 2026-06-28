@@ -45,6 +45,15 @@ impl<N: Net> Net for TimeoutNet<N> {
         timeout_io(self.timeout, self.inner.get_bytes(url, headers)).await
     }
 
+    async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> Result<Bytes, NetError> {
+        timeout_io(self.timeout, self.inner.post_bytes(url, body, headers)).await
+    }
+
     async fn get_range(
         &self,
         url: Url,

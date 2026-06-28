@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use url::Url;
 
 use super::{Client, ClientBuilder, RequestBuilder};
@@ -5,6 +6,10 @@ use crate::types::Compression;
 
 pub(crate) fn head_request(client: &Client, url: Url) -> RequestBuilder {
     client.head(url)
+}
+
+pub(crate) fn post_request(client: &Client, url: Url, body: Bytes) -> RequestBuilder {
+    client.post(url).body(body)
 }
 
 /// A native `ClientBuilder` transform. Used to disable individual

@@ -113,6 +113,19 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
             .await
     }
 
+    async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> Result<Bytes, NetError> {
+        self.retry_loop(|| {
+            self.inner
+                .post_bytes(url.clone(), body.clone(), headers.clone())
+        })
+        .await
+    }
+
     async fn get_range(
         &self,
         url: Url,
@@ -318,6 +331,63 @@ mod tests {
 
         let url = test_url();
         let result = retry_net.get_bytes(url, None).await;
+
+        assert!(result.is_err());
+    }
+
+    #[kithara::test(tokio)]
+    async fn test_retry_net_post_bytes_success_first_try() {
+        let mock = Unimock::new(
+            NetMock::post_bytes
+                .some_call(matching!(_, _, _))
+                .returns(Ok(Bytes::from("created"))),
+        );
+        let retry_net = retry_net_default(mock);
+
+        let url = test_url();
+        let result = retry_net
+            .post_bytes(url, Bytes::from("payload"), None)
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[kithara::test(tokio)]
+    async fn test_retry_net_post_bytes_retry_then_success() {
+        let mock = Unimock::new((
+            NetMock::post_bytes
+                .next_call(matching!(_, _, _))
+                .returns(Err(NetError::Timeout)),
+            NetMock::post_bytes
+                .next_call(matching!(_, _, _))
+                .returns(Err(NetError::Timeout)),
+            NetMock::post_bytes
+                .next_call(matching!(_, _, _))
+                .returns(Ok(Bytes::from("created"))),
+        ));
+        let retry_net = retry_net(mock, fast_retry_policy(3));
+
+        let url = test_url();
+        let result = retry_net
+            .post_bytes(url, Bytes::from("payload"), None)
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[kithara::test(tokio)]
+    async fn test_retry_net_post_bytes_non_retryable_error() {
+        let mock = Unimock::new(
+            NetMock::post_bytes
+                .some_call(matching!(_, _, _))
+                .returns(Err(status_404())),
+        );
+        let retry_net = retry_net_default(mock);
+
+        let url = test_url();
+        let result = retry_net
+            .post_bytes(url, Bytes::from("payload"), None)
+            .await;
 
         assert!(result.is_err());
     }
