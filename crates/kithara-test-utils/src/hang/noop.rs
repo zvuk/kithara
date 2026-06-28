@@ -43,17 +43,39 @@ impl<C: HangDump> HangDetector<C> {
     #[inline(always)]
     pub fn reset_from(&mut self, _file: &'static str, _line: u32) {}
 
+    /// No watchdog compiled in: the context closure is dropped **uncalled**, so
+    /// the app-context collection never executes in a no-`hang` (release) build —
+    /// a semantic guarantee independent of the optimizer.
+    #[inline(always)]
+    pub fn reset_with<F: FnOnce() -> C>(&mut self, _ctx_fn: F) {}
+
+    #[inline(always)]
+    pub fn reset_with_from<F: FnOnce() -> C>(
+        &mut self,
+        _ctx_fn: F,
+        _file: &'static str,
+        _line: u32,
+    ) {
+    }
+
     #[inline(always)]
     pub fn tick(&mut self) {}
 
     #[inline(always)]
     pub fn tick_from(&mut self, _file: &'static str, _line: u32) {}
 
+    /// See [`reset_with`](Self::reset_with): the closure is dropped uncalled.
     #[inline(always)]
-    pub fn tick_with(&mut self, _ctx: C) {}
+    pub fn tick_with<F: FnOnce() -> C>(&mut self, _ctx_fn: F) {}
 
     #[inline(always)]
-    pub fn tick_with_from(&mut self, _ctx: C, _file: &'static str, _line: u32) {}
+    pub fn tick_with_from<F: FnOnce() -> C>(
+        &mut self,
+        _ctx_fn: F,
+        _file: &'static str,
+        _line: u32,
+    ) {
+    }
 
     #[inline(always)]
     #[must_use]

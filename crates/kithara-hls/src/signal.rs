@@ -4,7 +4,7 @@ use kithara_platform::{
     sync::{CondvarGate, WaitGate},
     time::Duration,
 };
-use kithara_stream::WorkerWake;
+use kithara_stream::{DeferredWake, WorkerWake};
 
 /// Late-bound audio-worker data-arrival wake, shared across the coord, every
 /// variant, and each `FetchCmd` it emits. Created empty in `Hls::create` and
@@ -50,13 +50,26 @@ pub(crate) struct SizeSignal {
     /// signals), so the RT decoder's worker re-ticks on data arrival rather than
     /// on its 10 ms scheduler poll.
     worker_wake: WorkerWakeCell,
+    /// Late-bound peer-poll wake — the `HlsPeer`'s `reader_advanced` handle.
+    /// Fired by [`wake_peer`](Self::wake_peer) from the `on_slow` hook when an
+    /// in-flight fetch crosses `soft_timeout` without settling: the peer re-polls
+    /// and `reconcile_escape` marks the ABR escape against the now-stalled slot.
+    /// This is the anti-event twin of `worker_wake`/`ready` (data is *not*
+    /// arriving), so the escape is edge-triggered by the stall rather than left
+    /// to an incidental reader-progress wake. Empty until the peer activates
+    /// (`HlsCoord::set_peer_wake`), then set once.
+    peer_wake: Arc<OnceLock<Arc<DeferredWake>>>,
 }
 
 impl SizeSignal {
     /// Construct from a fresh readiness gate and an empty worker-wake cell. Built
     /// once in `Hls::create` and cloned down into every consumer.
     pub(crate) fn new(ready: Arc<CondvarGate<u64>>, worker_wake: WorkerWakeCell) -> Self {
-        Self { ready, worker_wake }
+        Self {
+            ready,
+            worker_wake,
+            peer_wake: Arc::new(OnceLock::new()),
+        }
     }
 
     /// Signal the gate, then re-tick the audio worker. Used where newly readable
@@ -83,6 +96,24 @@ impl SizeSignal {
     /// read it lock-free thereafter.
     pub(crate) fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
         let _ = self.worker_wake.set(wake);
+    }
+
+    /// Install the peer's `reader_advanced` wake (idempotent — only the first
+    /// set sticks). Called by `HlsPeer::activate`; [`wake_peer`](Self::wake_peer)
+    /// reads it lock-free thereafter.
+    pub(crate) fn set_peer_wake(&self, wake: Arc<DeferredWake>) {
+        let _ = self.peer_wake.set(wake);
+    }
+
+    /// Wake the HLS peer's `poll_next` so it re-runs `reconcile_escape` against
+    /// the just-flagged stalled slot. Called from the `on_slow` hook on the
+    /// downloader thread (off-RT — `notify_now`'s cross-thread `notify_one` is
+    /// allowed here). A no-op until the peer activates; the stored-permit
+    /// semantics mean a wake delivered between the peer's polls is not lost.
+    pub(crate) fn wake_peer(&self) {
+        if let Some(wake) = self.peer_wake.get() {
+            wake.notify_now();
+        }
     }
 
     /// Re-vend the underlying readiness gate. Used by the cancel waker, which

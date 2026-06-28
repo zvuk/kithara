@@ -1,16 +1,24 @@
 use std::sync::Arc;
 
-#[cfg(test)]
-use ringbuf::traits::Observer;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
-    traits::{Consumer, Producer, Split},
+    traits::{Consumer, Observer, Producer, Split},
 };
 
 /// A signal to wake up a blocked consumer.
 pub(crate) trait WakeSignal: Send + Sync + 'static {
-    /// Wake up the consumer.
+    /// Wake up the consumer. Fired on every successful ring push so a reader
+    /// parked in a blocking `recv` is unparked whenever new output lands —
+    /// redundant unparks are cheap and close the park/push race.
     fn wake(&self);
+
+    /// Signal that the ring went from empty to non-empty. Fired only on that
+    /// transition so an event-driven (non-blocking) reader gets one wake hint
+    /// per drain cycle without flooding the shared event bus. Default no-op.
+    fn on_data_available(&self) {}
+
+    /// Flush any wake-side deferred signals from the scheduler shell.
+    fn flush_deferred(&self) {}
 }
 
 /// The output port of a node.
@@ -64,17 +72,36 @@ impl<T> Outlet<T> {
         }
     }
 
+    fn notify_data_available(&self) {
+        if let Some(wake) = &self.wake {
+            wake.on_data_available();
+        }
+    }
+
+    /// Flush any deferred work owned by the wake signal.
+    pub(crate) fn flush_wake_signals(&self) {
+        if let Some(wake) = &self.wake {
+            wake.flush_deferred();
+        }
+    }
+
     /// Try to push into the ring; on failure, park into the (assumed empty)
-    /// overflow slot. Returns `true` when the item reached the ring (and the
-    /// consumer was notified), `false` when it was parked.
+    /// overflow slot. Returns `true` when the item reached the ring, `false`
+    /// when it was parked. A successful push always `wake`s a blocking reader;
+    /// the empty-to-non-empty transition additionally fires the
+    /// `on_data_available` hint for event-driven readers.
     fn push_or_park(&mut self, item: T) -> bool {
         debug_assert!(
             self.overflow.is_none(),
             "push_or_park called with non-empty overflow"
         );
+        let was_empty = self.producer.is_empty();
         match self.producer.try_push(item) {
             Ok(()) => {
                 self.notify();
+                if was_empty {
+                    self.notify_data_available();
+                }
                 true
             }
             Err(item) => {
@@ -169,11 +196,16 @@ mod tests {
 
     struct CountingWake {
         count: AtomicUsize,
+        data_available: AtomicUsize,
     }
 
     impl WakeSignal for CountingWake {
         fn wake(&self) {
             self.count.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn on_data_available(&self) {
+            self.data_available.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -261,17 +293,50 @@ mod tests {
     fn wake_skipped_when_parking_in_overflow() {
         let wake = Arc::new(CountingWake {
             count: AtomicUsize::new(0),
+            data_available: AtomicUsize::new(0),
         });
         let (mut out, mut inl) = connect::<i32>(1, Some(wake.clone()));
 
         assert_eq!(out.try_push(1), Ok(()));
         assert_eq!(wake.count.load(Ordering::SeqCst), 1);
 
+        // Parks in overflow (ring full): no ring push, so no wake.
         assert_eq!(out.try_push(2), Ok(()));
         assert_eq!(wake.count.load(Ordering::SeqCst), 1);
 
         assert_eq!(inl.try_pop(), Some(1));
         assert!(out.flush());
         assert_eq!(wake.count.load(Ordering::SeqCst), 2);
+    }
+
+    #[kithara::test]
+    fn wake_fires_every_ring_push_data_available_only_on_transition() {
+        let wake = Arc::new(CountingWake {
+            count: AtomicUsize::new(0),
+            data_available: AtomicUsize::new(0),
+        });
+        let (mut out, mut inl) = connect::<i32>(2, Some(wake.clone()));
+
+        // Empty -> non-empty: wake (unpark) AND the data-available hint.
+        assert_eq!(out.try_push(1), Ok(()));
+        assert_eq!(wake.count.load(Ordering::SeqCst), 1);
+        assert_eq!(wake.data_available.load(Ordering::SeqCst), 1);
+
+        // Push onto a non-empty ring: still wakes a blocking reader, but no
+        // duplicate data-available hint for an event-driven reader.
+        assert_eq!(out.try_push(2), Ok(()));
+        assert_eq!(wake.count.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            wake.data_available.load(Ordering::SeqCst),
+            1,
+            "data-available hint fires only on the empty-to-non-empty transition"
+        );
+
+        assert_eq!(inl.try_pop(), Some(1));
+        assert_eq!(inl.try_pop(), Some(2));
+        // Drained to empty, next push is a fresh transition.
+        assert_eq!(out.try_push(3), Ok(()));
+        assert_eq!(wake.count.load(Ordering::SeqCst), 3);
+        assert_eq!(wake.data_available.load(Ordering::SeqCst), 2);
     }
 }

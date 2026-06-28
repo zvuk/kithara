@@ -54,11 +54,15 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
             #[allow(unused_macros)]
             macro_rules! hang_tick {
                 () => { __hang_detector.tick_from(file!(), line!()); };
-                ($ctx:expr) => { __hang_detector.tick_with_from($ctx, file!(), line!()); };
+                // `$ctx` is wrapped in a closure so the no-`hang` (release)
+                // detector drops it uncalled — the app-context collection is
+                // provably never executed in release, not merely optimized away.
+                ($ctx:expr) => { __hang_detector.tick_with_from(|| $ctx, file!(), line!()); };
             }
             #[allow(unused_macros)]
             macro_rules! hang_reset {
                 () => { __hang_detector.reset_from(file!(), line!()); };
+                ($ctx:expr) => { __hang_detector.reset_with_from(|| $ctx, file!(), line!()); };
             }
             // Event-driven wait bounded by the liveness budget. `$wait_for` is a
             // `FnOnce(Duration)` that parks the current thread for at most that
@@ -70,6 +74,10 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
                 ($wait_for:expr) => {{
                     ($wait_for)(__hang_detector.remaining());
                     __hang_detector.tick_from(file!(), line!());
+                }};
+                ($wait_for:expr, $ctx:expr) => {{
+                    ($wait_for)(__hang_detector.remaining());
+                    __hang_detector.tick_with_from(|| $ctx, file!(), line!());
                 }};
             }
             #(#stmts)*

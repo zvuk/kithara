@@ -20,10 +20,10 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, ByteMap, ContainerFormat, MediaInfo, PendingReason, PlayheadRead, PlayheadState,
-    PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState, SegmentDescriptor,
-    SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantControl,
-    dl::FetchCmd,
+    Activity, ByteMap, ContainerFormat, DeferredWake, MediaInfo, PendingReason, PlayheadRead,
+    PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState,
+    SegmentDescriptor, SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult,
+    VariantControl, dl::FetchCmd,
 };
 use kithara_test_utils::kithara;
 
@@ -355,6 +355,20 @@ impl HlsCoord {
         None
     }
 
+    /// Resolve the segment whose fetch queue owns the reader cursor.
+    ///
+    /// This is deliberately wider than [`Self::find_at_offset`]: a cursor in
+    /// the active variant's init prefix is not inside any media segment, but it
+    /// still demands the segment-0 decoder probe plan. Cross-variant media
+    /// lookups keep the existing `find_at_offset` routing for shrunk outgoing
+    /// variants.
+    pub(crate) fn demand_segment_at_offset(&self, byte_offset: u64) -> Option<u32> {
+        let active = self.active_required();
+        active
+            .demand_segment_at_offset(byte_offset)
+            .or_else(|| self.find_at_offset(byte_offset).map(|(idx, _, _)| idx))
+    }
+
     /// Public-API mirror of [`Self::variant_change_pending`] used by the
     /// audio decode loop to bail out of an `Ok(Pending(_))` spin when
     /// the underlying `VariantChangeError` was absorbed by the demuxer.
@@ -473,6 +487,13 @@ impl HlsCoord {
     /// worker exists; downloader fetch closures read it lock-free thereafter.
     pub(crate) fn set_worker_wake(&self, wake: Arc<dyn kithara_stream::WorkerWake>) {
         self.signal.set_worker_wake(wake);
+    }
+
+    /// Install the peer's `reader_advanced` wake so the `on_slow` hook can
+    /// re-poll the peer when an in-flight fetch stalls past `soft_timeout`.
+    /// Called once by `HlsPeer::activate`.
+    pub(crate) fn set_peer_wake(&self, wake: Arc<DeferredWake>) {
+        self.signal.set_peer_wake(wake);
     }
 
     /// Mirror `abr.lock()` state to `seek_obs.is_pending()`.

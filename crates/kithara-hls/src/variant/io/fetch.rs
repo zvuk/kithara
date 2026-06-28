@@ -59,7 +59,14 @@ impl HlsVariant {
         // so the slow hook can flag this in-flight fetch when it crosses the
         // downloader's `soft_timeout`. The ABR stalled-escape gate reads it.
         let slow_slot = slot.handle.slot_state();
-        let on_slow: OnSlowFn = Box::new(move || slow_slot.mark_slow());
+        let slow_signal = signal.clone();
+        let on_slow: OnSlowFn = Box::new(move || {
+            slow_slot.mark_slow();
+            // Wake the peer's `poll_next` so `reconcile_escape` runs against the
+            // now-stalled slot. Without this the escape waited on an incidental
+            // reader-progress wake the stalled variant can never produce.
+            slow_signal.wake_peer();
+        });
         let mut inner_writer = slot.writer();
         // Per-chunk write signal: wake a reader parked in `wait_range(_, None)`
         // the moment bytes land (not only on commit), so a sub-segment range

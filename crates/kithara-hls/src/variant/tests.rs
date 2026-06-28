@@ -514,6 +514,14 @@ fn find_at_offset_inside_init_prefix_is_none() {
 }
 
 #[kithara::test]
+fn demand_segment_at_offset_inside_init_prefix_is_segment_zero() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400, 400], &ctx);
+    assert_eq!(v.demand_segment_at_offset(0), Some(0));
+    assert_eq!(v.demand_segment_at_offset(199), Some(0));
+}
+
+#[kithara::test]
 fn find_at_offset_at_init_size_returns_segment_zero() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400], &ctx);

@@ -132,6 +132,10 @@ impl HlsPeer {
         size_probe_method: SizeProbeMethod,
     ) {
         let reader_advanced = Arc::clone(&self.reader_advanced);
+        // Let the `on_slow` hook wake this peer's `poll_next` when an in-flight
+        // fetch stalls past `soft_timeout`, so `reconcile_escape` runs without
+        // waiting for an incidental reader-progress wake.
+        coord.set_peer_wake(Arc::clone(&self.reader_advanced));
         let cancel = coord.cancel.clone();
 
         let initial_seg = coord
@@ -429,15 +433,16 @@ impl HlsTrackState {
         let variant_now = coord.variant_index();
         let variant_changed = self.reader_variant != variant_now;
         self.reader_variant = variant_now;
-        let found = coord.find_at_offset(pos);
-        let resolved = found.map_or_else(|| u32::try_from(prev).unwrap_or(0), |(idx, _, _)| idx);
+        let demand_segment = coord.demand_segment_at_offset(pos);
+        let resolved = demand_segment.unwrap_or_else(|| u32::try_from(prev).unwrap_or(0));
         // Forward-seek settle floor: while the reader's physical byte cursor
         // still lags behind a just-applied seek target, ignore this poll's
         // stale-low segment. `seek_epoch_reset` already aimed `reader_segment`
         // + the fetch plan at the target; without this guard the lagging
         // `resolved` re-keys the cursor backward and `rebuild`s the prefix
         // (re-downloading seg 0..target). Only drop the floor once the reader
-        // *physically resolves* (`found.is_some()`) to a segment at/after it —
+        // *physically resolves* (`demand_segment.is_some()`) to a segment
+        // at/after it —
         // a `None` lookup falls back to `prev` and must NOT be read as "caught
         // up", or a later valid low lookup re-opens the race.
         if let Some(floor) = self.seek_settle_floor {
@@ -454,9 +459,9 @@ impl HlsTrackState {
             if matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_))) {
                 coord.commit_variant_switch_at_segment(ctx, floor);
             }
-            if found.is_some_and(|(idx, _, _)| idx >= floor) {
+            if demand_segment.is_some_and(|idx| idx >= floor) {
                 self.seek_settle_floor = None;
-            } else if let Some((landing, _, _)) = found
+            } else if let Some(landing) = demand_segment
                 && floor.saturating_sub(landing) == 1
             {
                 // Decoder-backoff landing, NOT a lagging cursor. The seek
@@ -521,7 +526,7 @@ impl HlsTrackState {
         // pre-switch range from `v_old`).
         let aligned_rescue = variant_changed
             && !switch_landed
-            && found.is_some()
+            && demand_segment.is_some()
             && coord.active().is_some_and(|a| a.served_from() == 0);
         if aligned_rescue {
             if let Some(active) = coord.active() {

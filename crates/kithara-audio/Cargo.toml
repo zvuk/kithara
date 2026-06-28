@@ -28,6 +28,7 @@ biquad = { workspace = true }
 rubato = { workspace = true }
 realfft = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
 audioadapter-buffers = { workspace = true }
 smallvec = { workspace = true }
 ringbuf = { workspace = true }

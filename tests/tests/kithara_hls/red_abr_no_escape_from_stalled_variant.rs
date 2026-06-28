@@ -52,7 +52,6 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto, fixture_protocol::DelayRule, temp_dir,
 };
 use kithara_platform::{
-    thread,
     time::{Duration, Instant},
     tokio::task::spawn_blocking,
 };
@@ -114,6 +113,7 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .decoder_backend(backend)
+        .block_on_underrun(true)
         .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -124,18 +124,23 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
     // blocking closure), so the read reflects the last committed variant.
     let abr = audio.abr_handle();
 
-    // Blocking pull on a dedicated thread (offline-pull contract): the
-    // current-thread runtime stays free to drive the HLS fetch/scheduler tasks
-    // while this thread polls for decoded chunks.
+    // Offline-pull drain on a dedicated thread (`block_on_underrun`): a ring
+    // underrun blocks in the engine-aware park (`wait_for_fetch`) instead of
+    // returning `Pending`, so this thread yields the CPU to the current-thread
+    // runtime that drives the HLS fetch/scheduler tasks. A sleep-poll loop is
+    // the wrong pattern here: under the flash virtual clock `thread::sleep`
+    // collapses to ~0 real time, so the poll loop busy-spins and starves the
+    // runtime's in-flight segment fetch — the escape commits and the recreate
+    // starts, but the new variant's bytes never land. The engine-aware park is
+    // the canonical offline-consumer contract (pull, never sleep-poll).
     let drained = spawn_blocking(move || {
-        let _ = audio.preload();
         let deadline = Instant::now() + Consts::DRAIN_BUDGET;
         let mut chunks = 0usize;
         while chunks < Consts::MIN_CHUNKS && Instant::now() < deadline {
             match PcmReader::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => chunks += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,
-                Ok(ChunkOutcome::Pending { .. }) => thread::sleep(Duration::from_millis(2)),
+                Ok(ChunkOutcome::Pending { .. }) => break,
                 Err(e) => panic!("decode error: {e}"),
             }
         }

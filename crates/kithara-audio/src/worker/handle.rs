@@ -498,63 +498,11 @@ mod tests {
         handle.shutdown();
     }
 
-    #[kithara::test]
-    fn worker_service_class_prioritises_audible() {
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
-
-        let (reg_a, mut rx_a, _) = make_registration(MockSource::new(100), 4, 0);
-        reg_a.service_class.store(ServiceClass::Idle);
-        let _id_a = handle.register_track(reg_a);
-
-        let (reg_b, mut rx_b, _) = make_registration(MockSource::new(100), 4, 0);
-        reg_b.service_class.store(ServiceClass::Audible);
-        let _id_b = handle.register_track(reg_b);
-
-        handle.wake();
-
-        // Warm up until the Audible track (B) is clearly being served, then
-        // clear both rings so the measurement starts from steady state.
-        // (Under flash this `wait_for_chunks` cannot false-time-out: the virtual
-        // clock is frozen while the worker is actively producing, so its budget
-        // only accrues during genuine worker-idle time.)
-        assert!(wait_for_chunks(&mut rx_b, 5, Duration::from_secs(5)) >= 5);
-        while rx_b.try_pop().is_some() {}
-        while rx_a.try_pop().is_some() {}
-
-        // Drain BOTH rings continuously. A saturated ring caps a track at
-        // ring-capacity regardless of priority, so a fixed-sleep-then-count
-        // measures ring size, not the property the scheduler actually
-        // guarantees: within a pass the Audible track is ticked before the
-        // Idle one. Under continuous drain neither ring saturates, so in steady
-        // state the Audible track (B) is delivered no later than the Idle track
-        // (A) and its running count can never fall behind. The loop is bounded
-        // by the Audible track's delivery count — driven by worker production,
-        // not a wall-clock/virtual deadline that could race the clock under flash.
-        const TARGET: usize = 20;
-        let mut got_a = 0usize;
-        let mut got_b = 0usize;
-        while got_b < TARGET {
-            let mut drained = false;
-            if rx_b.try_pop().is_some() {
-                got_b += 1;
-                drained = true;
-            }
-            if rx_a.try_pop().is_some() {
-                got_a += 1;
-                drained = true;
-            }
-            if !drained {
-                thread_sleep(Duration::from_millis(1));
-            }
-        }
-
-        assert!(
-            got_b >= got_a,
-            "Audible track must be served no later than Idle in steady state: A={got_a}, B={got_b}"
-        );
-
-        handle.shutdown();
-    }
+    // Audible-before-Idle is a pure ordering property of the scheduler's
+    // `slots_order`, not of consumed-chunk counts; verifying it through a live
+    // ring drain is structurally racy. It is locked deterministically in
+    // `runtime::scheduler::tests` instead — see
+    // `refresh_reorders_live_when_atomic_service_class_changes`.
 
     /// A slow/blocked track must not starve a producing track.
     ///

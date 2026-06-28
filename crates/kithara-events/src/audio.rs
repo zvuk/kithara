@@ -89,6 +89,11 @@ pub enum AudioEvent {
         total_ms: Option<u64>,
         seek_epoch: SeekEpoch,
     },
+    /// Decoded output became available to a non-blocking reader.
+    ///
+    /// This is a wake hint, not sink progress: committed playback position
+    /// still comes only from [`PlaybackProgress`](Self::PlaybackProgress).
+    OutputAvailable,
     /// Seek lifecycle diagnostics.
     SeekLifecycle {
         stage: SeekLifecycleStage,

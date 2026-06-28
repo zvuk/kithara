@@ -34,7 +34,7 @@ use crate::{
         source::{DecodeInit, OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
-    runtime::AtomicServiceClass,
+    runtime::{AtomicServiceClass, WakeSignal},
     traits::{ChunkOutcome, DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome},
     worker::{
         PreloadGate,
@@ -72,6 +72,33 @@ enum RecvOutcome {
     Closed,
     Empty,
     Item(Fetch<PcmChunk>),
+}
+
+const AUDIO_EVENT_CAPACITY: usize = 64;
+
+struct ReaderOutputWake {
+    thread: Arc<ThreadWake>,
+    emit: DeferredBus<AudioEvent>,
+}
+
+impl ReaderOutputWake {
+    fn new(thread: Arc<ThreadWake>, emit: DeferredBus<AudioEvent>) -> Self {
+        Self { thread, emit }
+    }
+}
+
+impl WakeSignal for ReaderOutputWake {
+    fn wake(&self) {
+        WakeSignal::wake(self.thread.as_ref());
+    }
+
+    fn on_data_available(&self) {
+        self.emit.enqueue(AudioEvent::OutputAvailable);
+    }
+
+    fn flush_deferred(&self) {
+        self.emit.flush();
+    }
 }
 
 /// Generic audio pipeline running in a separate thread.
@@ -200,7 +227,49 @@ pub struct Audio<S> {
     preloaded: bool,
 }
 
+/// Consumer-side snapshot attached to the `recv_outcome_blocking` watchdog
+/// (built by [`Audio::consumer_hang_ctx`]). Serialized into the hang dump
+/// *only* by the real (test) detector — the release detector drops the
+/// context closure uncalled, so none of these reads run in production.
+/// Carries the live ABR view so a starved drain reports *which* variant the
+/// run landed on and whether an escape/decision is stuck mid-flight.
+#[derive(serde::Serialize)]
+struct ConsumerHangCtx {
+    phase: String,
+    variant: Option<usize>,
+    abr_escaping: Option<bool>,
+    abr_locked: Option<bool>,
+    abr_pending: Option<String>,
+    epoch: u64,
+    preloaded: bool,
+    block_on_underrun: bool,
+}
+
 impl<S> Audio<S> {
+    fn create_channels(
+        pcm_buffer_chunks: usize,
+        bus: &EventBus,
+        reader_wake: &Arc<ThreadWake>,
+    ) -> (
+        crate::runtime::Outlet<Fetch<PcmChunk>>,
+        crate::runtime::Inlet<Fetch<PcmChunk>>,
+    ) {
+        let wake: Arc<dyn WakeSignal> = Arc::new(ReaderOutputWake::new(
+            Arc::clone(reader_wake),
+            Self::create_emit(bus),
+        ));
+        crate::runtime::connect::<Fetch<PcmChunk>>(pcm_buffer_chunks.max(1), Some(wake))
+    }
+
+    /// Deferred sink for FSM lifecycle events. The produce core enqueues
+    /// lock-free; the scheduler shell flushes (the `broadcast::send` is a
+    /// `kevent` the forbid-blocking core must not make). Capacity covers a pass's
+    /// worth of lifecycle events with margin — flushed every pass, so under
+    /// normal lifecycle it never fills.
+    fn create_emit(bus: &EventBus) -> DeferredBus<AudioEvent> {
+        DeferredBus::new(bus.clone(), AUDIO_EVENT_CAPACITY)
+    }
+
     /// Minimum playback-position advance (ms) between `PlaybackProgress`
     /// emissions. Caps progress telemetry to ~10/s so it cannot flood the
     /// shared bounded event bus and drop control events.
@@ -571,7 +640,7 @@ impl<S> Audio<S> {
     }
 
     #[kithara::flash(true)]
-    #[kithara::hang_watchdog]
+    #[kithara::hang_watchdog(ctx = ConsumerHangCtx)]
     fn recv_outcome_blocking(&mut self) -> RecvOutcome {
         loop {
             if let Some(fetch) = self.pcm_rx.try_pop() {
@@ -594,7 +663,26 @@ impl<S> Audio<S> {
                 hang_reset!();
                 return RecvOutcome::Closed;
             }
-            hang_park!(Self::wait_for_fetch);
+            hang_park!(Self::wait_for_fetch, self.consumer_hang_ctx());
+        }
+    }
+
+    /// Live consumer-side snapshot for the `recv_outcome_blocking` watchdog.
+    /// Built lazily by the real detector only (the closure is dropped uncalled
+    /// in release), so the ABR reads here never run in production.
+    fn consumer_hang_ctx(&self) -> ConsumerHangCtx {
+        let abr = self.abr_handle.as_ref();
+        ConsumerHangCtx {
+            phase: format!("{:?}", self.consumer_phase),
+            variant: abr.and_then(kithara_abr::AbrHandle::current_variant_index),
+            abr_escaping: abr.map(kithara_abr::AbrHandle::is_escaping),
+            abr_locked: abr.map(kithara_abr::AbrHandle::is_locked),
+            abr_pending: abr
+                .and_then(kithara_abr::AbrHandle::peek_pending_decision)
+                .map(|d| format!("{d:?}")),
+            epoch: self.validator.epoch,
+            preloaded: self.preloaded,
+            block_on_underrun: self.block_on_underrun,
         }
     }
 
@@ -927,7 +1015,7 @@ where
 
         let preload_gate = Arc::new(PreloadGate::default());
         let reader_wake = Arc::new(ThreadWake::default());
-        let (data_tx, data_rx) = Self::create_channels(pcm_buffer_chunks, Arc::clone(&reader_wake));
+        let (data_tx, data_rx) = Self::create_channels(pcm_buffer_chunks, &bus, &reader_wake);
         let (trash_tx, trash_inlet) = Self::create_trash_channel(pcm_buffer_chunks);
 
         let (worker, is_standalone) = config_worker.map_or_else(
@@ -988,16 +1076,6 @@ where
         })
     }
 
-    fn create_channels(
-        pcm_buffer_chunks: usize,
-        wake: Arc<ThreadWake>,
-    ) -> (
-        crate::runtime::Outlet<Fetch<PcmChunk>>,
-        crate::runtime::Inlet<Fetch<PcmChunk>>,
-    ) {
-        crate::runtime::connect::<Fetch<PcmChunk>>(pcm_buffer_chunks.max(1), Some(wake))
-    }
-
     fn create_decoder_factory(
         deps: &DecoderDeps,
         epoch: &Arc<AtomicU64>,
@@ -1034,16 +1112,6 @@ where
                 }
             }
         })
-    }
-
-    /// Deferred sink for FSM lifecycle events. The produce core enqueues
-    /// lock-free; the scheduler shell flushes (the `broadcast::send` is a
-    /// `kevent` the forbid-blocking core must not make). Capacity covers a pass's
-    /// worth of lifecycle events with margin — flushed every pass, so under
-    /// normal lifecycle it never fills.
-    fn create_emit(bus: &EventBus) -> DeferredBus<AudioEvent> {
-        const AUDIO_EVENT_CAPACITY: usize = 64;
-        DeferredBus::new(bus.clone(), AUDIO_EVENT_CAPACITY)
     }
 
     /// Build the initial decoder EXACTLY ONCE on a `spawn_blocking` thread
@@ -1506,6 +1574,45 @@ mod tests {
         audio.preload().expect("preload");
 
         assert!(matches!(audio.recv_outcome(), RecvOutcome::Empty));
+    }
+
+    #[kithara::test]
+    fn output_available_event_fires_on_empty_to_nonempty_ring_transition() {
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
+        let reader_wake = Arc::new(ThreadWake::default());
+        let (mut tx, mut rx) = Audio::<()>::create_channels(2, &bus, &reader_wake);
+
+        tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
+            .expect("first push reaches ring");
+        assert!(
+            events.try_recv().is_err(),
+            "ring wake event is deferred until the scheduler shell flush"
+        );
+        tx.flush_wake_signals();
+        assert!(matches!(
+            events.try_recv(),
+            Ok(kithara_events::Event::Audio(AudioEvent::OutputAvailable))
+        ));
+
+        tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
+            .expect("second push reaches ring");
+        tx.flush_wake_signals();
+        assert!(
+            events.try_recv().is_err(),
+            "no duplicate wake while the ring was already non-empty"
+        );
+
+        assert!(rx.try_pop().is_some());
+        assert!(rx.try_pop().is_some());
+
+        tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
+            .expect("third push reaches empty ring");
+        tx.flush_wake_signals();
+        assert!(matches!(
+            events.try_recv(),
+            Ok(kithara_events::Event::Audio(AudioEvent::OutputAvailable))
+        ));
     }
 
     #[kithara::test]
