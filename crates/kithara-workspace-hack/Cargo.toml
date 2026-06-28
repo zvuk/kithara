@@ -25,7 +25,7 @@ futures-channel = { version = "0.3", default-features = false, features = ["sink
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
-hotpath = { version = "0.17", features = ["hotpath", "hotpath-alloc"] }
+hotpath = { version = "0.18", features = ["hotpath", "hotpath-alloc"] }
 indexmap = { version = "2", features = ["serde"] }
 memchr = { version = "2" }
 num-integer = { version = "0.1", features = ["i128"] }
@@ -59,7 +59,7 @@ futures-channel = { version = "0.3", default-features = false, features = ["sink
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
-hotpath = { version = "0.17", features = ["hotpath", "hotpath-alloc"] }
+hotpath = { version = "0.18", features = ["hotpath", "hotpath-alloc"] }
 indexmap = { version = "2", features = ["serde"] }
 memchr = { version = "2" }
 num-integer = { version = "0.1", features = ["i128"] }
@@ -160,7 +160,7 @@ getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-f
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hotpath-macros = { version = "0.17", features = ["hotpath"] }
+hotpath-macros = { version = "0.18", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -271,7 +271,7 @@ futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hotpath-macros = { version = "0.17", features = ["hotpath"] }
+hotpath-macros = { version = "0.18", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -382,7 +382,7 @@ futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hotpath-macros = { version = "0.17", features = ["hotpath"] }
+hotpath-macros = { version = "0.18", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -465,7 +465,7 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
-hotpath-macros = { version = "0.17", features = ["hotpath"] }
+hotpath-macros = { version = "0.18", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
