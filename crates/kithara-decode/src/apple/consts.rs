@@ -31,6 +31,9 @@ impl Consts {
     pub(crate) const kAudioFileAAC_ADTSType: u32 = 0x6164_7473;
     /// `'caff'` — Core Audio Format file-type hint.
     pub(crate) const kAudioFileCAFType: u32 = 0x6361_6666;
+    /// `'flac'` — native FLAC bitstream file-type hint (macOS 10.13+ /
+    /// iOS 11+). Same four-cc as [`Self::kAudioFormatFLAC`].
+    pub(crate) const kAudioFileFLACType: u32 = 0x666c_6163;
     /// `'m4af'` — M4A (ALAC / AAC) file-type hint.
     pub(crate) const kAudioFileM4AType: u32 = 0x6d34_6166;
     /// `'MPG3'` — MPEG-1/2 Layer 3 file-type hint.

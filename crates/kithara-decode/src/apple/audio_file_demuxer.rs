@@ -72,6 +72,7 @@ impl AppleAudioFileDemuxer {
         Some(match (codec, container) {
             (AudioCodec::Pcm, ContainerFormat::Wav) => Consts::kAudioFileWAVEType,
             (AudioCodec::Mp3, ContainerFormat::MpegAudio) => Consts::kAudioFileMP3Type,
+            (AudioCodec::Flac, ContainerFormat::Flac) => Consts::kAudioFileFLACType,
             (AudioCodec::Alac, ContainerFormat::Mp4) => Consts::kAudioFileM4AType,
             (AudioCodec::Alac, ContainerFormat::Caf) => Consts::kAudioFileCAFType,
             (AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2, ContainerFormat::Mp4) => {
@@ -415,6 +416,33 @@ mod tests {
             DemuxOutcome::Frame(frame) => assert!(!frame.data.is_empty()),
             other => panic!("expected Frame, got {other:?}"),
         }
+    }
+
+    /// `supports` is the exact predicate the decoder factory gates
+    /// standalone `AudioFileServices` dispatch on (`apple_standalone_supports`).
+    /// Native FLAC (`fLaC`, `audio/flac`) is the regression contract: the iOS
+    /// build ships no Symphonia fallback, so a `false` here is precisely the
+    /// `Unsupported codec: Flac` the device hit on every `streamfl` track.
+    /// fMP4-FLAC and container-less FLAC must stay `false` — those route
+    /// through the segment-aware path, not this standalone one.
+    #[kithara::test]
+    #[case(AudioCodec::Pcm, Some(ContainerFormat::Wav), true)]
+    #[case(AudioCodec::Mp3, Some(ContainerFormat::MpegAudio), true)]
+    #[case(AudioCodec::Flac, Some(ContainerFormat::Flac), true)]
+    #[case(AudioCodec::Alac, Some(ContainerFormat::Mp4), true)]
+    #[case(AudioCodec::AacLc, Some(ContainerFormat::Mp4), true)]
+    #[case(AudioCodec::Flac, Some(ContainerFormat::Fmp4), false)]
+    #[case(AudioCodec::Flac, None, false)]
+    fn supports_covers_standalone_dispatch_matrix(
+        #[case] codec: AudioCodec,
+        #[case] container: Option<ContainerFormat>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            AppleAudioFileDemuxer::supports(codec, container),
+            expected,
+            "supports({codec:?}, {container:?})"
+        );
     }
 
     /// Streamed source: bytes past `ready` are not delivered yet. Mirrors
