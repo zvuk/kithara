@@ -19,6 +19,7 @@ use super::{
         AudioFormatInfo, AudioFormatListItem, AudioStreamBasicDescription,
         AudioStreamPacketDescription, UInt32,
     },
+    flac,
 };
 use crate::{
     codec::{CodecPriming, FrameCodec},
@@ -339,30 +340,6 @@ struct AppleInputFormat {
     frames_per_packet: u32,
 }
 
-/// Extract the raw 34-byte FLAC STREAMINFO from a track's `extra_data`,
-/// normalising the two shapes that reach the Apple codec:
-///   - fMP4 `dfLa` demuxer yields the raw STREAMINFO body directly.
-///   - standalone `AudioFileServices` exposes the magic cookie as the
-///     `dfLa` `FLACSpecificBox` verbatim — `[size:4][b"dfLa"]
-///     [version+flags:4][metadata block hdr:4][STREAMINFO:34]` — from
-///     which the STREAMINFO body is sliced.
-fn flac_streaminfo(extra: &[u8]) -> DecodeResult<&[u8]> {
-    // box header (size 4 + 'dfLa' 4 + version/flags 4) + block header 4.
-    const DFLA_STREAMINFO_OFFSET: usize = 16;
-    let body = if extra.get(4..8) == Some(b"dfLa") {
-        extra.get(DFLA_STREAMINFO_OFFSET..)
-    } else {
-        Some(extra)
-    };
-    body.and_then(|b| b.get(..Consts::FLAC_STREAMINFO_LEN))
-        .ok_or_else(|| {
-            DecodeError::InvalidData(format!(
-                "flac: STREAMINFO unavailable from {} bytes of codec config",
-                extra.len()
-            ))
-        })
-}
-
 /// Build the input ASBD + cookie + frames-per-packet for the given track.
 fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
     match track.codec {
@@ -370,7 +347,7 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
             build_aac_input_format(track)
         }
         AudioCodec::Flac => {
-            let streaminfo = flac_streaminfo(&track.extra_data)?;
+            let streaminfo = flac::streaminfo_body(&track.extra_data)?;
             let max_block = u32::from(u16::from_be_bytes([streaminfo[2], streaminfo[3]]))
                 .max(Consts::AAC_FRAMES_PER_PACKET);
 

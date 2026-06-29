@@ -8,6 +8,7 @@ use super::{
     audio_file::AppleAudioFile,
     consts::Consts,
     ffi::{AudioStreamBasicDescription, AudioStreamPacketDescription},
+    flac::StreamInfo,
 };
 use crate::{
     GaplessInfo,
@@ -93,12 +94,20 @@ impl AppleAudioFileDemuxer {
         open_mode: SourceOpenMode,
         duration_hint: Option<Duration>,
     ) -> DecodeResult<Self> {
-        let file =
-            if matches!(codec, AudioCodec::Mp3) && matches!(open_mode, SourceOpenMode::Streaming) {
-                AppleAudioFile::open_streaming(source, hint, None)?
-            } else {
-                AppleAudioFile::open(source, hint)?
-            };
+        // MP3 and FLAC are VBR with no on-disk packet index, so a complete
+        // open would query `packet_count()` — forcing `AudioFileServices` to
+        // scan the WHOLE file to build a packet table before the first frame
+        // (3–37 s on device for large lossless tracks, and a full download
+        // wait on a streamed source). The streaming open skips that scan;
+        // duration and the read-buffer size come from cheap header metadata
+        // instead (Xing for MP3, STREAMINFO for FLAC).
+        let lazy_streaming = matches!(open_mode, SourceOpenMode::Streaming)
+            && matches!(codec, AudioCodec::Mp3 | AudioCodec::Flac);
+        let file = if lazy_streaming {
+            AppleAudioFile::open_streaming(source, hint, None)?
+        } else {
+            AppleAudioFile::open(source, hint)?
+        };
         let asbd = file.data_format();
         let total_packets = file.packet_count();
         let frames_per_packet = if asbd.mFramesPerPacket > 0 {
@@ -111,6 +120,13 @@ impl AppleAudioFileDemuxer {
             AudioCodec::Pcm => serialize_asbd(&asbd),
             _ => file.magic_cookie().unwrap_or_default(),
         };
+
+        // FLAC's magic cookie carries STREAMINFO: `total_samples` yields the
+        // exact duration and `max_frame_size` bounds the VBR read buffer when
+        // the streaming open leaves `max_packet_size()` at 0.
+        let flac_info = (codec == AudioCodec::Flac)
+            .then(|| StreamInfo::parse(&extra_data).ok())
+            .flatten();
 
         let channels = u16::try_from(asbd.mChannelsPerFrame).map_err(|_| {
             DecodeError::backend_msg(format!(
@@ -128,12 +144,16 @@ impl AppleAudioFileDemuxer {
                 resource: "apple.audio_file",
             });
         };
+        let flac_duration = flac_info
+            .filter(|info| info.total_samples > 0)
+            .map(|info| duration_for_frames(sample_rate, info.total_samples));
         let duration = total_packets
             .filter(|count| *count > 0)
             .map(|total_packets| {
                 let frames = total_packets.saturating_mul(u64::from(frames_per_packet));
                 duration_for_frames(sample_rate, frames)
             })
+            .or(flac_duration)
             .or(duration_hint);
 
         let track_info = TrackInfo {
@@ -146,10 +166,12 @@ impl AppleAudioFileDemuxer {
         };
 
         let (cbr_batch_packets, buf_cap) = if asbd.mBytesPerPacket == 0 {
-            (
-                None,
-                usize::try_from(file.max_packet_size().max(4096)).map_err(DecodeError::backend)?,
-            )
+            // VBR. A streaming open reports no max packet size, so fall back
+            // to the FLAC STREAMINFO frame bound (FLAC frames reach ~16-19
+            // KiB, far past the 4 KiB floor) when AudioFile can't supply one.
+            let reported = usize::try_from(file.max_packet_size()).map_err(DecodeError::backend)?;
+            let flac_bound = flac_info.map_or(0, StreamInfo::max_frame_bytes);
+            (None, reported.max(flac_bound).max(4096))
         } else {
             let packets = Self::CBR_BATCH_TARGET_BYTES
                 .checked_div(asbd.mBytesPerPacket)
@@ -570,6 +592,46 @@ mod tests {
             DemuxOutcome::Frame(frame) => assert!(!frame.data.is_empty()),
             DemuxOutcome::Pending(PendingReason::NotReady(_)) => {}
             other => panic!("unexpected first MP3 outcome: {other:?}"),
+        }
+    }
+
+    /// Regression (#device-flac-slow-load): a streamed FLAC must open
+    /// without `AudioFileServices` scanning the whole file to build a packet
+    /// table (the `packet_count()` query a complete open issues). The scan
+    /// reads to EOF — 3–37 s of startup latency on device and a full
+    /// download wait on a streamed source. Mirrors the MP3 contract above.
+    #[kithara::test]
+    fn open_flac_demuxer_does_not_require_tail_bytes() {
+        let bytes = read_asset("sawtooth.flac");
+        // A bounded streaming open reads the header + first frame (~27 KiB)
+        // regardless of file size; this prefix covers that. The fixture is
+        // ~204 KiB, so a full-file packet-table scan would cross this bound.
+        let ready = 64_u64 * 1024;
+        let tail_read_attempted = Arc::new(AtomicBool::new(false));
+        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(NotReadySource::new(
+                bytes,
+                ready,
+                Some(Arc::clone(&tail_read_attempted)),
+            )),
+            AudioCodec::Flac,
+            Some(ContainerFormat::Flac),
+            SourceOpenMode::Streaming,
+            None,
+        )
+        .expect("FLAC streaming open must not require tail bytes");
+        assert!(
+            !tail_read_attempted.load(Ordering::Acquire),
+            "FLAC streaming open must not scan past the startup prefix"
+        );
+
+        match dx
+            .next_frame()
+            .expect("first FLAC frame read returns a status")
+        {
+            DemuxOutcome::Frame(frame) => assert!(!frame.data.is_empty()),
+            DemuxOutcome::Pending(PendingReason::NotReady(_)) => {}
+            other => panic!("unexpected first FLAC outcome: {other:?}"),
         }
     }
 
