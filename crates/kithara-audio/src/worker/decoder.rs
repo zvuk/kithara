@@ -3,7 +3,6 @@ use std::sync::Arc;
 use kithara_decode::PcmChunk;
 use kithara_platform::time::{Duration, Instant};
 use kithara_stream::SeekObserve;
-use tracing::trace;
 
 use super::{
     AudioWorkerSource, EngineLoad, PreloadGate, handle::TrackRegistration, types::ServiceClass,
@@ -182,13 +181,10 @@ impl Node for DecoderNode {
                 TickResult::Progress
             }
 
-            TrackStep::Blocked(reason) => {
-                trace!(?reason, "track blocked");
-                match reason {
-                    WaitingReason::WaitingDemand => TickResult::UpstreamPending,
-                    WaitingReason::Waiting | WaitingReason::WaitingMetadata => TickResult::Waiting,
-                }
-            }
+            TrackStep::Blocked(reason) => match reason {
+                WaitingReason::WaitingDemand => TickResult::UpstreamPending,
+                WaitingReason::Waiting | WaitingReason::WaitingMetadata => TickResult::Waiting,
+            },
 
             TrackStep::Eof if self.runtime.eof_sent => TickResult::Backpressured,
 
