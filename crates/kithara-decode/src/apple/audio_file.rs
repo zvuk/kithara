@@ -7,6 +7,8 @@ use std::{
     ptr,
 };
 
+use tracing::trace;
+
 use super::{
     consts::{Consts, os_status_to_string},
     ffi::{
@@ -516,7 +518,10 @@ fn live_source_len(ctx: &mut CallbackCtx) -> SInt64 {
         let _ = ctx.source.seek(SeekFrom::Start(pos));
     }
     match end {
-        Ok(end) => SInt64::try_from(end).unwrap_or(SInt64::MAX),
+        Ok(end) => {
+            trace!(len = end, "apple.audio_file: live size re-query");
+            SInt64::try_from(end).unwrap_or(SInt64::MAX)
+        }
         Err(err) => {
             ctx.last_error.set(Some(err));
             0
