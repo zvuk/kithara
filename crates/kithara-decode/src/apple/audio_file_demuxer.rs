@@ -402,7 +402,7 @@ mod tests {
         io::{self, Cursor, Error, ErrorKind, Read, Seek, SeekFrom},
         sync::{
             Arc,
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicU64, Ordering},
         },
     };
 
@@ -708,6 +708,101 @@ mod tests {
         assert!(
             produced > 0,
             "should decode the ready prefix before parking"
+        );
+    }
+
+    /// Streaming source whose reported length GROWS over the decode — models
+    /// a `Content-Length` (or download extent) that becomes known after open.
+    /// `seek(End)` resolves against the live `reported_len`.
+    struct GrowingLenSource {
+        inner: Cursor<Vec<u8>>,
+        reported_len: Arc<AtomicU64>,
+    }
+
+    impl Read for GrowingLenSource {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.inner.read(buf)
+        }
+    }
+
+    impl Seek for GrowingLenSource {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            match pos {
+                SeekFrom::End(delta) => {
+                    let base = i128::from(self.reported_len.load(Ordering::Acquire));
+                    let target = base.saturating_add(i128::from(delta));
+                    let target = u64::try_from(target.max(0)).unwrap_or(u64::MAX);
+                    self.inner.seek(SeekFrom::Start(target))
+                }
+                other => self.inner.seek(other),
+            }
+        }
+    }
+
+    /// Streaming FLAC regression (#device-flac-stall, root cause): the decoder
+    /// is created mid-download, when the source length is only the prefix that
+    /// has arrived — the final `Content-Length` becomes known shortly after.
+    /// A frozen open-time size snapshot pins a false EOF at that prefix:
+    /// `AudioFileServices` re-queries `get_size` during decode, so the size
+    /// MUST be live. On device the track played the fraction of a second
+    /// covered by the open-time prefix, then "froze"; each play kick decoded
+    /// another fraction and stopped again at the same false EOF.
+    ///
+    /// Here the reported length starts as a small prefix and grows to the true
+    /// total after a few frames (mirroring the length becoming known after
+    /// open); the demuxer must follow it to the true end. RED before the fix
+    /// (`get_size` returned the frozen open-time snapshot → decode capped at
+    /// the prefix); GREEN once `get_size` re-reads the live source length.
+    #[kithara::test]
+    fn flac_streaming_growing_len_reaches_true_eof() {
+        let bytes = read_asset("sawtooth.flac");
+        let true_len = bytes.len();
+        let initial = 64usize * 1024;
+        let reported_len = Arc::new(AtomicU64::new(
+            u64::try_from(initial).expect("prefix fits u64"),
+        ));
+
+        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(GrowingLenSource {
+                inner: Cursor::new(bytes),
+                reported_len: Arc::clone(&reported_len),
+            }),
+            AudioCodec::Flac,
+            Some(ContainerFormat::Flac),
+            SourceOpenMode::Streaming,
+            None,
+        )
+        .expect("streaming FLAC open with a growing length");
+
+        let mut consumed = 0usize;
+        let mut frames = 0usize;
+        loop {
+            // Reveal the true total once a few frames are in — mirrors the
+            // length becoming known shortly after open.
+            if frames == 3 {
+                reported_len.store(
+                    u64::try_from(true_len).expect("len fits u64"),
+                    Ordering::Release,
+                );
+            }
+            match dx.next_frame() {
+                Ok(DemuxOutcome::Frame(frame)) => {
+                    consumed += frame.data.len();
+                    frames += 1;
+                    assert!(consumed < true_len * 4, "runaway decode ({consumed} B)");
+                }
+                Ok(DemuxOutcome::Eof) => break,
+                Ok(DemuxOutcome::Pending(reason)) => {
+                    panic!("fully-readable source must never surface Pending: {reason:?}")
+                }
+                Err(e) => panic!("decode error: {e}"),
+            }
+        }
+
+        assert!(
+            consumed > initial * 2,
+            "AudioFile did NOT re-query get_size: decoded {consumed} B, capped at \
+             the open-time length {initial} B despite the size growing to {true_len} B"
         );
     }
 }

@@ -2,7 +2,6 @@
 
 use std::{
     cell::Cell,
-    convert::identity,
     ffi::c_void,
     io::{Error, ErrorKind, Read, Seek, SeekFrom},
     ptr,
@@ -21,6 +20,25 @@ use crate::{
     traits::BoxedSource,
 };
 
+/// How `AppleAudioFile` answers `AudioFileServices`' file-size query.
+enum SizeMode {
+    /// Total length is unknown (no `Content-Length`). `AudioFile` gets no
+    /// `get_size` proc and a tail probe is answered with EOF; reads run to
+    /// the source's natural end. Used for MP3 streaming.
+    Unknown,
+    /// A fixed, fully-present total — a complete local file ([`AppleAudioFile::open`])
+    /// or a caller-supplied `known_size`. Freezing is correct: the length
+    /// cannot change under a complete source.
+    Snapshot(i64),
+    /// A streamed source whose total is known but may still be arriving at
+    /// open. `get_size` re-reads the source length on every call so a length
+    /// that grows to the true total after open self-corrects. `AudioFile`
+    /// re-queries `get_size` during decode, so a frozen open-time snapshot
+    /// would pin a false EOF at whatever prefix had downloaded at open — the
+    /// device symptom "plays a fraction of a second then freezes".
+    Live,
+}
+
 struct CallbackCtx {
     source: BoxedSource,
     /// Last `io::Error` raised by the read callback while filling the
@@ -31,7 +49,7 @@ struct CallbackCtx {
     /// stash the original error here so the wrapper can rewrap it into
     /// `DecodeError::Backend` with the chain intact.
     last_error: Cell<Option<Error>>,
-    size: Option<i64>,
+    size: SizeMode,
 }
 
 /// Safe wrapper around an Apple `AudioFile` handle backed by an
@@ -60,34 +78,54 @@ impl AppleAudioFile {
         self.max_packet_size
     }
 
-    /// Open `source` as an audio file. `hint` is one of the
-    /// `kAudioFile*Type` four-cc constants in [`Consts`]; pass `None`
-    /// to let `AudioFileServices` auto-detect. Eagerly resolves the packet
-    /// count / max packet size — for VBR formats with no on-disk index
-    /// (FLAC) that triggers a full-file scan, so streamed sources should
-    /// prefer [`Self::open_sized_streaming`].
+    /// Open a complete local `source` as an audio file. `hint` is one of the
+    /// `kAudioFile*Type` four-cc constants in [`Consts`]; pass `None` to let
+    /// `AudioFileServices` auto-detect. The total length is fully present, so
+    /// the size is frozen ([`SizeMode::Snapshot`]) and the packet count /
+    /// max packet size are resolved eagerly — for VBR formats with no on-disk
+    /// index (FLAC) that triggers a full-file scan, so streamed sources must
+    /// use [`Self::open_sized_streaming`] / [`Self::open_streaming`] instead.
     pub(crate) fn open(source: BoxedSource, hint: Option<u32>) -> DecodeResult<Self> {
-        Self::open_seekable(source, hint, true)
+        let (source, end) = Self::probe_end(source)?;
+        let size = match end {
+            Some(end) => SizeMode::Snapshot(i64::try_from(end).map_err(DecodeError::backend)?),
+            None => SizeMode::Unknown,
+        };
+        Self::open_inner(source, hint, size, true)
     }
 
-    /// Like [`Self::open`] but skips the eager packet-count / max-packet-size
-    /// scan while still handing `AudioFileServices` the real file size. The
-    /// known size is what lets the codec treat a not-ready read as a
-    /// transient error (surfaced as `Pending`) instead of EOF, and resolve
-    /// seeks by size-estimation instead of an O(N) forward frame-scan — both
-    /// of which break when the size is unknown ([`Self::open_streaming`]).
+    /// Open a streamed `source` whose total length is known (`Content-Length`)
+    /// but whose bytes are still arriving. Skips the eager packet-count scan
+    /// and hands `AudioFileServices` a [`SizeMode::Live`] size — re-read on
+    /// every `get_size` so the length self-corrects as the download finishes,
+    /// rather than freezing the open-time prefix as a false EOF. A known size
+    /// is also what lets the codec treat a not-ready read as a transient
+    /// `Pending` (not EOF) and resolve seeks by size-estimation instead of an
+    /// O(N) forward frame-scan. If the source reports no length at all (no
+    /// `Content-Length`), falls back to the size-less [`SizeMode::Unknown`]
+    /// path ([`Self::open_streaming`]).
     pub(crate) fn open_sized_streaming(
         source: BoxedSource,
         hint: Option<u32>,
     ) -> DecodeResult<Self> {
-        Self::open_seekable(source, hint, false)
+        let (mut source, end) = Self::probe_end(source)?;
+        source
+            .seek(SeekFrom::Start(0))
+            .map_err(DecodeError::backend)?;
+        let size = if end.is_some() {
+            SizeMode::Live
+        } else {
+            SizeMode::Unknown
+        };
+        Self::open_inner(source, hint, size, false)
     }
 
-    fn open_seekable(
-        mut source: BoxedSource,
-        hint: Option<u32>,
-        scan_packets: bool,
-    ) -> DecodeResult<Self> {
+    /// Probe whether `source` can report a length (seek-to-end), restoring the
+    /// cursor to the start. `None` means the source has no known length
+    /// (`ErrorKind::Unsupported` — e.g. a chunked stream with no
+    /// `Content-Length`); this is a capability probe, not the size of record
+    /// (a streaming size is re-queried live — see [`SizeMode::Live`]).
+    fn probe_end(mut source: BoxedSource) -> DecodeResult<(BoxedSource, Option<u64>)> {
         let end = match source.seek(SeekFrom::End(0)) {
             Ok(end) => Some(end),
             Err(err) if err.kind() == ErrorKind::Unsupported => None,
@@ -96,19 +134,16 @@ impl AppleAudioFile {
         source
             .seek(SeekFrom::Start(0))
             .map_err(DecodeError::backend)?;
-        let size = end
-            .map(i64::try_from)
-            .transpose()
-            .map_err(DecodeError::backend)?;
-        Self::open_inner(source, hint, size, scan_packets)
+        Ok((source, end))
     }
 
     fn open_inner(
         source: BoxedSource,
         hint: Option<u32>,
-        size: Option<i64>,
+        size: SizeMode,
         scan_packets: bool,
     ) -> DecodeResult<Self> {
+        let has_size = !matches!(size, SizeMode::Unknown);
         let mut ctx = Box::new(CallbackCtx {
             source,
             size,
@@ -117,7 +152,7 @@ impl AppleAudioFile {
         let mut handle: AudioFileID = ptr::null_mut();
 
         let get_size_fn: AudioFile_GetSizeProc = get_size_callback;
-        let get_size = size.map(|_| get_size_fn);
+        let get_size = has_size.then_some(get_size_fn);
         // SAFETY: `ctx` is boxed (stable address) and outlives the
         let status = unsafe {
             AudioFileOpenWithCallbacks(
@@ -139,15 +174,16 @@ impl AppleAudioFile {
 
         let data_format = read_data_format(handle)?;
         // `read_packet_count` / `read_max_packet_size` force a full-file scan
-        // for VBR formats with no on-disk packet index (FLAC). Skip them on
-        // the streaming path; the demuxer sources duration and the read
-        // buffer size from header metadata (STREAMINFO) instead.
-        let packet_count = if size.is_some() && scan_packets {
+        // for VBR formats with no on-disk packet index (FLAC). Only the
+        // complete open (`Snapshot` + `scan_packets`) pays it; the streaming
+        // paths source duration and the read buffer size from header metadata
+        // (STREAMINFO) instead.
+        let packet_count = if has_size && scan_packets {
             Some(read_packet_count(handle)?)
         } else {
             None
         };
-        let max_packet_size = if size.is_some() && scan_packets {
+        let max_packet_size = if has_size && scan_packets {
             read_max_packet_size(handle).unwrap_or(0)
         } else {
             0
@@ -170,10 +206,10 @@ impl AppleAudioFile {
         source
             .seek(SeekFrom::Start(0))
             .map_err(DecodeError::backend)?;
-        let size = known_size
-            .map(i64::try_from)
-            .transpose()
-            .map_err(DecodeError::backend)?;
+        let size = match known_size {
+            Some(known) => SizeMode::Snapshot(i64::try_from(known).map_err(DecodeError::backend)?),
+            None => SizeMode::Unknown,
+        };
         Self::open_inner(source, hint, size, false)
     }
 
@@ -422,7 +458,7 @@ extern "C" fn read_callback(
         ))));
         return -1;
     };
-    if ctx.size.is_none() && position >= UNKNOWN_SIZE_TAIL_PROBE_MIN {
+    if matches!(ctx.size, SizeMode::Unknown) && position >= UNKNOWN_SIZE_TAIL_PROBE_MIN {
         *actual = 0;
         return Consts::noErr;
     }
@@ -452,14 +488,38 @@ extern "C" fn read_callback(
 
 extern "C" fn get_size_callback(user_data: *mut c_void) -> SInt64 {
     // SAFETY: `user_data` is the boxed `CallbackCtx` we pinned in
-    let ctx = unsafe { &*(user_data as *const CallbackCtx) };
-    ctx.size.map_or_else(
-        || {
+    // `open_inner`; `&mut` is sound because `AudioFile` never calls
+    // `get_size` and `read_callback` re-entrantly (it is synchronous).
+    let ctx = unsafe { &mut *(user_data as *mut CallbackCtx) };
+    match ctx.size {
+        SizeMode::Snapshot(size) => size,
+        SizeMode::Live => live_source_len(ctx),
+        SizeMode::Unknown => {
             ctx.last_error.set(Some(Error::other(
                 "AppleAudioFile get_size_callback called without a known size",
             )));
             0
-        },
-        identity,
-    )
+        }
+    }
+}
+
+/// Re-read the streamed source's current length. `AudioFileServices`
+/// re-queries `get_size` during decode, so a length that grows to the true
+/// total after open self-corrects here — no frozen open-time snapshot pins a
+/// false EOF. The cursor is saved and restored so the source's position
+/// accounting stays honest between callbacks (`read_callback` reseeks before
+/// every read regardless).
+fn live_source_len(ctx: &mut CallbackCtx) -> SInt64 {
+    let saved = ctx.source.stream_position();
+    let end = ctx.source.seek(SeekFrom::End(0));
+    if let Ok(pos) = saved {
+        let _ = ctx.source.seek(SeekFrom::Start(pos));
+    }
+    match end {
+        Ok(end) => SInt64::try_from(end).unwrap_or(SInt64::MAX),
+        Err(err) => {
+            ctx.last_error.set(Some(err));
+            0
+        }
+    }
 }
