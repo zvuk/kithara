@@ -267,6 +267,7 @@ async fn test_audio_playback_progress_uses_output_commit() {
             position_ms,
             total_ms,
             seek_epoch,
+            ..
         }))) = time::timeout(Duration::from_millis(40), events.recv()).await
         {
             assert!(position_ms > 0);

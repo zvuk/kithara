@@ -87,6 +87,7 @@ pub enum AudioEvent {
     PlaybackProgress {
         position_ms: u64,
         total_ms: Option<u64>,
+        buffered_ms: Option<u64>,
         seek_epoch: SeekEpoch,
     },
     /// Decoded output became available to a non-blocking reader.

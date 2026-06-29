@@ -7,7 +7,7 @@ use kithara_platform::{CancelToken, sync::Mutex, tokio, tokio::sync::broadcast};
 use crate::{
     item::ItemView,
     observer::ItemObserver,
-    types::{FfiError, FfiItemEvent, FfiItemStatus, FfiTimeRange},
+    types::{FfiError, FfiItemEvent, FfiItemStatus},
 };
 
 pub(crate) struct ItemEventBridge {
@@ -27,27 +27,10 @@ impl ItemEventBridge {
     /// Threshold for suppressing redundant duration/buffered updates (seconds).
     const UPDATE_THRESHOLD: f64 = 0.01;
 
-    fn buffered_seconds_from_event(event: &Event, duration_seconds: Option<f64>) -> Option<f64> {
-        let duration_seconds = duration_seconds?;
-        match event {
-            Event::File(FileEvent::ReadProgress {
-                position,
-                total: Some(total),
-            })
-            | Event::Hls(HlsEvent::ReadProgress {
-                position,
-                total: Some(total),
-            }) => Self::scaled_seconds(*position, *total, duration_seconds),
-            Event::Downloader(DownloaderEvent::RequestCompleted { .. }) => Some(duration_seconds),
-            _ => None,
-        }
-    }
-
     fn dispatch(
         observer: &Arc<dyn ItemObserver>,
         event: &Event,
         duration_seconds: &mut Option<f64>,
-        last_buffered: &mut Option<f64>,
         variants: &mut Vec<crate::types::FfiVariant>,
         state: &Arc<Mutex<ItemView>>,
     ) {
@@ -58,22 +41,6 @@ impl ItemEventBridge {
             *duration_seconds = Some(duration);
             state.lock().resolve_duration(duration);
             observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
-        }
-
-        if let Some(buffered) = Self::buffered_seconds_from_event(event, *duration_seconds)
-            && last_buffered
-                .is_none_or(|current| (current - buffered).abs() > Self::UPDATE_THRESHOLD)
-        {
-            *last_buffered = Some(buffered);
-            let ranges = if buffered > 0.0 {
-                vec![FfiTimeRange {
-                    start_seconds: 0.0,
-                    duration_seconds: buffered,
-                }]
-            } else {
-                Vec::new()
-            };
-            observer.on_event(FfiItemEvent::LoadedRangesChanged { ranges });
         }
 
         Self::dispatch_variant_events(observer, event, variants);
@@ -204,14 +171,6 @@ impl ItemEventBridge {
         }
     }
 
-    fn scaled_seconds(progress: u64, total: u64, duration_seconds: f64) -> Option<f64> {
-        if total == 0 {
-            return None;
-        }
-        let ratio = Self::u64_to_f64(progress)? / Self::u64_to_f64(total)?;
-        Some((duration_seconds * ratio).clamp(0.0, duration_seconds))
-    }
-
     /// Spawn a task that translates resource events into item callbacks
     /// and refreshes the shared [`ItemView`] cache backing the item's
     /// synchronous getters (`duration_sec`, `is_live_stream`, …).
@@ -238,7 +197,6 @@ impl ItemEventBridge {
         cancel: CancelToken,
     ) {
         crate::FFI_RUNTIME.spawn(async move {
-            let mut last_buffered = None;
             let mut variants: Vec<crate::types::FfiVariant> = Vec::new();
             loop {
                 tokio::select! {
@@ -249,7 +207,6 @@ impl ItemEventBridge {
                                 &observer,
                                 &event,
                                 &mut duration_seconds,
-                                &mut last_buffered,
                                 &mut variants,
                                 &state,
                             ),
@@ -281,29 +238,6 @@ mod tests {
 
     use super::ItemEventBridge;
     use crate::types::FfiError;
-
-    #[kithara::test]
-    #[case::clamps_to_duration(150, 100, 10.0, Some(10.0))]
-    #[case::rejects_zero_total(10, 0, 10.0, None)]
-    fn scaled_seconds_handles_boundary_inputs(
-        #[case] position: u64,
-        #[case] total: u64,
-        #[case] duration: f64,
-        #[case] expected: Option<f64>,
-    ) {
-        let buffered = ItemEventBridge::scaled_seconds(position, total, duration);
-        assert_eq!(buffered, expected);
-    }
-
-    #[kithara::test]
-    fn file_read_progress_maps_to_buffered_seconds() {
-        let event = Event::File(FileEvent::ReadProgress {
-            position: 50,
-            total: Some(100),
-        });
-        let buffered = ItemEventBridge::buffered_seconds_from_event(&event, Some(12.0));
-        assert_eq!(buffered, Some(6.0));
-    }
 
     #[kithara::test]
     fn file_error_maps_to_item_failed() {

@@ -41,6 +41,7 @@ pub use impls::{
         StartStreamFn, run_cmd,
     },
     shared_eq::SharedEq,
+    shared_player_state::PlaybackSnapshot,
     source_type::SourceType,
 };
 pub use kithara_audio::{

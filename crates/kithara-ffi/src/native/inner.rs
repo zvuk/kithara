@@ -539,10 +539,11 @@ impl NativeInner {
     }
 
     pub(crate) fn snapshot(&self) -> FfiPlayerSnapshot {
+        let view = self.queue.playback_view();
         FfiPlayerSnapshot {
             status: FfiPlayerStatus::from(self.queue.status()),
-            current_time: self.queue.position_seconds(),
-            duration: self.queue.duration_seconds(),
+            current_time: view.position,
+            duration: view.duration,
             rate: self.queue.rate(),
             playing_rate: self.queue.default_rate(),
             volume: self.queue.volume(),

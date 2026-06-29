@@ -1,9 +1,49 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_events::TrackId;
-use kithara_play::ResourceSrc;
+use kithara_play::{PlaybackSnapshot, ResourceSrc};
 
 use crate::track::TrackSource;
+
+/// One-shot view of the player's live playback state, returned by
+/// [`Queue::playback_view`](super::Queue::playback_view).
+///
+/// Collapses position / duration / buffered / playing into a single
+/// read so pollers (the FFI time thread, `snapshot`) assemble the whole
+/// state from one coherent call instead of several separate accessors.
+/// Each field keeps its own `Option` semantics: `position` carries the
+/// cached smoothing (filters transient `0.0` on pause/resume), and
+/// `duration` is `None` while unknown.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct PlaybackView {
+    /// Smoothed playback position in seconds; `None` until a stable
+    /// position is known (e.g. between tracks).
+    pub position: Option<f64>,
+    /// Total media duration in seconds; `None` while unknown.
+    pub duration: Option<f64>,
+    /// Decoded-ahead buffered/playable seconds; `None` when no track is
+    /// active. Always `>=` `position`.
+    pub buffered: Option<f64>,
+    /// Whether playback is active.
+    pub playing: bool,
+}
+
+impl From<PlaybackSnapshot> for PlaybackView {
+    /// Resolve a raw player snapshot into the queue-level view: an unknown
+    /// duration (`0.0`) collapses to `None`, and the decoded `frontier`
+    /// becomes the buffered window. `position` is carried through raw here —
+    /// [`Queue::playback_view`](super::Queue::playback_view) then overrides
+    /// it with the cached/smoothed value it owns.
+    fn from(snapshot: PlaybackSnapshot) -> Self {
+        Self {
+            position: Some(snapshot.position),
+            duration: (snapshot.duration > 0.0).then_some(snapshot.duration),
+            buffered: Some(snapshot.frontier),
+            playing: snapshot.playing,
+        }
+    }
+}
 
 /// Transition style for a track switch.
 ///

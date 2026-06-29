@@ -366,10 +366,15 @@ impl<S> Audio<S> {
             .playhead
             .duration()
             .map(|duration| clamp_u128_to_u64_millis(duration.as_millis()));
+        let buffered_ms = {
+            let decoded_ms = clamp_u128_to_u64_millis(self.playhead.decoded_frontier().as_millis());
+            Some(total_ms.map_or(decoded_ms, |total| decoded_ms.min(total)))
+        };
 
         self.emit_audio_event(AudioEvent::PlaybackProgress {
             position_ms,
             total_ms,
+            buffered_ms,
             seek_epoch: self.validator.epoch,
         });
     }
@@ -1489,6 +1494,12 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
     delegate! {
         to self.playhead {
             fn position(&self) -> Duration;
+        }
+    }
+
+    delegate! {
+        to self.playhead {
+            fn decoded_frontier(&self) -> Duration;
         }
     }
 }

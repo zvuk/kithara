@@ -6,7 +6,7 @@ use tracing::debug;
 
 use super::{
     Queue,
-    types::{CachedPosition, CrossfadeArm, Transition},
+    types::{CachedPosition, CrossfadeArm, PlaybackView, Transition},
 };
 use crate::{error::QueueError, track::TrackSource};
 
@@ -99,8 +99,9 @@ impl Queue {
     }
 
     fn handle_item_did_fail(&self, src: &std::sync::Arc<str>) {
-        let pos = self.player.position_seconds().unwrap_or(0.0);
-        let dur = self.player.duration_seconds().unwrap_or(0.0);
+        let snap = self.player.playback_snapshot();
+        let pos = snap.map_or(0.0, |s| s.position);
+        let dur = snap.map_or(0.0, |s| s.duration);
         debug!(%src, pos, dur, "ItemDidFail received — track aborted mid-stream");
         if self.current().is_none() {
             self.bus.publish(QueueEvent::QueueEnded);
@@ -131,8 +132,9 @@ impl Queue {
     /// player has not yet wired the src through; it falls back to the
     /// pos/dur tolerance heuristic to filter spurious events.
     fn handle_item_did_play_to_end(&self, src: &std::sync::Arc<str>) {
-        let pos = self.player.position_seconds().unwrap_or(0.0);
-        let dur = self.player.duration_seconds().unwrap_or(0.0);
+        let snap = self.player.playback_snapshot();
+        let pos = snap.map_or(0.0, |s| s.position);
+        let dur = snap.map_or(0.0, |s| s.duration);
         debug!(%src, pos, dur, "ItemDidPlayToEnd received");
         if self.current().is_none() {
             self.bus.publish(QueueEvent::QueueEnded);
@@ -175,11 +177,9 @@ impl Queue {
             return;
         }
         let crossfade = self.player.crossfade_duration();
-        let (Some(dur), Some(pos), Some(entry)) = (
-            self.player.duration_seconds(),
-            self.position_seconds(),
-            self.current(),
-        ) else {
+        let view = self.playback_view();
+        let (Some(dur), Some(pos), Some(entry)) = (view.duration, view.position, self.current())
+        else {
             return;
         };
         let armed_for = self.read_armed_for();
@@ -239,6 +239,25 @@ impl Queue {
     #[must_use]
     pub fn position_seconds(&self) -> Option<f64> {
         self.read_cached_position().into()
+    }
+
+    /// Single coherent read of the player's live playback state.
+    ///
+    /// Pollers (the FFI time thread, `snapshot`) get position, duration,
+    /// decoded frontier, and the playing flag from one call instead of
+    /// several separate accessors. The player-sourced fields come from one
+    /// [`PlaybackSnapshot`](kithara_play::PlaybackSnapshot) via its `From`
+    /// conversion; `position` is then replaced with this queue's cached,
+    /// 0.0-smoothed value.
+    #[must_use]
+    pub fn playback_view(&self) -> PlaybackView {
+        let mut view = self
+            .player
+            .playback_snapshot()
+            .map(PlaybackView::from)
+            .unwrap_or_default();
+        view.position = self.position_seconds();
+        view
     }
 
     fn process_player_event(&self, ev: &Event) {

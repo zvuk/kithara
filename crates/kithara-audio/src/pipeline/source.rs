@@ -1288,6 +1288,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn track_chunk(&mut self, chunk: &PcmChunk) {
         self.chunks_decoded += 1;
         self.total_samples += chunk.samples.len() as u64;
+        self.playhead.set_decoded_frontier(chunk.meta.end_timestamp);
 
         if self.chunks_decoded == 1
             && let Some(ref emit) = self.emit
