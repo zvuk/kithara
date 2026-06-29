@@ -98,15 +98,23 @@ impl AppleAudioFileDemuxer {
         // open would query `packet_count()` — forcing `AudioFileServices` to
         // scan the WHOLE file to build a packet table before the first frame
         // (3–37 s on device for large lossless tracks, and a full download
-        // wait on a streamed source). The streaming open skips that scan;
+        // wait on a streamed source). The streaming opens skip that scan;
         // duration and the read-buffer size come from cheap header metadata
         // instead (Xing for MP3, STREAMINFO for FLAC).
-        let lazy_streaming = matches!(open_mode, SourceOpenMode::Streaming)
-            && matches!(codec, AudioCodec::Mp3 | AudioCodec::Flac);
-        let file = if lazy_streaming {
-            AppleAudioFile::open_streaming(source, hint, None)?
-        } else {
-            AppleAudioFile::open(source, hint)?
+        //
+        // FLAC additionally needs the real file size handed to AudioFile
+        // (`open_sized_streaming`): without it a not-ready read past the
+        // download boundary is mistaken for EOF (track ends mid-stream) and
+        // seeks degrade to an O(N) forward frame-scan. MP3 stays size-less —
+        // it must not probe tail bytes at open (`open_mp3_demuxer_*`).
+        let file = match (open_mode, codec) {
+            (SourceOpenMode::Streaming, AudioCodec::Flac) => {
+                AppleAudioFile::open_sized_streaming(source, hint)?
+            }
+            (SourceOpenMode::Streaming, AudioCodec::Mp3) => {
+                AppleAudioFile::open_streaming(source, hint, None)?
+            }
+            _ => AppleAudioFile::open(source, hint)?,
         };
         let asbd = file.data_format();
         let total_packets = file.packet_count();
@@ -653,6 +661,53 @@ mod tests {
         assert!(
             duration.as_secs_f64() > 1.0,
             "complete MP3 duration is suspiciously short: {duration:?}"
+        );
+    }
+
+    /// Streaming FLAC regression (#device-flac-stall): when a read crosses
+    /// the not-yet-downloaded boundary, the demuxer must surface `Pending`
+    /// so the worker parks and wakes on more data. `AudioFileServices` masks
+    /// the read-callback failure as a graceful EOF (noErr, 0 packets) for
+    /// FLAC; before the fix that ended the track mid-stream — on device the
+    /// track played a fraction of a second then stalled, advancing only by
+    /// another fraction on a manual play kick (and seeks skipped to the next
+    /// track). The fix needs both the sized streaming open (`AudioFile` knows
+    /// more data exists) and `read_packet` consulting the stashed error.
+    #[kithara::test]
+    fn flac_streaming_not_ready_surfaces_pending_not_eof() {
+        let bytes = read_asset("sawtooth.flac");
+        // Header + several frames are ready; the rest is "not downloaded".
+        let ready = 64_u64 * 1024;
+        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(NotReadySource::new(bytes, ready, None)),
+            AudioCodec::Flac,
+            Some(ContainerFormat::Flac),
+            SourceOpenMode::Streaming,
+            None,
+        )
+        .expect("streaming FLAC open");
+
+        let mut produced = 0usize;
+        loop {
+            match dx.next_frame() {
+                Ok(DemuxOutcome::Frame(_)) => {
+                    produced += 1;
+                    assert!(
+                        produced < 5000,
+                        "drained the whole fixture without reaching the not-ready boundary"
+                    );
+                }
+                Ok(DemuxOutcome::Pending(PendingReason::NotReady(_))) => break,
+                Ok(DemuxOutcome::Eof) => panic!(
+                    "not-ready boundary surfaced as EOF after {produced} frames — \
+                     the track would end mid-stream"
+                ),
+                other => panic!("unexpected outcome at the not-ready boundary: {other:?}"),
+            }
+        }
+        assert!(
+            produced > 0,
+            "should decode the ready prefix before parking"
         );
     }
 }

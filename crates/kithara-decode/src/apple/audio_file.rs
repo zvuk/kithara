@@ -62,8 +62,32 @@ impl AppleAudioFile {
 
     /// Open `source` as an audio file. `hint` is one of the
     /// `kAudioFile*Type` four-cc constants in [`Consts`]; pass `None`
-    /// to let `AudioFileServices` auto-detect.
-    pub(crate) fn open(mut source: BoxedSource, hint: Option<u32>) -> DecodeResult<Self> {
+    /// to let `AudioFileServices` auto-detect. Eagerly resolves the packet
+    /// count / max packet size — for VBR formats with no on-disk index
+    /// (FLAC) that triggers a full-file scan, so streamed sources should
+    /// prefer [`Self::open_sized_streaming`].
+    pub(crate) fn open(source: BoxedSource, hint: Option<u32>) -> DecodeResult<Self> {
+        Self::open_seekable(source, hint, true)
+    }
+
+    /// Like [`Self::open`] but skips the eager packet-count / max-packet-size
+    /// scan while still handing `AudioFileServices` the real file size. The
+    /// known size is what lets the codec treat a not-ready read as a
+    /// transient error (surfaced as `Pending`) instead of EOF, and resolve
+    /// seeks by size-estimation instead of an O(N) forward frame-scan — both
+    /// of which break when the size is unknown ([`Self::open_streaming`]).
+    pub(crate) fn open_sized_streaming(
+        source: BoxedSource,
+        hint: Option<u32>,
+    ) -> DecodeResult<Self> {
+        Self::open_seekable(source, hint, false)
+    }
+
+    fn open_seekable(
+        mut source: BoxedSource,
+        hint: Option<u32>,
+        scan_packets: bool,
+    ) -> DecodeResult<Self> {
         let end = match source.seek(SeekFrom::End(0)) {
             Ok(end) => Some(end),
             Err(err) if err.kind() == ErrorKind::Unsupported => None,
@@ -76,10 +100,15 @@ impl AppleAudioFile {
             .map(i64::try_from)
             .transpose()
             .map_err(DecodeError::backend)?;
-        Self::open_inner(source, hint, size)
+        Self::open_inner(source, hint, size, scan_packets)
     }
 
-    fn open_inner(source: BoxedSource, hint: Option<u32>, size: Option<i64>) -> DecodeResult<Self> {
+    fn open_inner(
+        source: BoxedSource,
+        hint: Option<u32>,
+        size: Option<i64>,
+        scan_packets: bool,
+    ) -> DecodeResult<Self> {
         let mut ctx = Box::new(CallbackCtx {
             source,
             size,
@@ -109,12 +138,16 @@ impl AppleAudioFile {
         }
 
         let data_format = read_data_format(handle)?;
-        let packet_count = if size.is_some() {
+        // `read_packet_count` / `read_max_packet_size` force a full-file scan
+        // for VBR formats with no on-disk packet index (FLAC). Skip them on
+        // the streaming path; the demuxer sources duration and the read
+        // buffer size from header metadata (STREAMINFO) instead.
+        let packet_count = if size.is_some() && scan_packets {
             Some(read_packet_count(handle)?)
         } else {
             None
         };
-        let max_packet_size = if size.is_some() {
+        let max_packet_size = if size.is_some() && scan_packets {
             read_max_packet_size(handle).unwrap_or(0)
         } else {
             0
@@ -141,7 +174,7 @@ impl AppleAudioFile {
             .map(i64::try_from)
             .transpose()
             .map_err(DecodeError::backend)?;
-        Self::open_inner(source, hint, size)
+        Self::open_inner(source, hint, size, false)
     }
 
     pub(crate) fn packet_count(&self) -> Option<u64> {
@@ -160,6 +193,20 @@ impl AppleAudioFile {
             Error::other(format!("{op} failed: {}", os_status_to_string(status)))
         });
         DecodeError::backend(io_err)
+    }
+
+    /// Take the read callback's stashed error and return it as a typed
+    /// `DecodeError` ONLY if it is transient (a not-ready / pending read).
+    /// `AudioFile` masks such a callback failure as a graceful EOF or a
+    /// truncated packet, so the demuxer must surface it as `Pending` rather
+    /// than trust the `status`/packets result. A non-transient stashed
+    /// error (e.g. an incidental probe past a complete file's true EOF) is
+    /// dropped: the genuine `status`/packets outcome stands.
+    fn take_pending_callback_error(&self) -> Option<DecodeError> {
+        self._ctx.last_error.take().and_then(|err| {
+            let de = DecodeError::backend(err);
+            de.pending_reason().is_some().then_some(de)
+        })
     }
 
     /// Read one VBR packet at `starting_packet` into `buf`. Returns
@@ -190,6 +237,17 @@ impl AppleAudioFile {
             )
         };
 
+        // A not-ready streamed read is masked by AudioFile either as a
+        // graceful EOF (noErr, 0 packets) or as a truncated packet (a short
+        // `packets >= 1` with a stashed callback error) — both for
+        // compressed formats. Surface the transient error BEFORE trusting
+        // `status`/`packets` so it classifies as `Pending` and the partial
+        // read is discarded. A non-transient stashed error (an incidental
+        // probe past a complete file's true EOF) is ignored so genuine
+        // end-of-stream still reports `Ok(None)`.
+        if let Some(pending) = self.take_pending_callback_error() {
+            return Err(pending);
+        }
         if status != Consts::noErr {
             return Err(self.read_failure_error("AudioFileReadPacketData", status));
         }
