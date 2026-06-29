@@ -7,8 +7,6 @@ use std::{
     ptr,
 };
 
-use tracing::trace;
-
 use super::{
     consts::{Consts, os_status_to_string},
     ffi::{
@@ -28,17 +26,14 @@ enum SizeMode {
     /// `get_size` proc and a tail probe is answered with EOF; reads run to
     /// the source's natural end. Used for MP3 streaming.
     Unknown,
-    /// A fixed, fully-present total — a complete local file ([`AppleAudioFile::open`])
-    /// or a caller-supplied `known_size`. Freezing is correct: the length
-    /// cannot change under a complete source.
+    /// A known total length. For a complete local file
+    /// ([`AppleAudioFile::open`]) it is the file size; for a streamed source
+    /// ([`AppleAudioFile::open_sized_streaming`]) it is the authoritative
+    /// total the source reports at open (`Content-Length` / committed size —
+    /// the source never reports a partial in-flight length as the total, so
+    /// this is correct, not a prefix). `get_size` returns it directly — cheap
+    /// (called ~per packet by `AudioFileServices`) and stable.
     Snapshot(i64),
-    /// A streamed source whose total is known but may still be arriving at
-    /// open. `get_size` re-reads the source length on every call so a length
-    /// that grows to the true total after open self-corrects. `AudioFile`
-    /// re-queries `get_size` during decode, so a frozen open-time snapshot
-    /// would pin a false EOF at whatever prefix had downloaded at open — the
-    /// device symptom "plays a fraction of a second then freezes".
-    Live,
 }
 
 struct CallbackCtx {
@@ -96,16 +91,21 @@ impl AppleAudioFile {
         Self::open_inner(source, hint, size, true)
     }
 
-    /// Open a streamed `source` whose total length is known (`Content-Length`)
-    /// but whose bytes are still arriving. Skips the eager packet-count scan
-    /// and hands `AudioFileServices` a [`SizeMode::Live`] size — re-read on
-    /// every `get_size` so the length self-corrects as the download finishes,
-    /// rather than freezing the open-time prefix as a false EOF. A known size
-    /// is also what lets the codec treat a not-ready read as a transient
-    /// `Pending` (not EOF) and resolve seeks by size-estimation instead of an
-    /// O(N) forward frame-scan. If the source reports no length at all (no
-    /// `Content-Length`), falls back to the size-less [`SizeMode::Unknown`]
-    /// path ([`Self::open_streaming`]).
+    /// Open a streamed `source` whose total length the source reports at open
+    /// (`Content-Length` / committed size). Skips the eager packet-count scan
+    /// (the demuxer sources duration / read-buffer size from header metadata);
+    /// otherwise identical to [`Self::open`]. The known total is what lets the
+    /// codec treat a not-ready read as a transient `Pending` (not EOF) and
+    /// resolve seeks by size-estimation instead of an O(N) forward frame-scan.
+    /// If the source reports no length (no `Content-Length`, not yet
+    /// committed), falls back to the size-less [`SizeMode::Unknown`] path
+    /// ([`Self::open_streaming`]).
+    ///
+    /// The source must report its TRUE total here, never a partial in-flight
+    /// length: `AudioFileServices` never reads past the size `get_size`
+    /// reports, so a partial would pin a false EOF at the open-time prefix
+    /// (the "plays a fraction then freezes" device bug). `FileSource::len`
+    /// owns that guarantee.
     pub(crate) fn open_sized_streaming(
         source: BoxedSource,
         hint: Option<u32>,
@@ -114,19 +114,18 @@ impl AppleAudioFile {
         source
             .seek(SeekFrom::Start(0))
             .map_err(DecodeError::backend)?;
-        let size = if end.is_some() {
-            SizeMode::Live
-        } else {
-            SizeMode::Unknown
+        let size = match end {
+            Some(end) => SizeMode::Snapshot(i64::try_from(end).map_err(DecodeError::backend)?),
+            None => SizeMode::Unknown,
         };
         Self::open_inner(source, hint, size, false)
     }
 
-    /// Probe whether `source` can report a length (seek-to-end), restoring the
-    /// cursor to the start. `None` means the source has no known length
-    /// (`ErrorKind::Unsupported` — e.g. a chunked stream with no
-    /// `Content-Length`); this is a capability probe, not the size of record
-    /// (a streaming size is re-queried live — see [`SizeMode::Live`]).
+    /// Probe the source length via a seek-to-end, restoring the cursor to the
+    /// start. `None` means the source reports no length (`ErrorKind::Unsupported`
+    /// — e.g. a chunked stream with no `Content-Length`, or a streamed source
+    /// not yet committed). A streamed source reports its TRUE total here (never
+    /// a partial in-flight prefix) — see [`Self::open_sized_streaming`].
     fn probe_end(mut source: BoxedSource) -> DecodeResult<(BoxedSource, Option<u64>)> {
         let end = match source.seek(SeekFrom::End(0)) {
             Ok(end) => Some(end),
@@ -492,38 +491,13 @@ extern "C" fn get_size_callback(user_data: *mut c_void) -> SInt64 {
     // SAFETY: `user_data` is the boxed `CallbackCtx` we pinned in
     // `open_inner`; `&mut` is sound because `AudioFile` never calls
     // `get_size` and `read_callback` re-entrantly (it is synchronous).
-    let ctx = unsafe { &mut *(user_data as *mut CallbackCtx) };
-    match ctx.size {
-        SizeMode::Snapshot(size) => size,
-        SizeMode::Live => live_source_len(ctx),
+    let ctx = unsafe { &*(user_data as *const CallbackCtx) };
+    match &ctx.size {
+        SizeMode::Snapshot(size) => *size,
         SizeMode::Unknown => {
             ctx.last_error.set(Some(Error::other(
                 "AppleAudioFile get_size_callback called without a known size",
             )));
-            0
-        }
-    }
-}
-
-/// Re-read the streamed source's current length. `AudioFileServices`
-/// re-queries `get_size` during decode, so a length that grows to the true
-/// total after open self-corrects here — no frozen open-time snapshot pins a
-/// false EOF. The cursor is saved and restored so the source's position
-/// accounting stays honest between callbacks (`read_callback` reseeks before
-/// every read regardless).
-fn live_source_len(ctx: &mut CallbackCtx) -> SInt64 {
-    let saved = ctx.source.stream_position();
-    let end = ctx.source.seek(SeekFrom::End(0));
-    if let Ok(pos) = saved {
-        let _ = ctx.source.seek(SeekFrom::Start(pos));
-    }
-    match end {
-        Ok(end) => {
-            trace!(len = end, "apple.audio_file: live size re-query");
-            SInt64::try_from(end).unwrap_or(SInt64::MAX)
-        }
-        Err(err) => {
-            ctx.last_error.set(Some(err));
             0
         }
     }

@@ -402,7 +402,7 @@ mod tests {
         io::{self, Cursor, Error, ErrorKind, Read, Seek, SeekFrom},
         sync::{
             Arc,
-            atomic::{AtomicBool, AtomicU64, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
     };
 
@@ -711,85 +711,60 @@ mod tests {
         );
     }
 
-    /// Streaming source whose reported length GROWS over the decode — models
-    /// a `Content-Length` (or download extent) that becomes known after open.
-    /// `seek(End)` resolves against the live `reported_len`.
-    struct GrowingLenSource {
+    /// Streaming source that counts `seek(End)` calls — one per `get_size`
+    /// re-query — to pin the size-query cost. `seek(End)` returns the full,
+    /// fixed file length (the realistic case where `Content-Length` is known
+    /// at open), so a correct decoder needs the size exactly once.
+    struct CountingSource {
         inner: Cursor<Vec<u8>>,
-        reported_len: Arc<AtomicU64>,
+        end_seeks: Arc<AtomicUsize>,
     }
 
-    impl Read for GrowingLenSource {
+    impl Read for CountingSource {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             self.inner.read(buf)
         }
     }
 
-    impl Seek for GrowingLenSource {
+    impl Seek for CountingSource {
         fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-            match pos {
-                SeekFrom::End(delta) => {
-                    let base = i128::from(self.reported_len.load(Ordering::Acquire));
-                    let target = base.saturating_add(i128::from(delta));
-                    let target = u64::try_from(target.max(0)).unwrap_or(u64::MAX);
-                    self.inner.seek(SeekFrom::Start(target))
-                }
-                other => self.inner.seek(other),
+            if matches!(pos, SeekFrom::End(_)) {
+                self.end_seeks.fetch_add(1, Ordering::Release);
             }
+            self.inner.seek(pos)
         }
     }
 
-    /// Streaming FLAC regression (#device-flac-stall, root cause): the decoder
-    /// is created mid-download, when the source length is only the prefix that
-    /// has arrived — the final `Content-Length` becomes known shortly after.
-    /// A frozen open-time size snapshot pins a false EOF at that prefix:
-    /// `AudioFileServices` re-queries `get_size` during decode, so the size
-    /// MUST be live. On device the track played the fraction of a second
-    /// covered by the open-time prefix, then "froze"; each play kick decoded
-    /// another fraction and stopped again at the same false EOF.
-    ///
-    /// Here the reported length starts as a small prefix and grows to the true
-    /// total after a few frames (mirroring the length becoming known after
-    /// open); the demuxer must follow it to the true end. RED before the fix
-    /// (`get_size` returned the frozen open-time snapshot → decode capped at
-    /// the prefix); GREEN once `get_size` re-reads the live source length.
+    /// Perf contract (#device-flac-stall, regression guard): the streamed-FLAC
+    /// size query must be BOUNDED, not issued per packet. The first live-size
+    /// fix re-read the source length on every `get_size`, and
+    /// `AudioFileServices` calls `get_size` ~per packet — on device that turned
+    /// each `seek(End)` (priming + `phase_at`/`contains_range`) into per-packet
+    /// work, ballooning `step_track` to 10–77 ms and starving the audio worker
+    /// (`step_track took too long`), i.e. a fresh stall. With the full length
+    /// known at open, the decoder must resolve the size O(1), not O(packets).
     #[kithara::test]
-    fn flac_streaming_growing_len_reaches_true_eof() {
+    fn flac_streaming_size_query_is_bounded() {
         let bytes = read_asset("sawtooth.flac");
-        let true_len = bytes.len();
-        let initial = 64usize * 1024;
-        let reported_len = Arc::new(AtomicU64::new(
-            u64::try_from(initial).expect("prefix fits u64"),
-        ));
-
+        let end_seeks = Arc::new(AtomicUsize::new(0));
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
-            Box::new(GrowingLenSource {
+            Box::new(CountingSource {
                 inner: Cursor::new(bytes),
-                reported_len: Arc::clone(&reported_len),
+                end_seeks: Arc::clone(&end_seeks),
             }),
             AudioCodec::Flac,
             Some(ContainerFormat::Flac),
             SourceOpenMode::Streaming,
             None,
         )
-        .expect("streaming FLAC open with a growing length");
+        .expect("streaming FLAC open");
 
-        let mut consumed = 0usize;
         let mut frames = 0usize;
         loop {
-            // Reveal the true total once a few frames are in — mirrors the
-            // length becoming known shortly after open.
-            if frames == 3 {
-                reported_len.store(
-                    u64::try_from(true_len).expect("len fits u64"),
-                    Ordering::Release,
-                );
-            }
             match dx.next_frame() {
-                Ok(DemuxOutcome::Frame(frame)) => {
-                    consumed += frame.data.len();
+                Ok(DemuxOutcome::Frame(_)) => {
                     frames += 1;
-                    assert!(consumed < true_len * 4, "runaway decode ({consumed} B)");
+                    assert!(frames < 100_000, "runaway decode");
                 }
                 Ok(DemuxOutcome::Eof) => break,
                 Ok(DemuxOutcome::Pending(reason)) => {
@@ -799,10 +774,12 @@ mod tests {
             }
         }
 
+        let count = end_seeks.load(Ordering::Acquire);
         assert!(
-            consumed > initial * 2,
-            "AudioFile did NOT re-query get_size: decoded {consumed} B, capped at \
-             the open-time length {initial} B despite the size growing to {true_len} B"
+            count <= 4,
+            "size query not bounded: {count} seek(End) calls over {frames} frames — \
+             get_size must not re-read the source length per packet (the device perf \
+             regression that starved step_track). Expected O(1)."
         );
     }
 }
