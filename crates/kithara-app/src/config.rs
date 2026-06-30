@@ -2,7 +2,7 @@ use std::{fmt, sync::Arc};
 
 use bon::Builder;
 use kithara::{
-    assets::{AssetStore, FlushHub, StoreOptions},
+    assets::{AssetStore, AssetStoreBuilder, FlushHub, StoreOptions},
     hls::SizeProbeMethod,
     stream::dl::Downloader,
 };
@@ -96,7 +96,8 @@ impl AppConfig {
         let store_options = StoreOptions::default_builder()
             .flush_hub(Arc::clone(&flush_hub))
             .build();
-        let asset_store = kithara::file::build_shared_asset_store(&store_options, cancel.child());
+        let asset_store =
+            Arc::new(AssetStoreBuilder::from(&store_options).cancel(cancel.child()).build());
         Self::builder()
             .downloader(downloader)
             .flush_hub(flush_hub)

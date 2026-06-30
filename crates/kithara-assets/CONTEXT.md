@@ -151,6 +151,7 @@ The in-memory cache key is `(ResourceKey, Option<RequestIdentity>, Option<CtxIde
 
 - `&Url` → `ResourceKey` (`From`) — derive a unique key from a URL, query-aware
 - `&StoreOptions` → `EvictConfig` (`From`) — extract eviction config from store options
+- `&StoreOptions` → `AssetStoreBuilder` (`From`) — pre-populate a builder from store options (`cancel` set separately); the canonical `StoreOptions`-to-store path for file and HLS
 - `ResourceStatus` → `AssetResourceState` (`From`) — map storage status to asset state
 - `&LruState` ↔ `LruIndexFile` (`From` both ways) — LRU index persistence round-trip
 - `DiskStore` / `MemStore` → `AssetStore` (`From`) — wrap a backend into the unified store

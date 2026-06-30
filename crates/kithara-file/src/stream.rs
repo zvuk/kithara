@@ -1,8 +1,8 @@
 use std::{path::PathBuf, sync::Arc};
 
 use kithara_assets::{
-    AcquisitionResult, AssetReader, AssetScopeDelegate, AssetStore, AssetStoreBuilder, AssetsError,
-    EvictConfig, ReadSide, ResourceKey, StoreOptions, WriteSide, safe_path_component,
+    AcquisitionResult, AssetReader, AssetScopeDelegate, AssetStoreBuilder, AssetsError, ReadSide,
+    ResourceKey, WriteSide, safe_path_component,
 };
 use kithara_events::EventBus;
 use kithara_net::{HttpClient, NetOptions};
@@ -161,10 +161,9 @@ impl File {
             )
         });
 
-        let backend = config
-            .asset_store
-            .clone()
-            .unwrap_or_else(|| build_shared_asset_store(&config.store, cancel.clone()));
+        let backend = config.asset_store.clone().unwrap_or_else(|| {
+            Arc::new(AssetStoreBuilder::from(&config.store).cancel(cancel.clone()).build())
+        });
 
         let key = backend
             .scope_with_delegate(asset_root.as_str(), Arc::clone(&naming))
@@ -297,29 +296,6 @@ impl File {
             }
         }
     }
-}
-
-/// Build an app-wide shared file asset store from [`StoreOptions`].
-///
-/// Inject the result into every [`FileConfig::asset_store`](crate::FileConfig)
-/// that should cooperate on a single cache so concurrent consumers of
-/// one URL share a single download. `cancel` must be a child of the app
-/// master so a shutdown cascades through the store. Also the standalone
-/// fallback when no store is injected (single consumer).
-#[must_use]
-pub fn build_shared_asset_store(store: &StoreOptions, cancel: CancelToken) -> Arc<AssetStore> {
-    let mut builder = AssetStoreBuilder::new()
-        .cancel(cancel)
-        .root_dir(&store.cache_dir)
-        .evict_config(EvictConfig::from(store))
-        .ephemeral(store.is_ephemeral);
-    if let Some(cap) = store.cache_capacity {
-        builder = builder.cache_capacity(cap);
-    }
-    if let Some(ref hub) = store.flush_hub {
-        builder = builder.flush_hub(Arc::clone(hub));
-    }
-    Arc::new(builder.build())
 }
 
 /// Probe the first bytes of a committed `AssetResource` and try to

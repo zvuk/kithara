@@ -119,6 +119,22 @@ impl From<&StoreOptions> for EvictConfig {
     }
 }
 
+impl From<&StoreOptions> for AssetStoreBuilder {
+    fn from(opts: &StoreOptions) -> Self {
+        let mut builder = Self::new()
+            .root_dir(&opts.cache_dir)
+            .evict_config(EvictConfig::from(opts))
+            .ephemeral(opts.is_ephemeral);
+        if let Some(cap) = opts.cache_capacity {
+            builder = builder.cache_capacity(cap);
+        }
+        if let Some(ref hub) = opts.flush_hub {
+            builder = builder.flush_hub(Arc::clone(hub));
+        }
+        builder
+    }
+}
+
 /// Fully decorated disk store chain. Processing travels per-acquire as a
 /// [`ProcessCtx`](crate::ProcessCtx), so the chain is not generic over context.
 #[cfg(not(target_arch = "wasm32"))]
@@ -142,8 +158,7 @@ pub type AssetResource = AcquisitionResult<AssetWriter, AssetReader>;
 /// In-memory asset store with disabled decorators.
 ///
 /// Internal chain used for `AssetStore::Mem`.
-pub(crate) type MemStore =
-    LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<MemAssetStore>>>>;
+pub(crate) type MemStore = LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<MemAssetStore>>>>;
 
 /// Constructor for the ready-to-use [`AssetStore`]. One store services every
 /// asset under `root_dir`; a scope binds the `asset_root` and mints keys.
