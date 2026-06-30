@@ -1,18 +1,16 @@
 #![forbid(unsafe_code)]
 
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use bon::Builder;
 use kithara_abr::AbrMode;
-use kithara_assets::{BytePool, StoreOptions};
+use kithara_assets::{AssetStore, BytePool, StoreOptions};
 use kithara_drm::KeyProcessorRegistry;
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
 use kithara_platform::CancelToken;
 use kithara_stream::dl::Downloader;
 use url::Url;
-
-use crate::invalidation::HlsStore;
 
 /// Encryption key handling configuration.
 ///
@@ -84,11 +82,8 @@ pub struct HlsConfig {
     /// [`downloader`]: Self::downloader
     #[builder(default)]
     pub net_options: NetOptions,
-    /// Optional app-wide shared store. When present, the stream reuses
-    /// this backend (cache + flush hub + DRM `process_fn`) and registers
-    /// its eviction channel in the store's routing registry instead of
-    /// building a private per-stream store. See [`HlsStore`].
-    pub asset_store: Option<HlsStore>,
+    /// Optional app-wide shared store.
+    pub asset_store: Option<Arc<AssetStore>>,
     /// Base URL for resolving relative playlist/segment URLs.
     pub base_url: Option<Url>,
     /// Event bus (optional - if not provided, one is created internally).

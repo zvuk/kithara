@@ -15,8 +15,7 @@ use crate::DecryptContext;
 /// AES block size in bytes.
 pub(crate) const AES_BLOCK_SIZE: usize = 16;
 
-/// AES-128-CBC chunk decryption, for use as `ProcessChunkFn<DecryptContext>`
-/// in `ProcessingAssets`.
+/// AES-128-CBC chunk decryption, driven per chunk by a `ChunkSink`.
 ///
 /// Decrypts `input` into `output` using the key and IV from `ctx` and returns
 /// the number of bytes written. The last chunk (`is_last = true`) removes PKCS7

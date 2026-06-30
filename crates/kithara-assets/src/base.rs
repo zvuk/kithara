@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt::Debug, hash::Hash, path::Path};
+use std::{fmt::Debug, path::Path};
 
 // Base-layer storage seam types live in `resource.rs`; re-exported here so the
 // decorator stack can keep referring to them through `crate::base::`.
@@ -45,7 +45,7 @@ pub trait Assets: Clone + Send + Sync + 'static {
     /// Writer (Pending) phase returned by `acquire_resource*`.
     type ActiveRes: WriteSide<Reader = Self::ReadyRes>;
     /// Context type for resource processing. Use `()` for no context.
-    type Context: Clone + Send + Sync + Hash + Eq + Debug + 'static;
+    type Context: Clone + Send + Sync + Debug + 'static;
     /// Resource type for index persistence (pins, LRU). Cached and cloned by
     /// the cache decorator; no resource API is invoked on it directly.
     type IndexRes: Clone + Send + Sync + Debug + 'static;

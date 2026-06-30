@@ -12,6 +12,7 @@ mod deleter;
 mod disk_store;
 mod error;
 mod evict;
+mod eviction;
 mod flush;
 mod identity;
 pub mod index;
@@ -33,6 +34,7 @@ pub use cache::{CachedAssets, CachedReader, CachedWriter};
 pub use disk_store::DiskAssetStore;
 pub use error::{AssetsError, AssetsResult};
 pub use evict::EvictAssets;
+pub use eviction::EvictionSubscription;
 pub use flush::{FlushHub, FlushPolicy};
 pub use identity::RequestIdentity;
 pub use index::{DemandLease, EvictConfig, ProducerHandle};
@@ -44,11 +46,11 @@ pub use mem_store::MemAssetStore;
 pub use naming::{
     AssetScopeDelegate, DefaultAssetScopeDelegate, safe_path_component, url_fingerprint,
 };
-pub use process::{ProcessChunkFn, ProcessedReader, ProcessedWriter, ProcessingAssets};
+pub use process::{
+    ChunkSink, ProcessCtx, ProcessedReader, ProcessedWriter, ProcessingAssets, ResourceProcessor,
+};
 pub use resource::{BaseReader, BaseWriter};
 pub use scope::AssetScope;
 pub use state::AssetResourceState;
-pub use store::{
-    AssetReader, AssetResource, AssetStoreBuilder, AssetWriter, OnInvalidatedFn, StoreOptions,
-};
+pub use store::{AssetReader, AssetResource, AssetStoreBuilder, AssetWriter, StoreOptions};
 pub use unified::AssetStore;

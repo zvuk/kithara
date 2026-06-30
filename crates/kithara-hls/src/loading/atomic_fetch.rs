@@ -5,7 +5,6 @@ use kithara_assets::{
     AcquisitionResult, AssetScope, AssetWriter, ReadSide, ResourceKey, WriteSide,
 };
 use kithara_bufpool::BytePool;
-use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_stream::dl::{FetchCmd, PeerHandle, reject_html_response};
 use tracing::{debug, trace};
@@ -26,7 +25,7 @@ use crate::{HlsError, HlsResult};
 /// commit.
 pub(crate) async fn fetch_atomic_body(
     downloader: &PeerHandle,
-    scope: &AssetScope<DecryptContext>,
+    scope: &AssetScope,
     byte_pool: &BytePool,
     headers: Option<Headers>,
     url: &Url,
@@ -64,7 +63,7 @@ pub(crate) async fn fetch_atomic_body(
 /// Try to read the resource from the cache. Returns `Ok(Some(bytes))`
 /// on a cache hit, `Ok(None)` on miss.
 pub(crate) fn try_read_cached(
-    scope: &AssetScope<DecryptContext>,
+    scope: &AssetScope,
     byte_pool: &BytePool,
     key: &ResourceKey,
     url: &Url,
@@ -96,9 +95,9 @@ pub(crate) fn try_read_cached(
 /// resource is already committed. Harmless — the bytes are in memory
 /// from the network fetch. Consumes the writer (commit is consume-self).
 pub(crate) fn write_back_cache(
-    writer: AssetWriter<DecryptContext>,
+    writer: AssetWriter,
     bytes: &Bytes,
-    scope: &AssetScope<DecryptContext>,
+    scope: &AssetScope,
     url: &Url,
     rel_path: &str,
     resource_kind: &str,

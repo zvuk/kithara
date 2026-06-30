@@ -307,7 +307,7 @@ impl File {
 /// master so a shutdown cascades through the store. Also the standalone
 /// fallback when no store is injected (single consumer).
 #[must_use]
-pub fn build_shared_asset_store(store: &StoreOptions, cancel: CancelToken) -> Arc<AssetStore<()>> {
+pub fn build_shared_asset_store(store: &StoreOptions, cancel: CancelToken) -> Arc<AssetStore> {
     let mut builder = AssetStoreBuilder::new()
         .cancel(cancel)
         .root_dir(&store.cache_dir)

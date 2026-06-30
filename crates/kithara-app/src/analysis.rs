@@ -38,7 +38,7 @@ pub(crate) async fn listen(
     cancel: CancelToken,
     mut rx: EventReceiver,
 ) {
-    let mut driver = AnalysisController::new(&cancel, Some(Arc::clone(&config.file_asset_store)));
+    let mut driver = AnalysisController::new(&cancel, Some(Arc::clone(&config.asset_store)));
 
     // Analyse whatever is already loaded; later tracks arrive as events.
     driver.on_tracks_changed(&queue, &state, &config);

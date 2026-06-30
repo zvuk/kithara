@@ -4,8 +4,8 @@ pub mod config;
 pub mod error;
 
 mod coord;
+mod decrypt_processor;
 mod ids;
-mod invalidation;
 mod loading;
 mod naming;
 mod parsing;
@@ -19,7 +19,6 @@ mod variant;
 pub use config::{HlsConfig, KeyOptions, SizeProbeMethod};
 pub use error::{HlsError, HlsResult};
 pub use ids::VariantIndex;
-pub use invalidation::HlsStore;
 pub use kithara_abr::AbrMode;
 pub use kithara_drm::{KeyProcessor, KeyProcessorRegistry, KeyProcessorRule};
 pub use loading::{KeyStore, PlaylistCache};
@@ -31,4 +30,4 @@ pub use parsing::{
 };
 pub use playlist::{PlaylistState, SegmentState, VariantSizeMap, VariantState};
 pub use source::HlsSource;
-pub use stream::{Hls, build_shared_asset_store};
+pub use stream::Hls;

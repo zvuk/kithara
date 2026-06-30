@@ -3,6 +3,7 @@
 use std::{ops::Range, sync::Arc};
 
 use delegate::delegate;
+use kithara_assets::EvictionSubscription;
 use kithara_events::EventBus;
 use kithara_platform::{CancelScope, time::Duration};
 use kithara_storage::WaitOutcome;
@@ -11,9 +12,7 @@ use kithara_stream::{
     ReadOutcome, SeekControl, SeekObserve, Source, SourcePhase, StreamResult,
 };
 
-use crate::{
-    coord::HlsCoord, invalidation::HlsInvalidationGuard, peer::HlsPeer, reader::HlsReaderEventSink,
-};
+use crate::{coord::HlsCoord, peer::HlsPeer, reader::HlsReaderEventSink};
 
 /// HLS source: thin façade over [`HlsCoord`].
 ///
@@ -34,11 +33,9 @@ pub struct HlsSource {
     /// as `HlsEvent::ReaderSeek` / `HlsEvent::ReadProgress`.
     bus: EventBus,
     hls_peer: Option<Arc<HlsPeer>>,
-    /// Registry deregistration guard for the app-wide shared store. `Some`
-    /// only when an [`HlsStore`](crate::HlsStore) was injected; dropping it
-    /// removes this stream's eviction routing entry. `None` for a
-    /// private per-stream store.
-    invalidation_guard: Option<HlsInvalidationGuard>,
+    /// Eviction-subscription guard. Dropping it deregisters this stream's
+    /// eviction routing entry from the store (shared or private).
+    invalidation_guard: Option<EvictionSubscription>,
     peer_handle: Option<kithara_stream::dl::PeerHandle>,
     /// Reader→peer wake handle. Cloned from the owning [`HlsPeer`] once it is
     /// bound via [`Self::set_hls_peer`], and returned by [`Source::peer_wake`]
@@ -65,10 +62,10 @@ impl HlsSource {
         self.hls_peer = Some(peer);
     }
 
-    /// Pin the shared-store deregistration guard to this source's
-    /// lifetime. `None` keeps the private per-stream behaviour.
-    pub(crate) fn set_invalidation_guard(&mut self, guard: Option<HlsInvalidationGuard>) {
-        self.invalidation_guard = guard;
+    /// Pin the eviction-subscription deregistration guard to this
+    /// source's lifetime.
+    pub(crate) fn set_invalidation_guard(&mut self, guard: EvictionSubscription) {
+        self.invalidation_guard = Some(guard);
     }
 
     pub(crate) fn set_peer_handle(&mut self, handle: kithara_stream::dl::PeerHandle) {
