@@ -15,7 +15,7 @@ use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{DecodeError, DecoderBackend};
 use kithara_events::EventBus;
 use kithara_file::{FileConfig, FileSrc};
-use kithara_hls::{HlsConfig, HlsStore, KeyOptions, SizeProbeMethod};
+use kithara_hls::{HlsConfig, KeyOptions, SizeProbeMethod};
 use kithara_net::{Headers, HttpClient};
 use kithara_platform::{CancelScope, CancelToken};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
@@ -107,20 +107,16 @@ pub struct ResourceConfig {
     pub downloader: Option<Downloader>,
     /// Shared live audio-engine cost meter (decode + effects).
     pub engine_load: Option<Arc<EngineLoad>>,
-    /// App-wide shared file store. When present, file resources for the
-    /// same URL share one download and cached byte surface (player +
-    /// waveform dedup). `None` builds a private per-resource store.
-    pub file_asset_store: Option<Arc<AssetStore>>,
+    /// App-wide shared asset store. When present, resources for the same
+    /// URL share one download and cached byte surface. `None` builds a private
+    /// per-resource store.
+    pub asset_store: Option<Arc<AssetStore>>,
     /// Shared flush coordinator for `AssetStore` on-disk indexes.
     pub flush_hub: Option<Arc<FlushHub>>,
     /// Additional HTTP headers to include in all network requests.
     pub headers: Option<Headers>,
     /// Optional format hint (file extension like "mp3", "wav").
     pub hint: Option<String>,
-    /// App-wide shared HLS store (shared cache + DRM `process_fn` +
-    /// per-`asset_root` eviction routing). `None` builds a private
-    /// per-resource store.
-    pub hls_asset_store: Option<HlsStore>,
     /// Base URL for resolving relative HLS playlist/segment URLs.
     pub hls_base_url: Option<Url>,
     /// Target sample rate of the audio host (for resampling).
@@ -206,7 +202,7 @@ impl ResourceConfig {
         let file_config = FileConfig::for_src(file_src)
             .store(store)
             .downloader(downloader)
-            .maybe_asset_store(self.file_asset_store.clone())
+            .maybe_asset_store(self.asset_store.clone())
             .maybe_look_ahead_bytes(self.look_ahead_bytes)
             .maybe_headers(self.headers.clone())
             .maybe_name(self.name.clone())
@@ -251,7 +247,7 @@ impl ResourceConfig {
             .build();
         let hls_config = HlsConfig::for_url(url)
             .store(store)
-            .maybe_asset_store(self.hls_asset_store)
+            .maybe_asset_store(self.asset_store)
             .keys(self.keys)
             .maybe_downloader(self.downloader)
             .initial_abr_mode(self.initial_abr_mode)

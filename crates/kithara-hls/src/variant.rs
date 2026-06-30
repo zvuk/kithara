@@ -36,6 +36,7 @@ use url::Url;
 
 use crate::{
     HlsError,
+    decrypt_processor::as_process_ctx,
     playlist::{PlaylistAccess, PlaylistState},
 };
 
@@ -456,7 +457,7 @@ pub(crate) struct PlanCtx {
     /// (commit/fail), so an off-RT reader parked in `wait_range(_, None)`
     /// wakes the moment its range fills — no wall-clock poll.
     pub(crate) ready: Arc<CondvarGate<u64>>,
-    pub(crate) scope: AssetScope<DecryptContext>,
+    pub(crate) scope: AssetScope,
     pub(crate) master_cancel: CancelToken,
     /// Per-resource HTTP headers applied to every init/segment fetch.
     /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
@@ -671,7 +672,7 @@ impl HlsVariant {
     fn build_cmd(
         self: &Arc<Self>,
         url: Url,
-        acq: AssetResource<DecryptContext>,
+        acq: AssetResource,
         handle: Segment<Downloading>,
         ready: Arc<CondvarGate<u64>>,
         worker_wake: WorkerWakeCell,
@@ -749,7 +750,11 @@ impl HlsVariant {
             SegmentContent::Encrypted(c) => ctx
                 .scope
                 .store()
-                .acquire_resource_with_ctx(&init.resource_id, None, Some(c.clone()))
+                .acquire_resource_with_ctx(
+                    &init.resource_id,
+                    None,
+                    Some(as_process_ctx(c.clone())),
+                )
                 .expect("acquire_resource_with_ctx for init must succeed"),
         };
         self.build_cmd(
@@ -765,7 +770,7 @@ impl HlsVariant {
         playlist_state: &PlaylistState,
         variant_idx: usize,
         decrypt_ctx: Option<DecryptContext>,
-        scope: &AssetScope<DecryptContext>,
+        scope: &AssetScope,
     ) -> VariantInit {
         // An init exists iff the playlist carries an `#EXT-X-MAP` URL — NOT iff
         // the init HEAD produced a size. A failed or absent init HEAD leaves
@@ -797,7 +802,7 @@ impl HlsVariant {
         decrypt_contexts: &[Option<DecryptContext>],
         variant_idx: usize,
         init_size: u64,
-        scope: &AssetScope<DecryptContext>,
+        scope: &AssetScope,
     ) -> Vec<SegmentEntry> {
         let Some(num) = playlist_state.num_segments(variant_idx) else {
             return Vec::new();
@@ -1041,7 +1046,7 @@ impl HlsVariant {
             SegmentContent::Encrypted(c) => ctx.scope.store().acquire_resource_with_ctx(
                 &entry.resource_id,
                 None,
-                Some(c.clone()),
+                Some(as_process_ctx(c.clone())),
             ),
         };
         let resource = match acquire {
@@ -1795,9 +1800,9 @@ struct FetchSlot {
     ready: Arc<CondvarGate<u64>>,
     /// Read view of the writer's generation — used to observe a
     /// committed-by-race status before deciding the terminal transition.
-    reader: AssetReader<DecryptContext>,
+    reader: AssetReader,
     /// Sole commit owner (non-`Clone`); consumed in `settle`.
-    writer: AssetWriter<DecryptContext>,
+    writer: AssetWriter,
     cancel: CancelToken,
     /// Clone-able streaming-write handle for the fetch body closure.
     raw: RawWriteHandle,

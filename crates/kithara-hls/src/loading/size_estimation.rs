@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use kithara_assets::AssetScope;
-use kithara_drm::DecryptContext;
 use kithara_net::RangeSpec;
 use kithara_stream::dl::{FetchCmd, FetchResponse, PeerHandle};
 use tracing::debug;
@@ -35,7 +34,7 @@ pub(crate) struct SizeEstimator {
     playlist: Arc<PlaylistState>,
     /// Committed-resource lookup: same store the dispatch path consults
     /// before fetching, so estimation and fetch share one source of truth.
-    scope: AssetScope<DecryptContext>,
+    scope: AssetScope,
     headers: Option<kithara_net::Headers>,
     peer: PeerHandle,
     /// Whether probes are real `HEAD`s or single-byte ranged `GET`s.
@@ -61,7 +60,7 @@ pub(crate) struct Estimation {
 impl SizeEstimator {
     pub(crate) fn new(
         peer: PeerHandle,
-        scope: AssetScope<DecryptContext>,
+        scope: AssetScope,
         playlist: Arc<PlaylistState>,
         media_playlists: Vec<MediaPlaylist>,
         headers: Option<kithara_net::Headers>,

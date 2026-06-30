@@ -35,7 +35,7 @@ pub struct KeyStore {
     /// persist; the on-the-wire response is encrypted with a fresh
     /// per-session seed and never touches disk.
     decrypted_keys: Arc<DashMap<Url, Bytes>>,
-    scope: AssetScope<DecryptContext>,
+    scope: AssetScope,
     /// Byte buffer pool for reading cached key bodies.
     byte_pool: kithara_bufpool::BytePool,
     /// Cache-wide headers (typically equal to `HlsConfig::headers`).
@@ -61,7 +61,7 @@ impl KeyStore {
     #[must_use]
     pub fn new(
         downloader: PeerHandle,
-        scope: AssetScope<DecryptContext>,
+        scope: AssetScope,
         base_headers: Option<Headers>,
         key_registry: Option<KeyProcessorRegistry>,
         byte_pool: kithara_bufpool::BytePool,
@@ -409,7 +409,7 @@ impl KeyStore {
     #[must_use]
     pub fn with_options(
         downloader: PeerHandle,
-        scope: AssetScope<DecryptContext>,
+        scope: AssetScope,
         base_headers: Option<Headers>,
         options: crate::config::KeyOptions,
         byte_pool: kithara_bufpool::BytePool,

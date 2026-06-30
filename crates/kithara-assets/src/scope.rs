@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt::Debug, hash::Hash, sync::Arc};
+use std::sync::Arc;
 
 use url::Url;
 
@@ -20,20 +20,14 @@ use crate::{
 /// self-contained `&ResourceKey`. Asset-level operations
 /// ([`AssetScope::delete_asset`]) stay here.
 #[derive(Clone, Debug)]
-pub struct AssetScope<Ctx = ()>
-where
-    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
-{
+pub struct AssetScope {
     asset_root: Arc<str>,
     delegate: Arc<dyn AssetScopeDelegate>,
-    store: AssetStore<Ctx>,
+    store: AssetStore,
 }
 
-impl<Ctx> AssetScope<Ctx>
-where
-    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
-{
-    pub(crate) fn new(store: AssetStore<Ctx>, asset_root: Arc<str>) -> Self {
+impl AssetScope {
+    pub(crate) fn new(store: AssetStore, asset_root: Arc<str>) -> Self {
         Self::with_delegate(store, asset_root, Arc::new(DefaultAssetScopeDelegate))
     }
 
@@ -68,12 +62,12 @@ where
 
     /// The underlying shared store, where per-resource operations live.
     #[must_use]
-    pub fn store(&self) -> &AssetStore<Ctx> {
+    pub fn store(&self) -> &AssetStore {
         &self.store
     }
 
     pub(crate) fn with_delegate(
-        store: AssetStore<Ctx>,
+        store: AssetStore,
         asset_root: Arc<str>,
         delegate: Arc<dyn AssetScopeDelegate>,
     ) -> Self {

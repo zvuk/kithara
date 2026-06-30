@@ -1,7 +1,6 @@
 use std::{io::ErrorKind, ops::Range, sync::atomic::Ordering};
 
 use kithara_assets::{AssetResourceState, AssetScope, AssetsError, ReadSide, ResourceKey};
-use kithara_drm::DecryptContext;
 use kithara_platform::time::Duration;
 use kithara_stream::{StreamError, StreamResult};
 
@@ -23,14 +22,14 @@ pub(super) struct SegmentStore {
     /// `contains_range`, `committed_final_len`) open and probe resources
     /// through it; the fetch path acquires *writable* resources via
     /// `PlanCtx::scope` (the same clone), so this field is read-only here.
-    scope: AssetScope<DecryptContext>,
+    scope: AssetScope,
     init: VariantInit,
     segments: Vec<SegmentEntry>,
 }
 
 impl SegmentStore {
     pub(super) fn new(
-        scope: AssetScope<DecryptContext>,
+        scope: AssetScope,
         init: VariantInit,
         segments: Vec<SegmentEntry>,
     ) -> Self {

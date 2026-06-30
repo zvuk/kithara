@@ -2,9 +2,8 @@
 
 //! DRM decryption support for kithara.
 //!
-//! Provides AES-128-CBC decryption usable as a `ProcessChunkFn` callback
-//! in `kithara-assets` `ProcessingAssets` decorator. Designed to be
-//! protocol-agnostic (works with HLS, DASH, etc.).
+//! Provides AES-128-CBC decryption, wired into the asset store as a
+//! per-acquire `ProcessCtx` trait object.
 //!
 //! # Key processing
 //!

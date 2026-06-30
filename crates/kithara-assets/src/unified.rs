@@ -1,8 +1,6 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    fmt::Debug,
-    hash::Hash,
     ops::Range,
     path::Path,
     sync::{Arc, atomic::AtomicU64},
@@ -10,16 +8,19 @@ use std::{
 
 #[cfg(test)]
 use kithara_platform::CancelToken;
+use kithara_platform::tokio::sync::mpsc;
 use rangemap::RangeSet;
 
 use crate::{
     AssetResourceState,
     base::Assets,
     error::AssetsResult,
+    eviction::{EvictionRouter, EvictionSubscription},
     identity::RequestIdentity,
     index::{AvailabilityIndex, DemandEntry, DemandIndex, DemandLease, ProducerHandle},
     key::ResourceKey,
     naming::AssetScopeDelegate,
+    process::ProcessCtx,
     scope::AssetScope,
     store::{AssetReader, AssetResource, MemStore},
 };
@@ -39,46 +40,30 @@ macro_rules! delegate_to_store {
     };
 }
 
-/// Unified storage backend for assets.
-///
-/// Dispatches all operations to an inner disk or memory store chain.
-/// The `availability` field holds the aggregate byte-availability index:
-/// every query method below checks it first and falls back to a slow
-/// `resource_state` probe only when the aggregate has no entry for the
-/// key. The storage observer populates the aggregate on `write_at` /
-/// `commit`; explicit persistence is via [`AssetStore::checkpoint`].
-///
-/// The `base` field on the `Disk` variant is an optional
-/// [`Arc<DiskAssetStore>`] needed only to open `_index/availability.bin`
-/// for checkpointing. It is `Some` when the store is built through
-/// [`crate::AssetStoreBuilder::build`] (production path) and `None`
-/// when a bare [`DiskStore`] chain is converted via `From`/`Into`
-/// (test-only path). A `None` `base` makes `checkpoint()` a no-op.
+/// Unified storage backend: dispatches to an inner disk or memory store chain.
+/// Byte-availability queries hit the aggregate `availability` index first, else
+/// a slow `resource_state` probe; persistence is via [`AssetStore::checkpoint`].
 #[derive(Clone, Debug)]
-pub enum AssetStore<Ctx = ()>
-where
-    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
-{
+pub enum AssetStore {
     /// File-backed storage with mmap resources.
     #[cfg(not(target_arch = "wasm32"))]
     Disk {
-        store: DiskStore<Ctx>,
+        store: DiskStore,
         availability: AvailabilityIndex,
         demand: DemandIndex,
+        eviction: EvictionRouter,
         base: Option<Arc<DiskAssetStore>>,
     },
     /// In-memory storage (ephemeral, no disk artifacts).
     Mem {
-        store: MemStore<Ctx>,
+        store: MemStore,
         availability: AvailabilityIndex,
         demand: DemandIndex,
+        eviction: EvictionRouter,
     },
 }
 
-impl<Ctx> AssetStore<Ctx>
-where
-    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
-{
+impl AssetStore {
     /// Acquire a resource explicitly for mutation.
     ///
     /// # Errors
@@ -87,7 +72,7 @@ where
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
-    ) -> AssetsResult<AssetResource<Ctx>> {
+    ) -> AssetsResult<AssetResource> {
         delegate_to_store!(self, acquire_resource, key, identity)
     }
 
@@ -99,8 +84,8 @@ where
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
-        ctx: Option<Ctx>,
-    ) -> AssetsResult<AssetResource<Ctx>> {
+        ctx: Option<ProcessCtx>,
+    ) -> AssetsResult<AssetResource> {
         delegate_to_store!(self, acquire_resource_with_ctx, key, identity, ctx)
     }
 
@@ -121,6 +106,28 @@ where
     ) -> (DemandLease, Option<ProducerHandle>) {
         let entry = Arc::new(DemandEntry::new(read_pos, look_ahead));
         self.demand().attach_demand(key, entry)
+    }
+
+    /// Subscribe to evictions under `asset_root`.
+    ///
+    /// When a [`ResourceKey`] under `asset_root` is invalidated, the evicted key is sent on `tx`.
+    /// A single subscriber per `asset_root`, last-writer-wins. The returned
+    /// [`EvictionSubscription`] guard deregisters on drop.
+    pub fn subscribe_eviction(
+        &self,
+        asset_root: Arc<str>,
+        tx: mpsc::UnboundedSender<ResourceKey>,
+    ) -> EvictionSubscription {
+        self.eviction().subscribe(asset_root, tx)
+    }
+
+    /// Return the crate-private eviction-router handle.
+    fn eviction(&self) -> &EvictionRouter {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk { eviction, .. } => eviction,
+            Self::Mem { eviction, .. } => eviction,
+        }
     }
 
     /// Return the crate-private aggregate availability handle.
@@ -247,7 +254,7 @@ where
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
-    ) -> AssetsResult<AssetReader<Ctx>> {
+    ) -> AssetsResult<AssetReader> {
         delegate_to_store!(self, open_resource, key, identity)
     }
 
@@ -259,8 +266,8 @@ where
         &self,
         key: &ResourceKey,
         identity: Option<&RequestIdentity>,
-        ctx: Option<Ctx>,
-    ) -> AssetsResult<AssetReader<Ctx>> {
+        ctx: Option<ProcessCtx>,
+    ) -> AssetsResult<AssetReader> {
         delegate_to_store!(self, open_resource_with_ctx, key, identity, ctx)
     }
 
@@ -300,7 +307,7 @@ where
     /// the backing store is shared, so many scopes over distinct asset
     /// roots cooperate on one store.
     #[must_use]
-    pub fn scope<R: Into<Arc<str>>>(&self, asset_root: R) -> AssetScope<Ctx> {
+    pub fn scope<R: Into<Arc<str>>>(&self, asset_root: R) -> AssetScope {
         AssetScope::new(self.clone(), asset_root.into())
     }
 
@@ -313,7 +320,7 @@ where
         &self,
         asset_root: R,
         delegate: Arc<dyn AssetScopeDelegate>,
-    ) -> AssetScope<Ctx> {
+    ) -> AssetScope {
         AssetScope::with_delegate(self.clone(), asset_root.into(), delegate)
     }
 }
@@ -323,33 +330,31 @@ where
 // fresh cancel here because there is no upstream master on this path;
 // production stores are built through `AssetStoreBuilder::build`, which
 // threads the store cancel. Gated to keep the cancel-hierarchy lint
-// honest: these have no non-test callers in the workspace.
+// Test-only: no non-test callers in the workspace. The `EvictionRouter`
+// here is unwired (no `on_invalidated` hook); `subscribe_eviction` is a
+// no-op on a `From`-built store. Production stores come from `build()`.
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
-impl<Ctx> From<DiskStore<Ctx>> for AssetStore<Ctx>
-where
-    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
-{
-    fn from(store: DiskStore<Ctx>) -> Self {
+impl From<DiskStore> for AssetStore {
+    fn from(store: DiskStore) -> Self {
         Self::Disk {
             store,
             availability: AvailabilityIndex::new(),
             demand: DemandIndex::new(CancelToken::never()),
+            eviction: EvictionRouter::new(),
             base: None,
         }
     }
 }
 
 #[cfg(test)]
-impl<Ctx> From<MemStore<Ctx>> for AssetStore<Ctx>
-where
-    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
-{
-    fn from(store: MemStore<Ctx>) -> Self {
+impl From<MemStore> for AssetStore {
+    fn from(store: MemStore) -> Self {
         Self::Mem {
             store,
             availability: AvailabilityIndex::new(),
             demand: DemandIndex::new(CancelToken::never()),
+            eviction: EvictionRouter::new(),
         }
     }
 }

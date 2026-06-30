@@ -134,12 +134,40 @@ impl<R: ReadSide> ReadSide for CachedReader<R> {
     }
 }
 
+/// Opaque byte discriminator for cache entries. `Debug` is redacted: the
+/// bytes can be key material (e.g. AES `key||iv`).
+#[derive(Clone, Eq, PartialEq, Hash)]
+pub(crate) struct CtxIdentity(Box<[u8]>);
+
+impl From<&[u8]> for CtxIdentity {
+    fn from(bytes: &[u8]) -> Self {
+        Self(bytes.into())
+    }
+}
+
+impl fmt::Debug for CtxIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CtxIdentity(<{} bytes>)", self.0.len())
+    }
+}
+
+/// Projects a processing context to its [`CtxIdentity`] cache discriminator.
+pub(crate) trait CacheIdentity {
+    fn cache_identity(&self) -> CtxIdentity;
+}
+
+impl CacheIdentity for crate::process::ProcessCtx {
+    fn cache_identity(&self) -> CtxIdentity {
+        self.identity().into()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-enum CacheKey<C> {
+enum CacheKey {
     Resource {
         key: ResourceKey,
         identity: Option<RequestIdentity>,
-        ctx: Option<C>,
+        ctx: Option<CtxIdentity>,
     },
     PinsIndex,
     LruIndex,
@@ -151,15 +179,11 @@ enum CacheEntry<R, I> {
     Index(I),
 }
 
-type Cache<R, C, I> = Mutex<LruCache<CacheKey<C>, CacheEntry<R, I>>>;
-type SharedCache<A> =
-    Arc<Cache<<A as Assets>::ReadyRes, <A as Assets>::Context, <A as Assets>::IndexRes>>;
-type CacheMap<A> = LruCache<
-    CacheKey<<A as Assets>::Context>,
-    CacheEntry<<A as Assets>::ReadyRes, <A as Assets>::IndexRes>,
->;
+type Cache<R, I> = Mutex<LruCache<CacheKey, CacheEntry<R, I>>>;
+type SharedCache<A> = Arc<Cache<<A as Assets>::ReadyRes, <A as Assets>::IndexRes>>;
+type CacheMap<A> = LruCache<CacheKey, CacheEntry<<A as Assets>::ReadyRes, <A as Assets>::IndexRes>>;
 type CacheItem<A> = (
-    CacheKey<<A as Assets>::Context>,
+    CacheKey,
     CacheEntry<<A as Assets>::ReadyRes, <A as Assets>::IndexRes>,
 );
 
@@ -221,7 +245,7 @@ where
     fn cache_entry(
         &self,
         cache: &mut CacheMap<A>,
-        key: CacheKey<A::Context>,
+        key: CacheKey,
         entry: CacheEntry<A::ReadyRes, A::IndexRes>,
     ) -> Vec<ResourceKey> {
         let mut invalidated = Vec::new();
@@ -319,7 +343,7 @@ where
         self.inner.capabilities().contains(Capabilities::CACHE)
     }
 
-    fn is_pinned_key(&self, key: &CacheKey<A::Context>) -> bool {
+    fn is_pinned_key(&self, key: &CacheKey) -> bool {
         match key {
             CacheKey::Resource {
                 key: resource_key, ..
@@ -337,7 +361,7 @@ where
 
     fn open_index_resource<F>(
         &self,
-        cache_key: CacheKey<A::Context>,
+        cache_key: CacheKey,
         load: F,
     ) -> AssetsResult<A::IndexRes>
     where
@@ -416,6 +440,7 @@ where
 impl<A> Assets for CachedAssets<A>
 where
     A: Assets,
+    A::Context: CacheIdentity,
 {
     type ActiveRes = CachedWriter<A::ActiveRes>;
     type Context = A::Context;
@@ -438,7 +463,7 @@ where
         let cache_key = CacheKey::Resource {
             key: key.clone(),
             identity: identity.cloned(),
-            ctx: ctx.clone(),
+            ctx: ctx.as_ref().map(CacheIdentity::cache_identity),
         };
         let mut cache = self.cache.lock();
 
@@ -486,7 +511,7 @@ where
         {
             let mut cache = self.cache.lock();
 
-            let keys_to_remove: Vec<CacheKey<A::Context>> = cache
+            let keys_to_remove: Vec<CacheKey> = cache
                 .iter()
                 .filter_map(|(k, _)| match k {
                     CacheKey::Resource { key: rk, .. } if rk.asset_root() == Some(asset_root) => {
@@ -529,7 +554,7 @@ where
         let cache_key = CacheKey::Resource {
             key: key.clone(),
             identity: identity.cloned(),
-            ctx: ctx.clone(),
+            ctx: ctx.as_ref().map(CacheIdentity::cache_identity),
         };
 
         let mut cache = self.cache.lock();
@@ -646,6 +671,45 @@ mod tests {
             AcquisitionResult::Pending(w) => w,
             AcquisitionResult::Ready(_) => panic!("expected a Pending writer"),
         }
+    }
+
+    /// The base stores (`DiskAssetStore` / `MemAssetStore`) carry `Context =
+    /// ()`: no processing, so every entry shares one empty identity.
+    impl CacheIdentity for () {
+        fn cache_identity(&self) -> CtxIdentity {
+            [].as_slice().into()
+        }
+    }
+
+    /// Exact-byte cache identity for the `u8` mock context: the single byte
+    /// is its own discriminator, so two distinct ctx values key separately.
+    impl CacheIdentity for u8 {
+        fn cache_identity(&self) -> CtxIdentity {
+            [*self].as_slice().into()
+        }
+    }
+
+    /// The identity bytes can be AES `key||iv`; `Debug` must never print them,
+    /// neither directly nor via `CacheKey`'s derived `Debug`.
+    #[test]
+    fn debug_redacts_identity_bytes() {
+        let key = [0xAB_u8; 16];
+        let iv = [0xCD_u8; 16];
+        let bytes: Vec<u8> = key.iter().chain(iv.iter()).copied().collect();
+        let identity = CtxIdentity::from(bytes.as_slice());
+
+        let direct = format!("{identity:?}");
+        assert_eq!(direct, "CtxIdentity(<32 bytes>)");
+
+        let cache_key = CacheKey::Resource {
+            key: ResourceKey::relative("root", "seg.m4s"),
+            identity: None,
+            ctx: Some(identity),
+        };
+        let via_key = format!("{cache_key:?}");
+        assert!(via_key.contains("CtxIdentity(<32 bytes>)"), "{via_key}");
+        assert!(!via_key.contains("171"), "leaked key byte 0xAB (171): {via_key}");
+        assert!(!via_key.contains("205"), "leaked iv byte 0xCD (205): {via_key}");
     }
 
     #[derive(Clone, Debug)]

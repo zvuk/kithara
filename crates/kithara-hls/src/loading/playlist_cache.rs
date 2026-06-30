@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use kithara_assets::AssetScope;
-use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_platform::{sync::RwLock, tokio::sync::OnceCell};
 use kithara_stream::dl::PeerHandle;
@@ -33,7 +32,7 @@ pub struct PlaylistCache {
     /// fine-grained locks keep parallel variants out of each other's
     /// critical sections.
     media: Arc<DashMap<VariantId, Arc<OnceCell<MediaPlaylist>>>>,
-    scope: AssetScope<DecryptContext>,
+    scope: AssetScope,
     /// Byte buffer pool for reading cached playlist bodies.
     byte_pool: kithara_bufpool::BytePool,
     downloader: PeerHandle,
@@ -52,7 +51,7 @@ impl PlaylistCache {
 
     #[must_use]
     pub fn new(
-        scope: AssetScope<DecryptContext>,
+        scope: AssetScope,
         downloader: PeerHandle,
         byte_pool: kithara_bufpool::BytePool,
     ) -> Self {

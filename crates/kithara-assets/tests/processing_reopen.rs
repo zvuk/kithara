@@ -11,7 +11,10 @@ use cbc::{
     Encryptor,
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara_assets::{AcquisitionResult, AssetStoreBuilder, ProcessChunkFn, ReadSide, WriteSide};
+use kithara_assets::{
+    AcquisitionResult, AssetStoreBuilder, ChunkSink, ProcessCtx, ReadSide, ResourceProcessor,
+    WriteSide,
+};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_platform::time::Duration;
 use kithara_storage::ResourceStatus;
@@ -30,20 +33,93 @@ fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8])
     drop(w.commit(Some(data.len() as u64)).expect("commit"));
 }
 
-fn xor_process_fn(call_count: Arc<AtomicUsize>) -> ProcessChunkFn<()> {
-    Arc::new(move |input, output, _ctx: &mut (), _is_last| {
-        call_count.fetch_add(1, Ordering::SeqCst);
+/// Fixed-key XOR processor counting its `process` calls.
+#[derive(Debug)]
+struct XorProcessor {
+    call_count: Arc<AtomicUsize>,
+}
+
+struct XorSink {
+    call_count: Arc<AtomicUsize>,
+}
+
+impl ChunkSink for XorSink {
+    fn process(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        _is_last: bool,
+    ) -> Result<usize, String> {
+        self.call_count.fetch_add(1, Ordering::SeqCst);
         for (idx, byte) in input.iter().copied().enumerate() {
             output[idx] = byte ^ 0x5A;
         }
         Ok(input.len())
-    })
+    }
 }
 
-fn drm_process_fn() -> ProcessChunkFn<DecryptContext> {
-    Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
-        aes128_cbc_process_chunk(input, output, ctx, is_last)
-    })
+impl ResourceProcessor for XorProcessor {
+    fn identity(&self) -> &[u8] {
+        &[0x5A]
+    }
+
+    fn begin(&self) -> Box<dyn ChunkSink> {
+        Box::new(XorSink {
+            call_count: Arc::clone(&self.call_count),
+        })
+    }
+}
+
+fn xor_processor(call_count: Arc<AtomicUsize>) -> ProcessCtx {
+    Arc::new(XorProcessor { call_count })
+}
+
+/// Test-local AES-128-CBC processor mirroring the production HLS adapter:
+/// `identity` is `key||iv`; `begin()` mints a fresh `CbcSink` so CBC IV
+/// chaining restarts from the seed on each commit/reactivate.
+#[derive(Debug)]
+struct DecryptProcessor {
+    ctx: DecryptContext,
+    identity: Box<[u8]>,
+}
+
+impl DecryptProcessor {
+    fn new(ctx: DecryptContext) -> Self {
+        let mut identity = Vec::with_capacity(ctx.key.len() + ctx.iv.len());
+        identity.extend_from_slice(&ctx.key);
+        identity.extend_from_slice(&ctx.iv);
+        Self {
+            ctx,
+            identity: identity.into_boxed_slice(),
+        }
+    }
+}
+
+impl ResourceProcessor for DecryptProcessor {
+    fn identity(&self) -> &[u8] {
+        &self.identity
+    }
+
+    fn begin(&self) -> Box<dyn ChunkSink> {
+        Box::new(CbcSink {
+            ctx: self.ctx.clone(),
+        })
+    }
+}
+
+struct CbcSink {
+    ctx: DecryptContext,
+}
+
+impl ChunkSink for CbcSink {
+    fn process(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        is_last: bool,
+    ) -> Result<usize, String> {
+        aes128_cbc_process_chunk(input, output, &mut self.ctx, is_last)
+    }
 }
 
 fn encrypt_aes128_cbc(plaintext: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
@@ -64,9 +140,9 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
     let store = AssetStoreBuilder::new()
         .root_dir(dir.path())
         .cache_capacity(NonZeroUsize::new(1).unwrap())
-        .process_fn(xor_process_fn(Arc::clone(&call_count)))
         .build();
     let scope = store.scope(ROOT);
+    let proc = xor_processor(Arc::clone(&call_count));
 
     let key0 = scope.key("segments/0000.bin");
     let key1 = scope.key("segments/0001.bin");
@@ -76,7 +152,7 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
     write_commit(
         scope
             .store()
-            .acquire_resource_with_ctx(&key0, None, Some(()))
+            .acquire_resource_with_ctx(&key0, None, Some(Arc::clone(&proc)))
             .unwrap(),
         plaintext,
     );
@@ -87,7 +163,7 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
     write_commit(
         scope
             .store()
-            .acquire_resource_with_ctx(&key1, None, Some(()))
+            .acquire_resource_with_ctx(&key1, None, Some(Arc::clone(&proc)))
             .unwrap(),
         b"other-segment",
     );
@@ -97,7 +173,7 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
 
     let reopened = scope
         .store()
-        .open_resource_with_ctx(&key0, None, Some(()))
+        .open_resource_with_ctx(&key0, None, Some(Arc::clone(&proc)))
         .unwrap();
     assert!(
         matches!(reopened.status(), ResourceStatus::Committed { .. }),
@@ -123,9 +199,9 @@ fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
     let store = AssetStoreBuilder::new()
         .root_dir(dir.path())
         .cache_capacity(NonZeroUsize::new(1).unwrap())
-        .process_fn(xor_process_fn(Arc::clone(&call_count)))
         .build();
     let scope = store.scope(ROOT);
+    let proc = xor_processor(Arc::clone(&call_count));
 
     let key0 = scope.key("segments/0000.bin");
     let key1 = scope.key("segments/0001.bin");
@@ -135,7 +211,7 @@ fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
     write_commit(
         scope
             .store()
-            .acquire_resource_with_ctx(&key0, None, Some(()))
+            .acquire_resource_with_ctx(&key0, None, Some(Arc::clone(&proc)))
             .unwrap(),
         plaintext,
     );
@@ -143,7 +219,7 @@ fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
     write_commit(
         scope
             .store()
-            .acquire_resource_with_ctx(&key1, None, Some(()))
+            .acquire_resource_with_ctx(&key1, None, Some(Arc::clone(&proc)))
             .unwrap(),
         b"other-segment",
     );
@@ -168,9 +244,9 @@ fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes
     let store = AssetStoreBuilder::new()
         .root_dir(dir.path())
         .cache_capacity(NonZeroUsize::new(1).unwrap())
-        .process_fn(xor_process_fn(Arc::clone(&call_count)))
         .build();
     let scope = store.scope(ROOT);
+    let proc = xor_processor(Arc::clone(&call_count));
 
     let key0 = scope.key("segments/0000.bin");
     let key1 = scope.key("segments/0001.bin");
@@ -180,7 +256,7 @@ fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes
     write_commit(
         scope
             .store()
-            .acquire_resource_with_ctx(&key0, None, Some(()))
+            .acquire_resource_with_ctx(&key0, None, Some(Arc::clone(&proc)))
             .unwrap(),
         &plaintext,
     );
@@ -188,7 +264,7 @@ fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes
     write_commit(
         scope
             .store()
-            .acquire_resource_with_ctx(&key1, None, Some(()))
+            .acquire_resource_with_ctx(&key1, None, Some(Arc::clone(&proc)))
             .unwrap(),
         b"other-segment",
     );
@@ -212,7 +288,6 @@ fn reopened_large_committed_drm_processed_resource_without_ctx_reads_committed_b
     let store = AssetStoreBuilder::new()
         .root_dir(dir.path())
         .cache_capacity(NonZeroUsize::new(1).unwrap())
-        .process_fn(drm_process_fn())
         .build();
     let scope = store.scope(DRM_ROOT);
 
@@ -224,11 +299,12 @@ fn reopened_large_committed_drm_processed_resource_without_ctx_reads_committed_b
     let ciphertext = encrypt_aes128_cbc(&plaintext, &key, &iv);
     let other_plaintext = b"other-segment";
     let other_ciphertext = encrypt_aes128_cbc(other_plaintext, &key, &iv);
+    let proc: ProcessCtx = Arc::new(DecryptProcessor::new(DecryptContext::new(key, iv)));
 
     write_commit(
         scope
             .store()
-            .acquire_resource_with_ctx(&key0, None, Some(DecryptContext::new(key, iv)))
+            .acquire_resource_with_ctx(&key0, None, Some(Arc::clone(&proc)))
             .unwrap(),
         &ciphertext,
     );
@@ -236,7 +312,7 @@ fn reopened_large_committed_drm_processed_resource_without_ctx_reads_committed_b
     write_commit(
         scope
             .store()
-            .acquire_resource_with_ctx(&key1, None, Some(DecryptContext::new(key, iv)))
+            .acquire_resource_with_ctx(&key1, None, Some(Arc::clone(&proc)))
             .unwrap(),
         &other_ciphertext,
     );
