@@ -1,15 +1,23 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
-use kithara_platform::sync::RwLock;
+use arc_swap::ArcSwap;
+use kithara_platform::sync::Mutex;
 use kithara_test_utils::kithara;
 
 use crate::segment::Segment;
 
 /// One coherent coordinate frame: the cross-variant byte-address-space
-/// geometry. Held behind a single `RwLock` so every reader observes the
-/// shift, served range, init seed and offset table from the SAME
-/// activation — the split-lock torn read (shift from one activation,
-/// served bounds from the next) is impossible by construction.
+/// geometry. Published as an immutable [`ArcSwap`] snapshot so every reader
+/// observes the shift, served range, init seed and offset table from the SAME
+/// activation — the split-lock torn read (shift from one activation, served
+/// bounds from the next) is impossible by construction. Off-RT writers
+/// serialize through [`Layout::write_lock`] (load-clone-mutate-store) so no
+/// concurrent writer drops an update; the produce-core reads load the snapshot
+/// lock-free and allocation-free.
+#[derive(Clone)]
 struct Frame {
     /// Cumulative natural byte offsets for media segments, seeded with the
     /// init prefix length.
@@ -79,7 +87,7 @@ impl Frame {
     /// `byte_shift`, runs the natural-space search, then gates the result
     /// against `[served_from, served_until)` and re-shifts. All four fields
     /// (`byte_shift`, `offsets`, `served_from`, `served_until`) come from
-    /// the same locked frame.
+    /// the same published frame.
     fn find_virtual(&self, byte_virtual: u64, segments: &[Segment]) -> Option<(u32, u64, u64)> {
         let byte_natural = i64::try_from(byte_virtual)
             .ok()?
@@ -133,8 +141,8 @@ impl Frame {
     }
 
     /// Materialise the lock-free EOF snapshot (`total_bytes` +
-    /// `sizes_complete`) in one read so the caller can drop the write-lock
-    /// guard before publishing the atomics.
+    /// `sizes_complete`) in one read so the caller can publish the atomics
+    /// alongside the new frame snapshot.
     fn snapshot(&self, segments: &[Segment], init_size: u64) -> FrameSnapshot {
         FrameSnapshot {
             total: self.total_bytes(segments, init_size),
@@ -166,15 +174,15 @@ impl Frame {
     }
 }
 
-/// Coherent owner of the five coordinate fields. Reads take the shared
-/// lock and see one activation frame; the `activate_*` / `reset` /
-/// `apply_commit` mutators take the exclusive lock and publish a new frame
-/// atomically.
+/// Coherent owner of the five coordinate fields. Reads `load` the published
+/// frame snapshot lock-free; the `activate_*` / `reset` / `apply_commit`
+/// mutators serialize through `write_lock`, clone the live frame, mutate the
+/// owned copy, and `store` it back as a fresh immutable snapshot.
 ///
 /// `total` is a lock-free snapshot of `total_bytes`, republished from the
 /// frame at the end of every write-lock mutation. The produce-core read path
 /// (`wait_range` / `range_ready` / `read_at`) loads it without taking the
-/// lock — closing the contended `RwLock` spin the `rtsan` lane flagged on the
+/// lock — closing the contended frame-lock spin the `rtsan` lane flagged on the
 /// decode core.
 /// Inputs to [`Layout::activate_with_shift`]: pin `from_seg` at
 /// `seg_boundary` in virtual space, using `init_size` for offset recompute.
@@ -192,7 +200,13 @@ pub(super) struct Layout {
     /// the lock, alongside `total`.
     sizes_complete: AtomicBool,
     total: AtomicU64,
-    frame: RwLock<Frame>,
+    /// Immutable published geometry. Readers `load` it lock-free and
+    /// allocation-free; writers swap in a fresh `Arc<Frame>` under `write_lock`.
+    frame: ArcSwap<Frame>,
+    /// Serializes off-RT writers so a concurrent load-clone-mutate-store pair
+    /// cannot lose an update (the old `RwLock` serialized writes; `ArcSwap`
+    /// alone does not). Never taken on the produce-core read path.
+    write_lock: Mutex<()>,
 }
 
 impl Layout {
@@ -208,15 +222,30 @@ impl Layout {
         frame.recompute(init_size, segments);
         let snapshot = frame.snapshot(segments, init_size);
         Self {
-            frame: RwLock::new(frame),
+            frame: ArcSwap::from(Arc::new(frame)),
+            write_lock: Mutex::new(()),
             total: AtomicU64::new(snapshot.total),
             sizes_complete: AtomicBool::new(snapshot.sizes_complete),
         }
     }
 
+    /// Serialized load-clone-mutate-store for off-RT writers with a known
+    /// `init_size`. Takes `write_lock`, clones the live frame, applies `f` to
+    /// the owned copy, materialises the EOF snapshot, swaps the new frame in,
+    /// and republishes the atomics. Concurrent writers cannot lose an update
+    /// because each runs the whole cycle under `write_lock`.
+    fn mutate_frame(&self, segments: &[Segment], init_size: u64, f: impl FnOnce(&mut Frame)) {
+        let _w = self.write_lock.lock();
+        let mut frame = (**self.frame.load()).clone();
+        f(&mut frame);
+        let snapshot = frame.snapshot(segments, init_size);
+        self.frame.store(Arc::new(frame));
+        self.republish(snapshot);
+    }
+
     /// Pin `from_seg` at `seg_boundary` in virtual space and serve
     /// `[from_seg, num_segments)`. The seed, offset recompute, shift and
-    /// served bounds are published under one write-lock so no reader sees a
+    /// served bounds are published in one frame swap so no reader sees a
     /// half-built frame.
     pub(super) fn activate_with_shift(&self, params: ActivateParams, segments: &[Segment]) {
         let ActivateParams {
@@ -225,46 +254,49 @@ impl Layout {
             init_size,
         } = params;
         let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
-        let mut frame = self.frame.write();
-        frame.init_seed = init_size.max(1);
-        frame.recompute(init_size, segments);
-        let natural = frame
-            .offsets
-            .get(from_seg as usize)
-            .copied()
-            .unwrap_or_else(|| frame.total_bytes(segments, init_size));
-        let shift = i64::try_from(seg_boundary)
-            .ok()
-            .zip(i64::try_from(natural).ok())
-            .and_then(|(v, n)| v.checked_sub(n))
-            .unwrap_or(0);
-        frame.byte_shift = shift;
-        frame.served_from = from_seg;
-        frame.served_until = num;
-        let snapshot = frame.snapshot(segments, init_size);
-        drop(frame);
-        self.republish(snapshot);
+        self.mutate_frame(segments, init_size, |frame| {
+            frame.init_seed = init_size.max(1);
+            frame.recompute(init_size, segments);
+            let natural = frame
+                .offsets
+                .get(from_seg as usize)
+                .copied()
+                .unwrap_or_else(|| frame.total_bytes(segments, init_size));
+            let shift = i64::try_from(seg_boundary)
+                .ok()
+                .zip(i64::try_from(natural).ok())
+                .and_then(|(v, n)| v.checked_sub(n))
+                .unwrap_or(0);
+            frame.byte_shift = shift;
+            frame.served_from = from_seg;
+            frame.served_until = num;
+        });
     }
 
-    /// Apply a settled size and recompute offsets under one write-lock.
-    /// `store` performs the caller-owned size store (init or segment atom)
-    /// and returns the post-store `init_size` to seed the recompute — so a
-    /// reader never observes a new size against a stale offset table.
+    /// Apply a settled size and recompute offsets in one frame swap. `store`
+    /// performs the caller-owned size store (init or segment atom) and returns
+    /// the post-store `init_size` to seed the recompute — so a reader never
+    /// observes a new size against a stale offset table. The store runs under
+    /// `write_lock` so it serializes with the frame mutation.
     pub(super) fn apply_commit(&self, segments: &[Segment], store: impl FnOnce() -> u64) {
-        let mut frame = self.frame.write();
+        let _w = self.write_lock.lock();
         let init_size = store();
+        let mut frame = (**self.frame.load()).clone();
         frame.recompute(init_size, segments);
         let snapshot = frame.snapshot(segments, init_size);
-        drop(frame);
+        self.frame.store(Arc::new(frame));
         self.republish(snapshot);
     }
 
     pub(super) fn bisect_left(&self, byte: u64) -> usize {
-        self.frame.read().bisect_left(byte)
+        self.frame.load().bisect_left(byte)
     }
 
     pub(super) fn clear_init_seed(&self) {
-        self.frame.write().init_seed = 0;
+        let _w = self.write_lock.lock();
+        let mut frame = (**self.frame.load()).clone();
+        frame.init_seed = 0;
+        self.frame.store(Arc::new(frame));
     }
 
     pub(super) fn find_at_offset(
@@ -272,31 +304,29 @@ impl Layout {
         byte_virtual: u64,
         segments: &[Segment],
     ) -> Option<(u32, u64, u64)> {
-        self.frame.read().find_virtual(byte_virtual, segments)
+        self.frame.load().find_virtual(byte_virtual, segments)
     }
 
     pub(super) fn find_natural(&self, byte: u64, segments: &[Segment]) -> Option<(u32, u64, u64)> {
-        self.frame.read().find_natural(byte, segments)
+        self.frame.load().find_natural(byte, segments)
     }
 
     /// Coherent "is this variant historical?" check: `served_from` and
-    /// `served_until` are read under one lock, closing the coord-level
-    /// torn read between two separate accessor calls.
+    /// `served_until` are read from one published frame, closing the
+    /// coord-level torn read between two separate accessor calls.
     pub(super) fn is_shrunk(&self, num_segments: u32) -> bool {
-        let frame = self.frame.read();
+        let frame = self.frame.load();
         frame.served_from > 0 || frame.served_until < num_segments
     }
 
     pub(super) fn natural_offset(&self, idx: usize) -> Option<u64> {
-        self.frame.read().offsets.get(idx).copied()
+        self.frame.load().offsets.get(idx).copied()
     }
 
     /// Republish the lock-free `total` + `sizes_complete` snapshot computed
-    /// from the just-mutated frame. The two atomics together form the
+    /// from the just-published frame. The two atomics together form the
     /// produce-core EOF view, stored in one place at the tail of every
-    /// mutation. The frame guard is dropped before this call (the snapshot is
-    /// already materialised under-lock), so the lock is held no longer than
-    /// the mutation itself.
+    /// mutation.
     fn republish(&self, snapshot: FrameSnapshot) {
         self.total.store(snapshot.total, Ordering::Release);
         self.sizes_complete
@@ -316,7 +346,7 @@ impl Layout {
             return false;
         }
         let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
-        let frame = self.frame.read();
+        let frame = self.frame.load();
         frame.byte_shift == 0
             && frame.served_from == 0
             && frame.served_until == num
@@ -332,31 +362,27 @@ impl Layout {
             return;
         }
         let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
-        let mut frame = self.frame.write();
-        frame.byte_shift = 0;
-        frame.served_from = 0;
-        frame.served_until = num;
-        frame.init_seed = 0;
-        frame.recompute(init_size, segments);
-        let snapshot = frame.snapshot(segments, init_size);
-        drop(frame);
-        self.republish(snapshot);
+        self.mutate_frame(segments, init_size, |frame| {
+            frame.byte_shift = 0;
+            frame.served_from = 0;
+            frame.served_until = num;
+            frame.init_seed = 0;
+            frame.recompute(init_size, segments);
+        });
     }
 
     pub(super) fn segment_byte_offset(&self, idx: u32) -> Option<u64> {
-        self.frame.read().segment_byte_offset(idx)
+        self.frame.load().segment_byte_offset(idx)
     }
 
     pub(super) fn served_from(&self) -> u32 {
-        self.frame.read().served_from
+        self.frame.load().served_from
     }
 
     pub(super) fn set_served_until(&self, until: u32, segments: &[Segment], init_size: u64) {
-        let mut frame = self.frame.write();
-        frame.served_until = until;
-        let snapshot = frame.snapshot(segments, init_size);
-        drop(frame);
-        self.republish(snapshot);
+        self.mutate_frame(segments, init_size, |frame| {
+            frame.served_until = until;
+        });
     }
 
     /// Lock-free `sizes_complete` read for the produce-core EOF gates. `false`

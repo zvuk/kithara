@@ -1,7 +1,7 @@
 use std::sync::{Arc, OnceLock};
 
 use kithara_platform::{
-    sync::{CondvarGate, WaitGate},
+    sync::{ThreadGate, WaitGate},
     time::Duration,
 };
 use kithara_stream::{DeferredWake, WorkerWake};
@@ -44,7 +44,14 @@ pub(crate) struct SizeSignal {
     /// seek reset, cancel) signals it; the off-RT `wait_range(_, None)` parks on
     /// it instead of polling a wall-clock timer. See `CONTEXT.md`
     /// "Event-driven read wait".
-    ready: Arc<CondvarGate<u64>>,
+    ///
+    /// Lock-free [`ThreadGate`] (atomic bump + `unpark`) rather than a condvar:
+    /// the RT-reachable readiness edges (`fire_ready_only` from the coord's
+    /// fence-clear / seek transitions) `signal` it on the produce core, which
+    /// must not take a condvar mutex / `notify_all` futex. Single-waiter — the
+    /// one off-RT `wait_range(_, None)` reader registers for the `unpark`
+    /// fast-path; the counter bump alone closes the lost-wakeup window.
+    ready: Arc<ThreadGate>,
     /// Late-bound audio-worker wake. Fired alongside `ready` on the two
     /// downloader write/settle sites (NOT the coord's RT-reachable fence/seek
     /// signals), so the RT decoder's worker re-ticks on data arrival rather than
@@ -64,7 +71,7 @@ pub(crate) struct SizeSignal {
 impl SizeSignal {
     /// Construct from a fresh readiness gate and an empty worker-wake cell. Built
     /// once in `Hls::create` and cloned down into every consumer.
-    pub(crate) fn new(ready: Arc<CondvarGate<u64>>, worker_wake: WorkerWakeCell) -> Self {
+    pub(crate) fn new(ready: Arc<ThreadGate>, worker_wake: WorkerWakeCell) -> Self {
         Self {
             ready,
             worker_wake,
@@ -118,19 +125,19 @@ impl SizeSignal {
 
     /// Re-vend the underlying readiness gate. Used by the cancel waker, which
     /// must capture a hard-`Send + Sync` handle in its `on_cancel` closure.
-    pub(crate) fn ready_gate(&self) -> Arc<CondvarGate<u64>> {
+    pub(crate) fn ready_gate(&self) -> Arc<ThreadGate> {
         Arc::clone(&self.ready)
     }
 
     /// Pre-park snapshot of the gate generation (seqlock guard for the off-RT
-    /// `wait_range` loop). Pass-through to [`CondvarGate::current`].
+    /// `wait_range` loop). Pass-through to [`WaitGate::current`].
     pub(crate) fn current(&self) -> u64 {
         self.ready.current()
     }
 
     /// Park on the gate until its generation advances past `since` or `timeout`
     /// elapses. Returns `true` on a signal, `false` on timeout. Pass-through to
-    /// [`CondvarGate::wait_timeout`].
+    /// [`WaitGate::wait_timeout`].
     pub(crate) fn wait_timeout(&self, since: u64, timeout: Duration) -> bool {
         self.ready.wait_timeout(since, timeout)
     }

@@ -14,10 +14,11 @@ use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve};
 
 use super::{
     cancel_epoch::CancelEpoch,
+    cas_anchor::CasAnchorCell,
     offsets::Layout,
+    probe::SizeDemandState,
     reader_runtime::ReaderRuntime,
-    seek::SeekAlias,
-    size::{ExactSeekDemand, SizeDemandState},
+    seqlock::{AtomicOptU64, AtomicSeekAlias},
 };
 use crate::{
     config::SizeProbeMethod,
@@ -125,9 +126,25 @@ pub(super) struct VariantFlow {
 }
 
 pub(super) struct VariantSeek {
-    pub(super) alias: Mutex<Option<SeekAlias>>,
-    pub(super) exact_seek: Mutex<Option<ExactSeekDemand>>,
-    pub(super) exact_byte_seek: Mutex<Option<u64>>,
+    /// Lock-free, allocation-free seek-alias snapshot. The produce-core read
+    /// path ([`HlsVariant::seek_alias_at`], reached on every `find_at_offset`)
+    /// and the steady-read-path clear (`advance`) touch only atomics; the base
+    /// is single-writer (on-core), the resolved exact anchor is published
+    /// off-RT under a generation tag. See `flow/seqlock.rs`.
+    pub(super) alias: AtomicSeekAlias,
+    /// Lock-free, allocation-free exact-seek demand, read on the produce-core
+    /// metadata-phase gate ([`HlsVariant::exact_seek_metadata_phase`]). Body is
+    /// MULTI-writer: the on-core seek path (`seek_time_anchor`) and the off-RT
+    /// downloader seek-epoch reset (`rebuild_at_time`) both SET it with no lock
+    /// between them, so the cell serializes writers with a CAS-acquired version
+    /// and the RT reader bails to not-ready (never spins) on a write-in-flight.
+    /// Off-RT completers CAS-consume the generation.
+    pub(super) exact_seek: CasAnchorCell,
+    /// Lock-free, allocation-free exact-byte-seek demand, read and cleared on
+    /// the produce-core metadata-phase gate
+    /// ([`HlsVariant::exact_byte_metadata_phase`]). A single `AtomicU64` with a
+    /// `u64::MAX` none sentinel.
+    pub(super) exact_byte_seek: AtomicOptU64,
     pub(super) segment_aware_tail: AtomicU32,
     pub(super) size_demand: Mutex<SizeDemandState>,
 }
@@ -173,11 +190,19 @@ impl VariantSegments {
 }
 
 impl VariantFlow {
-    fn new(master_cancel: CancelToken, seek_obs: Arc<dyn SeekObserve>) -> Self {
+    fn new(
+        master_cancel: CancelToken,
+        seek_obs: Arc<dyn SeekObserve>,
+        queue_capacity: usize,
+    ) -> Self {
         Self {
             cancel_epoch: CancelEpoch::new(master_cancel),
             prefetch_anchor: AtomicU64::new(0),
-            queue: Mutex::default(),
+            // Preallocate to the worst-case rebuild size (init + every media
+            // segment + the seg-0 decoder probe) so the per-seek
+            // `clear` + `extend` in `rebuild_queue` never reallocates on the
+            // produce core.
+            queue: Mutex::new(VecDeque::with_capacity(queue_capacity)),
             reader: ReaderRuntime::new(seek_obs),
         }
     }
@@ -186,9 +211,9 @@ impl VariantFlow {
 impl VariantSeek {
     fn new(no_seek_tail: u32) -> Self {
         Self {
-            alias: Mutex::default(),
-            exact_seek: Mutex::default(),
-            exact_byte_seek: Mutex::default(),
+            alias: AtomicSeekAlias::new(),
+            exact_seek: CasAnchorCell::new(),
+            exact_byte_seek: AtomicOptU64::none(),
             segment_aware_tail: AtomicU32::new(no_seek_tail),
             size_demand: Mutex::default(),
         }
@@ -311,7 +336,11 @@ impl VariantParts {
         Arc::new(HlsVariant {
             variant,
             layout,
-            flow: VariantFlow::new(ctx.master_cancel.clone(), seek_obs),
+            flow: VariantFlow::new(
+                ctx.master_cancel.clone(),
+                seek_obs,
+                segments.len().saturating_add(2),
+            ),
             profile: VariantProfile {
                 codec,
                 container,

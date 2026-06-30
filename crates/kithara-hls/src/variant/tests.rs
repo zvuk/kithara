@@ -5,7 +5,7 @@ use std::sync::{
 
 use kithara_assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, ProcessChunkFn, WriteSide};
 use kithara_drm::DecryptContext;
-use kithara_platform::{CancelToken, sync::CondvarGate, time::Duration};
+use kithara_platform::{CancelToken, sync::ThreadGate, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     AudioCodec, ContainerFormat, ReadOutcome, SeekControl, SeekObserve, SeekState, SourceError,
@@ -51,10 +51,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
         look_ahead_segments: None,
         headers: None,
         size_probe_method: SizeProbeMethod::Head,
-        signal: SizeSignal::new(
-            Arc::new(CondvarGate::<u64>::default()),
-            Arc::new(OnceLock::new()),
-        ),
+        signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
     }
 }
 
@@ -343,7 +340,7 @@ fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
         "position must follow the requested reader_pos"
     );
     assert!(
-        v.seek.exact_byte_seek.lock().is_none(),
+        v.seek.exact_byte_seek.load().is_none(),
         "ABR byte-continuity activation mirrors the old reader cursor; it must not register a seek-style exact-byte demand in the incoming variant"
     );
 }

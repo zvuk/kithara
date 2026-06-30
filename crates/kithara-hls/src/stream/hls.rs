@@ -11,7 +11,7 @@ use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, VariantInfo};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancelScope, CancelToken, sync::CondvarGate, tokio::sync::mpsc, traits::FromWithParams,
+    CancelScope, CancelToken, sync::ThreadGate, tokio::sync::mpsc, traits::FromWithParams,
 };
 use kithara_stream::{
     Activity, PlayheadState, PlayheadWrite, SeekObserve, SeekState, SourceError, StreamType,
@@ -178,10 +178,7 @@ impl StreamType for Hls {
         // fires both on the two downloader write/settle sites so the RT decoder
         // re-ticks on data arrival, not on its 10 ms scheduler poll. Built once
         // here and cloned down into every consumer.
-        let signal = SizeSignal::new(
-            Arc::new(CondvarGate::<u64>::default()),
-            Arc::new(OnceLock::new()),
-        );
+        let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
 
         let plan_ctx = PlanCtx {
             master_cancel: cancel.clone(),

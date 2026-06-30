@@ -3,37 +3,30 @@ use std::sync::atomic::Ordering;
 use kithara_platform::time::Duration;
 use kithara_stream::{SourceSeekAnchor, StreamError, StreamResult, needs_exact_byte_sizes};
 
-use super::{HlsVariant, size::ExactSeekDemand};
+use super::{HlsVariant, seqlock::AliasSnapshot, size::ExactSeekDemand};
 use crate::HlsError;
-
-#[derive(Clone, Copy)]
-pub(super) struct SeekAlias {
-    pub(super) segment: u32,
-    pub(super) anchor: u64,
-    exact_anchor: Option<u64>,
-}
-
-impl SeekAlias {
-    fn covers_position(self, pos: u64) -> bool {
-        pos == self.anchor || self.exact_anchor == Some(pos)
-    }
-}
 
 impl HlsVariant {
     pub(super) fn clear_seek_alias(&self) {
-        *self.seek.alias.lock() = None;
+        self.seek.alias.clear();
     }
 
     pub(super) fn clear_seek_alias_if_moved(&self, pos: u64) {
-        let mut alias = self.seek.alias.lock();
-        if alias.is_some_and(|entry| !entry.covers_position(pos)) {
-            *alias = None;
+        // RT-reachable (via `advance`): a lock-free, alloc-free load + atomic
+        // clear. The base is single-writer (on-core), so the `Some -> None`
+        // store never races a concurrent base writer.
+        if self
+            .seek
+            .alias
+            .load()
+            .is_some_and(|alias| !alias.covers_position(pos))
+        {
+            self.seek.alias.clear();
         }
     }
 
     pub(super) fn seek_alias_at(&self, byte: u64) -> Option<(u32, u64, u64)> {
-        let alias = *self.seek.alias.lock();
-        let alias = alias?;
+        let alias = self.seek.alias.load()?;
         if byte < alias.anchor {
             return None;
         }
@@ -45,7 +38,11 @@ impl HlsVariant {
         (byte < end).then_some((alias.segment, alias.anchor, size))
     }
 
-    fn segment_aware_seek_alias_at(&self, alias: SeekAlias, byte: u64) -> Option<(u32, u64, u64)> {
+    fn segment_aware_seek_alias_at(
+        &self,
+        alias: AliasSnapshot,
+        byte: u64,
+    ) -> Option<(u32, u64, u64)> {
         let mut offset = alias.anchor;
         for (idx, segment) in self
             .segments
@@ -65,21 +62,16 @@ impl HlsVariant {
     }
 
     pub(super) fn set_seek_alias(&self, anchor: u64, segment: u32) {
-        *self.seek.alias.lock() = Some(SeekAlias {
-            segment,
-            anchor,
-            exact_anchor: None,
-        });
+        self.seek.alias.set(anchor, segment);
     }
 
     pub(super) fn resolve_seek_alias(&self, demand: ExactSeekDemand, exact_anchor: u64) {
-        let mut alias = self.seek.alias.lock();
-        if let Some(entry) = alias.as_mut()
-            && entry.anchor == demand.anchor
-            && entry.segment == demand.segment
-        {
-            entry.exact_anchor = Some(exact_anchor);
-        }
+        // Off-RT (exact-prefix settle): a lock-free, alloc-free store of the
+        // resolved exact anchor onto the matching base, tagged with the base
+        // generation so a stale resolver cannot attach to a newer alias.
+        self.seek
+            .alias
+            .resolve(demand.segment, demand.anchor, exact_anchor);
     }
 
     /// Reset variant to a "fresh" single-variant layout: `byte_shift = 0`,

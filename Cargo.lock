@@ -4712,6 +4712,7 @@ name = "kithara-hls"
 version = "0.0.1-alpha3"
 dependencies = [
  "aes",
+ "arc-swap",
  "axum",
  "bitflags 2.13.0",
  "bon",

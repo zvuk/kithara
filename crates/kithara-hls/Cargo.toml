@@ -21,6 +21,7 @@ kithara-drm = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-stream = { workspace = true, default-features = false }
 kithara-storage = { workspace = true }
+arc-swap = { workspace = true }
 bytes = { workspace = true }
 bitflags = { workspace = true }
 dashmap = { workspace = true }

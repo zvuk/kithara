@@ -15,7 +15,7 @@ use kithara_drm::DecryptContext;
 use kithara_events::AbrReason;
 use kithara_platform::{
     CancelToken,
-    sync::{CondvarGate, WaitGate},
+    sync::{ThreadGate, WaitGate},
     time::{Duration, Instant},
 };
 use kithara_storage::WaitOutcome;
@@ -393,7 +393,6 @@ impl HlsCoord {
     /// `Cancelled`); otherwise the variant that currently serves
     /// `range.start` decides — mid-buffer boundary cross resolves to
     /// the right `range_ready` / `is_flushing` / `total_bytes` view.
-    #[kithara::rtsan_allow_blocking]
     pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         if self.cancel.is_cancelled() {
             return SourcePhase::Cancelled;
@@ -445,7 +444,7 @@ impl HlsCoord {
     /// The bare readiness gate, captured by the cancel waker's `on_cancel`
     /// closure (which needs a hard-`Send + Sync` handle). Re-vended from
     /// [`Self::signal`].
-    pub(crate) fn ready_gate(&self) -> Arc<CondvarGate<u64>> {
+    pub(crate) fn ready_gate(&self) -> Arc<ThreadGate> {
         self.signal.ready_gate()
     }
 

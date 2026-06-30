@@ -2,6 +2,8 @@
 
 #[path = "state/cancel.rs"]
 mod cancel_epoch;
+#[path = "flow/cas_anchor.rs"]
+mod cas_anchor;
 mod core;
 #[path = "flow/cursor.rs"]
 mod cursor;
@@ -23,6 +25,8 @@ mod lifecycle;
 mod media;
 #[path = "map/offsets.rs"]
 mod offsets;
+#[path = "flow/probe.rs"]
+mod probe;
 #[path = "flow/queue.rs"]
 mod queue;
 #[path = "io/read.rs"]
@@ -31,6 +35,8 @@ mod read;
 mod reader_runtime;
 #[path = "flow/seek.rs"]
 mod seek;
+#[path = "flow/seqlock.rs"]
+mod seqlock;
 #[path = "flow/size.rs"]
 mod size;
 
@@ -38,7 +44,7 @@ pub(crate) use self::core::{HlsVariant, PlanCtx, SegmentActivateParams, VariantP
 #[cfg(test)]
 pub(in crate::variant) use self::{
     core::{VariantParts, segment_placeholder_size},
-    size::SizeDemand,
+    probe::SizeDemand,
 };
 
 #[cfg(test)]
