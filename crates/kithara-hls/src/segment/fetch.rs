@@ -8,7 +8,6 @@ use std::{
 };
 
 use kithara_assets::{AssetReader, AssetWriter, RawWriteHandle, ReadSide, WriteSide};
-use kithara_drm::DecryptContext;
 use kithara_net::{NetError, Retryability};
 use kithara_platform::CancelToken;
 use kithara_storage::ResourceStatus;
@@ -214,9 +213,9 @@ pub(crate) struct FetchSlot {
     pub(crate) signal: SizeSignal,
     /// Read view of the writer's generation — used to observe a
     /// committed-by-race status before deciding the terminal transition.
-    pub(crate) reader: AssetReader<DecryptContext>,
+    pub(crate) reader: AssetReader,
     /// Sole commit owner (non-`Clone`); consumed in `settle`.
-    pub(crate) writer: AssetWriter<DecryptContext>,
+    pub(crate) writer: AssetWriter,
     pub(crate) cancel: CancelToken,
     /// Clone-able streaming-write handle for the fetch body closure.
     pub(crate) raw: RawWriteHandle,

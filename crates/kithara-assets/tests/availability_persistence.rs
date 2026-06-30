@@ -30,9 +30,7 @@ fn disk_checkpoint_persists_committed_resource_across_rebuild() {
     let root = "p4-persist";
 
     {
-        let store = AssetStoreBuilder::<()>::default()
-            .root_dir(dir.path())
-            .build();
+        let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
         let scope = store.scope(root);
         let key = scope.key("segments/0001.bin");
         write_commit(
@@ -42,9 +40,7 @@ fn disk_checkpoint_persists_committed_resource_across_rebuild() {
         store.checkpoint().unwrap();
     }
 
-    let store = AssetStoreBuilder::<()>::default()
-        .root_dir(dir.path())
-        .build();
+    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
     let scope = store.scope(root);
     let key = scope.key("segments/0001.bin");
 
@@ -62,9 +58,7 @@ fn disk_checkpoint_drops_partial_writes_when_writer_abandons_without_commit() {
     let root = "p4-partial";
 
     {
-        let store = AssetStoreBuilder::<()>::default()
-            .root_dir(dir.path())
-            .build();
+        let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
         let scope = store.scope(root);
         let key = scope.key("segments/partial.bin");
         let res = pending(scope.store().acquire_resource(&key, None).unwrap());
@@ -74,9 +68,7 @@ fn disk_checkpoint_drops_partial_writes_when_writer_abandons_without_commit() {
         store.checkpoint().unwrap();
     }
 
-    let store = AssetStoreBuilder::<()>::default()
-        .root_dir(dir.path())
-        .build();
+    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
     let scope = store.scope(root);
     let key = scope.key("segments/partial.bin");
 
@@ -95,15 +87,11 @@ fn disk_checkpoint_drops_partial_writes_when_writer_abandons_without_commit() {
 fn disk_checkpoint_without_prior_writes_is_noop() {
     let dir = tempdir().unwrap();
     let root = "p4-empty";
-    let store = AssetStoreBuilder::<()>::default()
-        .root_dir(dir.path())
-        .build();
+    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
 
     store.checkpoint().unwrap();
 
-    let store2 = AssetStoreBuilder::<()>::default()
-        .root_dir(dir.path())
-        .build();
+    let store2 = AssetStoreBuilder::default().root_dir(dir.path()).build();
     let scope2 = store2.scope(root);
     let key = scope2.key("ghost.bin");
 
@@ -117,17 +105,13 @@ fn disk_rebuild_without_checkpoint_falls_back_to_slow_path() {
     let root = "p4-slow";
 
     {
-        let store = AssetStoreBuilder::<()>::default()
-            .root_dir(dir.path())
-            .build();
+        let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
         let scope = store.scope(root);
         let key = scope.key("segments/slow.bin");
         write_commit(scope.store().acquire_resource(&key, None).unwrap(), b"xyz");
     }
 
-    let store = AssetStoreBuilder::<()>::default()
-        .root_dir(dir.path())
-        .build();
+    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
     let scope = store.scope(root);
     let key = scope.key("segments/slow.bin");
 
@@ -140,14 +124,14 @@ fn mem_checkpoint_is_noop_and_aggregate_is_ephemeral() {
     let root = "p4-mem";
 
     {
-        let store = AssetStoreBuilder::<()>::default().ephemeral(true).build();
+        let store = AssetStoreBuilder::default().ephemeral(true).build();
         let scope = store.scope(root);
         let key = scope.key("segments/mem.bin");
         write_commit(scope.store().acquire_resource(&key, None).unwrap(), b"abcd");
         store.checkpoint().unwrap();
     }
 
-    let store = AssetStoreBuilder::<()>::default().ephemeral(true).build();
+    let store = AssetStoreBuilder::default().ephemeral(true).build();
     let scope = store.scope(root);
     let key = scope.key("segments/mem.bin");
     assert!(scope.store().available_ranges(&key).is_empty());
@@ -159,9 +143,7 @@ fn disk_checkpoint_is_idempotent() {
     let dir = tempdir().unwrap();
     let root = "p4-idem";
 
-    let store = AssetStoreBuilder::<()>::default()
-        .root_dir(dir.path())
-        .build();
+    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
     let scope = store.scope(root);
     let key = scope.key("segments/idempotent.bin");
     write_commit(
@@ -173,9 +155,7 @@ fn disk_checkpoint_is_idempotent() {
     store.checkpoint().unwrap();
     store.checkpoint().unwrap();
 
-    let store2 = AssetStoreBuilder::<()>::default()
-        .root_dir(dir.path())
-        .build();
+    let store2 = AssetStoreBuilder::default().root_dir(dir.path()).build();
     let scope2 = store2.scope(root);
     assert_eq!(scope2.store().final_len(&key), Some(5));
 }

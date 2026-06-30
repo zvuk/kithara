@@ -104,7 +104,7 @@ impl Segment {
     /// Narrow disk handle for this slot, built from the variant's shared scope
     /// plus the slot's key and url — the same cheap clone `segment_handle` /
     /// `init_handle` produced.
-    pub(crate) fn resource(&self, scope: &AssetScope<DecryptContext>) -> ResourceHandle {
+    pub(crate) fn resource(&self, scope: &AssetScope) -> ResourceHandle {
         ResourceHandle::new(
             scope.clone(),
             self.resource_id().clone(),
@@ -117,7 +117,7 @@ impl Segment {
     /// yet.
     pub(crate) fn read_at(
         &self,
-        scope: &AssetScope<DecryptContext>,
+        scope: &AssetScope,
         range: Range<u64>,
         dst: &mut [u8],
     ) -> StreamResult<Option<usize>> {
@@ -125,7 +125,7 @@ impl Segment {
     }
 
     /// Whether every byte in `range` is already present on disk for this slot.
-    pub(crate) fn contains(&self, scope: &AssetScope<DecryptContext>, range: Range<u64>) -> bool {
+    pub(crate) fn contains(&self, scope: &AssetScope, range: Range<u64>) -> bool {
         self.resource(scope).contains(range)
     }
 

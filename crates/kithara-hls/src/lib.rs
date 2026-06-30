@@ -3,9 +3,9 @@
 pub mod config;
 pub mod error;
 
+mod decrypt_processor;
 mod handle;
 mod ids;
-mod invalidation;
 mod naming;
 mod peer;
 mod playlist;
@@ -18,7 +18,6 @@ mod variant;
 pub use config::{HlsConfig, KeyOptions, SizeProbeMethod};
 pub use error::{HlsError, HlsResult};
 pub use ids::VariantIndex;
-pub use invalidation::HlsStore;
 pub use kithara_abr::AbrMode;
 pub use kithara_drm::{KeyProcessor, KeyProcessorRegistry, KeyProcessorRule};
 pub use kithara_platform::traits::FromWithParams;

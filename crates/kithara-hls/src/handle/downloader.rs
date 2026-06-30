@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use kithara_assets::AssetScope;
-use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_stream::dl::{Downloader, Peer, PeerHandle};
 
@@ -11,7 +10,7 @@ use kithara_stream::dl::{Downloader, Peer, PeerHandle};
 /// loaders that still need full download + disk capability.
 pub(crate) struct StreamPeer {
     peer_handle: PeerHandle,
-    scope: AssetScope<DecryptContext>,
+    scope: AssetScope,
     byte_pool: kithara_bufpool::BytePool,
 }
 
@@ -22,7 +21,7 @@ impl StreamPeer {
         downloader: &Downloader,
         peer: Arc<dyn Peer>,
         bus: EventBus,
-        scope: AssetScope<DecryptContext>,
+        scope: AssetScope,
         byte_pool: kithara_bufpool::BytePool,
     ) -> Self {
         let peer_handle = downloader.register(peer).with_bus(bus);
@@ -39,7 +38,7 @@ impl StreamPeer {
     }
 
     /// Staged-transition distribution accessor (retired S13/S14).
-    pub(crate) fn scope(&self) -> AssetScope<DecryptContext> {
+    pub(crate) fn scope(&self) -> AssetScope {
         self.scope.clone()
     }
 

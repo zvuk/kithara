@@ -103,20 +103,17 @@ async fn startup_issues_no_eager_size_probe_storm(#[case] fixture: StartupFixtur
     // variant prefix is loaded before reading counters.
     let audio = spawn_blocking(move || {
         let mut buf = vec![0.0f32; 4096];
-        loop {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count, .. }) => {
-                    info!(frames = count.get(), "first decoded audio frame");
-                    break;
-                }
-                Ok(ReadOutcome::Pending { .. }) => {
-                    panic!("read returned Pending with block_on_underrun before first frame");
-                }
-                Ok(ReadOutcome::Eof { .. }) => {
-                    panic!("read returned Eof before any frame");
-                }
-                Err(e) => panic!("read error before first frame: {e}"),
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                info!(frames = count.get(), "first decoded audio frame");
             }
+            Ok(ReadOutcome::Pending { .. }) => {
+                panic!("read returned Pending with block_on_underrun before first frame");
+            }
+            Ok(ReadOutcome::Eof { .. }) => {
+                panic!("read returned Eof before any frame");
+            }
+            Err(e) => panic!("read error before first frame: {e}"),
         }
         audio
     })

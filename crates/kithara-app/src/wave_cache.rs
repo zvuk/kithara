@@ -382,7 +382,7 @@ mod tests {
     }
 
     fn store_in(dir: &Path) -> Arc<AssetStore> {
-        Arc::new(AssetStoreBuilder::<()>::default().root_dir(dir).build())
+        Arc::new(AssetStoreBuilder::default().root_dir(dir).build())
     }
 
     fn cache_over(store: &Arc<AssetStore>) -> TrackAnalysisCache {

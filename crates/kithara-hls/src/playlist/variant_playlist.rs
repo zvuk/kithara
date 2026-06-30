@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use kithara_assets::AssetScope;
-use kithara_drm::DecryptContext;
 use url::Url;
 
 use super::{
@@ -31,7 +30,7 @@ impl VariantPlaylist {
     /// Returns an error when the variant URL fails to resolve.
     pub(crate) fn for_variant(
         cache: &PlaylistCache,
-        scope: &AssetScope<DecryptContext>,
+        scope: &AssetScope,
         master_url: &Url,
         variant: &VariantStream,
     ) -> HlsResult<Self> {
@@ -67,7 +66,7 @@ impl VariantPlaylist {
 /// fails to fetch or parse.
 pub(crate) async fn load_variant_playlists(
     cache: &PlaylistCache,
-    scope: &AssetScope<DecryptContext>,
+    scope: &AssetScope,
     master_url: &Url,
     variants: &[VariantStream],
 ) -> HlsResult<Vec<MediaPlaylist>> {

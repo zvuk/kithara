@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use kithara_assets::AssetScope;
-use kithara_drm::DecryptContext;
 use url::Url;
 
 use super::{parse::ParsedMaster, playlist_cache::PlaylistCache};
@@ -20,7 +19,7 @@ pub(crate) struct MasterPlaylist {
 impl MasterPlaylist {
     /// Build a loadable for the master at `url`, resolving the per-resource
     /// [`ResourceHandle`] from `scope`.
-    pub(crate) fn new(cache: PlaylistCache, scope: &AssetScope<DecryptContext>, url: Url) -> Self {
+    pub(crate) fn new(cache: PlaylistCache, scope: &AssetScope, url: Url) -> Self {
         let resource = ResourceHandle::new(scope.clone(), scope.key_from_url(&url), url);
         Self { cache, resource }
     }

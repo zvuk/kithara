@@ -29,7 +29,7 @@ fuzz_target!(|input: Input| {
     assert_eq!(root.len(), 32);
     assert!(root.bytes().all(|b| b.is_ascii_hexdigit()));
 
-    let store = AssetStoreBuilder::<()>::default().ephemeral(true).build();
+    let store = AssetStoreBuilder::default().ephemeral(true).build();
     let key = store.scope(root.clone()).key_from_url(&url);
     assert!(!key.is_absolute());
 

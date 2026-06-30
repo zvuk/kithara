@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use kithara::{
-    assets::{AssetScope, AssetStore, AssetStoreBuilder, ProcessChunkFn},
-    drm::{DecryptContext, aes128_cbc_process_chunk},
+    assets::{AssetScope, AssetStore, AssetStoreBuilder},
     hls::{KeyStore, PlaylistCache},
     net::{HttpClient, NetOptions},
 };
@@ -13,28 +12,22 @@ use crate::TestTempDir;
 
 /// Wrapper for test assets with temp directory lifetime management
 pub struct TestAssets {
-    assets: AssetStore<DecryptContext>,
+    assets: AssetStore,
     asset_root: Arc<str>,
     #[cfg(not(target_arch = "wasm32"))]
     _temp_dir: Arc<TestTempDir>,
 }
 
 impl TestAssets {
-    pub fn assets(&self) -> &AssetStore<DecryptContext> {
+    pub fn assets(&self) -> &AssetStore {
         &self.assets
     }
 
     /// Scope bound to this fixture's `asset_root`, mirroring how
     /// `Hls::create` scopes its per-stream store.
-    pub fn scope(&self) -> AssetScope<DecryptContext> {
+    pub fn scope(&self) -> AssetScope {
         self.assets.scope(Arc::clone(&self.asset_root))
     }
-}
-
-fn drm_process_fn() -> ProcessChunkFn<DecryptContext> {
-    Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
-        aes128_cbc_process_chunk(input, output, ctx, is_last)
-    })
 }
 
 /// Create test assets with default "test-hls" root
@@ -51,7 +44,6 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     let temp_dir = Arc::new(temp_dir);
 
     let assets = AssetStoreBuilder::default()
-        .process_fn(drm_process_fn())
         .root_dir(temp_dir.path().to_path_buf())
         .evict_config(EvictConfig::default())
         .cancel(CancelToken::never())
@@ -68,7 +60,6 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 #[cfg(target_arch = "wasm32")]
 pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     let assets = AssetStoreBuilder::default()
-        .process_fn(drm_process_fn())
         .cancel(CancelToken::never())
         .build();
 

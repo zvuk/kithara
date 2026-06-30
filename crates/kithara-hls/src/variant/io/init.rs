@@ -50,7 +50,7 @@ impl HlsVariant {
         playlist_state: &PlaylistState,
         variant_idx: usize,
         decrypt_ctx: Option<DecryptContext>,
-        scope: &AssetScope<DecryptContext>,
+        scope: &AssetScope,
     ) -> Option<Segment> {
         let url = playlist_state.init_url(variant_idx)?;
         let needs_exact = needs_exact_byte_sizes(

@@ -8,7 +8,7 @@ use std::{
 
 use clap::Parser;
 use kithara::{
-    assets::{BytePool, FlushHub, FlushPolicy, StoreOptions},
+    assets::{AssetStoreBuilder, BytePool, EvictConfig, FlushHub, FlushPolicy, StoreOptions},
     audio::generate_log_spaced_bands,
     net::{HttpClient, NetOptions},
     play::{PlayerConfig, PlayerImpl, StretchControls},
@@ -116,23 +116,23 @@ fn main() -> AppResult {
     let store_options = StoreOptions::builder()
         .flush_hub(Arc::clone(&flush_hub))
         .build();
-    let file_asset_store = kithara::file::build_shared_asset_store(
-        &store_options,
-        Some(byte_pool.clone()),
-        shutdown.child(),
-    );
-    let hls_asset_store = kithara::hls::build_shared_asset_store(
-        &store_options,
-        Some(byte_pool.clone()),
-        shutdown.child(),
+    let asset_store = Arc::new(
+        AssetStoreBuilder::default()
+            .cancel(shutdown.child())
+            .root_dir(&store_options.cache_dir)
+            .evict_config(EvictConfig::from(&store_options))
+            .ephemeral(store_options.is_ephemeral)
+            .pool(byte_pool.clone())
+            .maybe_cache_capacity(store_options.cache_capacity)
+            .maybe_flush_hub(store_options.flush_hub.clone())
+            .build(),
     );
     let config = AppConfig::builder()
         .downloader(downloader)
         .flush_hub(flush_hub)
         .shutdown(shutdown.clone())
         .byte_pool(byte_pool)
-        .file_asset_store(file_asset_store)
-        .hls_asset_store(hls_asset_store)
+        .asset_store(asset_store)
         .maybe_tracks((!args.tracks.is_empty()).then_some(args.tracks))
         .should_accept_invalid_certs(args.insecure)
         .build();

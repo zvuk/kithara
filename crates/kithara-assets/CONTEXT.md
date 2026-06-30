@@ -128,20 +128,33 @@ Internally these sit on top of an aggregate `AvailabilityIndex` keyed by `(asset
 
 Decrypt-readiness is a **phantom typestate** on a split acquisition handle, not a runtime flag. Acquiring an encrypted resource (`ctx = Some`) yields `AcquisitionResult::Pending(ProcessedWriter)`; a committed/cache-hit resource — or any `ctx = None` resource (playlists, keys) — yields `AcquisitionResult::Ready(ProcessedReader)`. Callers pattern-match the outcome; there is no runtime `is_readable()` check.
 
-- `ProcessedWriter` (Pending, **non-`Clone`**) owns the write+decrypt capability: `write_at` streams raw ciphertext to disk; `commit(self, final_len)` reads it back in chunks, transforms each via the callback (no allocation, e.g. AES-128-CBC), writes the plaintext back, and **consumes** the writer into a `ProcessedReader`. `fail(self)` — or dropping the writer without committing — fails the gate so no waiting reader deadlocks. The writer exposes **no reads**: `read_at` on a Pending handle is a compile error.
+- `ProcessedWriter` (Pending, **non-`Clone`**) owns the write+decrypt capability: `write_at` streams raw ciphertext to disk; `commit(self, final_len)` reads it back in chunks, transforms each via the resource's `ChunkSink` (no allocation, e.g. AES-128-CBC), writes the plaintext back, and **consumes** the writer into a `ProcessedReader`. `fail(self)` — or dropping the writer without committing — fails the gate so no waiting reader deadlocks. The writer exposes **no reads**: `read_at` on a Pending handle is a compile error.
 - `ProcessedReader` (Ready, `Clone`) exposes `read_at`/`wait_range`/`contains_range`/`len`/`next_gap`/`path` over already-processed bytes. `reactivate(self)` consumes the reader into a fresh `ProcessedWriter` carrying a **new** readiness gate.
 
-The Pending/Ready split is not confined to the processing layer — it is the shape of the whole `Assets` contract. `acquire_resource*` returns `AcquisitionResult<ActiveRes: WriteSide, ReadyRes: ReadSide>`; `open_resource*` returns the `ReadyRes` reader directly. Every decorator carries the split through mutually-recursive associated types (`WriteSide::Reader: ReadSide<Writer = Self>` ↔ `ReadSide::Writer: WriteSide<Reader = Self>`): `BaseWriter`/`BaseReader` (storage seam, `resource.rs`) → `ProcessedWriter`/`Reader` → `CachedWriter`/`Reader` → `LeaseWriter`/`Reader`, surfaced at the facade as `AssetWriter<Ctx>` / `AssetReader<Ctx>`. Because the commit owner is non-`Clone` but a streaming download closure needs a clone-able byte sink, `WriteSide::raw_write_handle()` yields a `RawWriteHandle` (a clone-able raw-write path into the writer's generation) decoupled from the single `commit`-owning writer. The cache stores **only `ReadyRes` readers** of the current generation; an acquire that hits a non-committed slot `reactivate`s a fresh writer and re-keys the cache entry, so prior committed reader clones keep their generation's gate.
+The Pending/Ready split is not confined to the processing layer — it is the shape of the whole `Assets` contract. `acquire_resource*` returns `AcquisitionResult<ActiveRes: WriteSide, ReadyRes: ReadSide>`; `open_resource*` returns the `ReadyRes` reader directly. Every decorator carries the split through mutually-recursive associated types (`WriteSide::Reader: ReadSide<Writer = Self>` ↔ `ReadSide::Writer: WriteSide<Reader = Self>`): `BaseWriter`/`BaseReader` (storage seam, `resource.rs`) → `ProcessedWriter`/`Reader` → `CachedWriter`/`Reader` → `LeaseWriter`/`Reader`, surfaced at the facade as `AssetWriter` / `AssetReader`. Because the commit owner is non-`Clone` but a streaming download closure needs a clone-able byte sink, `WriteSide::raw_write_handle()` yields a `RawWriteHandle` (a clone-able raw-write path into the writer's generation) decoupled from the single `commit`-owning writer. The cache stores **only `ReadyRes` readers** of the current generation; an acquire that hits a non-committed slot `reactivate`s a fresh writer and re-keys the cache entry, so prior committed reader clones keep their generation's gate.
 
 This replaces the former runtime `ReadinessGate` (a `processed: Mutex<bool>` + `Condvar` shared across `Clone`s of one `ProcessedResource`). That shared gate was the root of the DRM read-before-ready race: a re-fetching writer's `reactivate` flipped the gate for an extant reader's committed clone, so `read_at` hit `StorageError::NotReadable` mid-playback (`live_ephemeral_small_cache_playback_drm`; the older `local_queue_playlist_behavior_*` post-seek hang). The fresh-gate-on-`reactivate` plus the non-`Clone` writer make that race unrepresentable — a reacquiring writer gets its own gate and a committed reader's type-level readiness is never revoked. The gate survives **privately** inside `process.rs` only as the writer↔reader handoff primitive, reachable through `commit`/`await_ready`. Storage lifecycle `status()` stays a runtime `&self` facade (see "Decorator Chain"); the two axes are independent.
+
+## Per-acquire processing (`ProcessCtx`)
+
+The store is **not** generic over a processing context. Processing travels per acquire as `ProcessCtx = Arc<dyn ResourceProcessor>`; `None` is identity passthrough. This is what lets ONE non-generic `AssetStore` serve both plain (file) and decrypting (HLS) scopes — there is no second store instance and no second `_index/` set.
+
+- `ResourceProcessor` (defined here, implemented by consumers, e.g. the HLS `DecryptProcessor`): `identity() -> &[u8]` is the **immutable** cache identity (e.g. `key||iv`); `begin() -> Box<dyn ChunkSink>` mints **fresh per-commit** chaining state.
+- `ChunkSink::process(&mut self, …)` carries the evolving state (e.g. the CBC IV advancing between 64KB chunks). `commit` (and `reactivate`-then-`commit`) calls `begin()` each time, so every commit restarts chaining from the seed.
+- There is **no** build-time `process_fn`; `AssetStoreBuilder` takes no processing callback. Consumers never see the AES primitive in `kithara-assets` — only the trait.
+
+### Cache identity is exact bytes
+
+The in-memory cache key is `(ResourceKey, Option<RequestIdentity>, Option<CtxIdentity>)`, where `CtxIdentity` wraps `ResourceProcessor::identity()` (via the crate-internal `CacheIdentity` bridge). Equality is **byte-exact** `Eq`, not a hash digest — two distinct processors never collide. `CtxIdentity`'s `Debug` is redacted because the bytes can be key material (e.g. AES `key||iv`).
 
 ## Trait Bridges
 
 - `&Url` → `ResourceKey` (`From`) — derive a unique key from a URL, query-aware
 - `&StoreOptions` → `EvictConfig` (`From`) — extract eviction config from store options
+- `&StoreOptions` → `AssetStoreBuilder` (`From`) — pre-populate a builder from store options (`cancel` set separately); the canonical `StoreOptions`-to-store path for file and HLS
 - `ResourceStatus` → `AssetResourceState` (`From`) — map storage status to asset state
 - `&LruState` ↔ `LruIndexFile` (`From` both ways) — LRU index persistence round-trip
-- `DiskStore<Ctx>` / `MemStore<Ctx>` → `AssetStore<Ctx>` (`From`) — wrap a backend into the unified store
+- `DiskStore` / `MemStore` → `AssetStore` (`From`) — wrap a backend into the unified store
 
 ## Consumer Demand
 
@@ -163,3 +176,15 @@ let (lease, producer) = store.attach_demand(&key, read_pos, look_ahead);
 Known v1 limitation: the producer observes `producer_cancel` only at its throttle await, not mid-chunk. If the last consumer detaches and a new one attaches almost immediately, the old task can briefly overlap the new one — a short window of two in-flight GETs. Overlapping writes are idempotent, so this is wasteful, not incorrect.
 
 `DemandKey` is the `ResourceKey`, matching the granularity at which the store shares a resource. HTTP-response metadata (content length, codec) is **not** part of the demand index: only the producer (the CAS winner) observes the response headers; other consumers see the shared bytes via availability and the committed `final_len`, and rely on byte-probe codec detection (best-effort, same as a single consumer that lacks a `Content-Type`).
+
+## Eviction Subscription
+
+`EvictionRouter` is the third consumer-driven sibling of `AvailabilityIndex` and `DemandIndex` on `AssetStore`: one instance per `build()`, shared across store clones via `Arc`. It generalises the former HLS-specific eviction-routing registry into a first-class store capability, so one shared store serves file and HLS without an HLS-owned wrapper.
+
+```rust
+let guard = store.subscribe_eviction(asset_root, tx); // EvictionSubscription
+```
+
+- The ephemeral build path wires the router into the cache's single `on_invalidated` hook: when the cache volatile-displaces a resource the hook clears `AvailabilityIndex` and routes the evicted `ResourceKey` by its `asset_root` to the subscriber registered for that root. Keys under a different `asset_root` are not delivered.
+- One subscriber per `asset_root`, **last-writer-wins** (`DashMap::insert`), matching the HLS one-stream-per-`asset_root` model. The returned `EvictionSubscription` is an RAII guard that deregisters on drop; absolute keys (no `asset_root`) and unsubscribed roots no-op.
+- Firing is gated by volatile displacement: it fires for ephemeral (`MemAssetStore`) backings, where displacement frees bytes, and is dormant for durable disk backings, where displaced bytes survive on disk — so the disk path wires no `on_invalidated` hook at all. There is no public callback and no builder field; the router reaches the cache only through the ephemeral path's hook.

@@ -40,7 +40,7 @@ fn backend_resource_path_follows_ephemeral_flag(
     #[case] expect_path: bool,
 ) {
     let temp = TestTempDir::new();
-    let scope = AssetStoreBuilder::<()>::default()
+    let scope = AssetStoreBuilder::default()
         .ephemeral(ephemeral)
         .maybe_root_dir((!ephemeral).then_some(temp.path()))
         .build()

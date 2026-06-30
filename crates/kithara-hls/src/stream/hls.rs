@@ -2,12 +2,10 @@
 
 use std::sync::{Arc, OnceLock};
 
-use dashmap::DashMap;
 use kithara_assets::{
-    AssetScope, AssetScopeDelegate, AssetStore, AssetStoreBuilder, BytePool, EvictConfig,
-    OnInvalidatedFn, ProcessChunkFn, ResourceKey, StoreOptions,
+    AssetScopeDelegate, AssetStore, AssetStoreBuilder, BytePool, EvictConfig, ResourceKey,
+    StoreOptions,
 };
-use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, VariantInfo};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
@@ -25,7 +23,6 @@ use super::{
 use crate::{
     config::HlsConfig,
     handle::StreamPeer,
-    invalidation::{HlsInvalidationGuard, HlsInvalidationRegistry, HlsStore},
     naming::HlsAssetScopeDelegate,
     peer::HlsPeer,
     playlist::{
@@ -38,18 +35,6 @@ use crate::{
 
 /// Marker type for HLS streaming.
 pub struct Hls;
-
-fn eviction_callback(
-    evict_tx: mpsc::UnboundedSender<ResourceKey>,
-    next: Option<OnInvalidatedFn>,
-) -> OnInvalidatedFn {
-    Arc::new(move |key: &ResourceKey| {
-        let _ = evict_tx.send(key.clone());
-        if let Some(ref callback) = next {
-            callback(key);
-        }
-    })
-}
 
 fn effective_look_ahead_segments(config: &HlsConfig) -> Option<usize> {
     if !config.store.is_ephemeral {
@@ -86,16 +71,13 @@ impl StreamType for Hls {
             .unwrap_or_else(|| default_downloader(&config, &cancel));
 
         let (evict_tx, evict_rx) = mpsc::unbounded_channel::<ResourceKey>();
-        // App-wide shared store: reuse the injected backend and register
-        // this stream's eviction channel in the routing registry. Without
-        // injection, build a private per-stream store whose
-        // `on_invalidated` feeds this single eviction channel directly.
-        let (scope, invalidation_guard) = if let Some(shared) = config.asset_store.as_ref() {
-            shared_hls_scope(shared, asset_root_arc, naming, evict_tx)
-        } else {
-            let backend = build_asset_store(&config, cancel.clone(), evict_tx);
-            (backend.scope_with_delegate(asset_root_arc, naming), None)
-        };
+
+        let store = config
+            .asset_store
+            .clone()
+            .unwrap_or_else(|| Arc::new(build_asset_store(&config, cancel.clone())));
+        let invalidation_guard = store.subscribe_eviction(Arc::clone(&asset_root_arc), evict_tx);
+        let scope = store.scope_with_delegate(asset_root_arc, naming);
 
         let byte_pool = config
             .pool
@@ -297,21 +279,13 @@ fn default_downloader(config: &HlsConfig, cancel: &CancelToken) -> Downloader {
     Downloader::new(dl_config)
 }
 
-fn build_asset_store(
-    config: &HlsConfig,
-    cancel: CancelToken,
-    evict_tx: mpsc::UnboundedSender<ResourceKey>,
-) -> AssetStore<DecryptContext> {
-    let drm_process_fn: ProcessChunkFn<DecryptContext> =
-        Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
-            aes128_cbc_process_chunk(input, output, ctx, is_last)
-        });
-    let on_invalidated = eviction_callback(evict_tx, config.store.on_invalidated.clone());
-
+/// Build a private per-stream `AssetStore` (cache, flush hub; AES-128
+/// decryption travels per-acquire as a `ProcessCtx`). The caller
+/// subscribes its eviction channel via
+/// [`AssetStore::subscribe_eviction`](kithara_assets::AssetStore::subscribe_eviction).
+fn build_asset_store(config: &HlsConfig, cancel: CancelToken) -> AssetStore {
     AssetStoreBuilder::default()
-        .process_fn(drm_process_fn)
         .cancel(cancel)
-        .on_invalidated(on_invalidated)
         .root_dir(&config.store.cache_dir)
         .evict_config(EvictConfig::from(&config.store))
         .ephemeral(config.store.is_ephemeral)
@@ -321,73 +295,26 @@ fn build_asset_store(
         .build()
 }
 
-fn shared_hls_scope(
-    shared: &HlsStore,
-    asset_root: Arc<str>,
-    naming: Arc<dyn AssetScopeDelegate>,
-    evict_tx: mpsc::UnboundedSender<ResourceKey>,
-) -> (AssetScope<DecryptContext>, Option<HlsInvalidationGuard>) {
-    let guard = HlsInvalidationGuard::install(
-        Arc::clone(&shared.registry),
-        Arc::clone(&asset_root),
-        evict_tx,
-    );
-    let scope = shared.backend.scope_with_delegate(asset_root, naming);
-    (scope, Some(guard))
-}
-
-/// Build an app-wide shared HLS asset store: one
-/// `AssetStore<DecryptContext>` (DRM `process_fn`, cache, flush hub) plus
-/// a routing registry that steers per-`asset_root` invalidations to the
-/// owning stream. Inject the result into every [`HlsConfig::asset_store`]
-/// that should cooperate on a single cache. `cancel` must be a child of
-/// the app master so a shutdown cascades through the store.
+/// Build an app-wide shared HLS asset store.
+///
+/// Inject the result into every [`HlsConfig::asset_store`] that should
+/// cooperate on a single cache. Per-stream eviction delivery is bound by
+/// [`AssetStore::subscribe_eviction`].
 #[must_use]
 pub fn build_shared_asset_store(
     store: &StoreOptions,
     pool: Option<BytePool>,
     cancel: CancelToken,
-) -> HlsStore {
-    let registry: HlsInvalidationRegistry = Arc::new(DashMap::new());
-    let drm_process_fn: ProcessChunkFn<DecryptContext> =
-        Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
-            aes128_cbc_process_chunk(input, output, ctx, is_last)
-        });
-    let on_invalidated =
-        registry_eviction_callback(Arc::clone(&registry), store.on_invalidated.clone());
-
-    let backend = AssetStoreBuilder::default()
-        .process_fn(drm_process_fn)
-        .cancel(cancel)
-        .on_invalidated(on_invalidated)
-        .root_dir(&store.cache_dir)
-        .evict_config(EvictConfig::from(store))
-        .ephemeral(store.is_ephemeral)
-        .maybe_pool(pool)
-        .maybe_cache_capacity(store.cache_capacity)
-        .maybe_flush_hub(store.flush_hub.clone())
-        .build();
-
-    HlsStore {
-        registry,
-        backend: Arc::new(backend),
-    }
-}
-
-/// Shared-store invalidation callback: route an evicted key to the live
-/// stream that owns its `asset_root`, then chain any caller callback.
-fn registry_eviction_callback(
-    registry: HlsInvalidationRegistry,
-    next: Option<OnInvalidatedFn>,
-) -> OnInvalidatedFn {
-    Arc::new(move |key: &ResourceKey| {
-        if let Some(root) = key.asset_root()
-            && let Some(tx) = registry.get(root)
-        {
-            let _ = tx.send(key.clone());
-        }
-        if let Some(ref callback) = next {
-            callback(key);
-        }
-    })
+) -> Arc<AssetStore> {
+    Arc::new(
+        AssetStoreBuilder::default()
+            .cancel(cancel)
+            .root_dir(&store.cache_dir)
+            .evict_config(EvictConfig::from(store))
+            .ephemeral(store.is_ephemeral)
+            .maybe_pool(pool)
+            .maybe_cache_capacity(store.cache_capacity)
+            .maybe_flush_hub(store.flush_hub.clone())
+            .build(),
+    )
 }

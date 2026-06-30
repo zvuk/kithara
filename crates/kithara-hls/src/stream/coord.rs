@@ -11,7 +11,6 @@ use std::{
 use delegate::delegate;
 use kithara_abr::AbrHandle;
 use kithara_assets::{AssetScope, ResourceKey};
-use kithara_drm::DecryptContext;
 use kithara_events::AbrReason;
 use kithara_platform::{
     CancelToken,
@@ -55,7 +54,7 @@ pub(crate) struct HlsCoordEnv {
     /// signals use [`SizeSignal::fire_ready_only`]. See `CONTEXT.md`
     /// "Event-driven read wait".
     pub(crate) signal: SizeSignal,
-    pub(crate) scope: AssetScope<DecryptContext>,
+    pub(crate) scope: AssetScope,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
 }
@@ -70,7 +69,7 @@ pub(crate) struct HlsCoordEnv {
 pub(crate) struct HlsCoord {
     pub(crate) abr: AbrHandle,
     pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
-    pub(crate) scope: AssetScope<DecryptContext>,
+    pub(crate) scope: AssetScope,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
     /// Backing playhead state — the coord owns the `Arc` directly and

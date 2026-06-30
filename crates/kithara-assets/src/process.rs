@@ -3,7 +3,6 @@
 use std::{
     fmt,
     fmt::Debug,
-    hash::Hash,
     ops::Range,
     path::Path,
     sync::{
@@ -37,24 +36,33 @@ impl Consts {
     const CHUNK_SIZE_U64: u64 = 64 * 1024;
 }
 
-/// Chunk-based transform function for streaming processing.
+/// Per-acquire resource processor: an immutable identity plus a factory for
+/// fresh mutable chaining state. `identity()` is the exact (non-hashed) cache
+/// identity (e.g. AES `key||iv`); `begin()` mints a fresh [`ChunkSink`] per
+/// commit so chaining state (e.g. a CBC IV) restarts from the seed.
+pub trait ResourceProcessor: Send + Sync + Debug {
+    /// Immutable byte identity of this processor; exact `Eq` for the cache key.
+    fn identity(&self) -> &[u8];
+
+    /// Mint a fresh mutable chaining state for one commit.
+    fn begin(&self) -> Box<dyn ChunkSink>;
+}
+
+/// Mutable per-commit chaining state driven chunk-by-chunk on commit.
 ///
-/// Processes data in chunks without allocating new buffers.
-/// Suitable for AES-128-CBC and similar block ciphers.
-///
-/// The context is passed as `&mut Ctx` so stateful transforms (e.g., CBC IV chaining)
-/// can update their state between chunks.
-///
-/// # Arguments
-/// - `input`: source bytes to process
-/// - `output`: buffer to write processed bytes into (same size as input)
-/// - `ctx`: mutable processing context (e.g., encryption key + IV for CBC chaining)
-/// - `is_last`: true if this is the final chunk (for PKCS7 padding)
-///
-/// # Returns
-/// Number of bytes written to output buffer.
-pub type ProcessChunkFn<Ctx> =
-    Arc<dyn Fn(&[u8], &mut [u8], &mut Ctx, bool) -> Result<usize, String> + Send + Sync>;
+/// Holds whatever evolves between 64KB chunks (e.g. a CBC IV).
+pub trait ChunkSink: Send {
+    /// Transform `input` into `output` (same length). `is_last` flags the final
+    /// chunk so block ciphers can apply padding. Returns the bytes written.
+    ///
+    /// # Errors
+    /// Returns a message string if the transform fails (e.g. misaligned input).
+    fn process(&mut self, input: &[u8], output: &mut [u8], is_last: bool) -> Result<usize, String>;
+}
+
+/// Per-acquire processing handle: a shared [`ResourceProcessor`] trait object.
+/// `None` at an acquire site is identity passthrough (playlists, keys, init).
+pub type ProcessCtx = Arc<dyn ResourceProcessor>;
 
 /// Pairs a `processed` flag with the shared [`CondvarGate`] so readers can
 /// block until [`ProcessedWriter::commit`] drains the processor.
@@ -169,29 +177,26 @@ impl Drop for GateGuard {
 /// never a committed snapshot kept published for concurrent readers during a
 /// re-download (which would feed the processor the prior generation's bytes).
 /// Borrowed inputs for [`run_process`]: the `inner` write side, the
-/// `ctx` to clone per call, the `process` chunk fn, the byte `pool`, and
-/// the `final_len` to process up to.
-struct ProcessArgs<'a, W, Ctx> {
+/// `processor` to mint a fresh sink from, the byte `pool`, and the
+/// `final_len` to process up to.
+struct ProcessArgs<'a, W> {
     pool: &'a BytePool,
-    ctx: &'a Ctx,
-    process: &'a ProcessChunkFn<Ctx>,
+    processor: &'a ProcessCtx,
     inner: &'a W,
     final_len: u64,
 }
 
-fn run_process<W, Ctx>(args: &ProcessArgs<'_, W, Ctx>) -> StorageResult<u64>
+fn run_process<W>(args: &ProcessArgs<'_, W>) -> StorageResult<u64>
 where
     W: WriteSide,
-    Ctx: Clone,
 {
     let &ProcessArgs {
         inner,
-        ctx,
-        process,
+        processor,
         pool,
         final_len,
     } = args;
-    let mut ctx = ctx.clone();
+    let mut sink = processor.begin();
     let raw = inner.reader();
 
     let mut input_buf = pool.get_with(|b| b.resize(Consts::CHUNK_SIZE, 0));
@@ -214,7 +219,8 @@ where
             break;
         }
 
-        let written = (process)(&input_buf[..n], &mut output_buf[..n], &mut ctx, is_last)
+        let written = sink
+            .process(&input_buf[..n], &mut output_buf[..n], is_last)
             .map_err(StorageError::Failed)?;
 
         inner.write_at(write_offset, &output_buf[..written])?;
@@ -237,11 +243,10 @@ where
 /// handle is a compile error. [`commit`](WriteSide::commit) consumes the writer
 /// into a [`ProcessedReader`]; dropping without `commit`/`fail` fails the gate
 /// so a waiting reader cannot deadlock. See the crate `CONTEXT.md`.
-pub struct ProcessedWriter<W, Ctx> {
+pub struct ProcessedWriter<W> {
     pool: BytePool,
     guard: GateGuard,
-    ctx: Option<Ctx>,
-    process: ProcessChunkFn<Ctx>,
+    processor: Option<ProcessCtx>,
     inner: W,
 }
 
@@ -253,94 +258,86 @@ pub struct ProcessedWriter<W, Ctx> {
 /// until that writer commits. [`reactivate`](ReadSide::reactivate) consumes the
 /// reader into a fresh [`ProcessedWriter`] with a **new** gate, so reacquiring
 /// never poisons other reader clones of the prior generation.
-pub struct ProcessedReader<R, Ctx> {
+pub struct ProcessedReader<R> {
     readiness: Arc<ReadinessGate>,
     pool: BytePool,
-    ctx: Option<Ctx>,
-    process: ProcessChunkFn<Ctx>,
+    processor: Option<ProcessCtx>,
     inner: R,
 }
 
-impl<R, Ctx> Clone for ProcessedReader<R, Ctx>
+impl<R> Clone for ProcessedReader<R>
 where
     R: Clone,
-    Ctx: Clone,
 {
     fn clone(&self) -> Self {
         Self {
             readiness: Arc::clone(&self.readiness),
             pool: self.pool.clone(),
-            ctx: self.ctx.clone(),
-            process: Arc::clone(&self.process),
+            processor: self.processor.clone(),
             inner: self.inner.clone(),
         }
     }
 }
 
-impl<W: Debug, Ctx: Debug> Debug for ProcessedWriter<W, Ctx> {
+impl<W: Debug> Debug for ProcessedWriter<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProcessedWriter")
             .field("inner", &self.inner)
-            .field("ctx", &self.ctx)
+            .field("processor", &self.processor)
             .field("ready", &self.guard.readiness.is_ready())
             .finish_non_exhaustive()
     }
 }
 
-impl<R: Debug, Ctx: Debug> Debug for ProcessedReader<R, Ctx> {
+impl<R: Debug> Debug for ProcessedReader<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProcessedReader")
             .field("inner", &self.inner)
-            .field("ctx", &self.ctx)
+            .field("processor", &self.processor)
             .field("ready", &self.readiness.is_ready())
             .finish_non_exhaustive()
     }
 }
 
-impl<W, Ctx> ProcessedWriter<W, Ctx>
+impl<W> ProcessedWriter<W>
 where
     W: WriteSide,
-    Ctx: Clone + Send + Sync + Debug + 'static,
 {
     /// Create a fresh pending writer. The gate starts ready only when no
-    /// processing is required (`ctx` is `None`); an encrypted writer is pending
-    /// until [`commit`](WriteSide::commit).
-    pub fn new(inner: W, ctx: Option<Ctx>, process: ProcessChunkFn<Ctx>, pool: BytePool) -> Self {
-        let ready = ctx.is_none();
+    /// processing is required (`processor` is `None`); an encrypted writer is
+    /// pending until [`commit`](WriteSide::commit).
+    pub fn new(inner: W, processor: Option<ProcessCtx>, pool: BytePool) -> Self {
+        let ready = processor.is_none();
         Self {
             inner,
-            ctx,
-            process,
+            processor,
             pool,
             guard: GateGuard::new(Arc::new(ReadinessGate::new(ready))),
         }
     }
 
-    fn build_reader(&self, inner: W::Reader) -> ProcessedReader<W::Reader, Ctx> {
+    fn build_reader(&self, inner: W::Reader) -> ProcessedReader<W::Reader> {
         ProcessedReader {
             inner,
             readiness: Arc::clone(&self.guard.readiness),
             pool: self.pool.clone(),
-            ctx: self.ctx.clone(),
-            process: Arc::clone(&self.process),
+            processor: self.processor.clone(),
         }
     }
 }
 
-impl<W, Ctx> WriteSide for ProcessedWriter<W, Ctx>
+impl<W> WriteSide for ProcessedWriter<W>
 where
     W: WriteSide,
-    Ctx: Clone + Send + Sync + Debug + 'static,
 {
-    type Reader = ProcessedReader<W::Reader, Ctx>;
+    type Reader = ProcessedReader<W::Reader>;
 
-    fn commit(mut self, final_len: Option<u64>) -> StorageResult<ProcessedReader<W::Reader, Ctx>> {
-        let needs_processing = self.ctx.is_some() && !self.guard.readiness.is_ready();
-        let actual_len = match (needs_processing, final_len, self.ctx.as_ref()) {
-            (true, Some(len), Some(ctx)) if len > 0 => Some(run_process(&ProcessArgs {
-                ctx,
+    fn commit(mut self, final_len: Option<u64>) -> StorageResult<ProcessedReader<W::Reader>> {
+        let needs_processing = self.processor.is_some() && !self.guard.readiness.is_ready();
+        let actual_len = match (needs_processing, final_len, self.processor.as_ref()) {
+            (true, Some(len), Some(processor)) if len > 0 => Some(run_process(&ProcessArgs {
+                processor,
                 inner: &self.inner,
-                process: &self.process,
                 pool: &self.pool,
                 final_len: len,
             })?),
@@ -355,8 +352,7 @@ where
         Ok(ProcessedReader {
             readiness: Arc::clone(&self.guard.readiness),
             pool: self.pool.clone(),
-            ctx: self.ctx.clone(),
-            process: Arc::clone(&self.process),
+            processor: self.processor.clone(),
             inner: reader_inner,
         })
     }
@@ -371,7 +367,7 @@ where
         self.inner.raw_write_handle()
     }
 
-    fn reader(&self) -> ProcessedReader<W::Reader, Ctx> {
+    fn reader(&self) -> ProcessedReader<W::Reader> {
         self.build_reader(self.inner.reader())
     }
 
@@ -380,10 +376,9 @@ where
     }
 }
 
-impl<R, Ctx> ProcessedReader<R, Ctx>
+impl<R> ProcessedReader<R>
 where
     R: ReadSide,
-    Ctx: Clone + Send + Sync + Debug + 'static,
 {
     /// A waiter must abort when the gate failed (writer dropped) or the backing
     /// resource reached a terminal state — neither will ever flip ready.
@@ -396,35 +391,29 @@ where
     }
 
     fn is_readable(&self) -> bool {
-        self.ctx.is_none() || self.readiness.is_ready()
+        self.processor.is_none() || self.readiness.is_ready()
     }
 
     /// Wrap a Ready (committed or in-flight shared) inner reader. The gate is
-    /// open when no processing is required (`ctx` is `None`) or the inner
+    /// open when no processing is required (`processor` is `None`) or the inner
     /// resource is already committed (its on-disk bytes are already processed).
-    fn wrap_ready(
-        inner: R,
-        ctx: Option<Ctx>,
-        process: ProcessChunkFn<Ctx>,
-        pool: BytePool,
-    ) -> Self {
-        let ready = ctx.is_none() || matches!(inner.status(), ResourceStatus::Committed { .. });
+    fn wrap_ready(inner: R, processor: Option<ProcessCtx>, pool: BytePool) -> Self {
+        let ready =
+            processor.is_none() || matches!(inner.status(), ResourceStatus::Committed { .. });
         Self {
             pool,
-            ctx,
-            process,
+            processor,
             inner,
             readiness: Arc::new(ReadinessGate::new(ready)),
         }
     }
 }
 
-impl<R, Ctx> ReadSide for ProcessedReader<R, Ctx>
+impl<R> ReadSide for ProcessedReader<R>
 where
     R: ReadSide,
-    Ctx: Clone + Send + Sync + Debug + 'static,
 {
-    type Writer = ProcessedWriter<R::Writer, Ctx>;
+    type Writer = ProcessedWriter<R::Writer>;
 
     fn contains_range(&self, range: Range<u64>) -> bool {
         self.is_readable() && self.inner.contains_range(range)
@@ -442,15 +431,14 @@ where
         self.inner.path()
     }
 
-    fn reactivate(self) -> StorageResult<ProcessedWriter<R::Writer, Ctx>> {
+    fn reactivate(self) -> StorageResult<ProcessedWriter<R::Writer>> {
         let inner = self.inner.reactivate()?;
-        let ready = self.ctx.is_none();
+        let ready = self.processor.is_none();
         Ok(ProcessedWriter {
             inner,
             guard: GateGuard::new(Arc::new(ReadinessGate::new(ready))),
             pool: self.pool,
-            ctx: self.ctx,
-            process: self.process,
+            processor: self.processor,
         })
     }
 
@@ -475,7 +463,7 @@ where
 
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         let outcome = self.inner.wait_range(range)?;
-        if self.ctx.is_none() || outcome != WaitOutcome::Ready {
+        if self.processor.is_none() || outcome != WaitOutcome::Ready {
             return Ok(outcome);
         }
         if self.readiness.wait_until_ready(&|| self.inner_terminal()) {
@@ -492,50 +480,39 @@ where
 /// handle in a processed writer/reader that decrypts on commit. Without context
 /// (None) the resource passes through unprocessed.
 #[derive(Clone)]
-pub struct ProcessingAssets<A, Ctx>
+pub struct ProcessingAssets<A>
 where
     A: Assets,
-    A::Context: Default,
-    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
     inner: Arc<A>,
     pool: BytePool,
-    process: ProcessChunkFn<Ctx>,
 }
 
-impl<A, Ctx> ProcessingAssets<A, Ctx>
+impl<A> ProcessingAssets<A>
 where
     A: Assets,
-    A::Context: Default,
-    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
-    pub fn new(inner: Arc<A>, process: ProcessChunkFn<Ctx>, pool: BytePool) -> Self {
-        Self {
-            inner,
-            pool,
-            process,
-        }
+    pub fn new(inner: Arc<A>, pool: BytePool) -> Self {
+        Self { inner, pool }
     }
 
     fn wrap_ready(
         &self,
         inner: A::ReadyRes,
-        ctx: Option<Ctx>,
-    ) -> ProcessedReader<A::ReadyRes, Ctx> {
-        ProcessedReader::wrap_ready(inner, ctx, Arc::clone(&self.process), self.pool.clone())
+        processor: Option<ProcessCtx>,
+    ) -> ProcessedReader<A::ReadyRes> {
+        ProcessedReader::wrap_ready(inner, processor, self.pool.clone())
     }
 }
 
-impl<A, Ctx> Assets for ProcessingAssets<A, Ctx>
+impl<A> Assets for ProcessingAssets<A>
 where
     A: Assets,
-    A::Context: Default,
-    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
-    type ActiveRes = ProcessedWriter<A::ActiveRes, Ctx>;
-    type Context = Ctx;
+    type ActiveRes = ProcessedWriter<A::ActiveRes>;
+    type Context = ProcessCtx;
     type IndexRes = A::IndexRes;
-    type ReadyRes = ProcessedReader<A::ReadyRes, Ctx>;
+    type ReadyRes = ProcessedReader<A::ReadyRes>;
 
     fn acquire_resource_with_ctx(
         &self,
@@ -547,7 +524,6 @@ where
             AcquisitionResult::Pending(w) => Ok(AcquisitionResult::Pending(ProcessedWriter::new(
                 w,
                 ctx,
-                Arc::clone(&self.process),
                 self.pool.clone(),
             ))),
             AcquisitionResult::Ready(r) => Ok(AcquisitionResult::Ready(self.wrap_ready(r, ctx))),
@@ -625,14 +601,54 @@ mod tests {
         BaseWriter::new(StorageResource::from(res))
     }
 
-    /// Create XOR chunk processor (no allocation).
-    fn xor_chunk_processor(xor_key: u8, call_count: Arc<AtomicUsize>) -> ProcessChunkFn<()> {
-        Arc::new(move |input, output, _ctx: &mut (), _is_last| {
-            call_count.fetch_add(1, Ordering::SeqCst);
+    /// XOR processor whose `identity()` is the single key byte; each commit
+    /// mints a fresh sink that counts its `process` calls.
+    #[derive(Debug)]
+    struct XorProcessor {
+        xor_key: u8,
+        identity: Box<[u8]>,
+        call_count: Arc<AtomicUsize>,
+    }
+
+    struct XorSink {
+        xor_key: u8,
+        call_count: Arc<AtomicUsize>,
+    }
+
+    impl ChunkSink for XorSink {
+        fn process(
+            &mut self,
+            input: &[u8],
+            output: &mut [u8],
+            _is_last: bool,
+        ) -> Result<usize, String> {
+            self.call_count.fetch_add(1, Ordering::SeqCst);
             for (i, &b) in input.iter().enumerate() {
-                output[i] = b ^ xor_key;
+                output[i] = b ^ self.xor_key;
             }
             Ok(input.len())
+        }
+    }
+
+    impl ResourceProcessor for XorProcessor {
+        fn identity(&self) -> &[u8] {
+            &self.identity
+        }
+
+        fn begin(&self) -> Box<dyn ChunkSink> {
+            Box::new(XorSink {
+                xor_key: self.xor_key,
+                call_count: Arc::clone(&self.call_count),
+            })
+        }
+    }
+
+    /// Build a `ProcessCtx` XOR processor (no allocation in the sink).
+    fn xor_chunk_processor(xor_key: u8, call_count: Arc<AtomicUsize>) -> ProcessCtx {
+        Arc::new(XorProcessor {
+            xor_key,
+            identity: Box::new([xor_key]),
+            call_count,
         })
     }
 
@@ -642,7 +658,7 @@ mod tests {
         let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
         let (writer, _dir) = mock_writer(b"test content");
 
-        let writer = ProcessedWriter::new(writer, Some(()), process_fn, test_pool());
+        let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
         let reader = writer.commit(Some(b"test content".len() as u64)).unwrap();
         assert!(call_count.load(Ordering::SeqCst) > 0);
 
@@ -660,7 +676,7 @@ mod tests {
         let content: Vec<u8> = (0..100).collect();
         let (writer, _dir) = mock_writer(&content);
 
-        let writer = ProcessedWriter::new(writer, Some(()), process_fn, test_pool());
+        let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
         let reader = writer.commit(Some(100)).unwrap();
 
         let mut buf = vec![0u8; 20];
@@ -676,8 +692,8 @@ mod tests {
         let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
         let (writer, _dir) = mock_writer(b"plain bytes!");
 
-        let writer: ProcessedWriter<BaseWriter, ()> =
-            ProcessedWriter::new(writer, None, process_fn, test_pool());
+        let _ = process_fn;
+        let writer: ProcessedWriter<BaseWriter> = ProcessedWriter::new(writer, None, test_pool());
         let reader = writer.commit(Some(12)).unwrap();
 
         let mut buf = vec![0u8; 12];
@@ -697,7 +713,7 @@ mod tests {
         let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
         let (writer, _dir) = mock_writer(b"test content");
 
-        let writer = ProcessedWriter::new(writer, Some(()), process_fn, test_pool());
+        let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
         let reader = writer.reader();
 
         assert!(
@@ -718,7 +734,7 @@ mod tests {
         let raw: Vec<u8> = (0..32u8).collect();
         let (writer, _dir) = mock_writer(&raw);
 
-        let writer = ProcessedWriter::new(writer, Some(()), process_fn, test_pool());
+        let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
         let reader = writer.reader();
         let raw_len = raw.len() as u64;
 
@@ -757,8 +773,7 @@ mod tests {
 
         let writer = ProcessedWriter::new(
             BaseWriter::new(StorageResource::from(resource)),
-            Some(()),
-            process_fn,
+            Some(process_fn),
             test_pool(),
         );
         let reader = writer.reader();
@@ -795,7 +810,7 @@ mod tests {
         let ciphertext: Vec<u8> = plaintext.iter().map(|b| b ^ 0x42).collect();
         let (writer, _dir) = mock_writer(&ciphertext);
 
-        let writer = ProcessedWriter::new(writer, Some(()), process_fn, test_pool());
+        let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
         let reader_a = writer.commit(Some(ciphertext.len() as u64)).unwrap();
 
         let mut buf = vec![0u8; ciphertext.len()];
@@ -828,7 +843,7 @@ mod tests {
         assert_eq!(first.len(), second.len());
         let (writer, _dir) = mock_writer(&first);
 
-        let writer = ProcessedWriter::new(writer, Some(()), process_fn, test_pool());
+        let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
         let len = first.len() as u64;
         let reader = writer.commit(Some(len)).expect("first commit");
         let first_count = call_count.load(Ordering::SeqCst);
@@ -858,7 +873,7 @@ mod tests {
         assert_eq!(first.len(), second.len());
         let writer = mock_writer_mem(&first);
 
-        let writer = ProcessedWriter::new(writer, Some(()), process_fn, test_pool());
+        let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
         let len = first.len() as u64;
         let reader = writer.commit(Some(len)).expect("first commit");
         let first_count = call_count.load(Ordering::SeqCst);
@@ -885,7 +900,7 @@ mod tests {
         let process_fn = xor_chunk_processor(0x00, Arc::clone(&call_count));
         let (writer, _dir) = mock_writer(&[7u8; 16]);
 
-        let writer = ProcessedWriter::new(writer, Some(()), process_fn, test_pool());
+        let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
         writer.write_at(0, &[7u8; 16]).unwrap();
         let reader = writer.reader();
         let reader_probe = reader.clone();
@@ -934,12 +949,8 @@ mod tests {
             .commit(Some(already_processed.len() as u64))
             .unwrap();
 
-        let reader = ProcessedReader::wrap_ready(
-            BaseReader::new(storage),
-            Some(()),
-            process_fn,
-            test_pool(),
-        );
+        let reader =
+            ProcessedReader::wrap_ready(BaseReader::new(storage), Some(process_fn), test_pool());
 
         let mut buf = vec![0u8; already_processed.len()];
         let n = reader.read_at(0, &mut buf).unwrap();
@@ -952,29 +963,12 @@ mod tests {
     /// an uncommitted DRM-style entry whose read trips the pre-commit guard.
     #[kithara::test]
     fn open_resource_none_ctx_does_not_leak_precommit_guard() {
-        #[derive(Clone, Debug, Hash, Eq, PartialEq, Default)]
-        struct DrmCtx {
-            xor_key: u8,
-        }
-
-        let process_fn: ProcessChunkFn<DrmCtx> = Arc::new(
-            |input: &[u8], output: &mut [u8], ctx: &mut DrmCtx, _is_last: bool| {
-                for (i, &b) in input.iter().enumerate() {
-                    output[i] = b ^ ctx.xor_key;
-                }
-                Ok(input.len())
-            },
-        );
-
-        let store = AssetStoreBuilder::default()
-            .process_fn(process_fn)
-            .ephemeral(true)
-            .build();
+        let store = AssetStoreBuilder::default().ephemeral(true).build();
         let key = ResourceKey::relative("drm-fallthrough", "segment.m4s");
-        let ctx = DrmCtx { xor_key: 0x42 };
+        let proc: ProcessCtx = xor_chunk_processor(0x42, Arc::new(AtomicUsize::new(0)));
 
         let AcquisitionResult::Pending(writer) = store
-            .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
+            .acquire_resource_with_ctx(&key, None, Some(Arc::clone(&proc)))
             .expect("BUG: acquire with ctx must succeed")
         else {
             panic!("fresh acquire must be Pending");

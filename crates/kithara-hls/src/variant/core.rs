@@ -40,7 +40,7 @@ pub(crate) struct PlanCtx {
     /// fire it — the coord's RT-reachable fence/seek signals use
     /// [`SizeSignal::fire_ready_only`].
     pub(crate) signal: SizeSignal,
-    pub(crate) scope: kithara_assets::AssetScope<DecryptContext>,
+    pub(crate) scope: kithara_assets::AssetScope,
     pub(crate) master_cancel: CancelToken,
     /// Per-resource HTTP headers applied to every init/segment fetch.
     /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
@@ -156,7 +156,7 @@ pub(super) struct VariantSegments {
     /// Vends a narrow `ResourceHandle` per segment/init (`segment_handle` /
     /// `init_handle`); the produce-core's disk read and acquire flow through
     /// that handle, and it is the home for the `WS5d` held-resource lease.
-    pub(super) scope: kithara_assets::AssetScope<DecryptContext>,
+    pub(super) scope: kithara_assets::AssetScope,
     /// Init slot: `Some(Segment::Init)` for a variant that advertises a
     /// separately fetched `#EXT-X-MAP` init, `None` otherwise. Its existence
     /// is keyed on the playlist `#EXT-X-MAP` URL, never on the known byte size
@@ -177,7 +177,7 @@ impl Deref for VariantSegments {
 
 impl VariantSegments {
     fn new(
-        scope: kithara_assets::AssetScope<DecryptContext>,
+        scope: kithara_assets::AssetScope,
         init: Option<Segment>,
         entries: Vec<Segment>,
     ) -> Self {
@@ -363,7 +363,7 @@ impl HlsVariant {
         playlist_state: &PlaylistState,
         decrypt_contexts: &[Option<DecryptContext>],
         variant_idx: usize,
-        scope: &kithara_assets::AssetScope<DecryptContext>,
+        scope: &kithara_assets::AssetScope,
     ) -> Vec<Segment> {
         let Some(num) = playlist_state.num_segments(variant_idx) else {
             return Vec::new();

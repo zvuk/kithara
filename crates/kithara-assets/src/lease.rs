@@ -23,6 +23,7 @@ use crate::{
     identity::RequestIdentity,
     index::PinsIndex,
     key::ResourceKey,
+    process::ProcessCtx,
 };
 
 type RemoveFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
@@ -101,7 +102,7 @@ where
 
 impl<A> LeaseAssets<CachedAssets<A>>
 where
-    A: Assets,
+    A: Assets<Context = ProcessCtx>,
 {
     /// Size the buried LRU handle cache to fit `media_items` resources.
     /// Forwarded to the inner [`CachedAssets`], which owns the

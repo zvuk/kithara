@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use kithara_assets::{AcquisitionResult, AssetResource, ReadSide, WriteSide};
-use kithara_drm::DecryptContext;
 use kithara_storage::ResourceStatus;
 use kithara_stream::dl::{FetchCmd, OnCompleteFn, OnSlowFn, WriterFn};
 use url::Url;
@@ -20,7 +19,7 @@ impl HlsVariant {
     pub(super) fn build_cmd(
         self: &Arc<Self>,
         url: Url,
-        acq: AssetResource<DecryptContext>,
+        acq: AssetResource,
         handle: FetchClaim<Downloading>,
         signal: SizeSignal,
     ) -> Option<FetchCmd> {

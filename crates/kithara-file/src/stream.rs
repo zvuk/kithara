@@ -212,7 +212,7 @@ impl File {
     ) -> Result<FileSource, SourceError> {
         let key = local_key(path)?;
         let store = Arc::new(
-            AssetStoreBuilder::<()>::default()
+            AssetStoreBuilder::default()
                 .cancel(cancel.clone())
                 .maybe_pool(config.pool.clone())
                 .build(),
@@ -345,13 +345,13 @@ impl File {
 /// master so a shutdown cascades through the store. Also used as the
 /// standalone default when no store is injected (single consumer).
 #[must_use]
-pub fn build_shared_asset_store(
+pub(crate) fn build_shared_asset_store(
     store: &StoreOptions,
     pool: Option<BytePool>,
     cancel: CancelToken,
-) -> Arc<AssetStore<()>> {
+) -> Arc<AssetStore> {
     Arc::new(
-        AssetStoreBuilder::<()>::default()
+        AssetStoreBuilder::default()
             .cancel(cancel)
             .root_dir(&store.cache_dir)
             .evict_config(EvictConfig::from(store))

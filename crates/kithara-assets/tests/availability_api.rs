@@ -11,9 +11,7 @@ const ROOT: &str = "availability-p2";
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_store_empty_aggregate_returns_empty() {
     let dir = tempdir().unwrap();
-    let store = AssetStoreBuilder::<()>::default()
-        .root_dir(dir.path())
-        .build();
+    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
     let scope = store.scope(ROOT);
 
     let key = scope.key("segments/0001.bin");
@@ -28,7 +26,7 @@ fn disk_store_empty_aggregate_returns_empty() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn mem_store_empty_aggregate_returns_empty() {
-    let store = AssetStoreBuilder::<()>::default().ephemeral(true).build();
+    let store = AssetStoreBuilder::default().ephemeral(true).build();
     let scope = store.scope(ROOT);
 
     let key = scope.key("segments/0001.bin");
@@ -40,9 +38,7 @@ fn mem_store_empty_aggregate_returns_empty() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_store_slow_path_finds_committed_file() {
     let dir = tempdir().unwrap();
-    let store = AssetStoreBuilder::<()>::default()
-        .root_dir(dir.path())
-        .build();
+    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
     let scope = store.scope(ROOT);
 
     let key = scope.key("segments/0001.bin");
@@ -66,9 +62,7 @@ fn disk_store_slow_path_finds_committed_file() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_store_missing_resource_returns_empty() {
     let dir = tempdir().unwrap();
-    let store = AssetStoreBuilder::<()>::default()
-        .root_dir(dir.path())
-        .build();
+    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
     let scope = store.scope(ROOT);
 
     let key = scope.key("segments/ghost.bin");
@@ -80,9 +74,7 @@ fn disk_store_missing_resource_returns_empty() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn remove_resource_clears_aggregate_remove_call() {
     let dir = tempdir().unwrap();
-    let store = AssetStoreBuilder::<()>::default()
-        .root_dir(dir.path())
-        .build();
+    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
     let scope = store.scope(ROOT);
 
     let key = scope.key("segments/0001.bin");

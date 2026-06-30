@@ -3,11 +3,10 @@ use std::{io::ErrorKind, ops::Range};
 use kithara_assets::{
     AssetResource, AssetResourceState, AssetScope, AssetsError, AssetsResult, ReadSide, ResourceKey,
 };
-use kithara_drm::DecryptContext;
 use kithara_stream::{StreamError, StreamResult};
 use url::Url;
 
-use crate::{HlsError, segment::SegmentContent};
+use crate::{HlsError, decrypt_processor::as_process_ctx, segment::SegmentContent};
 
 /// Narrow per-segment view over the variant's on-disk resource. A segment (or
 /// its init prefix) talks to disk only through this surface — `read_at` /
@@ -22,13 +21,13 @@ use crate::{HlsError, segment::SegmentContent};
 /// `scope` / `scope.store().open_resource` op the call site ran before. The
 /// held-resource lease optimization is deferred.
 pub(crate) struct ResourceHandle {
-    scope: AssetScope<DecryptContext>,
+    scope: AssetScope,
     key: ResourceKey,
     url: Url,
 }
 
 impl ResourceHandle {
-    pub(crate) fn new(scope: AssetScope<DecryptContext>, key: ResourceKey, url: Url) -> Self {
+    pub(crate) fn new(scope: AssetScope, key: ResourceKey, url: Url) -> Self {
         Self { scope, key, url }
     }
 
@@ -74,17 +73,14 @@ impl ResourceHandle {
     /// Acquire the resource for the write path, branching on the segment's
     /// decryption disposition: `Plain` acquires cleartext; `Encrypted` carries
     /// the AES-128 [`DecryptContext`] forward as the processing context.
-    pub(crate) fn acquire(
-        &self,
-        content: &SegmentContent,
-    ) -> AssetsResult<AssetResource<DecryptContext>> {
+    pub(crate) fn acquire(&self, content: &SegmentContent) -> AssetsResult<AssetResource> {
         match content {
             SegmentContent::Plain => self.scope.store().acquire_resource(&self.key, None),
-            SegmentContent::Encrypted(c) => {
-                self.scope
-                    .store()
-                    .acquire_resource_with_ctx(&self.key, None, Some(c.clone()))
-            }
+            SegmentContent::Encrypted(c) => self.scope.store().acquire_resource_with_ctx(
+                &self.key,
+                None,
+                Some(as_process_ctx(c.clone())),
+            ),
         }
     }
 }

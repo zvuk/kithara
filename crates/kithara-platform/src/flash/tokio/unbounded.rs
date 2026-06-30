@@ -1,10 +1,16 @@
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 
 use super::mpsc::{Shared, drop_sender, error::SendError, push_unbounded};
 
 /// Unbounded sender (clone for multi-producer); `send` never blocks.
 pub struct UnboundedSender<T> {
     pub(super) shared: Arc<Shared<T>>,
+}
+
+impl<T> fmt::Debug for UnboundedSender<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UnboundedSender").finish_non_exhaustive()
+    }
 }
 
 impl<T> UnboundedSender<T> {

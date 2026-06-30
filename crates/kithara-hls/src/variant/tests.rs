@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kithara_assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, ProcessChunkFn, WriteSide};
+use kithara_assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, WriteSide};
 use kithara_drm::DecryptContext;
 use kithara_platform::{CancelToken, sync::ThreadGate, time::Duration};
 use kithara_storage::WaitOutcome;
@@ -30,16 +30,10 @@ use crate::{
 
 fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     let cancel = CancelToken::never();
-    let passthrough: ProcessChunkFn<DecryptContext> =
-        Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
-            output[..input.len()].copy_from_slice(input);
-            Ok(input.len())
-        });
     let backend = Arc::new(
         AssetStoreBuilder::default()
             .ephemeral(true)
             .cancel(cancel.clone())
-            .process_fn(passthrough)
             .build(),
     );
     PlanCtx {
@@ -55,7 +49,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     }
 }
 
-fn make_init(size: u64, scope: &AssetScope<DecryptContext>) -> Option<Segment> {
+fn make_init(size: u64, scope: &AssetScope) -> Option<Segment> {
     if size == 0 {
         return None;
     }
@@ -70,7 +64,7 @@ fn make_init(size: u64, scope: &AssetScope<DecryptContext>) -> Option<Segment> {
     }))
 }
 
-fn make_seg(idx: u32, size: u64, scope: &AssetScope<DecryptContext>) -> Segment {
+fn make_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
     let url: Url = format!("https://example.com/seg{idx}.m4s")
         .parse()
         .expect("valid url");
@@ -86,7 +80,7 @@ fn make_seg(idx: u32, size: u64, scope: &AssetScope<DecryptContext>) -> Segment 
     })
 }
 
-fn make_placeholder_seg(idx: u32, size: u64, scope: &AssetScope<DecryptContext>) -> Segment {
+fn make_placeholder_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
     let url: Url = format!("https://example.com/seg{idx}.m4s")
         .parse()
         .expect("valid url");
