@@ -7,7 +7,7 @@
     <!-- Build the crate with the wasm feature set: the default features
          (uniffi + symphonia) pull native-only deps that don't compile for
          wasm32. -->
-    <link data-trunk rel="rust" data-cargo-no-default-features data-cargo-features="wasm" />
+    <link data-trunk rel="rust" data-cargo-no-default-features data-cargo-features="wasm" data-wasm-opt-params="--enable-threads --enable-bulk-memory --enable-bulk-memory-opt --enable-mutable-globals --enable-nontrapping-float-to-int" />
     <link data-trunk rel="copy-file" href="../../logo.svg" />
     <link data-trunk rel="copy-file" href="_headers" />
     <link data-trunk rel="copy-file" href="coi-serviceworker.js" />
