@@ -4344,7 +4344,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kithara"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
  "kithara-abr",
@@ -4370,7 +4370,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-abr"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "bitflags 2.13.0",
  "bon",
@@ -4390,7 +4390,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-app"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "bon",
  "bytes",
@@ -4423,7 +4423,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-assets"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "aes",
  "bitflags 2.13.0",
@@ -4456,7 +4456,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-audio"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "aes",
  "arc-swap",
@@ -4510,7 +4510,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-beat"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "kithara-workspace-hack",
  "num-traits",
@@ -4523,7 +4523,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-bufpool"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "crossbeam-queue",
  "hotpath",
@@ -4537,7 +4537,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-decode"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "bon",
  "core-foundation 0.10.1",
@@ -4567,7 +4567,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-drm"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "aes",
  "bon",
@@ -4584,7 +4584,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-encode"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "bon",
  "fdk-aac",
@@ -4599,7 +4599,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-events"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "crossbeam-queue",
  "dashmap",
@@ -4619,7 +4619,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-ffi"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "bytes",
  "console_error_panic_hook",
@@ -4661,7 +4661,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-file"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "axum",
  "bon",
@@ -4709,7 +4709,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-hls"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "aes",
  "arc-swap",
@@ -4750,7 +4750,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-integration-tests"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "aes",
  "assert_no_alloc",
@@ -4820,7 +4820,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-net"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "async-trait",
  "axum",
@@ -4858,7 +4858,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-platform"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "console_error_panic_hook",
  "criterion",
@@ -4884,7 +4884,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-play"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "bevy_platform 0.19.0",
  "bon",
@@ -4919,7 +4919,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-queue"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "bon",
  "delegate",
@@ -4936,7 +4936,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-storage"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "arc-swap",
  "bon",
@@ -4960,7 +4960,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-stream"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "axum",
  "bitflags 2.13.0",
@@ -4993,7 +4993,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-test-macros"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "kithara-workspace-hack",
  "proc-macro2",
@@ -5003,7 +5003,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-test-utils"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "backtrace",
  "kithara-events",
@@ -5023,7 +5023,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-workspace-hack"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "aho-corasick",
  "arrayvec",
@@ -11486,7 +11486,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.0.1-alpha3"
+version = "0.0.1-alpha4"
 dependencies = [
  "anyhow",
  "cargo_metadata 0.23.1",

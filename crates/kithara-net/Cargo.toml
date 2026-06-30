@@ -60,7 +60,7 @@ reqwest = { workspace = true, optional = true, features = [
 ] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 tower-layer = { workspace = true, optional = true }
 tower-service = { workspace = true, optional = true }
 # `client-wreq` backend (native only — BoringSSL has no wasm target).

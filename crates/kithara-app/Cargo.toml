@@ -54,7 +54,7 @@ crabtime = { workspace = true }
 bon = { workspace = true }
 crossterm = { workspace = true, optional = true }
 iced = { workspace = true, optional = true }
-kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 kithara-platform = { workspace = true, features = ["signal"] }
 num-traits = { workspace = true }
 obfstr = { workspace = true }
