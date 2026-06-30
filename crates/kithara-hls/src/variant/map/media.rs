@@ -57,6 +57,19 @@ impl HlsVariant {
         )
     }
 
+    /// Bisect the decode-time table for the segment whose window contains
+    /// `t`, returning `(index, segment_start, segment_end)`. Replaces the
+    /// former O(N) linear playlist duration scan on the hot seek path with
+    /// the same `O(log N)` decode-time bisect the byte map already uses.
+    /// `None` only when the variant has no segments.
+    pub(crate) fn seek_point_at_time(&self, t: Duration) -> Option<(u32, Duration, Duration)> {
+        let idx = self.index_at_time(t)?;
+        let seg = self.segments.get(idx)?.as_media()?;
+        let start = seg.decode_time();
+        let end = start.saturating_add(seg.duration());
+        Some((u32::try_from(idx).ok()?, start, end))
+    }
+
     /// Clamped segment index whose decode-time window contains `t`, or
     /// `None` when the variant has no segments.
     pub(super) fn index_at_time(&self, t: Duration) -> Option<usize> {

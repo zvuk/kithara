@@ -224,10 +224,9 @@ impl Demuxer for Fmp4SegmentDemuxer {
             warmup_backoff(self.track_info.codec, self.track_info.sample_rate, &priming)
                 .map_or(target, |backoff| target.saturating_sub(backoff));
         let Some(desc) = self.segments.segment_at_time(seek_target) else {
-            return Err(DecodeError::SeekFailed(format!(
-                "no segment for time {}ms",
-                target.as_millis()
-            )));
+            return Err(DecodeError::SeekFailed(
+                format!("no segment for time {}ms", target.as_millis()).into(),
+            ));
         };
         if let Some(duration) = self.duration
             && desc.decode_time >= duration

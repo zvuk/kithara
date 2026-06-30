@@ -449,25 +449,46 @@ impl HlsCoord {
         self.signal.ready_gate()
     }
 
-    /// Reset the active variant to a "fresh" single-variant layout on
-    /// seek. Random seek may land far from the post-ABR-commit window,
-    /// so collapse `byte_shift` / `served_from` / `served_until` back
-    /// to the natural range: subsequent ABR commits at boundary will
-    /// re-build the layering as usual.
+    /// Seek entry point. Collapses cross-variant byte-continuity layering,
+    /// drops a stale ABR boundary decision, and wakes a parked reader.
     ///
-    /// Also drops any unobserved throughput-driven boundary-commit
-    /// decision: a pending up-switch chosen against pre-seek throughput
-    /// is stale once the reader jumps and would otherwise commit on
-    /// the first boundary after the seek lands, forcing decoder recreate
-    /// before the new-variant cache is warm (a `HangDetector` trip).
-    pub(crate) fn reset_for_seek(&self) {
-        if let Some(active) = self.active() {
-            active.reset_for_seek();
+    /// The expensive layout collapse ([`Self::reset_for_seek`]) runs only
+    /// when the active variant's offset table is not already the canonical
+    /// full-range geometry with every served size exact — a fully-resolved
+    /// single-variant track repeats the identical table, so the O(N) rebuild
+    /// is skipped. The ABR invalidation and the reader wake stay
+    /// unconditional, so the seek's cancel/wake semantics are unchanged for
+    /// every track (cross-variant, partial-download, or fully cached).
+    ///
+    /// Dropping the pending boundary decision matters because a pending
+    /// up-switch chosen against pre-seek throughput is stale once the reader
+    /// jumps and would otherwise commit on the first boundary after the seek
+    /// lands, forcing a decoder recreate before the new-variant cache is warm
+    /// (a `HangDetector` trip).
+    pub(crate) fn prepare_for_seek(&self) {
+        if self
+            .active()
+            .is_none_or(|active| !active.layout_seek_invariant())
+        {
+            self.reset_for_seek();
         }
         self.abr.invalidate_pending();
         // A seek repositioned the active variant: wake a reader parked on the
         // pre-seek range so it re-probes against the new position / flush gate.
         self.signal.fire_ready_only();
+    }
+
+    /// Collapse the active variant to a "fresh" single-variant layout on
+    /// seek. Random seek may land far from the post-ABR-commit window, so
+    /// reset `byte_shift` / `served_from` / `served_until` back to the
+    /// natural range: subsequent ABR commits at boundary will re-build the
+    /// layering as usual. Gated by [`Self::prepare_for_seek`] so it is not
+    /// entered when the layout is already canonical.
+    #[kithara::probe]
+    pub(crate) fn reset_for_seek(&self) {
+        if let Some(active) = self.active() {
+            active.reset_for_seek();
+        }
     }
 
     pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl> {
@@ -801,7 +822,7 @@ impl VariantControl for HlsCoord {
 /// implement the trait here instead of a separate view wrapper.
 impl ByteMap for HlsCoord {
     fn anchor_at_time(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
-        self.reset_for_seek();
+        self.prepare_for_seek();
         self.seek_time_anchor(position)
     }
 

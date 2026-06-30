@@ -1,4 +1,4 @@
-use std::{error::Error as StdError, io, io::ErrorKind, num::TryFromIntError};
+use std::{borrow::Cow, error::Error as StdError, io, io::ErrorKind, num::TryFromIntError};
 
 use kithara_bufpool::BudgetExhausted;
 use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, VariantChangeError};
@@ -23,10 +23,10 @@ pub enum DecodeError {
     UnsupportedContainer(ContainerFormat),
 
     #[error("Invalid data: {0}")]
-    InvalidData(String),
+    InvalidData(Cow<'static, str>),
 
     #[error("Seek failed: {0}")]
-    SeekFailed(String),
+    SeekFailed(Cow<'static, str>),
 
     /// The seek target is invalid for this stream — past EOF, beyond the
     /// indexed sample range, or otherwise out of the addressable space.
@@ -37,7 +37,7 @@ pub enum DecodeError {
     /// rejects the same target with the same answer. Pipeline must
     /// surface this to the caller (fail the seek) rather than retry.
     #[error("Seek target out of range: {0}")]
-    SeekOutOfRange(String),
+    SeekOutOfRange(Cow<'static, str>),
 
     #[error("Probe failed: could not detect codec")]
     ProbeFailed,

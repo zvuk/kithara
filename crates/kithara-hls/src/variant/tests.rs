@@ -138,7 +138,6 @@ fn make_var_with_seek_obs(
         init,
         segments,
         seek_obs,
-        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
         codec: None,
         container: None,
     }
@@ -182,7 +181,6 @@ fn media_info_carries_playlist_container() {
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: playlist_state.variant_codec(0),
         container: playlist_state.variant_container(0),
-        playlist_state: Arc::clone(&playlist_state),
     }
     .into_variant(0, &ctx);
 
@@ -233,7 +231,6 @@ fn range_ready_clamps_tail_seek_alias_to_eof() {
         init: None,
         segments: (0..3).map(|idx| make_seg(idx, 10, &ctx.scope)).collect(),
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
         codec: Some(AudioCodec::AacHeV2),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -273,7 +270,6 @@ fn segment_aware_seek_alias_routes_tail_by_segment_index() {
         init: None,
         segments: (0..4).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
         codec: Some(AudioCodec::Flac),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -768,7 +764,6 @@ fn read_at_zero_holds_pending_while_init_unsized() {
     let v = VariantParts {
         init,
         segments: vec![make_seg(0, 1024, &ctx.scope)],
-        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: None,
         container: None,
@@ -835,6 +830,25 @@ fn descriptor_at_time_clamps_to_last() {
 }
 
 #[kithara::test]
+fn seek_point_at_time_returns_bounds_and_clamps() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100, 100], &ctx);
+    let (idx, start, end) = v
+        .seek_point_at_time(Duration::from_secs(3))
+        .expect("seek point");
+    assert_eq!(idx, 1);
+    assert_eq!(start, Duration::from_secs(2));
+    assert_eq!(end, Duration::from_secs(4));
+
+    let (idx, start, end) = v
+        .seek_point_at_time(Duration::from_secs(999))
+        .expect("seek point clamps to last");
+    assert_eq!(idx, 2);
+    assert_eq!(start, Duration::from_secs(4));
+    assert_eq!(end, Duration::from_secs(6));
+}
+
+#[kithara::test]
 fn descriptor_after_byte_finds_next_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
@@ -866,7 +880,6 @@ fn segment_aware_rebuild_at_time_prefetches_seek_preroll_segment() {
         init: None,
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -891,13 +904,10 @@ fn segment_aware_rebuild_at_time_prefetches_seek_preroll_segment() {
 #[kithara::test]
 fn segment_aware_seek_time_anchor_fetches_preroll_segment() {
     let ctx = test_ctx(3);
-    let playlist_state =
-        make_playlist_state(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4), 5);
     let v = VariantParts {
         init: None,
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        playlist_state,
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -933,7 +943,6 @@ fn segment_aware_rebuild_with_decoder_probe_fetches_recreate_preroll_segment() {
         init: make_init(48, &ctx.scope),
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -956,7 +965,6 @@ fn exact_size_rebuild_at_time_starts_at_target_segment() {
         init: None,
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -981,7 +989,6 @@ fn exact_size_rebuild_with_decoder_probe_starts_tail_at_target_segment() {
         init: make_init(48, &ctx.scope),
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -1135,7 +1142,6 @@ fn exact_seek_completion_keeps_stale_anchor_alias_until_reader_moves() {
         init: None,
         segments,
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -1175,7 +1181,6 @@ fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
         init: None,
         segments,
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -1215,7 +1220,6 @@ fn byte_continuity_boundary_preparation_sizes_only_prefix() {
         init: None,
         segments,
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -1315,7 +1319,6 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     });
     let v = VariantParts {
         init,
-        playlist_state: Arc::new(PlaylistState::new(Vec::new())),
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: None,
         container: None,

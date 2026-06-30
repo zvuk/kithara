@@ -3,6 +3,7 @@
 use std::{
     fmt::Debug,
     hash::Hash,
+    num::NonZeroUsize,
     ops::Range,
     path::Path,
     sync::{Arc, atomic::AtomicU64},
@@ -237,6 +238,20 @@ where
     #[must_use]
     pub fn is_ephemeral(&self) -> bool {
         matches!(self, Self::Mem { .. })
+    }
+
+    /// Request the in-memory LRU handle cache hold up to `media_items`
+    /// media resources (e.g. the variant segment count). The store applies
+    /// its own non-media headroom and hard cap, returning the capacity
+    /// actually installed. Use on a private per-stream store only; resizing
+    /// an app-wide shared store clobbers sibling streams.
+    #[must_use]
+    pub fn reserve_cache_for(&self, media_items: usize) -> NonZeroUsize {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk { store, .. } => store.reserve_cache_for(media_items),
+            Self::Mem { store, .. } => store.reserve_cache_for(media_items),
+        }
     }
 
     /// Open a resource by key (no processing context).

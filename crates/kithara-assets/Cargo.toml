@@ -36,6 +36,7 @@ hex = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true }
 lru = { workspace = true }
 kithara-platform = { workspace = true }
 rangemap = { workspace = true }

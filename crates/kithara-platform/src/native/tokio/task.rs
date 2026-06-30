@@ -21,3 +21,12 @@ where
 {
     super::backend::task::spawn_blocking(f)
 }
+
+/// Spawn a blocking computation on a specific runtime [`Handle`].
+pub fn spawn_blocking_on<F, R>(handle: &Handle, f: F) -> JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    handle.spawn_blocking(f)
+}

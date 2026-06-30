@@ -2,11 +2,7 @@ use std::{num::NonZeroU16, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_platform::{
-    CancelToken,
-    time::{sleep, timeout},
-    tokio,
-};
+use kithara_platform::{CancelToken, time::timeout};
 use url::Url;
 
 use super::{
@@ -16,9 +12,9 @@ use super::{
 };
 use crate::{
     ByteStream,
-    error::{NetError, NetResult, Retryability},
+    error::{NetError, NetResult},
     metrics::ConnectionMetrics,
-    resumable::{Refetch, Resumed, exhausted, resumable_body},
+    resumable::{Refetch, Resumed, resumable_body},
     retry::{DefaultRetryPolicy, RetryNet},
     traits::{Net, NetExt},
     types::{Headers, NetOptions, RangeSpec},
@@ -70,65 +66,9 @@ impl RawAppleNet {
         let base_start = range.as_ref().map_or(0, |range| range.start);
         let end = range.as_ref().and_then(|range| range.end);
         let first = self
-            .open_first_body(
-                url.clone(),
-                range,
-                headers.clone(),
-                accept_partial,
-                base_start,
-                end,
-            )
+            .raw_body(url.clone(), range, headers.clone(), accept_partial)
             .await?;
         Ok(self.wrap_resumable(first, url, base_start, end, headers))
-    }
-
-    async fn open_first_body(
-        &self,
-        url: Url,
-        mut range: Option<RangeSpec>,
-        headers: Option<Headers>,
-        mut accept_partial: bool,
-        base_start: u64,
-        end: Option<u64>,
-    ) -> Result<ByteStream, NetError> {
-        let mut attempt = 0;
-        loop {
-            let error = match self
-                .raw_body(url.clone(), range.clone(), headers.clone(), accept_partial)
-                .await
-            {
-                Ok(stream) => return Ok(stream),
-                Err(error) => error,
-            };
-            if error.retryability() != Retryability::Transient
-                || attempt >= self.options.retry_policy.max_retries
-            {
-                return Err(
-                    if self.options.retry_policy.max_retries > 0
-                        && error.retryability() == Retryability::Transient
-                    {
-                        exhausted(self.options.retry_policy.max_retries, error)
-                    } else {
-                        error
-                    },
-                );
-            }
-            let delay = self.options.retry_policy.delay_for_attempt(attempt);
-            if delay.is_zero() {
-                if self.cancel.is_cancelled() {
-                    return Err(NetError::Cancelled);
-                }
-            } else {
-                tokio::select! {
-                    biased;
-                    () = self.cancel.cancelled() => return Err(NetError::Cancelled),
-                    () = sleep(delay) => {}
-                }
-            }
-            attempt += 1;
-            range = Some(RangeSpec::new(base_start, end));
-            accept_partial = true;
-        }
     }
 
     #[kithara::flash(io)]

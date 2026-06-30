@@ -249,10 +249,9 @@ impl ResourceConfig {
         let url = match self.src {
             ResourceSrc::Url(ref url) => url.clone(),
             ResourceSrc::Path(ref p) => {
-                return Err(DecodeError::InvalidData(format!(
-                    "HLS requires a URL, got local path: {}",
-                    p.display()
-                )));
+                return Err(DecodeError::InvalidData(
+                    format!("HLS requires a URL, got local path: {}", p.display()).into(),
+                ));
             }
         };
         let store = store_options_with_flush_hub(&self.store, self.flush_hub.clone());
@@ -318,21 +317,21 @@ impl ResourceConfig {
             #[cfg(not(target_arch = "wasm32"))]
             Ok(url) if url.scheme() == "file" => {
                 let path = url.to_file_path().map_err(|()| {
-                    DecodeError::InvalidData(format!("invalid file URL: {trimmed}"))
+                    DecodeError::InvalidData(format!("invalid file URL: {trimmed}").into())
                 })?;
                 Ok(ResourceSrc::Path(path))
             }
             #[cfg(target_arch = "wasm32")]
-            Ok(url) if url.scheme() == "file" => Err(DecodeError::InvalidData(format!(
-                "file:// URL is not supported on wasm: {trimmed}"
-            ))),
+            Ok(url) if url.scheme() == "file" => Err(DecodeError::InvalidData(
+                format!("file:// URL is not supported on wasm: {trimmed}").into(),
+            )),
             Ok(url) => Ok(ResourceSrc::Url(url)),
             Err(_) => {
                 let path = PathBuf::from(trimmed);
                 if !path.is_absolute() {
-                    return Err(DecodeError::InvalidData(format!(
-                        "invalid URL or file path (must be absolute): {trimmed}"
-                    )));
+                    return Err(DecodeError::InvalidData(
+                        format!("invalid URL or file path (must be absolute): {trimmed}").into(),
+                    ));
                 }
                 Ok(ResourceSrc::Path(path))
             }

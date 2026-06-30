@@ -19,7 +19,7 @@ ignored = ["serial_test"]
 kithara = { workspace = true, features = ["full", "probe"] }
 kithara-audio = { workspace = true, features = ["probe", "symphonia"] }
 kithara-abr = { workspace = true, features = ["probe"] }
-kithara-assets = { workspace = true }
+kithara-assets = { workspace = true, features = ["probe"] }
 kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }

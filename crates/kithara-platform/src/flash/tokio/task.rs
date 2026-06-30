@@ -110,3 +110,36 @@ where
         }
     })
 }
+
+/// Spawn a blocking computation on a specific runtime [`Handle`].
+///
+/// Same ambient propagation and quiescence accounting as [`spawn_blocking`],
+/// but queued onto the captured runtime handle.
+pub fn spawn_blocking_on<F, R>(handle: &Handle, f: F) -> JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let ambient = crate::flash::ambient_snapshot();
+    // Reserve the `active` slot BEFORE the pool queues the closure (covering
+    // the queue wait). The slot's Drop returns the reservation if the pool
+    // never runs the closure. Deliberately NOT unified with the `spawn_named`
+    // bracket: a pool closure owns no named-thread count and must restore the
+    // reused thread's previous dedicated flag.
+    let slot = ambient.then(credit::DedicatedSlot::reserve);
+    handle.spawn_blocking(move || {
+        // Held for the closure's lifetime (must outlive `f()`); restores the
+        // pool thread's previous ambient on exit.
+        let _ambient = crate::flash::set_ambient_for_spawn(ambient);
+        credit::reset_credit();
+        if let Some(slot) = slot {
+            let _pacer = slot.claim_pooled();
+            f()
+        } else {
+            // Non-ambient: invisible to the engine; the RAII settle only keeps
+            // the exit unwind-safe and consistent with the ambient arm.
+            let _exit = credit::Participant::unreserved();
+            f()
+        }
+    })
+}

@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use kithara_platform::sync::RwLock;
+use kithara_test_utils::kithara;
 
 use crate::segment::Segment;
 
@@ -96,6 +97,7 @@ impl Frame {
         Some((idx, off_virtual, size))
     }
 
+    #[kithara::probe]
     fn recompute(&mut self, init_size: u64, segments: &[Segment]) {
         self.offsets.resize(segments.len(), 0);
         let mut cum = if self.init_seed > 0 {
@@ -301,10 +303,34 @@ impl Layout {
             .store(snapshot.sizes_complete, Ordering::Release);
     }
 
+    /// True when the frame is already the canonical single-variant
+    /// full-range layout (`byte_shift == 0`, `served = [0, num)`, no
+    /// `init_seed`, offsets sized to `segments`) AND every served size is
+    /// already exact. In that state a [`Self::reset`] would recompute the
+    /// identical offset table, so a same-variant seek can skip the O(N)
+    /// rebuild. A shifted/shrunk/size-incomplete frame returns `false` and
+    /// is recomputed as before — cross-variant and partial-download seeks
+    /// keep their reset.
+    pub(super) fn is_canonical_complete(&self, segments: &[Segment]) -> bool {
+        if !self.sizes_complete.load(Ordering::Acquire) {
+            return false;
+        }
+        let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
+        let frame = self.frame.read();
+        frame.byte_shift == 0
+            && frame.served_from == 0
+            && frame.served_until == num
+            && frame.init_seed == 0
+            && frame.offsets.len() == segments.len()
+    }
+
     /// Collapse to a single-variant layout: `byte_shift = 0`,
     /// `served = [0, num_segments)`, offsets recomputed from the existing
     /// seed.
     pub(super) fn reset(&self, init_size: u64, segments: &[Segment]) {
+        if self.is_canonical_complete(segments) {
+            return;
+        }
         let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
         let mut frame = self.frame.write();
         frame.byte_shift = 0;

@@ -251,7 +251,13 @@ impl HlsVariant {
     }
 
     pub(super) fn set_exact_seek_demand(&self, anchor: u64, segment: u32) {
-        if !needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
+        if !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
+            || self.all_sizes_complete()
+        {
+            // No exact-size demand to register: either the container resolves
+            // ranges by segment index, or every served size *and* the init are
+            // already exact, so the O(prefix) re-scan and recompute would be
+            // pure churn.
             self.clear_exact_seek();
             return;
         }
@@ -276,7 +282,7 @@ impl HlsVariant {
 
     pub(super) fn set_exact_byte_seek_demand(&self, byte: u64) {
         if !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
-            || self.sizes_complete()
+            || self.all_sizes_complete()
         {
             self.clear_exact_byte_seek();
             return;
@@ -340,7 +346,7 @@ impl HlsVariant {
     }
 
     fn exact_byte_position_ready(&self, byte: u64) -> bool {
-        if self.sizes_complete() {
+        if self.all_sizes_complete() {
             return true;
         }
         self.find_at_offset(byte)
@@ -352,6 +358,17 @@ impl HlsVariant {
             .init
             .as_ref()
             .is_none_or(|init| init.size().is_exact())
+    }
+
+    /// Media-and-init completeness. [`Self::sizes_complete`] is a MEDIA-only
+    /// proxy (it ignores the `EXT-X-MAP` init); the exact-byte offset table
+    /// seeds from the init size, so a non-exact init shifts every segment
+    /// offset once it commits. Exact-byte seek short-circuits must fold the
+    /// init in or a seek before the init resolves can skip the
+    /// `SizeDemand::Init` request and land on stale bytes once the init
+    /// commit shifts offsets.
+    fn all_sizes_complete(&self) -> bool {
+        self.sizes_complete() && self.exact_init_complete()
     }
 
     fn request_exact_prefix_through(&self, segment: u32) {

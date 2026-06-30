@@ -56,8 +56,8 @@ pub(crate) struct Fmp4Frame {
 
 /// Parse an `EXT-X-MAP` init segment.
 pub(crate) fn parse_init(bytes: &[u8]) -> DecodeResult<Fmp4InitInfo> {
-    let mp4 =
-        Mp4::read_bytes(bytes).map_err(|e| DecodeError::InvalidData(format!("re_mp4: {e}")))?;
+    let mp4 = Mp4::read_bytes(bytes)
+        .map_err(|e| DecodeError::InvalidData(format!("re_mp4: {e}").into()))?;
 
     let track_box = mp4
         .moov
@@ -97,9 +97,9 @@ pub(crate) fn parse_init(bytes: &[u8]) -> DecodeResult<Fmp4InitInfo> {
             )
         }
         other => {
-            return Err(DecodeError::InvalidData(format!(
-                "unsupported audio sample entry: {other:?}"
-            )));
+            return Err(DecodeError::InvalidData(
+                format!("unsupported audio sample entry: {other:?}").into(),
+            ));
         }
     };
 
@@ -157,35 +157,38 @@ fn extract_aac_asc_raw(bytes: &[u8]) -> DecodeResult<Vec<u8>> {
 
     cursor
         .seek(SeekFrom::Current(8))
-        .map_err(|e| DecodeError::InvalidData(format!("seek past stsd header: {e}")))?;
+        .map_err(|e| DecodeError::InvalidData(format!("seek past stsd header: {e}").into()))?;
 
     let entry_start = cursor.position();
     let (entry_type, entry_size) = read_header(&mut cursor)?;
     if u32::from(entry_type) != FOURCC_MP4A {
-        return Err(DecodeError::InvalidData(format!(
-            "expected mp4a sample entry, found {:?}",
-            FourCC::from(entry_type).value
-        )));
+        return Err(DecodeError::InvalidData(
+            format!(
+                "expected mp4a sample entry, found {:?}",
+                FourCC::from(entry_type).value
+            )
+            .into(),
+        ));
     }
     let entry_end = entry_start + entry_size;
     let _ = stsd_end;
 
     cursor
         .seek(SeekFrom::Current(28))
-        .map_err(|e| DecodeError::InvalidData(format!("seek past mp4a header: {e}")))?;
+        .map_err(|e| DecodeError::InvalidData(format!("seek past mp4a header: {e}").into()))?;
 
     while cursor.position() < entry_end {
         let child_start = cursor.position();
         let (child_type, child_size) = read_header(&mut cursor)?;
         if u32::from(child_type) == FOURCC_ESDS {
-            cursor
-                .seek(SeekFrom::Current(4))
-                .map_err(|e| DecodeError::InvalidData(format!("seek past esds header: {e}")))?;
+            cursor.seek(SeekFrom::Current(4)).map_err(|e| {
+                DecodeError::InvalidData(format!("seek past esds header: {e}").into())
+            })?;
             return read_esds_decoder_specific_info(&mut cursor, child_start + child_size);
         }
         cursor
             .seek(SeekFrom::Start(child_start + child_size))
-            .map_err(|e| DecodeError::InvalidData(format!("skip mp4a child: {e}")))?;
+            .map_err(|e| DecodeError::InvalidData(format!("skip mp4a child: {e}").into()))?;
     }
     Err(DecodeError::InvalidData("esds box not found".into()))
 }
@@ -205,53 +208,53 @@ fn read_esds_decoder_specific_info(
 
     let (es_tag, es_size) = read_descriptor_header(cursor)?;
     if es_tag != TAG_ES_DESCRIPTOR {
-        return Err(DecodeError::InvalidData(format!(
-            "expected ES_Descriptor (0x03), got 0x{es_tag:02x}"
-        )));
+        return Err(DecodeError::InvalidData(
+            format!("expected ES_Descriptor (0x03), got 0x{es_tag:02x}").into(),
+        ));
     }
     let es_body_end = cursor.position() + u64::from(es_size);
     let mut header = [0u8; 3];
     cursor
         .read_exact(&mut header)
-        .map_err(|e| DecodeError::InvalidData(format!("read ES_Descriptor header: {e}")))?;
+        .map_err(|e| DecodeError::InvalidData(format!("read ES_Descriptor header: {e}").into()))?;
     let flags = header[2];
     if flags & 0x80 != 0 {
         cursor
             .seek(SeekFrom::Current(2))
-            .map_err(|e| DecodeError::InvalidData(format!("skip dependsOn_ES_ID: {e}")))?;
+            .map_err(|e| DecodeError::InvalidData(format!("skip dependsOn_ES_ID: {e}").into()))?;
     }
     if flags & 0x40 != 0 {
         let mut url_len = [0u8; 1];
         cursor
             .read_exact(&mut url_len)
-            .map_err(|e| DecodeError::InvalidData(format!("read URL_length: {e}")))?;
+            .map_err(|e| DecodeError::InvalidData(format!("read URL_length: {e}").into()))?;
         cursor
             .seek(SeekFrom::Current(i64::from(url_len[0])))
-            .map_err(|e| DecodeError::InvalidData(format!("skip URL: {e}")))?;
+            .map_err(|e| DecodeError::InvalidData(format!("skip URL: {e}").into()))?;
     }
     if flags & 0x20 != 0 {
         cursor
             .seek(SeekFrom::Current(2))
-            .map_err(|e| DecodeError::InvalidData(format!("skip OCR_ES_ID: {e}")))?;
+            .map_err(|e| DecodeError::InvalidData(format!("skip OCR_ES_ID: {e}").into()))?;
     }
 
     let _ = es_body_end;
     let (dc_tag, dc_size) = read_descriptor_header(cursor)?;
     if dc_tag != TAG_DECODER_CONFIG {
-        return Err(DecodeError::InvalidData(format!(
-            "expected DecoderConfigDescriptor (0x04), got 0x{dc_tag:02x}"
-        )));
+        return Err(DecodeError::InvalidData(
+            format!("expected DecoderConfigDescriptor (0x04), got 0x{dc_tag:02x}").into(),
+        ));
     }
     let dc_end = cursor.position() + u64::from(dc_size);
     cursor
         .seek(SeekFrom::Current(13))
-        .map_err(|e| DecodeError::InvalidData(format!("skip DCD body: {e}")))?;
+        .map_err(|e| DecodeError::InvalidData(format!("skip DCD body: {e}").into()))?;
 
     let (dsi_tag, dsi_size) = read_descriptor_header(cursor)?;
     if dsi_tag != TAG_DECODER_SPECIFIC {
-        return Err(DecodeError::InvalidData(format!(
-            "expected DecoderSpecificInfo (0x05), got 0x{dsi_tag:02x}"
-        )));
+        return Err(DecodeError::InvalidData(
+            format!("expected DecoderSpecificInfo (0x05), got 0x{dsi_tag:02x}").into(),
+        ));
     }
     if cursor.position() + u64::from(dsi_size) > dc_end.min(esds_end) {
         return Err(DecodeError::InvalidData(
@@ -261,7 +264,7 @@ fn read_esds_decoder_specific_info(
     let mut payload = vec![0u8; dsi_size as usize];
     cursor
         .read_exact(&mut payload)
-        .map_err(|e| DecodeError::InvalidData(format!("read DSI body: {e}")))?;
+        .map_err(|e| DecodeError::InvalidData(format!("read DSI body: {e}").into()))?;
     Ok(payload)
 }
 
@@ -272,13 +275,13 @@ fn read_descriptor_header(cursor: &mut Cursor<&[u8]>) -> DecodeResult<(u8, u32)>
     let mut tag = [0u8; 1];
     cursor
         .read_exact(&mut tag)
-        .map_err(|e| DecodeError::InvalidData(format!("read descriptor tag: {e}")))?;
+        .map_err(|e| DecodeError::InvalidData(format!("read descriptor tag: {e}").into()))?;
     let mut size: u32 = 0;
     for _ in 0..4 {
         let mut b = [0u8; 1];
-        cursor
-            .read_exact(&mut b)
-            .map_err(|e| DecodeError::InvalidData(format!("read descriptor size byte: {e}")))?;
+        cursor.read_exact(&mut b).map_err(|e| {
+            DecodeError::InvalidData(format!("read descriptor size byte: {e}").into())
+        })?;
         size = (size << 7) | u32::from(b[0] & 0x7F);
         if b[0] & 0x80 == 0 {
             return Ok((tag[0], size));
@@ -313,25 +316,28 @@ fn parse_flac_sample_entry(bytes: &[u8]) -> DecodeResult<(u32, u16, Vec<u8>)> {
 
     cursor
         .seek(SeekFrom::Current(8))
-        .map_err(|e| DecodeError::InvalidData(format!("seek past stsd header: {e}")))?;
+        .map_err(|e| DecodeError::InvalidData(format!("seek past stsd header: {e}").into()))?;
 
     let entry_start = cursor.position();
     let (entry_type, entry_size) = read_header(&mut cursor)?;
     if u32::from(entry_type) != FOURCC_FLAC {
-        return Err(DecodeError::InvalidData(format!(
-            "expected fLaC sample entry, found {:?}",
-            FourCC::from(entry_type).value
-        )));
+        return Err(DecodeError::InvalidData(
+            format!(
+                "expected fLaC sample entry, found {:?}",
+                FourCC::from(entry_type).value
+            )
+            .into(),
+        ));
     }
     let entry_end = entry_start + entry_size;
 
-    cursor
-        .seek(SeekFrom::Current(8))
-        .map_err(|e| DecodeError::InvalidData(format!("seek past sample entry header: {e}")))?;
+    cursor.seek(SeekFrom::Current(8)).map_err(|e| {
+        DecodeError::InvalidData(format!("seek past sample entry header: {e}").into())
+    })?;
     let mut buf = [0u8; 20];
     cursor
         .read_exact(&mut buf)
-        .map_err(|e| DecodeError::InvalidData(format!("read sample entry: {e}")))?;
+        .map_err(|e| DecodeError::InvalidData(format!("read sample entry: {e}").into()))?;
     let channels = u16::from_be_bytes([buf[8], buf[9]]);
     let sample_rate_raw = u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]);
     let sample_rate = sample_rate_raw >> 16;
@@ -340,19 +346,21 @@ fn parse_flac_sample_entry(bytes: &[u8]) -> DecodeResult<(u32, u16, Vec<u8>)> {
         let inner_start = cursor.position();
         let (inner_type, inner_size) = read_header(&mut cursor)?;
         if u32::from(inner_type) == FOURCC_DFLA {
-            cursor
-                .seek(SeekFrom::Current(4 + 4))
-                .map_err(|e| DecodeError::InvalidData(format!("seek past dfLa header: {e}")))?;
+            cursor.seek(SeekFrom::Current(4 + 4)).map_err(|e| {
+                DecodeError::InvalidData(format!("seek past dfLa header: {e}").into())
+            })?;
             let mut payload = vec![0u8; 34];
             cursor
                 .read_exact(&mut payload)
-                .map_err(|e| DecodeError::InvalidData(format!("read STREAMINFO: {e}")))?;
+                .map_err(|e| DecodeError::InvalidData(format!("read STREAMINFO: {e}").into()))?;
             let _ = inner_size;
             return Ok((sample_rate, channels, payload));
         }
         cursor
             .seek(SeekFrom::Start(inner_start + inner_size))
-            .map_err(|e| DecodeError::InvalidData(format!("skip sample entry child: {e}")))?;
+            .map_err(|e| {
+                DecodeError::InvalidData(format!("skip sample entry child: {e}").into())
+            })?;
     }
     let _ = stsd_end;
     Err(DecodeError::InvalidData("dfLa box not found".into()))
@@ -363,23 +371,23 @@ fn descend_into(cursor: &mut Cursor<&[u8]>, end: u64, target: BoxType) -> Decode
         let pos = cursor.position();
         let (box_type, size) = read_header(cursor)?;
         if box_type == target {
-            cursor
-                .seek(SeekFrom::Start(pos))
-                .map_err(|e| DecodeError::InvalidData(format!("rewind to box header: {e}")))?;
+            cursor.seek(SeekFrom::Start(pos)).map_err(|e| {
+                DecodeError::InvalidData(format!("rewind to box header: {e}").into())
+            })?;
             return Ok(());
         }
         cursor
             .seek(SeekFrom::Start(pos + size))
-            .map_err(|e| DecodeError::InvalidData(format!("skip box: {e}")))?;
+            .map_err(|e| DecodeError::InvalidData(format!("skip box: {e}").into()))?;
     }
-    Err(DecodeError::InvalidData(format!(
-        "box {target:?} not found"
-    )))
+    Err(DecodeError::InvalidData(
+        format!("box {target:?} not found").into(),
+    ))
 }
 
 fn read_header(cursor: &mut Cursor<&[u8]>) -> DecodeResult<(BoxType, u64)> {
-    let header =
-        BoxHeader::read(cursor).map_err(|e| DecodeError::InvalidData(format!("re_mp4: {e}")))?;
+    let header = BoxHeader::read(cursor)
+        .map_err(|e| DecodeError::InvalidData(format!("re_mp4: {e}").into()))?;
     Ok((header.name, header.size))
 }
 
@@ -404,29 +412,29 @@ pub(crate) fn parse_segment_frames(
         let box_start = cursor.position();
         let (box_type, size) = read_header(&mut cursor)?;
         if size < 8 {
-            return Err(DecodeError::InvalidData(format!(
-                "invalid box size {size} at offset {box_start}"
-            )));
+            return Err(DecodeError::InvalidData(
+                format!("invalid box size {size} at offset {box_start}").into(),
+            ));
         }
         let box_end = box_start + size;
 
         if box_type == BoxType::MoofBox {
             let moof = MoofBox::read_box(&mut cursor, size)
-                .map_err(|e| DecodeError::InvalidData(format!("re_mp4: {e}")))?;
+                .map_err(|e| DecodeError::InvalidData(format!("re_mp4: {e}").into()))?;
             cursor
                 .seek(SeekFrom::Start(box_end))
-                .map_err(|e| DecodeError::InvalidData(format!("seek after moof: {e}")))?;
+                .map_err(|e| DecodeError::InvalidData(format!("seek after moof: {e}").into()))?;
 
             let mdat_start = cursor.position();
             let (mdat_type, mdat_size) = read_header(&mut cursor)?;
             if mdat_type != BoxType::MdatBox {
-                return Err(DecodeError::InvalidData(format!(
-                    "expected mdat after moof, got {mdat_type:?}"
-                )));
+                return Err(DecodeError::InvalidData(
+                    format!("expected mdat after moof, got {mdat_type:?}").into(),
+                ));
             }
             cursor
                 .seek(SeekFrom::Start(mdat_start + mdat_size))
-                .map_err(|e| DecodeError::InvalidData(format!("seek past mdat: {e}")))?;
+                .map_err(|e| DecodeError::InvalidData(format!("seek past mdat: {e}").into()))?;
 
             collect_frames(
                 &SegmentParse {
@@ -442,7 +450,7 @@ pub(crate) fn parse_segment_frames(
 
         cursor
             .seek(SeekFrom::Start(box_end))
-            .map_err(|e| DecodeError::InvalidData(format!("skip top-level box: {e}")))?;
+            .map_err(|e| DecodeError::InvalidData(format!("skip top-level box: {e}").into()))?;
     }
 
     Ok(frames)
@@ -502,16 +510,21 @@ fn collect_frames(parse: &SegmentParse, out: &mut Vec<Fmp4Frame>) -> DecodeResul
             let duration = sample_duration_for(trun, tfhd, sample_idx);
 
             let start = usize::try_from(byte_cursor).map_err(|_| {
-                DecodeError::InvalidData(format!("frame offset overflows usize: {byte_cursor}"))
+                DecodeError::InvalidData(
+                    format!("frame offset overflows usize: {byte_cursor}").into(),
+                )
             })?;
             let end = start
                 .checked_add(size as usize)
                 .ok_or_else(|| DecodeError::InvalidData("sample byte range overflow".into()))?;
             if end > segment_bytes.len() {
-                return Err(DecodeError::InvalidData(format!(
-                    "sample byte range {start}..{end} past segment end {}",
-                    segment_bytes.len()
-                )));
+                return Err(DecodeError::InvalidData(
+                    format!(
+                        "sample byte range {start}..{end} past segment end {}",
+                        segment_bytes.len()
+                    )
+                    .into(),
+                ));
             }
 
             out.push(Fmp4Frame {

@@ -528,17 +528,17 @@ fn is_adpcm_codec_id(id: AudioCodecId) -> bool {
 fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
     match err {
         SymphoniaError::SeekError(SeekErrorKind::OutOfRange) => {
-            DecodeError::SeekOutOfRange(err.to_string())
+            DecodeError::SeekOutOfRange(err.to_string().into())
         }
         SymphoniaError::IoError(io_err)
             if io_err.get_ref().is_some_and(
                 <dyn std::error::Error + Send + Sync + 'static>::is::<StreamSeekPastEof>,
             ) =>
         {
-            DecodeError::SeekOutOfRange(io_err.to_string())
+            DecodeError::SeekOutOfRange(io_err.to_string().into())
         }
         SymphoniaError::IoError(e) if e.kind() == ErrorKind::UnexpectedEof => {
-            DecodeError::SeekOutOfRange(err.to_string())
+            DecodeError::SeekOutOfRange(err.to_string().into())
         }
         SymphoniaError::IoError(io_err)
             if io_err.kind() == ErrorKind::Interrupted
@@ -549,7 +549,7 @@ fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
         {
             DecodeError::Interrupted
         }
-        _ => DecodeError::SeekFailed(err.to_string()),
+        _ => DecodeError::SeekFailed(err.to_string().into()),
     }
 }
 

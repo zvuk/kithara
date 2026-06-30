@@ -1,5 +1,6 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, sync::Arc};
 
+use crossbeam_queue::ArrayQueue;
 use kithara_decode::{DecodeError, Decoder};
 use kithara_platform::time::Duration;
 use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor};
@@ -32,6 +33,8 @@ pub(crate) struct WaitingForSource;
 pub(crate) struct ApplyingSeek;
 /// Recreating the decoder (format boundary, codec change, seek recovery).
 pub(crate) struct RecreatingDecoder;
+/// Waiting for an off-core decoder rebuild to complete.
+pub(crate) struct RebuildingDecoder;
 /// Decoder recreated / seek applied; waiting for first valid chunk.
 pub(crate) struct AwaitingResume;
 /// End of stream reached.
@@ -44,6 +47,7 @@ impl sealed::Sealed for SeekRequested {}
 impl sealed::Sealed for WaitingForSource {}
 impl sealed::Sealed for ApplyingSeek {}
 impl sealed::Sealed for RecreatingDecoder {}
+impl sealed::Sealed for RebuildingDecoder {}
 impl sealed::Sealed for AwaitingResume {}
 impl sealed::Sealed for AtEof {}
 impl sealed::Sealed for Failed {}
@@ -62,6 +66,9 @@ impl TrackPhase for ApplyingSeek {
 }
 impl TrackPhase for RecreatingDecoder {
     type Data = RecreateState;
+}
+impl TrackPhase for RebuildingDecoder {
+    type Data = RebuildState;
 }
 impl TrackPhase for AwaitingResume {
     type Data = ResumeState;
@@ -121,6 +128,7 @@ pub(crate) enum CurrentFsm {
     WaitingForSource(Track<WaitingForSource>),
     ApplyingSeek(Track<ApplyingSeek>),
     RecreatingDecoder(Track<RecreatingDecoder>),
+    RebuildingDecoder(Track<RebuildingDecoder>),
     AwaitingResume(Track<AwaitingResume>),
     AtEof(Track<AtEof>),
     Failed(Track<Failed>),
@@ -157,6 +165,10 @@ impl CurrentFsm {
 
     pub(crate) fn recreating(state: RecreateState) -> Self {
         Self::RecreatingDecoder(Track::new(state))
+    }
+
+    pub(crate) fn rebuilding(state: RebuildState) -> Self {
+        Self::RebuildingDecoder(Track::new(state))
     }
 
     pub(crate) fn seek_requested(request: SeekRequest) -> Self {
@@ -230,6 +242,19 @@ pub(crate) struct RecreateState {
     pub(crate) cause: RecreateCause,
     pub(crate) next: RecreateNext,
     pub(crate) offset: u64,
+}
+
+pub(crate) struct RebuildState {
+    pub(crate) ticket: u64,
+    pub(crate) recreate: RecreateState,
+    pub(crate) started_seek_epoch: u64,
+    pub(crate) completion: Arc<ArrayQueue<DecoderRebuildComplete>>,
+    pub(crate) superseded_seek: Option<SeekRequest>,
+}
+
+pub(crate) struct DecoderRebuildComplete {
+    pub(crate) ticket: u64,
+    pub(crate) result: Result<Box<dyn Decoder>, RecreateOutcome>,
 }
 
 /// Outcome of one `execute_recreation` call.
@@ -380,6 +405,9 @@ pub(crate) fn map_source_phase(phase: SourcePhase) -> Option<WaitingReason> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crossbeam_queue::ArrayQueue;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -394,6 +422,25 @@ mod tests {
         }
     }
 
+    fn recreate_state() -> RecreateState {
+        RecreateState {
+            cause: RecreateCause::FormatBoundary,
+            media_info: MediaInfo::default(),
+            next: RecreateNext::Decode,
+            offset: 0,
+        }
+    }
+
+    fn rebuild_state() -> RebuildState {
+        RebuildState {
+            ticket: 1,
+            recreate: recreate_state(),
+            started_seek_epoch: 0,
+            completion: Arc::new(ArrayQueue::new(1)),
+            superseded_seek: None,
+        }
+    }
+
     #[kithara::test]
     fn is_terminal_for_each_phase() {
         let non_terminal = [
@@ -404,12 +451,8 @@ mod tests {
                 mode: SeekMode::Direct { target_byte: None },
                 request: seek_at(5),
             }),
-            CurrentFsm::recreating(RecreateState {
-                cause: RecreateCause::FormatBoundary,
-                media_info: MediaInfo::default(),
-                next: RecreateNext::Decode,
-                offset: 0,
-            }),
+            CurrentFsm::recreating(recreate_state()),
+            CurrentFsm::rebuilding(rebuild_state()),
             CurrentFsm::awaiting_resume(ResumeState {
                 seek: SeekContext {
                     epoch: 1,

@@ -3,6 +3,7 @@
 use std::{
     fmt::{self, Debug},
     fs,
+    num::NonZeroUsize,
     ops::Range,
     path::Path,
     sync::{Arc, Weak},
@@ -16,6 +17,7 @@ use crate::{
     AssetResourceState,
     acquisition::{AcquisitionResult, RawWriteHandle, ReadSide, WriteSide},
     base::Assets,
+    cache::CachedAssets,
     error::AssetsResult,
     evict::ByteRecorder,
     identity::RequestIdentity,
@@ -94,6 +96,19 @@ where
         f.debug_struct("LeaseAssets")
             .field("pins", &self.pins)
             .finish_non_exhaustive()
+    }
+}
+
+impl<A> LeaseAssets<CachedAssets<A>>
+where
+    A: Assets,
+{
+    /// Size the buried LRU handle cache to fit `media_items` resources.
+    /// Forwarded to the inner [`CachedAssets`], which owns the
+    /// headroom/cap policy; no atomic handle escapes the cache decorator.
+    /// Returns the capacity actually installed.
+    pub(crate) fn reserve_cache_for(&self, media_items: usize) -> NonZeroUsize {
+        self.inner.reserve_cache_for(media_items)
     }
 }
 

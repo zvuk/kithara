@@ -82,11 +82,6 @@ pub(crate) struct SegmentActivateParams {
 }
 
 pub(crate) struct HlsVariant {
-    /// Parsed master/media-playlist data. Owned by `Arc` so multiple
-    /// variants share a single immutable view; used by
-    /// `seek_time_anchor` (`find_seek_point_for_time`) and as the
-    /// source for the cached [`Self::codec`] / [`Self::container`].
-    pub(super) playlist_state: Arc<PlaylistState>,
     /// Coherent owner of the cross-variant byte-address-space coordinates
     /// (`byte_shift`, `served_from`, `served_until`, `init_seed`, the media
     /// offset table). A single lock guards all five so a reader never mixes
@@ -204,7 +199,6 @@ impl VariantSeek {
 /// Production builds this from parsed playlist metadata; tests build it
 /// inline from synthesised fixtures.
 pub(super) struct VariantParts {
-    pub(super) playlist_state: Arc<PlaylistState>,
     pub(super) seek_obs: Arc<dyn SeekObserve>,
     pub(super) codec: Option<AudioCodec>,
     pub(super) container: Option<ContainerFormat>,
@@ -291,12 +285,11 @@ impl FromWithParams<&Arc<PlaylistState>, VariantParams<'_>> for Arc<HlsVariant> 
         let codec = playlist_state.variant_codec(variant_idx);
         let container = playlist_state.variant_container(variant_idx);
         VariantParts {
+            seek_obs,
             codec,
             container,
             init,
             segments,
-            seek_obs,
-            playlist_state: Arc::clone(playlist_state),
         }
         .into_variant(variant_idx, ctx)
     }
@@ -307,7 +300,6 @@ impl VariantParts {
     #[must_use]
     pub(super) fn into_variant(self, variant: usize, ctx: &PlanCtx) -> Arc<HlsVariant> {
         let Self {
-            playlist_state,
             init,
             codec,
             container,
@@ -318,7 +310,6 @@ impl VariantParts {
         let layout = Layout::new(init_size, &segments);
         Arc::new(HlsVariant {
             variant,
-            playlist_state,
             layout,
             flow: VariantFlow::new(ctx.master_cancel.clone(), seek_obs),
             profile: VariantProfile {

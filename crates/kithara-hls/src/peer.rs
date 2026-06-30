@@ -556,7 +556,7 @@ impl HlsTrackState {
             return;
         }
         self.last_seek_epoch = cur_seek;
-        coord.reset_for_seek();
+        coord.prepare_for_seek();
         self.seek_epoch_reset(coord, ctx);
     }
 

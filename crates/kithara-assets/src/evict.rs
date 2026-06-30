@@ -17,7 +17,7 @@ use crate::{
 };
 
 mod kithara {
-    pub(crate) use kithara_test_macros::mock;
+    pub(crate) use kithara_test_macros::{mock, probe};
 }
 
 /// Trait for recording asset bytes for eviction tracking.
@@ -228,6 +228,7 @@ where
     type IndexRes = A::IndexRes;
     type ReadyRes = A::ReadyRes;
 
+    #[kithara::probe]
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
@@ -240,6 +241,7 @@ where
         self.inner.acquire_resource_with_ctx(key, identity, ctx)
     }
 
+    #[kithara::probe]
     fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,

@@ -69,6 +69,16 @@ impl HlsVariant {
         self.layout.reset(self.init_route_size(), &self.segments);
     }
 
+    /// True when a same-variant seek needs no layout reset: the offset table
+    /// is already the canonical full-range geometry and every served size is
+    /// exact, so [`Self::reset_layout_to_full_range`] would reproduce the
+    /// identical table. Lets [`HlsCoord::prepare_for_seek`] skip the reset on
+    /// a fully-resolved single-variant track. Cross-variant (shifted/shrunk)
+    /// or size-incomplete layouts return `false` and keep their reset.
+    pub(crate) fn layout_seek_invariant(&self) -> bool {
+        self.layout.is_canonical_complete(&self.segments)
+    }
+
     /// Virtual byte offset of segment `seg_idx` in the combined stream.
     /// For the initial variant (`byte_shift == 0`) this equals the natural
     /// offset; after an Auto-mode switch this places the segment relative

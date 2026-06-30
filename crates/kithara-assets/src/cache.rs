@@ -1,6 +1,15 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt, num::NonZeroUsize, ops::Range, path::Path, sync::Arc};
+use std::{
+    fmt,
+    num::NonZeroUsize,
+    ops::Range,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use dashmap::DashSet;
 use kithara_platform::sync::Mutex;
@@ -147,7 +156,7 @@ enum CacheKey<C> {
 
 #[derive(Clone, Debug)]
 enum CacheEntry<R, I> {
-    Resource(R),
+    Resource { reader: R, hits: usize },
     Index(I),
 }
 
@@ -176,7 +185,7 @@ where
 {
     inner: Arc<A>,
     pinned: Arc<DashSet<ResourceKey>>,
-    capacity: NonZeroUsize,
+    capacity: Arc<AtomicUsize>,
     on_invalidated: Option<crate::store::OnInvalidatedFn>,
     cache: SharedCache<A>,
     /// True when dropping a resource handle frees its bytes (ephemeral
@@ -210,12 +219,35 @@ where
     ) -> Self {
         Self {
             inner,
-            capacity,
+            capacity: Arc::new(AtomicUsize::new(capacity.get())),
             on_invalidated,
             cache: Arc::new(Mutex::new(LruCache::new(capacity))),
             pinned: Arc::new(DashSet::new()),
             volatile,
         }
+    }
+
+    /// Slots reserved above the media count for non-media handles
+    /// (init segment, LRU / pins index resources).
+    const NON_MEDIA_HEADROOM: usize = 2;
+    /// Hard ceiling on the auto-sized cache, bounding the fd / memory
+    /// budget for very long tracks.
+    const MAX_CACHE_CAPACITY: usize = 64;
+
+    /// Size the cache to hold up to `media_items` media resources plus a
+    /// small non-media headroom, clamped to [`Self::MAX_CACHE_CAPACITY`].
+    /// This is the store's own policy seam: callers propose a media count
+    /// and receive the capacity actually installed. Growing lets the
+    /// eviction loop retain more resources; shrinking is enforced lazily on
+    /// the next insert. The capacity stays owned here — callers reach this
+    /// through the lease/store forwarders, never by holding the atomic.
+    pub(crate) fn reserve_cache_for(&self, media_items: usize) -> NonZeroUsize {
+        let want = media_items
+            .saturating_add(Self::NON_MEDIA_HEADROOM)
+            .clamp(1, Self::MAX_CACHE_CAPACITY);
+        let capacity = NonZeroUsize::new(want).unwrap_or(NonZeroUsize::MIN);
+        self.capacity.store(capacity.get(), Ordering::Relaxed);
+        capacity
     }
 
     fn cache_entry(
@@ -226,7 +258,7 @@ where
     ) -> Vec<ResourceKey> {
         let mut invalidated = Vec::new();
 
-        let effective = self.capacity.get() + self.pinned_cache_count(cache);
+        let effective = self.capacity.load(Ordering::Relaxed) + self.pinned_cache_count(cache);
 
         while cache.len() >= effective {
             let Some((displaced_key, displaced_entry)) = self.pop_evictable(cache) else {
@@ -237,7 +269,7 @@ where
                     CacheKey::Resource {
                         key: resource_key, ..
                     },
-                    CacheEntry::Resource(_),
+                    CacheEntry::Resource { .. },
                 ) = (displaced_key, displaced_entry)
             {
                 invalidated.push(resource_key);
@@ -256,7 +288,7 @@ where
                 CacheKey::Resource {
                     key: resource_key, ..
                 },
-                CacheEntry::Resource(_),
+                CacheEntry::Resource { .. },
             ) = (displaced_key, displaced_entry)
         {
             invalidated.push(resource_key);
@@ -277,7 +309,7 @@ where
                     CacheKey::Resource {
                         key: resource_key, ..
                     },
-                    CacheEntry::Resource(res),
+                    CacheEntry::Resource { reader: res, .. },
                 ) = (cache_key, entry)
                 else {
                     continue;
@@ -331,7 +363,7 @@ where
     fn is_protected_resource(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> bool {
         matches!(
             entry,
-            CacheEntry::Resource(res) if matches!(res.status(), ResourceStatus::Active)
+            CacheEntry::Resource { reader: res, .. } if matches!(res.status(), ResourceStatus::Active)
         )
     }
 
@@ -370,6 +402,13 @@ where
             .count()
     }
 
+    fn entry_hits(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> usize {
+        match entry {
+            CacheEntry::Resource { hits, .. } => *hits,
+            CacheEntry::Index(_) => 0,
+        }
+    }
+
     fn pop_evictable(&self, cache: &mut CacheMap<A>) -> Option<CacheItem<A>> {
         let key = cache
             .iter()
@@ -377,9 +416,13 @@ where
                 if Self::is_protected_resource(entry) || self.is_pinned_key(key) {
                     return None;
                 }
-                Some(key.clone())
+                Some((key.clone(), Self::entry_hits(entry)))
             })
-            .last()?;
+            // Frequency-aware victim: fewest hits wins; ties fall to the
+            // least-recently-used end (iter yields MRU->LRU, so a later equal
+            // candidate is the better victim).
+            .reduce(|best, cand| if cand.1 <= best.1 { cand } else { best })
+            .map(|(key, _)| key)?;
         cache.pop(&key).map(|entry| (key, entry))
     }
 
@@ -442,11 +485,14 @@ where
         };
         let mut cache = self.cache.lock();
 
-        let hit = match cache.get(&cache_key) {
-            Some(CacheEntry::Resource(reader)) => Some(reader.clone()),
+        let hit = match cache.get_mut(&cache_key) {
+            Some(CacheEntry::Resource { reader, hits }) => {
+                *hits = hits.saturating_add(1);
+                Some((reader.clone(), *hits))
+            }
             _ => None,
         };
-        if let Some(reader) = hit {
+        if let Some((reader, hit_count)) = hit {
             if matches!(reader.status(), ResourceStatus::Committed { .. }) {
                 drop(cache);
                 return Ok(AcquisitionResult::Ready(self.wrap_reader(key, reader)));
@@ -454,8 +500,15 @@ where
             // In-flight slot: reactivate mints a fresh-generation writer; cache
             // its current-generation reader-view so concurrent opens block on
             // the new generation's gate. No invalidation — same key, same bytes.
+            // Carry the hit count across the re-put so frequency survives.
             let writer = reader.reactivate()?;
-            cache.put(cache_key, CacheEntry::Resource(writer.reader()));
+            cache.put(
+                cache_key,
+                CacheEntry::Resource {
+                    reader: writer.reader(),
+                    hits: hit_count,
+                },
+            );
             drop(cache);
             return Ok(AcquisitionResult::Pending(self.wrap_writer(key, writer)));
         }
@@ -468,7 +521,10 @@ where
         let displaced = self.cache_entry(
             &mut cache,
             cache_key,
-            CacheEntry::Resource(reader_for_cache),
+            CacheEntry::Resource {
+                reader: reader_for_cache,
+                hits: 1,
+            },
         );
         let on_invalidated = self.on_invalidated.clone();
         drop(cache);
@@ -534,7 +590,8 @@ where
 
         let mut cache = self.cache.lock();
 
-        if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
+        if let Some(CacheEntry::Resource { reader: res, hits }) = cache.get_mut(&cache_key) {
+            *hits = hits.saturating_add(1);
             return Ok(self.wrap_reader(key, res.clone()));
         }
 
@@ -547,7 +604,7 @@ where
                             CacheKey::Resource {
                                 key: resource_key, ..
                             },
-                            CacheEntry::Resource(res),
+                            CacheEntry::Resource { reader: res, .. },
                         ) if resource_key == key
                             && matches!(res.status(), ResourceStatus::Committed { .. }) =>
                         {
@@ -560,7 +617,14 @@ where
         }
 
         let res = self.inner.open_resource_with_ctx(key, identity, ctx)?;
-        let displaced = self.cache_entry(&mut cache, cache_key, CacheEntry::Resource(res.clone()));
+        let displaced = self.cache_entry(
+            &mut cache,
+            cache_key,
+            CacheEntry::Resource {
+                reader: res.clone(),
+                hits: 1,
+            },
+        );
         let on_invalidated = self.on_invalidated.clone();
         drop(cache);
 

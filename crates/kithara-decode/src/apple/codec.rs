@@ -398,7 +398,7 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
         AudioCodec::Alac => {
             if track.extra_data.is_empty() {
                 return Err(DecodeError::InvalidData(
-                    "alac: missing magic cookie (kAudioFilePropertyMagicCookieData)".to_string(),
+                    "alac: missing magic cookie (kAudioFilePropertyMagicCookieData)".into(),
                 ));
             }
             let asbd = AudioStreamBasicDescription {
@@ -420,11 +420,14 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
 
 fn parse_pcm_extra_data(extra: &[u8]) -> DecodeResult<AudioStreamBasicDescription> {
     if extra.len() < size_of::<AudioStreamBasicDescription>() {
-        return Err(DecodeError::InvalidData(format!(
-            "pcm: extra_data too short ({} bytes, need {})",
-            extra.len(),
-            size_of::<AudioStreamBasicDescription>()
-        )));
+        return Err(DecodeError::InvalidData(
+            format!(
+                "pcm: extra_data too short ({} bytes, need {})",
+                extra.len(),
+                size_of::<AudioStreamBasicDescription>()
+            )
+            .into(),
+        ));
     }
     let mut asbd = AudioStreamBasicDescription::default();
     // SAFETY: `AudioStreamBasicDescription` is `#[repr(C)]` POD; length
@@ -582,9 +585,9 @@ fn derive_aac_asbd_from_esds(
 /// `kithara-decode/CONTEXT.md` "Apple AAC input format (ESDS rationale)".
 fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
     let too_long = |scope: &str, n: usize| {
-        DecodeError::InvalidData(format!(
-            "aac: {scope} too long for short-form ESDS size field ({n} > 127)"
-        ))
+        DecodeError::InvalidData(
+            format!("aac: {scope} too long for short-form ESDS size field ({n} > 127)").into(),
+        )
     };
     let dsi_body: u8 = asc
         .len()

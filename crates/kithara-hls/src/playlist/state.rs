@@ -145,6 +145,12 @@ impl PlaylistState {
 /// solely to group the visibility of N methods under a single
 /// `pub(crate)` marker rather than annotating each one individually.
 pub(crate) trait PlaylistAccess: Send + Sync {
+    /// Resolve the segment whose decode-time window contains `target` from
+    /// the parsed playlist, returning `(index, segment_start, segment_end)`.
+    /// Cold path: the cross-variant switch reseed in
+    /// [`HlsCoord::commit_variant_switch`]. The per-seek hot path
+    /// (`HlsVariant::seek_time_anchor`) bisects the active variant's
+    /// decode-time table directly instead.
     fn find_seek_point_for_time(
         &self,
         variant: VariantIndex,

@@ -120,6 +120,28 @@ impl StreamType for Hls {
 
         let (master, media_playlists) = load_playlists(&stream_peer, &config).await?;
 
+        // Size the private per-stream LRU handle cache to the variant's
+        // segment count when the caller left it at the default, so random
+        // seeks reuse open segment resources instead of thrashing a tiny
+        // window into repeated re-opens. The store owns the headroom/cap
+        // policy; shared stores are app-wide and must not be resized here.
+        if config.asset_store.is_none() && config.store.cache_capacity.is_none() {
+            let max_variant_segments = media_playlists
+                .iter()
+                .map(|mp| mp.segments.len())
+                .max()
+                .unwrap_or(0);
+            let installed = stream_peer
+                .scope()
+                .store()
+                .reserve_cache_for(max_variant_segments);
+            tracing::debug!(
+                max_variant_segments,
+                cache_capacity = installed.get(),
+                "sized private per-stream handle cache"
+            );
+        }
+
         let key_store = KeyStore::with_options(
             stream_peer.peer_handle(),
             stream_peer.scope(),

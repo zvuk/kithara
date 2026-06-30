@@ -122,7 +122,7 @@ fn remote_scope_parts(url: &url::Url, name: Option<&str>) -> (Arc<dyn AssetScope
     (naming, asset_root)
 }
 
-fn fallback_downloader(cancel: &CancelToken, pool: Option<BytePool>) -> Downloader {
+fn default_downloader(cancel: &CancelToken, pool: Option<BytePool>) -> Downloader {
     let cancel_for_dl = cancel.child();
     let net_options = NetOptions::builder().maybe_byte_pool(pool).build();
     let client = HttpClient::new(net_options, cancel_for_dl.child());
@@ -251,7 +251,7 @@ impl File {
             ..
         } = config;
         let (naming, asset_root) = remote_scope_parts(&url, name.as_deref());
-        let downloader = downloader.unwrap_or_else(|| fallback_downloader(&cancel, pool.clone()));
+        let downloader = downloader.unwrap_or_else(|| default_downloader(&cancel, pool.clone()));
         let backend =
             asset_store.unwrap_or_else(|| build_shared_asset_store(&store, pool, cancel.clone()));
 
@@ -342,8 +342,8 @@ impl File {
 /// Inject the result into every [`FileConfig::asset_store`](crate::FileConfig)
 /// that should cooperate on a single cache so concurrent consumers of
 /// one URL share a single download. `cancel` must be a child of the app
-/// master so a shutdown cascades through the store. Also the standalone
-/// fallback when no store is injected (single consumer).
+/// master so a shutdown cascades through the store. Also used as the
+/// standalone default when no store is injected (single consumer).
 #[must_use]
 pub fn build_shared_asset_store(
     store: &StoreOptions,

@@ -64,9 +64,32 @@ impl HlsVariant {
         old_queue_len = self.flow.queue.lock().len() as u64
     )]
     pub(crate) fn rebuild(&self, _ctx: &PlanCtx, from_seg: u32) {
+        if self.fetch_plan_satisfied(from_seg) {
+            return;
+        }
         self.rebuild_queue(from_seg);
     }
 
+    /// True when every fetch a `rebuild_queue(from_seg)` would enqueue is
+    /// already `Loaded` — the init (if any) plus every media segment in
+    /// `[from_seg, num_segments)`. In that state a rebuild only reseeds
+    /// entries `dispatch` immediately skips, so it is pure churn on a
+    /// fully-cached seek. A partial cache returns `false` and rebuilds, so
+    /// the prefetch tail is still re-aimed at the seek target whenever a
+    /// fetch is actually outstanding.
+    pub(super) fn fetch_plan_satisfied(&self, from_seg: u32) -> bool {
+        if self.needs_init_fetch() {
+            return false;
+        }
+        let segs_len = self.num_segments();
+        (from_seg..segs_len).all(|idx| {
+            self.segments
+                .get(idx as usize)
+                .is_some_and(|seg| seg.state().is_loaded())
+        })
+    }
+
+    #[kithara::probe]
     pub(super) fn rebuild_queue(&self, from_seg: u32) {
         let segs_len = self.num_segments();
         let init = self

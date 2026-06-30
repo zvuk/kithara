@@ -11,7 +11,7 @@ use super::stretch_backend::{StretchBackend, StretchBackendError};
 pub(crate) struct SignalsmithBackend {
     inner: Stretch,
     /// The latency tail was already drained; `flush` is one-shot per stream
-    /// end or the caller's drain loop (`drain_effects`) would never finish.
+    /// end or the caller's EOF drain loop would never finish.
     flushed: bool,
     ratio: f64,
     channels: usize,

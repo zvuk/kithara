@@ -4,7 +4,7 @@ use kithara_platform::time::Duration;
 use kithara_stream::{SourceSeekAnchor, StreamError, StreamResult, needs_exact_byte_sizes};
 
 use super::{HlsVariant, size::ExactSeekDemand};
-use crate::{HlsError, playlist::PlaylistAccess};
+use crate::HlsError;
 
 #[derive(Clone, Copy)]
 pub(super) struct SeekAlias {
@@ -111,9 +111,7 @@ impl HlsVariant {
         position: Duration,
     ) -> StreamResult<Option<SourceSeekAnchor>> {
         let variant = self.variant;
-        let Some((segment_index, segment_start, segment_end)) = self
-            .playlist_state
-            .find_seek_point_for_time(variant, position)
+        let Some((seg_idx_u32, segment_start, segment_end)) = self.seek_point_at_time(position)
         else {
             return Err(StreamError::Source(
                 HlsError::SegmentNotFound(format!(
@@ -123,11 +121,10 @@ impl HlsVariant {
                 .into(),
             ));
         };
-        let seg_idx_u32 = u32::try_from(segment_index).unwrap_or(u32::MAX);
         let byte_offset = self.segment_byte_offset(seg_idx_u32).ok_or_else(|| {
             StreamError::Source(
                 HlsError::SegmentNotFound(format!(
-                    "seek offset not found: variant={variant} segment={segment_index}"
+                    "seek offset not found: variant={variant} segment={seg_idx_u32}"
                 ))
                 .into(),
             )
@@ -145,7 +142,9 @@ impl HlsVariant {
         self.set_prefetch_anchor(prefetch_anchor);
         self.set_seek_alias(byte_offset, seg_idx_u32);
         self.set_segment_aware_seek_tail(fetch_start);
-        self.rebuild_queue(fetch_start);
+        if !self.fetch_plan_satisfied(fetch_start) {
+            self.rebuild_queue(fetch_start);
+        }
         self.set_exact_seek_demand(byte_offset, seg_idx_u32);
         Ok(Some(anchor))
     }
