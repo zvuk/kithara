@@ -136,16 +136,14 @@ impl AppleAudioFileDemuxer {
             .then(|| StreamInfo::parse(&extra_data).ok())
             .flatten();
 
-        let channels = u16::try_from(asbd.mChannelsPerFrame).map_err(|_| {
-            DecodeError::backend_msg(format!(
-                "apple.audio_file: invalid channel count {}",
-                asbd.mChannelsPerFrame
-            ))
-        })?;
+        let channels =
+            u16::try_from(asbd.mChannelsPerFrame).map_err(|_| DecodeError::InvalidData {
+                detail: "apple.audio_file: invalid channel count",
+            })?;
         if channels == 0 {
-            return Err(DecodeError::backend_msg(
-                "apple.audio_file: invalid zero channel count",
-            ));
+            return Err(DecodeError::InvalidData {
+                detail: "apple.audio_file: invalid zero channel count",
+            });
         }
         let Some(sample_rate) = sample_rate_from_asbd(asbd.mSampleRate) else {
             return Err(DecodeError::InvalidSampleRate {
@@ -217,7 +215,7 @@ impl AppleAudioFileDemuxer {
     ) -> DecodeResult<Self> {
         let hint = container
             .and_then(|c| Self::file_type_id(codec, c))
-            .ok_or(DecodeError::UnsupportedCodec(codec))?;
+            .ok_or(DecodeError::UnsupportedCodec { codec })?;
         Self::open(source, Some(hint), codec, open_mode, duration_hint)
     }
 

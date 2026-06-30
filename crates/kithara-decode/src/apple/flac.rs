@@ -16,14 +16,8 @@ pub(crate) fn streaminfo_body(extra: &[u8]) -> DecodeResult<&[u8]> {
         Some(extra)
     };
     body.and_then(|b| b.get(..Consts::FLAC_STREAMINFO_LEN))
-        .ok_or_else(|| {
-            DecodeError::InvalidData(
-                format!(
-                    "flac: STREAMINFO unavailable from {} bytes of codec config",
-                    extra.len()
-                )
-                .into(),
-            )
+        .ok_or_else(|| DecodeError::InvalidData {
+            detail: "flac: STREAMINFO unavailable from codec config",
         })
 }
 

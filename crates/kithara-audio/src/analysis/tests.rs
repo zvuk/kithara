@@ -91,9 +91,9 @@ impl FakeReader {
     }
 
     fn failing() -> Self {
-        Self::new(VecDeque::from([Err(DecodeError::InvalidData(
-            "scripted failure".into(),
-        ))]))
+        Self::new(VecDeque::from([Err(DecodeError::InvalidData {
+            detail: "scripted failure",
+        })]))
     }
 }
 

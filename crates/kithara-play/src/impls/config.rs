@@ -248,10 +248,10 @@ impl ResourceConfig {
         let byte_pool = self.byte_pool.clone();
         let url = match self.src {
             ResourceSrc::Url(ref url) => url.clone(),
-            ResourceSrc::Path(ref p) => {
-                return Err(DecodeError::InvalidData(
-                    format!("HLS requires a URL, got local path: {}", p.display()).into(),
-                ));
+            ResourceSrc::Path(_) => {
+                return Err(DecodeError::InvalidData {
+                    detail: "HLS requires a URL, got a local path",
+                });
             }
         };
         let store = store_options_with_flush_hub(&self.store, self.flush_hub.clone());
@@ -316,22 +316,22 @@ impl ResourceConfig {
         match Url::parse(trimmed) {
             #[cfg(not(target_arch = "wasm32"))]
             Ok(url) if url.scheme() == "file" => {
-                let path = url.to_file_path().map_err(|()| {
-                    DecodeError::InvalidData(format!("invalid file URL: {trimmed}").into())
+                let path = url.to_file_path().map_err(|()| DecodeError::InvalidData {
+                    detail: "invalid file URL",
                 })?;
                 Ok(ResourceSrc::Path(path))
             }
             #[cfg(target_arch = "wasm32")]
-            Ok(url) if url.scheme() == "file" => Err(DecodeError::InvalidData(
-                format!("file:// URL is not supported on wasm: {trimmed}").into(),
-            )),
+            Ok(url) if url.scheme() == "file" => Err(DecodeError::InvalidData {
+                detail: "file:// URL is not supported on wasm",
+            }),
             Ok(url) => Ok(ResourceSrc::Url(url)),
             Err(_) => {
                 let path = PathBuf::from(trimmed);
                 if !path.is_absolute() {
-                    return Err(DecodeError::InvalidData(
-                        format!("invalid URL or file path (must be absolute): {trimmed}").into(),
-                    ));
+                    return Err(DecodeError::InvalidData {
+                        detail: "invalid URL or file path (must be absolute)",
+                    });
                 }
                 Ok(ResourceSrc::Path(path))
             }

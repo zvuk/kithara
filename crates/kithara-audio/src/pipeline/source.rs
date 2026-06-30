@@ -599,7 +599,9 @@ impl<T: StreamType> StreamAudioSource<T> {
         let Some(recreate_offset) = recreate_offset else {
             self.fail_seek(
                 request,
-                DecodeError::InvalidData(Self::SEEK_ANCHOR_NO_INIT_RANGE.into()),
+                DecodeError::InvalidData {
+                    detail: Self::SEEK_ANCHOR_NO_INIT_RANGE,
+                },
                 "seek anchor alignment: no init segment range",
             );
             return false;
@@ -615,10 +617,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let Some(mut target_info) = target_info else {
             self.fail_seek(
                 request,
-                DecodeError::InvalidData(
-                    "seek anchor alignment: variant/codec changed but media info unavailable"
-                        .into(),
-                ),
+                DecodeError::InvalidData { detail: "seek anchor alignment: variant/codec changed but media info unavailable" },
                 "seek anchor alignment failed",
             );
             return false;
@@ -1047,7 +1046,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         };
         warn!(?err, epoch, ?position, recreate_offset, "{warn_msg}");
 
-        if matches!(err, DecodeError::SeekOutOfRange(_)) {
+        if matches!(err, DecodeError::SeekOutOfRange { .. }) {
             self.reject_seek(request, &err, fail_ctx);
             return false;
         }
@@ -1079,7 +1078,9 @@ impl<T: StreamType> StreamAudioSource<T> {
         else {
             self.fail_seek(
                 request,
-                DecodeError::InvalidData(Self::SEEK_RECOVERY_NO_INIT_RANGE.into()),
+                DecodeError::InvalidData {
+                    detail: Self::SEEK_RECOVERY_NO_INIT_RANGE,
+                },
                 fail_ctx,
             );
             return false;
@@ -1164,13 +1165,15 @@ impl<T: StreamType> StreamAudioSource<T> {
         let outcome: DecodeResult<DecoderChunkOutcome> =
             match catch_unwind(AssertUnwindSafe(|| self.session.decoder.next_chunk())) {
                 Ok(result) => result,
-                Err(payload) => Err(DecodeError::InvalidData(
-                    format!(
-                        "decoder panic during next_chunk: {}",
-                        Self::decode_panic_message(payload)
-                    )
-                    .into(),
-                )),
+                Err(payload) => {
+                    warn!(
+                        panic = %Self::decode_panic_message(payload),
+                        "decoder panicked during next_chunk"
+                    );
+                    Err(DecodeError::InvalidData {
+                        detail: "decoder panicked during next_chunk",
+                    })
+                }
             };
         match &outcome {
             Ok(DecoderChunkOutcome::Eof) => {
@@ -1208,13 +1211,13 @@ impl<T: StreamType> StreamAudioSource<T> {
         let outcome = match catch_unwind(AssertUnwindSafe(|| self.session.decoder.seek(position))) {
             Ok(result) => result,
             Err(payload) => {
-                return Err(DecodeError::InvalidData(
-                    format!(
-                        "decoder panic during seek: {}",
-                        Self::decode_panic_message(payload)
-                    )
-                    .into(),
-                ));
+                warn!(
+                    panic = %Self::decode_panic_message(payload),
+                    "decoder panicked during seek"
+                );
+                return Err(DecodeError::InvalidData {
+                    detail: "decoder panicked during seek",
+                });
             }
         };
         let pos_after_seek = self.shared_stream.position();
@@ -1754,18 +1757,18 @@ impl<T: StreamType> StreamAudioSource<T> {
 
             match self.decoder_next_chunk_safe() {
                 Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
-                    match self.handle_variant_change(&DecodeError::InvalidData(
-                        Self::VARIANT_CHANGE_NO_FORMAT_TRANSITION.into(),
-                    )) {
+                    match self.handle_variant_change(&DecodeError::InvalidData {
+                        detail: Self::VARIANT_CHANGE_NO_FORMAT_TRANSITION,
+                    }) {
                         DecodeAction::Yield => return Err(DecodeError::Interrupted),
                         DecodeAction::Return(result) => return result,
                     }
                 }
                 Ok(DecoderChunkOutcome::Pending(reason)) => {
                     if self.shared_stream.has_variant_change_pending() {
-                        match self.handle_variant_change(&DecodeError::InvalidData(
-                            Self::VARIANT_CHANGE_NO_FORMAT_TRANSITION.into(),
-                        )) {
+                        match self.handle_variant_change(&DecodeError::InvalidData {
+                            detail: Self::VARIANT_CHANGE_NO_FORMAT_TRANSITION,
+                        }) {
                             DecodeAction::Yield => return Err(DecodeError::Interrupted),
                             DecodeAction::Return(result) => return result,
                         }
@@ -1894,7 +1897,9 @@ impl<T: StreamType> StreamAudioSource<T> {
                 warn!(?err, "seek anchor resolution failed");
                 self.fail_seek(
                     request,
-                    DecodeError::SeekFailed(Self::SEEK_ANCHOR_RESOLUTION_FAILED.into()),
+                    DecodeError::SeekFailed {
+                        detail: Self::SEEK_ANCHOR_RESOLUTION_FAILED,
+                    },
                     "seek anchor resolution failed",
                 );
                 return;

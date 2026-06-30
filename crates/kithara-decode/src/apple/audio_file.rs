@@ -167,10 +167,10 @@ impl AppleAudioFile {
             )
         };
         if status != Consts::noErr {
-            return Err(DecodeError::backend_msg(format!(
-                "AudioFileOpenWithCallbacks failed: {}",
-                os_status_to_string(status)
-            )));
+            return Err(DecodeError::BackendStatus {
+                code: status,
+                op: "AudioFileOpenWithCallbacks",
+            });
         }
 
         let data_format = read_data_format(handle)?;
@@ -352,10 +352,10 @@ fn read_data_format(handle: AudioFileID) -> DecodeResult<AudioStreamBasicDescrip
         )
     };
     if status != Consts::noErr {
-        return Err(DecodeError::backend_msg(format!(
-            "AudioFileGetProperty(DataFormat) failed: {}",
-            os_status_to_string(status)
-        )));
+        return Err(DecodeError::BackendStatus {
+            code: status,
+            op: "AudioFileGetProperty(DataFormat)",
+        });
     }
     Ok(asbd)
 }
@@ -373,10 +373,10 @@ fn read_packet_count(handle: AudioFileID) -> DecodeResult<u64> {
         )
     };
     if status != Consts::noErr {
-        return Err(DecodeError::backend_msg(format!(
-            "AudioFileGetProperty(PacketCount) failed: {}",
-            os_status_to_string(status)
-        )));
+        return Err(DecodeError::BackendStatus {
+            code: status,
+            op: "AudioFileGetProperty(PacketCount)",
+        });
     }
     Ok(count)
 }
@@ -394,10 +394,10 @@ fn read_max_packet_size(handle: AudioFileID) -> DecodeResult<u32> {
         )
     };
     if status != Consts::noErr {
-        return Err(DecodeError::backend_msg(format!(
-            "AudioFileGetProperty(MaxPacketSize) failed: {}",
-            os_status_to_string(status)
-        )));
+        return Err(DecodeError::BackendStatus {
+            code: status,
+            op: "AudioFileGetProperty(MaxPacketSize)",
+        });
     }
     Ok(sz)
 }

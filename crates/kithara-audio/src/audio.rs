@@ -63,10 +63,10 @@ fn clamp_u128_to_u64_millis(ms: u128) -> u64 {
 /// Errors if the product does not fit in `usize` on the host (32-bit targets).
 fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
     let samples = frames.saturating_mul(channels);
-    usize::try_from(samples).map_err(|err| {
-        DecodeError::Io(IoError::other(format!(
+    usize::try_from(samples).map_err(|err| DecodeError::Io {
+        source: IoError::other(format!(
             "frames*channels overflow: {samples} does not fit usize: {err}"
-        )))
+        )),
     })
 }
 
@@ -473,9 +473,9 @@ impl<S> Audio<S> {
         if self.current_chunk.is_none() && self.consumer_phase != ConsumerPhase::AtEof {
             self.fill_buffer();
             if self.consumer_phase == ConsumerPhase::Failed {
-                return Err(DecodeError::Io(IoError::other(
-                    "pcm channel closed during preload",
-                )));
+                return Err(DecodeError::Io {
+                    source: IoError::other("pcm channel closed during preload"),
+                });
             }
         }
         Ok(())
@@ -533,9 +533,9 @@ impl<S> Audio<S> {
                 });
             }
             ConsumerPhase::Failed => {
-                return Err(DecodeError::Io(IoError::other(
-                    "pcm channel closed / producer failed",
-                )));
+                return Err(DecodeError::Io {
+                    source: IoError::other("pcm channel closed / producer failed"),
+                });
             }
             _ => {}
         }
@@ -625,9 +625,9 @@ impl<S> Audio<S> {
         let position = self.position();
         match self.consumer_phase {
             ConsumerPhase::AtEof => Ok(ReadOutcome::Eof { position }),
-            ConsumerPhase::Failed => Err(DecodeError::Io(IoError::other(
-                "pcm channel closed / producer failed",
-            ))),
+            ConsumerPhase::Failed => Err(DecodeError::Io {
+                source: IoError::other("pcm channel closed / producer failed"),
+            }),
             ConsumerPhase::SeekPending { .. } => Ok(ReadOutcome::Pending {
                 position,
                 reason: PendingReason::SeekInProgress,
@@ -961,10 +961,10 @@ where
             cancel: config_cancel,
         } = config;
         let cancel = CancelScope::new(config_cancel).token();
-        let runtime_handle = RuntimeHandle::try_current().map_err(|e| {
-            DecodeError::Io(IoError::other(format!(
+        let runtime_handle = RuntimeHandle::try_current().map_err(|e| DecodeError::Io {
+            source: IoError::other(format!(
                 "audio stream construction requires a tokio runtime: {e}"
-            )))
+            )),
         })?;
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
@@ -1262,7 +1262,9 @@ where
             }
         })
         .await
-        .map_err(|e| DecodeError::Io(IoError::other(format!("decoder task panicked: {e}"))))?;
+        .map_err(|e| DecodeError::Io {
+            source: IoError::other(format!("decoder task panicked: {e}")),
+        })?;
         if decoder.is_ok() {
             debug!("Audio::new — decoder created");
         }
@@ -1325,7 +1327,9 @@ where
         debug!("Audio::new — creating Stream...");
         let stream = Stream::<T>::new(stream_config)
             .await
-            .map_err(|e| DecodeError::Io(IoError::other(e.to_string())))?;
+            .map_err(|e| DecodeError::Io {
+                source: IoError::other(e.to_string()),
+            })?;
         debug!("Audio::new — Stream created");
         Ok(stream)
     }
@@ -1339,7 +1343,9 @@ where
         // blocking mode), which waits for a slow prefix and surfaces a genuine
         // source error (e.g. 503) directly. Reset the cursor to 0 so the build
         // probes the container header from the start.
-        stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
+        stream
+            .seek(SeekFrom::Start(0))
+            .map_err(|source| DecodeError::Io { source })?;
         Ok(stream)
     }
 
@@ -1354,7 +1360,9 @@ where
         debug!("Audio::new — spawning probe task...");
         let result = spawn_blocking(move || Self::probe_stream_blocking(stream, &byte_pool))
             .await
-            .map_err(|e| DecodeError::Io(IoError::other(format!("probe task panicked: {e}"))))??;
+            .map_err(|e| DecodeError::Io {
+                source: IoError::other(format!("probe task panicked: {e}")),
+            })??;
         debug!("Audio::new — probe task done");
         Ok(result)
     }
@@ -1450,9 +1458,9 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
             let position = self.position();
             return match self.consumer_phase {
                 ConsumerPhase::AtEof => Ok(ChunkOutcome::Eof { position }),
-                ConsumerPhase::Failed => Err(DecodeError::Io(IoError::other(
-                    "pcm channel closed / producer failed",
-                ))),
+                ConsumerPhase::Failed => Err(DecodeError::Io {
+                    source: IoError::other("pcm channel closed / producer failed"),
+                }),
                 ConsumerPhase::SeekPending { .. } => Ok(ChunkOutcome::Pending {
                     position,
                     reason: PendingReason::SeekInProgress,
@@ -1854,7 +1862,10 @@ mod tests {
         assert!(result.is_none());
         assert_eq!(audio.consumer_phase, ConsumerPhase::Failed);
         let mut buf = [0.0f32; 16];
-        assert!(matches!(audio.read(&mut buf), Err(DecodeError::Io(_))));
+        assert!(matches!(
+            audio.read(&mut buf),
+            Err(DecodeError::Io { source: _ })
+        ));
     }
 
     #[kithara::test]

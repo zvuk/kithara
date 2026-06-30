@@ -81,8 +81,8 @@ impl SymphoniaCodec {
             .make_audio_decoder(params, &opts)
             .map_err(DecodeError::backend)?;
 
-        let raw_rate = params.sample_rate.ok_or_else(|| {
-            DecodeError::InvalidData("symphonia native params missing sample rate".into())
+        let raw_rate = params.sample_rate.ok_or_else(|| DecodeError::InvalidData {
+            detail: "symphonia native params missing sample rate",
         })?;
         let channels = params
             .channels
@@ -299,7 +299,7 @@ fn map_codec(codec: AudioCodec) -> DecodeResult<(AudioCodecId, Option<CodecProfi
         AudioCodec::Alac => Ok((CODEC_ID_ALAC, None)),
         AudioCodec::Opus => Ok((CODEC_ID_OPUS, None)),
         AudioCodec::Vorbis => Ok((CODEC_ID_VORBIS, None)),
-        AudioCodec::Pcm | AudioCodec::Adpcm => Err(DecodeError::UnsupportedCodec(codec)),
+        AudioCodec::Pcm | AudioCodec::Adpcm => Err(DecodeError::UnsupportedCodec { codec }),
     }
 }
 

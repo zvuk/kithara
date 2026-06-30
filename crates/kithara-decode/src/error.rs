@@ -1,32 +1,40 @@
-use std::{borrow::Cow, error::Error as StdError, io, io::ErrorKind, num::TryFromIntError};
+use std::{error::Error as StdError, io, io::ErrorKind, num::TryFromIntError};
 
 use kithara_bufpool::BudgetExhausted;
 use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, VariantChangeError};
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 use kithara_stream::{NotReadyCause, StreamPending};
-use thiserror::Error;
 
 /// Errors that can occur during audio decoding.
 ///
 /// This error type is backend-agnostic, wrapping decoder-specific errors
 /// in the `Backend` variant.
-#[derive(Debug, Error)]
+///
+/// The real-time decode core constructs [`InvalidData`](Self::InvalidData),
+/// [`SeekFailed`](Self::SeekFailed) and [`SeekOutOfRange`](Self::SeekOutOfRange)
+/// on the `#[kithara::rtsan_forbid_blocking]` produce path, so those variants
+/// carry only `&'static str` / `Copy` fields — construction never allocates.
+/// `Display` formatting may allocate, but only off-RT when actually rendered.
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum DecodeError {
-    #[error("IO error: {0}")]
-    Io(io::Error),
+    #[error("IO error: {source}")]
+    Io {
+        #[source]
+        source: io::Error,
+    },
 
-    #[error("Unsupported codec: {0:?}")]
-    UnsupportedCodec(AudioCodec),
+    #[error("Unsupported codec: {codec:?}")]
+    UnsupportedCodec { codec: AudioCodec },
 
-    #[error("Unsupported container: {0:?}")]
-    UnsupportedContainer(ContainerFormat),
+    #[error("Unsupported container: {container:?}")]
+    UnsupportedContainer { container: ContainerFormat },
 
-    #[error("Invalid data: {0}")]
-    InvalidData(Cow<'static, str>),
+    #[error("Invalid data: {detail}")]
+    InvalidData { detail: &'static str },
 
-    #[error("Seek failed: {0}")]
-    SeekFailed(Cow<'static, str>),
+    #[error("Seek failed: {detail}")]
+    SeekFailed { detail: &'static str },
 
     /// The seek target is invalid for this stream — past EOF, beyond the
     /// indexed sample range, or otherwise out of the addressable space.
@@ -36,8 +44,19 @@ pub enum DecodeError {
     /// stream itself, not from decoder state, so a freshly built decoder
     /// rejects the same target with the same answer. Pipeline must
     /// surface this to the caller (fail the seek) rather than retry.
-    #[error("Seek target out of range: {0}")]
-    SeekOutOfRange(Cow<'static, str>),
+    #[error("Seek target out of range: {detail}")]
+    SeekOutOfRange { detail: &'static str },
+
+    /// Off-RT parse failure carrying the upstream parser/io error as a
+    /// typed source. Used by the init-segment / box parsers, which run on
+    /// in-memory buffers during decoder construction (never on the RT
+    /// produce path).
+    #[error("Parse failed in {what}: {source}")]
+    Parse {
+        what: &'static str,
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
 
     #[error("Probe failed: could not detect codec")]
     ProbeFailed,
@@ -54,13 +73,22 @@ pub enum DecodeError {
     #[error("invalid sample rate: zero is not a valid audio rate ({resource})")]
     InvalidSampleRate { resource: &'static str },
 
+    /// A platform decode backend reported a numeric status code (Apple
+    /// `OSStatus`, Android `media_status_t`). Carries the raw code plus a
+    /// `&'static str` operation tag instead of a pre-formatted string.
+    #[error("decoder backend status {code} ({op})")]
+    BackendStatus { code: i32, op: &'static str },
+
     /// A seek interrupted the decode operation. Not a real error —
     /// the caller should check for pending seeks and retry.
     #[error("Interrupted by seek")]
     Interrupted,
 
-    #[error("Decoder error: {0}")]
-    Backend(#[source] Box<dyn StdError + Send + Sync>),
+    #[error("Decoder error: {source}")]
+    Backend {
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
 }
 
 fn is_seek_pending_io(err: &io::Error) -> bool {
@@ -129,25 +157,28 @@ pub enum ErrorClass {
 
 impl DecodeError {
     /// Wrap any `StdError + Send + Sync` payload as a [`DecodeError::Backend`].
-    /// Avoids 30+ repeats of `.map_err(|e| DecodeError::Backend(Box::new(e)))`
+    /// Avoids 30+ repeats of `.map_err(|e| DecodeError::Backend { source: Box::new(e) })`
     /// across the apple / android / symphonia codec layers.
     #[must_use]
     pub fn backend<E>(err: E) -> Self
     where
         E: Into<Box<dyn StdError + Send + Sync>>,
     {
-        Self::Backend(err.into())
+        Self::Backend { source: err.into() }
     }
 
-    /// Convenience constructor for "we have a description string, not
-    /// a typed source error" — typically `format!(...)` payloads for
-    /// FFI status codes (Apple `OSStatus`, Android `media_status_t`).
+    /// Wrap an upstream parser / io error as a [`DecodeError::Parse`] with a
+    /// `&'static str` site tag. For off-RT init-segment / box parsing only —
+    /// preserves the typed source chain without stringifying it.
     #[must_use]
-    pub fn backend_msg<S>(msg: S) -> Self
+    pub fn parse<E>(what: &'static str, err: E) -> Self
     where
-        S: Into<String>,
+        E: Into<Box<dyn StdError + Send + Sync>>,
     {
-        Self::Backend(Box::new(io::Error::other(msg.into())))
+        Self::Parse {
+            what,
+            source: err.into(),
+        }
     }
 
     /// Tag the error in one source-chain pass so hot decode loops can
@@ -159,17 +190,17 @@ impl DecodeError {
     pub fn classify(&self) -> ErrorClass {
         match self {
             Self::Interrupted => ErrorClass::Interrupted,
-            Self::Io(err) => {
-                if is_variant_change_io(err) {
+            Self::Io { source } => {
+                if is_variant_change_io(source) {
                     ErrorClass::VariantChange
-                } else if is_seek_pending_io(err) {
+                } else if is_seek_pending_io(source) {
                     ErrorClass::Interrupted
                 } else {
                     ErrorClass::Other
                 }
             }
-            Self::Backend(err) => {
-                let leaf = err.as_ref();
+            Self::Backend { source } => {
+                let leaf = source.as_ref();
                 if error_chain_is_variant_change(leaf) {
                     ErrorClass::VariantChange
                 } else if error_chain_is_interrupted(leaf) {
@@ -199,8 +230,8 @@ impl DecodeError {
     #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
     pub(crate) fn pending_reason(&self) -> Option<PendingReason> {
         let io_err = match self {
-            Self::Io(e) => e,
-            Self::Backend(b) => b.as_ref().downcast_ref::<io::Error>()?,
+            Self::Io { source } => source,
+            Self::Backend { source } => source.as_ref().downcast_ref::<io::Error>()?,
             _ => return None,
         };
         if io_err.kind() != ErrorKind::Interrupted && io_err.kind() != ErrorKind::WouldBlock {
@@ -223,7 +254,7 @@ impl From<io::Error> for DecodeError {
         if err.kind() == ErrorKind::Interrupted {
             Self::Interrupted
         } else {
-            Self::Io(err)
+            Self::Io { source: err }
         }
     }
 }
@@ -252,16 +283,20 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    #[case::invalid_data(DecodeError::InvalidData("bad frame".into()), "Invalid data: bad frame")]
-    #[case::seek_failed(DecodeError::SeekFailed("timestamp out of range".into()), "Seek failed: timestamp out of range")]
+    #[case::invalid_data(DecodeError::InvalidData { detail: "bad frame" }, "Invalid data: bad frame")]
+    #[case::seek_failed(DecodeError::SeekFailed { detail: "timestamp out of range" }, "Seek failed: timestamp out of range")]
     #[case::probe_failed(DecodeError::ProbeFailed, "Probe failed: could not detect codec")]
     #[case::unsupported_codec(
-        DecodeError::UnsupportedCodec(AudioCodec::AacLc),
+        DecodeError::UnsupportedCodec { codec: AudioCodec::AacLc },
         "Unsupported codec: AacLc"
     )]
     #[case::unsupported_container(
-        DecodeError::UnsupportedContainer(ContainerFormat::Fmp4),
+        DecodeError::UnsupportedContainer { container: ContainerFormat::Fmp4 },
         "Unsupported container: Fmp4"
+    )]
+    #[case::backend_status(
+        DecodeError::BackendStatus { code: -42, op: "AudioFileOpen" },
+        "decoder backend status -42 (AudioFileOpen)"
     )]
     fn test_error_display(#[case] error: DecodeError, #[case] expected: &str) {
         assert_eq!(error.to_string(), expected);
@@ -288,7 +323,7 @@ mod tests {
         let io_err = IoError::new(kind, msg);
         let decode_err: DecodeError = io_err.into();
         match expected {
-            ExpectedKind::Io => assert!(matches!(decode_err, DecodeError::Io(_))),
+            ExpectedKind::Io => assert!(matches!(decode_err, DecodeError::Io { .. })),
             ExpectedKind::Interrupted => assert!(matches!(decode_err, DecodeError::Interrupted)),
         }
     }
@@ -300,9 +335,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_decode_error_backend_msg_wraps_a_display() {
-        let err = DecodeError::backend_msg(format!("oss status {}", 42));
-        assert!(err.to_string().contains("oss status 42"));
+    fn test_decode_error_parse_preserves_source() {
+        let err = DecodeError::parse("re_mp4", IoError::other("truncated box"));
+        assert!(err.to_string().contains("Parse failed in re_mp4"));
+        assert!(StdError::source(&err).is_some());
     }
 
     #[kithara::test]
@@ -326,7 +362,9 @@ mod tests {
 
     #[kithara::test]
     fn test_io_variant_change_is_detected() {
-        let decode_err = DecodeError::Io(IoError::other(VariantChangeError));
+        let decode_err = DecodeError::Io {
+            source: IoError::other(VariantChangeError),
+        };
         assert_eq!(decode_err.classify(), ErrorClass::VariantChange);
         assert!(!decode_err.is_interrupted());
     }

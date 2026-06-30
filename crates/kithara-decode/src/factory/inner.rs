@@ -295,7 +295,7 @@ fn create_apple(
         #[cfg(not(feature = "symphonia"))]
         {
             let _ = layout;
-            return Err(DecodeError::UnsupportedCodec(codec));
+            return Err(DecodeError::UnsupportedCodec { codec });
         }
     }
 
@@ -313,7 +313,7 @@ fn create_apple(
     #[cfg(not(feature = "symphonia"))]
     {
         let _ = (source, container, config);
-        Err(DecodeError::UnsupportedCodec(codec))
+        Err(DecodeError::UnsupportedCodec { codec })
     }
 }
 
@@ -404,7 +404,7 @@ fn create_android(
         #[cfg(not(feature = "symphonia"))]
         {
             let _ = layout;
-            return Err(DecodeError::UnsupportedCodec(codec));
+            return Err(DecodeError::UnsupportedCodec { codec });
         }
     }
 
@@ -422,7 +422,7 @@ fn create_android(
     #[cfg(not(feature = "symphonia"))]
     {
         let _ = (source, container, config);
-        Err(DecodeError::UnsupportedCodec(codec))
+        Err(DecodeError::UnsupportedCodec { codec })
     }
 }
 
@@ -458,7 +458,7 @@ fn build_android_standalone_decoder(
         (AudioCodec::Alac, Some(ContainerFormat::Mp4)) => {
             AndroidMediaExtractorDemuxer::open_alac_m4a(source)?
         }
-        _ => return Err(DecodeError::UnsupportedCodec(codec)),
+        _ => return Err(DecodeError::UnsupportedCodec { codec }),
     };
     let codec_impl = AndroidCodec::open_with_config(demuxer.track_info())?;
     let pool = config
@@ -600,7 +600,7 @@ fn create_fmp4_segment_symphonia(
                 SymphoniaCodec::open_with_config(track, &symphonia_config)
             })
         }
-        other => Err(DecodeError::UnsupportedCodec(other)),
+        other => Err(DecodeError::UnsupportedCodec { codec: other }),
     }
 }
 
@@ -677,7 +677,9 @@ mod apple_factory_tests {
         assert!(
             !matches!(
                 result,
-                Err(DecodeError::UnsupportedCodec(AudioCodec::AacLc))
+                Err(DecodeError::UnsupportedCodec {
+                    codec: AudioCodec::AacLc
+                })
             ),
             "apple-only AAC-LC fMP4 metadata probe was rejected as UnsupportedCodec"
         );
