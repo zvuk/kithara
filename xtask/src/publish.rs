@@ -40,6 +40,13 @@ pub(crate) struct PublishArgs {
     /// use 610 (crates.io allows 5 new crates burst, then 1 per 10 min).
     #[arg(long, default_value_t = Consts::DEFAULT_DELAY_SECS)]
     delay: u64,
+
+    /// Skip the verification build (`cargo publish --no-verify`). Required for
+    /// workspace library crates that leave the HTTP backend to the consumer:
+    /// an isolated default-feature build selects no backend and fails to
+    /// compile even though the packaged source is correct.
+    #[arg(long)]
+    no_verify: bool,
 }
 
 pub(crate) fn run(args: &PublishArgs) -> Result<()> {
@@ -70,7 +77,7 @@ pub(crate) fn run(args: &PublishArgs) -> Result<()> {
         println!("Mode: publish ({}s delay between crates)", args.delay);
         println!();
         let project = ProjectConfig::load(Path::new("."))?;
-        run_publish(&order, args.delay, &project.publish)?;
+        run_publish(&order, args.delay, args.no_verify, &project.publish)?;
     }
 
     println!();
@@ -132,7 +139,12 @@ fn run_dry_run_inner(order: &[String]) -> Result<()> {
 /// `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`. Since kithara
 /// places the hack under such a target section, we strip it ourselves and call
 /// `cargo publish` directly; the original Cargo.toml is restored unconditionally.
-fn run_publish(order: &[String], delay: u64, publish: &PublishConfig) -> Result<()> {
+fn run_publish(
+    order: &[String],
+    delay: u64,
+    no_verify: bool,
+    publish: &PublishConfig,
+) -> Result<()> {
     let manifests = locate_manifests(order)?;
     let versions = locate_versions(order)?;
 
@@ -162,6 +174,7 @@ fn run_publish(order: &[String], delay: u64, publish: &PublishConfig) -> Result<
             manifest,
             &publish.workspace_hack_crate,
             PublishMode::Upload,
+            no_verify,
         )?;
         published_count += 1;
         last_action_was_publish = true;
@@ -223,6 +236,7 @@ fn run_registry_dry_run(order: &[String], publish: &PublishConfig) -> Result<()>
             &manifests[name],
             &publish.workspace_hack_crate,
             PublishMode::DryRun,
+            false,
         )?;
     }
 
@@ -358,10 +372,13 @@ enum PublishMode {
 }
 
 impl PublishMode {
-    fn cargo_args(self, name: &str) -> Vec<&str> {
+    fn cargo_args(self, name: &str, no_verify: bool) -> Vec<&str> {
         let mut args = vec!["publish", "-p", name, "--allow-dirty"];
         if matches!(self, Self::DryRun) {
             args.push("--dry-run");
+        }
+        if no_verify {
+            args.push("--no-verify");
         }
         args
     }
@@ -374,7 +391,13 @@ impl PublishMode {
     }
 }
 
-fn publish_one(name: &str, manifest: &Path, hack_crate: &str, mode: PublishMode) -> Result<()> {
+fn publish_one(
+    name: &str,
+    manifest: &Path,
+    hack_crate: &str,
+    mode: PublishMode,
+    no_verify: bool,
+) -> Result<()> {
     let original = fs::read_to_string(manifest)
         .with_context(|| format!("read {} for {name}", manifest.display()))?;
     let stripped = strip_workspace_hack(&original, hack_crate);
@@ -387,7 +410,7 @@ fn publish_one(name: &str, manifest: &Path, hack_crate: &str, mode: PublishMode)
         println!("  Temporarily removed {hack_crate} dependency.");
     }
 
-    let args = mode.cargo_args(name);
+    let args = mode.cargo_args(name, no_verify);
     let result = run_cargo(&args, &mode.description(name));
 
     let restore_result = restore_publish_inputs(manifest, &original, did_strip, lockfile);
