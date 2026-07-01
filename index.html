@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kithara Play WASM</title>
+    <!-- Build the crate with the wasm feature set: the default features
+         (uniffi + symphonia) pull native-only deps that don't compile for
+         wasm32. -->
+    
+<script type="module">
+import init, * as bindings from './kithara-ffi.js';
+const wasm = await init({ module_or_path: './kithara-ffi_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+    
+    
+    
+    <style>
+        :root {
+            --bg-dark: #1a1a2e;
+            --bg-panel: #222244;
+            --bg-panel-alt: #2a2a54;
+            --line: #3b3b67;
+            --text-main: #e6e6e6;
+            --text-muted: #888ca3;
+            --accent: #bb9442;
+            --accent-strong: #d6ad59;
+            --error: #e65b5b;
+            --ok: #58c27d;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: "Avenir Next", "Fira Sans", "Trebuchet MS", sans-serif;
+            max-width: 900px;
+            margin: 22px auto;
+            padding: 0 16px 24px;
+            background:
+                radial-gradient(1200px 420px at 20% -10%, rgba(187, 148, 66, 0.22), transparent 58%),
+                radial-gradient(900px 380px at 100% 0%, rgba(34, 34, 68, 0.55), transparent 60%),
+                var(--bg-dark);
+            color: var(--text-main);
+        }
+        .header {
+            display: flex;
+            gap: 14px;
+            align-items: center;
+            margin-bottom: 14px;
+        }
+        .logo {
+            width: 64px;
+            height: 64px;
+            object-fit: contain;
+            border-radius: 10px;
+            background: rgba(34, 34, 68, 0.7);
+            border: 1px solid var(--line);
+            padding: 8px;
+        }
+        h1 {
+            color: var(--accent);
+            font-size: 28px;
+            letter-spacing: 0.2px;
+            text-shadow: 0 0 26px rgba(187, 148, 66, 0.2);
+        }
+        .subtitle { color: var(--text-muted); font-size: 13px; }
+        .card {
+            background: linear-gradient(180deg, rgba(42, 42, 84, 0.92), rgba(34, 34, 68, 0.95));
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 13px;
+            margin-bottom: 12px;
+            box-shadow: 0 18px 36px rgba(3, 3, 13, 0.28);
+        }
+        .row { display: flex; gap: 8px; align-items: center; }
+        .row + .row { margin-top: 10px; }
+        input[type="text"] {
+            flex: 1;
+            padding: 9px 12px;
+            font-size: 14px;
+            background: rgba(21, 21, 42, 0.74);
+            border: 1px solid var(--line);
+            color: var(--text-main);
+            border-radius: 6px;
+            outline: none;
+        }
+        input[type="text"]:focus { border-color: var(--accent); }
+        button {
+            padding: 9px 14px;
+            border: 1px solid #a88742;
+            border-radius: 6px;
+            background: linear-gradient(180deg, var(--accent-strong), var(--accent));
+            color: #1b1b2d;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 100ms ease, transform 100ms ease;
+        }
+        button:hover {
+            background: linear-gradient(180deg, #e2b963, var(--accent-strong));
+            transform: translateY(-1px);
+        }
+        button:disabled {
+            background: rgba(66, 66, 98, 0.5);
+            border-color: rgba(90, 90, 120, 0.5);
+            color: rgba(200, 200, 200, 0.6);
+            cursor: not-allowed;
+            transform: none;
+        }
+        #playlist {
+            margin-top: 10px;
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-height: 230px;
+            overflow-y: auto;
+        }
+        #playlist li {
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 8px 10px;
+            background: rgba(20, 20, 41, 0.66);
+            cursor: pointer;
+            font-size: 13px;
+            color: #dde0f3;
+            word-break: break-all;
+        }
+        #playlist li.active {
+            border-color: var(--accent);
+            background: rgba(187, 148, 66, 0.18);
+        }
+        #playlist li:hover { border-color: #8d8db8; }
+        input[type="range"] { flex: 1; accent-color: var(--accent); }
+        .setting-label {
+            min-width: 74px;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+        .setting-value {
+            min-width: 64px;
+            color: var(--text-muted);
+            font-family: monospace;
+            text-align: right;
+        }
+        .time { min-width: 46px; color: var(--text-muted); font-family: monospace; }
+        #status {
+            font-size: 13px;
+            color: var(--text-muted);
+            font-family: monospace;
+            margin-bottom: 10px;
+        }
+        .eq-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 8px;
+        }
+        .eq-band {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 8px;
+            background: rgba(21, 21, 42, 0.74);
+            overflow: hidden;
+        }
+        .eq-band label {
+            display: block;
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+        .eq-band input[type="range"] {
+            display: block;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            flex: 0 0 auto;
+        }
+        .eq-band .gain {
+            display: block;
+            margin-top: 4px;
+            font-size: 11px;
+            color: var(--text-main);
+            font-family: monospace;
+        }
+        #event-log {
+            background: rgba(15, 15, 30, 0.84);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 12px;
+            font-family: monospace;
+            color: #aab0c6;
+            max-height: 220px;
+            overflow-y: auto;
+        }
+        #event-log .error { color: var(--error); }
+        #event-log .info { color: var(--ok); }
+        @media (max-width: 740px) {
+            .eq-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .header { align-items: flex-start; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <img class="logo" src="logo.svg" alt="Kithara logo" />
+        <div>
+            <h1>Kithara Play WASM</h1>
+            <p class="subtitle">Queue + crossfade + EQ on the unified AudioPlayer <span id="build-info" style="color:var(--text-muted)"></span></p>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="row">
+            <input type="text" id="url-input" placeholder="Track URL (.m3u8 / .mp3 / etc)">
+            <button id="add-btn" disabled>Add To Queue</button>
+        </div>
+        <ul id="playlist"></ul>
+    </div>
+
+    <div class="card">
+        <div class="row">
+            <button id="play-btn" disabled>Play</button>
+            <button id="pause-btn" disabled>Pause</button>
+            <button id="stop-btn" disabled>Stop</button>
+        </div>
+        <div class="row">
+            <span class="time" id="position">0:00</span>
+            <input type="range" id="seek-slider" min="0" max="100" value="0" step="0.1" disabled>
+            <span class="time" id="duration">0:00</span>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="row">
+            <label class="setting-label" for="volume-slider">Volume</label>
+            <input type="range" id="volume-slider" min="0" max="1" value="0.5" step="0.01" disabled>
+            <span class="setting-value" id="volume-value">100%</span>
+        </div>
+        <div class="row">
+            <label class="setting-label" for="crossfade-slider">Crossfade</label>
+            <input type="range" id="crossfade-slider" min="0" max="10" value="5" step="0.1" disabled>
+            <span class="setting-value" id="crossfade-value">5.0s</span>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="row" style="justify-content: space-between;">
+            <strong style="font-size: 13px; color:var(--text-main);">Equalizer</strong>
+            <button id="eq-reset-btn" disabled>Reset EQ</button>
+        </div>
+        <div class="eq-grid" id="eq-grid"></div>
+    </div>
+
+    <div id="status">Initializing WASM...</div>
+    <div id="event-log"></div>
+
+    <script src="./coi-serviceworker.js"></script>
+    <script type="module">
+        const $ = id => document.getElementById(id);
+        const fmt = ms => {
+            const s = Math.max(0, Math.floor(ms / 1000));
+            return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+        };
+        function log(msg, cls = '') {
+            const div = document.createElement('div');
+            if (cls) div.className = cls;
+            div.textContent = `[${new Date().toISOString().slice(11, 23)}] ${msg}`;
+            $('event-log').appendChild(div);
+            $('event-log').scrollTop = $('event-log').scrollHeight;
+        }
+
+        function setControlsEnabled(on) {
+            for (const id of ['add-btn','play-btn','pause-btn','stop-btn','seek-slider','volume-slider','crossfade-slider','eq-reset-btn'])
+                $(id).disabled = !on;
+        }
+
+        // --- Init WASM ---
+        // `AudioPlayer` is the wasm-bindgen class generated from the
+        // #[wasm_bindgen] impl in src/web/surface.rs. `checkRuntime()` is
+        // appended to kithara-ffi.js by `cargo xtask wasm postbuild`.
+        const wasm = await import('./kithara-ffi.js');
+
+        const runtime = wasm.checkRuntime();
+        if (!runtime.ok) {
+            setControlsEnabled(false);
+            $('status').textContent = runtime.waitingForReload
+                ? 'Waiting for cross-origin isolation (service worker reload)...'
+                : 'Environment is not ready for WASM audio playback';
+            log(runtime.reason, runtime.waitingForReload ? 'info' : 'error');
+            throw new Error(runtime.reason);
+        }
+
+        await wasm.default();
+
+        // One AudioPlayer instance owns the engine worker + queue.
+        const player = new wasm.AudioPlayer();
+        window.__player = player;
+        window.__wasm = wasm;
+
+        $('build-info').textContent = `(${wasm.build_info()})`;
+
+        // --- Queue mirror (idx -> { url, label, id }) ---
+        // The engine owns the canonical queue; this JS list mirrors insertion
+        // order so the UI can map a clicked row to a queue index. Exposed on
+        // window so selenium tests can manipulate the queue.
+        const playlist = window.playlist = [];
+        let currentId = -1;
+        let durationMs = 0;
+        window.__durationMs = 0;
+
+        // setupNetwork wires the shared X-Auth-Token applied to subsequently
+        // inserted tracks.
+        player.setupNetwork('');
+        // The AES key processor is intentionally NOT wired here. setupHlsAes
+        // registers a player-wide rule whose salt header (X-Encrypted-Key) is
+        // currently attached to every fetch, not just key requests on the DRM
+        // domain; the plain MP3/HLS server's CORS (allow-headers: Range) then
+        // rejects the preflight (TypeError: Failed to fetch). The DRM track
+        // below therefore won't decrypt in this demo until the rule headers
+        // are scoped to the rule's domain.
+
+        const seedTracks = [
+            { url: 'https://stream.silvercomet.top/track.mp3', label: 'MP3 Track' },
+            { url: 'https://stream.silvercomet.top/hls/master.m3u8', label: 'HLS Stream' },
+            { url: 'https://stream.silvercomet.top/drm/master.m3u8', label: 'DRM Stream' },
+        ];
+
+        window.renderPlaylist = renderPlaylist;
+        function renderPlaylist() {
+            const ul = $('playlist');
+            ul.textContent = '';
+            playlist.forEach((track, i) => {
+                const li = document.createElement('li');
+                li.textContent = `${i + 1}. ${track.label}`;
+                if (track.id === currentId) li.classList.add('active');
+                li.onclick = () => selectTrack(i);
+                ul.appendChild(li);
+            });
+        }
+
+        // window-exposed for selenium: append a track to the engine queue and
+        // the JS mirror, returning the allocated track id.
+        window.addTrack = addTrack;
+        function addTrack(url, label) {
+            const id = player.append(url);
+            playlist.push({ url, label: label || url, id });
+            renderPlaylist();
+            log(`Added track: ${label || url} (id ${id})`, 'info');
+            return id;
+        }
+
+        // window-exposed for selenium: clear both the engine queue and the JS
+        // mirror so the two stay in sync (the engine owns the canonical queue).
+        window.clearPlaylist = clearPlaylist;
+        function clearPlaylist() {
+            player.removeAllItems();
+            playlist.length = 0;
+            currentId = -1;
+            durationMs = 0;
+            window.__durationMs = 0;
+            renderPlaylist();
+        }
+
+        function selectTrack(index) {
+            const track = playlist[index];
+            if (!track) return;
+            $('status').textContent = `Loading ${track.label}...`;
+            try {
+                player.selectItem(index);
+                player.play();
+                $('status').textContent = `Playing ${track.label}`;
+                log(`Track selected: ${track.label}`, 'info');
+            } catch (err) {
+                $('status').textContent = `Track select failed: ${err}`;
+                log(`Track select failed: ${err}`, 'error');
+            }
+        }
+
+        // --- Player observer ---
+        // The surface marshals each FfiPlayerEvent into a plain JS object with
+        // a `kind` discriminant. We log everything and track duration so the
+        // seek slider has a real range.
+        player.setObserver(event => {
+            const kind = event.kind || 'Event';
+            if (kind === 'DurationChanged') {
+                durationMs = event.seconds * 1000;
+                window.__durationMs = durationMs;
+            } else if (kind === 'CurrentItemChanged') {
+                currentId = event.item_id ?? -1;
+                renderPlaylist();
+            }
+            const cls = /error|fail|closed|lagged/i.test(JSON.stringify(event)) ? 'error' : '';
+            log(`${kind} ${JSON.stringify(event)}`, cls);
+        });
+
+        // --- Add track button ---
+        $('add-btn').onclick = () => {
+            const url = $('url-input').value.trim();
+            if (!url) return;
+            addTrack(url, url);
+            $('url-input').value = '';
+        };
+
+        // --- Transport ---
+        $('play-btn').onclick = () => { player.play(); $('status').textContent = 'Playing'; log('Play', 'info'); };
+        $('pause-btn').onclick = () => { player.pause(); $('status').textContent = 'Paused'; log('Pause', 'info'); };
+        $('stop-btn').onclick = () => {
+            // Stop = pause + reset position to 0; the queue is preserved so the
+            // same item can be replayed. Use clearPlaylist to empty the queue.
+            player.stop();
+            $('seek-slider').value = '0';
+            $('position').textContent = '0:00';
+            $('status').textContent = 'Stopped';
+            log('Stop', 'info');
+        };
+
+        // --- Seek ---
+        $('seek-slider').oninput = () => {
+            $('position').textContent = fmt(Number($('seek-slider').value));
+        };
+        $('seek-slider').onchange = () => {
+            const ms = Number($('seek-slider').value);
+            player.seek(ms);
+            log(`Seek to ${fmt(ms)}`, 'info');
+        };
+
+        // --- Volume ---
+        $('volume-slider').oninput = () => {
+            const v = Number($('volume-slider').value);
+            player.setVolume(v);
+            $('volume-value').textContent = `${Math.round(v * 100)}%`;
+        };
+
+        // --- Crossfade ---
+        $('crossfade-slider').oninput = () => {
+            $('crossfade-value').textContent =
+                Number($('crossfade-slider').value) <= 0 ? 'Off'
+                : `${Number($('crossfade-slider').value).toFixed(1)}s`;
+        };
+        $('crossfade-slider').onchange = () => {
+            player.setCrossfadeSeconds(Number($('crossfade-slider').value));
+        };
+
+        // --- Equalizer ---
+        function renderEq() {
+            const grid = $('eq-grid');
+            grid.textContent = '';
+            const bands = player.eqBandCount();
+            for (let i = 0; i < bands; i++) {
+                const band = document.createElement('div');
+                band.className = 'eq-band';
+                const label = document.createElement('label');
+                label.textContent = `Band ${i + 1}`;
+                const slider = document.createElement('input');
+                Object.assign(slider, {
+                    type: 'range', min: '-24', max: '6', step: '0.1',
+                    value: String(player.eqGain(i)),
+                });
+                const gain = document.createElement('span');
+                gain.className = 'gain';
+                gain.textContent = `${Number(slider.value).toFixed(1)} dB`;
+                slider.oninput = () => {
+                    gain.textContent = `${Number(slider.value).toFixed(1)} dB`;
+                };
+                slider.onchange = () => player.setEqGain(i, Number(slider.value));
+                band.append(label, slider, gain);
+                grid.appendChild(band);
+            }
+        }
+        $('eq-reset-btn').onclick = () => { player.resetEq(); renderEq(); log('EQ reset', 'info'); };
+
+        // --- UI loop (requestAnimationFrame) ---
+        // tick() pumps the worker -> main channel and services DRM key
+        // requests. currentTimeMs() reads the live position cache (60Hz smooth
+        // UI without a worker round-trip); duration comes from the observer.
+        function tick() {
+            player.tick();
+
+            const pos = player.currentTimeMs();
+            $('position').textContent = fmt(pos);
+            $('duration').textContent = fmt(durationMs);
+            if (durationMs > 0) {
+                $('seek-slider').max = String(durationMs);
+                if (!$('seek-slider').matches(':active')) {
+                    $('seek-slider').value = String(Math.min(pos, durationMs));
+                }
+            }
+
+            requestAnimationFrame(tick);
+        }
+
+        // --- Init ---
+        {
+            const initVol = Number($('volume-slider').value);
+            player.setVolume(initVol);
+        }
+        for (const t of seedTracks) addTrack(t.url, t.label);
+        renderEq();
+        $('volume-value').textContent = `${Math.round(player.volume() * 100)}%`;
+        $('crossfade-value').textContent = `${player.crossfadeSeconds().toFixed(1)}s`;
+        setControlsEnabled(true);
+        $('status').textContent = 'Ready';
+        log('WASM player initialized', 'info');
+        requestAnimationFrame(tick);
+    </script>
+</body>
+</html>
