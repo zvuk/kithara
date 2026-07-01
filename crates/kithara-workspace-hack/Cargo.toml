@@ -25,7 +25,7 @@ futures-channel = { version = "0.3", default-features = false, features = ["sink
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
-hotpath = { version = "0.18", features = ["hotpath", "hotpath-alloc"] }
+hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 indexmap = { version = "2", features = ["serde"] }
 memchr = { version = "2" }
 num-integer = { version = "0.1", features = ["i128"] }
@@ -59,7 +59,7 @@ futures-channel = { version = "0.3", default-features = false, features = ["sink
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
-hotpath = { version = "0.18", features = ["hotpath", "hotpath-alloc"] }
+hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 indexmap = { version = "2", features = ["serde"] }
 memchr = { version = "2" }
 num-integer = { version = "0.1", features = ["i128"] }
