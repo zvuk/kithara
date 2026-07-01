@@ -34,10 +34,12 @@ public extension KitharaPlayer {
 
 public extension KitharaPlayerItem {
     /// Buffered byte ranges for the underlying resource. Updates as
-    /// the loader fetches new segments. Rx mirror of
-    /// `KitharaPlayerItem.loadedRanges`.
-    var rxLoadedRanges: Observable<[ItemLoadedRange]> {
-        loadedRanges.asObservable()
+    /// the loader fetches new segments. Vended as the
+    /// ``ItemLoadedRangeSource`` protocol so consumers can map onto
+    /// their own range type without depending on the concrete
+    /// ``ItemLoadedRange``. Rx mirror of `KitharaPlayerItem.loadedRanges`.
+    var rxLoadedRanges: Observable<[any ItemLoadedRangeSource]> {
+        loadedRanges.asObservable().map { $0 as [any ItemLoadedRangeSource] }
     }
 
     /// Duration in seconds once the demuxer resolves it. Emits `nil`

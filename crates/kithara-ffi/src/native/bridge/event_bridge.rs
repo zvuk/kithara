@@ -15,7 +15,7 @@ use kithara_queue::Queue;
 use crate::{
     observer::{ItemObserver, PlayerObserver},
     registry::ItemRegistry,
-    types::{FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiTrackStatus},
+    types::{FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiTimeRange, FfiTrackStatus},
 };
 
 pub(crate) struct EventBridge {
@@ -216,7 +216,13 @@ impl EventBridge {
             Arc::clone(&last_current),
             cancel.clone(),
         );
-        let time_thread = Self::spawn_time_thread(queue, observer, cancel.clone());
+        let time_thread = Self::spawn_time_thread(
+            queue,
+            observer,
+            Arc::clone(items),
+            last_current,
+            cancel.clone(),
+        );
         Self {
             cancel,
             time_thread: Some(time_thread),
@@ -255,37 +261,85 @@ impl EventBridge {
     }
 
     /// Dedicated OS thread that drives `Queue::tick` and polls current
-    /// time / duration at ~10 Hz. Uses a plain thread instead of an
-    /// async task to avoid blocking the single-threaded tokio runtime
-    /// with sync locks held inside the engine.
+    /// time / duration / decoded frontier at ~10 Hz. Uses a plain thread
+    /// instead of an async task to avoid blocking the single-threaded
+    /// tokio runtime with sync locks held inside the engine.
     fn spawn_time_thread(
         queue: Arc<Queue>,
         observer: Arc<dyn PlayerObserver>,
+        items: Arc<Mutex<ItemRegistry>>,
+        last_current: Arc<Mutex<Option<TrackId>>>,
         cancel: CancelToken,
     ) -> JoinHandle<()> {
         spawn(move || {
             let interval = Duration::from_millis(Self::TIME_POLL_INTERVAL_MS);
             let mut last_time: Option<f64> = None;
             let mut last_duration: Option<f64> = None;
+            let mut last_buffered: Option<f64> = None;
 
             while !cancel.is_cancelled() {
                 sleep(interval);
                 let _ = queue.tick();
                 queue.process_notifications();
-                Self::emit_if_changed(
-                    &observer,
-                    queue.position_seconds(),
-                    &mut last_time,
-                    |seconds| FfiPlayerEvent::TimeChanged { seconds },
-                );
-                Self::emit_if_changed(
-                    &observer,
-                    queue.duration_seconds(),
-                    &mut last_duration,
-                    |seconds| FfiPlayerEvent::DurationChanged { seconds },
-                );
+                let view = queue.playback_view();
+                Self::emit_if_changed(&observer, view.position, &mut last_time, |seconds| {
+                    FfiPlayerEvent::TimeChanged { seconds }
+                });
+                Self::emit_if_changed(&observer, view.duration, &mut last_duration, |seconds| {
+                    FfiPlayerEvent::DurationChanged { seconds }
+                });
+                Self::emit_loaded_ranges(&items, &last_current, view.buffered, &mut last_buffered);
             }
         })
+    }
+
+    /// Build loaded ranges from the decoded-ahead frontier.
+    ///
+    /// The frontier is the authoritative buffered/playable window (always
+    /// `>=` the playhead), so it is reported as a single range `[0,
+    /// frontier]`. An empty vec means nothing is decoded yet.
+    fn loaded_ranges_from_frontier(frontier: f64) -> Vec<FfiTimeRange> {
+        if frontier > 0.0 {
+            vec![FfiTimeRange {
+                start_seconds: 0.0,
+                duration_seconds: frontier,
+            }]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Push refreshed loaded ranges to the current item's observer when the
+    /// polled frontier moves. Using the polled decoded frontier (not the
+    /// lossy byte-ratio telemetry that under-reported a VBR-FLAC quiet
+    /// intro) keeps loaded ranges always covering the playhead, so the
+    /// host never wrongly pauses into a buffering deadlock.
+    fn emit_loaded_ranges(
+        items: &Arc<Mutex<ItemRegistry>>,
+        last_current: &Mutex<Option<TrackId>>,
+        frontier: Option<f64>,
+        last: &mut Option<f64>,
+    ) {
+        let Some(frontier) = frontier else {
+            *last = None;
+            return;
+        };
+        if last.is_some_and(|prev| (prev - frontier).abs() <= Self::TIME_UPDATE_THRESHOLD) {
+            return;
+        }
+        let Some(track_id) = *last_current.lock() else {
+            return;
+        };
+        let Some(item) = items.lock().get(&track_id).cloned() else {
+            return;
+        };
+        let Some(item_obs) = item.observer() else {
+            return;
+        };
+        *last = Some(frontier);
+        item_obs.on_event(FfiItemEvent::LoadedRangesChanged {
+            ranges: Self::loaded_ranges_from_frontier(frontier),
+        });
     }
 }
 
@@ -301,11 +355,42 @@ impl Drop for EventBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{item::AudioPlayerItem, types::FfiItemConfig};
 
     fn assert_send<T: Send>() {}
+
+    fn item_config() -> FfiItemConfig {
+        FfiItemConfig {
+            abr_mode: None,
+            audio_id: None,
+            headers: None,
+            uuid_i64: None,
+            url: "https://example.com/quiet-intro.flac".to_string(),
+            is_live_stream: false,
+            preferred_peak_bitrate: 0.0,
+            preferred_peak_bitrate_expensive: 0.0,
+        }
+    }
 
     #[kithara::test]
     fn event_bridge_is_send() {
         assert_send::<EventBridge>();
+    }
+
+    /// The decoded-ahead frontier covers the playhead, so loaded ranges
+    /// built from it keep the item playable — unlike the old byte-ratio
+    /// telemetry that under-reported a VBR-FLAC quiet intro (~0.66s decoded
+    /// byte-ratio at a 0.917s playhead) and made the host pause into a
+    /// buffering deadlock.
+    #[kithara::test]
+    fn loaded_ranges_from_frontier_cover_playhead() {
+        let item = AudioPlayerItem::new(item_config());
+        let ranges = EventBridge::loaded_ranges_from_frontier(4.0);
+        assert!(item.is_playable(0.917, ranges));
+    }
+
+    #[kithara::test]
+    fn loaded_ranges_empty_when_nothing_decoded() {
+        assert!(EventBridge::loaded_ranges_from_frontier(0.0).is_empty());
     }
 }

@@ -4,7 +4,7 @@
 use std::env;
 use std::{fmt, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
-use bon::Builder;
+use bon::{Builder, bon};
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
 use kithara_platform::{CancelScope, CancelToken};
@@ -58,7 +58,8 @@ pub struct StoreOptions {
     pub max_assets: Option<usize>,
     /// Maximum bytes to store (soft cap for LRU eviction).
     pub max_bytes: Option<u64>,
-    /// Directory for persistent cache storage (required).
+    /// Directory for persistent cache storage.
+    #[builder(default = default_cache_dir())]
     pub cache_dir: PathBuf,
     /// Use ephemeral (in-memory) storage instead of disk.
     ///
@@ -84,7 +85,18 @@ impl fmt::Debug for StoreOptions {
 
 impl Default for StoreOptions {
     fn default() -> Self {
-        Self::default_builder().build()
+        Self::builder().build()
+    }
+}
+
+fn default_cache_dir() -> PathBuf {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        env::temp_dir().join("kithara")
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        PathBuf::from("/kithara")
     }
 }
 
@@ -96,18 +108,6 @@ impl StoreOptions {
     {
         Self::builder().cache_dir(cache_dir.into()).build()
     }
-
-    /// Builder pre-populated with the platform default `cache_dir`.
-    ///
-    /// Allows `StoreOptions::default_builder().is_ephemeral(true).build()` —
-    /// the chainable counterpart to `StoreOptions::default()`.
-    pub fn default_builder() -> StoreOptionsBuilder<store_options_builder::SetCacheDir> {
-        #[cfg(not(target_arch = "wasm32"))]
-        let cache_dir = env::temp_dir().join("kithara");
-        #[cfg(target_arch = "wasm32")]
-        let cache_dir = PathBuf::from("/kithara");
-        Self::builder().cache_dir(cache_dir)
-    }
 }
 
 impl From<&StoreOptions> for EvictConfig {
@@ -116,22 +116,6 @@ impl From<&StoreOptions> for EvictConfig {
             max_assets: opts.max_assets,
             max_bytes: opts.max_bytes,
         }
-    }
-}
-
-impl From<&StoreOptions> for AssetStoreBuilder {
-    fn from(opts: &StoreOptions) -> Self {
-        let mut builder = Self::new()
-            .root_dir(&opts.cache_dir)
-            .evict_config(EvictConfig::from(opts))
-            .ephemeral(opts.is_ephemeral);
-        if let Some(cap) = opts.cache_capacity {
-            builder = builder.cache_capacity(cap);
-        }
-        if let Some(ref hub) = opts.flush_hub {
-            builder = builder.flush_hub(Arc::clone(hub));
-        }
-        builder
     }
 }
 
@@ -160,10 +144,12 @@ pub type AssetResource = AcquisitionResult<AssetWriter, AssetReader>;
 /// Internal chain used for `AssetStore::Mem`.
 pub(crate) type MemStore = LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<MemAssetStore>>>>;
 
-/// Constructor for the ready-to-use [`AssetStore`]. One store services every
-/// asset under `root_dir`; a scope binds the `asset_root` and mints keys.
-#[derive(Default)]
-pub struct AssetStoreBuilder {
+/// Constructor for the ready-to-use [`AssetStore`].
+///
+/// One store services every asset under `root_dir`. A scope binds the
+/// `asset_root` and mints self-contained keys; per-resource ops live on
+/// the store.
+struct AssetStoreBuildArgs {
     cache_capacity: Option<NonZeroUsize>,
     cancel: Option<CancelToken>,
     evict_config: Option<EvictConfig>,
@@ -174,13 +160,70 @@ pub struct AssetStoreBuilder {
     ephemeral: bool,
 }
 
-impl AssetStoreBuilder {
-    /// Builder with defaults (no `root_dir`/`asset_root`/evict/cancel set).
+struct AssetStoreBuilderFactory;
+
+#[bon]
+impl AssetStoreBuilderFactory {
+    #[builder(
+        start_fn(name = builder, vis = "pub(crate)"),
+        builder_type(name = AssetStoreBuilder, vis = "pub"),
+        state_mod(name = asset_store_builder, vis = "pub"),
+        finish_fn(name = into_args, vis = "pub(crate)")
+    )]
+    fn args(
+        cache_capacity: Option<NonZeroUsize>,
+        cancel: Option<CancelToken>,
+        evict_config: Option<EvictConfig>,
+        flush_hub: Option<Arc<FlushHub>>,
+        mem_resource_capacity: Option<usize>,
+        pool: Option<BytePool>,
+        #[builder(into)] root_dir: Option<PathBuf>,
+        #[builder(default = false)] ephemeral: bool,
+    ) -> AssetStoreBuildArgs {
+        AssetStoreBuildArgs {
+            cache_capacity,
+            cancel,
+            evict_config,
+            flush_hub,
+            mem_resource_capacity,
+            pool,
+            root_dir,
+            ephemeral,
+        }
+    }
+}
+
+impl Default for AssetStoreBuilder<asset_store_builder::Empty> {
+    fn default() -> Self {
+        AssetStoreBuilderFactory::builder()
+    }
+}
+
+impl<State> AssetStoreBuilder<State>
+where
+    State: asset_store_builder::IsComplete,
+{
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn build(self) -> AssetStore {
+        self.into_args().build()
     }
 
+    /// Build a disk-backed `AssetStore` chain with a fresh availability index.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    #[must_use]
+    fn build_disk(self) -> DiskStore {
+        self.into_args().build_disk()
+    }
+
+    /// Build ephemeral (in-memory) asset store with its own
+    /// unshared [`AvailabilityIndex`].
+    #[cfg(test)]
+    fn build_ephemeral(self) -> MemStore {
+        self.into_args().build_ephemeral()
+    }
+}
+
+impl AssetStoreBuildArgs {
     /// Build the storage backend.
     ///
     /// Returns `AssetStore::Disk` for persistent storage or
@@ -190,7 +233,7 @@ impl AssetStoreBuilder {
     /// variant (query target) so writes observed by any resource
     /// become visible through `AssetStore::contains_range`.
     #[must_use]
-    pub fn build(self) -> AssetStore {
+    fn build(self) -> AssetStore {
         let availability = AvailabilityIndex::new();
         // The demand index is a consumer-driven sibling of `availability`:
         // no observer / decorator threading, just a shared field. Each
@@ -199,7 +242,7 @@ impl AssetStoreBuilder {
         // The eviction router is the third consumer-driven sibling: the
         // ephemeral cache's `on_invalidated` hook routes evicted keys into
         // it; the store hands subscribers per `asset_root`.
-        let eviction = EvictionRouter::new();
+        let eviction = EvictionRouter::default();
         #[cfg(target_arch = "wasm32")]
         {
             let store = self.build_ephemeral_with_availability(&availability, &eviction);
@@ -234,9 +277,9 @@ impl AssetStoreBuilder {
     }
 
     /// Build a disk-backed `AssetStore` chain with a fresh availability index.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     #[must_use]
-    pub fn build_disk(self) -> DiskStore {
+    fn build_disk(self) -> DiskStore {
         let (chain, _base) = self.build_disk_with_availability(AvailabilityIndex::new());
         chain
     }
@@ -315,7 +358,10 @@ impl AssetStoreBuilder {
     /// unshared [`AvailabilityIndex`].
     #[cfg(test)]
     fn build_ephemeral(self) -> MemStore {
-        self.build_ephemeral_with_availability(&AvailabilityIndex::new(), &EvictionRouter::new())
+        self.build_ephemeral_with_availability(
+            &AvailabilityIndex::new(),
+            &EvictionRouter::default(),
+        )
     }
 
     fn build_ephemeral_with_availability(
@@ -382,64 +428,6 @@ impl AssetStoreBuilder {
             true,
         ));
         LeaseAssets::new(cached, cancel, pins)
-    }
-
-    /// Set the in-memory LRU cache capacity for opened resources.
-    #[must_use]
-    pub fn cache_capacity(mut self, capacity: NonZeroUsize) -> Self {
-        self.cache_capacity = Some(capacity);
-        self
-    }
-
-    #[must_use]
-    pub fn cancel(mut self, cancel: CancelToken) -> Self {
-        self.cancel = Some(cancel);
-        self
-    }
-
-    /// Use ephemeral (in-memory) storage instead of disk.
-    ///
-    /// When `true`, `build()` returns `AssetStore::Mem` with auto-eviction
-    /// (LRU cache removes underlying data on eviction).
-    /// Default: `false`.
-    #[must_use]
-    pub fn ephemeral(mut self, ephemeral: bool) -> Self {
-        self.ephemeral = ephemeral;
-        self
-    }
-
-    #[must_use]
-    pub fn evict_config(mut self, cfg: EvictConfig) -> Self {
-        self.evict_config = Some(cfg);
-        self
-    }
-
-    /// Reuse an externally-owned [`FlushHub`] for the on-disk indexes.
-    /// See [`StoreOptions`] builder's `flush_hub` setter.
-    #[must_use]
-    pub fn flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
-        self.flush_hub = Some(hub);
-        self
-    }
-
-    /// Set capacity of each in-memory resource for ephemeral backend.
-    #[must_use]
-    pub fn mem_resource_capacity(mut self, capacity: usize) -> Self {
-        self.mem_resource_capacity = Some(capacity);
-        self
-    }
-
-    /// Set the buffer pool (created at application startup and shared).
-    #[must_use]
-    pub fn pool(mut self, pool: BytePool) -> Self {
-        self.pool = Some(pool);
-        self
-    }
-
-    /// Set the root directory for the asset store.
-    pub fn root_dir<P: Into<PathBuf>>(mut self, root: P) -> Self {
-        self.root_dir = Some(root.into());
-        self
     }
 }
 
@@ -526,7 +514,7 @@ mod tests {
         let file_path = dir.path().join("test.bin");
         fs::write(&file_path, b"data").unwrap();
 
-        let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+        let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
 
         let key = ResourceKey::absolute(&file_path);
         let res = store.open_resource(&key, None).unwrap();
@@ -540,7 +528,7 @@ mod tests {
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn builder_defaults_all_enabled() {
         let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+        let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
 
         let key = ResourceKey::relative(ROOT, "test.bin");
         let writer = pending(store.acquire_resource(&key, None).unwrap());
@@ -559,7 +547,7 @@ mod tests {
         let file_path = dir.path().join("song.mp3");
         fs::write(&file_path, b"test data").unwrap();
 
-        let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+        let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
 
         let key = ResourceKey::absolute(&file_path);
         let res = store.open_resource(&key, None).unwrap();
@@ -571,13 +559,13 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn build_ephemeral_returns_mem() {
-        let backend = AssetStoreBuilder::new().ephemeral(true).build();
+        let backend = AssetStoreBuilder::default().ephemeral(true).build();
         assert!(backend.is_ephemeral());
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn ephemeral_capabilities_lack_evict_and_lease() {
-        let store = AssetStoreBuilder::new().build_ephemeral();
+        let store = AssetStoreBuilder::default().build_ephemeral();
         let caps = store.capabilities();
         assert!(caps.contains(Capabilities::CACHE));
         assert!(caps.contains(Capabilities::PROCESSING));
@@ -589,14 +577,16 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn disk_defaults_all_capabilities() {
         let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::new().root_dir(dir.path()).build_disk();
+        let store = AssetStoreBuilder::default()
+            .root_dir(dir.path())
+            .build_disk();
         assert_eq!(store.capabilities(), Capabilities::all());
     }
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn build_disk_returns_disk() {
         let dir = tempdir().unwrap();
-        let backend = AssetStoreBuilder::new()
+        let backend = AssetStoreBuilder::default()
             .root_dir(dir.path())
             .ephemeral(false)
             .build();
@@ -605,7 +595,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn ephemeral_retains_data_within_cache_capacity() {
-        let backend = AssetStoreBuilder::new()
+        let backend = AssetStoreBuilder::default()
             .cache_capacity(NonZeroUsize::new(5).unwrap())
             .ephemeral(true)
             .build();
@@ -628,7 +618,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn ephemeral_evicts_data_beyond_cache_capacity() {
-        let backend = AssetStoreBuilder::new()
+        let backend = AssetStoreBuilder::default()
             .cache_capacity(NonZeroUsize::new(3).unwrap())
             .ephemeral(true)
             .build();
@@ -651,7 +641,9 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn from_asset_store() {
         let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::new().root_dir(dir.path()).build_disk();
+        let store = AssetStoreBuilder::default()
+            .root_dir(dir.path())
+            .build_disk();
         let backend: AssetStore = store.into();
         assert!(matches!(backend, AssetStore::Disk { .. }));
     }
@@ -665,7 +657,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn red_test_lease_resource_drop_strands_availability_index() {
         let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+        let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
         let seg_root = "seg_root";
 
         let target = ResourceKey::relative(seg_root, "v0_15.m4s");
@@ -712,7 +704,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn red_test_delete_asset_strands_availability_index() {
         let dir = tempdir().unwrap();
-        let store = AssetStoreBuilder::new().root_dir(dir.path()).build();
+        let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
         let seg_root = "seg_root";
 
         let key_a = ResourceKey::relative(seg_root, "v0_15.m4s");

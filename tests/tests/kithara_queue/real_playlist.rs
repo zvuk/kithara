@@ -14,7 +14,7 @@ use kithara_integration_tests::{
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
-    time::{Duration, sleep, timeout},
+    time::{Duration, Instant, sleep, timeout},
 };
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
@@ -464,6 +464,15 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         AbrMode::Auto(None)
     )
 )]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::zvuk_prod_drm_flac_apple(
+        "https://cdn-hls-slicer.zvuk.com/drm/track/125895892_2/master.m3u8",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::manual(3)
+    )
+)]
 async fn track_plays_end_to_end(
     #[case] url: &str,
     #[case] rng_seed: u64,
@@ -748,4 +757,144 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
             fails.join("\n")
         );
     }
+}
+
+/// REGRESSION (RED): cold-start latency across every DRM track captured
+/// from the on-device session. Mirrors a user tapping through tracks —
+/// each URL is a distinct asset (fresh cache-miss), so every start pays
+/// master + variant playlists + DRM keys + first segment. Measures
+/// append→first-audio per track and asserts it stays under the
+/// acceptable-wait ceiling (1s on a normal connection). Currently RED:
+/// on-device startup is ~4.5s, dominated by serialized variant-playlist
+/// fetches.
+// flash(false): real zvuk prod CDN/keyserver e2e; wall-clock latency IS the assertion.
+#[kithara::test(tokio)]
+#[ignore = "real zvuk prod DRM network (needs baked .env tokens) — run with --include-ignored"]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+async fn prod_tracks_sequential_startup_latency() {
+    kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
+
+    const STARTUP_CEILING: Duration = Duration::from_secs(1);
+    const TRACKS: &[&str] = &[
+        "https://cdn-hls-slicer.zvuk.com/drm/track/104988976_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/113688673_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/123566675_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/131714156_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/135488625_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/136562115_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/137046708_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/138131437_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/138535172_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/139716840_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/140509143_3/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/141628267_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/142405787_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/142770592_3/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/143183529_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/145817161_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/148731554_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/159916835_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/163529263_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/164581725_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/165511278_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/169997048_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/171681646_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/172301616_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/172640775_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/179000327_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/180339527_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/181696305_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/181911634_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/182394791_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/182812078_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/183208054_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/53215370_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/53807581_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/74462582_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/78947600_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/79515355_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/84414146_2/master.m3u8",
+    ];
+
+    let ctx = shared_test_ctx().await;
+    let mut report: Vec<(&'static str, Result<(Duration, Duration), String>)> =
+        Vec::with_capacity(TRACKS.len());
+
+    for url in TRACKS {
+        let mut rx = ctx.queue.subscribe();
+        let source = build_track_source(url, ctx, DecoderBackend::Apple, AbrMode::Auto(None));
+        let t0 = Instant::now();
+        let track_id = ctx.queue.append(source);
+
+        let outcome: Result<(Duration, Duration), String> = async {
+            wait_for_status(
+                &mut rx,
+                &ctx.queue,
+                track_id,
+                TrackStatus::Loaded,
+                Duration::from_secs(30),
+            )
+            .await
+            .map_err(|e| format!("load: {e}"))?;
+            let load_latency = t0.elapsed();
+
+            ctx.queue
+                .select(track_id, Transition::None)
+                .map_err(|e| format!("select: {e:?}"))?;
+            wait_for_position_at_least(&ctx.queue, 0.1, Duration::from_secs(20))
+                .await
+                .map_err(|e| format!("first-audio: {e}"))?;
+            let first_audio_latency = t0.elapsed();
+
+            Ok((load_latency, first_audio_latency))
+        }
+        .await;
+
+        let _ = ctx.queue.remove(track_id);
+        report.push((url, outcome));
+    }
+
+    let ceiling_ms = STARTUP_CEILING.as_millis();
+    eprintln!(
+        "\n=== prod sequential startup latency (append→first-audio), ceiling {ceiling_ms}ms ==="
+    );
+    let mut violations: Vec<String> = Vec::new();
+    let mut first_audio_ms: Vec<f64> = Vec::new();
+    for (url, outcome) in &report {
+        match outcome {
+            Ok((load, first_audio)) => {
+                let load_ms = load.as_secs_f64() * 1000.0;
+                let fa_ms = first_audio.as_secs_f64() * 1000.0;
+                first_audio_ms.push(fa_ms);
+                eprintln!("  {fa_ms:>7.0}ms first-audio ({load_ms:>7.0}ms load)  {url}");
+                if *first_audio > STARTUP_CEILING {
+                    violations.push(format!(
+                        "  - {url}: first-audio={fa_ms:.0}ms > {ceiling_ms}ms"
+                    ));
+                }
+            }
+            Err(e) => {
+                eprintln!("  FAIL {e}  {url}");
+                violations.push(format!("  - {url}: {e}"));
+            }
+        }
+    }
+    if !first_audio_ms.is_empty() {
+        let mut sorted = first_audio_ms.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = sorted[sorted.len() / 2];
+        let worst = sorted[sorted.len() - 1];
+        let mean = sorted.iter().sum::<f64>() / sorted.len() as f64;
+        eprintln!(
+            "  -- n={} median={median:.0}ms mean={mean:.0}ms worst={worst:.0}ms --",
+            sorted.len()
+        );
+    }
+    assert!(
+        violations.is_empty(),
+        "{} of {} tracks exceeded {ceiling_ms}ms startup ceiling:\n{}",
+        violations.len(),
+        report.len(),
+        violations.join("\n")
+    );
 }

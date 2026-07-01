@@ -5,10 +5,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use kithara_platform::{
-    maybe_send::{MaybeSend, MaybeSync},
-    sync::Notify,
-};
+use kithara_platform::sync::Notify;
 
 /// Reader→peer wake split into an off-core *arm* and an off-core *flush*, so a
 /// cross-thread `tokio::Notify` wake never fires on the real-time audio produce
@@ -82,7 +79,7 @@ impl DeferredWake {
 ///
 /// Segmented sources (HLS) hold an optional handle and fire it from their
 /// off-RT write/commit sites only; non-segmented sources never set one.
-pub trait WorkerWake: MaybeSend + MaybeSync {
+pub trait WorkerWake: Send + Sync {
     /// Wake the audio worker so it re-ticks the decoder now that data landed.
     fn wake(&self);
 }

@@ -72,6 +72,7 @@ pub(crate) fn build_resource_config(url: &str, config: &AppConfig) -> Option<Res
         builder
             .downloader(config.downloader.clone())
             .flush_hub(config.flush_hub.clone())
+            .byte_pool(config.byte_pool.clone())
             .asset_store(config.asset_store.clone())
             .keys(keys)
             .maybe_headers(headers)

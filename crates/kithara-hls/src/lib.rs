@@ -3,16 +3,15 @@
 pub mod config;
 pub mod error;
 
-mod coord;
 mod decrypt_processor;
+mod handle;
 mod ids;
-mod loading;
 mod naming;
-mod parsing;
 mod peer;
 mod playlist;
 mod reader;
-mod source;
+mod segment;
+mod signal;
 mod stream;
 mod variant;
 
@@ -21,13 +20,11 @@ pub use error::{HlsError, HlsResult};
 pub use ids::VariantIndex;
 pub use kithara_abr::AbrMode;
 pub use kithara_drm::{KeyProcessor, KeyProcessorRegistry, KeyProcessorRule};
-pub use loading::{KeyStore, PlaylistCache};
+pub use kithara_platform::traits::FromWithParams;
 #[doc(hidden)]
 pub use naming::HlsAssetScopeDelegate;
-pub use parsing::{
-    MasterPlaylist, MediaPlaylist, VariantId, VariantStream, parse_master_playlist,
-    parse_media_playlist, variant_info_from_master,
+pub use playlist::{
+    KeyStore, MediaPlaylist, ParsedMaster, PlaylistCache, PlaylistState, SegmentState, VariantId,
+    VariantState, VariantStream, parse_master_playlist, parse_media_playlist,
 };
-pub use playlist::{PlaylistState, SegmentState, VariantSizeMap, VariantState};
-pub use source::HlsSource;
-pub use stream::Hls;
+pub use stream::{Hls, HlsSource, build_shared_asset_store};

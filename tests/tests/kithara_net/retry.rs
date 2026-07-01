@@ -28,6 +28,9 @@ fn make_retry_mock(failures_before_success: usize, error_type: NetError) -> Unim
     let bytes_attempts = Arc::clone(&attempts);
     let bytes_error = Arc::clone(&error);
 
+    let post_attempts = Arc::clone(&attempts);
+    let post_error = Arc::clone(&error);
+
     let stream_attempts = Arc::clone(&attempts);
     let stream_error = Arc::clone(&error);
 
@@ -43,6 +46,15 @@ fn make_retry_mock(failures_before_success: usize, error_type: NetError) -> Unim
             .answers(leaked(move |_, _url, _headers| {
                 if should_fail(&bytes_attempts, failures_before_success) {
                     Err(bytes_error.as_ref().clone())
+                } else {
+                    Ok(Bytes::from_static(b"success"))
+                }
+            })),
+        NetMock::post_bytes
+            .some_call(matching!(_, _, _))
+            .answers(leaked(move |_, _url, _body, _headers| {
+                if should_fail(&post_attempts, failures_before_success) {
+                    Err(post_error.as_ref().clone())
                 } else {
                     Ok(Bytes::from_static(b"success"))
                 }

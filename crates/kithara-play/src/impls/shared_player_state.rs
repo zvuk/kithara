@@ -9,6 +9,29 @@ use ringbuf::{
 
 use super::{player_notification::PlayerNotification, player_track::PlayerTrack};
 
+/// Coherent snapshot of the live playback scalars, produced by
+/// [`SharedPlayerState::snapshot`].
+///
+/// One read returns every polled value at once instead of issuing a
+/// separate atomic load per field on each consumer. New polled values
+/// are added as a field here rather than as another standalone getter +
+/// atomic + poll call across the stack.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct PlaybackSnapshot {
+    /// Playback position in seconds.
+    pub position: f64,
+    /// Decoded-ahead frontier (buffered/playable seconds). Always
+    /// `>= position`.
+    pub frontier: f64,
+    /// Total media duration in seconds; `0.0` when unknown.
+    pub duration: f64,
+    /// Current output sample rate.
+    pub sample_rate: u32,
+    /// Whether playback is active.
+    pub playing: bool,
+}
+
 /// Shared state that bridges the main thread and the audio processor.
 ///
 /// Position and duration are updated by the processor every render cycle.
@@ -24,6 +47,10 @@ pub struct SharedPlayerState {
     ///
     /// Source of truth is the per-track `PlayheadState` in the audio pipeline.
     pub position: AtomicF64,
+    /// Last observed decoded-ahead frontier (buffered/playable seconds) for the
+    /// current (leading) track. Authoritative, polled source for the FFI loaded
+    /// ranges — written by the processor each render cycle alongside `position`.
+    pub frontier: AtomicF64,
     /// Current sample rate from the audio stream.
     pub sample_rate: AtomicU32,
     /// Diagnostic: how many times `process()` has been called on the audio
@@ -74,6 +101,7 @@ impl SharedPlayerState {
             playing: AtomicBool::new(false),
             seek_epoch: AtomicU64::new(0),
             position: AtomicF64::new(0.0),
+            frontier: AtomicF64::new(0.0),
             duration: AtomicF64::new(0.0),
             sample_rate: AtomicU32::new(0),
             process_count: AtomicU64::new(0),
@@ -102,6 +130,26 @@ impl SharedPlayerState {
         self.seek_epoch
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1)
+    }
+
+    /// Single consistent read of the live playback scalars.
+    ///
+    /// `frontier` is clamped to at least `position`: the decode-ahead
+    /// window is monotone and never trails the playhead, so a torn
+    /// cross-field read at a seek boundary can never report buffered
+    /// less than played. Consumers (FFI poll loop, queue) derive
+    /// position / duration / loaded-ranges from one coherent view.
+    #[must_use]
+    pub fn snapshot(&self) -> PlaybackSnapshot {
+        let position = self.position.load(Ordering::Relaxed);
+        let frontier = self.frontier.load(Ordering::Relaxed).max(position);
+        PlaybackSnapshot {
+            position,
+            frontier,
+            duration: self.duration.load(Ordering::Relaxed),
+            sample_rate: self.sample_rate.load(Ordering::Relaxed),
+            playing: self.playing.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -156,5 +204,42 @@ mod tests {
         state.duration.store(180.0, Ordering::Relaxed);
         assert!((state.position.load(Ordering::Relaxed) - 42.5).abs() < f64::EPSILON);
         assert!((state.duration.load(Ordering::Relaxed) - 180.0).abs() < f64::EPSILON);
+    }
+
+    #[kithara::test]
+    fn snapshot_reads_all_fields_at_once() {
+        let state = SharedPlayerState::new();
+        state.playing.store(true, Ordering::Relaxed);
+        state.position.store(12.0, Ordering::Relaxed);
+        state.frontier.store(20.0, Ordering::Relaxed);
+        state.duration.store(180.0, Ordering::Relaxed);
+        state.sample_rate.store(48_000, Ordering::Relaxed);
+
+        let snap = state.snapshot();
+        assert!(snap.playing);
+        assert!((snap.position - 12.0).abs() < f64::EPSILON);
+        assert!((snap.frontier - 20.0).abs() < f64::EPSILON);
+        assert!((snap.duration - 180.0).abs() < f64::EPSILON);
+        assert_eq!(snap.sample_rate, 48_000);
+    }
+
+    /// Regression marker for the iOS VBR-FLAC freeze: a buffered/playable
+    /// frontier that under-reports the playhead (as the old byte-ratio
+    /// telemetry did — e.g. 0.657s decoded-byte ratio at a 0.917s
+    /// playhead) makes the host gate playback off and deadlock. The
+    /// snapshot must never surface a frontier behind the position.
+    #[kithara::test]
+    fn snapshot_frontier_never_trails_position() {
+        let state = SharedPlayerState::new();
+        state.position.store(0.917, Ordering::Relaxed);
+        state.frontier.store(0.657, Ordering::Relaxed);
+
+        let snap = state.snapshot();
+        assert!(
+            snap.frontier >= snap.position,
+            "frontier {} must cover position {}",
+            snap.frontier,
+            snap.position
+        );
     }
 }

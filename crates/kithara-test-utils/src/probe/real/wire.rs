@@ -133,7 +133,7 @@ impl IntoProbeArg for CancelReason {
 
 impl IntoProbeArg for AbrMode {
     fn into_probe_arg(self) -> u64 {
-        usize::from(self) as u64
+        num_traits::AsPrimitive::<u64>::as_(usize::from(self))
     }
 }
 

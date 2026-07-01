@@ -40,11 +40,11 @@ fn backend_resource_path_follows_ephemeral_flag(
     #[case] expect_path: bool,
 ) {
     let temp = TestTempDir::new();
-    let mut builder = AssetStoreBuilder::new().ephemeral(ephemeral);
-    if !ephemeral {
-        builder = builder.root_dir(temp.path());
-    }
-    let scope = builder.build().scope("test");
+    let scope = AssetStoreBuilder::default()
+        .ephemeral(ephemeral)
+        .maybe_root_dir((!ephemeral).then_some(temp.path()))
+        .build()
+        .scope("test");
 
     let key = scope.key("seg_0.m4s");
     let AcquisitionResult::Pending(writer) = scope

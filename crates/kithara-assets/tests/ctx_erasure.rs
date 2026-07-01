@@ -74,7 +74,11 @@ impl ChunkSink for EvolvingXorSink {
 fn reference_transform(seed: u8, input: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(input.len());
     for (idx, chunk) in input.chunks(CHUNK_SIZE).enumerate() {
-        let key = seed.wrapping_add(idx as u8);
+        let idx_mod = match u8::try_from(idx % 256) {
+            Ok(value) => value,
+            Err(_) => unreachable!("idx % 256 always fits in u8"),
+        };
+        let key = seed.wrapping_add(idx_mod);
         out.extend(chunk.iter().map(|&b| b ^ key));
     }
     out
@@ -125,7 +129,7 @@ fn index_dirs(root: &Path) -> Vec<PathBuf> {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn one_store_serves_both_none_and_processing_scopes() {
     let dir = tempdir().unwrap();
-    let store: AssetStore = AssetStoreBuilder::new().root_dir(dir.path()).build();
+    let store: AssetStore = AssetStoreBuilder::default().root_dir(dir.path()).build();
 
     let scope_a = store.scope("scope-a-file");
     let key_a = scope_a.key("media/audio.bin");
@@ -174,12 +178,15 @@ fn one_store_serves_both_none_and_processing_scopes() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn multi_chunk_chaining_matches_reference() {
     let dir = tempdir().unwrap();
-    let store: AssetStore = AssetStoreBuilder::new().root_dir(dir.path()).build();
+    let store: AssetStore = AssetStoreBuilder::default().root_dir(dir.path()).build();
     let scope = store.scope("chaining");
 
     // 200KB > 64KB chunk size => 4 chunks => 3 key evolutions.
     let payload: Vec<u8> = (0u8..=u8::MAX).cycle().take(200 * 1024).collect();
-    assert!(payload.len() > CHUNK_SIZE, "payload must span multiple chunks");
+    assert!(
+        payload.len() > CHUNK_SIZE,
+        "payload must span multiple chunks"
+    );
 
     let seed = 0x11u8;
     let proc = processor(seed, &[seed]);
@@ -224,7 +231,7 @@ fn multi_chunk_chaining_matches_reference() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn per_acquire_processor_applies_to_its_own_resource() {
     let dir = tempdir().unwrap();
-    let store: AssetStore = AssetStoreBuilder::new().root_dir(dir.path()).build();
+    let store: AssetStore = AssetStoreBuilder::default().root_dir(dir.path()).build();
     let scope = store.scope("per-acquire");
 
     let payload = b"shared payload bytes for both keys";

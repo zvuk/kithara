@@ -8,30 +8,11 @@ use anyhow::{Result, bail};
 use cargo_metadata::MetadataCommand;
 use clap::Args;
 
-use crate::util::check_tool;
+use crate::{common::project::ProjectConfig, util::check_tool};
 
 struct Consts;
 impl Consts {
     const INSTALL_HINT: &'static str = "cargo install cargo-modules";
-
-    /// Packages excluded from the default workspace sweep:
-    /// - workspace-hack: auto-generated hakari surface, no source modules.
-    /// - test-utils / *-macros: helper/proc-macro crates with intentional unimported items.
-    /// - kithara-ffi / kithara-fuzz / xtask: special export shapes / fuzz targets.
-    /// - kithara-decode / kithara-platform: heavy `#[cfg(target_*)]`
-    ///   gating that the default rust-analyzer view treats as orphan modules
-    ///   (false positives without per-target runs). These are validated through
-    ///   target-specific builds (`just wasm check`, `cargo check --target ...`).
-    const EXCLUDED_PACKAGES: &'static [&'static str] = &[
-        "kithara-workspace-hack",
-        "kithara-test-utils",
-        "kithara-test-macros",
-        "kithara-ffi",
-        "kithara-fuzz",
-        "kithara-decode",
-        "kithara-platform",
-        "xtask",
-    ];
 
     const PARALLELISM: usize = 4;
 }
@@ -60,6 +41,7 @@ pub(crate) fn run(args: &OrphansArgs) -> Result<()> {
         Consts::INSTALL_HINT,
     )?;
 
+    let excluded = excluded_packages()?;
     let packages: Vec<String> = if args.packages.is_empty() {
         if args.audit_mode {
             println!(
@@ -68,12 +50,12 @@ pub(crate) fn run(args: &OrphansArgs) -> Result<()> {
             );
             return Ok(());
         }
-        all_non_excluded()?
+        all_non_excluded(&excluded)?
     } else {
         let mut kept = Vec::new();
         let mut skipped = Vec::new();
         for pkg in &args.packages {
-            if Consts::EXCLUDED_PACKAGES.contains(&pkg.as_str()) {
+            if excluded.iter().any(|e| e == pkg) {
                 skipped.push(pkg.clone());
             } else {
                 kept.push(pkg.clone());
@@ -154,13 +136,19 @@ pub(crate) fn run(args: &OrphansArgs) -> Result<()> {
     Ok(())
 }
 
-fn all_non_excluded() -> Result<Vec<String>> {
+fn excluded_packages() -> Result<Vec<String>> {
+    let metadata = MetadataCommand::new().no_deps().exec()?;
+    let root = metadata.workspace_root.as_std_path();
+    Ok(ProjectConfig::load(root)?.orphans.exclude_packages)
+}
+
+fn all_non_excluded(excluded: &[String]) -> Result<Vec<String>> {
     let metadata = MetadataCommand::new().no_deps().exec()?;
     let mut out: Vec<String> = metadata
         .workspace_packages()
         .into_iter()
         .map(|p| p.name.to_string())
-        .filter(|n| !Consts::EXCLUDED_PACKAGES.contains(&n.as_str()))
+        .filter(|n| !excluded.iter().any(|e| e == n))
         .collect();
     out.sort();
     Ok(out)

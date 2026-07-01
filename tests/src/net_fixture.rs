@@ -24,6 +24,16 @@ impl<N: Net> Net for DelayedNet<N> {
         self.inner.get_bytes(url, headers).await
     }
 
+    async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> Result<Bytes, NetError> {
+        sleep(self.delay).await;
+        self.inner.post_bytes(url, body, headers).await
+    }
+
     async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
         sleep(self.delay).await;
         self.inner.stream(url, headers).await
@@ -71,6 +81,12 @@ pub async fn assert_success_all_net_methods(net: &impl Net) {
     let url = test_url();
 
     let result = net.get_bytes(url.clone(), None).await;
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
+
+    let result = net
+        .post_bytes(url.clone(), Bytes::from_static(b"payload"), None)
+        .await;
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
 

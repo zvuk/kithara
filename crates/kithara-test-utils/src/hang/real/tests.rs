@@ -95,9 +95,9 @@ mod native_detector_tests {
             let mut detector: HangDetector<Ctx> =
                 HangDetector::new("tests.tick_with", Duration::from_millis(1))
                     .with_dump_dir(dir_for_closure);
-            detector.tick_with(Ctx { phase: 5 });
+            detector.tick_with(|| Ctx { phase: 5 });
             sleep(Duration::from_millis(10));
-            detector.tick_with(Ctx { phase: 7 });
+            detector.tick_with(|| Ctx { phase: 7 });
         }));
         assert!(result.is_err(), "detector must panic past deadline");
 

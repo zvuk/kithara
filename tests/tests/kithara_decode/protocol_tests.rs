@@ -2,8 +2,10 @@ use std::io::Cursor;
 
 use kithara_decode::{Decoder, DecoderConfig, DecoderFactory, PcmChunk};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use kithara_integration_tests::ensure_silence_1s_alac_m4a;
+use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcomeTestExt};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use kithara_integration_tests::{encode_test_pcm::SawtoothPcmFixture, ensure_silence_1s_alac_m4a};
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_utils::kithara;
@@ -258,26 +260,97 @@ fn wav_pcm_round_trip_matches_signal_across_backends() {
     }
 }
 
+/// Standalone (non-fMP4) container codecs the Apple `AudioFileServices`
+/// path must decode. Each case yields the encoded fixture bytes plus the
+/// `MediaInfo` the production stream layer detects for it.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[derive(Clone, Copy, Debug)]
+enum StandaloneCase {
+    AlacM4a,
+    NativeFlac,
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+impl StandaloneCase {
+    fn fixture(self) -> (Vec<u8>, MediaInfo) {
+        match self {
+            Self::AlacM4a => {
+                let path = ensure_silence_1s_alac_m4a();
+                let bytes = std::fs::read(&path).expect("read ALAC fixture");
+                (
+                    bytes,
+                    MediaInfo::new(Some(AudioCodec::Alac), Some(ContainerFormat::Mp4)),
+                )
+            }
+            Self::NativeFlac => (
+                synth_native_flac_1s(),
+                MediaInfo::new(Some(AudioCodec::Flac), Some(ContainerFormat::Flac)),
+            ),
+        }
+    }
+}
+
+/// Encode 1 second of stereo 44.1 kHz sawtooth PCM into a native `fLaC`
+/// bitstream via `kithara-encode`. Mirrors the raw FLAC body the zvuk
+/// `streamfl` endpoint serves (Content-Type `audio/flac`, magic `fLaC`)
+/// that the device misdecodes — the pinned contract for that regression.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn synth_native_flac_1s() -> Vec<u8> {
+    let pcm = SawtoothPcmFixture::new(
+        Consts::WAV_FRAMES / 2,
+        Consts::WAV_SAMPLE_RATE,
+        Consts::WAV_CHANNELS,
+    );
+    let encoded = EncoderFactory::encode_bytes(BytesEncodeRequest {
+        pcm: &pcm,
+        target: BytesEncodeTarget::Flac,
+        bit_rate: None,
+    })
+    .expect("encode synthetic native FLAC bytes");
+    assert_eq!(
+        &encoded.bytes[..4],
+        b"fLaC",
+        "kithara-encode must emit a native FLAC bitstream"
+    );
+    encoded.bytes
+}
+
+/// Apple's standalone `AudioFileServices` path decodes every non-fMP4
+/// container codec the production stream layer routes to it. `NativeFlac`
+/// is the regression contract: zvuk `streamfl` tracks are raw `fLaC`
+/// bitstreams that the device must decode through the Apple backend (the
+/// only decoder shipped in the iOS build — no Symphonia fallback).
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[kithara::test]
-fn apple_decodes_standalone_alac_m4a() {
-    let path = ensure_silence_1s_alac_m4a();
-    let bytes = std::fs::read(&path).expect("read ALAC fixture");
-    let info = MediaInfo::new(Some(AudioCodec::Alac), Some(ContainerFormat::Mp4));
+#[case::alac(StandaloneCase::AlacM4a)]
+#[case::native_flac(StandaloneCase::NativeFlac)]
+fn apple_decodes_standalone(#[case] case: StandaloneCase) {
+    let (bytes, info) = case.fixture();
     let mut decoder = Backend::Apple.make_decoder(bytes, &info);
 
     let spec = decoder.spec();
-    assert!(spec.sample_rate.get() >= 8000, "ALAC sample rate sanity");
-    assert!(spec.channels >= 1, "ALAC channel count sanity");
+    assert!(
+        spec.sample_rate.get() >= 8000,
+        "{case:?} sample rate sanity"
+    );
+    assert!(spec.channels >= 1, "{case:?} channel count sanity");
 
     let samples = drain_all(&mut *decoder);
     let frames = samples.len() / usize::from(spec.channels.max(1));
-    let expected: usize = spec.sample_rate.get().as_(); // 1-second fixture
+    let expected: usize = spec.sample_rate.get().as_(); // 1-second fixtures
     let tol = expected / 10;
     assert!(
         frames.abs_diff(expected) <= tol,
-        "Apple ALAC produced {frames} frames, expected ~{expected} (tol {tol})"
+        "Apple {case:?} produced {frames} frames, expected ~{expected} (tol {tol})"
     );
+
+    // The FLAC fixture is a non-silent sawtooth, so audible PCM proves the
+    // `dfLa` magic cookie was decoded for real — not silence/garbage that a
+    // frame count alone would let through. (The ALAC fixture is silence.)
+    if matches!(case, StandaloneCase::NativeFlac) {
+        let peak = samples.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.1, "Apple FLAC decoded near-silence — peak {peak}");
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]

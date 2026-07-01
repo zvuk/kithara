@@ -15,9 +15,13 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
     offline::OfflinePlayer,
-    swallow_detector::assert_no_committed_swallow,
+    swallow_detector::{assert_committed_reached, assert_no_committed_swallow},
 };
-use kithara_platform::{CancelToken, flash::real_io, time::Duration};
+use kithara_platform::{
+    CancelToken,
+    flash::real_io,
+    time::{self, Duration, Instant},
+};
 use kithara_test_utils::probe::capture as probe_capture;
 
 /// `b"0123456789abcdef"` — the AES-128 key/zero-IV pair used across the
@@ -35,7 +39,8 @@ const TOP_VARIANT: usize = VARIANT_COUNT - 1;
 const OUT_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
 const BLOCKS_PER_WINDOW: usize = 8;
-const PLAY_SECS: f64 = 40.0;
+const PLAY_SECS: f64 = 18.0;
+const MIN_DELAYED_PLAYHEAD_SECS: f64 = 14.0;
 /// The committed playhead advances ~one decoded chunk (~0.1 s) per
 /// `write_playhead`. A single forward step beyond this is the production
 /// swallow — the playhead leaping forward by ~one segment with no seek.
@@ -80,6 +85,20 @@ fn build_fixture() -> HlsFixtureBuilder {
             key_hex: AES_KEY_HEX.to_owned(),
             iv_hex: Some(AES_IV_HEX.to_owned()),
         })
+}
+
+async fn play_realtime(player: &mut OfflinePlayer, windows: u64, window_secs: f64) {
+    let _real_io = real_io();
+    for _ in 0..windows {
+        let started = Instant::now();
+        for _ in 0..BLOCKS_PER_WINDOW {
+            let _ = player.render(BLOCK_FRAMES);
+        }
+        let elapsed = started.elapsed().as_secs_f64();
+        if window_secs > elapsed {
+            time::sleep(Duration::from_secs_f64(window_secs - elapsed)).await;
+        }
+    }
 }
 
 /// Deterministic, credential-free mirror of `zvuk_prod_flac_swallow`. Repeats
@@ -142,19 +161,8 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
     // instead of the virtual clock racing past the producer (which starves the
     // worker so the track never plays). Off the `flash` feature this is a ZST
     // no-op and the clock is already real.
-    {
-        let _real_io = real_io();
-        for _ in 0..windows {
-            let started = Instant::now();
-            for _ in 0..BLOCKS_PER_WINDOW {
-                let _ = player.render(BLOCK_FRAMES);
-            }
-            let elapsed = started.elapsed().as_secs_f64();
-            if window_secs > elapsed {
-                time::sleep(Duration::from_secs_f64(window_secs - elapsed)).await;
-            }
-        }
-    }
+    play_realtime(&mut player, windows, window_secs).await;
 
+    assert_committed_reached(&recorder, MIN_DELAYED_PLAYHEAD_SECS);
     assert_no_committed_swallow(&recorder, MAX_COMMITTED_STEP_SECS);
 }

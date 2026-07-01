@@ -5,9 +5,9 @@ use std::{
 };
 
 use futures::channel::oneshot;
-use tokio_with_wasm::alias as tww_alias;
-pub use tokio_with_wasm::alias::task::*;
-use tww_alias::task as tww_task;
+
+pub use super::backend::task::*;
+use super::{backend::task as tww_task, runtime::Handle};
 
 /// Forward a `tokio_with_wasm` JoinHandle into our own oneshot-backed
 /// channel, converting any tww join error into our cancelled `JoinError`.
@@ -69,6 +69,18 @@ where
     }
 
     JoinHandle { rx }
+}
+
+/// Run a blocking closure on a dedicated Web Worker thread.
+///
+/// The wasm runtime handle is a compatibility token, so this delegates to
+/// [`spawn_blocking`].
+pub fn spawn_blocking_on<F, T>(_handle: &Handle, f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    spawn_blocking(f)
 }
 
 /// Handle to a spawned async task.

@@ -353,17 +353,17 @@ impl FailingReader {
 
 impl PcmReader for FailingReader {
     fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        Err(DecodeError::InvalidData(
-            "mock: decoder failed mid-stream".into(),
-        ))
+        Err(DecodeError::InvalidData {
+            detail: "mock: decoder failed mid-stream",
+        })
     }
     fn read_planar<'a>(
         &mut self,
         _output: &'a mut [&'a mut [f32]],
     ) -> Result<ReadOutcome, DecodeError> {
-        Err(DecodeError::InvalidData(
-            "mock: decoder failed mid-stream".into(),
-        ))
+        Err(DecodeError::InvalidData {
+            detail: "mock: decoder failed mid-stream",
+        })
     }
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         Ok(SeekOutcome::Landed {

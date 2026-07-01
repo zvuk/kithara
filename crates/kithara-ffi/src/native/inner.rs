@@ -4,6 +4,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use kithara::{
     abr::AbrMode,
+    assets::BytePool,
     audio::generate_log_spaced_bands,
     hls::{KeyOptions, KeyProcessorRegistry, KeyProcessorRule},
     net::{HttpClient, NetOptions},
@@ -41,9 +42,12 @@ fn build_processor_closure(
 /// Build the default `NetOptions`. The `dev` feature enables the
 /// `insecure` flag for local test servers; release builds always
 /// validate TLS.
-fn default_net_options() -> NetOptions {
+fn default_net_options(byte_pool: BytePool) -> NetOptions {
     const INSECURE: bool = cfg!(feature = "dev");
-    NetOptions::builder().is_insecure(INSECURE).build()
+    NetOptions::builder()
+        .is_insecure(INSECURE)
+        .byte_pool(byte_pool)
+        .build()
 }
 
 /// Build a core-level [`KeyProcessorRule`] from an FFI rule. Wraps
@@ -169,6 +173,9 @@ pub(crate) struct NativeInner {
     /// is always alive, independent of the caller thread (Swift /
     /// Kotlin callbacks run without an ambient tokio context).
     downloader: Downloader,
+    /// App-wide byte pool shared by `NSURLSession` copies, cache processors,
+    /// and resource probes.
+    byte_pool: BytePool,
     event_bridge: Mutex<Option<EventBridge>>,
     /// Mutable [`KeyOptions`] — initialised from [`FfiPlayerConfig`]
     /// and extended at runtime by `setup_hls_aes`. Cloned per-item on
@@ -187,13 +194,14 @@ pub(crate) struct NativeInner {
 impl NativeInner {
     pub(crate) fn new(config: FfiPlayerConfig) -> Self {
         let cancel = CancelToken::root();
+        let byte_pool = BytePool::default();
         let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(config.eq_band_count as usize))
             .cancel(cancel.child())
             .build();
         let player = Arc::new(PlayerImpl::new(player_config));
         let queue_config = QueueConfig::default().with_player(player);
-        let net = default_net_options();
+        let net = default_net_options(byte_pool.clone());
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(net, cancel.child()))
                 .runtime(crate::FFI_RUNTIME.clone())
@@ -203,6 +211,7 @@ impl NativeInner {
         let player_headers_map: DashMap<String, String> = player_headers.into_iter().collect();
         Self {
             downloader,
+            byte_pool,
             shutdown: cancel,
             key_options: Mutex::new(key_options),
             player_headers: player_headers_map,
@@ -530,10 +539,11 @@ impl NativeInner {
     }
 
     pub(crate) fn snapshot(&self) -> FfiPlayerSnapshot {
+        let view = self.queue.playback_view();
         FfiPlayerSnapshot {
             status: FfiPlayerStatus::from(self.queue.status()),
-            current_time: self.queue.position_seconds(),
-            duration: self.queue.duration_seconds(),
+            current_time: view.position,
+            duration: view.duration,
             rate: self.queue.rate(),
             playing_rate: self.queue.default_rate(),
             volume: self.queue.volume(),
@@ -583,6 +593,7 @@ fn build_source_for_item(
         .maybe_headers(merged_headers_for_item(inner, item).map(Into::into))
         .events(scoped.clone())
         .downloader(inner.downloader.clone())
+        .byte_pool(inner.byte_pool.clone())
         .keys(inner.key_options.lock().clone())
         .initial_abr_mode(abr_mode.unwrap_or_default())
         .build();

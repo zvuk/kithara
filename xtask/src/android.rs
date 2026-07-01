@@ -9,6 +9,7 @@ use cargo_metadata::MetadataCommand;
 
 use crate::{
     BuildProfile,
+    common::project::ProjectConfig,
     util::{check_rust_target, check_tool},
 };
 
@@ -99,7 +100,8 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         .exec()
         .context("failed to read cargo metadata")?;
     let root = metadata.workspace_root.as_std_path();
-    let crate_dir = root.join("crates/kithara-ffi");
+    let ffi_crate = ProjectConfig::load(root)?.android.ffi_crate;
+    let crate_dir = root.join("crates").join(&ffi_crate);
     let jni_dir = root.join("android/lib/build/generated/jniLibs");
     let kotlin_dir = root.join("android/lib/build/generated/uniffi/kotlin");
 
@@ -131,7 +133,7 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         .args([
             "build",
             "-p",
-            "kithara-ffi",
+            ffi_crate.as_str(),
             "--no-default-features",
             "--features",
             features,
@@ -164,7 +166,7 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         // symphonia gives the host bindgen build a DecoderBackend
         // variant (the android MediaCodec variant is target_os-gated
         // and absent when compiling the bindgen bin for the host).
-        "uniffi,symphonia",
+        "uniffi-bindgen-cli,symphonia",
     ]);
     if matches!(profile, BuildProfile::Release) {
         cmd.arg("--release");
@@ -225,7 +227,12 @@ fn run_aar() -> Result<()> {
     }
 
     let output = android_root.join("lib/build/outputs/aar");
-    let aars = [output.join("kithara.aar"), output.join("rust-tls.aar")];
+    let aars: Vec<PathBuf> = ProjectConfig::load(&workspace_root)?
+        .android
+        .aars
+        .iter()
+        .map(|name| output.join(name))
+        .collect();
     for aar in &aars {
         if !aar.is_file() {
             bail!("expected AAR was not produced: {}", aar.display());

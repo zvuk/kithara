@@ -110,5 +110,8 @@ fn test_unsupported_container_returns_error() {
     let media_info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::MpegTs));
     let result =
         DecoderFactory::create_from_media_info(cursor, &media_info, DecoderConfig::default());
-    assert!(matches!(result, Err(DecodeError::UnsupportedContainer(_))));
+    assert!(matches!(
+        result,
+        Err(DecodeError::UnsupportedContainer { .. })
+    ));
 }

@@ -14,16 +14,16 @@ workspace = true
 
 [dependencies]
 # Kithara sub-crates
-kithara-audio = { workspace = true }
-kithara-decode = { workspace = true }
+kithara-audio = { workspace = true, default-features = false }
+kithara-decode = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
-kithara-stream = { workspace = true }
-kithara-file = { workspace = true }
-kithara-hls = { workspace = true }
-kithara-abr = { workspace = true }
+kithara-stream = { workspace = true, default-features = false }
+kithara-file = { workspace = true, default-features = false }
+kithara-hls = { workspace = true, default-features = false }
+kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true }
-kithara-net = { workspace = true }
+kithara-net = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
@@ -47,15 +47,56 @@ smallvec = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 bevy_platform = { workspace = true }
 firewheel-web-audio = { workspace = true, optional = true }
 
 [features]
-default = ["backend-cpal", "symphonia"]
+default = ["backend-cpal", "symphonia", "client-reqwest", "tls-rustls"]
 backend-cpal = ["firewheel/cpal"]
+# HTTP backend forwarding to every kithara-net-reaching dep.
+client-reqwest = [
+    "kithara-net/client-reqwest",
+    "kithara-stream/client-reqwest",
+    "kithara-file/client-reqwest",
+    "kithara-hls/client-reqwest",
+    "kithara-audio/client-reqwest",
+    "kithara-decode/client-reqwest",
+    "kithara-events/client-reqwest",
+    "kithara-abr/client-reqwest",
+]
+client-wreq = [
+    "kithara-net/client-wreq",
+    "kithara-stream/client-wreq",
+    "kithara-file/client-wreq",
+    "kithara-hls/client-wreq",
+    "kithara-audio/client-wreq",
+    "kithara-decode/client-wreq",
+    "kithara-events/client-wreq",
+    "kithara-abr/client-wreq",
+]
+tls-rustls = [
+    "kithara-net/tls-rustls",
+    "kithara-stream/tls-rustls",
+    "kithara-file/tls-rustls",
+    "kithara-hls/tls-rustls",
+    "kithara-audio/tls-rustls",
+    "kithara-decode/tls-rustls",
+    "kithara-events/tls-rustls",
+    "kithara-abr/tls-rustls",
+]
+tls-native = [
+    "kithara-net/tls-native",
+    "kithara-stream/tls-native",
+    "kithara-file/tls-native",
+    "kithara-hls/tls-native",
+    "kithara-audio/tls-native",
+    "kithara-decode/tls-native",
+    "kithara-events/tls-native",
+    "kithara-abr/tls-native",
+]
 backend-web-audio = ["dep:firewheel-web-audio", "symphonia"]
 wasm-bindgen = ["firewheel/wasm-bindgen"]
 apple = ["kithara-audio/apple"]
@@ -73,7 +114,7 @@ mock = []
 [dev-dependencies]
 kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "probe"] }
 kithara-audio = { workspace = true, features = ["probe"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

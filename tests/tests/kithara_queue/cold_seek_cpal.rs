@@ -8,8 +8,8 @@ use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_integration_tests::{kithara, temp_dir, waits::wait_for_position_at_least};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
-    CancelToken,
-    time::{Duration, Instant, sleep, timeout},
+    CancelToken, time,
+    time::{Duration, Instant, timeout},
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
@@ -102,7 +102,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::spawn(async move {
         loop {
-            sleep(Duration::from_millis(16)).await;
+            time::sleep(Duration::from_millis(16)).await;
             if queue_for_tick.tick().is_err() {
                 break;
             }
@@ -162,7 +162,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
             );
             last_pos_log = Instant::now();
         }
-        sleep(Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(200)).await;
     }
 
     if tick_handle.is_finished() {
@@ -206,7 +206,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
             );
             last_pos_log = Instant::now();
         }
-        sleep(Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(200)).await;
     }
 
     if tick_handle.is_finished() {

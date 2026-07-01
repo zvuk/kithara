@@ -36,14 +36,14 @@ impl KeyOptions {
     }
 }
 
-/// Method used by [`crate::loading::size_estimation`] to probe segment
-/// sizes when `#EXT-X-BYTERANGE` is absent.
+/// Method used for lazy exact-size probes when a file-like decoder path needs
+/// byte-accurate segment offsets and `#EXT-X-BYTERANGE` is absent.
 ///
 /// `Head` is the spec-correct default. Some WAFs (notably zvuk's stage
 /// `/drm/` path) drop `HEAD` bursts with a TCP close while still
 /// happily serving `GET`s, so callers can switch the probe to a
 /// single-byte ranged `GET` whose `Content-Range` header carries the
-/// resource total. Both methods produce the same `VariantSizeMap`.
+/// resource total.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SizeProbeMethod {
@@ -90,7 +90,7 @@ pub struct HlsConfig {
     #[builder(name = events)]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown. The master `CancelToken` whose
-    /// shared atomic mirror reaches [`HlsCoord`](crate::coord::HlsCoord)'s
+    /// shared atomic mirror reaches [`HlsCoord`](crate::stream::HlsCoord)'s
     /// lock-free `is_cancelled()` read on the produce-core; the async-only
     /// downloader / net / asset paths derive children from its inner
     /// [`CancelToken`](kithara_platform::CancelToken).
@@ -104,13 +104,21 @@ pub struct HlsConfig {
     /// at the consumer site — production HLS streams need a downloader
     /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
     pub look_ahead_bytes: Option<u64>,
+    /// Number of non-media HLS cache entries reserved when deriving the
+    /// ephemeral media prefetch window from [`StoreOptions::cache_capacity`].
+    #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE)]
+    pub ephemeral_cache_non_media_reserve: usize,
+    /// Minimum media-segment prefetch window for ephemeral HLS stores after
+    /// applying [`Self::ephemeral_cache_non_media_reserve`].
+    #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW)]
+    pub ephemeral_cache_min_media_window: usize,
     /// Optional name for cache disambiguation.
     pub name: Option<String>,
     /// Buffer pool (shared across all components, created if not provided).
     pub pool: Option<BytePool>,
-    /// Method used by size estimation to probe segment lengths. See
-    /// [`SizeProbeMethod`]. Switch to [`SizeProbeMethod::RangeGet`]
-    /// for upstreams that reject `HEAD` (zvuk stage `/drm/`).
+    /// Method used by on-demand exact-size probes. Segment-aware fMP4 decode
+    /// never issues these probes; file-like paths use them after a seek needs
+    /// exact prefix offsets.
     #[builder(default)]
     pub size_probe_method: SizeProbeMethod,
     /// Storage configuration.
@@ -124,16 +132,6 @@ pub struct HlsConfig {
     /// Capacity of the event bus channel (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
-    /// Max parallel HEAD requests fired by size estimation during
-    /// playlist load. Some upstreams (notably zvuk's stage `/drm/`
-    /// path) drop TCP connections when more than a handful of HEADs
-    /// arrive concurrently; capping here keeps cold-start estimation
-    /// reliable while still being fast for tracks with many segments.
-    /// Transient drops are retried by [`HttpClient`](kithara_net::HttpClient)
-    /// using its own `retry_policy`, so the cap can stay relatively
-    /// generous.
-    #[builder(default = 8)]
-    pub head_estimation_concurrency: usize,
 }
 
 impl fmt::Debug for HlsConfig {
@@ -146,6 +144,14 @@ impl fmt::Debug for HlsConfig {
             .field("cancel", &self.cancel)
             .field("headers", &self.headers)
             .field("look_ahead_bytes", &self.look_ahead_bytes)
+            .field(
+                "ephemeral_cache_non_media_reserve",
+                &self.ephemeral_cache_non_media_reserve,
+            )
+            .field(
+                "ephemeral_cache_min_media_window",
+                &self.ephemeral_cache_min_media_window,
+            )
             .field("name", &self.name)
             .field("pool", &self.pool)
             .field("store", &self.store)
@@ -153,10 +159,6 @@ impl fmt::Debug for HlsConfig {
             .field("url", &self.url)
             .field("download_batch_size", &self.download_batch_size)
             .field("event_channel_capacity", &self.event_channel_capacity)
-            .field(
-                "head_estimation_concurrency",
-                &self.head_estimation_concurrency,
-            )
             .field("size_probe_method", &self.size_probe_method)
             .field("net_options", &self.net_options)
             .finish_non_exhaustive()
@@ -175,6 +177,8 @@ impl HlsConfig {
     /// need a downloader backpressure cap so an idle reader does not
     /// drain the whole playlist into cache.
     pub const DEFAULT_LOOK_AHEAD_BYTES: u64 = 2 * 1024 * 1024;
+    pub const DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE: usize = 4;
+    pub const DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW: usize = 3;
 
     /// Create new HLS config with URL.
     #[must_use]

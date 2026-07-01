@@ -31,7 +31,7 @@ Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-fil
 ```rust
 use kithara_assets::AssetStoreBuilder;
 
-let store = AssetStoreBuilder::new()
+let store = AssetStoreBuilder::default()
     .root_dir(cache_dir)
     .cancel(cancel.clone())
     .build();

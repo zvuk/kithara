@@ -11,16 +11,21 @@ use std::{
 use delegate::delegate;
 use fast_interleave::deinterleave_variable;
 use kithara_bufpool::{BytePool, PcmBuf, PcmPool};
-use kithara_decode::{DecoderConfig, DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
+use kithara_decode::{
+    Decoder, DecoderConfig, DecoderFactory, GaplessMode, PcmChunk, PcmMeta, PcmSpec, TrackMetadata,
+};
 use kithara_events::{AudioEvent, DeferredBus, EventBus, SeekLifecycleStage, SegmentLocation};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
 use kithara_platform::{
-    CancelScope, CancelToken, thread::park_timeout, time::Duration, tokio::task::spawn_blocking,
+    CancelScope, CancelToken,
+    thread::park_timeout,
+    time::Duration,
+    tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking},
 };
 use kithara_stream::{
     ChunkPosition, DeferredWake, MediaInfo, PlayheadWrite, SeekControl, SeekObserve, Stream,
-    StreamType,
+    StreamType, WorkerWake,
 };
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
@@ -34,10 +39,12 @@ use crate::{
         source::{DecodeInit, OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
-    runtime::AtomicServiceClass,
-    traits::{ChunkOutcome, DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome},
+    runtime::{AtomicServiceClass, WakeSignal},
+    traits::{
+        AudioEffect, ChunkOutcome, DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome,
+    },
     worker::{
-        PreloadGate,
+        EngineLoad, PreloadGate,
         handle::{AudioWorkerHandle, TrackRegistration, WorkerWakeBridge},
         thread_wake::ThreadWake,
         types::{ServiceClass, TrackId},
@@ -56,10 +63,10 @@ fn clamp_u128_to_u64_millis(ms: u128) -> u64 {
 /// Errors if the product does not fit in `usize` on the host (32-bit targets).
 fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
     let samples = frames.saturating_mul(channels);
-    usize::try_from(samples).map_err(|err| {
-        DecodeError::Io(IoError::other(format!(
+    usize::try_from(samples).map_err(|err| DecodeError::Io {
+        source: IoError::other(format!(
             "frames*channels overflow: {samples} does not fit usize: {err}"
-        )))
+        )),
     })
 }
 
@@ -72,6 +79,33 @@ enum RecvOutcome {
     Closed,
     Empty,
     Item(Fetch<PcmChunk>),
+}
+
+const AUDIO_EVENT_CAPACITY: usize = 64;
+
+struct ReaderOutputWake {
+    thread: Arc<ThreadWake>,
+    emit: DeferredBus<AudioEvent>,
+}
+
+impl ReaderOutputWake {
+    fn new(thread: Arc<ThreadWake>, emit: DeferredBus<AudioEvent>) -> Self {
+        Self { thread, emit }
+    }
+}
+
+impl WakeSignal for ReaderOutputWake {
+    fn wake(&self) {
+        WakeSignal::wake(self.thread.as_ref());
+    }
+
+    fn on_data_available(&self) {
+        self.emit.enqueue(AudioEvent::OutputAvailable);
+    }
+
+    fn flush_deferred(&self) {
+        self.emit.flush();
+    }
 }
 
 /// Generic audio pipeline running in a separate thread.
@@ -200,7 +234,49 @@ pub struct Audio<S> {
     preloaded: bool,
 }
 
+/// Consumer-side snapshot attached to the `recv_outcome_blocking` watchdog
+/// (built by [`Audio::consumer_hang_ctx`]). Serialized into the hang dump
+/// *only* by the real (test) detector — the release detector drops the
+/// context closure uncalled, so none of these reads run in production.
+/// Carries the live ABR view so a starved drain reports *which* variant the
+/// run landed on and whether an escape/decision is stuck mid-flight.
+#[derive(serde::Serialize)]
+struct ConsumerHangCtx {
+    phase: String,
+    variant: Option<usize>,
+    abr_escaping: Option<bool>,
+    abr_locked: Option<bool>,
+    abr_pending: Option<String>,
+    epoch: u64,
+    preloaded: bool,
+    block_on_underrun: bool,
+}
+
 impl<S> Audio<S> {
+    fn create_channels(
+        pcm_buffer_chunks: usize,
+        bus: &EventBus,
+        reader_wake: &Arc<ThreadWake>,
+    ) -> (
+        crate::runtime::Outlet<Fetch<PcmChunk>>,
+        crate::runtime::Inlet<Fetch<PcmChunk>>,
+    ) {
+        let wake: Arc<dyn WakeSignal> = Arc::new(ReaderOutputWake::new(
+            Arc::clone(reader_wake),
+            Self::create_emit(bus),
+        ));
+        crate::runtime::connect::<Fetch<PcmChunk>>(pcm_buffer_chunks.max(1), Some(wake))
+    }
+
+    /// Deferred sink for FSM lifecycle events. The produce core enqueues
+    /// lock-free; the scheduler shell flushes (the `broadcast::send` is a
+    /// `kevent` the forbid-blocking core must not make). Capacity covers a pass's
+    /// worth of lifecycle events with margin — flushed every pass, so under
+    /// normal lifecycle it never fills.
+    fn create_emit(bus: &EventBus) -> DeferredBus<AudioEvent> {
+        DeferredBus::new(bus.clone(), AUDIO_EVENT_CAPACITY)
+    }
+
     /// Minimum playback-position advance (ms) between `PlaybackProgress`
     /// emissions. Caps progress telemetry to ~10/s so it cannot flood the
     /// shared bounded event bus and drop control events.
@@ -297,10 +373,15 @@ impl<S> Audio<S> {
             .playhead
             .duration()
             .map(|duration| clamp_u128_to_u64_millis(duration.as_millis()));
+        let buffered_ms = {
+            let decoded_ms = clamp_u128_to_u64_millis(self.playhead.decoded_frontier().as_millis());
+            Some(total_ms.map_or(decoded_ms, |total| decoded_ms.min(total)))
+        };
 
         self.emit_audio_event(AudioEvent::PlaybackProgress {
             position_ms,
             total_ms,
+            buffered_ms,
             seek_epoch: self.validator.epoch,
         });
     }
@@ -392,9 +473,9 @@ impl<S> Audio<S> {
         if self.current_chunk.is_none() && self.consumer_phase != ConsumerPhase::AtEof {
             self.fill_buffer();
             if self.consumer_phase == ConsumerPhase::Failed {
-                return Err(DecodeError::Io(IoError::other(
-                    "pcm channel closed during preload",
-                )));
+                return Err(DecodeError::Io {
+                    source: IoError::other("pcm channel closed during preload"),
+                });
             }
         }
         Ok(())
@@ -452,9 +533,9 @@ impl<S> Audio<S> {
                 });
             }
             ConsumerPhase::Failed => {
-                return Err(DecodeError::Io(IoError::other(
-                    "pcm channel closed / producer failed",
-                )));
+                return Err(DecodeError::Io {
+                    source: IoError::other("pcm channel closed / producer failed"),
+                });
             }
             _ => {}
         }
@@ -544,9 +625,9 @@ impl<S> Audio<S> {
         let position = self.position();
         match self.consumer_phase {
             ConsumerPhase::AtEof => Ok(ReadOutcome::Eof { position }),
-            ConsumerPhase::Failed => Err(DecodeError::Io(IoError::other(
-                "pcm channel closed / producer failed",
-            ))),
+            ConsumerPhase::Failed => Err(DecodeError::Io {
+                source: IoError::other("pcm channel closed / producer failed"),
+            }),
             ConsumerPhase::SeekPending { .. } => Ok(ReadOutcome::Pending {
                 position,
                 reason: PendingReason::SeekInProgress,
@@ -571,7 +652,7 @@ impl<S> Audio<S> {
     }
 
     #[kithara::flash(true)]
-    #[kithara::hang_watchdog]
+    #[kithara::hang_watchdog(ctx = ConsumerHangCtx)]
     fn recv_outcome_blocking(&mut self) -> RecvOutcome {
         loop {
             if let Some(fetch) = self.pcm_rx.try_pop() {
@@ -594,7 +675,26 @@ impl<S> Audio<S> {
                 hang_reset!();
                 return RecvOutcome::Closed;
             }
-            hang_park!(Self::wait_for_fetch);
+            hang_park!(Self::wait_for_fetch, self.consumer_hang_ctx());
+        }
+    }
+
+    /// Live consumer-side snapshot for the `recv_outcome_blocking` watchdog.
+    /// Built lazily by the real detector only (the closure is dropped uncalled
+    /// in release), so the ABR reads here never run in production.
+    fn consumer_hang_ctx(&self) -> ConsumerHangCtx {
+        let abr = self.abr_handle.as_ref();
+        ConsumerHangCtx {
+            phase: format!("{:?}", self.consumer_phase),
+            variant: abr.and_then(kithara_abr::AbrHandle::current_variant_index),
+            abr_escaping: abr.map(kithara_abr::AbrHandle::is_escaping),
+            abr_locked: abr.map(kithara_abr::AbrHandle::is_locked),
+            abr_pending: abr
+                .and_then(kithara_abr::AbrHandle::peek_pending_decision)
+                .map(|d| format!("{d:?}")),
+            epoch: self.validator.epoch,
+            preloaded: self.preloaded,
+            block_on_underrun: self.block_on_underrun,
         }
     }
 
@@ -786,6 +886,35 @@ struct DecoderDeps {
     pcm_pool: PcmPool,
 }
 
+struct StreamSourceRegistration<'a, T: StreamType> {
+    bus: &'a EventBus,
+    cancel: &'a CancelToken,
+    decoder: Box<dyn Decoder>,
+    decoder_factory: crate::pipeline::source::DecoderFactory<T>,
+    effects: Vec<Box<dyn AudioEffect>>,
+    emit: DeferredBus<AudioEvent>,
+    engine_load: Option<Arc<EngineLoad>>,
+    epoch: Arc<AtomicU64>,
+    gapless_mode: GaplessMode,
+    initial_media_info: Option<MediaInfo>,
+    pcm_buffer_chunks: usize,
+    preload_chunks: NonZeroUsize,
+    runtime_handle: RuntimeHandle,
+    shared_stream: SharedStream<T>,
+    worker: Option<AudioWorkerHandle>,
+}
+
+struct RegisteredStreamSource {
+    data_rx: crate::runtime::Inlet<Fetch<PcmChunk>>,
+    is_standalone_worker: bool,
+    preload_gate: Arc<PreloadGate>,
+    reader_wake: Arc<ThreadWake>,
+    service_class: Arc<AtomicServiceClass>,
+    track_id: TrackId,
+    trash_tx: crate::runtime::Outlet<PcmChunk>,
+    worker: AudioWorkerHandle,
+}
+
 /// Provides async constructor that creates Stream internally.
 /// Uses `StreamAudioSource` for automatic format change detection on ABR switch.
 impl<T> Audio<Stream<T>>
@@ -832,6 +961,11 @@ where
             cancel: config_cancel,
         } = config;
         let cancel = CancelScope::new(config_cancel).token();
+        let runtime_handle = RuntimeHandle::try_current().map_err(|e| DecodeError::Io {
+            source: IoError::other(format!(
+                "audio stream construction requires a tokio runtime: {e}"
+            )),
+        })?;
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
         let byte_pool = byte_pool.unwrap_or_else(|| BytePool::default().clone());
@@ -898,60 +1032,34 @@ where
 
         let interleaved = Self::alloc_interleaved_scratch(pool, output_spec);
 
-        let emit = Self::create_emit(&bus);
-        let decoder_factory = Self::create_decoder_factory(&decoder_deps, &epoch, &byte_len_handle);
-        let initial_variant = initial_media_info.as_ref().and_then(|i| i.variant_index);
         let abr_handle = shared_stream.abr_handle();
         let peer_wake = shared_stream.peer_wake();
-        // Retain a handle to inject the worker wake after the worker exists —
-        // `shared_stream` itself is moved into the source below. `SharedStream`
-        // is `Arc`-backed, so the clone shares the same inner stream/coord.
-        let wake_stream = shared_stream.clone();
-        let audio_source = StreamAudioSource::new(
-            shared_stream,
-            DecodeInit {
-                decoder,
-                decoder_factory,
-                media_info: initial_media_info,
-                gapless_mode: config_gapless_mode,
-            },
-            Arc::clone(&epoch),
+        let RegisteredStreamSource {
+            data_rx,
+            is_standalone_worker,
+            preload_gate,
+            reader_wake,
+            service_class,
+            track_id,
+            trash_tx,
+            worker,
+        } = Self::register_stream_audio_source(StreamSourceRegistration {
+            bus: &bus,
+            cancel: &cancel,
+            decoder,
+            decoder_factory: Self::create_decoder_factory(&decoder_deps, &epoch, &byte_len_handle),
             effects,
-        )
-        .with_emit(emit);
-
-        bus.publish(AudioEvent::DecoderReady {
-            base_offset: 0,
-            variant: initial_variant,
-        });
-
-        let preload_gate = Arc::new(PreloadGate::default());
-        let reader_wake = Arc::new(ThreadWake::default());
-        let (data_tx, data_rx) = Self::create_channels(pcm_buffer_chunks, Arc::clone(&reader_wake));
-        let (trash_tx, trash_inlet) = Self::create_trash_channel(pcm_buffer_chunks);
-
-        let (worker, is_standalone) = config_worker.map_or_else(
-            || (AudioWorkerHandle::with_cancel(cancel.child()), true),
-            |w| (w, false),
-        );
-
-        let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
-
-        let track_id = worker.register_track(TrackRegistration {
-            trash_inlet,
-            source: Box::new(audio_source),
-            outlet: data_tx,
-            preload_gate: preload_gate.clone(),
-            preload_chunks: preload_chunks.get(),
-            service_class: Arc::clone(&service_class),
+            emit: Self::create_emit(&bus),
             engine_load: config_engine_load,
+            epoch: Arc::clone(&epoch),
+            gapless_mode: config_gapless_mode,
+            initial_media_info,
+            pcm_buffer_chunks,
+            preload_chunks,
+            runtime_handle,
+            shared_stream,
+            worker: config_worker,
         });
-
-        // Now that the worker exists, wire its data-arrival wake into the
-        // source: a segmented (HLS) source re-ticks the worker the instant
-        // segment bytes are written/committed, off the 10 ms scheduler poll.
-        // No-op for non-segmented sources (the default `set_worker_wake`).
-        wake_stream.set_worker_wake(Arc::new(WorkerWakeBridge(worker.clone())));
 
         Ok(Self {
             playhead,
@@ -983,19 +1091,92 @@ where
             last_progress_emit: None,
             track_id: Some(track_id),
             worker: Some(worker),
-            is_standalone_worker: is_standalone,
+            is_standalone_worker,
             _marker: PhantomData,
         })
     }
 
-    fn create_channels(
-        pcm_buffer_chunks: usize,
-        wake: Arc<ThreadWake>,
-    ) -> (
-        crate::runtime::Outlet<Fetch<PcmChunk>>,
-        crate::runtime::Inlet<Fetch<PcmChunk>>,
-    ) {
-        crate::runtime::connect::<Fetch<PcmChunk>>(pcm_buffer_chunks.max(1), Some(wake))
+    fn register_stream_audio_source(
+        registration: StreamSourceRegistration<'_, T>,
+    ) -> RegisteredStreamSource {
+        let StreamSourceRegistration {
+            bus,
+            cancel,
+            decoder,
+            decoder_factory,
+            effects,
+            emit,
+            engine_load,
+            epoch,
+            gapless_mode,
+            initial_media_info,
+            pcm_buffer_chunks,
+            preload_chunks,
+            runtime_handle,
+            shared_stream,
+            worker,
+        } = registration;
+        let initial_variant = initial_media_info.as_ref().and_then(|i| i.variant_index);
+        // Retain a handle to inject the worker wake after the worker exists —
+        // `shared_stream` itself is moved into the source below. `SharedStream`
+        // is `Arc`-backed, so the clone shares the same inner stream/coord.
+        let wake_stream = shared_stream.clone();
+        let preload_gate = Arc::new(PreloadGate::default());
+        let reader_wake = Arc::new(ThreadWake::default());
+        let (data_tx, data_rx) = Self::create_channels(pcm_buffer_chunks, bus, &reader_wake);
+        let (trash_tx, trash_inlet) = Self::create_trash_channel(pcm_buffer_chunks);
+        let (worker, is_standalone_worker) = worker.map_or_else(
+            || (AudioWorkerHandle::with_cancel(cancel.child()), true),
+            |w| (w, false),
+        );
+        let worker_wake: Arc<dyn WorkerWake> = Arc::new(WorkerWakeBridge(worker.clone()));
+        let audio_source = StreamAudioSource::new(
+            shared_stream,
+            DecodeInit {
+                decoder,
+                decoder_factory,
+                media_info: initial_media_info,
+                gapless_mode,
+            },
+            epoch,
+            effects,
+            runtime_handle,
+            Arc::clone(&worker_wake),
+        )
+        .with_emit(emit);
+
+        bus.publish(AudioEvent::DecoderReady {
+            base_offset: 0,
+            variant: initial_variant,
+        });
+
+        let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
+        let track_id = worker.register_track(TrackRegistration {
+            trash_inlet,
+            source: Box::new(audio_source),
+            outlet: data_tx,
+            preload_gate: preload_gate.clone(),
+            preload_chunks: preload_chunks.get(),
+            service_class: Arc::clone(&service_class),
+            engine_load,
+        });
+
+        // Now that the worker exists, wire its data-arrival wake into the
+        // source: a segmented (HLS) source re-ticks the worker the instant
+        // segment bytes are written/committed, off the 10 ms scheduler poll.
+        // No-op for non-segmented sources (the default `set_worker_wake`).
+        wake_stream.set_worker_wake(worker_wake);
+
+        RegisteredStreamSource {
+            data_rx,
+            is_standalone_worker,
+            preload_gate,
+            reader_wake,
+            service_class,
+            track_id,
+            trash_tx,
+            worker,
+        }
     }
 
     fn create_decoder_factory(
@@ -1008,7 +1189,7 @@ where
         let factory_byte_len = Arc::clone(byte_len_handle);
         let factory_pool = deps.pcm_pool.clone();
         let factory_byte_pool = deps.byte_pool.clone();
-        Box::new(move |stream, info, base_offset| {
+        Arc::new(move |stream, info, base_offset| {
             let byte_len = stream
                 .len()
                 .map_or(0, |len| len.saturating_sub(base_offset));
@@ -1023,7 +1204,7 @@ where
                 .maybe_hooks(stream.take_reader_event_sink())
                 .build();
             let source = OffsetReader::new(stream.clone(), base_offset);
-            match DecoderFactory::create_from_media_info(source, info, config) {
+            match DecoderFactory::create_from_media_info(source, &info, config) {
                 Ok(d) => {
                     d.update_byte_len(byte_len);
                     Ok(d)
@@ -1034,16 +1215,6 @@ where
                 }
             }
         })
-    }
-
-    /// Deferred sink for FSM lifecycle events. The produce core enqueues
-    /// lock-free; the scheduler shell flushes (the `broadcast::send` is a
-    /// `kevent` the forbid-blocking core must not make). Capacity covers a pass's
-    /// worth of lifecycle events with margin — flushed every pass, so under
-    /// normal lifecycle it never fills.
-    fn create_emit(bus: &EventBus) -> DeferredBus<AudioEvent> {
-        const AUDIO_EVENT_CAPACITY: usize = 64;
-        DeferredBus::new(bus.clone(), AUDIO_EVENT_CAPACITY)
     }
 
     /// Build the initial decoder EXACTLY ONCE on a `spawn_blocking` thread
@@ -1065,7 +1236,7 @@ where
         initial_media_info: Option<MediaInfo>,
         hint: Option<String>,
         deps: &DecoderDeps,
-    ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
+    ) -> Result<Box<dyn Decoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
         let decoder_config = DecoderConfig::builder()
@@ -1091,7 +1262,9 @@ where
             }
         })
         .await
-        .map_err(|e| DecodeError::Io(IoError::other(format!("decoder task panicked: {e}"))))?;
+        .map_err(|e| DecodeError::Io {
+            source: IoError::other(format!("decoder task panicked: {e}")),
+        })?;
         if decoder.is_ok() {
             debug!("Audio::new — decoder created");
         }
@@ -1154,7 +1327,9 @@ where
         debug!("Audio::new — creating Stream...");
         let stream = Stream::<T>::new(stream_config)
             .await
-            .map_err(|e| DecodeError::Io(IoError::other(e.to_string())))?;
+            .map_err(|e| DecodeError::Io {
+                source: IoError::other(e.to_string()),
+            })?;
         debug!("Audio::new — Stream created");
         Ok(stream)
     }
@@ -1168,7 +1343,9 @@ where
         // blocking mode), which waits for a slow prefix and surfaces a genuine
         // source error (e.g. 503) directly. Reset the cursor to 0 so the build
         // probes the container header from the start.
-        stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
+        stream
+            .seek(SeekFrom::Start(0))
+            .map_err(|source| DecodeError::Io { source })?;
         Ok(stream)
     }
 
@@ -1183,7 +1360,9 @@ where
         debug!("Audio::new — spawning probe task...");
         let result = spawn_blocking(move || Self::probe_stream_blocking(stream, &byte_pool))
             .await
-            .map_err(|e| DecodeError::Io(IoError::other(format!("probe task panicked: {e}"))))??;
+            .map_err(|e| DecodeError::Io {
+                source: IoError::other(format!("probe task panicked: {e}")),
+            })??;
         debug!("Audio::new — probe task done");
         Ok(result)
     }
@@ -1279,9 +1458,9 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
             let position = self.position();
             return match self.consumer_phase {
                 ConsumerPhase::AtEof => Ok(ChunkOutcome::Eof { position }),
-                ConsumerPhase::Failed => Err(DecodeError::Io(IoError::other(
-                    "pcm channel closed / producer failed",
-                ))),
+                ConsumerPhase::Failed => Err(DecodeError::Io {
+                    source: IoError::other("pcm channel closed / producer failed"),
+                }),
                 ConsumerPhase::SeekPending { .. } => Ok(ChunkOutcome::Pending {
                     position,
                     reason: PendingReason::SeekInProgress,
@@ -1423,6 +1602,12 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmReader for Audio<S> {
             fn position(&self) -> Duration;
         }
     }
+
+    delegate! {
+        to self.playhead {
+            fn decoded_frontier(&self) -> Duration;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1506,6 +1691,45 @@ mod tests {
         audio.preload().expect("preload");
 
         assert!(matches!(audio.recv_outcome(), RecvOutcome::Empty));
+    }
+
+    #[kithara::test]
+    fn output_available_event_fires_on_empty_to_nonempty_ring_transition() {
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
+        let reader_wake = Arc::new(ThreadWake::default());
+        let (mut tx, mut rx) = Audio::<()>::create_channels(2, &bus, &reader_wake);
+
+        tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
+            .expect("first push reaches ring");
+        assert!(
+            events.try_recv().is_err(),
+            "ring wake event is deferred until the scheduler shell flush"
+        );
+        tx.flush_wake_signals();
+        assert!(matches!(
+            events.try_recv(),
+            Ok(kithara_events::Event::Audio(AudioEvent::OutputAvailable))
+        ));
+
+        tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
+            .expect("second push reaches ring");
+        tx.flush_wake_signals();
+        assert!(
+            events.try_recv().is_err(),
+            "no duplicate wake while the ring was already non-empty"
+        );
+
+        assert!(rx.try_pop().is_some());
+        assert!(rx.try_pop().is_some());
+
+        tx.try_push(Fetch::new(PcmChunk::default(), false, 0))
+            .expect("third push reaches empty ring");
+        tx.flush_wake_signals();
+        assert!(matches!(
+            events.try_recv(),
+            Ok(kithara_events::Event::Audio(AudioEvent::OutputAvailable))
+        ));
     }
 
     #[kithara::test]
@@ -1638,7 +1862,10 @@ mod tests {
         assert!(result.is_none());
         assert_eq!(audio.consumer_phase, ConsumerPhase::Failed);
         let mut buf = [0.0f32; 16];
-        assert!(matches!(audio.read(&mut buf), Err(DecodeError::Io(_))));
+        assert!(matches!(
+            audio.read(&mut buf),
+            Err(DecodeError::Io { source: _ })
+        ));
     }
 
     #[kithara::test]

@@ -16,5 +16,8 @@ pub(crate) mod source_io;
 
 pub(crate) use demuxer::Fmp4SegmentDemuxer;
 
+#[cfg(test)]
+pub(crate) mod test_layout;
+
 #[cfg(all(test, feature = "symphonia"))]
 mod tests;

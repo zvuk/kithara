@@ -117,9 +117,9 @@ impl Fmp4SegmentDemuxer {
     ) -> DecodeResult<Self> {
         let init_range = segments.init_segment_range();
         if init_range.is_empty() {
-            return Err(DecodeError::InvalidData(
-                "HLS init segment range not announced".into(),
-            ));
+            return Err(DecodeError::InvalidData {
+                detail: "HLS init segment range not announced",
+            });
         }
         let mut init_state = SegmentReadState::new(init_range, byte_pool.get());
         if let FillStatus::Pending(_) = fill_segment_buffer(
@@ -224,10 +224,9 @@ impl Demuxer for Fmp4SegmentDemuxer {
             warmup_backoff(self.track_info.codec, self.track_info.sample_rate, &priming)
                 .map_or(target, |backoff| target.saturating_sub(backoff));
         let Some(desc) = self.segments.segment_at_time(seek_target) else {
-            return Err(DecodeError::SeekFailed(format!(
-                "no segment for time {}ms",
-                target.as_millis()
-            )));
+            return Err(DecodeError::SeekFailed {
+                detail: "no segment covers the requested seek time",
+            });
         };
         if let Some(duration) = self.duration
             && desc.decode_time >= duration

@@ -165,6 +165,62 @@ pub(crate) fn print_grouped(report: &Report, diff: &RatchetDiff<'_>) {
     }
 }
 
+/// Print ONLY the violations that FAIL the ratchet — new ones (absent from the
+/// baseline) and regressions (count rose above baseline) — to stderr, each with
+/// its exact location (`key` = `path[:line[:col]][:Type][::name]`) and message.
+/// The grouped report above lists every current violation, including the
+/// hundreds that are baselined and allowed; this focused block is the subset a
+/// contributor must actually act on. Printed last and on stderr so it never
+/// pollutes structured stdout (`--json` / `--report`) and is the final thing on
+/// screen before the bail — no more hunting "which of 600 lines is the new one".
+pub(crate) fn print_ratchet_failures(diff: &RatchetDiff<'_>) {
+    if !diff.has_failures() {
+        return;
+    }
+    if !diff.new_violations.is_empty() {
+        eprintln!(
+            "\n{}",
+            bold_red(&format!(
+                "🛑 {} NEW violation(s) not in baseline — fix the code, or justify in the owning CONTEXT.md:",
+                diff.new_violations.len(),
+            )),
+        );
+        for v in &diff.new_violations {
+            eprint_failing(v);
+        }
+    }
+    if !diff.regressions.is_empty() {
+        eprintln!(
+            "\n{}",
+            bold_red(&format!(
+                "🛑 {} REGRESSION(s) — count rose above baseline:",
+                diff.regressions.len(),
+            )),
+        );
+        for v in &diff.regressions {
+            eprint_failing(v);
+        }
+    }
+}
+
+/// One failing-violation line: severity tag + check + exact location, then the
+/// instance message indented beneath.
+fn eprint_failing(v: &Violation) {
+    eprintln!(
+        "  {arrow} [{sev}] {check}  {key}",
+        arrow = red("▸"),
+        sev = v.severity,
+        check = bold(v.check),
+        key = v.key,
+    );
+    for line in v.message.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            eprintln!("      {}", dim(trimmed));
+        }
+    }
+}
+
 pub(crate) fn render_markdown(
     report: &Report,
     ran: &[&'static str],

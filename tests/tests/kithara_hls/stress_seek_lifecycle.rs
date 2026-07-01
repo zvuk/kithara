@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use kithara_platform::{CancelToken, thread, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;
@@ -42,9 +42,7 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
     for retry in 0..Consts::MAX_ZERO_READS {
         match audio.read(buf) {
             Ok(ReadOutcome::Frames { count, .. }) => return (count.get(), retry, false),
-            Ok(ReadOutcome::Pending { .. }) => {
-                thread::sleep(Duration::from_millis(1));
-            }
+            Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => return (0, retry, true),
             Err(e) => {
                 warn!(

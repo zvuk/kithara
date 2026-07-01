@@ -149,6 +149,10 @@ fn segment_gate_key(hls_token: &str, variant: usize, segment: usize) -> String {
     format!("{hls_token}|v{variant}|s{segment}")
 }
 
+fn size_probe_key(hls_token: &str, variant: usize, segment: usize) -> String {
+    format!("{hls_token}|v{variant}|s{segment}|probe")
+}
+
 /// A test-controlled withhold gate for one `(hls token, variant)` init
 /// (`EXT-X-MAP`) segment.
 ///
@@ -288,6 +292,14 @@ pub(crate) struct TestServerState {
     segment_gates: RwLock<HashMap<String, Arc<SegmentGate>>>,
     init_gates: RwLock<HashMap<String, Arc<InitGate>>>,
     delay_gates: RwLock<HashMap<String, Arc<DelayGate>>>,
+    /// Per-`(hls token, variant, segment)` count of size-probe requests the
+    /// server has served: every `HEAD` and every single-byte ranged
+    /// `GET` (`Range: bytes=0-0`). Unlike the withhold gates this counter is
+    /// always live (no pre-registration), so a test can observe the up-front
+    /// size-estimation pass that probes every segment of every variant at
+    /// `Audio::new()` versus the lazy per-segment resolve that probes only
+    /// the active prefix.
+    size_probes: RwLock<HashMap<String, AtomicU64>>,
 }
 
 #[derive(Clone)]
@@ -307,6 +319,7 @@ impl TestServerState {
             segment_gates: RwLock::new(HashMap::new()),
             init_gates: RwLock::new(HashMap::new()),
             delay_gates: RwLock::new(HashMap::new()),
+            size_probes: RwLock::new(HashMap::new()),
         })
     }
 
@@ -413,6 +426,30 @@ impl TestServerState {
         let map = self.delay_gates.read().expect("delay gates poisoned");
         map.get(&delay_gate_key(hls_token, variant, segment))
             .map(Arc::clone)
+    }
+
+    /// Record one size-probe (`HEAD` or single-byte ranged `GET`) served for
+    /// `(hls token, variant, segment)`. Always live — no gate registration.
+    pub(crate) fn mark_size_probe(&self, hls_token: &str, variant: usize, segment: usize) {
+        let key = size_probe_key(hls_token, variant, segment);
+        {
+            let map = self.size_probes.read().expect("size probes poisoned");
+            if let Some(counter) = map.get(&key) {
+                counter.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+        let mut map = self.size_probes.write().expect("size probes poisoned");
+        map.entry(key)
+            .or_insert_with(|| AtomicU64::new(0))
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Size-probes served for one `(hls token, variant, segment)`.
+    pub(crate) fn size_probe_count(&self, hls_token: &str, variant: usize, segment: usize) -> u64 {
+        let map = self.size_probes.read().expect("size probes poisoned");
+        map.get(&size_probe_key(hls_token, variant, segment))
+            .map_or(0, |counter| counter.load(Ordering::Relaxed))
     }
 
     /// Lookup a previously encoded signal payload. Test fixture builders

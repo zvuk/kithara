@@ -15,11 +15,12 @@ workspace = true
 [dependencies]
 arc-swap = { workspace = true }
 bon = { workspace = true }
+crossbeam-queue = { workspace = true }
 delegate = { workspace = true }
-kithara-abr = { workspace = true }
-kithara-decode = { workspace = true }
+kithara-abr = { workspace = true, default-features = false }
+kithara-decode = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
-kithara-stream = { workspace = true }
+kithara-stream = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-beat = { workspace = true, optional = true }
 kithara-test-macros = { workspace = true }
@@ -28,6 +29,7 @@ biquad = { workspace = true }
 rubato = { workspace = true }
 realfft = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
 audioadapter-buffers = { workspace = true }
 smallvec = { workspace = true }
 ringbuf = { workspace = true }
@@ -40,9 +42,34 @@ hotpath = { workspace = true, optional = true }
 unimock = { workspace = true }
 
 [features]
-default = ["symphonia"]
+default = ["symphonia", "client-reqwest", "tls-rustls"]
 probe = []
 mock = []
+# HTTP backend forwarding to every kithara-net-reaching dep.
+client-reqwest = [
+    "kithara-stream/client-reqwest",
+    "kithara-events/client-reqwest",
+    "kithara-abr/client-reqwest",
+    "kithara-decode/client-reqwest",
+]
+client-wreq = [
+    "kithara-stream/client-wreq",
+    "kithara-events/client-wreq",
+    "kithara-abr/client-wreq",
+    "kithara-decode/client-wreq",
+]
+tls-rustls = [
+    "kithara-stream/tls-rustls",
+    "kithara-events/tls-rustls",
+    "kithara-abr/tls-rustls",
+    "kithara-decode/tls-rustls",
+]
+tls-native = [
+    "kithara-stream/tls-native",
+    "kithara-events/tls-native",
+    "kithara-abr/tls-native",
+    "kithara-decode/tls-native",
+]
 # Enable performance monitoring with hotpath-rs (timing only, minimal overhead)
 perf = ["dep:hotpath", "hotpath/hotpath"]
 # Enable memory profiling for examples (includes allocation tracking, adds overhead)
@@ -67,7 +94,7 @@ stretch-bungee = ["dep:bungee-rs"]
 # in practice: wasm builds simply do not enable it (rten on wasm unverified).
 beat-nn = ["dep:kithara-beat", "kithara-beat/embed-small-model"]
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 signalsmith-stretch = { workspace = true, optional = true }
 bungee-rs = { workspace = true, optional = true }
 
@@ -91,7 +118,8 @@ bytes = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
+kithara-storage = { workspace = true }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 tempfile = { workspace = true }
 aes = { workspace = true }
 cbc = { workspace = true }
@@ -99,10 +127,12 @@ wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { workspace = true }
-reqwest = { workspace = true, features = ["rustls", "stream"] }
 tracing-subscriber = { workspace = true }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
 kithara-assets = { workspace = true }
-kithara-net = { workspace = true }
+kithara-net = { workspace = true, default-features = false, features = [
+    "client-reqwest",
+    "tls-rustls",
+] }
 hotpath = { workspace = true }

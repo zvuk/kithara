@@ -25,6 +25,13 @@ pub type OnResponseFn = Box<dyn FnOnce(&Headers) + Send>;
 /// before headers were received.
 pub type OnCompleteFn = Box<dyn FnOnce(u64, Option<&Headers>, Option<&NetError>) + Send>;
 
+/// Per-command slow-fetch hook. Fires once when the fetch outlasts
+/// `DownloaderConfig::soft_timeout` without completing — the twin of
+/// [`OnCompleteFn`] for the mid-flight "still pending, now slow"
+/// transition. The request keeps running; this is advisory, fired at the
+/// same point that publishes [`DownloaderEvent::LoadSlow`](kithara_events::DownloaderEvent::LoadSlow).
+pub type OnSlowFn = Box<dyn FnOnce() + Send>;
+
 /// Optional response-header validator for a single `FetchCmd`.
 ///
 /// Invoked with the response headers after a successful HTTP response.
@@ -53,6 +60,10 @@ pub struct FetchCmd {
     /// response is ready, before the body streams. `None` for the
     /// channel path (`execute`/`batch`).
     pub on_response: Option<OnResponseFn>,
+    /// Streaming path slow hook — fires once at `soft_timeout` if the
+    /// fetch has not completed. `None` for callers that don't observe
+    /// slowness. The request keeps running regardless.
+    pub on_slow: Option<OnSlowFn>,
     /// Optional byte range (HTTP Range request).
     pub range: Option<RangeSpec>,
     /// Optional per-request response validator.

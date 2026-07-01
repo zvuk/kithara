@@ -1,5 +1,4 @@
-pub use tokio_with_wasm::alias::task::*;
-
+pub use super::backend::task::*;
 use super::runtime::Handle;
 
 /// Spawn `future` on a specific runtime [`Handle`]: a direct `handle.spawn`.
@@ -20,5 +19,14 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    tokio::task::spawn_blocking(f)
+    super::backend::task::spawn_blocking(f)
+}
+
+/// Spawn a blocking computation on a specific runtime [`Handle`].
+pub fn spawn_blocking_on<F, R>(handle: &Handle, f: F) -> JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    handle.spawn_blocking(f)
 }

@@ -4,7 +4,8 @@
 //! root `spawn`/`spawn_blocking` are intentionally ABSENT. `net` too: the
 //! wasm tree is a documented subset — browser code has no socket surface.
 
-pub use tokio_with_wasm::alias::{join, pin, select, try_join};
+pub use backend::{join, pin, select, try_join};
+pub(crate) use tokio_with_wasm::alias as backend;
 
 pub mod runtime;
 pub mod sync;

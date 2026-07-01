@@ -132,8 +132,13 @@ pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> Ab
         (false, None, false, Some(bps)) => bps,
     };
 
+    let escaping = state.is_escaping();
     let max_bw = state.max_bandwidth_bps();
-    let sorted = sorted_candidates(view.variants, max_bw);
+    let mut sorted = sorted_candidates(view.variants, max_bw);
+    if escaping {
+        // The active variant cannot deliver — it must not be a Stay target.
+        sorted.retain(|(idx, _)| *idx != current);
+    }
     if sorted.is_empty() {
         return AbrDecision::Stay {
             current,
@@ -150,6 +155,18 @@ pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> Ab
             reason: AbrReason::AlreadyOptimal,
         };
     };
+
+    if escaping {
+        // `current` was excluded from `sorted` above, so `candidate_idx !=
+        // current`. Escape to the bandwidth-viable candidate, bypassing the
+        // buffer-too-low and hysteresis gates: their premise (staying grows the
+        // buffer) is false for a variant that delivers nothing.
+        return AbrDecision::UpSwitch {
+            from: current,
+            to: candidate_idx,
+            reason: AbrReason::EscapeStalled,
+        };
+    }
 
     if let Some(cap) = max_bw
         && current_bw > cap

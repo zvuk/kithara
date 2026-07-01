@@ -7,9 +7,10 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
+use plist::Value as PlistValue;
 use regex::Regex;
 
-use crate::common::project::ProjectConfig;
+use crate::{apple_docgen, common::project::ProjectConfig};
 
 /// Module constants for `cargo xtask apple run`. Grouped per the
 /// `style.multiple-private-module-consts` lint.
@@ -42,13 +43,22 @@ impl Consts {
     ];
     /// Positive proof — at least one of these must appear in every slice
     /// to confirm the Apple HW dispatcher is actually linked in.
-    const APPLE_PROOF_NEEDLES: &[&str] = &["AppleCodec", "apple7decode"];
-    /// Slice subdirectories inside the `*.xcframework` we expect to find.
-    const XCFRAMEWORK_SLICES: &[&str] = &[
-        "ios-arm64",
-        "ios-arm64_x86_64-simulator",
-        "macos-arm64_x86_64",
+    const APPLE_PROOF_NEEDLES: &[&str] = &["AppleCodec", "AppleAudioFileDemuxer"];
+    /// Apple App Store uploads no longer require bitcode, and embedding it
+    /// bloats every Rust object stored in the release static archive.
+    const RELEASE_RUSTFLAGS: &[&str] = &["-C", "embed-bitcode=no"];
+    const RELEASE_CARGO_ARGS: &[&str] = &[
+        "+nightly",
+        "-Z",
+        "build-std=std,panic_abort",
+        "-Z",
+        "build-std-features=panic_immediate_abort",
     ];
+    /// Slice subdirectories inside the `*.xcframework` we expect to find.
+    const XCFRAMEWORK_SLICES: &[&str] =
+        &["ios-arm64", Self::IOS_SIMULATOR_SLICE, "macos-arm64_x86_64"];
+    const IOS_SIMULATOR_FAT_SLICE: &'static str = "ios-arm64_x86_64-simulator";
+    const IOS_SIMULATOR_SLICE: &'static str = "ios-arm64-simulator";
 }
 
 /// Project-agnostic single-framework packaging config, read from
@@ -159,6 +169,64 @@ impl Drop for TempWorkDir {
     }
 }
 
+struct HakariDisableGuard {
+    manifest: PathBuf,
+    original_manifest: String,
+    lockfile: PathBuf,
+    original_lockfile: String,
+    active: bool,
+}
+
+impl HakariDisableGuard {
+    fn disable(workspace_root: &Path) -> Result<Self> {
+        let manifest = workspace_root.join("crates/kithara-workspace-hack/Cargo.toml");
+        let lockfile = workspace_root.join("Cargo.lock");
+        let original_manifest = fs::read_to_string(&manifest)
+            .with_context(|| format!("read {}", manifest.display()))?;
+        let original_lockfile = fs::read_to_string(&lockfile)
+            .with_context(|| format!("read {}", lockfile.display()))?;
+        let mut guard = Self {
+            manifest,
+            original_manifest,
+            lockfile,
+            original_lockfile,
+            active: true,
+        };
+
+        println!("==> Temporarily disabling hakari workspace-hack for release build");
+        let status = Command::new("cargo")
+            .args(["hakari", "disable"])
+            .current_dir(workspace_root)
+            .status()
+            .context("failed to run cargo hakari disable")?;
+        if !status.success() {
+            guard.restore().context(
+                "cargo hakari disable failed, then restoring kithara-workspace-hack also failed",
+            )?;
+            bail!("cargo hakari disable failed");
+        }
+
+        Ok(guard)
+    }
+
+    fn restore(&mut self) -> Result<()> {
+        if self.active {
+            fs::write(&self.manifest, &self.original_manifest)
+                .with_context(|| format!("restore {}", self.manifest.display()))?;
+            fs::write(&self.lockfile, &self.original_lockfile)
+                .with_context(|| format!("restore {}", self.lockfile.display()))?;
+            self.active = false;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for HakariDisableGuard {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
 #[derive(Clone, Debug, clap::Subcommand)]
 pub(crate) enum AppleCommand {
     /// Build `XCFramework` for Apple platforms.
@@ -166,6 +234,9 @@ pub(crate) enum AppleCommand {
         /// Build profile.
         #[arg(long, default_value_t = crate::BuildProfile::Release)]
         profile: crate::BuildProfile,
+        /// Build one Rust target triple instead of all Apple platforms.
+        #[arg(long)]
+        target: Option<String>,
     },
     /// Build ONE self-contained `Kithara.xcframework` (Swift API + `UniFFI`
     /// binding + Rust core merged into a single module) for manual drag-in
@@ -206,6 +277,12 @@ pub(crate) enum AppleCommand {
         /// `apple/KitharaFFIInternal.xcframework`).
         path: PathBuf,
     },
+    /// Generate DocC documentation-extension pages from Rust rustdoc JSON.
+    Docgen {
+        /// Verify rustdoc JSON compatibility and allowlist coverage without writing files.
+        #[arg(long)]
+        check: bool,
+    },
     /// Build release Apple artifacts, strip/audit them, zip them, and print
     /// the SPM checksum for the Rust `XCFramework` binary target.
     Release,
@@ -213,7 +290,7 @@ pub(crate) enum AppleCommand {
 
 pub(crate) fn run(cmd: AppleCommand) -> Result<()> {
     match cmd {
-        AppleCommand::Build { profile } => run_build(profile),
+        AppleCommand::Build { profile, target } => run_build(profile, target.as_deref()),
         AppleCommand::Single { profile } => run_single(profile),
         AppleCommand::Run {
             simulator,
@@ -229,6 +306,7 @@ pub(crate) fn run(cmd: AppleCommand) -> Result<()> {
             skip_framework,
         ),
         AppleCommand::Audit { path } => audit_symbols(&path),
+        AppleCommand::Docgen { check } => apple_docgen::run(check),
         AppleCommand::Release => run_release(),
     }
 }
@@ -253,15 +331,14 @@ fn audit_symbols(xcframework_dir: &Path) -> Result<()> {
             ));
             continue;
         }
-        let output = Command::new("nm")
+        let output = Command::new(symbol_tool())
             .arg(&lib)
             .output()
-            .with_context(|| format!("invoke nm on {}", lib.display()))?;
-        // `nm` returns non-zero for "no symbols" archives but still
-        // emits useful stdout; only treat IO failure as fatal.
-        let stdout = String::from_utf8_lossy(&output.stdout);
+            .with_context(|| format!("invoke symbol audit on {}", lib.display()))?;
+        let symbols = String::from_utf8_lossy(&output.stdout);
+        let strings = archive_strings(&lib)?;
         for needle in Consts::BANNED_SYMBOL_NEEDLES {
-            let count = stdout.matches(needle).count();
+            let count = symbols.matches(needle).count() + strings.matches(needle).count();
             if count > 0 {
                 errors.push(format!(
                     "slice `{slice}` leaked {count} `{needle}` symbols — \
@@ -271,7 +348,7 @@ fn audit_symbols(xcframework_dir: &Path) -> Result<()> {
         }
         let has_apple_proof = Consts::APPLE_PROOF_NEEDLES
             .iter()
-            .any(|n| stdout.contains(n));
+            .any(|n| symbols.contains(n) || strings.contains(n));
         if !has_apple_proof {
             let proof = Consts::APPLE_PROOF_NEEDLES;
             errors.push(format!(
@@ -294,7 +371,41 @@ fn audit_symbols(xcframework_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn run_build(profile: crate::BuildProfile) -> Result<()> {
+fn symbol_tool() -> PathBuf {
+    rust_tool("llvm-nm").unwrap_or_else(|| PathBuf::from("nm"))
+}
+
+fn rust_tool(name: &str) -> Option<PathBuf> {
+    let output = Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let sysroot = String::from_utf8(output.stdout).ok()?;
+    let rustlib = PathBuf::from(sysroot.trim()).join("lib/rustlib");
+    for entry in fs::read_dir(rustlib).ok()? {
+        let path = entry.ok()?.path().join("bin").join(name);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn archive_strings(lib: &Path) -> Result<String> {
+    let output = Command::new("strings")
+        .arg(lib)
+        .output()
+        .with_context(|| format!("invoke strings on {}", lib.display()))?;
+    if !output.status.success() {
+        bail!("strings failed for {}", lib.display());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn run_build(profile: crate::BuildProfile, target: Option<&str>) -> Result<()> {
     match Command::new("cargo")
         .args(["swift", "--help"])
         .stdout(Stdio::null())
@@ -311,13 +422,28 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     let root = metadata.workspace_root.as_std_path();
     let crate_dir = root.join("crates/kithara-ffi");
     let apple_dir = root.join("apple");
+    let mut hakari_guard = if matches!(profile, crate::BuildProfile::Release) {
+        Some(HakariDisableGuard::disable(root)?)
+    } else {
+        None
+    };
 
     println!("==> Building KitharaFFI with cargo-swift");
 
     let mut cmd = Command::new("cargo");
-    cmd.args(["swift", "package", "-p", "ios", "macos", "-n", "KitharaFFI"]);
+    if matches!(profile, crate::BuildProfile::Release) {
+        cmd.args(Consts::RELEASE_CARGO_ARGS);
+    }
+    cmd.args(["swift", "package"]);
+    if let Some(target) = target {
+        cmd.args(["--target", target]);
+    } else {
+        cmd.args(["-p", "ios", "macos"]);
+    }
+    cmd.args(["-n", "KitharaFFI"]);
     if matches!(profile, crate::BuildProfile::Release) {
         cmd.arg("--release");
+        set_release_rustflags(&mut cmd);
     }
     cmd.args([
         "--lib-type",
@@ -351,6 +477,12 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     }
     copy_dir_all(&xcf_src, &xcf_dst)
         .with_context(|| format!("copy {} -> {}", xcf_src.display(), xcf_dst.display()))?;
+    if target.is_none() {
+        keep_arm64_ios_simulator_only(&xcf_dst)?;
+    }
+    if matches!(profile, crate::BuildProfile::Release) {
+        strip_xcframework(&xcf_dst)?;
+    }
 
     if let Some(parent) = swift_dst.parent() {
         fs::create_dir_all(parent)?;
@@ -377,7 +509,22 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     println!("To build and test:");
     println!("  cd {} && swift build && swift test", apple_dir.display());
 
+    if let Some(guard) = &mut hakari_guard {
+        guard.restore()?;
+    }
+
     Ok(())
+}
+
+fn set_release_rustflags(cmd: &mut Command) {
+    let mut flags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
+    for flag in Consts::RELEASE_RUSTFLAGS {
+        if !flags.is_empty() {
+            flags.push('\x1f');
+        }
+        flags.push_str(flag);
+    }
+    cmd.env("CARGO_ENCODED_RUSTFLAGS", flags);
 }
 
 fn run_release() -> Result<()> {
@@ -397,8 +544,7 @@ fn run_release() -> Result<()> {
     let apple_dir = root.join("apple");
     let internal = apple_dir.join("KitharaFFIInternal.xcframework");
 
-    run_build(crate::BuildProfile::Release)?;
-    strip_xcframework(&internal)?;
+    run_build(crate::BuildProfile::Release, None)?;
     audit_symbols(&internal)?;
     run_single(crate::BuildProfile::Release)?;
 
@@ -450,6 +596,71 @@ fn strip_xcframework(xcframework: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn keep_arm64_ios_simulator_only(xcframework: &Path) -> Result<()> {
+    let fat = xcframework.join(Consts::IOS_SIMULATOR_FAT_SLICE);
+    let thin = xcframework.join(Consts::IOS_SIMULATOR_SLICE);
+    if fat.exists() {
+        if thin.exists() {
+            fs::remove_dir_all(&thin).with_context(|| format!("remove {}", thin.display()))?;
+        }
+        fs::rename(&fat, &thin)
+            .with_context(|| format!("rename {} -> {}", fat.display(), thin.display()))?;
+        let lib = thin.join("libkithara_ffi.a");
+        let tmp = thin.join("libkithara_ffi.arm64.a");
+        lipo_thin(&lib, "arm64", &tmp)?;
+        fs::rename(&tmp, &lib)
+            .with_context(|| format!("replace {} with {}", lib.display(), tmp.display()))?;
+    } else if !thin.exists() {
+        bail!(
+            "missing iOS simulator slice: expected {} or {} under {}",
+            Consts::IOS_SIMULATOR_SLICE,
+            Consts::IOS_SIMULATOR_FAT_SLICE,
+            xcframework.display()
+        );
+    }
+    update_ios_simulator_plist(xcframework)
+}
+
+fn update_ios_simulator_plist(xcframework: &Path) -> Result<()> {
+    let plist = xcframework.join("Info.plist");
+    let mut root =
+        PlistValue::from_file(&plist).with_context(|| format!("read {}", plist.display()))?;
+    let libraries = root
+        .as_dictionary_mut()
+        .and_then(|dict| dict.get_mut("AvailableLibraries"))
+        .and_then(PlistValue::as_array_mut)
+        .with_context(|| format!("invalid xcframework plist {}", plist.display()))?;
+
+    let mut updated = false;
+    for library in libraries {
+        let Some(dict) = library.as_dictionary_mut() else {
+            continue;
+        };
+        let platform = dict
+            .get("SupportedPlatform")
+            .and_then(PlistValue::as_string);
+        let variant = dict
+            .get("SupportedPlatformVariant")
+            .and_then(PlistValue::as_string);
+        if platform == Some("ios") && variant == Some("simulator") {
+            dict.insert(
+                "LibraryIdentifier".into(),
+                PlistValue::String(Consts::IOS_SIMULATOR_SLICE.to_string()),
+            );
+            dict.insert(
+                "SupportedArchitectures".into(),
+                PlistValue::Array(vec![PlistValue::String("arm64".to_string())]),
+            );
+            updated = true;
+        }
+    }
+
+    if !updated {
+        bail!("missing iOS simulator library entry in {}", plist.display());
+    }
+    plist::to_file_xml(&plist, &root).with_context(|| format!("write {}", plist.display()))
 }
 
 fn zip_dir(parent: &Path, directory_name: &str, output: &Path) -> Result<()> {
@@ -515,16 +726,23 @@ fn run_single(profile: crate::BuildProfile) -> Result<()> {
     let apple_dir = root.join("apple");
     let internal = apple_dir.join("KitharaFFIInternal.xcframework");
 
-    if !internal.exists() {
+    let built_internal = if internal.exists() {
+        false
+    } else {
         println!("==> KitharaFFIInternal.xcframework not found — building it first");
-        run_build(profile)?;
-    }
+        run_build(profile, None)?;
+        true
+    };
     require_dir(&internal)?;
+    keep_arm64_ios_simulator_only(&internal)?;
+    if matches!(profile, crate::BuildProfile::Release) && !built_internal {
+        strip_xcframework(&internal)?;
+    }
 
     let rx_src = resolve_rxswift(&root)?;
     println!("==> RxSwift source: {}", rx_src.display());
 
-    let temp = TempWorkDir::create("kithara-apple-single")?;
+    let temp = TempWorkDir::create(&format!("{}-apple-single", crate::util::project_name()))?;
     let work = temp.path().to_path_buf();
     let merged = work.join("merged");
     fs::create_dir_all(&merged)?;
@@ -678,33 +896,28 @@ fn build_single_xcframework(
     let sim_sdk = sdk_path("iphonesimulator")?;
 
     let mm_dev = internal.join("ios-arm64/Headers/KitharaFFIInternal");
-    let mm_sim = internal.join("ios-arm64_x86_64-simulator/Headers/KitharaFFIInternal");
+    let mm_sim = internal.join(format!(
+        "{}/Headers/KitharaFFIInternal",
+        Consts::IOS_SIMULATOR_SLICE
+    ));
     let rust_dev = internal.join("ios-arm64/libkithara_ffi.a");
-    let rust_sim_fat = internal.join("ios-arm64_x86_64-simulator/libkithara_ffi.a");
+    let rust_sim = internal.join(format!("{}/libkithara_ffi.a", Consts::IOS_SIMULATOR_SLICE));
     require_file(&mm_dev.join("module.modulemap"))?;
     require_file(&mm_sim.join("module.modulemap"))?;
     require_file(&rust_dev)?;
-    require_file(&rust_sim_fat)?;
-
-    let rust_sim_arm = work.join("rust-sim-arm64.a");
-    let rust_sim_x86 = work.join("rust-sim-x86_64.a");
-    lipo_thin(&rust_sim_fat, "arm64", &rust_sim_arm)?;
-    lipo_thin(&rust_sim_fat, "x86_64", &rust_sim_x86)?;
+    require_file(&rust_sim)?;
 
     let msrc = swift_files(merged)?;
     let rx_files = swift_files_recursive(rx_src)?;
 
     let dev_out = work.join("dev");
     let sim_a_out = work.join("sim-a");
-    let sim_x_out = work.join("sim-x");
     let rx_dev_out = work.join("rx/dev");
     let rx_sim_a_out = work.join("rx/sim-a");
-    let rx_sim_x_out = work.join("rx/sim-x");
 
     let dt = &spec.deployment_target;
     let triple_dev = format!("arm64-apple-ios{dt}");
     let triple_sim_a = format!("arm64-apple-ios{dt}-simulator");
-    let triple_sim_x = format!("x86_64-apple-ios{dt}-simulator");
 
     let slices = [
         ArchBuild {
@@ -722,20 +935,10 @@ fn build_single_xcframework(
             triple: &triple_sim_a,
             sdk: &sim_sdk,
             module_map: &mm_sim,
-            rust_lib: &rust_sim_arm,
+            rust_lib: &rust_sim,
             out: &sim_a_out,
             module_triple: "arm64-apple-ios-simulator",
             rx_out: &rx_sim_a_out,
-        },
-        ArchBuild {
-            module: &spec.framework_name,
-            triple: &triple_sim_x,
-            sdk: &sim_sdk,
-            module_map: &mm_sim,
-            rust_lib: &rust_sim_x86,
-            out: &sim_x_out,
-            module_triple: "x86_64-apple-ios-simulator",
-            rx_out: &rx_sim_x_out,
         },
     ];
     for slice in &slices {
@@ -745,7 +948,7 @@ fn build_single_xcframework(
     let fw_ios = work.join("fw/ios");
     let fw_sim = work.join("fw/sim");
     assemble_framework(&fw_ios, "iPhoneOS", &[&dev_out], spec)?;
-    assemble_framework(&fw_sim, "iPhoneSimulator", &[&sim_a_out, &sim_x_out], spec)?;
+    assemble_framework(&fw_sim, "iPhoneSimulator", &[&sim_a_out], spec)?;
 
     let framework = format!("{}.framework", spec.framework_name);
     create_xcframework(&[&fw_ios.join(&framework), &fw_sim.join(&framework)], out)
@@ -1085,7 +1288,7 @@ fn run_app(
         // The demo links `KitharaFFIInternal.xcframework`, so the
         // XCFramework must exist before xcodebuild can resolve the
         // package graph; refresh it the same way `run_build` does.
-        run_build(profile)?;
+        run_build(profile, None)?;
     }
 
     let uuid = resolve_simulator_uuid(&simulator)?;

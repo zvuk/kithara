@@ -14,6 +14,7 @@ pub mod hang;
 pub mod mock;
 pub mod probe;
 pub mod rtsan;
+#[cfg(any(test, feature = "probe"))]
 pub mod test;
 
 pub mod kithara {

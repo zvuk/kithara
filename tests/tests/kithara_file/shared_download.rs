@@ -72,7 +72,7 @@ async fn shared_store_one_get() {
     let server = TestHttpServer::new(app).await;
     let url = server.url("/audio.mp3");
 
-    let store = Arc::new(AssetStoreBuilder::new().ephemeral(true).build());
+    let store = Arc::new(AssetStoreBuilder::default().ephemeral(true).build());
 
     // Whole-file consumer (waveform) attaches first → wins the producer
     // election and drives the single download.

@@ -63,7 +63,7 @@ impl AndroidCodec {
             AudioCodec::Pcm => MIME_RAW,
             AudioCodec::Mp3 => MIME_MP3,
             AudioCodec::Alac => MIME_ALAC,
-            other => return Err(DecodeError::UnsupportedCodec(other)),
+            other => return Err(DecodeError::UnsupportedCodec { codec: other }),
         };
 
         let format = build_format(mime, track).map_err(DecodeError::from)?;

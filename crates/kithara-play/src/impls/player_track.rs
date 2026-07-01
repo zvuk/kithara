@@ -130,6 +130,11 @@ pub struct PlayerTrack {
     /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
     /// duration) captured under the resource lock.
     observed_duration: f64,
+    /// Last decoded-ahead frontier (seconds) captured under the resource lock
+    /// during `read()`. Fallback for [`Self::decoded_frontier`] when the
+    /// resource lock is momentarily held by the decoder; the live resource is
+    /// the authoritative source. Always `>=` the served position.
+    observed_frontier: f64,
     sample_rate: u32,
     /// Cumulative frames this track has actually served into the mix output.
     ///
@@ -180,6 +185,7 @@ impl PlayerTrack {
             sample_rate: sample_rate.get(),
             served_frames: 0,
             observed_duration,
+            observed_frontier: 0.0,
             ended_at_eof: false,
         };
         track.update_service_class(TrackState::Preloading);
@@ -257,6 +263,23 @@ impl PlayerTrack {
             .try_lock()
             .ok()
             .map_or(self.observed_duration, |resource| resource.duration())
+    }
+
+    /// Decoded-ahead frontier in seconds — how much content is decoded and
+    /// ready to play (always `>=` [`Self::position`]). Reads the live resource
+    /// (mirroring [`Self::duration`]) so the buffered/playable window keeps
+    /// growing while the player is paused — the decode worker advances the
+    /// frontier on its own thread, but `read()` (which refreshes
+    /// `observed_frontier`) only runs while rendering. Falls back to the last
+    /// rendered value when the resource lock is momentarily held by the decoder.
+    #[must_use]
+    pub fn decoded_frontier(&self) -> f64 {
+        self.resource
+            .try_lock()
+            .ok()
+            .map_or(self.observed_frontier, |resource| {
+                resource.decoded_frontier()
+            })
     }
 
     /// Emit the crossfade-aligned handover trigger once per playback cycle.
@@ -435,6 +458,7 @@ impl PlayerTrack {
                     frames_until_eof: None,
                 };
             };
+            self.observed_frontier = guard.decoded_frontier();
             let (scratch_left, scratch_right) = scratch_bufs.split_at_mut(1);
             let mut scratch_window = [
                 &mut scratch_left[0][range.clone()],
@@ -690,6 +714,8 @@ impl PlayerTrack {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use kithara_audio::PcmReader;
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmSpec, TrackMetadata};
@@ -868,6 +894,107 @@ mod tests {
         assert!(!TrackState::FadingOut.is_leading());
         assert!(!TrackState::Preloading.is_leading());
         assert!(!TrackState::Finished.is_leading());
+    }
+
+    /// `PcmReader` fixture whose decoded frontier the test advances *after* the
+    /// track is built — modelling the decode worker filling lookahead on its
+    /// own thread while the player is paused (no render cycle refreshes the
+    /// `observed_frontier` cache).
+    struct LiveFrontierReader {
+        bus: EventBus,
+        spec: PcmSpec,
+        metadata: TrackMetadata,
+        frontier_ns: Arc<AtomicU64>,
+    }
+
+    impl PcmReader for LiveFrontierReader {
+        fn decoded_frontier(&self) -> Duration {
+            Duration::from_nanos(self.frontier_ns.load(Ordering::Relaxed))
+        }
+
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(180))
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.metadata
+        }
+
+        fn position(&self) -> Duration {
+            Duration::ZERO
+        }
+
+        fn read(
+            &mut self,
+            _buf: &mut [f32],
+        ) -> Result<kithara_audio::ReadOutcome, kithara_audio::DecodeError> {
+            Ok(kithara_audio::ReadOutcome::Eof {
+                position: Duration::ZERO,
+            })
+        }
+
+        fn read_planar<'a>(
+            &mut self,
+            _output: &'a mut [&'a mut [f32]],
+        ) -> Result<kithara_audio::ReadOutcome, kithara_audio::DecodeError> {
+            Ok(kithara_audio::ReadOutcome::Eof {
+                position: Duration::ZERO,
+            })
+        }
+
+        fn seek(
+            &mut self,
+            position: Duration,
+        ) -> Result<kithara_audio::SeekOutcome, kithara_audio::DecodeError> {
+            Ok(kithara_audio::SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
+    #[kithara::test]
+    fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
+        // The decode worker advances the frontier on its own thread; while the
+        // player is paused no render cycle runs, so the `observed_frontier`
+        // cache stays at its construction value. `decoded_frontier()` must read
+        // the live resource (mirroring `duration()`) so the FFI buffered/loaded
+        // ranges keep growing past a forward-seek target while paused. Without
+        // it the host app's `isPlayable` gate never reopens and seek hangs.
+        let frontier_ns = Arc::new(AtomicU64::new(0));
+        let reader = LiveFrontierReader {
+            bus: EventBus::default(),
+            spec: mock_spec(),
+            metadata: TrackMetadata::default(),
+            frontier_ns: Arc::clone(&frontier_ns),
+        };
+        let src: Arc<str> = Arc::from("frontier.flac");
+        let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
+        let track = make_track_from_resource(resource, src, None);
+
+        // No `read()` has run (paused / no render): cache is the initial 0.
+        assert_eq!(track.decoded_frontier(), 0.0);
+
+        // Decode worker fills lookahead past the forward-seek target while paused.
+        frontier_ns.store(
+            u64::try_from(Duration::from_millis(81_000).as_nanos()).expect("fits in u64"),
+            Ordering::Relaxed,
+        );
+
+        // Must reflect the live decoded frontier, not the stale render cache.
+        let live = track.decoded_frontier();
+        assert!(
+            (live - 81.0).abs() < 1e-6,
+            "decoded_frontier must read the live resource, got {live}"
+        );
     }
 
     #[kithara::test(tokio)]

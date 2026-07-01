@@ -13,6 +13,20 @@ categories = ["network-programming", "asynchronous"]
 workspace = true
 
 [features]
+default = ["client-reqwest", "tls-rustls"]
+# HTTP client backend. Pick exactly one per target. `client-reqwest`
+# (pure-Rust) is the portable default; `client-wreq` (BoringSSL + browser
+# TLS/HTTP2 emulation) and `client-apple` (NSURLSession) are native-only
+# opt-ins. See CONTEXT.md "HTTP client backends".
+client-reqwest = ["dep:reqwest", "dep:tower-layer", "dep:tower-service"]
+client-wreq = ["dep:tower-layer", "dep:tower-service", "dep:wreq", "dep:wreq-util"]
+client-apple = ["dep:block2", "dep:dashmap", "dep:objc2", "dep:objc2-foundation"]
+# TLS backend for the `client-reqwest` path. No effect on `client-wreq` (always
+# BoringSSL) or `client-apple` (URLSession owns TLS). `tls-rustls` is the
+# default; `tls-native` uses the platform TLS (Apple Secure Transport /
+# SChannel / OpenSSL). Both are no-ops on wasm32, where the browser owns TLS.
+tls-rustls = ["reqwest?/rustls"]
+tls-native = ["reqwest?/native-tls"]
 probe = []
 mock = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
@@ -21,37 +35,74 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 bitflags = { workspace = true }
 bon = { workspace = true }
 kithara-platform = { workspace = true }
+kithara-bufpool = { workspace = true }
 kithara-test-macros = { workspace = true }
 bytes = { workspace = true }
+dashmap = { workspace = true, optional = true }
 futures = { workspace = true }
 num-traits = { workspace = true }
-reqwest = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 async-trait = { workspace = true }
 unimock = { workspace = true }
 hotpath = { workspace = true, optional = true }
+# `client-reqwest` backend (native + wasm). reqwest gates its own TLS /
+# compression deps behind `cfg(not(wasm32))`, so the compression / cookie / TLS
+# features here are inert on wasm and selected on native.
+reqwest = { workspace = true, optional = true, features = [
+    "stream",
+    "gzip",
+    "brotli",
+    "deflate",
+    "zstd",
+    "cookies",
+] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
-reqwest = { workspace = true, features = [
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+tower-layer = { workspace = true, optional = true }
+tower-service = { workspace = true, optional = true }
+# `client-wreq` backend (native only — BoringSSL has no wasm target).
+wreq = { workspace = true, optional = true, features = [
     "brotli",
     "cookies",
     "deflate",
     "gzip",
-    "rustls",
     "stream",
     "zstd",
 ] }
+wreq-util = { workspace = true, optional = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+block2 = { workspace = true, optional = true }
+objc2 = { workspace = true, optional = true }
+objc2-foundation = { workspace = true, optional = true, features = [
+    "std",
+    "block2",
+    "NSData",
+    "NSDate",
+    "NSDictionary",
+    "NSError",
+    "NSOperation",
+    "NSObject",
+    "NSString",
+    "NSArray",
+    "NSURL",
+    "NSURLAuthenticationChallenge",
+    "NSURLCredential",
+    "NSURLProtectionSpace",
+    "NSURLRequest",
+    "NSURLResponse",
+    "NSURLSession",
+] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-reqwest = { workspace = true, features = ["stream"] }
 gloo-timers = { workspace = true }
 
 [dev-dependencies]
 kithara-net = { path = ".", default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 futures = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true }
@@ -59,5 +110,4 @@ wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { workspace = true }
-tower = { workspace = true }
 memory-stats = { workspace = true }

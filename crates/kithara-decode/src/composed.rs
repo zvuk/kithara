@@ -556,8 +556,8 @@ fn write_silent_test_frame(
     let frames = usize::try_from(frames_per_call)?;
     let samples = frames
         .checked_mul(usize::from(spec.channels))
-        .ok_or_else(|| {
-            crate::error::DecodeError::InvalidData("test frame sample count overflow".to_string())
+        .ok_or_else(|| crate::error::DecodeError::InvalidData {
+            detail: "test frame sample count overflow",
         })?;
     out.ensure_len(samples)?;
     for slot in out.iter_mut() {

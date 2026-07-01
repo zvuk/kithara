@@ -412,7 +412,9 @@ fn build_track_info(track: &Track, codec_params: &AudioCodecParameters) -> Decod
     let codec = map_codec_id(codec_params.codec);
     let sample_rate = codec_params
         .sample_rate
-        .ok_or_else(|| DecodeError::InvalidData("missing sample rate".into()))?;
+        .ok_or_else(|| DecodeError::InvalidData {
+            detail: "missing sample rate",
+        })?;
     let channels = codec_params
         .channels
         .as_ref()
@@ -527,18 +529,22 @@ fn is_adpcm_codec_id(id: AudioCodecId) -> bool {
 
 fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
     match err {
-        SymphoniaError::SeekError(SeekErrorKind::OutOfRange) => {
-            DecodeError::SeekOutOfRange(err.to_string())
-        }
+        SymphoniaError::SeekError(SeekErrorKind::OutOfRange) => DecodeError::SeekOutOfRange {
+            detail: "seek target past indexed sample range",
+        },
         SymphoniaError::IoError(io_err)
             if io_err.get_ref().is_some_and(
                 <dyn std::error::Error + Send + Sync + 'static>::is::<StreamSeekPastEof>,
             ) =>
         {
-            DecodeError::SeekOutOfRange(io_err.to_string())
+            DecodeError::SeekOutOfRange {
+                detail: "seek past end of stream",
+            }
         }
         SymphoniaError::IoError(e) if e.kind() == ErrorKind::UnexpectedEof => {
-            DecodeError::SeekOutOfRange(err.to_string())
+            DecodeError::SeekOutOfRange {
+                detail: "seek hit unexpected end of stream",
+            }
         }
         SymphoniaError::IoError(io_err)
             if io_err.kind() == ErrorKind::Interrupted
@@ -549,7 +555,9 @@ fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
         {
             DecodeError::Interrupted
         }
-        _ => DecodeError::SeekFailed(err.to_string()),
+        _ => DecodeError::SeekFailed {
+            detail: "symphonia seek failed",
+        },
     }
 }
 

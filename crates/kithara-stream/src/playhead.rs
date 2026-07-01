@@ -43,10 +43,12 @@ pub struct ChunkPosition {
 pub struct PlayheadState {
     position_ns: AtomicU64,
     total_duration_ns: AtomicU64,
+    decoded_frontier_ns: AtomicU64,
 }
 
 /// Read-only view of the committed playhead.
 pub trait PlayheadRead: Send + Sync {
+    fn decoded_frontier(&self) -> Duration;
     fn duration(&self) -> Option<Duration>;
     fn position(&self) -> Duration;
 }
@@ -59,6 +61,7 @@ pub trait PlayheadWrite: PlayheadRead {
     /// Pin after a seek (caps at total duration).
     fn land(&self, pos: &ChunkPosition);
     fn set_duration(&self, duration: Option<Duration>);
+    fn set_decoded_frontier(&self, t: Duration);
     /// Partial-chunk fixup — raw store, no duration cap.
     fn set_position(&self, position: Duration);
 }
@@ -70,6 +73,7 @@ impl PlayheadState {
         Self {
             position_ns: AtomicU64::new(0),
             total_duration_ns: AtomicU64::new(NO_DURATION),
+            decoded_frontier_ns: AtomicU64::new(0),
         }
     }
 
@@ -102,6 +106,10 @@ impl Default for PlayheadState {
 }
 
 impl PlayheadRead for PlayheadState {
+    fn decoded_frontier(&self) -> Duration {
+        Duration::from_nanos(self.decoded_frontier_ns.load(Ordering::Relaxed))
+    }
+
     fn duration(&self) -> Option<Duration> {
         match self.total_duration_ns.load(Ordering::Acquire) {
             NO_DURATION => None,
@@ -128,6 +136,11 @@ impl PlayheadWrite for PlayheadState {
             .and_then(|d| u64::try_from(d.as_nanos()).ok())
             .unwrap_or(NO_DURATION);
         self.total_duration_ns.store(raw, Ordering::Release);
+    }
+
+    fn set_decoded_frontier(&self, t: Duration) {
+        let nanos = u64::try_from(t.as_nanos()).unwrap_or(u64::MAX);
+        self.decoded_frontier_ns.fetch_max(nanos, Ordering::Relaxed);
     }
 
     fn set_position(&self, position: Duration) {
@@ -239,5 +252,16 @@ mod tests {
         assert_eq!(s.duration(), Some(Duration::from_secs(10)));
         s.set_duration(None);
         assert_eq!(s.duration(), None);
+    }
+
+    #[kithara::test]
+    fn decoded_frontier_is_monotonic() {
+        let s = PlayheadState::new();
+        assert_eq!(s.decoded_frontier(), Duration::ZERO);
+
+        s.set_decoded_frontier(Duration::from_millis(900));
+        s.set_decoded_frontier(Duration::from_millis(400));
+
+        assert_eq!(s.decoded_frontier(), Duration::from_millis(900));
     }
 }

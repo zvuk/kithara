@@ -363,6 +363,8 @@ public struct ItemLoadedRange: Sendable, Equatable {
         self.duration = ffi.durationSeconds
     }
 
+    /// Construct a range from any ``ItemLoadedRangeSource`` (e.g. an Rx
+    /// mirror type) without depending on its concrete type.
     public init<Source: ItemLoadedRangeSource>(_ source: Source) {
         self.start = source.start
         self.duration = source.duration
@@ -378,12 +380,16 @@ public struct PlaybackProgress: Sendable, Equatable {
     /// Item duration in seconds.
     public let duration: TimeInterval
 
+    /// Construct progress from its normalised `value` (`[0, 1]`) plus
+    /// `time` and `duration` in seconds.
     public init(value: TimeInterval, time: TimeInterval, duration: TimeInterval) {
         self.value = value
         self.time = time
         self.duration = duration
     }
 
+    /// Construct progress from any ``PlaybackProgressSource`` without
+    /// depending on its concrete type.
     public init<Source: PlaybackProgressSource>(_ source: Source) {
         self.value = source.value
         self.time = source.time
@@ -391,11 +397,15 @@ public struct PlaybackProgress: Sendable, Equatable {
     }
 }
 
+/// Source of a buffered time range, letting consumers map ``ItemLoadedRange``
+/// onto their own range type without importing the concrete struct.
 public protocol ItemLoadedRangeSource {
     var start: TimeInterval { get }
     var duration: TimeInterval { get }
 }
 
+/// Source of structured playback progress, letting consumers map
+/// ``PlaybackProgress`` onto their own type without importing the concrete struct.
 public protocol PlaybackProgressSource {
     var value: TimeInterval { get }
     var time: TimeInterval { get }

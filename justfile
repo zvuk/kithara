@@ -97,28 +97,24 @@ doc:
 # The flash virtual clock is ENABLED by default (`--features flash`): tests
 # run on a deterministic engine-driven clock that collapses artificial waits, so
 # the suite is fast and reproducible. Opt out with `--flash=off` (`--no-flash` /
-# `--flash=false`) to run on the real wall clock — the regression baseline. The
-# `--flash=*` token is stripped before reaching nextest; every other arg passes
-# through unchanged.
+# `--flash=false`) to run on the real wall clock — the regression baseline.
+# `--net-backend=apple` opts the integration crate into `kithara/apple-net`;
+# the default backend is the target's normal test backend (`wreq` on Apple
+# hosts). Recipe-level `--flash=*` / `--net-backend=*` tokens are stripped
+# before reaching nextest; every other arg passes through unchanged.
 #
-#   just test                 # whole workspace, flash ON, all backends
-#   just test --flash=off     # real wall clock (regression baseline)
-#   just test -p kithara-hls  # one package, flash ON
-#   just test --profile ci    # CI nextest profile
-#   just test EXPR            # nextest filter expression
+#   just test                          # whole workspace, flash ON, target default backend
+#   just test --lane=cached            # nextest cache profile
+#   just test --lane=doc               # doc-tests
+#   just test --lane=e2e               # real-network + cpal hardware end-to-end tests
+#   just test --lane=selenium          # Selenium WebDriver tests
+#   just test --flash=off              # real wall clock (regression baseline)
+#   just test --flash=true --net-backend=apple
+#   just test -p kithara-hls           # one package, flash ON
+#   just test --profile ci             # CI nextest profile
+#   just test EXPR                     # nextest filter expression
 test *ARGS:
-    #!/usr/bin/env bash
-    set -eo pipefail
-    flash_feat="--features flash"
-    passthru=""
-    for a in {{ARGS}}; do
-        case "$a" in
-            --flash=off|--flash=false|--no-flash) flash_feat="" ;;
-            --flash=on|--flash=true) flash_feat="--features flash" ;;
-            *) passthru="$passthru $a" ;;
-        esac
-    done
-    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release $flash_feat $passthru
+    cargo xtask test {{ARGS}}
 
 # Dual-run wave gate for the platform refactor: flash ON, then flash OFF.
 # OFF lane builds in its own target dir so the feature flip does not
@@ -130,39 +126,6 @@ gate *ARGS:
     cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features flash {{ARGS}}
     echo "=== gate: flash OFF ==="
     CARGO_TARGET_DIR=target-flash-off cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
-
-# The L2 fixture cache is ON BY DEFAULT (build-fingerprinted temp dir, see
-# tests/src/fixture_cache.rs). This variant instead uses the nextest `cache`
-# profile, whose setup script wipes + recreates a shared cache dir and exports
-# KITHARA_FIXTURE_CACHE — an ephemeral, explicitly-scoped per-run cache.
-test-cached *ARGS:
-    #!/usr/bin/env bash
-    set -eo pipefail
-    flash_feat="--features flash"
-    passthru=""
-    for a in {{ARGS}}; do
-        case "$a" in
-            --flash=off|--flash=false|--no-flash) flash_feat="" ;;
-            --flash=on|--flash=true) flash_feat="--features flash" ;;
-            *) passthru="$passthru $a" ;;
-        esac
-    done
-    cargo nextest run --profile cache --workspace --exclude kithara-fuzz --cargo-profile test-release $flash_feat $passthru
-
-# Doc-tests (cargo nextest doesn't run them).
-test-doc:
-    cargo test --doc --workspace --exclude kithara-fuzz
-
-# Real-network + cpal-hardware end-to-end tests (gated by `e2e` feature).
-#   just test-e2e
-#   just test-e2e kithara_play::silvercomet_seek_hang
-test-e2e *ARGS:
-    cargo nextest run -p kithara-integration-tests --features e2e --cargo-profile test-release \
-        --test suite_e2e --run-ignored all {{ARGS}}
-
-# Selenium WebDriver tests (trunk + chromedriver, native target).
-test-selenium *ARGS:
-    cargo +nightly test -p kithara-integration-tests --features selenium --test suite_heavy selenium -- --nocapture {{ARGS}}
 
 # RealtimeSanitizer: compile the player RT path under `-Zsanitizer=realtime`
 # and run the offline-render tests, which enter the
@@ -196,7 +159,9 @@ rtsan-file FILTER="phase_continuity::file": (_rtsan "suite_stress" FILTER)
 rtsan-hls FILTER="phase_continuity::hls": (_rtsan "suite_stress" FILTER)
 
 # Convenience: workspace tests + doc-tests in one run.
-test-all: test test-doc
+test-all:
+    just test
+    just test --lane=doc
 
 # Run all linters scoped to a crate / path / workspace. With
 # `--autofix`, run each tool's autofix first (where available), then
@@ -416,7 +381,7 @@ ci-full-run OUTPUT:
 
     run_stage lint    just lint-fast
     run_stage test    just test
-    run_stage e2e     just test-e2e
+    run_stage e2e     just test --lane=e2e
     run_stage mutants just mutants ci "{{OUTPUT}}/mutants"
 
     echo "=== ci-full-run $RUN_ID done at $(date -u -Iseconds) ==="
@@ -480,8 +445,9 @@ orphans *ARGS:
 # Runs lint + quality + audit tools + heavy stages (lockbud / hack /
 # semver-checks / unused-pub) + workspace tests, writes
 # target/health-report.md plus per-stage logs in target/health-logs/.
-# Excluded by design (run separately): mutants, coverage, dead, test-e2e,
-# test-selenium, wasm, bench, perf, memory-check.
+# Excluded by design (run separately): mutants, coverage, dead,
+# `just test --lane=e2e`, `just test --lane=selenium`, wasm, bench, perf,
+# memory-check.
 # Install every external tool that `just health`, `just audit`, and the
 # standalone diagnostic recipes depend on. Idempotent — `cargo install --locked`
 # is a no-op when the binary is already current. `lockbud` is rebuilt from
@@ -676,7 +642,7 @@ wasm MODE="check":
         # kithara-decode on wasm uses symphonia (pure Rust). Its default `fdk-aac`
         # feature is libfdk-aac (C via fdk-aac-sys), which cannot target
         # wasm32-unknown-unknown (no libc/sysroot), so check the realistic wasm set.
-        cargo check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia
+        cargo check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia,client-reqwest,tls-rustls
         cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
       test)
@@ -768,6 +734,7 @@ apple MODE="xcframework" *ARGS:
             -scheme "$scheme" -destination "$destination" build
         ;;
       doc)
+        cargo xtask apple docgen
         mkdir -p docs-build
         KITHARA_LOCAL_DEV=1 swift package --allow-writing-to-directory ./docs-build \
             generate-documentation \
@@ -783,6 +750,27 @@ apple MODE="xcframework" *ARGS:
         exit 2
         ;;
     esac
+
+# Release artifacts (framework + docs + wasm), staged for upload + Pages deploy.
+#   just release-artifacts VERSION   # build all artifacts, stamp Package.swift, cache them
+#   just release-publish [REF]       # upload framework + docs to GitHub + GitLab
+#   just release-pages [REF]         # deploy the wasm bundle to GitHub Pages classic
+# Build every release artifact ahead of time and cache it under the tag:
+#   - framework (fpm + single) built by `release prepare`
+#   - DocC archive built here, zipped + cached as the docs asset
+#   - wasm dist built here, zipped + cached for the Pages deploy
+release-artifacts VERSION:
+    just apple doc
+    cargo xtask wasm build --profile release
+    cargo xtask release prepare {{VERSION}}
+
+# Upload the cached framework + docs assets to GitHub and the GitLab mirror.
+release-publish REF="HEAD":
+    cargo xtask release publish --ref {{REF}}
+
+# Deploy the cached wasm bundle to GitHub Pages classic (gh-pages, force-orphan).
+release-pages REF="HEAD":
+    cargo xtask release pages --ref {{REF}}
 
 # Temporarily patch project.yml to use local package path for xcodegen.
 [private]

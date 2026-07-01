@@ -5,8 +5,10 @@ use std::{
     io,
     ops::Range,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
+use arc_swap::ArcSwap;
 use kithara_platform::sync::Mutex;
 
 use crate::{
@@ -65,9 +67,8 @@ type FactoryFn<D> =
 /// either sees no file or sees the fully durable committed bytes.
 pub struct AtomicChunked<D: DriverIo> {
     /// The current writer. Swapped (not cloned) on the commit-rename.
-    /// Read/wait paths mint a cheap `ResourceReader` and release the
-    /// lock before blocking.
-    inner: Mutex<ResourceWriter<D>>,
+    /// Read/wait paths mint a cheap `ResourceReader` from the current snapshot.
+    inner: ArcSwap<ResourceWriter<D>>,
     /// `Some(<path>.tmp)` while writes are in flight; cleared on
     /// successful `commit`. `Drop` / `fail` use a still-set value to
     /// remove the orphaned temp file.
@@ -102,8 +103,7 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// # Errors
     /// Propagates the inner commit error and any filesystem error.
     pub fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        let mut guard = self.inner.lock();
-        guard.commit_in_place(final_len)?;
+        self.inner.load().commit_in_place(final_len)?;
 
         let tmp = self.tmp_path.lock().take();
         if let Some(tmp) = tmp {
@@ -123,10 +123,9 @@ impl<D: DriverIo> AtomicChunked<D> {
 
             if let Some(factory) = self.factory.as_ref() {
                 let new_inner = factory(&self.canonical_path, OpenIntent::Reopen)?;
-                *guard = new_inner;
+                self.inner.store(Arc::new(new_inner));
             }
         }
-        drop(guard);
         Ok(())
     }
 
@@ -137,7 +136,7 @@ impl<D: DriverIo> AtomicChunked<D> {
 
     /// Mark the resource failed and remove the orphaned temp file.
     pub fn fail(&self, reason: String) {
-        self.inner.lock().fail_in_place(reason);
+        self.inner.load().fail_in_place(reason);
         if let Some(tmp) = self.tmp_path.lock().take() {
             let _ = fs::remove_file(&tmp);
         }
@@ -207,7 +206,7 @@ impl<D: DriverIo> AtomicChunked<D> {
         let inner = factory(&tmp_path, OpenIntent::Fresh)?;
         Ok(Self {
             canonical_path,
-            inner: Mutex::new(inner),
+            inner: ArcSwap::from_pointee(inner),
             tmp_path: Mutex::new(Some(tmp_path)),
             factory: Some(Box::new(factory)),
         })
@@ -221,7 +220,7 @@ impl<D: DriverIo> AtomicChunked<D> {
     pub fn passthrough(inner: ResourceWriter<D>, canonical_path: PathBuf) -> Self {
         Self {
             canonical_path,
-            inner: Mutex::new(inner),
+            inner: ArcSwap::from_pointee(inner),
             tmp_path: Mutex::default(),
             factory: None,
         }
@@ -237,7 +236,7 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// # Errors
     /// Returns error if the resource is cancelled or the backend cannot reopen.
     pub fn reactivate(&self) -> StorageResult<()> {
-        self.inner.lock().reactivate_in_place()
+        self.inner.load().reactivate_in_place()
     }
 
     /// Read data at the given offset into `buf`.
@@ -270,7 +269,7 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// Mint a cheap read-only view without holding the inner lock during
     /// subsequent (possibly blocking) reads.
     fn read_view(&self) -> ResourceReader<D> {
-        self.inner.lock().reader()
+        self.inner.load().reader()
     }
 
     /// Current runtime status.
@@ -292,7 +291,7 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// # Errors
     /// Returns error if the resource is cancelled, failed, or the write fails.
     pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner.lock().write_at(offset, data)
+        self.inner.load().write_at(offset, data)
     }
 }
 

@@ -1,44 +1,87 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::EvictConfig;
 use kithara::assets::{
-    AcquisitionResult, AssetScope, AssetStoreBuilder, ProcessChunkFn, ReadSide, WriteSide,
+    AcquisitionResult, AssetScope, AssetStoreBuilder, ChunkSink, ProcessCtx, ReadSide,
+    ResourceProcessor, WriteSide,
 };
 use kithara_integration_tests::temp_dir;
 use kithara_platform::time::Duration;
 
-/// Context for test processing callback.
-#[derive(Clone, Debug, Hash, Eq, PartialEq, Default)]
-struct TestContext {
-    /// XOR key for "encryption/decryption".
+#[derive(Debug)]
+struct XorProcessor {
+    call_count: Arc<AtomicUsize>,
+    identity: [u8; 1],
     xor_key: u8,
 }
 
-/// Create a simple XOR chunk transform callback (no allocation).
-fn create_xor_chunk_callback(call_count: Arc<AtomicUsize>) -> ProcessChunkFn<TestContext> {
-    Arc::new(
-        move |input: &[u8], output: &mut [u8], ctx: &mut TestContext, _is_last: bool| {
-            call_count.fetch_add(1, Ordering::SeqCst);
-            for (i, &b) in input.iter().enumerate() {
-                output[i] = b ^ ctx.xor_key;
-            }
-            Ok(input.len())
-        },
-    )
+impl XorProcessor {
+    fn new(xor_key: u8, call_count: Arc<AtomicUsize>) -> Self {
+        Self {
+            call_count,
+            identity: [xor_key],
+            xor_key,
+        }
+    }
+}
+
+impl ResourceProcessor for XorProcessor {
+    fn identity(&self) -> &[u8] {
+        &self.identity
+    }
+
+    fn begin(&self) -> Box<dyn ChunkSink> {
+        Box::new(XorSink {
+            call_count: Arc::clone(&self.call_count),
+            xor_key: self.xor_key,
+        })
+    }
+}
+
+struct XorSink {
+    call_count: Arc<AtomicUsize>,
+    xor_key: u8,
+}
+
+impl fmt::Debug for XorSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("XorSink").finish_non_exhaustive()
+    }
+}
+
+impl ChunkSink for XorSink {
+    fn process(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        _is_last: bool,
+    ) -> Result<usize, String> {
+        self.call_count.fetch_add(1, Ordering::SeqCst);
+        for (i, &b) in input.iter().enumerate() {
+            output[i] = b ^ self.xor_key;
+        }
+        Ok(input.len())
+    }
+}
+
+fn create_xor_processor(xor_key: u8, call_count: Arc<AtomicUsize>) -> ProcessCtx {
+    Arc::new(XorProcessor::new(xor_key, call_count))
 }
 
 fn build_test_processing_scope(
     temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
-    process_fn: ProcessChunkFn<TestContext>,
-) -> AssetScope<TestContext> {
-    let builder = AssetStoreBuilder::new().process_fn(process_fn);
+) -> AssetScope {
+    let builder = AssetStoreBuilder::default();
     #[cfg(not(target_arch = "wasm32"))]
     {
         builder
@@ -63,7 +106,7 @@ fn build_test_scope_no_processing(
 ) -> AssetScope {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        AssetStoreBuilder::new()
+        AssetStoreBuilder::default()
             .root_dir(temp_dir.path())
             .evict_config(EvictConfig {
                 max_assets: None,
@@ -75,7 +118,7 @@ fn build_test_scope_no_processing(
     #[cfg(target_arch = "wasm32")]
     {
         let _ = temp_dir;
-        AssetStoreBuilder::new()
+        AssetStoreBuilder::default()
             .ephemeral(true)
             .build()
             .scope(asset_root)
@@ -86,20 +129,16 @@ fn build_test_scope_no_processing(
 fn processing_transforms_data_on_commit(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    let scope = build_test_processing_scope(
-        &temp_dir,
-        "test-processing",
-        create_xor_chunk_callback(Arc::clone(&call_count)),
-    );
+    let scope = build_test_processing_scope(&temp_dir, "test-processing");
 
     let key = scope.key("data.bin");
 
     let original_data = b"Hello, World! This is test data for processing.";
-    let ctx = TestContext { xor_key: 0x42 };
+    let ctx = create_xor_processor(0x42, Arc::clone(&call_count));
     {
         let AcquisitionResult::Pending(writer) = scope
             .store()
-            .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
+            .acquire_resource_with_ctx(&key, None, Some(Arc::clone(&ctx)))
             .unwrap()
         else {
             panic!("fresh acquire must be Pending");
@@ -128,20 +167,16 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_integration_tests::Tes
 fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    let scope = build_test_processing_scope(
-        &temp_dir,
-        "test-cache",
-        create_xor_chunk_callback(Arc::clone(&call_count)),
-    );
+    let scope = build_test_processing_scope(&temp_dir, "test-cache");
 
     let key = scope.key("cached.bin");
-    let ctx = TestContext { xor_key: 0xAB };
+    let ctx = create_xor_processor(0xAB, Arc::clone(&call_count));
 
     let original_data = b"Data for caching test";
     {
         let AcquisitionResult::Pending(writer) = scope
             .store()
-            .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
+            .acquire_resource_with_ctx(&key, None, Some(Arc::clone(&ctx)))
             .unwrap()
         else {
             panic!("fresh acquire must be Pending");
@@ -153,7 +188,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_integration_te
 
     let processed_res = scope
         .store()
-        .open_resource_with_ctx(&key, None, Some(ctx.clone()))
+        .open_resource_with_ctx(&key, None, Some(Arc::clone(&ctx)))
         .unwrap();
     let mut buf1 = vec![0u8; original_data.len()];
     processed_res.read_at(0, &mut buf1).unwrap();
@@ -174,20 +209,16 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_integration_te
 fn processing_partial_reads_work_correctly(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    let scope = build_test_processing_scope(
-        &temp_dir,
-        "test-partial",
-        create_xor_chunk_callback(Arc::clone(&call_count)),
-    );
+    let scope = build_test_processing_scope(&temp_dir, "test-partial");
 
     let key = scope.key("partial.bin");
-    let ctx = TestContext { xor_key: 0xFF };
+    let ctx = create_xor_processor(0xFF, Arc::clone(&call_count));
 
     let original_data: Vec<u8> = (0..100).collect();
     {
         let AcquisitionResult::Pending(writer) = scope
             .store()
-            .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
+            .acquire_resource_with_ctx(&key, None, Some(Arc::clone(&ctx)))
             .unwrap()
         else {
             panic!("fresh acquire must be Pending");
@@ -220,20 +251,16 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_integration_tests::
 fn processing_read_past_end_returns_zero(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    let scope = build_test_processing_scope(
-        &temp_dir,
-        "test-eof",
-        create_xor_chunk_callback(Arc::clone(&call_count)),
-    );
+    let scope = build_test_processing_scope(&temp_dir, "test-eof");
 
     let key = scope.key("eof.bin");
-    let ctx = TestContext { xor_key: 0x00 };
+    let ctx = create_xor_processor(0x00, Arc::clone(&call_count));
 
     let original_data = b"short";
     {
         let AcquisitionResult::Pending(writer) = scope
             .store()
-            .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
+            .acquire_resource_with_ctx(&key, None, Some(Arc::clone(&ctx)))
             .unwrap()
         else {
             panic!("fresh acquire must be Pending");

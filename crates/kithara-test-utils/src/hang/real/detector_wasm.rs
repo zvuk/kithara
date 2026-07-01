@@ -135,6 +135,26 @@ impl<C: HangDump> HangDetector<C> {
         self.spins_since_progress = 0;
     }
 
+    /// `reset` that also refreshes the stored context, forwarded by
+    /// `hang_reset!($ctx)`. Records the app state observed at the last progress
+    /// point so a later stall dumps the freshest context even if the spinning
+    /// `hang_tick!` carried none. The context is produced by a closure that this
+    /// (real) detector invokes; the no-`hang` build's detector drops it
+    /// uncalled, so the collection is provably skipped in release.
+    #[track_caller]
+    pub fn reset_with<F: FnOnce() -> C>(&mut self, ctx_fn: F) {
+        self.ctx = Some(ctx_fn());
+        let loc = Location::caller();
+        self.reset_from(loc.file(), loc.line());
+    }
+
+    /// `reset_with` with an explicit source location, forwarded by
+    /// `hang_reset!($ctx)`.
+    pub fn reset_with_from<F: FnOnce() -> C>(&mut self, ctx_fn: F, file: &'static str, line: u32) {
+        self.ctx = Some(ctx_fn());
+        self.reset_from(file, line);
+    }
+
     /// Progress check without updating the stored context. Keeps whatever was
     /// moved in by the last [`tick_with`](Self::tick_with). Reads the clock
     /// only once per [`CLOCK_SAMPLE_TICKS`] calls. On the deadline it reports
@@ -171,16 +191,19 @@ impl<C: HangDump> HangDetector<C> {
         self.started_ms = None;
     }
 
+    /// Progress check that refreshes the stored context from a closure. The
+    /// closure runs only in this real detector; the no-`hang` build drops it
+    /// uncalled, so the app-context collection is provably skipped in release.
     #[track_caller]
-    pub fn tick_with(&mut self, ctx: C) {
-        self.ctx = Some(ctx);
+    pub fn tick_with<F: FnOnce() -> C>(&mut self, ctx_fn: F) {
+        self.ctx = Some(ctx_fn());
         let loc = Location::caller();
         self.tick_from(loc.file(), loc.line());
     }
 
     /// `tick_with` with an explicit source location, forwarded by `hang_tick!`.
-    pub fn tick_with_from(&mut self, ctx: C, file: &'static str, line: u32) {
-        self.ctx = Some(ctx);
+    pub fn tick_with_from<F: FnOnce() -> C>(&mut self, ctx_fn: F, file: &'static str, line: u32) {
+        self.ctx = Some(ctx_fn());
         self.tick_from(file, line);
     }
 

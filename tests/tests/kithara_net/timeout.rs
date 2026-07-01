@@ -34,6 +34,15 @@ fn make_timeout_mock(should_succeed: bool) -> Unimock {
                     Err(mock_error())
                 }
             })),
+        NetMock::post_bytes
+            .some_call(matching!(_, _, _))
+            .answers(leaked(move |_, _url, _body, _headers| {
+                if should_succeed {
+                    Ok(Bytes::from_static(b"success"))
+                } else {
+                    Err(mock_error())
+                }
+            })),
         NetMock::stream
             .some_call(matching!(_, _))
             .answers(leaked(move |_, _url, _headers| {

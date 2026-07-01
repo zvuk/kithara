@@ -19,14 +19,14 @@ ignored = ["serial_test"]
 kithara = { workspace = true, features = ["full", "probe"] }
 kithara-audio = { workspace = true, features = ["probe", "symphonia"] }
 kithara-abr = { workspace = true, features = ["probe"] }
-kithara-assets = { workspace = true }
+kithara-assets = { workspace = true, features = ["probe"] }
 kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
 kithara-hls = { workspace = true, features = ["probe"] }
 kithara-queue = { workspace = true, features = ["backend-cpal", "probe"] }
 kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
-kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 rkyv = { workspace = true }
 kithara-net = { workspace = true, features = ["mock", "probe"] }
 kithara-platform = { workspace = true }
@@ -120,7 +120,7 @@ tokio-stream = { workspace = true }
 # `feature = "apple"` + matching `target_os`, so without these entries
 # the test crate cannot reference it.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara = { workspace = true, features = ["apple"] }
+kithara = { workspace = true, features = ["apple", "client-wreq"] }
 kithara-audio = { workspace = true, features = ["apple"] }
 kithara-decode = { workspace = true, features = ["apple"] }
 kithara-play = { workspace = true, features = ["apple"] }
@@ -165,6 +165,10 @@ selenium = []
 # path-dep against the virtual `kithara_platform::time::Instant`. Used by the
 # phase-continuity equivalence proof.
 flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
+# Run integration tests with the native Apple HTTP backend (`NSURLSession`).
+# This is separate from `apple`, which only brings Apple decode/audio variants
+# into scope for tests.
+apple-net = ["kithara/apple-net"]
 
 [[bin]]
 name = "test_server"

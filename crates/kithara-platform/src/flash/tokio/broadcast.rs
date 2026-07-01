@@ -1,5 +1,6 @@
 use std::{
     future::Future,
+    panic::Location,
     pin::Pin,
     sync::{
         Arc,
@@ -9,12 +10,15 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use tokio_with_wasm::alias::sync::broadcast as inner;
 
-use crate::flash::{
-    flash_ambient,
-    ids::{Backend, trace_native_from_ambient},
-    system,
+use crate::{
+    flash::{
+        diag::PrimKind,
+        flash_ambient,
+        ids::{Backend, trace_native_from_ambient},
+        system,
+    },
+    native::tokio::sync::broadcast as inner,
 };
 
 /// Receive errors, mirroring `tokio::broadcast::error` variant-for-variant so
@@ -145,13 +149,16 @@ impl Shared {
 
 /// Create a bounded broadcast channel buffering `capacity` messages per receiver.
 #[must_use]
+#[track_caller]
 pub fn channel<T: Clone>(capacity: usize) -> (Sender<T>, Receiver<T>) {
     let (tx, rx) = inner::channel(capacity);
     let shared = Arc::new(Shared {
         gate: Mutex::new(Gate::default()),
         senders: AtomicUsize::new(1),
         backend: if flash_ambient() {
-            Backend::Engine(system::next_condvar_id())
+            let cvid = system::next_condvar_id();
+            system::describe_cvid(cvid, PrimKind::Broadcast, Location::caller());
+            Backend::Engine(cvid)
         } else {
             Backend::Native
         },

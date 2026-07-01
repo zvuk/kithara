@@ -1,5 +1,4 @@
 use std::{
-    fmt,
     panic::Location,
     sync::{
         Arc,
@@ -9,16 +8,16 @@ use std::{
 };
 
 use super::{
-    Clock, Core, CvId, FLASH, FlashInner, Registry, WaiterId,
+    Clock, Core, CvDesc, CvId, FLASH, FlashInner, Registry, WaiterId,
     credit::WaitGuard,
     gate::{AtomicTaskState, ParkOutcome, TaskState, WakeOutcome},
     wake::{Token, Wake},
 };
-use crate::flash::ids::ThreadKey;
+use crate::flash::{ctx, diag, ids::ThreadKey};
 
 /// What kind of waiter an [`Entry`] is, so a signal targets the right group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WaitKind {
+pub(super) enum WaitKind {
     /// A timed waiter with no early-wake channel: woken solely by the engine
     /// crossing its deadline. Used by the test harness `park_for` and by the
     /// async `sleep` future (`register_sleep_async`).
@@ -33,8 +32,8 @@ enum WaitKind {
 
 /// A parked waiter's wake handle plus the group it belongs to.
 pub(super) struct Entry {
-    kind: WaitKind,
-    wake: Wake,
+    pub(super) kind: WaitKind,
+    pub(super) wake: Wake,
 }
 
 impl Registry {
@@ -183,6 +182,32 @@ impl FlashInner {
     /// Allocate a fresh condvar id (one per [`crate::sync::Condvar`] under sim).
     pub(in crate::flash) fn next_condvar_id(&self) -> CvId {
         self.core.lock().registry.fresh_cv()
+    }
+
+    /// Record the provenance of an engine-backed primitive (its kind + creation
+    /// site) under its `cvid`, so the hang dump can label that primitive's parked
+    /// waiters. A no-op unless sync tracing is on ([`diag::trace_enabled`]) — the
+    /// `bool` check happens BEFORE the `core` lock, so primitive constructors can
+    /// call this unconditionally right after [`Self::next_condvar_id`] for ~zero
+    /// cost when tracing is off.
+    pub(in crate::flash) fn describe_cvid(
+        &self,
+        cvid: CvId,
+        kind: diag::PrimKind,
+        loc: &'static Location<'static>,
+    ) {
+        if !diag::trace_enabled() {
+            return;
+        }
+        let created_on = std::thread::current().name().map(str::to_owned);
+        self.core.lock().registry.cv_desc.insert(
+            cvid.0,
+            CvDesc {
+                kind,
+                created_at: loc,
+                created_on,
+            },
+        );
     }
 
     /// Test-harness convenience: park for `Duration` from the current virtual
@@ -427,6 +452,7 @@ impl FlashInner {
             Wake::Task {
                 waker,
                 granted: Arc::clone(&granted),
+                task: ctx::cur_async(),
             },
         );
         let adv = s.try_advance(&self.clock);
@@ -505,6 +531,7 @@ impl FlashInner {
                 wake: Wake::Task {
                     waker,
                     granted: Arc::clone(&granted),
+                    task: ctx::cur_async(),
                 },
                 kind: WaitKind::Condvar(cvid),
             },
@@ -545,6 +572,7 @@ impl FlashInner {
                 wake: Wake::Task {
                     waker,
                     granted: Arc::clone(&granted),
+                    task: ctx::cur_async(),
                 },
                 kind: WaitKind::Timed,
             },
@@ -695,6 +723,7 @@ impl FlashInner {
                 wake: Wake::Task {
                     waker,
                     granted: Arc::clone(&granted),
+                    task: ctx::cur_async(),
                 },
                 kind: WaitKind::Condvar(cvid),
             },
@@ -776,69 +805,6 @@ impl FlashInner {
     }
 }
 
-/// Diagnostic snapshot of the engine for hang dumps: counters plus every
-/// parked waiter with its kind and deadline relative to the virtual clock.
-/// Uses `try_lock` so a dump from a panic/abort path can never itself hang
-/// on a held `core` lock.
-impl fmt::Display for FlashInner {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let now = self.clock.now_nanos();
-        let Ok(s) = self.core.try_lock() else {
-            return write!(
-                f,
-                "virtual_now_ns={now}; engine core lock held — engine mid-operation"
-            );
-        };
-        writeln!(
-            f,
-            "virtual_now_ns={now} active={} active_async={} real_io={} pace_anchor={} yielders={}",
-            s.registry.active,
-            s.registry.active_async,
-            s.sched.real_io,
-            if s.sched.pace_anchor.is_some() {
-                "set"
-            } else {
-                "none"
-            },
-            s.sched.yielders.len(),
-        )?;
-        // Name WHO pins quiescence instead of leaving bare counters. Async: the
-        // spawn site of every task in a non-quiescent gate state (a task mid
-        // bridged-wait has released its slot, so `active_async` may be < the
-        // listed count — those are not pinning). Sync: every dedicated pacer
-        // currently `Running` (`active` may exceed the list by a reserved-but-
-        // unclaimed slot or an in-flight wake bump, which carry no thread yet).
-        for (id, loc) in &s.registry.active_async_holders {
-            writeln!(f, "  active_async holder task={id} spawned_at={loc}")?;
-        }
-        for (key, holder) in &s.registry.active_sync_holders {
-            writeln!(
-                f,
-                "  active holder thread={key:?} name={}",
-                holder.name.as_deref().unwrap_or("<unnamed>"),
-            )?;
-        }
-        for ((deadline, id), entry) in &s.sched.timed {
-            writeln!(
-                f,
-                "  timed id={id:?} kind={:?} deadline_in_ns={}",
-                entry.kind,
-                deadline.saturating_sub(now),
-            )?;
-        }
-        for (id, entry) in &s.sched.indef {
-            writeln!(f, "  indef id={id:?} kind={:?}", entry.kind)?;
-        }
-        if !s.sched.unpark_pending.is_empty() {
-            writeln!(f, "  unpark_pending={:?}", s.sched.unpark_pending)?;
-        }
-        if !s.sched.notify_permits.is_empty() {
-            writeln!(f, "  notify_permits={:?}", s.sched.notify_permits)?;
-        }
-        Ok(())
-    }
-}
-
 /// Handle an async waiter future holds for the lifetime of one park. Carries the
 /// engine key so a cancelled (dropped-before-resolve) future can remove its
 /// still-parked entry, and the `granted` flag the firer sets so the future can
@@ -863,6 +829,11 @@ impl AsyncHandle {
 /// Process-engine forward of [`FlashInner::next_condvar_id`].
 pub(crate) fn next_condvar_id() -> CvId {
     FLASH.next_condvar_id()
+}
+
+/// Process-engine forward of [`FlashInner::describe_cvid`].
+pub(crate) fn describe_cvid(cvid: CvId, kind: diag::PrimKind, loc: &'static Location<'static>) {
+    FLASH.describe_cvid(cvid, kind, loc);
 }
 
 /// Process-engine forward of [`FlashInner::park_for`].

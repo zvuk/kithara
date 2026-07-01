@@ -4,8 +4,11 @@ use tracing::{debug, warn};
 
 use super::core::PlayerImpl;
 use crate::{
-    error::PlayError, events::PlayerEvent, impls::player_processor::PlayerCmd,
-    traits::engine::Engine, types::SlotId,
+    error::PlayError,
+    events::PlayerEvent,
+    impls::{player_processor::PlayerCmd, shared_player_state::PlaybackSnapshot},
+    traits::engine::Engine,
+    types::SlotId,
 };
 
 impl PlayerImpl {
@@ -31,6 +34,16 @@ impl PlayerImpl {
         self.phase.lock().abr_handle()
     }
 
+    /// Single coherent read of the active slot's live playback scalars.
+    ///
+    /// `None` when no slot is allocated. The standalone `position_seconds`
+    /// / `duration_seconds` / `is_playing` / `buffered_seconds` getters are
+    /// thin derivations of this snapshot — one shared read primitive.
+    pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
+        let slot_id = self.slot()?;
+        Some(self.core.engine.slot_shared_state(slot_id)?.snapshot())
+    }
+
     /// Current media duration in seconds.
     ///
     /// Returns `None` while duration is unknown — the engine sets the shared
@@ -40,9 +53,7 @@ impl PlayerImpl {
     /// queue auto-advance) need the `None` to avoid false-EOF on a freshly-
     /// loaded track whose demuxer has not yet seen the metadata box.
     pub fn duration_seconds(&self) -> Option<f64> {
-        let slot_id = self.slot()?;
-        let state = self.core.engine.slot_shared_state(slot_id)?;
-        let dur = state.duration.load(Ordering::Relaxed);
+        let dur = self.playback_snapshot()?.duration;
         (dur > 0.0).then_some(dur)
     }
 
@@ -69,20 +80,12 @@ impl PlayerImpl {
 
     /// Returns `true` if the player is in playing state.
     pub fn is_playing(&self) -> bool {
-        let Some(slot_id) = self.slot() else {
-            return false;
-        };
-        let Some(state) = self.core.engine.slot_shared_state(slot_id) else {
-            return false;
-        };
-        state.playing.load(Ordering::Relaxed)
+        self.playback_snapshot().is_some_and(|s| s.playing)
     }
 
     /// Current playback position in seconds.
     pub fn position_seconds(&self) -> Option<f64> {
-        let slot_id = self.slot()?;
-        let state = self.core.engine.slot_shared_state(slot_id)?;
-        Some(state.position.load(Ordering::Relaxed))
+        Some(self.playback_snapshot()?.position)
     }
 
     /// Reset EQ gains to 0 dB for all bands.

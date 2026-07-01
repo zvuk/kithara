@@ -26,7 +26,7 @@ fn make_coord() -> Arc<FileCoord> {
 
 fn make_source(reader: AssetReader, coord: Arc<FileCoord>, bus: EventBus) -> FileSource {
     let backend = Arc::new(
-        AssetStoreBuilder::new()
+        AssetStoreBuilder::default()
             .cancel(CancelToken::never())
             .build(),
     );
@@ -69,7 +69,7 @@ fn file_coord_total_bytes_roundtrip() {
 }
 
 fn create_committed_resource(data: &[u8]) -> AssetReader {
-    let store = AssetStoreBuilder::new()
+    let store = AssetStoreBuilder::default()
         .ephemeral(true)
         .cancel(CancelToken::never())
         .build();
@@ -83,7 +83,7 @@ fn create_committed_resource(data: &[u8]) -> AssetReader {
 }
 
 fn create_active_resource(data: &[u8]) -> (AssetReader, kithara_assets::AssetWriter) {
-    let store = AssetStoreBuilder::new()
+    let store = AssetStoreBuilder::default()
         .ephemeral(true)
         .cancel(CancelToken::never())
         .build();

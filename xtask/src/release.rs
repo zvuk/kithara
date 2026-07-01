@@ -48,6 +48,13 @@ enum ReleaseCommand {
         #[arg(long, default_value = "HEAD")]
         r#ref: String,
     },
+    /// Deploy the prepared wasm bundle to GitHub Pages classic (gh-pages
+    /// branch, force-orphan).
+    Pages {
+        /// Git ref whose Package.swift defines the release version.
+        #[arg(long, default_value = "HEAD")]
+        r#ref: String,
+    },
 }
 
 pub(crate) fn run(args: &ReleaseArgs) -> Result<()> {
@@ -56,6 +63,7 @@ pub(crate) fn run(args: &ReleaseArgs) -> Result<()> {
     match &args.command {
         ReleaseCommand::Prepare { version, zip } => prepare(cfg, version, zip.as_deref()),
         ReleaseCommand::Publish { r#ref } => publish(cfg, r#ref),
+        ReleaseCommand::Pages { r#ref } => pages(cfg, r#ref),
     }
 }
 
@@ -114,11 +122,67 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
         }
     }
 
+    stage_dir_asset(&tag, &cfg.docs_asset, &cfg.docs_archive, "documentation")?;
+    stage_dir_asset(
+        &tag,
+        &cfg.wasm_asset,
+        &cfg.wasm_dist,
+        "wasm gh-pages bundle",
+    )?;
+
     println!();
     println!("Next steps:");
     println!("  1. Commit {MANIFEST} in the release PR.");
     println!("  2. After merge: cargo xtask release publish");
+    if !cfg.pages_branch.is_empty() && !cfg.wasm_asset.is_empty() {
+        println!("  3. Deploy wasm to Pages: cargo xtask release pages");
+    }
     Ok(())
+}
+
+/// Zip a freshly-built artifact dir (docs archive / wasm dist) into the tagged
+/// release cache. A disabled channel (empty `asset`) is a no-op; a missing
+/// source dir prints a note and is skipped so a release without that artifact
+/// still succeeds.
+fn stage_dir_asset(tag: &str, asset: &str, source_rel: &str, label: &str) -> Result<()> {
+    if asset.is_empty() {
+        return Ok(());
+    }
+    let source = Path::new(source_rel);
+    if !source.is_dir() {
+        println!(
+            "Note: {label} dir {source_rel} not found — {asset} channel skipped (build it first)"
+        );
+        return Ok(());
+    }
+    let parent = source
+        .parent()
+        .with_context(|| format!("{source_rel} has no parent dir"))?;
+    let name = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .with_context(|| format!("{source_rel} has no final component"))?;
+    let dest = cache_named(tag, asset)?;
+    zip_dir(parent, name, &dest)?;
+    println!("Cached artifact: {} ({label})", dest.display());
+    Ok(())
+}
+
+fn zip_dir(parent: &Path, directory_name: &str, output: &Path) -> Result<()> {
+    if output.exists() {
+        fs::remove_file(output).with_context(|| format!("remove {}", output.display()))?;
+    }
+    if let Some(dir) = output.parent() {
+        fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    }
+    run_step(
+        Command::new("zip")
+            .args(["-r", "-y", "-q"])
+            .arg(output)
+            .arg(directory_name)
+            .current_dir(parent),
+        "zip artifact dir",
+    )
 }
 
 fn publish(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
@@ -333,21 +397,182 @@ fn publish_gitlab(
     Ok(())
 }
 
-/// Publish the secondary single self-contained framework zip. It is uploaded
-/// to the GitHub release and mirrored to the `GitLab` generic registry so
-/// manual Apple integrations can download the same bytes.
+/// Publish the secondary cached assets — the single self-contained framework
+/// and the documentation archive — to the GitHub release and the `GitLab`
+/// generic registry so manual integrations download the same bytes.
 fn publish_extras(cfg: &ReleaseConfig, tag: &str) -> Result<()> {
-    if !cfg.single_asset.is_empty() {
-        let zip = cache_named(tag, &cfg.single_asset)?;
-        if !zip.is_file() {
+    upload_extra_asset(cfg, tag, &cfg.single_asset, true)?;
+    upload_extra_asset(cfg, tag, &cfg.docs_asset, false)?;
+    Ok(())
+}
+
+/// Upload one optional cached asset to GitHub + `GitLab`. `required` bails when
+/// the cached zip is missing (the single framework channel); otherwise a
+/// missing artifact (docs) is skipped with a note so the core release still
+/// publishes.
+fn upload_extra_asset(cfg: &ReleaseConfig, tag: &str, name: &str, required: bool) -> Result<()> {
+    if name.is_empty() {
+        return Ok(());
+    }
+    let zip = cache_named(tag, name)?;
+    if !zip.is_file() {
+        if required {
             bail!(
-                "cached {} not found at {}; re-run `cargo xtask release prepare`",
-                cfg.single_asset,
+                "cached {name} not found at {}; re-run `cargo xtask release prepare`",
                 zip.display()
             );
         }
-        upload_github_asset(&cfg.github_repo, tag, &zip)?;
-        upload_gitlab_asset(cfg, tag, &cfg.single_asset, &zip)?;
+        println!("[release] {name} not cached — skipping (run prepare to include it)");
+        return Ok(());
+    }
+    upload_github_asset(&cfg.github_repo, tag, &zip)?;
+    upload_gitlab_asset(cfg, tag, name, &zip)?;
+    Ok(())
+}
+
+/// Deploy the prepared wasm bundle to GitHub Pages classic: force-orphan a
+/// single commit onto the configured branch and push it. Idempotent — every
+/// deploy replaces the branch contents wholesale.
+fn pages(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
+    if cfg.pages_branch.is_empty() || cfg.wasm_asset.is_empty() {
+        bail!("release.pages_branch / release.wasm_asset must be set in .config/xtask.toml");
+    }
+    check_tool("git", &["--version"], "https://git-scm.com")?;
+    check_tool("unzip", &["-v"], "unzip is part of the base system")?;
+
+    let sha = git_capture(&["rev-parse", git_ref])?;
+    let manifest = git_capture(&["show", &format!("{sha}:{MANIFEST}")])?;
+    let version = manifest_field(&manifest, "version")?;
+    let tag = tag_of(&version);
+
+    let zip = cache_named(&tag, &cfg.wasm_asset)?;
+    if !zip.is_file() {
+        bail!(
+            "cached {} not found at {}; run `just release-artifacts {version}` first",
+            cfg.wasm_asset,
+            zip.display()
+        );
+    }
+
+    let staging = env::temp_dir().join(format!("{}-pages-{tag}", crate::util::project_name()));
+    if staging.exists() {
+        fs::remove_dir_all(&staging).with_context(|| format!("clean {}", staging.display()))?;
+    }
+    fs::create_dir_all(&staging).with_context(|| format!("create {}", staging.display()))?;
+    run_step(
+        Command::new("unzip")
+            .arg("-q")
+            .arg(&zip)
+            .arg("-d")
+            .arg(&staging),
+        "unzip wasm bundle",
+    )?;
+
+    deploy_pages_branch(&cfg.pages_branch, &single_subdir(&staging)?, &tag)?;
+    println!();
+    println!("Pages deployed to branch {} ({tag}).", cfg.pages_branch);
+    Ok(())
+}
+
+/// The bundle zip contains the `dist` dir as its single top-level entry; deploy
+/// that dir's contents at the branch root. Fall back to the staging dir itself.
+fn single_subdir(dir: &Path) -> Result<PathBuf> {
+    let mut subdirs = fs::read_dir(dir)
+        .with_context(|| format!("read {}", dir.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    match subdirs.len() {
+        1 => Ok(subdirs.remove(0)),
+        _ => Ok(dir.to_path_buf()),
+    }
+}
+
+fn deploy_pages_branch(branch: &str, content: &Path, tag: &str) -> Result<()> {
+    let worktree =
+        env::temp_dir().join(format!("{}-{branch}-worktree", crate::util::project_name()));
+    let _ = Command::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(&worktree)
+        .status();
+    if worktree.exists() {
+        fs::remove_dir_all(&worktree).with_context(|| format!("clean {}", worktree.display()))?;
+    }
+
+    run_step(
+        Command::new("git")
+            .args(["worktree", "add", "--force", "--detach"])
+            .arg(&worktree),
+        "git worktree add",
+    )?;
+    let result = deploy_into_worktree(&worktree, branch, content, tag);
+    let _ = Command::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(&worktree)
+        .status();
+    result
+}
+
+fn deploy_into_worktree(worktree: &Path, branch: &str, content: &Path, tag: &str) -> Result<()> {
+    run_step(
+        Command::new("git")
+            .current_dir(worktree)
+            .args(["switch", "--orphan", branch]),
+        "git switch --orphan",
+    )?;
+    clear_worktree(worktree)?;
+    copy_dir(content, worktree)?;
+    fs::write(worktree.join(".nojekyll"), "").context("write .nojekyll")?;
+    run_step(
+        Command::new("git")
+            .current_dir(worktree)
+            .args(["add", "-A"]),
+        "git add",
+    )?;
+    run_step(
+        Command::new("git").current_dir(worktree).args([
+            "commit",
+            "-m",
+            &format!("deploy: wasm Pages for {tag}"),
+        ]),
+        "git commit",
+    )?;
+    run_step(
+        Command::new("git")
+            .current_dir(worktree)
+            .args(["push", "--force", "origin", branch]),
+        "git push gh-pages",
+    )
+}
+
+/// Remove every entry except the worktree's `.git` link.
+fn clear_worktree(dir: &Path) -> Result<()> {
+    for entry in fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
+        let path = entry?.path();
+        if path.file_name().and_then(|n| n.to_str()) == Some(".git") {
+            continue;
+        }
+        if path.is_dir() {
+            fs::remove_dir_all(&path).with_context(|| format!("remove {}", path.display()))?;
+        } else {
+            fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
+    for entry in fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            fs::create_dir_all(&to).with_context(|| format!("create {}", to.display()))?;
+            copy_dir(&from, &to)?;
+        } else {
+            fs::copy(&from, &to)
+                .with_context(|| format!("copy {} -> {}", from.display(), to.display()))?;
+        }
     }
     Ok(())
 }
@@ -839,7 +1064,9 @@ fn cache_path(cfg: &ReleaseConfig, tag: &str) -> Result<PathBuf> {
 fn cache_named(tag: &str, name: &str) -> Result<PathBuf> {
     let home = env::var_os("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home)
-        .join("Library/Caches/kithara/releases")
+        .join("Library/Caches")
+        .join(crate::util::project_name())
+        .join("releases")
         .join(tag)
         .join(name))
 }
@@ -1011,6 +1238,11 @@ mod tests {
             gitlab_package: "kithara".into(),
             asset: "KitharaFFIInternal.xcframework.zip".into(),
             single_asset: "Kithara.xcframework.zip".into(),
+            docs_asset: "Kithara-docs.zip".into(),
+            docs_archive: "docs-build/Kithara.doccarchive".into(),
+            wasm_asset: "kithara-wasm-pages.zip".into(),
+            wasm_dist: "crates/kithara-ffi/dist".into(),
+            pages_branch: "gh-pages".into(),
         };
         let notes = render_release_notes(
             &cfg,
@@ -1044,6 +1276,11 @@ mod tests {
             gitlab_package: "kithara".into(),
             asset: "KitharaFFIInternal.xcframework.zip".into(),
             single_asset: "Kithara.xcframework.zip".into(),
+            docs_asset: "Kithara-docs.zip".into(),
+            docs_archive: "docs-build/Kithara.doccarchive".into(),
+            wasm_asset: "kithara-wasm-pages.zip".into(),
+            wasm_dist: "crates/kithara-ffi/dist".into(),
+            pages_branch: "gh-pages".into(),
         };
 
         let links = gitlab_release_links(&cfg, "v0.0.2");

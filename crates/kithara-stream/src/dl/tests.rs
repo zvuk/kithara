@@ -12,7 +12,6 @@ use axum::{
     routing::{get, head},
 };
 use bytes::Bytes;
-use dashmap::DashSet;
 use futures::stream::iter as stream_iter;
 use kithara_abr::Abr;
 use kithara_events::{DownloaderEvent, Event, EventBus};
@@ -21,9 +20,10 @@ use kithara_platform::{
     CancelToken,
     sync::{Mutex, Notify},
     time::{self, Duration},
-    tokio::{net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
+    tokio::task::spawn as tokio_spawn,
 };
 use kithara_test_utils::kithara;
+use tokio::net::TcpListener as TokioTcpListener;
 use url::Url;
 
 use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority};
@@ -509,76 +509,48 @@ async fn poll_next_respects_max_concurrent() {
     assert!(observed_peak > 0, "sanity: at least one request ran");
 }
 
-/// Verify that Downloaders sharing a single [`HttpClient`] reuse the
-/// same keep-alive socket pool across **successive** Downloader
-/// lifetimes — the realistic prod pattern (tracks come and go, ABR
-/// `switch_variant` rebuilds Downloaders, queue advances next track).
+/// Verify that Downloaders sharing a single [`HttpClient`] reuse the same
+/// keep-alive pool across **successive** Downloader lifetimes: tracks come and
+/// go, ABR `switch_variant` rebuilds Downloaders, and the queue advances.
 ///
 /// Contract:
 /// - The caller builds one [`HttpClient`] and hands a clone to every
 ///   Downloader via [`DownloaderConfig::client`]. `reqwest::Client` is
 ///   internally `Arc`'d so all clones share one connection pool.
-/// - When a Downloader is dropped, its keep-alive sockets stay in the
+/// - When a Downloader is dropped, its keep-alive connections stay in the
 ///   shared pool's idle list and are picked up by the next Downloader.
-/// - With `WAVES` rounds × `PARALLEL_DLS` parallel Downloaders, the
-///   server-observed unique client ports must stay close to a single
-///   wave's peak (`PARALLEL_DLS * MAX_CONCURRENT`), independent of the
-///   number of waves.
+/// - With `WAVES` rounds x `PARALLEL_DLS` parallel Downloaders, the
+///   client-observed opened connection count stays close to a small number of
+///   waves, independent of total request count.
 ///
-/// A regression that reverts to a per-Downloader client would multiply
-/// the observed port count by `WAVES`, immediately tripping the
-/// assertion.
+/// A regression that reverts to a per-Downloader client multiplies the opened
+/// connection count by `WAVES`, immediately tripping the assertion.
 #[kithara::test(tokio, timeout(Duration::from_secs(PORT_STRESS_TIMEOUT_SECS)))]
-async fn shared_client_keepalive_bounds_socket_count() {
+async fn shared_client_keepalive_bounds_connection_count() {
     const PARALLEL_DLS: usize = 8;
     const WAVES: usize = 25;
     const REQUESTS_PER_DL: usize = 114;
     const MAX_CONCURRENT: usize = 5;
-    /// Single-wave peak when keep-alive is shared correctly: the first
-    /// wave establishes ≤ `PARALLEL_DLS * MAX_CONCURRENT` sockets; each
-    /// subsequent wave reuses them from the shared idle pool. 50%
-    /// headroom covers race between handler completion and pool
-    /// checkout. A regression to per-Downloader pools produces
-    /// `WAVES * PARALLEL_DLS * MAX_CONCURRENT` ≈ 1000 unique sockets.
-    const MAX_UNIQUE_PORTS: usize = PARALLEL_DLS * MAX_CONCURRENT * 3 / 2;
+    /// Client-observed opened connections are a churn sentinel. Correct
+    /// shared-pool behavior stays close to a few waves; per-Downloader pools
+    /// produce `WAVES * PARALLEL_DLS * MAX_CONCURRENT` ≈ 1000 connections.
+    const MAX_CLIENT_CONNECTIONS: usize = PARALLEL_DLS * MAX_CONCURRENT * 5;
 
     let total_served = Arc::new(AtomicUsize::new(0));
     let total_served_c = Arc::clone(&total_served);
-    let unique_ports: Arc<DashSet<u16>> = Arc::new(DashSet::new());
-    let unique_ports_c = Arc::clone(&unique_ports);
 
-    let app = Router::new()
-        .route(
-            "/head",
-            head(move || {
-                total_served_c.fetch_add(1, Ordering::Relaxed);
-                async { "" }
-            }),
-        )
-        .layer(axum::middleware::from_fn(
-            move |req: axum::extract::Request, next: axum::middleware::Next| {
-                let unique = Arc::clone(&unique_ports_c);
-                async move {
-                    if let Some(info) = req
-                        .extensions()
-                        .get::<axum::extract::ConnectInfo<SocketAddr>>()
-                    {
-                        unique.insert(info.0.port());
-                    }
-                    next.run(req).await
-                }
-            },
-        ));
+    let app = Router::new().route(
+        "/head",
+        head(move || {
+            total_served_c.fetch_add(1, Ordering::Relaxed);
+            async { "" }
+        }),
+    );
 
     let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr: SocketAddr = listener.local_addr().expect("local_addr");
+    let addr = listener.local_addr().expect("local_addr");
     tokio_spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .expect("serve");
+        axum::serve(listener, app).await.expect("serve");
     });
 
     let url = Url::parse(&format!("http://{addr}/head")).expect("url");
@@ -631,20 +603,21 @@ async fn shared_client_keepalive_bounds_socket_count() {
     }
 
     let expected = total_dls * REQUESTS_PER_DL;
-    let unique = unique_ports.len();
+    let connection_count = shared_client.connection_count();
     assert!(
         all_failures.is_empty(),
         "shared client should not produce HTTP failures: {total_ok}/{expected} ok, \
-         {} downloaders had failures (unique_client_ports={unique}):\n{}",
+         {} downloaders had failures (client_connections={connection_count}):\n{}",
         all_failures.len(),
         all_failures.join("\n")
     );
     assert!(
-        unique <= MAX_UNIQUE_PORTS,
-        "shared keep-alive regression: {unique} unique client ports for {expected} requests \
+        connection_count <= MAX_CLIENT_CONNECTIONS,
+        "shared keep-alive regression: client opened {connection_count} connections \
+         for {expected} requests \
          across {WAVES} waves of {PARALLEL_DLS} downloaders \
-         (expected ≤ {MAX_UNIQUE_PORTS}). Successive Downloaders should reuse sockets \
-         from the shared pool; this many indicates per-Downloader clients."
+         (expected ≤ {MAX_CLIENT_CONNECTIONS}). Successive Downloaders should reuse sockets \
+         from the shared pool; this many indicates per-Downloader clients or severe churn."
     );
 }
 

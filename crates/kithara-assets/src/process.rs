@@ -57,8 +57,7 @@ pub trait ChunkSink: Send {
     ///
     /// # Errors
     /// Returns a message string if the transform fails (e.g. misaligned input).
-    fn process(&mut self, input: &[u8], output: &mut [u8], is_last: bool)
-    -> Result<usize, String>;
+    fn process(&mut self, input: &[u8], output: &mut [u8], is_last: bool) -> Result<usize, String>;
 }
 
 /// Per-acquire processing handle: a shared [`ResourceProcessor`] trait object.
@@ -694,8 +693,7 @@ mod tests {
         let (writer, _dir) = mock_writer(b"plain bytes!");
 
         let _ = process_fn;
-        let writer: ProcessedWriter<BaseWriter> =
-            ProcessedWriter::new(writer, None, test_pool());
+        let writer: ProcessedWriter<BaseWriter> = ProcessedWriter::new(writer, None, test_pool());
         let reader = writer.commit(Some(12)).unwrap();
 
         let mut buf = vec![0u8; 12];
@@ -965,7 +963,7 @@ mod tests {
     /// an uncommitted DRM-style entry whose read trips the pre-commit guard.
     #[kithara::test]
     fn open_resource_none_ctx_does_not_leak_precommit_guard() {
-        let store = AssetStoreBuilder::new().ephemeral(true).build();
+        let store = AssetStoreBuilder::default().ephemeral(true).build();
         let key = ResourceKey::relative("drm-fallthrough", "segment.m4s");
         let proc: ProcessCtx = xor_chunk_processor(0x42, Arc::new(AtomicUsize::new(0)));
 

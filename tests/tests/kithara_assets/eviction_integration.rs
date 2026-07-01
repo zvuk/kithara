@@ -27,7 +27,7 @@ fn asset_scope_with_root(
     asset_root: &str,
     max_assets: Option<usize>,
 ) -> AssetScope {
-    AssetStoreBuilder::new()
+    AssetStoreBuilder::default()
         .root_dir(temp_dir.path())
         .evict_config(EvictConfig {
             max_assets,

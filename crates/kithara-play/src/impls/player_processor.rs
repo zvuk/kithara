@@ -284,6 +284,7 @@ impl PlayerNodeProcessor {
         self.tracks_transitions.clear();
         self.shared_state.playing.store(false, Ordering::SeqCst);
         self.shared_state.position.store(0.0, Ordering::Relaxed);
+        self.shared_state.frontier.store(0.0, Ordering::Relaxed);
         self.shared_state.duration.store(0.0, Ordering::Relaxed);
     }
 
@@ -727,6 +728,18 @@ impl PlayerNodeProcessor {
     /// the first render block, or every active track was a non-leading
     /// fade-in).
     fn update_position_duration(&self, leading_outcome: Option<(f64, f64)>) {
+        // Decoded-ahead frontier comes from the leading track's lock-free
+        // snapshot (always `>=` position) — the authoritative buffered/playable
+        // window the FFI polls for loaded ranges.
+        for (_, track) in self.tracks.iter() {
+            if track.state().is_leading() {
+                self.shared_state
+                    .frontier
+                    .store(track.decoded_frontier(), Ordering::Relaxed);
+                break;
+            }
+        }
+
         if let Some((position, duration)) = leading_outcome {
             self.shared_state
                 .position

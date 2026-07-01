@@ -13,25 +13,31 @@ const ROOT_A: &str = "asset_root_a";
 const ROOT_B: &str = "asset_root_b";
 
 fn ephemeral_store(cap: usize) -> AssetStore {
-    AssetStoreBuilder::new()
+    AssetStoreBuilder::default()
         .ephemeral(true)
-        .cache_capacity(NonZeroUsize::new(cap).unwrap())
+        .cache_capacity(NonZeroUsize::new(cap).expect("test cache capacity must be non-zero"))
         .build()
 }
 
 /// Stream `data` through a Pending writer and commit it.
 fn write_commit(store: &AssetStore, key: &ResourceKey, data: &[u8]) {
-    let AcquisitionResult::Pending(w) = store.acquire_resource(key, None).unwrap() else {
+    let AcquisitionResult::Pending(w) = store
+        .acquire_resource(key, None)
+        .expect("test acquire must succeed")
+    else {
         panic!("fresh acquire must be Pending");
     };
-    w.write_at(0, data).unwrap();
-    w.commit(Some(data.len() as u64)).unwrap();
+    w.write_at(0, data).expect("test write must succeed");
+    w.commit(Some(data.len() as u64))
+        .expect("test commit must succeed");
 }
 
 /// Commit `count` resources under `root` to force LRU displacement.
 fn fill_root(store: &AssetStore, root: &str, count: usize) -> Vec<ResourceKey> {
     let scope = store.scope(root);
-    let keys: Vec<ResourceKey> = (0..count).map(|i| scope.key(format!("seg_{i}.m4s"))).collect();
+    let keys: Vec<ResourceKey> = (0..count)
+        .map(|i| scope.key(format!("seg_{i}.m4s")))
+        .collect();
     for key in &keys {
         write_commit(store, key, b"data");
     }

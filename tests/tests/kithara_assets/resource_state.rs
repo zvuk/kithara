@@ -1,20 +1,58 @@
-use std::{collections::HashSet, num::NonZeroUsize, path::Path, sync::Arc};
+use std::{collections::HashSet, fmt, num::NonZeroUsize, path::Path, sync::Arc};
 
 use kithara_assets::{
-    AcquisitionResult, AssetResourceState, AssetStoreBuilder, BytePool, DiskAssetStore,
-    EvictConfig, ProcessChunkFn, ReadSide, WriteSide,
+    AcquisitionResult, AssetResourceState, AssetStoreBuilder, BytePool, ChunkSink, DiskAssetStore,
+    EvictConfig, ProcessCtx, ReadSide, ResourceProcessor, WriteSide,
 };
 use kithara_integration_tests::{asset_fixture::PinsIndex, assets_ext::AssetStoreTestExt};
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
 
-fn xor_process_fn() -> ProcessChunkFn<u8> {
-    Arc::new(|input, output, ctx: &mut u8, _is_last| {
+#[derive(Debug)]
+struct XorProcessor {
+    identity: [u8; 1],
+    key: u8,
+}
+
+impl ResourceProcessor for XorProcessor {
+    fn identity(&self) -> &[u8] {
+        &self.identity
+    }
+
+    fn begin(&self) -> Box<dyn ChunkSink> {
+        Box::new(XorSink { key: self.key })
+    }
+}
+
+struct XorSink {
+    key: u8,
+}
+
+impl fmt::Debug for XorSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("XorSink").finish_non_exhaustive()
+    }
+}
+
+impl ChunkSink for XorSink {
+    fn process(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        _is_last: bool,
+    ) -> Result<usize, String> {
         for (idx, byte) in input.iter().copied().enumerate() {
-            output[idx] = byte ^ *ctx;
+            output[idx] = byte ^ self.key;
         }
         Ok(input.len())
+    }
+}
+
+fn xor_processor(key: u8) -> ProcessCtx {
+    Arc::new(XorProcessor {
+        identity: [key],
+        key,
     })
 }
 
@@ -35,7 +73,7 @@ fn load_pins(root_dir: &Path) -> HashSet<String> {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
     let dir = tempdir().unwrap();
-    let scope = AssetStoreBuilder::new()
+    let scope = AssetStoreBuilder::default()
         .root_dir(dir.path())
         .build()
         .scope("disk-asset");
@@ -84,7 +122,7 @@ fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
     let dir = tempdir().unwrap();
-    let scope = AssetStoreBuilder::new()
+    let scope = AssetStoreBuilder::default()
         .root_dir(dir.path())
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build()
@@ -113,7 +151,7 @@ fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
     let dir = tempdir().unwrap();
-    let scope = AssetStoreBuilder::new()
+    let scope = AssetStoreBuilder::default()
         .root_dir(dir.path())
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build()
@@ -139,7 +177,7 @@ fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_open_resource_on_missing_key_does_not_create_ghost_file() {
     let dir = tempdir().unwrap();
-    let scope = AssetStoreBuilder::new()
+    let scope = AssetStoreBuilder::default()
         .root_dir(dir.path())
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build()
@@ -177,7 +215,7 @@ fn disk_open_resource_on_missing_key_does_not_create_ghost_file() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
-    let scope = AssetStoreBuilder::new()
+    let scope = AssetStoreBuilder::default()
         .cache_capacity(NonZeroUsize::new(3).unwrap())
         .ephemeral(true)
         .build()
@@ -252,13 +290,13 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         max_bytes: None,
     };
 
-    let scope_a = AssetStoreBuilder::new()
+    let scope_a = AssetStoreBuilder::default()
         .root_dir(dir.path())
         .evict_config(evict.clone())
-        .process_fn(xor_process_fn())
         .build()
         .scope("asset-a");
     let key_a = scope_a.key("segments/0001.bin");
+    let proc_a = xor_processor(0x55);
 
     assert_eq!(
         scope_a.store().resource_state(&key_a).unwrap(),
@@ -268,7 +306,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     let res_a_writer = pending(
         scope_a
             .store()
-            .acquire_resource_with_ctx(&key_a, None, Some(0x55))
+            .acquire_resource_with_ctx(&key_a, None, Some(Arc::clone(&proc_a)))
             .unwrap(),
     );
     assert_eq!(
@@ -287,22 +325,24 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         AssetResourceState::Committed { final_len: Some(3) }
     );
 
-    let reopened = scope_a.store().open_resource(&key_a, None).unwrap();
+    let reopened = scope_a
+        .store()
+        .open_resource_with_ctx(&key_a, None, Some(Arc::clone(&proc_a)))
+        .unwrap();
     let mut processed = Vec::new();
     reopened.read_into(&mut processed).unwrap();
     assert_eq!(processed, vec![0x45, 0x75, 0x65]);
 
-    let scope_b = AssetStoreBuilder::new()
+    let scope_b = AssetStoreBuilder::default()
         .root_dir(dir.path())
         .evict_config(evict.clone())
-        .process_fn(xor_process_fn())
         .build()
         .scope("asset-b");
     let key_b = scope_b.key("segments/0001.bin");
     let res_b = pending(
         scope_b
             .store()
-            .acquire_resource_with_ctx(&key_b, None, Some(0x11))
+            .acquire_resource_with_ctx(&key_b, None, Some(xor_processor(0x11)))
             .unwrap(),
     );
     res_b.write_at(0, b"bbb").unwrap();
@@ -321,27 +361,25 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         "dropping the last user handle must eagerly unpin even while the store stays alive"
     );
 
-    let scope_c = AssetStoreBuilder::new()
+    let scope_c = AssetStoreBuilder::default()
         .root_dir(dir.path())
         .evict_config(evict.clone())
-        .process_fn(xor_process_fn())
         .build()
         .scope("asset-c");
     let key_c = scope_c.key("segments/0001.bin");
     let res_c = pending(
         scope_c
             .store()
-            .acquire_resource_with_ctx(&key_c, None, Some(0x22))
+            .acquire_resource_with_ctx(&key_c, None, Some(xor_processor(0x22)))
             .unwrap(),
     );
     res_c.write_at(0, b"ccc").unwrap();
     let res_c = res_c.commit(Some(3)).unwrap();
     drop(res_c);
 
-    let scope_a_probe = AssetStoreBuilder::new()
+    let scope_a_probe = AssetStoreBuilder::default()
         .root_dir(dir.path())
         .evict_config(evict.clone())
-        .process_fn(xor_process_fn())
         .build()
         .scope("asset-a");
     assert_eq!(

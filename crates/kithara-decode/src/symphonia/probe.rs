@@ -167,14 +167,14 @@ fn create_reader_for_container(
             let reader = OggReader::try_new(mss, format_opts).map_err(DecodeError::backend)?;
             Ok(Box::new(reader))
         }
-        ContainerFormat::MpegTs => Err(DecodeError::UnsupportedContainer(container)),
+        ContainerFormat::MpegTs => Err(DecodeError::UnsupportedContainer { container }),
         ContainerFormat::Caf => {
             tracing::warn!("CAF container - falling back to probe");
-            Err(DecodeError::UnsupportedContainer(container))
+            Err(DecodeError::UnsupportedContainer { container })
         }
         ContainerFormat::Mkv => {
             tracing::warn!("MKV container - falling back to probe");
-            Err(DecodeError::UnsupportedContainer(container))
+            Err(DecodeError::UnsupportedContainer { container })
         }
     }
 }

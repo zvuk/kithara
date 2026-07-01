@@ -2,7 +2,8 @@ use std::{cmp::min, collections::HashMap, fmt};
 
 use bitflags::bitflags;
 use bon::Builder;
-use kithara_platform::time::Duration;
+use kithara_bufpool::BytePool;
+use kithara_platform::{time::Duration, traits::FromWithParams};
 
 bitflags! {
     /// HTTP `Accept-Encoding` algorithms the client advertises and is
@@ -20,6 +21,21 @@ bitflags! {
         const BROTLI  = 1 << 2;
         const ZSTD    = 1 << 3;
     }
+}
+
+/// TLS+HTTP fingerprint the native `client-wreq` backend impersonates. The
+/// DRM keyserver sits behind an anti-bot WAF that fingerprints the TLS
+/// `ClientHello` (JA3) and 418-rejects non-browser stacks; presenting a real
+/// browser fingerprint via `wreq` is what gets a 200. Default `Safari` matches
+/// iOS `URLSession`; Android selects a different preset. Inert under the
+/// `client-reqwest` backend and on wasm32 (no emulation; the browser fetch
+/// already carries a real fingerprint).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ImpersonatePreset {
+    #[default]
+    Safari,
+    Chrome,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -167,12 +183,47 @@ pub struct NetOptions {
     /// Set to 0 to disable pooling.
     #[builder(default = 8)]
     pub pool_max_idle_per_host: usize,
+    /// Apple `NSURLSession` streaming body queue capacity, measured in
+    /// delivered data chunks waiting for Rust consumption. Set to 0 to disable
+    /// `URLSession` task suspension for queued body chunks.
+    #[builder(default = 32)]
+    pub body_queue_capacity: usize,
+    /// Queue length at or below which a suspended Apple streaming task resumes.
+    /// Values greater than or equal to [`Self::body_queue_capacity`] are valid:
+    /// they resume as soon as the consumer drains one chunk.
+    #[builder(default = 16)]
+    pub body_queue_resume_at: usize,
+    /// Shared byte buffer pool used by backends that must copy platform-owned
+    /// response buffers before handing bytes to Rust consumers.
+    pub byte_pool: Option<BytePool>,
+    /// Browser TLS+HTTP2 fingerprint the native `client-wreq` backend
+    /// impersonates. Defaults to `Safari`. Ignored by the `client-reqwest`
+    /// backend and on wasm32 (no emulation there).
+    #[builder(default)]
+    pub impersonate: ImpersonatePreset,
 }
 
 impl Default for NetOptions {
     fn default() -> Self {
         Self::builder()
             .total_timeout(Duration::from_secs(120))
+            .build()
+    }
+}
+
+impl FromWithParams<Self, Option<BytePool>> for NetOptions {
+    fn build(options: Self, byte_pool: Option<BytePool>) -> Self {
+        Self::builder()
+            .compression(options.compression)
+            .inactivity_timeout(options.inactivity_timeout)
+            .maybe_total_timeout(options.total_timeout)
+            .retry_policy(options.retry_policy)
+            .is_insecure(options.is_insecure)
+            .pool_max_idle_per_host(options.pool_max_idle_per_host)
+            .body_queue_capacity(options.body_queue_capacity)
+            .body_queue_resume_at(options.body_queue_resume_at)
+            .maybe_byte_pool(options.byte_pool.or(byte_pool))
+            .impersonate(options.impersonate)
             .build()
     }
 }

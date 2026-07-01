@@ -22,7 +22,7 @@ num-traits = { workspace = true }
 rten = { workspace = true }
 rten-tensor = { workspace = true }
 thiserror = { workspace = true }
-kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
 serde = { workspace = true }

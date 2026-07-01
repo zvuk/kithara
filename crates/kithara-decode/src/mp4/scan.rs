@@ -20,7 +20,9 @@ impl Consts {
     const BOX_MEAN: [u8; 4] = *b"mean";
     const BOX_META: [u8; 4] = *b"meta";
     const BOX_MINF: [u8; 4] = *b"minf";
+    const BOX_MOOF: [u8; 4] = *b"moof";
     const BOX_MOOV: [u8; 4] = *b"moov";
+    const BOX_MVEX: [u8; 4] = *b"mvex";
     const BOX_MVHD: [u8; 4] = *b"mvhd";
     const BOX_NAME: [u8; 4] = *b"name";
     const BOX_STBL: [u8; 4] = *b"stbl";
@@ -439,6 +441,44 @@ pub(crate) fn sniff_mp4_codec(reader: &mut dyn DecoderInput) -> Option<[u8; 4]> 
     let mut sniffer = CodecSniffer::default();
     scan_mp4(reader, &mut sniffer).ok()?;
     sniffer.fourcc
+}
+
+/// Return whether an MP4 stream is fragmented. Reader position is restored.
+pub(crate) fn sniff_mp4_fragmented(reader: &mut dyn DecoderInput) -> Option<bool> {
+    let position = reader.stream_position().ok()?;
+    let result = scan_mp4_fragment_hint(reader);
+    let restore = reader.seek(SeekFrom::Start(position));
+
+    match (result, restore) {
+        (Ok(fragmented), Ok(_)) => Some(fragmented),
+        _ => None,
+    }
+}
+
+fn scan_mp4_fragment_hint(reader: &mut dyn DecoderInput) -> Result<bool, Mp4MetadataError> {
+    while let Some(header) = next_box(reader, None)? {
+        match header.kind {
+            Consts::BOX_MOOF => return Ok(true),
+            Consts::BOX_MOOV => {
+                if scan_moov_for_mvex(reader, header.end)? {
+                    return Ok(true);
+                }
+            }
+            _ => {}
+        }
+        reader.seek(SeekFrom::Start(header.end))?;
+    }
+    Ok(false)
+}
+
+fn scan_moov_for_mvex(reader: &mut dyn DecoderInput, end: u64) -> Result<bool, Mp4MetadataError> {
+    while let Some(header) = next_box(reader, Some(end))? {
+        if header.kind == Consts::BOX_MVEX {
+            return Ok(true);
+        }
+        reader.seek(SeekFrom::Start(header.end))?;
+    }
+    Ok(false)
 }
 
 /// Extract the audio sample rate from the first sample entry of an `stsd`.

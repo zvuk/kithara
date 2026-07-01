@@ -5,11 +5,13 @@ use std::{
 
 use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_stream::{AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo};
+use kithara_stream::{
+    AudioCodec, BoxedEventSink, ByteMap, ContainerFormat, MediaInfo, needs_exact_byte_sizes,
+};
 
 use super::probe::{
     ProbeHint, codec_from_mp4_fourcc, container_from_extension, probe_codec,
-    resolve_codec_container,
+    resolve_codec_container, sniff_container_from_source,
 };
 use crate::{
     Decoder, InputRequirement,
@@ -218,11 +220,14 @@ impl DecoderFactory {
     }
 
     pub(super) fn dispatch_backend(
-        source: BoxedSource,
+        mut source: BoxedSource,
         hint: &ProbeHint,
         config: DecoderConfig,
     ) -> DecodeResult<Box<dyn Decoder>> {
-        let (codec, container) = resolve_codec_container(hint)?;
+        let (codec, mut container) = resolve_codec_container(hint)?;
+        if container.is_none() {
+            container = sniff_container_from_source(&mut source);
+        }
 
         tracing::debug!(
             ?codec,
@@ -290,7 +295,7 @@ fn create_apple(
         #[cfg(not(feature = "symphonia"))]
         {
             let _ = layout;
-            return Err(DecodeError::UnsupportedCodec(codec));
+            return Err(DecodeError::UnsupportedCodec { codec });
         }
     }
 
@@ -308,7 +313,7 @@ fn create_apple(
     #[cfg(not(feature = "symphonia"))]
     {
         let _ = (source, container, config);
-        Err(DecodeError::UnsupportedCodec(codec))
+        Err(DecodeError::UnsupportedCodec { codec })
     }
 }
 
@@ -399,7 +404,7 @@ fn create_android(
         #[cfg(not(feature = "symphonia"))]
         {
             let _ = layout;
-            return Err(DecodeError::UnsupportedCodec(codec));
+            return Err(DecodeError::UnsupportedCodec { codec });
         }
     }
 
@@ -417,7 +422,7 @@ fn create_android(
     #[cfg(not(feature = "symphonia"))]
     {
         let _ = (source, container, config);
-        Err(DecodeError::UnsupportedCodec(codec))
+        Err(DecodeError::UnsupportedCodec { codec })
     }
 }
 
@@ -453,7 +458,7 @@ fn build_android_standalone_decoder(
         (AudioCodec::Alac, Some(ContainerFormat::Mp4)) => {
             AndroidMediaExtractorDemuxer::open_alac_m4a(source)?
         }
-        _ => return Err(DecodeError::UnsupportedCodec(codec)),
+        _ => return Err(DecodeError::UnsupportedCodec { codec }),
     };
     let codec_impl = AndroidCodec::open_with_config(demuxer.track_info())?;
     let pool = config
@@ -569,10 +574,7 @@ fn should_use_segment_aware(
 /// ask the same question without a [`DecoderConfig`]. AAC / FLAC in fMP4 is
 /// the only segment-aware path; everything else reads incrementally.
 fn segment_aware_container(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
-    matches!(
-        codec,
-        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac
-    ) && matches!(container, Some(ContainerFormat::Fmp4))
+    !needs_exact_byte_sizes(Some(codec), container)
 }
 
 #[cfg(feature = "symphonia")]
@@ -598,7 +600,7 @@ fn create_fmp4_segment_symphonia(
                 SymphoniaCodec::open_with_config(track, &symphonia_config)
             })
         }
-        other => Err(DecodeError::UnsupportedCodec(other)),
+        other => Err(DecodeError::UnsupportedCodec { codec: other }),
     }
 }
 
@@ -640,4 +642,46 @@ where
         },
     );
     Ok(Box::new(decoder))
+}
+
+/// RED (device repro): on the size-reduced apple-only build (no symphonia
+/// fallback), `MediaInfo { codec: AacLc, container: None }` over real fMP4
+/// bytes must resolve the shared container hint before backend dispatch.
+#[cfg(all(test, feature = "apple", any(target_os = "macos", target_os = "ios")))]
+mod apple_factory_tests {
+    use std::{io::Cursor, sync::Arc};
+
+    use kithara_stream::{AudioCodec, ByteMap, MediaInfo};
+    use kithara_test_utils::kithara;
+
+    use super::{DecoderBackend, DecoderConfig, DecoderFactory};
+    use crate::{
+        DecodeError,
+        fmp4::test_layout::{TestLayoutCodec, build_test_layout},
+    };
+
+    #[kithara::test]
+    fn apple_aac_lc_metadata_probe_is_not_rejected_as_unsupported_codec() {
+        let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 1);
+        let source = Cursor::new(blob);
+        let byte_map: Arc<dyn ByteMap> = Arc::new(segmented);
+        let media_info = MediaInfo::new(Some(AudioCodec::AacLc), None);
+        let config = DecoderConfig {
+            backend: DecoderBackend::Apple,
+            byte_map: Some(byte_map),
+            ..DecoderConfig::default()
+        };
+
+        let result = DecoderFactory::create_from_media_info(source, &media_info, config);
+
+        assert!(
+            !matches!(
+                result,
+                Err(DecodeError::UnsupportedCodec {
+                    codec: AudioCodec::AacLc
+                })
+            ),
+            "apple-only AAC-LC fMP4 metadata probe was rejected as UnsupportedCodec"
+        );
+    }
 }

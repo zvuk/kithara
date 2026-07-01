@@ -11,6 +11,90 @@ feature_powerset_exclude = ["kithara-play", "kithara-app", "kithara-fuzz"]
 # Crates excluded from whole-workspace stages (fuzz target needs cargo-fuzz).
 workspace_exclude = ["kithara-fuzz"]
 
+[test]
+default_lane = "workspace"
+default_backend = "wreq"
+feature_arg = "--features"
+
+[test.flash]
+default = true
+features = ["flash"]
+
+[test.net_backends.wreq]
+features = []
+
+[test.net_backends.apple]
+features = ["kithara-integration-tests/apple-net"]
+
+[test.lanes.workspace]
+program = "cargo"
+prefix_args = [
+    "nextest",
+    "run",
+    "--workspace",
+    "--exclude",
+    "kithara-fuzz",
+    "--cargo-profile",
+    "test-release",
+]
+
+[test.lanes.cached]
+program = "cargo"
+prefix_args = [
+    "nextest",
+    "run",
+    "--profile",
+    "cache",
+    "--workspace",
+    "--exclude",
+    "kithara-fuzz",
+    "--cargo-profile",
+    "test-release",
+]
+
+[test.lanes.doc]
+program = "cargo"
+prefix_args = [
+    "test",
+    "--doc",
+    "--workspace",
+    "--exclude",
+    "kithara-fuzz",
+]
+default_flash = false
+
+[test.lanes.e2e]
+program = "cargo"
+prefix_args = [
+    "nextest",
+    "run",
+    "-p",
+    "kithara-integration-tests",
+    "--cargo-profile",
+    "test-release",
+    "--test",
+    "suite_e2e",
+    "--run-ignored",
+    "all",
+]
+default_features = ["e2e"]
+default_flash = false
+
+[test.lanes.selenium]
+program = "cargo"
+prefix_args = [
+    "+nightly",
+    "test",
+    "-p",
+    "kithara-integration-tests",
+    "--test",
+    "suite_heavy",
+]
+default_features = ["selenium"]
+suffix_args = ["selenium", "--", "--nocapture"]
+passthrough = "after-suffix"
+default_flash = false
+
 [publish]
 workspace_hack_crate = "kithara-workspace-hack"
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
@@ -23,6 +107,70 @@ gitlab_project = "disrupt/kithara"
 gitlab_package = "kithara"
 asset = "KitharaFFIInternal.xcframework.zip"
 single_asset = "Kithara.xcframework.zip"
+# Documentation channel: DocC archive (`just apple doc`) zipped + uploaded as a
+# release asset.
+docs_asset = "Kithara-docs.zip"
+docs_archive = "docs-build/Kithara.doccarchive"
+# WebAssembly channel: trunk dist (`cargo xtask wasm build`) zipped + deployed
+# to GitHub Pages classic on the gh-pages branch.
+wasm_asset = "kithara-wasm-pages.zip"
+wasm_dist = "crates/kithara-ffi/dist"
+pages_branch = "gh-pages"
+
+[orphans]
+# Packages excluded from the default `cargo modules orphans` sweep.
+exclude_packages = [
+    "kithara-workspace-hack",
+    "kithara-test-utils",
+    "kithara-test-macros",
+    "kithara-ffi",
+    "kithara-fuzz",
+    "kithara-decode",
+    "kithara-platform",
+    "xtask",
+]
+
+[android]
+# Cargo package compiled into the Android JNI libraries.
+ffi_crate = "kithara-ffi"
+# AAR artifacts the Gradle export is expected to produce.
+aars = ["kithara.aar", "rust-tls.aar"]
+
+[wasm]
+# wasm-bindgen JS artifact patched by the trunk post-build hook.
+js_artifact = "kithara-ffi.js"
+
+[quality]
+# Trait directory whose every `pub trait` must carry `#[unimock]`.
+unimock_traits_dir = "crates/kithara-play/src/traits"
+
+[apple.docgen]
+# DocC documentation-extension pages generated from Rust rustdoc JSON so the
+# Swift facade docs stay a projection of the Rust `///` source of truth.
+# Cargo package whose rustdoc JSON is the doc source (JSON stem = dashes→underscores).
+package = "kithara-ffi"
+# Features enabled for the rustdoc JSON build.
+features = ["uniffi"]
+# DocC module the extension headers target: `# ``<module>/<symbol>```.
+module = "Kithara"
+# Workspace-relative dir the generated `.md` extensions land in (gitignored).
+output_dir = "apple/Sources/Kithara/Kithara.docc"
+# Swift source dirs whose every public/open symbol must carry a `///` doc
+# comment (the completeness gate enforced by `apple docgen --check`).
+swift_dirs = ["apple/Sources/Kithara", "apple/Sources/KitharaRx"]
+
+# facade DocC symbol → Rust type in the rustdoc JSON (the allowlist).
+[[apple.docgen.symbols]]
+docc = "TrackStatus"
+rust = "FfiTrackStatus"
+
+[[apple.docgen.symbols]]
+docc = "ItemEvent"
+rust = "FfiItemEvent"
+
+[[apple.docgen.symbols]]
+docc = "PlayerSnapshot"
+rust = "FfiPlayerSnapshot"
 
 [lint_exclude]
 # Test code dropped from EVERY lint namespace (arch, style, idioms) so baselines

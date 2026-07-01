@@ -515,7 +515,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::runtime::connect;
+    use crate::runtime::{AtomicServiceClass, connect};
 
     struct TestObserver;
 
@@ -552,6 +552,25 @@ mod tests {
     impl Node for ServiceClassNode {
         fn service_class(&self) -> ServiceClass {
             self.service_class
+        }
+
+        fn tick(&mut self) -> TickResult {
+            TickResult::Done
+        }
+    }
+
+    /// Test node whose service class is backed by an `AtomicServiceClass`,
+    /// mirroring the production `DecoderNode` — the real-time consumer writes
+    /// the atomic wait-free and the scheduler reads it back each pass via
+    /// `service_class()`. Lets a test drive the live re-prioritisation path
+    /// (`refresh_service_classes` → `recompute_slots_order`) deterministically.
+    struct AtomicClassNode {
+        class: Arc<AtomicServiceClass>,
+    }
+
+    impl Node for AtomicClassNode {
+        fn service_class(&self) -> ServiceClass {
+            self.class.load()
         }
 
         fn tick(&mut self) -> TickResult {
@@ -686,6 +705,78 @@ mod tests {
         recompute_slots_order(&slots, &mut slots_order);
 
         assert_eq!(slots_order, vec![1, 2, 0]);
+    }
+
+    #[kithara::test]
+    fn refresh_reorders_live_when_atomic_service_class_changes() {
+        // End-to-end of the live re-prioritisation path the worker runs each
+        // pass: the real-time consumer writes a track's `AtomicServiceClass`
+        // wait-free; the scheduler's `refresh_service_classes` must observe the
+        // new value and flag a reorder, after which `recompute_slots_order`
+        // places the Audible track ahead of the Idle one. Deterministic by
+        // construction — no live worker thread, no rings, no concurrency, no
+        // timing: just the exact functions a pass calls, over a fixed in-memory
+        // slot set with distinct classes (a total order with a unique result).
+        // The strict in-pass tick ordering itself is locked separately by
+        // `scheduler_orders_service_classes_descending`.
+        let class_a = Arc::new(AtomicServiceClass::new(ServiceClass::Idle));
+        let class_b = Arc::new(AtomicServiceClass::new(ServiceClass::Audible));
+
+        // Slots start mislabeled (both `Idle`) so the assertion proves refresh
+        // actually re-reads the node and detects the change, not that the slot
+        // happened to be seeded correctly.
+        let mut slots = vec![
+            Slot {
+                id: 0,
+                node: AtomicClassNode {
+                    class: Arc::clone(&class_a),
+                },
+                service_class: ServiceClass::Idle,
+                is_terminal: false,
+            },
+            Slot {
+                id: 1,
+                node: AtomicClassNode {
+                    class: Arc::clone(&class_b),
+                },
+                service_class: ServiceClass::Idle,
+                is_terminal: false,
+            },
+        ];
+
+        let mut needs_reorder = false;
+        refresh_service_classes(&mut slots, &mut needs_reorder);
+        assert!(
+            needs_reorder,
+            "refresh must flag a reorder when a node's live class differs from its slot"
+        );
+        assert_eq!(slots[1].service_class, ServiceClass::Audible);
+
+        let mut order: Vec<usize> = Vec::new();
+        recompute_slots_order(&slots, &mut order);
+        assert_eq!(
+            order,
+            vec![1, 0],
+            "Audible (slot 1) must be ordered before Idle (slot 0)"
+        );
+
+        // Dynamic swap: the consumer promotes A to Audible and demotes B to
+        // Idle. The next pass's refresh must pick this up and the reorder must
+        // flip — the property the flaky live-worker count test could never pin.
+        class_a.store(ServiceClass::Audible);
+        class_b.store(ServiceClass::Idle);
+        needs_reorder = false;
+        refresh_service_classes(&mut slots, &mut needs_reorder);
+        assert!(
+            needs_reorder,
+            "refresh must flag a reorder after the priority swap"
+        );
+        recompute_slots_order(&slots, &mut order);
+        assert_eq!(
+            order,
+            vec![0, 1],
+            "after the swap, A (now Audible) must lead B (now Idle)"
+        );
     }
 
     #[kithara::test]

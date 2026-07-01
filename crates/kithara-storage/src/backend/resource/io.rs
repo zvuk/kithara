@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
 use crate::{
     StorageError, StorageResult,
     backend::{resource::state::ResourceCore, traits::DriverIo},
@@ -130,6 +132,9 @@ impl<D: DriverIo> ResourceCore<D> {
                     state.available.remove(window.end..upper);
                 }
             }
+            self.inner
+                .available_snapshot
+                .store(Arc::new(state.available.clone()));
         }
         self.inner.gate.notify_all();
 
@@ -275,6 +280,50 @@ mod tests {
         assert_eq!(core.len_inner(), Some(11));
         assert!(core.contains_range_inner(0..11));
         assert!(!core.contains_range_inner(0..12));
+    }
+
+    /// An active resource's `contains_range_inner` must answer from a lock-free
+    /// availability snapshot. The committed-length fast path is intentionally
+    /// unavailable here: the resource is still active after `write_at_inner`.
+    fn run_active_contains_range_does_not_take_state_mutex<D>(core: &ResourceCore<D>)
+    where
+        D: DriverIo + Send + Sync + 'static,
+    {
+        core.write_at_inner(0, b"hello world")
+            .expect("active write must succeed");
+        assert_eq!(core.inner.driver.committed_len(), None);
+
+        let guard = core.inner.gate.lock();
+
+        let (tx, rx) = mpsc::channel();
+        let worker = core.clone();
+        thread::spawn(move || {
+            let covers = worker.contains_range_inner(0..11);
+            let _ = tx.send(covers);
+        });
+
+        let covers = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("active contains_range blocked on the state mutex");
+
+        drop(guard);
+
+        assert!(covers);
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[case::mem(Backend::Mem)]
+    #[case::mmap(Backend::Mmap)]
+    fn active_contains_range_does_not_take_state_mutex(#[case] backend: Backend) {
+        match backend {
+            Backend::Mem => run_active_contains_range_does_not_take_state_mutex(&open_mem()),
+            Backend::Mmap => {
+                let dir = tempfile::tempdir().expect("tempdir must be creatable");
+                run_active_contains_range_does_not_take_state_mutex(&open_mmap(
+                    dir.path().join("active.bin"),
+                ));
+            }
+        }
     }
 
     /// Fill `[0, len)` with `value` in multiple `write_at_inner` calls so a

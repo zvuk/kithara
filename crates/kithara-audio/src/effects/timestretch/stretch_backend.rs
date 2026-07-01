@@ -23,8 +23,8 @@ pub enum StretchBackendError {
 pub trait StretchBackend: Send + 'static {
     /// Drain the buffered tail at end of stream. One-shot: once the tail is
     /// drained, further calls (until the next `process` or `reset`) must
-    /// append nothing — the worker pulls `flush` in a loop until it yields
-    /// an empty append (`drain_effects`).
+    /// append nothing — EOF drain pulls `flush` in a loop until it yields
+    /// an empty append.
     ///
     /// # Errors
     /// Returns [`StretchBackendError::Process`] if the library fails to drain.

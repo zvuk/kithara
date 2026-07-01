@@ -606,17 +606,17 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
 
 /**
  * FFI-facing audio player. A thin facade over the platform-selected
- * [`Inner`] engine (`NativeInner` on Apple / Android, `WasmInner` on
+ * `Inner` engine (`NativeInner` on Apple / Android, `WasmInner` on
  * wasm32). Every exported method delegates straight to `inner`; the
  * facade only owns the object identity and (on native) the `Drop`
  * shutdown pulse. The JS control surface lives in
- * [`crate::web::surface`].
+ * `crate::web::surface`.
  */
 public protocol AudioPlayerProtocol: AnyObject, Sendable {
     
     /**
      * Advance to the next item in the queue, no-op if already on the
-     * last item or the queue is empty. Uses [`FfiTransition::None`]
+     * last item or the queue is empty. Uses [`crate::types::FfiTransition::None`]
      * for an immediate cut.
      */
     func advanceToNextItem() 
@@ -629,7 +629,7 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * # Errors
      *
      * Returns [`FfiError`] when the source URL cannot be resolved into
-     * a queue-owned [`kithara::play::Source`] — same failure surface as
+     * a queue-owned `kithara::play::Source` — same failure surface as
      * [`Self::insert`].
      */
     func append(item: AudioPlayerItem) throws 
@@ -640,14 +640,14 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * Currently playing item (if any). Resolves the queue's current
      * track id against the player's Swift-owned item registry so
      * callers get back the same `AudioPlayerItem` instance they passed
-     * to [`insert`].
+     * to [`Self::insert`].
      */
     func currentItem()  -> AudioPlayerItem?
     
     /**
      * Live playback position in seconds, or `0.0` if no item is loaded.
-     * Convenience over [`snapshot().current_time`] for hot-path UI
-     * updates.
+     * Convenience over [`Self::snapshot`] and
+     * [`FfiPlayerSnapshot::current_time`] for hot-path UI updates.
      */
     func currentTime()  -> Double
     
@@ -795,7 +795,7 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * `processor.process_key(key, salt)` on each decrypt.
      *
      * Items already in the queue keep their original key registry —
-     * re-call this method *before* [`insert`] for the new processor
+     * re-call this method *before* [`Self::insert`] for the new processor
      * to apply.
      */
     func setupHlsAes(processor: FfiKeyProcessor) 
@@ -812,7 +812,7 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     /**
      * Player-wide auth header. Stores `auth_token` under
      * `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
-     * every subsequent [`insert`]. Pass an empty string to clear.
+     * every subsequent [`Self::insert`]. Pass an empty string to clear.
      */
     func setupNetwork(authToken: String) 
     
@@ -846,11 +846,11 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
 }
 /**
  * FFI-facing audio player. A thin facade over the platform-selected
- * [`Inner`] engine (`NativeInner` on Apple / Android, `WasmInner` on
+ * `Inner` engine (`NativeInner` on Apple / Android, `WasmInner` on
  * wasm32). Every exported method delegates straight to `inner`; the
  * facade only owns the object identity and (on native) the `Drop`
  * shutdown pulse. The JS control surface lives in
- * [`crate::web::surface`].
+ * `crate::web::surface`.
  */
 open class AudioPlayer: AudioPlayerProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -915,7 +915,7 @@ public convenience init(config: FfiPlayerConfig) {
     
     /**
      * Advance to the next item in the queue, no-op if already on the
-     * last item or the queue is empty. Uses [`FfiTransition::None`]
+     * last item or the queue is empty. Uses [`crate::types::FfiTransition::None`]
      * for an immediate cut.
      */
 open func advanceToNextItem()  {try! rustCall() {
@@ -933,7 +933,7 @@ open func advanceToNextItem()  {try! rustCall() {
      * # Errors
      *
      * Returns [`FfiError`] when the source URL cannot be resolved into
-     * a queue-owned [`kithara::play::Source`] — same failure surface as
+     * a queue-owned `kithara::play::Source` — same failure surface as
      * [`Self::insert`].
      */
 open func append(item: AudioPlayerItem)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
@@ -956,7 +956,7 @@ open func crossfadeDuration() -> Float  {
      * Currently playing item (if any). Resolves the queue's current
      * track id against the player's Swift-owned item registry so
      * callers get back the same `AudioPlayerItem` instance they passed
-     * to [`insert`].
+     * to [`Self::insert`].
      */
 open func currentItem() -> AudioPlayerItem?  {
     return try!  FfiConverterOptionTypeAudioPlayerItem.lift(try! rustCall() {
@@ -968,8 +968,8 @@ open func currentItem() -> AudioPlayerItem?  {
     
     /**
      * Live playback position in seconds, or `0.0` if no item is loaded.
-     * Convenience over [`snapshot().current_time`] for hot-path UI
-     * updates.
+     * Convenience over [`Self::snapshot`] and
+     * [`FfiPlayerSnapshot::current_time`] for hot-path UI updates.
      */
 open func currentTime() -> Double  {
     return try!  FfiConverterDouble.lift(try! rustCall() {
@@ -1270,7 +1270,7 @@ open func setVolume(volume: Float)  {try! rustCall() {
      * `processor.process_key(key, salt)` on each decrypt.
      *
      * Items already in the queue keep their original key registry —
-     * re-call this method *before* [`insert`] for the new processor
+     * re-call this method *before* [`Self::insert`] for the new processor
      * to apply.
      */
 open func setupHlsAes(processor: FfiKeyProcessor)  {try! rustCall() {
@@ -1299,7 +1299,7 @@ open func setupHlsAesWithRule(rule: FfiKeyRule)  {try! rustCall() {
     /**
      * Player-wide auth header. Stores `auth_token` under
      * `AUTH_TOKEN_HEADER`; merged into per-item HTTP headers on
-     * every subsequent [`insert`]. Pass an empty string to clear.
+     * every subsequent [`Self::insert`]. Pass an empty string to clear.
      */
 open func setupNetwork(authToken: String)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_setup_network(
@@ -3346,7 +3346,7 @@ public func FfiConverterTypeFfiPlayerConfig_lower(_ value: FfiPlayerConfig) -> R
 
 
 /**
- * Snapshot of the player's current state, returned by [`AudioPlayer::snapshot`].
+ * Snapshot of the player's current state, returned by [`crate::player::AudioPlayer::snapshot`].
  *
  * Fields are `Option` when no current item is loaded — callers should
  * not assume defaults.
@@ -3798,7 +3798,7 @@ public func FfiConverterTypeFfiError_lower(_ value: FfiError) -> RustBuffer {
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
- * Typed item event dispatched through [`ItemObserver::on_event`].
+ * Typed item event dispatched through [`crate::observer::ItemObserver::on_event`].
  */
 
 public enum FfiItemEvent: Equatable, Hashable {
@@ -4049,7 +4049,7 @@ public func FfiConverterTypeFfiItemStatus_lower(_ value: FfiItemStatus) -> RustB
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
- * Typed player event dispatched through [`PlayerObserver::on_event`].
+ * Typed player event dispatched through [`crate::observer::PlayerObserver::on_event`].
  *
  * Replaces raw integer status codes with typed enums. Swift receives
  * a single callback with a discriminated union instead of 7 separate methods.
@@ -4443,22 +4443,42 @@ public func FfiConverterTypeFfiTimeControlStatus_lower(_ value: FfiTimeControlSt
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
- * FFI-friendly mirror of [`kithara_events::TrackStatus`].
+ * Track lifecycle state for a queued item.
  *
- * Mirrors the Queue-side track lifecycle: pending -> loading -> slow ->
- * loaded -> consumed, or `failed` on error. `Cancelled` covers
- * loads that were overridden by a later `select` of a different track.
+ * Emitted by the native engine as the queue loads, plays, consumes,
+ * fails, or cancels an item.
  */
 
 public enum FfiTrackStatus: Equatable, Hashable {
     
+    /**
+     * The item is known to the queue but loading has not started.
+     */
     case pending
+    /**
+     * The item is actively loading.
+     */
     case loading
+    /**
+     * Loading is progressing slowly enough to be user-visible.
+     */
     case slow
+    /**
+     * The item is loaded and ready for playback.
+     */
     case loaded
+    /**
+     * Loading or playback failed with a native error message.
+     */
     case failed(reason: String
     )
+    /**
+     * The item has already been consumed by playback.
+     */
     case consumed
+    /**
+     * Loading was cancelled by a newer queue selection.
+     */
     case cancelled
 
 
@@ -5103,19 +5123,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_fficipher_process_key() != 57446) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_advance_to_next_item() != 52946) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_advance_to_next_item() != 53698) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 58802) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 35753) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_duration() != 1470) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_current_item() != 17048) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_current_item() != 65110) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_current_time() != 18781) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_current_time() != 5603) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_eq_band_count() != 6883) {
@@ -5190,13 +5210,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 21146) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes() != 27668) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes() != 49387) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes_with_rule() != 46772) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_network() != 16415) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_network() != 65125) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_snapshot() != 4273) {

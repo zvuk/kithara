@@ -21,4 +21,7 @@ mod selection;
 mod state;
 mod types;
 
-pub use self::{state::Queue, types::Transition};
+pub use self::{
+    state::Queue,
+    types::{PlaybackView, Transition},
+};

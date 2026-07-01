@@ -13,6 +13,7 @@ use kithara_platform::{
 };
 use url::Url;
 
+#[cfg(not(target_arch = "wasm32"))]
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
 }
@@ -44,6 +45,7 @@ type RawByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>>>>;
 pub struct ByteStream {
     /// Response headers from the HTTP request that produced this stream.
     pub headers: Headers,
+    partial: bool,
     inner: RawByteStream,
 }
 
@@ -51,7 +53,23 @@ impl ByteStream {
     /// Create a new `ByteStream` from response headers and a raw body stream.
     #[must_use]
     pub fn new(headers: Headers, inner: RawByteStream) -> Self {
-        Self { headers, inner }
+        Self::with_partial(headers, inner, false)
+    }
+
+    /// Create a new `ByteStream` and record whether the response was partial.
+    #[must_use]
+    pub fn with_partial(headers: Headers, inner: RawByteStream, partial: bool) -> Self {
+        Self {
+            headers,
+            partial,
+            inner,
+        }
+    }
+
+    /// Whether this stream was produced by an HTTP partial-content response.
+    #[must_use]
+    pub fn is_partial(&self) -> bool {
+        self.partial
     }
 
     /// Consume the wrapper, returning just the raw byte stream.
@@ -80,6 +98,14 @@ impl Stream for ByteStream {
 pub trait Net: MaybeSend + MaybeSync {
     /// Get all bytes from a URL
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError>;
+
+    /// POST `body` to a URL and return the full response body.
+    async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> Result<Bytes, NetError>;
 
     /// Get a range of bytes from a URL
     async fn get_range(

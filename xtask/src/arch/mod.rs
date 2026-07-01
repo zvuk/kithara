@@ -172,6 +172,7 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
     }
 
     if diff.has_failures() {
+        report::print_ratchet_failures(&diff);
         bail!(
             "architectural ratchet failed: {} regression(s), {} new violation(s)",
             diff.regressions.len(),

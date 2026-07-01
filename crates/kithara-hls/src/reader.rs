@@ -8,7 +8,7 @@ use std::sync::{
 use kithara_events::{DeferredBus, EventBus, HlsEvent};
 use kithara_stream::{PrerollHint, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 
-use crate::coord::HlsCoord;
+use crate::stream::HlsCoord;
 
 /// Ring depth for the decode-core → shell event hand-off. The hooks
 /// resolve at most a segment-boundary and an initial-seek event per pass,

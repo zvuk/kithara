@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -8,18 +7,12 @@ use crate::key::ResourceKey;
 
 /// Per-`asset_root` eviction fanout: routes each evicted [`ResourceKey`] to the
 /// single subscriber registered for its `asset_root` (last-writer-wins).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct EvictionRouter {
     subscribers: Arc<DashMap<Arc<str>, mpsc::UnboundedSender<ResourceKey>>>,
 }
 
 impl EvictionRouter {
-    pub(crate) fn new() -> Self {
-        Self {
-            subscribers: Arc::new(DashMap::new()),
-        }
-    }
-
     /// Register `tx` to receive evictions under `asset_root`, returning an
     /// RAII guard that deregisters on drop. Last-writer-wins per root.
     pub(crate) fn subscribe(

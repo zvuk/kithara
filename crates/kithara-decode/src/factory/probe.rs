@@ -1,6 +1,12 @@
+use std::io::{Read, Seek, SeekFrom};
+
 use kithara_stream::{AudioCodec, ContainerFormat};
 
-use crate::error::{DecodeError, DecodeResult};
+use crate::{
+    error::{DecodeError, DecodeResult},
+    mp4::sniff_mp4_fragmented,
+    traits::BoxedSource,
+};
 
 /// Hints for codec probing.
 #[derive(Debug, Clone, Default)]
@@ -20,6 +26,70 @@ pub(super) fn resolve_codec_container(
     hint: &ProbeHint,
 ) -> DecodeResult<(AudioCodec, Option<ContainerFormat>)> {
     Ok((probe_codec(hint)?, hint.container))
+}
+
+/// Non-fatal byte sniff for inputs that genuinely arrive without container
+/// metadata; HLS should normally supply this through `MediaInfo`.
+pub(super) fn sniff_container_from_source(source: &mut BoxedSource) -> Option<ContainerFormat> {
+    const PREFIX_LEN: usize = 12;
+
+    if source.seek(SeekFrom::Start(0)).is_err() {
+        return None;
+    }
+
+    let mut prefix = [0; PREFIX_LEN];
+    let read = source.read(&mut prefix).ok()?;
+    if source.seek(SeekFrom::Start(0)).is_err() {
+        return None;
+    }
+
+    let container = sniff_container_from_prefix(&prefix[..read], source);
+    if source.seek(SeekFrom::Start(0)).is_err() {
+        return None;
+    }
+    container
+}
+
+fn sniff_container_from_prefix(prefix: &[u8], source: &mut BoxedSource) -> Option<ContainerFormat> {
+    if prefix.starts_with(b"fLaC") {
+        return Some(ContainerFormat::Flac);
+    }
+    if prefix.len() >= 12 && prefix.starts_with(b"RIFF") && prefix.get(8..12) == Some(b"WAVE") {
+        return Some(ContainerFormat::Wav);
+    }
+    if prefix.starts_with(b"OggS") {
+        return Some(ContainerFormat::Ogg);
+    }
+    if is_mp4_prefix(prefix) {
+        return sniff_mp4_fragmented(&mut **source).map(|fragmented| {
+            if fragmented {
+                ContainerFormat::Fmp4
+            } else {
+                ContainerFormat::Mp4
+            }
+        });
+    }
+    if is_adts_sync(prefix) {
+        return Some(ContainerFormat::Adts);
+    }
+    if prefix.starts_with(b"ID3") || is_mp3_sync(prefix) {
+        return Some(ContainerFormat::MpegAudio);
+    }
+    None
+}
+
+fn is_mp4_prefix(prefix: &[u8]) -> bool {
+    prefix
+        .get(4..8)
+        .is_some_and(|kind| kind == b"ftyp" || kind == b"styp")
+}
+
+fn is_adts_sync(prefix: &[u8]) -> bool {
+    prefix.len() >= 2 && prefix[0] == 0xff && (prefix[1] & 0xf0) == 0xf0
+}
+
+fn is_mp3_sync(prefix: &[u8]) -> bool {
+    prefix.len() >= 2 && prefix[0] == 0xff && (prefix[1] & 0xe0) == 0xe0
 }
 
 /// Probe codec from hints.
@@ -123,9 +193,19 @@ pub(super) fn codec_from_container(container: ContainerFormat) -> Option<AudioCo
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Cursor, Seek};
+
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::traits::BoxedSource;
+
+    fn hls_fixture(name: &str) -> Vec<u8> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/hls")
+            .join(name);
+        std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+    }
 
     #[kithara::test]
     fn test_probe_hint_default() {
@@ -148,6 +228,27 @@ mod tests {
         assert_eq!(hint.container, Some(ContainerFormat::Ogg));
         assert_eq!(hint.extension, Some("flac".into()));
         assert_eq!(hint.mime, Some("audio/flac".into()));
+    }
+
+    #[kithara::test]
+    fn sniff_container_detects_hls_fmp4_init_and_segment() {
+        let mut init_source: BoxedSource = Box::new(Cursor::new(hls_fixture("init-slq-a1.mp4")));
+        assert_eq!(
+            sniff_container_from_source(&mut init_source),
+            Some(ContainerFormat::Fmp4)
+        );
+        assert_eq!(init_source.stream_position().expect("source position"), 0);
+
+        let mut segment_source: BoxedSource =
+            Box::new(Cursor::new(hls_fixture("segment-1-slq-a1.m4s")));
+        assert_eq!(
+            sniff_container_from_source(&mut segment_source),
+            Some(ContainerFormat::Fmp4)
+        );
+        assert_eq!(
+            segment_source.stream_position().expect("source position"),
+            0
+        );
     }
 
     #[kithara::test]

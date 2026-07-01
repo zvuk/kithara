@@ -112,6 +112,12 @@ impl Resource {
         self.inner.duration()
     }
 
+    /// Decoded-ahead frontier of the underlying reader (always `>=` position).
+    #[must_use]
+    pub fn decoded_frontier(&self) -> Duration {
+        self.inner.decoded_frontier()
+    }
+
     /// Get a reference to the underlying `EventBus`.
     ///
     /// Useful for passing to downstream components that also publish events.

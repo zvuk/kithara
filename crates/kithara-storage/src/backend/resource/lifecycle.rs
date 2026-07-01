@@ -1,6 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Range, path::Path, sync::atomic::Ordering};
+use std::{
+    ops::Range,
+    path::Path,
+    sync::{Arc, atomic::Ordering},
+};
 
 use crate::{
     StorageResult,
@@ -31,6 +35,9 @@ impl<D: DriverIo> ResourceCore<D> {
                         state.available.remove(window.end..len);
                     }
                 }
+                self.inner
+                    .available_snapshot
+                    .store(Arc::new(state.available.clone()));
             }
         }
         self.inner.gate.notify_all();
@@ -54,8 +61,8 @@ impl<D: DriverIo> ResourceCore<D> {
         if let Some(committed_len) = self.inner.driver.committed_len() {
             return range.end <= committed_len;
         }
-        let state = self.inner.gate.lock();
-        range_covered_by(&state.available, &range)
+        let snap = self.inner.available_snapshot.load();
+        range_covered_by(&snap, &range)
     }
 
     pub(super) fn fail_inner(&self, reason: String) {

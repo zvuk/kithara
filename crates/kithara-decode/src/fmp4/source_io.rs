@@ -14,7 +14,7 @@ use crate::{
 fn map_stream_err(err: StreamReadError) -> DecodeError {
     match err {
         StreamReadError::Source(io_err) => DecodeError::from(io_err),
-        _ => DecodeError::InvalidData(format!("unknown stream read error: {err:?}")),
+        _ => DecodeError::parse("stream read", err),
     }
 }
 
@@ -72,11 +72,11 @@ impl SegmentReadState {
         if self.buffer.len() == total {
             return Ok(());
         }
-        self.buffer.ensure_len(total).map_err(|_| {
-            DecodeError::InvalidData(format!(
-                "byte-pool budget exhausted sizing segment buffer to {total} bytes"
-            ))
-        })?;
+        self.buffer
+            .ensure_len(total)
+            .map_err(|_| DecodeError::InvalidData {
+                detail: "byte-pool budget exhausted sizing segment buffer",
+            })?;
         self.buffer.truncate(total);
         Ok(())
     }
@@ -178,11 +178,9 @@ pub(crate) fn fill_segment_buffer(
                 if refresh_range(state, live) && state.sync_buffer_ready()? {
                     return Ok(FillStatus::Ready);
                 }
-                return Err(DecodeError::InvalidData(format!(
-                    "unexpected EOF before segment buffer filled: {} / {}",
-                    state.filled,
-                    state.total()
-                )));
+                return Err(DecodeError::InvalidData {
+                    detail: "unexpected EOF before segment buffer filled",
+                });
             }
         }
     }

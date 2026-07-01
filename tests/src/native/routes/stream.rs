@@ -14,7 +14,9 @@ use crate::{
     fixture_protocol::{HlsRouteKind, HttpErrorRule},
     hls_spec::HlsSpecError,
     hls_stream::GeneratedHls,
-    native::routes::range::{build_range_response, build_range_response_with_len},
+    native::routes::range::{
+        build_range_response, build_range_response_with_len, parse_range_header,
+    },
     test_server_state::TestServerState,
     token_store::is_token,
 };
@@ -133,6 +135,18 @@ async fn serve_media_segment(
                 fixture.match_http_error(HlsRouteKind::Segment, Some(variant), Some(segment))
             {
                 return inject_error(rule);
+            }
+            // Count size-probes (always live, no gate registration): every
+            // HEAD, and any single-byte ranged GET (`Range: bytes=0-0`). Lets a
+            // test observe the up-front estimation pass that probes every
+            // segment of every variant at `Audio::new()`.
+            match method {
+                SegmentMethod::Head => state.mark_size_probe(hls_spec, variant, segment),
+                SegmentMethod::Get => {
+                    if let Some((0, Some(1))) = parse_range_header(headers) {
+                        state.mark_size_probe(hls_spec, variant, segment);
+                    }
+                }
             }
             if matches!(method, SegmentMethod::Get) {
                 // Deterministic withhold gate (release-driven, not timer-driven):

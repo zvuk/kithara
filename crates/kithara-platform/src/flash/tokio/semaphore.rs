@@ -1,5 +1,6 @@
 use std::{
     future::Future,
+    panic::Location,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll, Waker},
@@ -8,6 +9,7 @@ use std::{
 use parking_lot::Mutex;
 
 use crate::flash::{
+    diag::PrimKind,
     flash_ambient,
     ids::{Backend, trace_native_from_ambient},
     system,
@@ -46,6 +48,7 @@ pub struct Semaphore {
 
 impl Semaphore {
     #[must_use]
+    #[track_caller]
     pub fn new(permits: usize) -> Self {
         Self {
             inner: Mutex::new(Inner {
@@ -53,7 +56,9 @@ impl Semaphore {
                 wakers: Vec::new(),
             }),
             backend: if flash_ambient() {
-                Backend::Engine(system::next_condvar_id())
+                let cvid = system::next_condvar_id();
+                system::describe_cvid(cvid, PrimKind::Semaphore, Location::caller());
+                Backend::Engine(cvid)
             } else {
                 Backend::Native
             },

@@ -19,6 +19,7 @@ use super::{
         AudioFormatInfo, AudioFormatListItem, AudioStreamBasicDescription,
         AudioStreamPacketDescription, UInt32,
     },
+    flac,
 };
 use crate::{
     codec::{CodecPriming, FrameCodec},
@@ -87,10 +88,10 @@ impl AppleCodec {
         // SAFETY: input/output formats are valid stack values; `converter`
         let status = unsafe { AudioConverterNew(&input_format, &output_format, &mut converter) };
         if status != Consts::noErr {
-            return Err(DecodeError::backend_msg(format!(
-                "AudioConverterNew failed: {}",
-                os_status_to_string(status)
-            )));
+            return Err(DecodeError::BackendStatus {
+                code: status,
+                op: "AudioConverterNew",
+            });
         }
 
         if let Some(cookie) = cookie.as_ref().filter(|c| !c.is_empty()) {
@@ -288,10 +289,10 @@ impl FrameCodec for AppleCodec {
             && status != Consts::kAudioConverterErr_NoDataNow
             && output_packets == 0
         {
-            return Err(DecodeError::backend_msg(format!(
-                "AudioConverterFillComplexBuffer failed: {}",
-                os_status_to_string(status)
-            )));
+            return Err(DecodeError::BackendStatus {
+                code: status,
+                op: "AudioConverterFillComplexBuffer",
+            });
         }
 
         let frames = output_packets;
@@ -309,10 +310,10 @@ impl FrameCodec for AppleCodec {
         // SAFETY: `self.converter` is a live handle.
         let status = unsafe { AudioConverterReset(self.converter) };
         if status != Consts::noErr {
-            return Err(DecodeError::backend_msg(format!(
-                "AudioConverterReset failed: {}",
-                os_status_to_string(status)
-            )));
+            return Err(DecodeError::BackendStatus {
+                code: status,
+                op: "AudioConverterReset",
+            });
         }
         self.input_state.clear();
         Ok(())
@@ -346,14 +347,7 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
             build_aac_input_format(track)
         }
         AudioCodec::Flac => {
-            if track.extra_data.len() < Consts::FLAC_STREAMINFO_LEN {
-                return Err(DecodeError::InvalidData(format!(
-                    "flac: STREAMINFO too short ({} bytes, need {})",
-                    track.extra_data.len(),
-                    Consts::FLAC_STREAMINFO_LEN
-                )));
-            }
-            let streaminfo = &track.extra_data[..Consts::FLAC_STREAMINFO_LEN];
+            let streaminfo = flac::streaminfo_body(&track.extra_data)?;
             let max_block = u32::from(u16::from_be_bytes([streaminfo[2], streaminfo[3]]))
                 .max(Consts::AAC_FRAMES_PER_PACKET);
 
@@ -403,9 +397,9 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
         }
         AudioCodec::Alac => {
             if track.extra_data.is_empty() {
-                return Err(DecodeError::InvalidData(
-                    "alac: missing magic cookie (kAudioFilePropertyMagicCookieData)".to_string(),
-                ));
+                return Err(DecodeError::InvalidData {
+                    detail: "alac: missing magic cookie (kAudioFilePropertyMagicCookieData)",
+                });
             }
             let asbd = AudioStreamBasicDescription {
                 mSampleRate: f64::from(track.sample_rate),
@@ -420,17 +414,15 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
                 frames_per_packet: 4096,
             })
         }
-        other => Err(DecodeError::UnsupportedCodec(other)),
+        other => Err(DecodeError::UnsupportedCodec { codec: other }),
     }
 }
 
 fn parse_pcm_extra_data(extra: &[u8]) -> DecodeResult<AudioStreamBasicDescription> {
     if extra.len() < size_of::<AudioStreamBasicDescription>() {
-        return Err(DecodeError::InvalidData(format!(
-            "pcm: extra_data too short ({} bytes, need {})",
-            extra.len(),
-            size_of::<AudioStreamBasicDescription>()
-        )));
+        return Err(DecodeError::InvalidData {
+            detail: "pcm: extra_data too short for AudioStreamBasicDescription",
+        });
     }
     let mut asbd = AudioStreamBasicDescription::default();
     // SAFETY: `AudioStreamBasicDescription` is `#[repr(C)]` POD; length
@@ -525,20 +517,18 @@ fn derive_aac_asbd_from_esds(
         )
     };
     if status != Consts::noErr || list_bytes == 0 {
-        return Err(DecodeError::backend_msg(format!(
-            "AudioFormatGetPropertyInfo(FormatList) failed: {} (size={}, esds_len={})",
-            os_status_to_string(status),
-            list_bytes,
-            esds.len()
-        )));
+        return Err(DecodeError::BackendStatus {
+            code: status,
+            op: "AudioFormatGetPropertyInfo(FormatList)",
+        });
     }
 
     let item_size = size_of::<AudioFormatListItem>();
     let item_count = usize::try_from(list_bytes)? / item_size;
     if item_count == 0 {
-        return Err(DecodeError::backend_msg(format!(
-            "FormatList returned {list_bytes} bytes (< 1 item)"
-        )));
+        return Err(DecodeError::InvalidData {
+            detail: "FormatList returned fewer than one item",
+        });
     }
     let mut items: Vec<AudioFormatListItem> = vec![AudioFormatListItem::default(); item_count];
     let mut io_size = list_bytes;
@@ -553,17 +543,16 @@ fn derive_aac_asbd_from_esds(
         )
     };
     if status != Consts::noErr {
-        return Err(DecodeError::backend_msg(format!(
-            "AudioFormatGetProperty(FormatList) failed: {}",
-            os_status_to_string(status)
-        )));
+        return Err(DecodeError::BackendStatus {
+            code: status,
+            op: "AudioFormatGetProperty(FormatList)",
+        });
     }
 
     let returned = usize::try_from(io_size)? / item_size;
-    let chosen = items
-        .first()
-        .copied()
-        .ok_or_else(|| DecodeError::backend_msg("FormatList returned zero items"))?;
+    let chosen = items.first().copied().ok_or(DecodeError::InvalidData {
+        detail: "FormatList returned zero items",
+    })?;
 
     tracing::debug!(
         format_id = format!("{:#010x}", chosen.mASBD.mFormatID),
@@ -587,23 +576,14 @@ fn derive_aac_asbd_from_esds(
 /// APIs accept as a magic cookie. Layout documented in
 /// `kithara-decode/CONTEXT.md` "Apple AAC input format (ESDS rationale)".
 fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
-    let too_long = |scope: &str, n: usize| {
-        DecodeError::InvalidData(format!(
-            "aac: {scope} too long for short-form ESDS size field ({n} > 127)"
-        ))
+    const TOO_LONG: DecodeError = DecodeError::InvalidData {
+        detail: "aac: descriptor too long for short-form ESDS size field",
     };
-    let dsi_body: u8 = asc
-        .len()
-        .try_into()
-        .map_err(|_| too_long("ASC", asc.len()))?;
+    let dsi_body: u8 = asc.len().try_into().map_err(|_| TOO_LONG)?;
     let dcd_body_len = 1 + 1 + 3 + 4 + 4 + 2 + asc.len();
-    let dcd_body: u8 = dcd_body_len
-        .try_into()
-        .map_err(|_| too_long("DecoderConfigDescriptor", dcd_body_len))?;
+    let dcd_body: u8 = dcd_body_len.try_into().map_err(|_| TOO_LONG)?;
     let esd_body_len = 2 + 1 + 2 + dcd_body_len + 3;
-    let esd_body: u8 = esd_body_len
-        .try_into()
-        .map_err(|_| too_long("ES_Descriptor", esd_body_len))?;
+    let esd_body: u8 = esd_body_len.try_into().map_err(|_| TOO_LONG)?;
 
     // NOTE: ES_Descriptor chain; field-by-field layout in CONTEXT.md "Apple AAC input format".
     let header: [u8; 22] = [
@@ -763,6 +743,77 @@ mod priming_table_tests {
         assert_eq!(
             apple_codec_priming(AudioCodec::Flac),
             CodecPriming::default()
+        );
+    }
+}
+
+#[cfg(test)]
+mod aac_lc_decode_tests {
+    use kithara_bufpool::PcmPool;
+    use kithara_platform::time::Duration;
+    use kithara_stream::AudioCodec;
+    use kithara_test_utils::kithara;
+
+    use super::AppleCodec;
+    use crate::{
+        codec::FrameCodec,
+        demuxer::TrackInfo,
+        fmp4::parsing::{CodecConfig, parse_init, parse_segment_frames},
+    };
+
+    fn read_fixture(name: &str) -> Vec<u8> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/hls")
+            .join(name);
+        std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+    }
+
+    /// RED (device repro): the Apple AAC-LC decoder must turn real fMP4
+    /// access units into finite PCM with no symphonia fallback compiled in
+    /// — the exact decode path the size-reduced iOS framework exercises.
+    /// The module already lives under the `apple` + macOS/iOS gate, so no
+    /// per-item `cfg` is needed.
+    #[kithara::test]
+    fn apple_aac_lc_decode_produces_finite_pcm() {
+        let init_bytes = read_fixture("init-slq-a1.mp4");
+        let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
+        assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
+        let extra_data = match &init.config {
+            CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
+        };
+        let track = TrackInfo {
+            extra_data,
+            codec: init.codec,
+            sample_rate: init.sample_rate,
+            channels: init.channels,
+            duration: None,
+            gapless: init.gapless,
+        };
+
+        let seg = read_fixture("segment-1-slq-a1.m4s");
+        let ranges: Vec<(usize, usize)> = parse_segment_frames(&init, &seg)
+            .expect("BUG: parse segment frames")
+            .iter()
+            .map(|f| (f.offset, f.size))
+            .collect();
+        assert!(!ranges.is_empty(), "segment yielded no AAC frames");
+
+        let pool = PcmPool::default();
+        let mut codec =
+            AppleCodec::open_with_config(&track, false).expect("BUG: open Apple AAC-LC codec");
+        let mut pcm = Vec::new();
+        for &(offset, size) in &ranges {
+            let mut buf = pool.get();
+            codec
+                .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
+                .expect("BUG: decode Apple AAC-LC frame");
+            pcm.extend_from_slice(&buf[..]);
+        }
+
+        assert!(!pcm.is_empty(), "Apple AAC-LC decode produced no PCM");
+        assert!(
+            pcm.iter().all(|sample| sample.is_finite()),
+            "Apple AAC-LC decode produced non-finite PCM",
         );
     }
 }

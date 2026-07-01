@@ -157,10 +157,11 @@ fn wrap_with_cancel(byte_stream: ByteStream, cancel: CancelGroup) -> InnerStream
                 return None;
             }
             let chunk = tokio::select! {
+                biased;
                 () = state.cancel.cancelled() => {
                     state.done = true;
                     return Some((Err(NetError::Cancelled), state));
-                }
+                },
                 c = state.stream.next() => c,
             };
             chunk.map(|item| (item, state))

@@ -26,4 +26,7 @@ mod kithara_queue {
 
     #[path = "../kithara_queue/real_playlist.rs"]
     mod real_playlist;
+
+    #[path = "../kithara_queue/zvuk_prod_aac_to_flac_switch.rs"]
+    mod zvuk_prod_aac_to_flac_switch;
 }

@@ -120,7 +120,7 @@ async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
 
     let hls_config = HlsConfig::for_url(url)
         .events(bus)
-        .store(StoreOptions::default_builder().is_ephemeral(true).build())
+        .store(StoreOptions::builder().is_ephemeral(true).build())
         .with_abr_options(AbrOptions {
             mode: auto(0),
             ..Default::default()

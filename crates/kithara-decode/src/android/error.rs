@@ -39,7 +39,9 @@ impl AndroidBackendError {
 impl From<AndroidBackendError> for DecodeError {
     fn from(err: AndroidBackendError) -> Self {
         match err {
-            AndroidBackendError::UnsupportedCodec { codec } => DecodeError::UnsupportedCodec(codec),
+            AndroidBackendError::UnsupportedCodec { codec } => {
+                DecodeError::UnsupportedCodec { codec }
+            }
             _ => DecodeError::backend(err),
         }
     }

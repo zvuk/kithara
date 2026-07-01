@@ -18,6 +18,9 @@
 /// Participant credit accounting (dedicated pacers, bridged waits, blocking
 /// pacer bracket) split out of the scheduler — see `credit.rs`.
 pub(super) mod credit;
+/// Hang-dump rendering: the `fmt::Display for FlashInner` snapshot of counters,
+/// quiescence pinners, parked waiters and engine primitives — see `dump.rs`.
+pub(super) mod dump;
 /// Per-task gate FSM ([`gate::TaskGate`]) — the waker-interception state
 /// machine behind [`crate::flash::Participating`].
 pub(super) mod gate;
@@ -36,12 +39,12 @@ pub(super) mod sched;
 pub(super) mod wake;
 
 pub(in crate::flash) use inner::{
-    Clock, Core, CvId, FLASH, FlashInner, Registry, SyncHolder, WaiterId,
+    Clock, Core, CvDesc, CvId, FLASH, FlashInner, Registry, SyncHolder, WaiterId,
 };
 pub(in crate::flash) use pace::{real_io_enter, real_io_exit};
 pub(in crate::flash) use sched::{
-    AsyncHandle, async_acquire, cancel_async_wait, cancel_yield, dump, next_condvar_id,
-    park_timed_unparkable, register_channel_async, register_condvar_timed,
+    AsyncHandle, async_acquire, cancel_async_wait, cancel_yield, describe_cvid, dump,
+    next_condvar_id, park_timed_unparkable, register_channel_async, register_condvar_timed,
     register_condvar_untimed, register_notify_async, register_sleep_async, register_yield_async,
     signal_channel, signal_condvar, signal_notify, sleep_timed, unpark, yield_until_advance,
 };

@@ -244,4 +244,10 @@ pub fn set_ambient_for_spawn(_on: bool) -> AmbientScope {
 }
 
 /// No engine to report without the `flash` feature (or on wasm).
-pub fn dump_to_stderr(_context: &str) {}
+#[must_use]
+pub fn hang_dump(_context: &str) -> String {
+    String::new()
+}
+
+/// No engine to report without the `flash` feature (or on wasm).
+pub fn log_hang_dump(_context: &str) {}

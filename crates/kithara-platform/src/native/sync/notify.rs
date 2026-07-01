@@ -1,1 +1,1 @@
-pub use tokio_with_wasm::alias::sync::Notify;
+pub use crate::native::tokio::backend::sync::Notify;

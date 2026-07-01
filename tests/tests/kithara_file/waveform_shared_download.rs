@@ -79,12 +79,12 @@ async fn waveform_and_player_share_one_get() {
     let server = TestHttpServer::new(app).await;
     let url = server.url("/audio.wav");
 
-    let store = Arc::new(AssetStoreBuilder::new().ephemeral(true).build());
+    let store = Arc::new(AssetStoreBuilder::default().ephemeral(true).build());
 
     // Waveform analysis consumer (whole-file) of the shared store.
     let waveform_cfg = ResourceConfig::for_src(url.as_str())
         .expect("waveform url")
-        .file_asset_store(Arc::clone(&store))
+        .asset_store(Arc::clone(&store))
         .build();
 
     // Player consumer of the same URL through the same shared store. Built

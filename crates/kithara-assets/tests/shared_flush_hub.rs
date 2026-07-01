@@ -22,7 +22,7 @@ fn shared_hub_registers_three_indexes_per_store() {
     let hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     assert_eq!(hub.live_source_count(), 0, "fresh hub has no sources");
 
-    let _store_a = AssetStoreBuilder::new()
+    let _store_a = AssetStoreBuilder::default()
         .root_dir(dir.path().join("a"))
         .flush_hub(hub.clone())
         .build();
@@ -33,7 +33,7 @@ fn shared_hub_registers_three_indexes_per_store() {
         "one disk store registers Pins+Lru+Availability with the hub"
     );
 
-    let _store_b = AssetStoreBuilder::new()
+    let _store_b = AssetStoreBuilder::default()
         .root_dir(dir.path().join("b"))
         .flush_hub(hub.clone())
         .build();
@@ -50,11 +50,11 @@ fn shared_hub_gcs_dropped_store_indexes() {
     let dir = tempdir().unwrap();
     let hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
 
-    let store_a = AssetStoreBuilder::new()
+    let store_a = AssetStoreBuilder::default()
         .root_dir(dir.path().join("a"))
         .flush_hub(hub.clone())
         .build();
-    let store_b = AssetStoreBuilder::new()
+    let store_b = AssetStoreBuilder::default()
         .root_dir(dir.path().join("b"))
         .flush_hub(hub.clone())
         .build();
@@ -97,11 +97,11 @@ fn shared_hub_flush_now_persists_every_store() {
     let dir = tempdir().unwrap();
     let hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
 
-    let store_a = AssetStoreBuilder::new()
+    let store_a = AssetStoreBuilder::default()
         .root_dir(dir.path().join("a"))
         .flush_hub(hub.clone())
         .build();
-    let store_b = AssetStoreBuilder::new()
+    let store_b = AssetStoreBuilder::default()
         .root_dir(dir.path().join("b"))
         .flush_hub(hub.clone())
         .build();

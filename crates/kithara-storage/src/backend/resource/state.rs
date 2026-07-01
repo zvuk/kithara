@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 
+use arc_swap::ArcSwap;
 use kithara_platform::{CancelToken, sync::CondvarGate};
 use rangemap::RangeSet;
 
@@ -31,6 +32,7 @@ pub(super) struct Inner<D: DriverIo> {
     /// taking the state mutex.
     pub(super) committed: AtomicBool,
     pub(super) cancel: CancelToken,
+    pub(super) available_snapshot: ArcSwap<RangeSet<u64>>,
     /// Guarded readiness state plus its condvar, unified in the shared
     /// [`CondvarGate`] — the gold-standard single-lock event-driven wait the
     /// project's other readiness gates are modelled on. `lock()` guards
@@ -101,17 +103,21 @@ impl<D: Driver> ResourceCore<D> {
         observer: Option<Arc<dyn AvailabilityObserver>>,
     ) -> StorageResult<Self> {
         let (driver, init) = D::open(opts)?;
+        let available = init.available;
+        let final_len = init.final_len;
+        let is_committed = init.is_committed;
         Ok(Self {
             inner: Arc::new(Inner {
                 cancel,
                 driver,
                 observer,
-                committed: AtomicBool::new(init.is_committed),
+                committed: AtomicBool::new(is_committed),
+                available_snapshot: ArcSwap::from_pointee(available.clone()),
                 gate: CondvarGate::new(CommonState {
                     failed: None,
-                    final_len: init.final_len,
-                    available: init.available,
-                    committed: init.is_committed,
+                    final_len,
+                    available,
+                    committed: is_committed,
                 }),
             }),
         })

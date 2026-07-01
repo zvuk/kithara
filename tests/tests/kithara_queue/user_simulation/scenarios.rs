@@ -100,7 +100,7 @@ pub(crate) fn seek_backward_after_natural_eof_repro() -> Vec<Action> {
 /// late-position path with substantial accumulated state.
 pub(crate) fn long_play_then_seek_backward() -> Vec<Action> {
     vec![
-        Action::PlayFor(Duration::from_secs(30)),
+        Action::RenderFor(Duration::from_secs(30)),
         Action::SeekRatio(0.15),
         Action::PlayFor(Duration::from_secs(3)),
     ]
@@ -111,7 +111,7 @@ pub(crate) fn long_play_then_seek_backward() -> Vec<Action> {
 /// triggers Bug #5 (false EOF) in the user's manual repro.
 pub(crate) fn long_play_then_seek_forward() -> Vec<Action> {
     vec![
-        Action::PlayFor(Duration::from_secs(30)),
+        Action::RenderFor(Duration::from_secs(30)),
         Action::SeekRatio(0.85),
         Action::PlayFor(Duration::from_secs(3)),
     ]

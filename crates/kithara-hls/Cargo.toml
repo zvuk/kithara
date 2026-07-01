@@ -13,15 +13,17 @@ categories = ["multimedia::audio", "network-programming"]
 workspace = true
 
 [dependencies]
-kithara-abr = { workspace = true }
+kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-events = { workspace = true, features = ["hls"] }
 kithara-drm = { workspace = true }
-kithara-net = { workspace = true }
-kithara-stream = { workspace = true }
+kithara-net = { workspace = true, default-features = false }
+kithara-stream = { workspace = true, default-features = false }
 kithara-storage = { workspace = true }
+arc-swap = { workspace = true }
 bytes = { workspace = true }
+bitflags = { workspace = true }
 dashmap = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
@@ -38,19 +40,48 @@ num-traits = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [features]
-default = []
+default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
 probe = []
+# HTTP backend forwarding to every kithara-net-reaching dep.
+client-reqwest = [
+    "kithara-net/client-reqwest",
+    "kithara-stream/client-reqwest",
+    "kithara-events/client-reqwest",
+    "kithara-abr/client-reqwest",
+]
+client-wreq = [
+    "kithara-net/client-wreq",
+    "kithara-stream/client-wreq",
+    "kithara-events/client-wreq",
+    "kithara-abr/client-wreq",
+]
+tls-rustls = [
+    "kithara-net/tls-rustls",
+    "kithara-stream/tls-rustls",
+    "kithara-events/tls-rustls",
+    "kithara-abr/tls-rustls",
+]
+tls-native = [
+    "kithara-net/tls-native",
+    "kithara-stream/tls-native",
+    "kithara-events/tls-native",
+    "kithara-abr/tls-native",
+]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
 aes = { workspace = true }
 cbc = { workspace = true }
 kithara-hls = { path = ".", default-features = false, features = ["probe"] }
-kithara-net = { workspace = true, features = ["probe"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
+kithara-net = { workspace = true, default-features = false, features = [
+    "probe",
+    "client-reqwest",
+    "tls-rustls",
+] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 tempfile = { workspace = true }
 serial_test = { workspace = true }
 wasm-bindgen-test = { workspace = true }

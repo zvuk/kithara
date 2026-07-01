@@ -16,7 +16,12 @@ default = ["hang"]
 flash = ["kithara-platform/flash"]
 hang = ["dep:serde", "dep:serde_json"]
 mock = ["dep:unimock"]
-probe = ["dep:usdt"]
+probe = ["dep:usdt", "tracing-subscriber/env-filter"]
+# HTTP backend forwarding (kithara-net reached via kithara-events).
+client-reqwest = ["kithara-events/client-reqwest"]
+client-wreq = ["kithara-events/client-wreq"]
+tls-rustls = ["kithara-events/tls-rustls"]
+tls-native = ["kithara-events/tls-native"]
 
 [dependencies]
 kithara-events = { workspace = true, features = ["downloader"] }
@@ -31,11 +36,13 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 unimock = { workspace = true, optional = true }
 
+[dev-dependencies]
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 tracing-wasm = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
 usdt = { workspace = true, optional = true }
 backtrace = { workspace = true }
 tokio = { workspace = true, features = ["time", "rt"] }

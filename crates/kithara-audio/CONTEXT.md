@@ -285,7 +285,7 @@ There are two distinct epoch atomics: the **timeline** seek epoch, bumped by the
 - **Node Architecture**: A track is represented by a single `Node` implementation (`DecoderNode`), stored in the shared scheduler as `Box<dyn Node>` through `runtime/`.
 - **Operators vs Nodes**: Audio effects are implemented as operators (`AudioEffect`) that are called directly within the track's `Node`. We do not use separate `Node`s or ring buffers between effects.
 - **Chain order**: The effect chain is `[..pre, Resampler, ..custom]`. With `AudioConfig::stretch` set (tempo mode), a source-domain `TimeStretchProcessor` occupies the `pre` slot before the host resampler and drives the resampler's rate atomic (`1.0` when key-locked, else `speed`). Without it, the chain is resampler-first and `playback_rate` drives the resampler "vinyl" speed+pitch path.
-- **EOF drain**: At true EOF the whole chain is drained once (`drain_effects`): each stage is flushed to exhaustion after the upstream stage's outputs pass through it, so a buffering effect's multi-pull tail is never truncated. `StreamAudioSource` parks the drained tail in a one-shot `eof_drain_queue` and emits one chunk per call; `EndOfStream` fires once on completion, not at source exhaustion.
+- **EOF drain**: At true EOF `StreamAudioSource` drains the effect chain incrementally, one emitted chunk per FSM step: each stage is flushed to exhaustion only after the upstream stage's outputs pass through it, so a buffering effect's multi-pull tail is never truncated and the producer core does not allocate a drain queue. `EndOfStream` fires once on completion, not at source exhaustion.
 
 ### Coordinate spaces
 

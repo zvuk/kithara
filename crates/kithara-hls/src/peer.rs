@@ -23,7 +23,7 @@ use kithara_stream::{
 };
 use kithara_test_utils::kithara;
 
-use crate::{coord::HlsCoord, ids::duration_prefix, variant::PlanCtx};
+use crate::{config::SizeProbeMethod, ids::duration_prefix, stream::HlsCoord, variant::PlanCtx};
 
 struct HlsTrackState {
     coord: Arc<HlsCoord>,
@@ -39,6 +39,9 @@ struct HlsTrackState {
     /// Mirrors `HlsConfig::look_ahead_bytes` — capped idle prefetch
     /// budget threaded into every `PlanCtx` constructed for `dispatch`.
     look_ahead_bytes: Option<u64>,
+    /// Effective media-segment cap used for small ephemeral stores.
+    look_ahead_segments: Option<usize>,
+    size_probe_method: SizeProbeMethod,
     /// Target segment of an in-flight forward seek, held until the reader's
     /// physical byte cursor catches up to it. `coord.position()` only
     /// advances when the reader actually reads at the new offset, so right
@@ -125,8 +128,14 @@ impl HlsPeer {
         eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
         prefetch_budget: usize,
         look_ahead_bytes: Option<u64>,
+        look_ahead_segments: Option<usize>,
+        size_probe_method: SizeProbeMethod,
     ) {
         let reader_advanced = Arc::clone(&self.reader_advanced);
+        // Let the `on_slow` hook wake this peer's `poll_next` when an in-flight
+        // fetch stalls past `soft_timeout`, so `reconcile_escape` runs without
+        // waiting for an incidental reader-progress wake.
+        coord.set_peer_wake(Arc::clone(&self.reader_advanced));
         let cancel = coord.cancel.clone();
 
         let initial_seg = coord
@@ -140,8 +149,9 @@ impl HlsPeer {
                 scope: coord.scope.clone(),
                 headers: coord.headers.clone(),
                 seek_epoch: self.seek_obs.epoch(),
-                ready: coord.ready_gate(),
-                worker_wake: coord.worker_wake_cell(),
+                signal: coord.signal(),
+                size_probe_method,
+                look_ahead_segments,
             };
             active.rebuild(&plan_ctx, initial_seg);
         }
@@ -157,6 +167,8 @@ impl HlsPeer {
                 eviction_rx,
                 prefetch_budget,
                 look_ahead_bytes,
+                look_ahead_segments,
+                size_probe_method,
                 last_seek_epoch: 0,
                 seek_settle_floor: None,
                 reader_segment: Arc::clone(&self.reader_segment),
@@ -306,11 +318,19 @@ impl Peer for HlsPeer {
                 .broadcast_eviction(&outcome.ctx, &key, outcome.seg_at_reader);
         }
 
-        let cmds = outcome
+        let mut cmds = outcome
             .coord
-            .active()
-            .map(|active| active.dispatch(&outcome.ctx, outcome.ctx.prefetch_budget))
-            .unwrap_or_default();
+            .dispatch_pending_size_demands(&outcome.ctx, outcome.ctx.prefetch_budget);
+        let remaining = outcome.ctx.prefetch_budget.saturating_sub(cmds.len());
+        if remaining > 0 {
+            cmds.extend(
+                outcome
+                    .coord
+                    .active()
+                    .map(|active| active.dispatch(&outcome.ctx, remaining))
+                    .unwrap_or_default(),
+            );
+        }
         if cmds.is_empty() {
             return Poll::Pending;
         }
@@ -366,9 +386,16 @@ impl HlsPeer {
 
         state.apply_seek_change(&coord, &ctx);
         let seg_at_reader = state.apply_boundary_crossing(&coord, &ctx);
+        // Reconcile the ABR escape flag under the guard (atomic-only). A rising
+        // edge wants a controller re-tick, which reads `peer.progress()` and
+        // re-locks `state` — so defer it until after `drop(guard)`.
+        let needs_retick = coord.reconcile_escape(seg_at_reader);
         let evictions = state.drain_evictions();
         drop(guard);
         coord.sync_abr_lock();
+        if needs_retick {
+            coord.abr.reevaluate();
+        }
 
         PollPhase::Continue(Box::new(PollOutcome {
             coord,
@@ -406,15 +433,16 @@ impl HlsTrackState {
         let variant_now = coord.variant_index();
         let variant_changed = self.reader_variant != variant_now;
         self.reader_variant = variant_now;
-        let found = coord.find_at_offset(pos);
-        let resolved = found.map_or_else(|| u32::try_from(prev).unwrap_or(0), |(idx, _, _)| idx);
+        let demand_segment = coord.demand_segment_at_offset(pos);
+        let resolved = demand_segment.unwrap_or_else(|| u32::try_from(prev).unwrap_or(0));
         // Forward-seek settle floor: while the reader's physical byte cursor
         // still lags behind a just-applied seek target, ignore this poll's
         // stale-low segment. `seek_epoch_reset` already aimed `reader_segment`
         // + the fetch plan at the target; without this guard the lagging
         // `resolved` re-keys the cursor backward and `rebuild`s the prefix
         // (re-downloading seg 0..target). Only drop the floor once the reader
-        // *physically resolves* (`found.is_some()`) to a segment at/after it —
+        // *physically resolves* (`demand_segment.is_some()`) to a segment
+        // at/after it —
         // a `None` lookup falls back to `prev` and must NOT be read as "caught
         // up", or a later valid low lookup re-opens the race.
         if let Some(floor) = self.seek_settle_floor {
@@ -431,9 +459,9 @@ impl HlsTrackState {
             if matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_))) {
                 coord.commit_variant_switch_at_segment(ctx, floor);
             }
-            if found.is_some_and(|(idx, _, _)| idx >= floor) {
+            if demand_segment.is_some_and(|idx| idx >= floor) {
                 self.seek_settle_floor = None;
-            } else if let Some((landing, _, _)) = found
+            } else if let Some(landing) = demand_segment
                 && floor.saturating_sub(landing) == 1
             {
                 // Decoder-backoff landing, NOT a lagging cursor. The seek
@@ -468,12 +496,17 @@ impl HlsTrackState {
             self.reader_segment.store(resolved_us, Ordering::Release);
         }
         let manual_mode = matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_)));
-        let switch_landed = if boundary_crossed || manual_mode {
-            coord.commit_variant_switch(ctx, resolved)
-        } else if let Some(rescue_seg) = coord.urgent_rescue_boundary(resolved) {
-            coord.commit_variant_switch(ctx, rescue_seg)
-        } else {
-            false
+        let switch_landed = match coord.urgent_rescue_boundary(resolved) {
+            Some(rescue_seg) => coord.commit_variant_switch(ctx, rescue_seg),
+            // Reader pinned at a clean boundary on a non-delivering segment with
+            // a pending switch — the current variant cannot cross the boundary,
+            // so commit the target AT the stalled segment instead of waiting for
+            // a reader advance that can never happen (startup/stall livelock).
+            None if coord.stalled_escape(resolved) => {
+                coord.commit_variant_switch_at_segment(ctx, resolved)
+            }
+            None if boundary_crossed || manual_mode => coord.commit_variant_switch(ctx, resolved),
+            None => false,
         };
         let prev_u32 = u32::try_from(prev).unwrap_or(0);
         let discontinuous_advance = boundary_crossed && resolved != prev_u32.saturating_add(1);
@@ -493,7 +526,7 @@ impl HlsTrackState {
         // pre-switch range from `v_old`).
         let aligned_rescue = variant_changed
             && !switch_landed
-            && found.is_some()
+            && demand_segment.is_some()
             && coord.active().is_some_and(|a| a.served_from() == 0);
         if aligned_rescue {
             if let Some(active) = coord.active() {
@@ -523,7 +556,7 @@ impl HlsTrackState {
             return;
         }
         self.last_seek_epoch = cur_seek;
-        coord.reset_for_seek();
+        coord.prepare_for_seek();
         self.seek_epoch_reset(coord, ctx);
     }
 
@@ -545,8 +578,9 @@ impl HlsTrackState {
             prefetch_budget: self.prefetch_budget,
             seek_epoch: self.seek_obs.epoch(),
             look_ahead_bytes: self.look_ahead_bytes,
-            ready: self.coord.ready_gate(),
-            worker_wake: self.coord.worker_wake_cell(),
+            look_ahead_segments: self.look_ahead_segments,
+            signal: self.coord.signal(),
+            size_probe_method: self.size_probe_method,
         }
     }
 

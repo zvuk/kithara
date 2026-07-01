@@ -1,28 +1,37 @@
 use std::sync::{
     Arc, Barrier, OnceLock,
-    atomic::{AtomicU64, AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering},
 };
 
 use kithara_assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, WriteSide};
 use kithara_drm::DecryptContext;
-use kithara_platform::{CancelToken, sync::CondvarGate, time::Duration};
+use kithara_platform::{CancelToken, sync::ThreadGate, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ReadOutcome, SeekControl, SeekObserve, SeekState, SourceError, SourcePhase, StreamError,
+    AudioCodec, ContainerFormat, ReadOutcome, SeekControl, SeekObserve, SeekState, SourceError,
+    SourcePhase, StreamError,
 };
 use kithara_test_utils::kithara;
 use url::Url;
 
 use super::{
-    HlsVariant, InitEntry, PlanCtx, PlannedFetch, SegmentActivateParams, SegmentContent,
-    SegmentEntry, SegmentSlotState, VariantInit, VariantParts,
+    HlsVariant, PlanCtx, SegmentActivateParams, SizeDemand, VariantParts, segment_placeholder_size,
 };
-use crate::playlist::{PlaylistState, VariantState};
+use crate::{
+    config::SizeProbeMethod,
+    ids::SegmentIndex,
+    playlist::{PlaylistState, SegmentState, VariantState},
+    segment::{
+        InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
+        SegmentSlotState,
+    },
+    signal::SizeSignal,
+};
 
 fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     let cancel = CancelToken::never();
     let backend = Arc::new(
-        AssetStoreBuilder::new()
+        AssetStoreBuilder::default()
             .ephemeral(true)
             .cancel(cancel.clone())
             .build(),
@@ -33,41 +42,58 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
         scope: backend.scope("test"),
         seek_epoch: 0,
         look_ahead_bytes: None,
+        look_ahead_segments: None,
         headers: None,
-        ready: Arc::new(CondvarGate::<u64>::default()),
-        worker_wake: Arc::new(OnceLock::new()),
+        size_probe_method: SizeProbeMethod::Head,
+        signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
     }
 }
 
-fn make_init(size: u64, scope: &AssetScope) -> VariantInit {
+fn make_init(size: u64, scope: &AssetScope) -> Option<Segment> {
     if size == 0 {
-        return VariantInit::NotApplicable;
+        return None;
     }
     let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
     let resource_id = scope.key_from_url(&url);
-    VariantInit::Pending(InitEntry {
+    Some(Segment::Init(InitSegment {
         url,
         resource_id,
         state: SegmentSlotState::missing(),
-        size: AtomicU64::new(size),
+        size: SegmentSize::seed(size),
         content: SegmentContent::Plain,
-    })
+    }))
 }
 
-fn make_seg(idx: u32, size: u64, scope: &AssetScope) -> SegmentEntry {
+fn make_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
     let url: Url = format!("https://example.com/seg{idx}.m4s")
         .parse()
         .expect("valid url");
     let resource_id = scope.key_from_url(&url);
-    SegmentEntry {
+    Segment::Media(MediaSegment {
         url,
         resource_id,
         state: SegmentSlotState::missing(),
-        size: AtomicU64::new(size),
+        size: SegmentSize::seed(size),
         content: SegmentContent::Plain,
         decode_time: Duration::from_millis(u64::from(idx) * 2000),
         duration: Duration::from_secs(2),
-    }
+    })
+}
+
+fn make_placeholder_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
+    let url: Url = format!("https://example.com/seg{idx}.m4s")
+        .parse()
+        .expect("valid url");
+    let resource_id = scope.key_from_url(&url);
+    Segment::Media(MediaSegment {
+        url,
+        resource_id,
+        state: SegmentSlotState::missing(),
+        size: SegmentSize::placeholder(size),
+        content: SegmentContent::Plain,
+        decode_time: Duration::from_millis(u64::from(idx) * 2000),
+        duration: Duration::from_secs(2),
+    })
 }
 
 fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) -> Arc<HlsVariant> {
@@ -88,7 +114,7 @@ fn make_var_with_seek_obs(
     seek_obs: Arc<dyn SeekObserve>,
 ) -> Arc<HlsVariant> {
     let init = make_init(init_size, &ctx.scope);
-    let segments: Vec<SegmentEntry> = media_sizes
+    let segments: Vec<Segment> = media_sizes
         .iter()
         .enumerate()
         .map(|(i, &size)| {
@@ -99,26 +125,68 @@ fn make_var_with_seek_obs(
             )
         })
         .collect();
-    HlsVariant::from_parts(
-        variant,
-        VariantParts {
-            init,
-            segments,
-            seek_obs,
-            playlist_state: Arc::new(PlaylistState::new(Vec::new())),
-            codec: None,
-            container: None,
-        },
-        ctx,
-    )
+    VariantParts {
+        init,
+        segments,
+        seek_obs,
+        codec: None,
+        container: None,
+    }
+    .into_variant(variant, ctx)
+}
+
+fn make_playlist_state(
+    codec: Option<AudioCodec>,
+    container: Option<ContainerFormat>,
+    count: usize,
+) -> Arc<PlaylistState> {
+    let segments = (0..count)
+        .map(|idx| {
+            let url: Url = format!("https://example.com/media{idx}.m4s")
+                .parse()
+                .expect("valid url");
+            SegmentState {
+                duration: Duration::from_secs(2),
+                byte_range_len: None,
+                url,
+                index: SegmentIndex::try_new(idx, count).expect("in-bounds segment"),
+            }
+        })
+        .collect();
+    Arc::new(PlaylistState::new(vec![VariantState {
+        codec,
+        container,
+        init_url: None,
+        segments,
+    }]))
+}
+
+#[kithara::test]
+fn media_info_carries_playlist_container() {
+    let ctx = test_ctx(1);
+    let playlist_state =
+        make_playlist_state(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4), 1);
+    let v = VariantParts {
+        init: None,
+        segments: vec![make_seg(0, 10, &ctx.scope)],
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: playlist_state.variant_codec(0),
+        container: playlist_state.variant_container(0),
+    }
+    .into_variant(0, &ctx);
+
+    let info = v.media_info();
+    assert_eq!(info.codec, Some(AudioCodec::AacLc));
+    assert_eq!(info.container, Some(ContainerFormat::Fmp4));
 }
 
 fn push_planned(v: &HlsVariant, seg: u32) {
-    v.queue.lock().push_back(PlannedFetch::Segment(seg));
+    v.flow.queue.lock().push_back(PlannedFetch::Segment(seg));
 }
 
 fn queue_seg_indices(v: &HlsVariant) -> Vec<u32> {
-    v.queue
+    v.flow
+        .queue
         .lock()
         .iter()
         .filter_map(|p| match p {
@@ -129,10 +197,82 @@ fn queue_seg_indices(v: &HlsVariant) -> Vec<u32> {
 }
 
 fn queue_has_init(v: &HlsVariant) -> bool {
-    v.queue
+    v.flow
+        .queue
         .lock()
         .iter()
         .any(|p| matches!(p, PlannedFetch::Init))
+}
+
+#[kithara::test]
+fn placeholder_size_uses_duration_as_route_geometry() {
+    let size = segment_placeholder_size(Duration::from_secs(2), Some(64_000));
+
+    assert_eq!(size, 8 * 1024);
+    assert!(
+        !SegmentSize::placeholder(size).is_exact(),
+        "duration-derived route sizes must stay non-exact"
+    );
+}
+
+#[kithara::test]
+fn range_ready_clamps_tail_seek_alias_to_eof() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..3).map(|idx| make_seg(idx, 10, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacHeV2),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    for segment in v.segments() {
+        let key = segment.resource_id().clone();
+        let AcquisitionResult::Pending(writer) = ctx
+            .scope
+            .store()
+            .acquire_resource(&key, None)
+            .expect("acquire segment")
+        else {
+            panic!("segment resource must be pending");
+        };
+        let segment_len =
+            usize::try_from(segment.len()).expect("test segment length must fit usize");
+        let bytes = vec![0u8; segment_len];
+        writer.write_at(0, &bytes).expect("write segment");
+        writer
+            .commit(Some(bytes.len() as u64))
+            .expect("commit segment");
+    }
+
+    let anchor = v.segment_byte_offset(1).expect("segment 1 offset");
+    v.set_seek_alias(anchor, 1);
+
+    assert!(
+        v.range_ready(&(anchor..anchor + 64)),
+        "tail range that starts in a seek alias must clamp to ready EOF"
+    );
+}
+
+#[kithara::test]
+fn segment_aware_seek_alias_routes_tail_by_segment_index() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..4).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Flac),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    let anchor = 1_000;
+
+    v.set_seek_alias(anchor, 2);
+
+    assert_eq!(v.find_at_offset(anchor), Some((2, anchor, 100)));
+    assert_eq!(v.find_at_offset(anchor + 99), Some((2, anchor, 100)));
+    assert_eq!(v.find_at_offset(anchor + 100), Some((3, anchor + 100, 100)));
+    assert_eq!(v.find_at_offset(anchor + 200), None);
 }
 
 #[kithara::test]
@@ -193,6 +333,10 @@ fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
         reader_pos,
         "position must follow the requested reader_pos"
     );
+    assert!(
+        v.seek.exact_byte_seek.load().is_none(),
+        "ABR byte-continuity activation mirrors the old reader cursor; it must not register a seek-style exact-byte demand in the incoming variant"
+    );
 }
 
 #[kithara::test]
@@ -235,9 +379,9 @@ fn reset_to_full_range_uses_live_init_size_after_shifted_activation() {
             seg_boundary: 1_000,
         },
     );
-    v.layout.apply_commit(v.store.segments(), || {
-        v.store.apply_loaded_size(PlannedFetch::Init, 588);
-        v.store.init_size()
+    v.layout.apply_commit(v.segments(), || {
+        v.apply_loaded_size(PlannedFetch::Init, 588);
+        v.init_size()
     });
 
     v.reset_to_full_range();
@@ -357,6 +501,14 @@ fn find_at_offset_inside_init_prefix_is_none() {
 }
 
 #[kithara::test]
+fn demand_segment_at_offset_inside_init_prefix_is_segment_zero() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400, 400], &ctx);
+    assert_eq!(v.demand_segment_at_offset(0), Some(0));
+    assert_eq!(v.demand_segment_at_offset(199), Some(0));
+}
+
+#[kithara::test]
 fn find_at_offset_at_init_size_returns_segment_zero() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400], &ctx);
@@ -385,8 +537,8 @@ fn find_at_offset_reflects_post_commit_size_shrink() {
     let (idx, off, size) = v.find_at_offset(450).expect("seg 1 before shrink");
     assert_eq!((idx, off, size), (1, 400, 400));
 
-    v.layout.apply_commit(v.store.segments(), || {
-        v.store.segments()[0].size.store(384, Ordering::Release);
+    v.layout.apply_commit(v.segments(), || {
+        v.segments()[0].size().set_exact(384);
         v.init_size()
     });
 
@@ -415,8 +567,8 @@ fn total_bytes_lock_free_tracks_commit_and_served_until() {
     let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
     assert_eq!(v.total_bytes(), 200 + 400 * 4, "init + 4 media segments");
 
-    v.layout.apply_commit(v.store.segments(), || {
-        v.store.segments()[0].size.store(384, Ordering::Release);
+    v.layout.apply_commit(v.segments(), || {
+        v.segments()[0].size().set_exact(384);
         v.init_size()
     });
     assert_eq!(
@@ -479,46 +631,46 @@ fn init_byte_range_empty_when_size_zero() {
 }
 
 /// `init_size == 0` (no `#EXT-X-MAP`, byte-range-embedded init, or a failed
-/// init HEAD) is exactly `VariantInit::NotApplicable`: no separate init
-/// resource, no `about:blank` acquire, and `rebuild` never enqueues
-/// `PlannedFetch::Init`.
+/// separate init URL) is exactly a `None` init slot (old `VariantInit::NotApplicable`):
+/// no separate init resource, no `about:blank` acquire, and `rebuild` never
+/// enqueues `PlannedFetch::Init`.
 #[kithara::test]
 fn variant_init_not_applicable_no_acquire() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[400, 400], &ctx);
     assert!(
-        matches!(v.store.init(), VariantInit::NotApplicable),
-        "init_size == 0 must construct as NotApplicable"
+        v.init().is_none(),
+        "init_size == 0 must construct as a None init slot (old NotApplicable)"
     );
     assert_eq!(v.init_size(), 0);
     assert!(
         v.init_resource().is_none(),
-        "NotApplicable carries no init resource"
+        "a None init slot carries no init resource"
     );
     v.rebuild(&ctx, 0);
     assert!(
         !queue_has_init(&v),
-        "NotApplicable must never enqueue PlannedFetch::Init"
+        "a None init slot must never enqueue PlannedFetch::Init"
     );
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 2, "only the two media segments dispatch");
-    let seg0_url = v.store.segments()[0].url.clone();
+    let seg0_url = v.segments()[0].url().clone();
     assert_eq!(cmds[0].url, seg0_url, "first cmd is seg 0, not an init");
 }
 
-/// `init_size > 0` (fMP4 `#EXT-X-MAP` with a known size) is
-/// `VariantInit::Pending`: a real, separately-fetched init segment that is
+/// `init_size > 0` (fMP4 `#EXT-X-MAP` with a known size) is a present
+/// `Some(Segment::Init)`: a real, separately-fetched init segment that is
 /// enqueued first and acquired exactly as before.
 #[kithara::test]
 fn variant_init_pending_for_fmp4() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400], &ctx);
-    let VariantInit::Pending(entry) = v.store.init() else {
-        panic!("init_size > 0 must construct as Pending");
+    let Some(entry @ Segment::Init(_)) = v.init() else {
+        panic!("init_size > 0 must construct as Some(Segment::Init)");
     };
-    assert_eq!(entry.size.load(Ordering::Acquire), 200);
+    assert_eq!(entry.size().get(), 200);
     assert_eq!(v.init_size(), 200);
-    let init_url = entry.url.clone();
+    let init_url = entry.url().clone();
     assert!(
         v.init_resource().is_some(),
         "Pending init exposes its resource key"
@@ -534,52 +686,51 @@ fn variant_init_pending_for_fmp4() {
 }
 
 /// Frozen-discriminator guard: `init.size` only ever shrinks post-commit
-/// (HEAD estimate -> committed `final_len`); it never crosses 0 -> positive.
-/// So a `Pending` init constructed with `init_size > 0` stays `Pending`
-/// even after a commit shrink — the enum discriminant is equivalent to the
-/// old dynamic `init_size() > 0` check at every later read.
+/// (known/probed size -> committed `final_len`); it never crosses 0 -> positive.
+/// So a present `Some(Segment::Init)` constructed with `init_size > 0` stays
+/// present even after a commit shrink — the `Option<Segment>` discriminant is
+/// equivalent to the old dynamic `init_size() > 0` check at every later read.
 #[kithara::test]
 fn variant_init_pending_stays_pending_after_commit_shrink() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400], &ctx);
 
-    v.layout.apply_commit(v.store.segments(), || {
-        v.store.apply_loaded_size(PlannedFetch::Init, 160);
+    v.layout.apply_commit(v.segments(), || {
+        v.apply_loaded_size(PlannedFetch::Init, 160);
         v.init_size()
     });
 
     assert_eq!(v.init_size(), 160, "init size shrinks on commit");
     assert!(
-        matches!(v.store.init(), VariantInit::Pending(_)),
-        "a shrink (still > 0) keeps the init Pending — size never crosses to 0"
+        matches!(v.init(), Some(Segment::Init(_))),
+        "a shrink (still > 0) keeps the init present — size never crosses to 0"
     );
     assert!(v.init_resource().is_some());
 }
 
-/// Regression: an `#EXT-X-MAP` init whose HEAD size estimate is 0 (a failed or
-/// absent init HEAD under load) is still a real init that must be fetched.
-/// Existence follows the EXT-X-MAP URL, not the HEAD size. Misclassifying it as
-/// `NotApplicable` drops the init: `read_at(0)` then routes to the media loop
-/// and serves segment 0's container where the demuxer expects `ftyp`
+/// Regression: an `#EXT-X-MAP` init whose size is not yet known is still a real
+/// init that must be fetched. Existence follows the EXT-X-MAP URL, not the byte
+/// size. Misclassifying it as
+/// a `None` init slot drops the init: `read_at(0)` then routes to the media
+/// loop and serves segment 0's container where the demuxer expects `ftyp`
 /// ("`re_mp4`: ftyp not found"), or the reader wedges ("no progress").
 #[kithara::test]
-fn init_with_url_but_zero_head_size_is_pending() {
+fn init_with_url_but_unknown_size_is_pending() {
     let ctx = test_ctx(3);
     let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
     let playlist = PlaylistState::new(vec![VariantState {
         codec: None,
         container: None,
         init_url: Some(url),
-        size_map: None,
         segments: Vec::new(),
     }]);
 
     let init = HlsVariant::build_init_entry(&playlist, 0, None, &ctx.scope);
 
     assert!(
-        matches!(init, VariantInit::Pending(_)),
-        "EXT-X-MAP init with a zero HEAD size estimate must stay Pending \
-         (existence follows the URL, not the HEAD size), got {init:?}"
+        matches!(init, Some(Segment::Init(_))),
+        "EXT-X-MAP init with an unknown size must stay present \
+         (existence follows the URL, not the byte size), got {init:?}"
     );
 }
 
@@ -594,25 +745,21 @@ fn init_with_url_but_zero_head_size_is_pending() {
 fn read_at_zero_holds_pending_while_init_unsized() {
     let ctx = test_ctx(3);
     let init_url: Url = "https://example.com/init.mp4".parse().expect("valid url");
-    let init = VariantInit::Pending(InitEntry {
+    let init = Some(Segment::Init(InitSegment {
         resource_id: ctx.scope.key_from_url(&init_url),
         url: init_url,
         state: SegmentSlotState::missing(),
-        size: AtomicU64::new(0),
+        size: SegmentSize::seed(0),
         content: SegmentContent::Plain,
-    });
-    let v = HlsVariant::from_parts(
-        0,
-        VariantParts {
-            init,
-            segments: vec![make_seg(0, 1024, &ctx.scope)],
-            playlist_state: Arc::new(PlaylistState::new(Vec::new())),
-            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-            codec: None,
-            container: None,
-        },
-        &ctx,
-    );
+    }));
+    let v = VariantParts {
+        init,
+        segments: vec![make_seg(0, 1024, &ctx.scope)],
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: None,
+        container: None,
+    }
+    .into_variant(0, &ctx);
 
     assert!(
         v.has_init() && v.init_size() == 0,
@@ -624,7 +771,7 @@ fn read_at_zero_holds_pending_while_init_unsized() {
     );
 
     // Commit segment 0's bytes so an *unguarded* read_at(0) would serve them.
-    let seg0_key = v.store.segments()[0].resource_id.clone();
+    let seg0_key = v.segments()[0].resource_id().clone();
     let AcquisitionResult::Pending(writer) = ctx
         .scope
         .store()
@@ -674,6 +821,25 @@ fn descriptor_at_time_clamps_to_last() {
 }
 
 #[kithara::test]
+fn seek_point_at_time_returns_bounds_and_clamps() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100, 100], &ctx);
+    let (idx, start, end) = v
+        .seek_point_at_time(Duration::from_secs(3))
+        .expect("seek point");
+    assert_eq!(idx, 1);
+    assert_eq!(start, Duration::from_secs(2));
+    assert_eq!(end, Duration::from_secs(4));
+
+    let (idx, start, end) = v
+        .seek_point_at_time(Duration::from_secs(999))
+        .expect("seek point clamps to last");
+    assert_eq!(idx, 2);
+    assert_eq!(start, Duration::from_secs(4));
+    assert_eq!(end, Duration::from_secs(6));
+}
+
+#[kithara::test]
 fn descriptor_after_byte_finds_next_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
@@ -699,13 +865,140 @@ fn rebuild_refills_queue_without_touching_cancel_token() {
 }
 
 #[kithara::test]
+fn segment_aware_rebuild_at_time_prefetches_seek_preroll_segment() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+
+    let target = v
+        .rebuild_at_time(&ctx, Duration::from_secs(4))
+        .expect("target segment");
+
+    assert_eq!(target, 2, "time seek still lands on the target segment");
+    assert_eq!(
+        queue_seg_indices(&v),
+        vec![1, 2, 3, 4],
+        "segment-aware seek must fetch the codec pre-roll segment too"
+    );
+    assert_eq!(
+        v.prefetch_anchor(),
+        v.segment_byte_offset(1).expect("pre-roll segment offset")
+    );
+}
+
+#[kithara::test]
+fn segment_aware_seek_time_anchor_fetches_preroll_segment() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+
+    let anchor = v
+        .seek_time_anchor(Duration::from_secs(4))
+        .expect("seek anchor")
+        .expect("segment-aware anchor");
+
+    assert_eq!(anchor.segment_index, Some(2));
+    assert_eq!(
+        anchor.byte_offset, 200,
+        "decoder anchor remains the target segment boundary"
+    );
+    assert_eq!(
+        v.get_position(),
+        200,
+        "reader position remains the decoder anchor"
+    );
+    assert_eq!(
+        queue_seg_indices(&v),
+        vec![1, 2, 3, 4],
+        "fetch queue includes the segment a codec warmup backoff may read"
+    );
+    assert_eq!(v.prefetch_anchor(), 100);
+}
+
+#[kithara::test]
+fn segment_aware_rebuild_with_decoder_probe_fetches_recreate_preroll_segment() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: make_init(48, &ctx.scope),
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+
+    v.rebuild_with_decoder_probe(&ctx, 2);
+
+    assert!(queue_has_init(&v));
+    assert_eq!(
+        queue_seg_indices(&v),
+        vec![0, 1, 2, 3, 4],
+        "format-boundary decoder seek must fetch the codec pre-roll segment"
+    );
+}
+
+#[kithara::test]
+fn exact_size_rebuild_at_time_starts_at_target_segment() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+
+    let target = v
+        .rebuild_at_time(&ctx, Duration::from_secs(4))
+        .expect("target segment");
+
+    assert_eq!(target, 2);
+    assert_eq!(queue_seg_indices(&v), vec![2, 3, 4]);
+    assert_eq!(
+        v.prefetch_anchor(),
+        v.segment_byte_offset(2).expect("target segment offset")
+    );
+}
+
+#[kithara::test]
+fn exact_size_rebuild_with_decoder_probe_starts_tail_at_target_segment() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: make_init(48, &ctx.scope),
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+
+    v.rebuild_with_decoder_probe(&ctx, 2);
+
+    assert!(queue_has_init(&v));
+    assert_eq!(queue_seg_indices(&v), vec![0, 2, 3, 4]);
+}
+
+#[kithara::test]
 fn dispatch_emits_init_first_then_segments_under_budget() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400], &ctx);
-    let init_url = v.store.init().expect_pending().url.clone();
-    let seg0_url = v.store.segments()[0].url.clone();
-    let seg1_url = v.store.segments()[1].url.clone();
-    let seg2_url = v.store.segments()[2].url.clone();
+    let init_url = v.init().expect("init is present").url().clone();
+    let seg0_url = v.segments()[0].url().clone();
+    let seg1_url = v.segments()[1].url().clone();
+    let seg2_url = v.segments()[2].url().clone();
     v.rebuild(&ctx, 0);
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 4);
@@ -729,17 +1022,30 @@ fn dispatch_respects_budget() {
 }
 
 #[kithara::test]
+fn dispatch_respects_segment_lookahead_cap() {
+    let mut ctx = test_ctx(10);
+    ctx.look_ahead_segments = Some(2);
+    let v = make_var(0, 0, &[100; 6], &ctx);
+    v.rebuild(&ctx, 0);
+
+    let cmds = v.dispatch(&ctx, 10);
+
+    assert_eq!(cmds.len(), 2);
+    assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5]);
+}
+
+#[kithara::test]
 fn dispatch_skips_non_missing_segments() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
-    v.store.segments()[1].state.mark_loaded();
-    v.queue.lock().clear();
+    v.segments()[1].state().mark_loaded();
+    v.flow.queue.lock().clear();
     for seg in 0..3_u32 {
         push_planned(&v, seg);
     }
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 2);
-    assert!(v.store.segments()[1].state.is_loaded());
+    assert!(v.segments()[1].state().is_loaded());
 }
 
 #[kithara::test]
@@ -755,12 +1061,12 @@ fn dispatch_requeues_orphaned_downloading_segment() {
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
 
     // seg 1 is mid-flight under an orphaned claim (Missing -> Downloading).
-    let orphan = v.store.segments()[1]
-        .state
+    let orphan = v.segments()[1]
+        .state()
         .try_claim(PlannedFetch::Segment(1), Arc::downgrade(&v))
         .expect("seg 1 must be claimable");
 
-    v.queue.lock().clear();
+    v.flow.queue.lock().clear();
     for seg in 0..3_u32 {
         push_planned(&v, seg);
     }
@@ -777,7 +1083,7 @@ fn dispatch_requeues_orphaned_downloading_segment() {
     // unsettled `DownloadClaim` Drop reverts the slot to Missing.
     drop(orphan);
     assert!(
-        !v.store.segments()[1].state.is_loaded(),
+        !v.segments()[1].state().is_loaded(),
         "orphaned claim drop reverts seg 1 to Missing"
     );
 
@@ -796,8 +1102,8 @@ fn dispatch_requeues_orphaned_downloading_segment() {
 fn phase_at_reports_waiting_demand_for_claimed_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
-    let claim = v.store.segments()[0]
-        .state
+    let claim = v.segments()[0]
+        .state()
         .try_claim(PlannedFetch::Segment(0), Arc::downgrade(&v))
         .expect("segment claim");
 
@@ -808,17 +1114,144 @@ fn phase_at_reports_waiting_demand_for_claimed_segment() {
 }
 
 #[kithara::test]
+fn phase_at_reports_waiting_demand_for_queued_segment() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+
+    push_planned(&v, 0);
+
+    assert_eq!(v.phase_at(0..16), SourcePhase::WaitingDemand);
+}
+
+#[kithara::test]
+fn exact_seek_completion_keeps_stale_anchor_alias_until_reader_moves() {
+    let ctx = test_ctx(3);
+    let segments: Vec<Segment> = (0..3)
+        .map(|idx| make_placeholder_seg(idx, 256, &ctx.scope))
+        .collect();
+    let v = VariantParts {
+        init: None,
+        segments,
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+    let stale_anchor = 512;
+    v.set_position(stale_anchor);
+    v.set_prefetch_anchor(stale_anchor);
+    v.set_seek_alias(stale_anchor, 2);
+    v.rebuild(&ctx, 2);
+    v.set_exact_seek_demand(stale_anchor, 2);
+    v.set_exact_seek_demand(stale_anchor + 64, 2);
+
+    v.apply_resolved_size(SizeDemand::Segment(0), 100);
+    v.apply_resolved_size(SizeDemand::Segment(1), 100);
+    v.apply_resolved_size(SizeDemand::Segment(2), 100);
+
+    assert_eq!(v.get_position(), 200);
+    v.advance(0);
+    assert_eq!(v.find_at_offset(stale_anchor), Some((2, stale_anchor, 100)));
+    assert_eq!(
+        v.phase_at(stale_anchor..stale_anchor + 16),
+        SourcePhase::WaitingDemand
+    );
+
+    v.advance(1);
+    assert_eq!(v.get_position(), 201);
+    assert_eq!(v.find_at_offset(stale_anchor), None);
+}
+
+#[kithara::test]
+fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
+    let ctx = test_ctx(3);
+    let segments: Vec<Segment> = (0..10)
+        .map(|idx| make_placeholder_seg(idx, 64, &ctx.scope))
+        .collect();
+    let v = VariantParts {
+        init: None,
+        segments,
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+
+    v.set_position(0);
+    assert!(
+        v.dispatch(&ctx, 3).is_empty(),
+        "a no-op seek to the current cursor must not issue startup size probes"
+    );
+
+    v.set_position(512);
+    assert_eq!(v.phase_at(512..513), SourcePhase::WaitingDemand);
+    let cmds = v.dispatch(&ctx, 3);
+    assert_eq!(
+        cmds.len(),
+        3,
+        "raw byte seek size probes must respect the dispatch budget"
+    );
+    assert_eq!(cmds[0].url, v.segments()[0].url().clone());
+    assert_eq!(cmds[1].url, v.segments()[1].url().clone());
+    assert_eq!(cmds[2].url, v.segments()[2].url().clone());
+    let cmds = v.dispatch(&ctx, 3);
+    assert_eq!(cmds.len(), 3);
+    assert_eq!(cmds[0].url, v.segments()[3].url().clone());
+    assert_eq!(cmds[1].url, v.segments()[4].url().clone());
+    assert_eq!(cmds[2].url, v.segments()[5].url().clone());
+}
+
+#[kithara::test]
+fn byte_continuity_boundary_preparation_sizes_only_prefix() {
+    let ctx = test_ctx(8);
+    let segments: Vec<Segment> = (0..4)
+        .map(|idx| make_placeholder_seg(idx, 64, &ctx.scope))
+        .collect();
+    let v = VariantParts {
+        init: None,
+        segments,
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+
+    assert!(
+        !v.prepare_exact_prefix_for_boundary(2),
+        "WAV byte-continuity switch at segment 2 needs exact sizes for segments 0 and 1"
+    );
+
+    let cmds = v.dispatch_size_only(&ctx, 8);
+    assert_eq!(cmds.len(), 2);
+    assert_eq!(cmds[0].url, v.segments()[0].url().clone());
+    assert_eq!(cmds[1].url, v.segments()[1].url().clone());
+
+    v.apply_resolved_size(SizeDemand::Segment(0), 100);
+    v.apply_resolved_size(SizeDemand::Segment(1), 120);
+
+    assert!(
+        v.prepare_exact_prefix_for_boundary(2),
+        "once the prefix is exact, coord may calculate byte_shift and commit"
+    );
+    assert!(
+        !v.segments()[2].size().is_exact(),
+        "the segment after the switch boundary must stay lazy"
+    );
+}
+
+#[kithara::test]
 fn on_evict_returns_minus_one_for_init() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[100, 100, 100], &ctx);
-    v.store.init().expect_pending().state.mark_loaded();
-    v.store.segments()[1].state.mark_loaded();
-    let key = v.store.init().expect_pending().resource_id.clone();
+    let init = v.init().expect("init is present");
+    init.state().mark_loaded();
+    v.segments()[1].state().mark_loaded();
+    let key = init.resource_id().clone();
     let res = v.on_evict(&key);
     assert_eq!(res, Some(-1));
-    assert!(!v.store.init().expect_pending().state.is_loaded());
+    assert!(!v.init().expect("init is present").state().is_loaded());
     assert!(
-        v.store.segments()[1].state.is_loaded(),
+        v.segments()[1].state().is_loaded(),
         "init eviction must not touch segment states"
     );
 }
@@ -827,11 +1260,11 @@ fn on_evict_returns_minus_one_for_init() {
 fn on_evict_returns_seg_idx_for_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
-    v.store.segments()[1].state.mark_loaded();
-    let key = v.store.segments()[1].resource_id.clone();
+    v.segments()[1].state().mark_loaded();
+    let key = v.segments()[1].resource_id().clone();
     let res = v.on_evict(&key);
     assert_eq!(res, Some(1));
-    assert!(!v.store.segments()[1].state.is_loaded());
+    assert!(!v.segments()[1].state().is_loaded());
 }
 
 #[kithara::test]
@@ -866,27 +1299,23 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     let url: Url = "https://example.com/seg0.m4s".parse().expect("valid url");
     let resource_id = ctx.scope.key_from_url(&url);
     let key = *b"0123456789abcdef";
-    let seg = SegmentEntry {
+    let seg = Segment::Media(MediaSegment {
         url,
         resource_id,
         state: SegmentSlotState::missing(),
-        size: AtomicU64::new(100),
+        size: SegmentSize::seed(100),
         content: SegmentContent::Encrypted(DecryptContext::new(key, [0u8; 16])),
         decode_time: Duration::ZERO,
         duration: Duration::from_secs(2),
-    };
-    let v = HlsVariant::from_parts(
-        0,
-        VariantParts {
-            init,
-            playlist_state: Arc::new(PlaylistState::new(Vec::new())),
-            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-            codec: None,
-            container: None,
-            segments: vec![seg],
-        },
-        &ctx,
-    );
+    });
+    let v = VariantParts {
+        init,
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: None,
+        container: None,
+        segments: vec![seg],
+    }
+    .into_variant(0, &ctx);
     push_planned(&v, 0);
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 1);
@@ -1006,12 +1435,12 @@ fn variant_flip_cancels_v_old_and_keeps_v_new_token_live() {
 fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100; 20], &ctx);
-    v.store.segments()[10].state.mark_loaded();
+    v.segments()[10].state().mark_loaded();
 
     v.rebuild(&ctx, 10);
     let cmds = v.dispatch(&ctx, 3);
     assert_eq!(cmds.len(), 3);
-    let seg10_url = v.store.segments()[10].url.clone();
+    let seg10_url = v.segments()[10].url().clone();
     assert!(
         cmds.iter().all(|c| c.url != seg10_url),
         "Loaded seg 10 must not be re-emitted"

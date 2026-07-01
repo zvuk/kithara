@@ -13,10 +13,19 @@ categories = ["caching"]
 workspace = true
 
 [features]
-default = []
+default = ["client-reqwest", "tls-rustls"]
 probe = []
 mock = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
+# HTTP backend forwarding. kithara-storage reaches the single kithara-net
+# package only through kithara-test-utils -> kithara-events (downloader event
+# types). These forwards give kithara-net a backend in standalone builds of
+# this crate; workspace-level default-features = false keeps the default off
+# when kithara-storage is a transitive dep (so apple/android stay wreq-only).
+client-reqwest = ["kithara-test-utils/client-reqwest"]
+client-wreq = ["kithara-test-utils/client-wreq"]
+tls-rustls = ["kithara-test-utils/tls-rustls"]
+tls-native = ["kithara-test-utils/tls-native"]
 
 [dependencies]
 bon = { workspace = true }
@@ -37,7 +46,7 @@ unimock = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 # mmap backend (not available on wasm32)
 mmap-io = { workspace = true }
 # crash-safe atomic writes (unique temp files)
@@ -46,6 +55,6 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 kithara-storage = { path = ".", default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }

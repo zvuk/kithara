@@ -52,6 +52,7 @@ pub(crate) type Refetch =
 struct State {
     inner: ByteStream,
     cancel: CancelToken,
+    expected_len: Option<u64>,
     stall: Duration,
     refetch: Refetch,
     policy: RetryPolicy,
@@ -79,8 +80,11 @@ impl State {
         if self.resumes >= self.policy.max_retries {
             return Err(exhausted(self.policy.max_retries, cause));
         }
+        let delay = self.policy.delay_for_attempt(self.resumes);
         self.resumes += 1;
-        sleep(self.policy.delay_for_attempt(self.resumes)).await;
+        if !delay.is_zero() {
+            sleep(delay).await;
+        }
         let resumed = (self.refetch)(self.consumed).await?;
         self.inner = resumed.stream;
         self.to_skip = resumed.skip;
@@ -103,6 +107,11 @@ impl State {
         let rest = bytes.split_off(skip.to_usize().unwrap_or(bytes.len()));
         (!rest.is_empty()).then_some(rest)
     }
+
+    fn body_complete(&self) -> bool {
+        self.expected_len
+            .is_some_and(|expected| self.consumed >= expected)
+    }
 }
 
 /// Await the next body chunk — a real socket read, so the fn is one
@@ -113,9 +122,27 @@ impl State {
 /// failure funnels through [`State::resume`]'s single classification.
 #[kithara::flash(io)]
 async fn next_chunk(st: &mut State) -> Option<Result<Bytes, NetError>> {
+    if st.body_complete() {
+        return None;
+    }
     tokio::select! {
-        () = st.cancel.cancelled() => Some(Err(NetError::Cancelled)),
-        res = timeout(st.stall, st.inner.next()) => res.unwrap_or(Some(Err(NetError::Timeout))),
+        biased;
+        res = timeout(st.stall, st.inner.next()) => {
+            match res {
+                Ok(None) if st.expected_len.is_some() && !st.body_complete() => {
+                    Some(Err(NetError::Network("HTTP body ended before content-length".to_string())))
+                }
+                Ok(item) => item,
+                Err(_) => Some(Err(NetError::Timeout)),
+            }
+        },
+        () = st.cancel.cancelled() => {
+            if st.body_complete() {
+                None
+            } else {
+                Some(Err(NetError::Cancelled))
+            }
+        },
     }
 }
 
@@ -131,12 +158,14 @@ pub(crate) fn resumable_body(
     policy: RetryPolicy,
     cancel: CancelToken,
 ) -> RawBody {
+    let expected_len = content_length(&first);
     let state = State {
         refetch,
         stall,
         policy,
         cancel,
         inner: first,
+        expected_len,
         consumed: 0,
         to_skip: 0,
         resumes: 0,
@@ -165,11 +194,19 @@ pub(crate) fn resumable_body(
 /// (the last transient chunk error, or `Timeout` for a pure stall). Both the
 /// stall and the transient-chunk-error exhaustion paths funnel through here
 /// so the consumer always sees one `Fatal` [`NetError::RetryExhausted`].
-fn exhausted(max_retries: u32, source: NetError) -> NetError {
+pub(crate) fn exhausted(max_retries: u32, source: NetError) -> NetError {
     NetError::RetryExhausted {
         max_retries,
         source: Box::new(source),
     }
+}
+
+fn content_length(stream: &ByteStream) -> Option<u64> {
+    stream
+        .headers
+        .get("content-length")
+        .or_else(|| stream.headers.get("Content-Length"))
+        .and_then(|value| value.parse().ok())
 }
 
 #[cfg(test)]
@@ -196,6 +233,12 @@ mod tests {
 
     fn byte_stream(chunks: Vec<Result<Bytes, NetError>>) -> ByteStream {
         ByteStream::new(Headers::default(), Box::pin(stream::iter(chunks)))
+    }
+
+    fn byte_stream_with_len(len: u64, chunks: Vec<Result<Bytes, NetError>>) -> ByteStream {
+        let mut headers = Headers::default();
+        headers.insert("content-length", len.to_string());
+        ByteStream::new(headers, Box::pin(stream::iter(chunks)))
     }
 
     /// A body that never yields (server holds the connection open, no bytes).
@@ -303,6 +346,36 @@ mod tests {
             3,
             "resume from consumed offset"
         );
+    }
+
+    /// A clean EOF before the promised content-length is a broken transfer, not
+    /// a complete body. Treat it like a transient body failure and resume from
+    /// the consumed offset.
+    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    async fn early_eof_before_content_length_resumes() {
+        let resume_off = Arc::new(AtomicU64::new(u64::MAX));
+        let seen = Arc::clone(&resume_off);
+        let refetch: Refetch = Box::new(move |off| {
+            seen.store(off, Ordering::SeqCst);
+            Box::pin(async move {
+                Ok(resumed(
+                    byte_stream(vec![Ok(Bytes::from_static(b"def"))]),
+                    0,
+                ))
+            })
+        });
+        let out = collect(resumable_body(
+            byte_stream_with_len(6, vec![Ok(Bytes::from_static(b"abc"))]),
+            refetch,
+            STALL,
+            policy(2),
+            CancelToken::never(),
+        ))
+        .await
+        .expect("early EOF before content-length must resume");
+
+        assert_eq!(out, b"abcdef");
+        assert_eq!(resume_off.load(Ordering::SeqCst), 3);
     }
 
     /// Non-range server: the resume re-fetch returns the FULL body from zero

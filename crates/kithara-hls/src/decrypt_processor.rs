@@ -1,8 +1,7 @@
 //! AES-128-CBC adapter binding the `kithara-drm` cipher to the
 //! `kithara-assets` `ResourceProcessor` / `ChunkSink` contract.
 
-use std::fmt;
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 
 use kithara_assets::{ChunkSink, ProcessCtx, ResourceProcessor};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
@@ -59,12 +58,7 @@ struct CbcSink {
 }
 
 impl ChunkSink for CbcSink {
-    fn process(
-        &mut self,
-        input: &[u8],
-        output: &mut [u8],
-        is_last: bool,
-    ) -> Result<usize, String> {
+    fn process(&mut self, input: &[u8], output: &mut [u8], is_last: bool) -> Result<usize, String> {
         aes128_cbc_process_chunk(input, output, &mut self.ctx, is_last)
     }
 }

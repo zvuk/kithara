@@ -13,8 +13,18 @@ categories = ["caching"]
 workspace = true
 
 [features]
+default = ["client-reqwest", "tls-rustls"]
 probe = []
 mock = []
+# HTTP backend forwarding. kithara-assets reaches the single kithara-net
+# package only through kithara-storage -> kithara-test-utils -> kithara-events
+# (downloader event types). These forwards give kithara-net a backend in
+# standalone builds; workspace-level default-features = false keeps the
+# default off when kithara-assets is a transitive dep (apple/android wreq-only).
+client-reqwest = ["kithara-storage/client-reqwest"]
+client-wreq = ["kithara-storage/client-wreq"]
+tls-rustls = ["kithara-storage/tls-rustls"]
+tls-native = ["kithara-storage/tls-native"]
 
 [dependencies]
 rkyv = { workspace = true }
@@ -26,6 +36,7 @@ hex = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true }
 lru = { workspace = true }
 kithara-platform = { workspace = true }
 rangemap = { workspace = true }
@@ -37,7 +48,7 @@ unimock = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha3", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 tempfile = { workspace = true }
 
 [dev-dependencies]
@@ -47,5 +58,5 @@ cbc = { workspace = true }
 kithara-assets = { path = "." }
 tempfile = { workspace = true }
 serial_test = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 wasm-bindgen-test = { workspace = true }

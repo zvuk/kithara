@@ -22,6 +22,7 @@ use kithara_platform::CancelToken;
 
 let client = HttpClient::new(NetOptions::default(), CancelToken::never());
 let bytes = client.get_bytes(url, None).await?;        // None = no extra headers
+let created = client.post_bytes(url, body, None).await?; // POST bytes, read the response body
 let stream = client.stream(url, None).await?;
 ```
 
@@ -31,7 +32,7 @@ Decorators compose via the `NetExt` extension trait: `with_retry` adds exponenti
 
 <table>
 <tr><th>Type</th><th>Role</th></tr>
-<tr><td><code>Net</code> (trait)</td><td>HTTP operations: <code>get_bytes</code>, <code>stream</code>, <code>get_range</code>, <code>head</code></td></tr>
+<tr><td><code>Net</code> (trait)</td><td>HTTP operations: <code>get_bytes</code>, <code>post_bytes</code>, <code>stream</code>, <code>get_range</code>, <code>head</code></td></tr>
 <tr><td><code>HttpClient</code></td><td><code>reqwest::Client</code> wrapper implementing <code>Net</code></td></tr>
 <tr><td><code>Headers</code></td><td><code>HashMap&lt;String, String&gt;</code> wrapper</td></tr>
 <tr><td><code>RangeSpec</code></td><td>HTTP byte range: <code>{ start: u64, end: Option&lt;u64&gt; }</code></td></tr>

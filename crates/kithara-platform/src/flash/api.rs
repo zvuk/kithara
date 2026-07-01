@@ -208,12 +208,28 @@ impl Future for Yield {
     }
 }
 
-/// Dump the flash quiescence-engine state to stderr. The `#[kithara::test]`
-/// harness calls this from both hang exits (virtual-timeout panic and the
-/// HARD TIMEOUT abort thread) so a wedged run self-reports every parked
-/// participant, deadline and pending signal instead of dying opaque.
-pub fn dump_to_stderr(context: &str) {
-    eprintln!("[flash-dump] {context}:\n{}", system::dump());
+/// Build the full hang report: the dumping thread's context, the quiescence
+/// engine snapshot (every parked participant, deadline and pending signal), and
+/// the sync-primitive registry snapshot (every live Mutex/RwLock with its
+/// holder/waiters + the engine-backed kinds). Pure (no I/O), so a caller can
+/// route it to `tracing`, a durable file dump, or both.
+#[must_use]
+pub fn hang_dump(context: &str) -> String {
+    format!(
+        "[flash hang dump] {context}\n{thread}\n--- quiescence engine ---\n{engine}\
+         --- sync primitives ---\n{registry}",
+        thread = super::diag::current_thread_context(),
+        engine = system::dump(),
+        registry = super::diag::snapshot(),
+    )
+}
+
+/// Emit [`hang_dump`] via `tracing` at ERROR. The `#[kithara::test]` harness
+/// calls this from both hang exits (the virtual-timeout panic and the HARD
+/// TIMEOUT abort thread) so a wedged run self-reports the full wait-for picture
+/// instead of dying opaque.
+pub fn log_hang_dump(context: &str) {
+    tracing::error!(target: "flash::hang", "{}", hang_dump(context));
 }
 
 /// Virtual `sleep` that hits the quiescence engine UNCONDITIONALLY (no

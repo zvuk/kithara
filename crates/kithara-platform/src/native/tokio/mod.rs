@@ -1,11 +1,14 @@
 //! Mirror of the tokio surface the workspace is allowed to touch.
 //! Enumerated on purpose: a glob re-export is how unvetted primitives
-//! leak in unnoticed (see design doc §2). `time`/`fs`/`io`/`process` and the
-//! root `spawn`/`spawn_blocking` are intentionally ABSENT. `signal` and
-//! `task_local!` are native-only (no socket/task-scope surface in the wasm
-//! subset — same rationale as `net`).
+//! leak in unnoticed (see design doc §2). `time`/`net`/`fs`/`io`/`process`
+//! and the root `spawn`/`spawn_blocking` are intentionally ABSENT.
+//! `task_local!` is native-only (no task-scope surface in the wasm subset).
+//! `signal` is opt-in for desktop binaries that own process shutdown.
 
-pub use tokio_with_wasm::alias::{join, net, pin, select, signal, task_local, try_join};
+#[cfg(feature = "signal")]
+pub use backend::signal;
+pub use backend::{join, pin, select, task_local, try_join};
+pub(crate) use tokio as backend;
 
 pub mod runtime;
 pub mod sync;

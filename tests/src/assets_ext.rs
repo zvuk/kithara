@@ -1,5 +1,3 @@
-use std::{fmt::Debug, hash::Hash};
-
 use kithara_assets::{AssetResourceState, AssetStore, ResourceKey};
 
 /// Test-only convenience over the public [`AssetStore::resource_state`]:
@@ -11,10 +9,7 @@ pub trait AssetStoreTestExt {
     fn has_resource(&self, key: &ResourceKey) -> bool;
 }
 
-impl<Ctx> AssetStoreTestExt for AssetStore<Ctx>
-where
-    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
-{
+impl AssetStoreTestExt for AssetStore {
     fn has_resource(&self, key: &ResourceKey) -> bool {
         matches!(
             self.resource_state(key),

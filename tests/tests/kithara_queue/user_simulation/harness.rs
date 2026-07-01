@@ -12,8 +12,9 @@ use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
     time::{Duration, sleep, timeout},
+    tokio::sync::broadcast::error::TryRecvError,
 };
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome};
+use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome, SessionDispatcher};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use url::Url;
@@ -35,6 +36,9 @@ pub(crate) const SEEK_TARGET_TOLERANCE_S: f64 = 1.5;
 pub(crate) const NATURAL_EOF_WINDOW_S: f64 = 3.0;
 /// Tick interval driving the loop polling helpers.
 const POLL_INTERVAL: Duration = Duration::from_millis(40);
+const OFFLINE_SAMPLE_RATE: u64 = 44_100;
+const RENDER_BLOCK_FRAMES: usize = 512;
+const RENDER_YIELD_INTERVAL_BLOCKS: usize = 16;
 
 /// Periodic queue tick driver, run as a spawned task. `#[kithara::flash(true)]`
 /// makes the body flash-ACTIVE under an ambient (flash) test, so its
@@ -64,6 +68,7 @@ async fn run_tick_driver(queue: Arc<Queue>) {
 /// harness asserts the per-action invariants from the plan.
 pub(crate) struct SimHarness {
     queue: Arc<Queue>,
+    session: Arc<OfflineSession>,
     tick: kithara_platform::tokio::task::JoinHandle<()>,
     _downloader: Downloader,
     _store: StoreOptions,
@@ -112,9 +117,10 @@ impl SimHarness {
     /// every track in `specs`. Does **not** call `select` — that's left
     /// to the scenario via `enter_track`.
     pub(crate) async fn new(cache_path: &Path, specs: &[TrackSpec]) -> Self {
+        let session = Arc::new(OfflineSession::new());
         let player = Arc::new(PlayerImpl::new(
             PlayerConfig::builder()
-                .session(OfflineSession::arc_auto())
+                .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
                 .build(),
         ));
         let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
@@ -151,6 +157,7 @@ impl SimHarness {
 
         Self {
             queue,
+            session,
             tick,
             _downloader: downloader,
             _store: store,
@@ -207,6 +214,7 @@ impl SimHarness {
             Action::Pause => self.do_pause(),
             Action::Resume => self.do_resume(),
             Action::PlayFor(d) => self.do_play_for(d).await,
+            Action::RenderFor(d) => self.do_render_for(d).await,
         }
     }
 
@@ -217,6 +225,7 @@ impl SimHarness {
         self.tick.abort();
         let _ = self.tick.await;
         drop(self.queue);
+        drop(self.session);
         drop(self._downloader);
     }
 
@@ -792,6 +801,130 @@ impl SimHarness {
                     pre_entry.map(|e| e.status)
                 );
             }
+        }
+    }
+
+    async fn do_render_for(&mut self, at_least: Duration) {
+        let mut pre_pos = self.position();
+        let pre_track = self.current_track_id();
+        let duration = self.duration();
+        let media_budget = at_least * 2;
+        let render_budget_blocks =
+            render_blocks_for(media_budget).max(render_blocks_for(Duration::from_secs(3)));
+        let stagnation_blocks = render_blocks_for(Duration::from_secs(3));
+        let mut last_pos = pre_pos;
+        let mut no_progress_blocks: usize = 0;
+        let mut rx = self.queue.subscribe();
+
+        for block_idx in 0..render_budget_blocks {
+            if let Some(id) = pre_track
+                && let Some(entry) = self.queue.track(id)
+                && let TrackStatus::Failed(err) = &entry.status
+            {
+                panic!(
+                    "[RenderFor({}ms)] track Failed mid-render: {err}",
+                    at_least.as_millis()
+                );
+            }
+
+            let cur = self.position();
+            if cur + 1.0 < pre_pos {
+                pre_pos = cur;
+                last_pos = cur;
+                no_progress_blocks = 0;
+            }
+            if cur > last_pos + 0.05 {
+                last_pos = cur;
+                no_progress_blocks = 0;
+            }
+            if self.is_playing() {
+                if cur - pre_pos >= at_least.as_secs_f64() * 0.9 {
+                    return;
+                }
+                if duration > 0.0 && (duration - cur).abs() < 0.5 {
+                    return;
+                }
+                if no_progress_blocks >= stagnation_blocks
+                    && self.position() < pre_pos + 0.1
+                    && (duration <= 0.0 || (duration - cur).abs() >= NATURAL_EOF_WINDOW_S)
+                {
+                    panic!(
+                        "[RenderFor({}ms)] SILENT HANG: position stuck at {cur:.3}s for \
+                         3s+ worth of rendered audio blocks \
+                         (pre={pre_pos:.3}s, target_advance={target:.3}s, dur={duration:.3}s)",
+                        at_least.as_millis(),
+                        target = at_least.as_secs_f64()
+                    );
+                }
+            }
+
+            let _ = self.session.render(RENDER_BLOCK_FRAMES);
+            let _ = self.queue.tick();
+            if drain_playback_progress(&mut rx) {
+                no_progress_blocks = 0;
+            } else {
+                no_progress_blocks = no_progress_blocks.saturating_add(1);
+            }
+            if block_idx % RENDER_YIELD_INTERVAL_BLOCKS == 0 {
+                kithara_platform::tokio::task::yield_now().await;
+            }
+        }
+
+        let post = self.position();
+        let advance = post - pre_pos;
+        let target = at_least.as_secs_f64();
+        let reached_eof = duration > 0.0 && (duration - post).abs() < 0.5;
+        if !reached_eof && advance < target * 0.5 {
+            panic!(
+                "[RenderFor({}ms)] PARTIAL HANG: only advanced {advance:.3}s in {budget:?} \
+                 (target={target:.3}s, pre={pre_pos:.3}s, post={post:.3}s, dur={duration:.3}s)",
+                at_least.as_millis(),
+                budget = media_budget
+            );
+        }
+
+        if let Some(pre_id) = pre_track
+            && self.current_track_id() != Some(pre_id)
+        {
+            let pre_entry = self.queue.track(pre_id);
+            let expected_advance = at_least.as_secs_f64();
+            let advanced = post - pre_pos;
+            if advanced < expected_advance - NATURAL_EOF_WINDOW_S {
+                panic!(
+                    "[RenderFor({}ms)] SPURIOUS AUTO-ADVANCE: track flipped from \
+                     {pre_id:?} to {:?} at position {post:.2}s after only \
+                     {advanced:.2}s of playback (requested {expected_advance:.2}s). \
+                     pre_status={:?}",
+                    at_least.as_millis(),
+                    self.current_track_id(),
+                    pre_entry.map(|e| e.status)
+                );
+            }
+        }
+    }
+}
+
+fn render_blocks_for(duration: Duration) -> usize {
+    const NANOS_PER_SEC: u128 = 1_000_000_000;
+
+    let whole = u128::from(duration.as_secs()) * u128::from(OFFLINE_SAMPLE_RATE);
+    let fractional =
+        u128::from(duration.subsec_nanos()) * u128::from(OFFLINE_SAMPLE_RATE) / NANOS_PER_SEC;
+    let total_frames = whole.saturating_add(fractional);
+    let Ok(frames) = usize::try_from(total_frames) else {
+        panic!("render duration {duration:?} exceeds usize frame budget");
+    };
+    frames.saturating_add(RENDER_BLOCK_FRAMES - 1) / RENDER_BLOCK_FRAMES
+}
+
+fn drain_playback_progress(rx: &mut EventReceiver) -> bool {
+    let mut saw_progress = false;
+    loop {
+        match rx.try_recv() {
+            Ok(Event::Audio(AudioEvent::PlaybackProgress { .. })) => saw_progress = true,
+            Ok(_) => {}
+            Err(TryRecvError::Lagged(_)) => continue,
+            Err(TryRecvError::Empty | TryRecvError::Closed) => return saw_progress,
         }
     }
 }
