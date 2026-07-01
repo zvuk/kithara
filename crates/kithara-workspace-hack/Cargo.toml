@@ -85,7 +85,7 @@ toml_parser = { version = "1" }
 [target.x86_64-unknown-linux-gnu.dependencies]
 aho-corasick = { version = "1" }
 bit-set = { version = "0.8" }
-bit-vec = { version = "0.8" }
+bit-vec = { version = "0.9" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -138,7 +138,7 @@ zstd-sys = { version = "2", default-features = false, features = ["legacy", "std
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 aho-corasick = { version = "1" }
 bit-set = { version = "0.8" }
-bit-vec = { version = "0.8" }
+bit-vec = { version = "0.9" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
 cc = { version = "1", default-features = false, features = ["parallel"] }
@@ -196,7 +196,7 @@ zstd-sys = { version = "2", default-features = false, features = ["legacy", "std
 [target.x86_64-apple-darwin.dependencies]
 aho-corasick = { version = "1" }
 bit-set = { version = "0.8" }
-bit-vec = { version = "0.8" }
+bit-vec = { version = "0.9" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 block2 = { version = "0.6" }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
@@ -249,7 +249,7 @@ zstd-sys = { version = "2", default-features = false, features = ["legacy", "std
 [target.x86_64-apple-darwin.build-dependencies]
 aho-corasick = { version = "1" }
 bit-set = { version = "0.8" }
-bit-vec = { version = "0.8" }
+bit-vec = { version = "0.9" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 block2 = { version = "0.6" }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
@@ -307,7 +307,7 @@ zstd-sys = { version = "2", default-features = false, features = ["legacy", "std
 [target.aarch64-apple-darwin.dependencies]
 aho-corasick = { version = "1" }
 bit-set = { version = "0.8" }
-bit-vec = { version = "0.8" }
+bit-vec = { version = "0.9" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 block2 = { version = "0.6" }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
@@ -360,7 +360,7 @@ zstd-sys = { version = "2", default-features = false, features = ["legacy", "std
 [target.aarch64-apple-darwin.build-dependencies]
 aho-corasick = { version = "1" }
 bit-set = { version = "0.8" }
-bit-vec = { version = "0.8" }
+bit-vec = { version = "0.9" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 block2 = { version = "0.6" }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
