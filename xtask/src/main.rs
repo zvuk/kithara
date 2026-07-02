@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+mod agent_hook;
 mod android;
 mod apple;
 mod apple_docgen;
@@ -27,6 +28,7 @@ mod util;
 mod viz;
 mod wasm;
 
+use agent_hook::AgentHookArgs;
 use android::AndroidCommand;
 use apple::AppleCommand;
 use ast_grep::AstGrepArgs;
@@ -108,6 +110,8 @@ enum Command {
     Release(ReleaseArgs),
     /// Translate scope tokens to tool-specific flags (used by `just audit`).
     Scope(ScopeArgs),
+    /// Agent editor/shell hooks for tool-specific adapters.
+    AgentHook(AgentHookArgs),
     /// Run workspace tests through `cargo nextest`.
     Test(TestArgs),
     /// Format Rust, manifests, TOML, JSON, and Markdown through project tooling.
@@ -145,6 +149,7 @@ fn main() -> anyhow::Result<()> {
         Command::Publish(ref args) => publish::run(args),
         Command::Release(ref args) => release::run(args),
         Command::Scope(ref args) => scope::run(args),
+        Command::AgentHook(ref args) => agent_hook::run(args),
         Command::Test(ref args) => test::run(args),
         Command::Format(ref args) => format::run(args),
         Command::AstGrep(ref args) => ast_grep::run(args),

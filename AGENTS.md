@@ -35,6 +35,7 @@ Use it for repo-wide coding conventions, path routing, and stable coordination s
 - Prefer clean, maintainable code over clever shortcuts or speculative abstractions.
 - Keep code readable and easy to understand.
 - Optimize for performance in hot paths.
+- Use repo harnesses for acceptance and formatting: `cargo xtask test` / `just test` and `cargo xtask format`. Raw `cargo test`, `cargo nextest`, or direct formatter commands are scoped probes only, not final validation claims.
 
 ## Agent Red-Flag Gate
 
@@ -220,6 +221,8 @@ Risks or follow-ups:
 - If a task needs a plan, follow `.docs/workflows/rust-ai.md` and `.docs/plans/_template.md`.
 - Load `.docs/guides/*` files only when the task, a red flag, or a failing lint points to that topic.
 - Load `.docs/guides/tooling.md` only when touching formatter, lint, dependency-audit, or external-tool policy.
+- Load `.docs/guides/test-harness.md` only when adding/debugging tests or reporting validation scope.
+- Load `.docs/guides/agent-hooks.md` only when touching tool adapters, hooks, or command routing.
 - If shared boundaries are unclear, stop and clarify before implementation.
 - Keep debate procedures, investigation journaling, and TDD choreography out of `AGENTS.md`. Put that guidance in workflow docs or owning `CONTEXT.md` files.
 - Do not restate the same repo rule in tool-specific files. Tool-specific files should only route the agent to canonical docs and scoped domain guidance.

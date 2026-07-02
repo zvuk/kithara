@@ -31,11 +31,14 @@ handoff, integration, or a workflow decision.
   flow, and god objects.
 - `.docs/guides/review-validation.md`: tests, review discipline, PR readiness, and
   validation scope.
+- `.docs/guides/test-harness.md`: test entrypoints, scoped probes, regression
+  proof, and shared harness helpers.
 - `.docs/guides/cancel-policy.md`: cancellation hierarchy details.
 - `.docs/guides/lint-policy.md`: lint-suppression policy and sanctioned exception
   details.
 - `.docs/guides/tooling.md`: formatter, lint, dependency-audit, and external-tool
   ownership.
+- `.docs/guides/agent-hooks.md`: tool adapter hooks and command guard behavior.
 
 If a lint fails, open only the reported rule or the matching reference file. Do
 not pre-load the whole `ast-grep` or `xtask` tree.

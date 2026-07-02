@@ -3,7 +3,30 @@
     "commit": "",
     "pr": ""
   },
-  "hooks": {},
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cargo xtask agent-hook pre-bash"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cargo xtask agent-hook post-edit"
+          }
+        ]
+      }
+    ]
+  },
   "enabledPlugins": {
     "ralph-loop@claude-plugins-official": true,
     "claude-octopus@nyldn-plugins": true
