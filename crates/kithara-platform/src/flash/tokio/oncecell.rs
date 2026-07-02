@@ -1,4 +1,5 @@
 use std::{
+    convert::Infallible,
     future::Future,
     panic::Location,
     pin::Pin,
@@ -34,6 +35,34 @@ pub struct OnceCell<T> {
 }
 
 impl<T> OnceCell<T> {
+    /// Create a statically-initializable cell.
+    #[must_use]
+    pub const fn const_new() -> Self {
+        Self {
+            value: OnceLock::new(),
+            init: Mutex::new(Init {
+                wakers: Vec::new(),
+                in_progress: false,
+            }),
+            backend: Backend::Native,
+        }
+    }
+
+    /// Get the value, or run `f` to initialize it.
+    pub async fn get_or_init<F, Fut>(&self, f: F) -> &T
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = T>,
+    {
+        match self
+            .get_or_try_init(|| async { Ok::<T, Infallible>(f().await) })
+            .await
+        {
+            Ok(value) => value,
+            Err(never) => match never {},
+        }
+    }
+
     /// Release the init claim and wake every parked waiter so each re-checks the
     /// value (set ⇒ resolves) or contends for the next turn (init failed). On
     /// the flash path one `signal_channel(_, true)` wakes all engine waiters.
@@ -323,5 +352,15 @@ mod tests {
         assert_eq!(first, Err("boom"));
         let second = cell.get_or_try_init(|| async { Ok::<_, &str>(7) }).await;
         assert_eq!(second, Ok(&7));
+    }
+
+    #[kithara::test(tokio, multi_thread)]
+    async fn const_new_supports_infallible_init() {
+        static CELL: OnceCell<usize> = OnceCell::const_new();
+
+        let value = CELL.get_or_init(|| async { 11 }).await;
+
+        assert_eq!(*value, 11);
+        assert_eq!(*CELL.get_or_init(|| async { 12 }).await, 11);
     }
 }

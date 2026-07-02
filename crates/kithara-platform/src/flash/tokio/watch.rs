@@ -9,31 +9,13 @@ use std::{
 
 use parking_lot::{Mutex, MutexGuard};
 
+pub use super::errors::{RecvError, SendError};
 use crate::flash::{
     diag::PrimKind,
     flash_ambient,
     ids::{Backend, trace_native_from_ambient},
     system,
 };
-
-/// Error returned by [`Receiver::changed`] once every sender has dropped, so the
-/// value can never change again. A distinct type from `tokio`'s (whose field is
-/// private, so it cannot be constructed here); callers only ever map it away.
-pub mod error {
-    /// All senders dropped; the watched value will never change again.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct RecvError;
-
-    impl std::fmt::Display for RecvError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("watch channel closed")
-        }
-    }
-
-    impl std::error::Error for RecvError {}
-}
-
-pub use error::RecvError;
 
 /// Value + version + close latch, plus the off-flash parked-receiver wakers,
 /// all under one mutex (the gate). The version starts at `0`; every `send`
@@ -140,6 +122,19 @@ impl<T> Drop for Sender<T> {
 }
 
 impl<T> Sender<T> {
+    /// Create a new receiver that starts from the sender's current value.
+    #[must_use]
+    pub fn subscribe(&self) -> Receiver<T> {
+        let state = self.shared.state.lock();
+        let seen = state.version;
+        drop(state);
+        Receiver {
+            shared: Arc::clone(&self.shared),
+            seen,
+            pending: None,
+        }
+    }
+
     /// Replace the watched value and wake every receiver.
     ///
     /// # Errors
@@ -156,25 +151,18 @@ impl<T> Sender<T> {
         self.shared.signal(drained);
         Ok(())
     }
-}
 
-/// Returned by `Sender::send` when no receivers remain; carries the value back.
-/// Distinct from `tokio`'s (its inner field is private); callers discard it.
-pub struct SendError<T>(pub T);
-
-impl<T> std::fmt::Debug for SendError<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("SendError(..)")
+    /// Replace the watched value, wake every receiver, and return the old value.
+    pub fn send_replace(&self, value: T) -> T {
+        let mut state = self.shared.state.lock();
+        let old = std::mem::replace(&mut state.value, value);
+        state.version += 1;
+        let drained = std::mem::take(&mut state.wakers);
+        drop(state);
+        self.shared.signal(drained);
+        old
     }
 }
-
-impl<T> std::fmt::Display for SendError<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("sending on a watch channel with no receivers")
-    }
-}
-
-impl<T> std::error::Error for SendError<T> {}
 
 /// Receiving half: borrows the latest value and awaits version changes.
 pub struct Receiver<T> {
@@ -243,6 +231,21 @@ impl<T> Receiver<T> {
     pub fn changed(&mut self) -> Changed<'_, T> {
         Changed { rx: self }
     }
+
+    /// Await until the latest watched value satisfies `predicate`.
+    ///
+    /// # Errors
+    /// [`RecvError`] once every sender has dropped before a matching value
+    /// arrives.
+    pub fn wait_for<F>(&mut self, predicate: F) -> WaitFor<'_, T, F>
+    where
+        F: FnMut(&T) -> bool + Unpin,
+    {
+        WaitFor {
+            rx: self,
+            predicate,
+        }
+    }
 }
 
 /// Future returned by [`Receiver::changed`].
@@ -297,6 +300,80 @@ impl<T> Future for Changed<'_, T> {
             }
         }
         Poll::Pending
+    }
+}
+
+/// Future returned by [`Receiver::wait_for`].
+pub struct WaitFor<'a, T, F> {
+    rx: &'a mut Receiver<T>,
+    predicate: F,
+}
+
+impl<'a, T, F> Future for WaitFor<'a, T, F>
+where
+    F: FnMut(&T) -> bool + Unpin,
+{
+    type Output = Result<(), RecvError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let rx = &mut *this.rx;
+        match rx.pending.as_ref() {
+            Some(Parked::Engine(handle)) => {
+                if handle.granted() {
+                    rx.pending = None;
+                } else {
+                    return Poll::Pending;
+                }
+            }
+            Some(Parked::Real(_)) => rx.pending = None,
+            None => {}
+        }
+
+        let state = rx.shared.state.lock();
+        rx.seen = state.version;
+        if (this.predicate)(&state.value) {
+            drop(state);
+            return Poll::Ready(Ok(()));
+        }
+        if state.closed {
+            drop(state);
+            return Poll::Ready(Err(RecvError));
+        }
+        match rx.shared.backend {
+            Backend::Engine(cvid) => {
+                let (handle, adv) = system::register_channel_async(cvid, cx.waker().clone());
+                rx.pending = Some(Parked::Engine(handle));
+                drop(state);
+                adv.fire();
+            }
+            Backend::Native => {
+                trace_native_from_ambient("watch", "wait_for_park");
+                let waker = cx.waker().clone();
+                let mut state = state;
+                state.wakers.push(waker.clone());
+                rx.pending = Some(Parked::Real(waker));
+                drop(state);
+            }
+        }
+        Poll::Pending
+    }
+}
+
+impl<T, F> Drop for WaitFor<'_, T, F> {
+    fn drop(&mut self) {
+        match self.rx.pending.take() {
+            Some(Parked::Real(waker)) => {
+                self.rx
+                    .shared
+                    .state
+                    .lock()
+                    .wakers
+                    .retain(|w| !w.will_wake(&waker));
+            }
+            Some(Parked::Engine(handle)) => system::cancel_async_wait(&handle),
+            None => {}
+        }
     }
 }
 
@@ -373,5 +450,20 @@ mod tests {
             tx.send(2).expect("receiver present");
         }));
         assert_eq!(waiter.await.expect("task joined"), 2);
+    }
+
+    #[kithara::test(tokio, multi_thread)]
+    async fn sender_subscribe_wait_for_and_send_replace_cover_required_surface() {
+        flash::reset();
+        let (tx, mut rx) = channel(false);
+        assert!(!tx.send_replace(true));
+        rx.wait_for(|value| *value).await.expect("value delivered");
+        assert!(*rx.borrow());
+
+        let mut late = tx.subscribe();
+        late.wait_for(|value| *value)
+            .await
+            .expect("current value observed");
+        assert!(*late.borrow());
     }
 }
