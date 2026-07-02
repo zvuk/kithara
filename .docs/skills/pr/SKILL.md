@@ -1,6 +1,6 @@
 ---
 name: pr
-description: Draft project-aligned PR descriptions from the current branch. Use when the user asks to prepare a PR description, PR notes, a branch summary for review, or to fill the repository pull request template. Follow `.docs/workflow/pr-description.md` for the output shape and expectations.
+description: Draft project-aligned PR descriptions from the current branch. Use when the user asks to prepare a PR description, PR notes, a branch summary for review, or to fill the repository pull request template. Follow `.docs/workflows/pr-description.md` for the output shape and expectations.
 ---
 
 # PR Description
@@ -31,5 +31,5 @@ description: Draft project-aligned PR descriptions from the current branch. Use 
 
 ## Repo note
 
-- In this repository, use `.docs/workflow/pr-description.md` as the source of truth for the PR description shape.
+- In this repository, use `.docs/workflows/pr-description.md` as the source of truth for the PR description shape.
 - Do not invent a parallel template when the workflow document already defines the structure.

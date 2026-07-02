@@ -6,8 +6,10 @@ Use it for repo-wide coding conventions, path routing, and stable coordination s
 ## Authority
 
 - `AGENTS.md` is the canonical repo-level contract for all coding agents. It owns repo-wide invariants, coding conventions, routing, and the stable coordination shapes below.
-- `.docs/workflow/rust-ai.md` is the canonical workflow for task setup, split, handoff, and integration.
-- If two documents disagree: `AGENTS.md` wins over `.docs/workflow/*`, which wins over crate `README.md` / `CONTEXT.md`, which wins over tool-specific shims.
+- `.docs/workflows/rust-ai.md` is the canonical workflow for task setup, split, handoff, and integration.
+- `.docs/guides/*` contains lazy-loaded reference guidance. Open only the file that matches the current task, red flag, or lint failure.
+- `.docs/rules/*` contains tool-neutral entry rules used through tool-specific symlinks.
+- If two documents disagree: `AGENTS.md` wins over `.docs/workflows/*`, `.docs/guides/*`, and `.docs/rules/*`, which win over crate `README.md` / `CONTEXT.md`, which win over tool-specific shims.
 
 ## Core Principles
 
@@ -24,16 +26,33 @@ Use it for repo-wide coding conventions, path routing, and stable coordination s
 - Do not use `unwrap()` or `expect()` in production code without a strong, explicit reason.
 - Name the canonical owner before changing shared state, shared types, or cross-crate contracts. If the owner is unclear, stop and clarify before implementation.
 - Do not introduce parallel mutable sources of truth without an explicit transition contract. When old and new state must coexist temporarily, use a staged ownership transfer in the task packet or plan.
-- No fallback chains (`try A, else B, else C`) to paper over state-resolution bugs. A fallback is a code smell: if the primary path has no correct answer, the underlying state contract is broken — fix the contract, not the symptom. Legitimate fallbacks (user-facing defaults, optional config, degraded-mode operation) must be explicitly justified in the owning crate `CONTEXT.md` or the task packet. Tests that codify fallback behaviour protect symptoms and should be treated as evidence of a root-cause bug.
+- No fallback chains (`try A, else B, else C`) to paper over state-resolution bugs. A fallback is a code smell: if the primary path has no correct answer, the underlying state contract is broken - fix the contract, not the symptom. Legitimate fallbacks (user-facing defaults, optional config, degraded-mode operation) must be explicitly justified in the owning crate `CONTEXT.md` or the task packet. Tests that codify fallback behaviour protect symptoms and should be treated as evidence of a root-cause bug.
 - Prefer generics and composition over near-duplicate protocol-specific types.
 - Use `tracing`, not `println!` or `dbg!`, in production code.
 - Do not use destructive git commands unless the user explicitly asks for them.
-- Cancel-token hierarchy (typed, propagate-down): cancel is a tree of `Arc<Node>` (one `AtomicBool` per node) living in `kithara-platform` `common/cancel/`. `CancelToken` is a handle into the tree (`Clone` = identity, same node) with `child()` (derive a descendant) / `cancel()` (cancels its own subtree — epoch / per-fetch cancels are legitimate) / `is_cancelled()` (one Acquire-load) / `cancelled()` (async, `select!`-safe) / `on_cancel()` (sync waker). Two constructors mint a fresh tree root instead of deriving from a parent: `root()` (the owning master a subsystem holds and cancels on teardown; owner sites only) and the `never()` sentinel (structurally required, never cancelled). `CancelGroup` is the OR-combinator over a set of tokens. `CancelScope::new(Option<CancelToken>)` is the canonical seam: a passed parent → `token = parent.child()` (composed); `None` → the scope's token is itself a fresh `root()` (standalone). Parent-liveness keeps an ancestor node alive for DFS reachability. `CancelScope::Drop` is PASSIVE — teardown is an explicit `scope.cancel()` on the owner's own subtree, never an implicit cancel of a potentially-foreign master. Hard-coded `CancelToken::root()` and `CancelToken::never()` are forbidden in production code outside the allowlist (consumer-crate tops `kithara-app` / `kithara-ffi`, `CancelScope` in `kithara-platform`, the `kithara-stream` `batch` `never()` sentinel, the `kithara-hls` `wake_signal` latch). Enforced by `cargo xtask lint arch` (`cancel_root_sites`). See `crates/kithara-play/CONTEXT.md` "Cancel Hierarchy" for the full contract.
-- Zero-tolerance for lint suppress. Forbidden: new entries in `.config/{arch,style,idioms,ast-grep}/*.toml`; new `#[allow(...)]` / `#[expect(...)]` / `#![allow(...)]` / `// xtask-lint-ignore:` markers in production code. Legalized exceptions: exactly two flash-ON-scoped expects in `kithara-platform/src/lib.rs`: `#[cfg_attr(feature = "flash", expect(unreachable_pub, dead_code, unused_imports))]` on `mod native` (the facade pattern makes `unreachable_pub` structurally false-positive in the flash-ON configuration; `dead_code` covers W1-interim unconsumed native arms and must be removed once the W2 flash wrappers consume them — the unfulfilled expectation will demand it; `unused_imports` covers native pub-use re-exports shadowed by the flash arms) and `#[cfg_attr(all(not(target_arch = "wasm32"), feature = "flash"), expect(unreachable_pub, dead_code))]` on `mod common` (the ungated inert control surface `common::flash_inert` and the real-clock items it aliases compile in the flash-ON lane but are intentionally unwired there — the engine `flash` module takes the path). The OFF lane of the dual-run gate keeps full lint coverage of both modules. Unavoidable lint → STOP, fix the underlying code; never grow `baseline.toml` or add a suppress to make a commit pass. Cast-group fixes use `num-traits` (`NumCast` / `AsPrimitive` / `ToPrimitive`), not `as` or per-site `try_from().expect()`.
+- Cancel-token hierarchy is typed and propagate-down. Hard-coded `CancelToken::root()` and `CancelToken::never()` are forbidden outside sanctioned owner sites. See `.docs/guides/cancel-policy.md` only when touching cancellation.
+- Zero-tolerance for lint suppressions and baseline growth. Unavoidable lint means STOP and fix the underlying code. See `.docs/guides/lint-policy.md` only when touching lint policy or a lint exception.
 - Prefer clean, maintainable code over clever shortcuts or speculative abstractions.
 - Keep code readable and easy to understand.
 - Optimize for performance in hot paths.
 
+## Agent Red-Flag Gate
+
+Reject a design before coding when it:
+
+- Has no canonical owner for touched state, shared types, or cross-crate
+  contracts, or creates multiple mutable sources of truth.
+- Masks state-contract bugs with fallback, retry, sentinel, or workaround
+  branches.
+- Crosses platform, protocol, surface, test, or crate-layer boundaries without
+  owning the contract.
+- Widens public API or adds ad-hoc Rust shapes instead of standard traits,
+  domain types, config, or builders.
+- Uses `Arc<...>`, especially `Arc<Atomic*>`, as ownership glue instead of an
+  owner, command, or snapshot model.
+- Introduces shared mutable god-state, globals, god objects, callback spirals, or
+  unrelated responsibilities in one file, type, trait, or facade.
+- Requires a lint suppress, new baseline entry, or "temporary" bypass to pass.
 
 ## Dependency Management
 
@@ -69,8 +88,7 @@ Use it for repo-wide coding conventions, path routing, and stable coordination s
 - Do not add large comment blocks at the top of files.
 - Do not restate the obvious in comments.
 - Contracts, invariants, lifecycle, protocol, or cache explanations belong in the owning crate `CONTEXT.md`; the `README.md` stays an overview that points to it.
-- NO separator comments or banner commends and no ad-hoc style variants that conflict with workspace lint rules.
-- Keep comments short and local. Put longer contracts and invariants in crate `CONTEXT.md`.
+- No separator comments, banner comments, or ad-hoc style variants that conflict with workspace lint rules.
 
 ### File size and decomposition
 
@@ -131,7 +149,7 @@ Use it for repo-wide coding conventions, path routing, and stable coordination s
 - Respect workspace-wide config such as `rustfmt.toml`, `clippy.toml`, `deny.toml`, and `sgconfig.yml`.
 - Change lint policy in the shared config files instead of creating per-crate drift unless there is a strong reason.
 - The pre-commit hook expects clean formatting, linting, and tests. If they fail after your change, assume your change caused it until proven otherwise.
-- Treat **`rustc` warnings** (for example `unused-imports`, `dead_code`, `deprecated`, unfulfilled `#[expect]`, `unreachable_pub`) the same as Clippy: fix the cause in code you touch—remove dead code, update imports and APIs, replace deprecated items—rather than leaving warnings to accumulate.
+- Treat **`rustc` warnings** (for example `unused-imports`, `dead_code`, `deprecated`, unfulfilled `#[expect]`, `unreachable_pub`) the same as Clippy: fix the cause in code you touch - remove dead code, update imports and APIs, replace deprecated items - rather than leaving warnings to accumulate.
 - Prefer fixing the cause of a compiler or Clippy warning (correct types, control flow, dependency or API change) over silencing it. Do not add `#[allow(...)]`, file-level `#![allow(...)]`, or other lint suppressions unless there is no reasonable code-side fix; if you must suppress, document why in the owning crate `CONTEXT.md` or in a short comment on the same item.
 
 ### Style rules enforced by tooling
@@ -198,7 +216,8 @@ Risks or follow-ups:
 - Keep the primary acceptance target explicit in the packet or plan and revisit it after local fixes.
 - Read only the repo docs and crate `README.md` / `CONTEXT.md` files that match the owned paths.
 - The stable task packet, handoff, and final report shapes live here. Do not create parallel template docs for them.
-- If a task needs a plan, follow `.docs/workflow/rust-ai.md` and `.docs/plans/_template.md`.
+- If a task needs a plan, follow `.docs/workflows/rust-ai.md` and `.docs/plans/_template.md`.
+- Load `.docs/guides/*` files only when the task, a red flag, or a failing lint points to that topic.
 - If shared boundaries are unclear, stop and clarify before implementation.
 - Keep debate procedures, investigation journaling, and TDD choreography out of `AGENTS.md`. Put that guidance in workflow docs or owning `CONTEXT.md` files.
 - Do not restate the same repo rule in tool-specific files. Tool-specific files should only route the agent to canonical docs and scoped domain guidance.
