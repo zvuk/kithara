@@ -8,148 +8,26 @@ publish = false
 autotests = false
 build = "build.rs"
 
-[lints]
-workspace = true
-
 [package.metadata.cargo-machete]
 ignored = ["serial_test"]
 
-# Cross-platform dependencies (used by both native and WASM tests)
-[dependencies]
-kithara = { workspace = true, features = ["full", "probe"] }
-kithara-audio = { workspace = true, features = ["probe", "symphonia"] }
-kithara-abr = { workspace = true, features = ["probe"] }
-kithara-assets = { workspace = true, features = ["probe"] }
-kithara-bufpool = { workspace = true }
-kithara-drm = { workspace = true }
-kithara-events = { workspace = true }
-kithara-hls = { workspace = true, features = ["probe"] }
-kithara-queue = { workspace = true, features = ["backend-cpal", "probe"] }
-kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
-rkyv = { workspace = true }
-kithara-net = { workspace = true, features = ["mock", "probe"] }
-kithara-platform = { workspace = true }
-kithara-storage = { workspace = true }
-kithara-stream = { workspace = true, features = ["probe"] }
+[[bin]]
+name = "test_server"
+path = "bin/test_server.rs"
+test = false
 
-# Channels/buffers
-bytes = { workspace = true }
+[[bin]]
+name = "fixture-cache-setup"
+path = "bin/fixture-cache-setup.rs"
+test = false
 
-# HTTP/URL
-url = { workspace = true }
-
-# Testing framework
-tempfile = { workspace = true }
-serial_test = { workspace = true }
-thiserror = { workspace = true }
-
-# Logging
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-
-# Serialization
-serde = { workspace = true }
-serde_json = { workspace = true }
-
-# Crypto (for HLS encryption tests)
-aes = { workspace = true }
-cbc = { workspace = true }
-base64 = { workspace = true }
-hex = { workspace = true }
-sha2 = { workspace = true }
-uuid = { workspace = true }
-
-# Misc
-futures = { workspace = true }
-
-# Async traits
-async-trait = { workspace = true }
-
-# --- Native-only dependencies ---
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara = { workspace = true }
-kithara-platform = { workspace = true, features = ["tokio-net"] }
-# fdk-aac пришёл из kithara-decode defaults до Phase 2 (workspace
-# default-features=false). HE-AAC v2 fMP4 фикстуры в rapid-scrub /
-# stress-seek тестах декодятся через symphonia path, и без fdk-aac
-# отдается LC-only — добавляем явно.
-kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia", "fdk-aac"] }
-kithara-encode = { workspace = true }
-kithara-file = { workspace = true }
-kithara-play = { workspace = true, features = ["backend-cpal"] }
-firewheel = { workspace = true }
-num-traits = { workspace = true }
-
-# HTTP server (axum stack not available on WASM)
-reqwest = { workspace = true, features = ["rustls", "stream"] }
-axum = { workspace = true }
-tower = { workspace = true }
-tower-http = { workspace = true }
-moka = { workspace = true }
-
-# Seeded RNG for user-simulation e2e scenarios. Tests in
-# `tests/tests/kithara_queue/user_simulation/` need a deterministic
-# random stream so failures stay reproducible across CI re-runs.
-rand = { workspace = true }
-
-# Mocking
-unimock = { workspace = true }
-
-# Storage
-mmap-io = { workspace = true }
-
-# WebDriver automation
-thirtyfour = { workspace = true }
-
-# Performance monitoring (optional)
-hotpath = { workspace = true, optional = true }
-
-# RSS memory profiling
-memory-stats = { workspace = true }
-assert_no_alloc = { workspace = true }
-ringbuf = { workspace = true }
-tokio-stream = { workspace = true }
-
-# --- Apple hardware backend (macOS/iOS only) ---
-# Forwarded so `DecoderBackend::Apple` is in scope for tests that
-# parametrise over backends. The variant is `#[cfg]`-gated on
-# `feature = "apple"` + matching `target_os`, so without these entries
-# the test crate cannot reference it.
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara = { workspace = true, features = ["apple", "client-wreq"] }
-kithara-audio = { workspace = true, features = ["apple"] }
-kithara-decode = { workspace = true, features = ["apple"] }
-kithara-play = { workspace = true, features = ["apple"] }
-
-# --- Android hardware backend (android only) ---
-[target.'cfg(target_os = "android")'.dependencies]
-kithara-audio = { workspace = true, features = ["android"] }
-kithara-decode = { workspace = true, features = ["android"] }
-
-# --- WASM-only dependencies ---
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-kithara-test-macros = { workspace = true }
-
-# WASM-specific
-js-sys = { workspace = true }
-wasm-bindgen = { workspace = true }
-wasm-bindgen-futures = { workspace = true }
-wasm-bindgen-test = { workspace = true }
-web-sys = { workspace = true }
-gloo-timers = { workspace = true }
-tracing-wasm = { workspace = true }
-console_error_panic_hook = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-criterion = { workspace = true }
+[[bin]]
+name = "wasm_test_runner"
+path = "bin/wasm_test_runner.rs"
+test = false
 
 [features]
-perf = [
-    "dep:hotpath",
-    "hotpath/hotpath",
-    "kithara/perf",
-]
+perf = ["dep:hotpath", "hotpath/hotpath", "kithara/perf"]
 # End-to-end tests that require real networks and real audio hardware.
 # Gated off by default so `just test` never compiles `suite_e2e`.
 e2e = []
@@ -167,20 +45,140 @@ flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
 # into scope for tests.
 apple-net = ["kithara/apple-net"]
 
-[[bin]]
-name = "test_server"
-path = "bin/test_server.rs"
-test = false
+# Cross-platform dependencies (used by both native and WASM tests)
+[dependencies]
+kithara = { workspace = true, features = ["full", "probe"] }
+kithara-abr = { workspace = true, features = ["probe"] }
+kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
+kithara-assets = { workspace = true, features = ["probe"] }
+kithara-audio = { workspace = true, features = ["probe", "symphonia"] }
+kithara-bufpool = { workspace = true }
+kithara-drm = { workspace = true }
+kithara-events = { workspace = true }
+kithara-hls = { workspace = true, features = ["probe"] }
+kithara-net = { workspace = true, features = ["mock", "probe"] }
+kithara-platform = { workspace = true }
+kithara-queue = { workspace = true, features = ["backend-cpal", "probe"] }
+kithara-storage = { workspace = true }
+kithara-stream = { workspace = true, features = ["probe"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
-[[bin]]
-name = "fixture-cache-setup"
-path = "bin/fixture-cache-setup.rs"
-test = false
+# Crypto (for HLS encryption tests)
+aes = { workspace = true }
 
-[[bin]]
-name = "wasm_test_runner"
-path = "bin/wasm_test_runner.rs"
-test = false
+# Async traits
+async-trait = { workspace = true }
+base64 = { workspace = true }
+
+# Channels/buffers
+bytes = { workspace = true }
+cbc = { workspace = true }
+
+# Misc
+futures = { workspace = true }
+hex = { workspace = true }
+rkyv = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Testing framework
+serial_test = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# HTTP/URL
+url = { workspace = true }
+uuid = { workspace = true }
+
+# --- Apple hardware backend (macOS/iOS only) ---
+# Forwarded so `DecoderBackend::Apple` is in scope for tests that
+# parametrise over backends. The variant is `#[cfg]`-gated on
+# `feature = "apple"` + matching `target_os`, so without these entries
+# the test crate cannot reference it.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+kithara = { workspace = true, features = ["apple", "client-wreq"] }
+kithara-audio = { workspace = true, features = ["apple"] }
+kithara-decode = { workspace = true, features = ["apple"] }
+kithara-play = { workspace = true, features = ["apple"] }
+
+# --- Native-only dependencies ---
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara = { workspace = true }
+# fdk-aac пришёл из kithara-decode defaults до Phase 2 (workspace
+# default-features=false). HE-AAC v2 fMP4 фикстуры в rapid-scrub /
+# stress-seek тестах декодятся через symphonia path, и без fdk-aac
+# отдается LC-only — добавляем явно.
+kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia", "fdk-aac"] }
+kithara-encode = { workspace = true }
+kithara-file = { workspace = true }
+kithara-platform = { workspace = true, features = ["tokio-net"] }
+kithara-play = { workspace = true, features = ["backend-cpal"] }
+
+assert_no_alloc = { workspace = true }
+axum = { workspace = true }
+firewheel = { workspace = true }
+
+# Performance monitoring (optional)
+hotpath = { workspace = true, optional = true }
+
+# RSS memory profiling
+memory-stats = { workspace = true }
+
+# Storage
+mmap-io = { workspace = true }
+moka = { workspace = true }
+num-traits = { workspace = true }
+
+# Seeded RNG for user-simulation e2e scenarios. Tests in
+# `tests/tests/kithara_queue/user_simulation/` need a deterministic
+# random stream so failures stay reproducible across CI re-runs.
+rand = { workspace = true }
+
+# HTTP server (axum stack not available on WASM)
+reqwest = { workspace = true, features = ["rustls", "stream"] }
+ringbuf = { workspace = true }
+
+# WebDriver automation
+thirtyfour = { workspace = true }
+tokio-stream = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# Mocking
+unimock = { workspace = true }
+
+# --- WASM-only dependencies ---
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+kithara-test-macros = { workspace = true }
+
+console_error_panic_hook = { workspace = true }
+gloo-timers = { workspace = true }
+
+# WASM-specific
+js-sys = { workspace = true }
+tracing-wasm = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+wasm-bindgen-test = { workspace = true }
+web-sys = { workspace = true }
+
+# --- Android hardware backend (android only) ---
+[target.'cfg(target_os = "android")'.dependencies]
+kithara-audio = { workspace = true, features = ["android"] }
+kithara-decode = { workspace = true, features = ["android"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { workspace = true }
+
+[lints]
+workspace = true
 
 [[test]]
 name = "red_env_guard_leak_thread"

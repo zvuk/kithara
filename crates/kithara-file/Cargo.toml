@@ -9,26 +9,6 @@ description = "Progressive download and playback for MP3, AAC, FLAC and more."
 keywords = ["audio", "streaming", "mp3", "aac", "download"]
 categories = ["multimedia::audio", "network-programming"]
 
-[lints]
-workspace = true
-
-[dependencies]
-bon = { workspace = true }
-kithara-abr = { workspace = true, default-features = false }
-kithara-assets = { workspace = true }
-kithara-events = { workspace = true }
-kithara-net = { workspace = true, default-features = false }
-kithara-platform = { workspace = true }
-kithara-stream = { workspace = true, default-features = false }
-kithara-storage = { workspace = true }
-kithara-test-utils = { workspace = true }
-futures = { workspace = true }
-re_mp4 = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-url = { workspace = true }
-hotpath = { workspace = true, optional = true }
-
 [features]
 default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
@@ -64,15 +44,36 @@ tls-native = [
 # builds only.
 probe = []
 
+[dependencies]
+kithara-abr = { workspace = true, default-features = false }
+kithara-assets = { workspace = true }
+kithara-events = { workspace = true }
+kithara-net = { workspace = true, default-features = false }
+kithara-platform = { workspace = true }
+kithara-storage = { workspace = true }
+kithara-stream = { workspace = true, default-features = false }
+kithara-test-utils = { workspace = true }
+
+bon = { workspace = true }
+futures = { workspace = true }
+hotpath = { workspace = true, optional = true }
+re_mp4 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-tempfile = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { workspace = true }
-tracing-subscriber = { workspace = true }
 memory-stats = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,27 @@
+always_trailing_comma = false
+multiline_trailing_comma = true
+max_array_line_len = 100
+indent_count = 4
+space_around_eq = true
+compact_arrays = false
+compact_inline_tables = false
+trailing_newline = true
+key_value_newlines = true
+allowed_blank_lines = 1
+crlf = false
+
+table_order = [
+  "workspace",
+  "workspace.package",
+  "workspace.dependencies",
+  "workspace.lints",
+  "workspace.metadata",
+  "package",
+  "lib",
+  "bin",
+  "features",
+  "dependencies",
+  "target",
+  "build-dependencies",
+  "dev-dependencies",
+]

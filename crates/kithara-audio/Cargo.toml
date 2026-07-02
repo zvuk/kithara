@@ -9,38 +9,6 @@ description = "Audio pipeline: worker thread, effects chain, resampling."
 keywords = ["audio", "dsp", "resampling", "playback", "player"]
 categories = ["multimedia::audio"]
 
-[lints]
-workspace = true
-
-[dependencies]
-arc-swap = { workspace = true }
-bon = { workspace = true }
-crossbeam-queue = { workspace = true }
-delegate = { workspace = true }
-kithara-abr = { workspace = true, default-features = false }
-kithara-decode = { workspace = true, default-features = false }
-kithara-events = { workspace = true }
-kithara-stream = { workspace = true, default-features = false }
-kithara-bufpool = { workspace = true }
-kithara-beat = { workspace = true, optional = true }
-kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true }
-biquad = { workspace = true }
-rubato = { workspace = true }
-realfft = { workspace = true }
-thiserror = { workspace = true }
-serde = { workspace = true }
-audioadapter-buffers = { workspace = true }
-smallvec = { workspace = true }
-ringbuf = { workspace = true }
-tracing = { workspace = true }
-kithara-platform = { workspace = true }
-portable-atomic = { workspace = true }
-fast-interleave = { workspace = true }
-num-traits = { workspace = true }
-hotpath = { workspace = true, optional = true }
-unimock = { workspace = true }
-
 [features]
 default = ["symphonia", "client-reqwest", "tls-rustls"]
 probe = []
@@ -93,46 +61,85 @@ stretch-bungee = ["dep:bungee-rs"]
 # NN beat/downbeat detector (kithara-beat, embedded small model). Native-only
 # in practice: wasm builds simply do not enable it (rten on wasm unverified).
 beat-nn = ["dep:kithara-beat", "kithara-beat/embed-small-model"]
+
+[dependencies]
+kithara-abr = { workspace = true, default-features = false }
+kithara-beat = { workspace = true, optional = true }
+kithara-bufpool = { workspace = true }
+kithara-decode = { workspace = true, default-features = false }
+kithara-events = { workspace = true }
+kithara-platform = { workspace = true }
+kithara-stream = { workspace = true, default-features = false }
+kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true }
+
+arc-swap = { workspace = true }
+audioadapter-buffers = { workspace = true }
+biquad = { workspace = true }
+bon = { workspace = true }
+crossbeam-queue = { workspace = true }
+delegate = { workspace = true }
+fast-interleave = { workspace = true }
+hotpath = { workspace = true, optional = true }
+num-traits = { workspace = true }
+portable-atomic = { workspace = true }
+realfft = { workspace = true }
+ringbuf = { workspace = true }
+rubato = { workspace = true }
+serde = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+unimock = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
-signalsmith-stretch = { workspace = true, optional = true }
+
 bungee-rs = { workspace = true, optional = true }
+signalsmith-stretch = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = { workspace = true }
 js-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
 web-sys = { workspace = true, features = [
-    "AudioContext", "AudioWorkletNode", "AudioWorkletNodeOptions",
-    "BaseAudioContext", "MessagePort"
+    "AudioContext",
+    "AudioWorkletNode",
+    "AudioWorkletNodeOptions",
+    "BaseAudioContext",
+    "MessagePort",
 ] }
 
 [dev-dependencies]
 # `stretch-signalsmith` keeps the stretch-slot contract tests in the default
 # `cargo test -p kithara-audio` run now that no pure-Rust backend exists.
 kithara-audio = { path = ".", default-features = false, features = ["mock", "probe", "symphonia", "stretch-signalsmith"] }
-assert_no_alloc = { workspace = true }
 kithara-bufpool = { workspace = true }
-portable-atomic = { workspace = true }
-num-traits = { workspace = true }
-bytes = { workspace = true }
-tracing = { workspace = true }
-url = { workspace = true }
 kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia"] }
 kithara-storage = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
-tempfile = { workspace = true }
+
 aes = { workspace = true }
+assert_no_alloc = { workspace = true }
+bytes = { workspace = true }
 cbc = { workspace = true }
+num-traits = { workspace = true }
+portable-atomic = { workspace = true }
+tempfile = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-axum = { workspace = true }
-tracing-subscriber = { workspace = true }
+kithara-assets = { workspace = true }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
-kithara-assets = { workspace = true }
 kithara-net = { workspace = true, default-features = false, features = [
     "client-reqwest",
     "tls-rustls",
 ] }
+
+axum = { workspace = true }
 hotpath = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

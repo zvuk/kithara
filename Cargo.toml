@@ -3,26 +3,26 @@ resolver = "2"
 members = [
     "crates/kithara",
     "crates/kithara-abr",
-    "crates/kithara-drm",
-    "crates/kithara-events",
-    "crates/kithara-net",
-    "crates/kithara-file",
-    "crates/kithara-hls",
+    "crates/kithara-app",
+    "crates/kithara-assets",
     "crates/kithara-audio",
     "crates/kithara-beat",
-    "crates/kithara-encode",
-    "crates/kithara-decode",
-    "crates/kithara-stream",
-    "crates/kithara-storage",
-    "crates/kithara-assets",
     "crates/kithara-bufpool",
+    "crates/kithara-decode",
+    "crates/kithara-drm",
+    "crates/kithara-encode",
+    "crates/kithara-events",
+    "crates/kithara-ffi",
+    "crates/kithara-file",
+    "crates/kithara-hls",
+    "crates/kithara-net",
     "crates/kithara-platform",
     "crates/kithara-play",
     "crates/kithara-queue",
-    "crates/kithara-test-utils",
+    "crates/kithara-storage",
+    "crates/kithara-stream",
     "crates/kithara-test-macros",
-    "crates/kithara-app",
-    "crates/kithara-ffi",
+    "crates/kithara-test-utils",
     "crates/kithara-workspace-hack",
     "tests",
     "tests/fuzz",
@@ -123,7 +123,13 @@ type_complexity = "warn"
 approx_constant = "warn"
 
 [workspace.metadata.kithara]
-tools = { rustfmt = "rustfmt.toml", clippy = "clippy.toml", deny = "deny.toml" }
+
+[workspace.metadata.kithara.tools]
+cargo_sort = ".config/tomlfmt.toml"
+clippy = "clippy.toml"
+deny = "deny.toml"
+rustfmt = "rustfmt.toml"
+typos = ".config/typos.toml"
 
 # Drives `cargo xtask apple single` (one self-contained xcframework for the
 # CocoaPods / manual drag-in channels). Project-agnostic: point these at a
@@ -136,13 +142,7 @@ short-version = "0.0.1"
 # iOS 15 floor: consumer apps (e.g. Zvuk) still ship an iOS 15 minimum, and a
 # module built for iOS 16 cannot be imported by an iOS 15 target.
 deployment-target = "15.0"
-autolink-frameworks = [
-    "AudioToolbox",
-    "CoreAudio",
-    "AVFoundation",
-    "Security",
-    "SystemConfiguration",
-]
+autolink-frameworks = ["AudioToolbox", "CoreAudio", "AVFoundation", "Security", "SystemConfiguration"]
 
 [workspace.package]
 version = "0.0.1-alpha4"
@@ -174,14 +174,16 @@ homepage = "https://github.com/zvuk/kithara"
 # opt back into `hang`.
 kithara = { path = "crates/kithara", version = "0.0.1-alpha4", default-features = false }
 kithara-abr = { path = "crates/kithara-abr", version = "0.0.1-alpha4", default-features = false }
+kithara-app = { path = "crates/kithara-app", default-features = false }
 kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha4", default-features = false }
-kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha4" }
 kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha4", default-features = false }
 kithara-beat = { path = "crates/kithara-beat", version = "0.0.1-alpha4" }
-kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha4" }
+kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha4" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha4", default-features = false }
 kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha4" }
+kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha4" }
 kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha4" }
+kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha4", default-features = false }
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha4", default-features = false }
 kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha4", default-features = false }
@@ -192,173 +194,171 @@ kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha4", d
 kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha4", default-features = false }
 kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha4" }
 kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha4", default-features = false }
-kithara-ffi = { path = "crates/kithara-ffi" }
-kithara-app = { path = "crates/kithara-app", default-features = false }
 kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha4" }
-rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
-serial_test = "3.5.0"
-unimock = { version = "0.6", features = ["std"] }
-backtrace = "0.3"
-tokio = { version = "1.52.3", default-features = false }
-tokio_with_wasm = { version = "0.9", features = ["full"] }
-tokio-stream = "0.1.18"
-futures = "0.3.32"
-wasm_safe_thread = "0.1.1"
-parking_lot = "0.12"
-pin-project-lite = "0.2"
-arc-swap = "1.9"
-bytes = "1.12.0"
-ringbuf = "0.5.0"
-slice_ring_buf = "0.3"
-async-stream = "0.3.6"
-crossbeam-queue = "0.3"
-reqwest = { version = "0.13.4", default-features = false }
-wreq = "5"
-wreq-util = "2"
-url = "2.5.8"
-axum = "0.8.9"
-hls_m3u8 = "0.7.0"
-fallible-iterator = "0.3"
-re_mp4 = "0.5.0"
-symphonia = { version = "0.6.0", features = ["all", "opt-simd"] }
-symphonia-format-isomp4 = "0.6.0"
-symphonia-core = "0.6.0"
-fdk-aac = "0.8.0"
-fdk-aac-sys = "0.5.0"
-ffmpeg-next = "8.1.0"
-dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
-ratatui = "0.30.2"
-rubato = "3.0"
-realfft = "3.5"
-# Beat detection NN inference (kithara-beat).
-rten = { version = "0.24", features = ["fft"] }
-rten-tensor = "0.24"
-# Time-stretch backends: C++ FFI, native-only, behind `stretch-*` features.
-signalsmith-stretch = "0.1.3"
-bungee-rs = "0.1.1"
-audioadapter-buffers = "3.0"
-smallvec = "1"
-num-traits = { version = "0.2", default-features = false }
-cpal = { version = "0.18", default-features = false }
-firewheel = { version = "0.10.0", default-features = false, features = ["std", "tracing"] }
-firewheel-web-audio = { version = "0.4.0", default-features = false }
-bevy_platform = { version = "0.19", default-features = false, features = ["alloc", "std", "web"] }
-biquad = "0.6.0"
-thunderdome = { version = "0.6.1", default-features = false }
-portable-atomic = { version = "1.13.1", default-features = false, features = ["fallback", "float"] }
-thiserror = "2.0.18"
-usdt = { version = "0.6", default-features = false, features = ["asm"] }
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "registry"] }
-tracing-wasm = "0.2"
-tracing-android = "0.2.0"
-tracing-log = "0.2"
-web-time = "1.1"
-gloo-timers = { version = "0.4", features = ["futures"] }
-console_error_panic_hook = "0.1"
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-wasm-bindgen-test = "0.3"
-js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Blob", "BroadcastChannel", "console", "DedicatedWorkerGlobalScope", "Document", "Element", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "MessageEvent", "Window"] }
-send_wrapper = "0.6"
-base64 = "0.22.1"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-rustdoc-types = "0.57.4"
-serde_yml = "0.0.13"
-toml = { version = "1.1", features = ["preserve_order"] }
-rkyv = "0.8.16"
-bytecheck = "0.8.2"
-
-# hex encoding
-hex = "0.4"
-
-# crypto/obfuscation
-crabtime = "1.1.4"
-obfstr = "0.4.4"
-rand = "0.10.1"
 
 # misc
-glob = "0.3"
 aes = "0.9.1"
-cbc = "0.2.1"
-uuid = { version = "1", features = ["v5"] }
-sha2 = "0.11"
-tower = "0.5.3"
-tower-layer = "0.3.3"
-tower-service = "0.3.3"
-tower-http = { version = "0.7", features = ["cors", "fs", "set-header"] }
-tempfile = "3.27.0"
 
-# FFI
-uniffi = { version = "0.31.2", default-features = false }
-jni = "0.22"
-ndk-context = "0.1.1"
-rustls-platform-verifier = "0.7.0"
+# xtask tooling
+anyhow = "1"
+
+# fuzzing
+arbitrary = { version = "1", features = ["derive"] }
+
+arc-swap = "1.9"
+
+# memory profiling
+assert_no_alloc = "1.1"
+async-stream = "0.3.6"
 
 # async traits
 async-trait = "0.1.89"
-thirtyfour = "0.37.1"
+audioadapter-buffers = "3.0"
+axum = "0.8.9"
+backtrace = "0.3"
+base64 = "0.22.1"
+bevy_platform = { version = "0.19", default-features = false, features = ["alloc", "std", "web"] }
+biquad = "0.6.0"
 
 # delegation
-delegate = "0.13"
 bitflags = "2.13"
-
-# proc macros
-proc-macro2 = "1"
-quote = "1"
-syn = { version = "2", features = ["full"] }
-
-# storage (range maps + mmap)
-rangemap = { version = "1.7.1", features = ["serde1"] }
-mmap-io = { version = "1.0", default-features = false }
-dashmap = "6.2.1"
-moka = { version = "0.12", features = ["sync"] }
-bon = "3.9"
-derive_more = { version = "2.1", features = ["from"] }
-lru = "0.18"
-
-# fuzzing
-libfuzzer-sys = "0.4"
-arbitrary = { version = "1", features = ["derive"] }
-proptest = "1"
-
-# memory profiling
-dhat = "0.3"
-memory-stats = "1.2"
-stats_alloc = "0.1"
-assert_no_alloc = "1.1"
-
-# performance monitoring
-hotpath = "0.18.0"
-criterion = "0.8.2"
-
-# fast interleave/deinterleave
-fast-interleave = "0.1"
 
 # Apple platform support
 block2 = "0.6.2"
+
+# storage (range maps + mmap)
+bon = "3.9"
+bungee-rs = "0.1.1"
+bytecheck = "0.8.2"
+bytes = "1.12.0"
+cargo_metadata = "0.23"
+cbc = "0.2.1"
+
+# CLI
+clap = { version = "4.6", features = ["derive", "env"] }
+console_error_panic_hook = "0.1"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
-objc2 = "0.6.4"
-objc2-foundation = { version = "0.3.2", default-features = false }
+cpal = { version = "0.18", default-features = false }
 
+# crypto/obfuscation
+crabtime = "1.1.4"
+
+# performance monitoring
+criterion = "0.8.2"
+crossbeam-queue = "0.3"
+crossterm = "0.29"
+dashmap = "6.2.1"
+dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
+delegate = "0.13"
+derive_more = { version = "2.1", features = ["from"] }
+dhat = "0.3"
+fallible-iterator = "0.3"
+
+# fast interleave/deinterleave
+fast-interleave = "0.1"
+fdk-aac = "0.8.0"
+fdk-aac-sys = "0.5.0"
+ffmpeg-next = "8.1.0"
+firewheel = { version = "0.10.0", default-features = false, features = ["std", "tracing"] }
+firewheel-web-audio = { version = "0.4.0", default-features = false }
+futures = "0.3.32"
+glob = "0.3"
+gloo-timers = { version = "0.4", features = ["futures"] }
+
+# hex encoding
+hex = "0.4"
+hls_m3u8 = "0.7.0"
+hotpath = "0.18.0"
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
 
 # UI frameworks
 iced = { version = "0.14", features = ["tokio", "svg", "canvas"] }
 iced_aw = { version = "0.14.1", default-features = false, features = ["tabs", "tab_bar", "selection_list"] }
 
-# CLI
-clap = { version = "4.6", features = ["derive", "env"] }
-crossterm = "0.29"
-
-# xtask tooling
-cargo_metadata = "0.23"
-anyhow = "1"
-regex = "1"
+# FFI
+jni = "0.22"
+js-sys = "0.3"
+libfuzzer-sys = "0.4"
+lru = "0.18"
+memory-stats = "1.2"
+mmap-io = { version = "1.0", default-features = false }
+moka = { version = "0.12", features = ["sync"] }
+ndk-context = "0.1.1"
+num-traits = { version = "0.2", default-features = false }
+obfstr = "0.4.4"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false }
+parking_lot = "0.12"
+pin-project-lite = "0.2"
 plist = "1"
+portable-atomic = { version = "1.13.1", default-features = false, features = ["fallback", "float"] }
+
+# proc macros
+proc-macro2 = "1"
+proptest = "1"
+quote = "1"
+rand = "0.10.1"
+rangemap = { version = "1.7.1", features = ["serde1"] }
+ratatui = "0.30.2"
+re_mp4 = "0.5.0"
+realfft = "3.5"
+regex = "1"
+reqwest = { version = "0.13.4", default-features = false }
+ringbuf = "0.5.0"
+rkyv = "0.8.16"
+rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
+# Beat detection NN inference (kithara-beat).
+rten = { version = "0.24", features = ["fft"] }
+rten-tensor = "0.24"
+rubato = "3.0"
+rustdoc-types = "0.57.4"
+rustls-platform-verifier = "0.7.0"
+send_wrapper = "0.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yml = "0.0.13"
+serial_test = "3.5.0"
+sha2 = "0.11"
+# Time-stretch backends: C++ FFI, native-only, behind `stretch-*` features.
+signalsmith-stretch = "0.1.3"
+slice_ring_buf = "0.3"
+smallvec = "1"
+stats_alloc = "0.1"
+symphonia = { version = "0.6.0", features = ["all", "opt-simd"] }
+symphonia-core = "0.6.0"
+symphonia-format-isomp4 = "0.6.0"
+syn = { version = "2", features = ["full"] }
+tempfile = "3.27.0"
+thirtyfour = "0.37.1"
+thiserror = "2.0.18"
+thunderdome = { version = "0.6.1", default-features = false }
+tokio = { version = "1.52.3", default-features = false }
+tokio-stream = "0.1.18"
+tokio_with_wasm = { version = "0.9", features = ["full"] }
+toml = { version = "1.1", features = ["preserve_order"] }
+tower = "0.5.3"
+tower-http = { version = "0.7", features = ["cors", "fs", "set-header"] }
+tower-layer = "0.3.3"
+tower-service = "0.3.3"
+tracing = "0.1.44"
+tracing-android = "0.2.0"
+tracing-log = "0.2"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "registry"] }
+tracing-wasm = "0.2"
+uniffi = { version = "0.31.2", default-features = false }
+unimock = { version = "0.6", features = ["std"] }
+url = "2.5.8"
+usdt = { version = "0.6", default-features = false, features = ["asm"] }
+uuid = { version = "1", features = ["v5"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+wasm-bindgen-test = "0.3"
+wasm_safe_thread = "0.1.1"
+web-sys = { version = "0.3", features = ["Blob", "BroadcastChannel", "console", "DedicatedWorkerGlobalScope", "Document", "Element", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "MessageEvent", "Window"] }
+web-time = "1.1"
+wreq = "5"
+wreq-util = "2"
 
 # Optimise CPU-heavy audio dependencies in debug builds so the audio
 # worker thread can keep up with real-time playback.  Without this,
@@ -409,9 +409,6 @@ opt-level = 3
 [profile.dev.package.bungee-sys]
 opt-level = 3
 
-[patch.crates-io]
-firewheel-web-audio = { git = "https://github.com/gerasim13/firewheel-web-audio", rev = "1a5e383af4d5d318f93d6d25e617cc95d7b20aef" }
-
 [profile.release]
 opt-level = "z"
 lto = "fat"
@@ -439,3 +436,6 @@ inherits = "release"
 opt-level = "z"
 lto = "fat"
 codegen-units = 1
+
+[patch.crates-io]
+firewheel-web-audio = { git = "https://github.com/gerasim13/firewheel-web-audio", rev = "1a5e383af4d5d318f93d6d25e617cc95d7b20aef" }

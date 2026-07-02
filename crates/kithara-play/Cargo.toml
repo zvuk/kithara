@@ -9,50 +9,6 @@ description = "Player engine: audio graph, EQ, crossfade, DJ-ready."
 keywords = ["audio", "player", "dj", "crossfade", "playback"]
 categories = ["multimedia::audio"]
 
-[lints]
-workspace = true
-
-[dependencies]
-# Kithara sub-crates
-kithara-audio = { workspace = true, default-features = false }
-kithara-decode = { workspace = true, default-features = false }
-kithara-events = { workspace = true }
-kithara-platform = { workspace = true }
-kithara-stream = { workspace = true, default-features = false }
-kithara-file = { workspace = true, default-features = false }
-kithara-hls = { workspace = true, default-features = false }
-kithara-abr = { workspace = true, default-features = false }
-kithara-assets = { workspace = true }
-kithara-net = { workspace = true, default-features = false }
-kithara-bufpool = { workspace = true }
-kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true }
-num-traits = { workspace = true }
-
-# Audio engine
-firewheel = { workspace = true }
-thunderdome = { workspace = true }
-
-# Async & channels
-ringbuf = { workspace = true }
-
-# Utilities
-bon = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-url = { workspace = true }
-portable-atomic = { workspace = true }
-smallvec = { workspace = true }
-
-unimock = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-bevy_platform = { workspace = true }
-firewheel-web-audio = { workspace = true, optional = true }
-
 [features]
 default = ["backend-cpal", "symphonia", "client-reqwest", "tls-rustls"]
 backend-cpal = ["firewheel/cpal"]
@@ -111,11 +67,55 @@ fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
 probe = []
 mock = []
 
+[dependencies]
+kithara-abr = { workspace = true, default-features = false }
+kithara-assets = { workspace = true }
+# Kithara sub-crates
+kithara-audio = { workspace = true, default-features = false }
+kithara-bufpool = { workspace = true }
+kithara-decode = { workspace = true, default-features = false }
+kithara-events = { workspace = true }
+kithara-file = { workspace = true, default-features = false }
+kithara-hls = { workspace = true, default-features = false }
+kithara-net = { workspace = true, default-features = false }
+kithara-platform = { workspace = true }
+kithara-stream = { workspace = true, default-features = false }
+kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true }
+
+# Utilities
+bon = { workspace = true }
+
+# Audio engine
+firewheel = { workspace = true }
+num-traits = { workspace = true }
+portable-atomic = { workspace = true }
+
+# Async & channels
+ringbuf = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+thunderdome = { workspace = true }
+tracing = { workspace = true }
+
+unimock = { workspace = true }
+url = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy_platform = { workspace = true }
+firewheel-web-audio = { workspace = true, optional = true }
+
 [dev-dependencies]
-kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "probe"] }
 kithara-audio = { workspace = true, features = ["probe"] }
+kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "probe"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 kithara-play = { path = ".", features = ["wasm-bindgen"] }
+
+[lints]
+workspace = true

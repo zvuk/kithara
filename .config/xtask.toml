@@ -29,53 +29,47 @@ features = ["kithara-integration-tests/apple-net"]
 [test.lanes.workspace]
 program = "cargo"
 prefix_args = [
-    "nextest",
-    "run",
-    "--workspace",
-    "--exclude",
-    "kithara-fuzz",
-    "--cargo-profile",
-    "test-release",
+  "nextest",
+  "run",
+  "--workspace",
+  "--exclude",
+  "kithara-fuzz",
+  "--cargo-profile",
+  "test-release",
 ]
 
 [test.lanes.cached]
 program = "cargo"
 prefix_args = [
-    "nextest",
-    "run",
-    "--profile",
-    "cache",
-    "--workspace",
-    "--exclude",
-    "kithara-fuzz",
-    "--cargo-profile",
-    "test-release",
+  "nextest",
+  "run",
+  "--profile",
+  "cache",
+  "--workspace",
+  "--exclude",
+  "kithara-fuzz",
+  "--cargo-profile",
+  "test-release",
 ]
 
 [test.lanes.doc]
 program = "cargo"
-prefix_args = [
-    "test",
-    "--doc",
-    "--workspace",
-    "--exclude",
-    "kithara-fuzz",
-]
+prefix_args = ["test", "--doc", "--workspace", "--exclude", "kithara-fuzz"]
 default_flash = false
 
 [test.lanes.e2e]
 program = "cargo"
 prefix_args = [
-    "nextest",
-    "run",
-    "-p",
-    "kithara-integration-tests",
-    "--cargo-profile",
-    "test-release",
-    "--test",
-    "suite_e2e",
-    "--run-ignored",
-    "all",
+  "nextest",
+  "run",
+  "-p",
+  "kithara-integration-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "suite_e2e",
+  "--run-ignored",
+  "all",
 ]
 default_features = ["e2e"]
 default_flash = false
@@ -83,12 +77,12 @@ default_flash = false
 [test.lanes.selenium]
 program = "cargo"
 prefix_args = [
-    "+nightly",
-    "test",
-    "-p",
-    "kithara-integration-tests",
-    "--test",
-    "suite_heavy",
+  "+nightly",
+  "test",
+  "-p",
+  "kithara-integration-tests",
+  "--test",
+  "suite_heavy",
 ]
 default_features = ["selenium"]
 suffix_args = ["selenium", "--", "--nocapture"]
@@ -120,14 +114,14 @@ pages_branch = "gh-pages"
 [orphans]
 # Packages excluded from the default `cargo modules orphans` sweep.
 exclude_packages = [
-    "kithara-workspace-hack",
-    "kithara-test-utils",
-    "kithara-test-macros",
-    "kithara-ffi",
-    "kithara-fuzz",
-    "kithara-decode",
-    "kithara-platform",
-    "xtask",
+  "kithara-workspace-hack",
+  "kithara-test-utils",
+  "kithara-test-macros",
+  "kithara-ffi",
+  "kithara-fuzz",
+  "kithara-decode",
+  "kithara-platform",
+  "xtask",
 ]
 
 [android]
@@ -178,24 +172,24 @@ rust = "FfiPlayerSnapshot"
 # `fn`/`impl`) are stripped automatically via AST on top of these globs.
 # build.rs is compile-time, never a production-runtime path, so it is excluded too.
 paths = [
-    "**/tests/**",
-    "**/tests.rs",
-    "**/*_test.rs",
-    "**/*_tests.rs",
-    "**/test_*.rs",
-    "**/benches/**",
-    "**/build.rs",
-    "crates/kithara-test-utils/**",
-    "crates/kithara-test-macros/**",
-    "crates/kithara-integration-tests/**",
-    "crates/kithara-fuzz/**",
+  "**/tests/**",
+  "**/tests.rs",
+  "**/*_test.rs",
+  "**/*_tests.rs",
+  "**/test_*.rs",
+  "**/benches/**",
+  "**/build.rs",
+  "crates/kithara-test-utils/**",
+  "crates/kithara-test-macros/**",
+  "crates/kithara-integration-tests/**",
+  "crates/kithara-fuzz/**",
 ]
 modules = []
 # Hard-correctness rules that must scan the FULL tree (tests included),
 # bypassing the `paths` exclusions above. Each runs in a second ast-grep pass
 # with no exclude globs; the rule's own `files:`/`ignores:` scope it.
 scan_all_rules = [
-    "arch.no-direct-time",
-    "arch.no-direct-thread-wait",
-    "arch.no-flash-time-hacks",
+  "arch.no-direct-time",
+  "arch.no-direct-thread-wait",
+  "arch.no-flash-time-hacks",
 ]

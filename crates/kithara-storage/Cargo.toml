@@ -9,9 +9,6 @@ description = "mmap-backed storage resource with random-access I/O."
 keywords = ["storage", "mmap", "cache", "audio", "io"]
 categories = ["caching"]
 
-[lints]
-workspace = true
-
 [features]
 default = ["client-reqwest", "tls-rustls"]
 probe = []
@@ -28,22 +25,23 @@ tls-rustls = ["kithara-test-utils/tls-rustls"]
 tls-native = ["kithara-test-utils/tls-native"]
 
 [dependencies]
-bon = { workspace = true }
-delegate = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
 kithara-bufpool = { workspace = true }
+kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 
 # range tracking + sync primitives (wasm32-compatible)
-rangemap = { workspace = true }
-kithara-platform = { workspace = true }
-crossbeam-queue = { workspace = true }
 arc-swap = { workspace = true }
 
-unimock = { workspace = true }
+bon = { workspace = true }
+crossbeam-queue = { workspace = true }
+delegate = { workspace = true }
+
 hotpath = { workspace = true, optional = true }
+rangemap = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
@@ -58,3 +56,6 @@ kithara-storage = { path = ".", default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }
+
+[lints]
+workspace = true

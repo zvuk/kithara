@@ -9,21 +9,6 @@ description = "Protocol-agnostic adaptive bitrate algorithm for audio streaming.
 keywords = ["abr", "streaming", "hls", "audio", "bitrate"]
 categories = ["multimedia::audio", "network-programming"]
 
-[dependencies]
-bitflags = { workspace = true }
-bon = { workspace = true }
-dashmap = { workspace = true }
-kithara-events = { workspace = true }
-kithara-platform = { workspace = true }
-kithara-test-utils = { workspace = true }
-num-traits = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-unimock = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
-
 [features]
 default = ["client-reqwest", "tls-rustls"]
 # No-op shim retained so `#[kithara::probe]` macro expansions
@@ -39,10 +24,26 @@ client-wreq = ["kithara-events/client-wreq"]
 tls-rustls = ["kithara-events/tls-rustls"]
 tls-native = ["kithara-events/tls-native"]
 
+[dependencies]
+kithara-events = { workspace = true }
+kithara-platform = { workspace = true }
+kithara-test-utils = { workspace = true }
+
+bitflags = { workspace = true }
+bon = { workspace = true }
+dashmap = { workspace = true }
+num-traits = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+unimock = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
 [dev-dependencies]
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
-wasm-bindgen-test = { workspace = true }
 proptest = { workspace = true }
+wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }

@@ -8,9 +8,6 @@ description = "kithara test runtime: probe/hang/mock helpers (no-op in release).
 keywords = ["audio", "testing", "kithara", "probe"]
 categories = ["development-tools::testing"]
 
-[lints]
-workspace = true
-
 [features]
 default = ["hang"]
 flash = ["kithara-platform/flash"]
@@ -27,21 +24,25 @@ tls-native = ["kithara-events/tls-native"]
 kithara-events = { workspace = true, features = ["downloader"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
+
 num-traits = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-url = { workspace = true }
 
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 unimock = { workspace = true, optional = true }
+url = { workspace = true }
 
-[dev-dependencies]
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+backtrace = { workspace = true }
+usdt = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 tracing-wasm = { workspace = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-usdt = { workspace = true, optional = true }
-backtrace = { workspace = true }
+[dev-dependencies]
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[lints]
+workspace = true

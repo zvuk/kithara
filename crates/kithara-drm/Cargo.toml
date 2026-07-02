@@ -9,9 +9,6 @@ description = "AES-128 DRM decryption for streaming audio, extensible keys."
 keywords = ["drm", "aes", "audio", "hls", "streaming"]
 categories = ["multimedia::audio", "cryptography"]
 
-[lints]
-workspace = true
-
 [package.metadata.cargo-machete]
 ignored = ["kithara-workspace-hack"]
 
@@ -31,3 +28,6 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 kithara-drm = { path = ".", default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
+
+[lints]
+workspace = true

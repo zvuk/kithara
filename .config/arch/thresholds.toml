@@ -9,14 +9,14 @@ deny = 10
 # Platform adapter crate: cfg gates are its raison d'être.
 exempt_crates = ["kithara-platform"]
 exclude_globs = [
-    "**/tests/**",
-    "**/benches/**",
-    # `kithara-ffi/src/lib.rs` is the single structural boundary for the
-    # browser/wasm bindings (`pub mod web;`) and the Android JNI surface
-    # (`pub(crate) mod android;`). The mod-level cfg gates are exactly what
-    # this lint normally pushes toward; they live here intentionally.
-    # Documented in `crates/kithara-ffi/README.md` "Web target".
-    "crates/kithara-ffi/src/lib.rs",
+  "**/tests/**",
+  "**/benches/**",
+  # `kithara-ffi/src/lib.rs` is the single structural boundary for the
+  # browser/wasm bindings (`pub mod web;`) and the Android JNI surface
+  # (`pub(crate) mod android;`). The mod-level cfg gates are exactly what
+  # this lint normally pushes toward; they live here intentionally.
+  # Documented in `crates/kithara-ffi/README.md` "Web target".
+  "crates/kithara-ffi/src/lib.rs",
 ]
 
 [file_size]
@@ -27,10 +27,10 @@ exclude_globs = [
 warn = 400
 deny = 1000
 exclude_globs = [
-    "**/tests/**",
-    "**/benches/**",
-    "**/generated/**",
-    "**/*.pb.rs",
+  "**/tests/**",
+  "**/benches/**",
+  "**/generated/**",
+  "**/*.pb.rs",
 ]
 
 [file_density]
@@ -129,12 +129,12 @@ warn = 4
 # singletons; lib crates accept them as injected dependencies (see
 # `feedback_pools_via_config_not_global` in user memory).
 exempt_crates = [
-    "kithara-app",
-    "kithara-ffi",
-    "xtask",
-    "kithara-test-utils",
-    "kithara-test-macros",
-    "kithara-probe-macros",
+  "kithara-app",
+  "kithara-ffi",
+  "xtask",
+  "kithara-test-utils",
+  "kithara-test-macros",
+  "kithara-probe-macros",
 ]
 
 [cancel_root_sites]
@@ -142,22 +142,22 @@ exempt_crates = [
 # hard-coded `CancelToken::root()` / `CancelToken::never()` calls are
 # indistinguishable from test fixtures and don't root an orphan tree.
 exempt_crates = [
-    "kithara-test-utils",
-    "kithara-test-macros",
-    "kithara-probe-macros",
-    "xtask",
+  "kithara-test-utils",
+  "kithara-test-macros",
+  "kithara-probe-macros",
+  "xtask",
 ]
 # Files where minting a fresh cancel root is sanctioned: consumer-crate owner
 # tops (App / FFI), FFI bridges that outlive the player, `CancelScope`'s
 # standalone root, and the dedicated never-cancelled sentinel / latch sites
 # (`kithara-stream` batch placeholder, `kithara-hls` peer `wake_signal`).
 allowed_files = [
-    "crates/kithara-app/src/main.rs",
-    "crates/kithara-ffi/src/native/inner.rs",
-    "crates/kithara-ffi/src/core/item.rs",
-    "crates/kithara-platform/src/common/cancel/scope.rs",
-    "crates/kithara-stream/src/dl/batch.rs",
-    "crates/kithara-hls/src/peer.rs",
+  "crates/kithara-app/src/main.rs",
+  "crates/kithara-ffi/src/native/inner.rs",
+  "crates/kithara-ffi/src/core/item.rs",
+  "crates/kithara-platform/src/common/cancel/scope.rs",
+  "crates/kithara-stream/src/dl/batch.rs",
+  "crates/kithara-hls/src/peer.rs",
 ]
 
 [tokio_dep_quarantine]
@@ -167,10 +167,10 @@ allowed_files = [
 # name every transitive dep. The test-support crates carry tokio purely as test
 # scaffolding (runtime + macros for fixtures), not production coupling.
 exempt_crates = [
-    "kithara-platform",
-    "kithara-workspace-hack",
-    "kithara-test-utils",
-    "kithara-integration-tests",
+  "kithara-platform",
+  "kithara-workspace-hack",
+  "kithara-test-utils",
+  "kithara-integration-tests",
 ]
 # Crates whose *production* tokio coupling is NOT yet migrated to the platform
 # re-exports — outstanding W6 quarantine debt. Now empty: `kithara-app`,
@@ -186,12 +186,12 @@ allowed_crates = []
 warn = 3
 deny = 5
 patterns = [
-    "Arc<Mutex<",
-    "Arc<RwLock<",
-    "Arc<parking_lot::Mutex<",
-    "Arc<parking_lot::RwLock<",
-    "Arc<tokio::sync::Mutex<",
-    "Arc<tokio::sync::RwLock<",
+  "Arc<Mutex<",
+  "Arc<RwLock<",
+  "Arc<parking_lot::Mutex<",
+  "Arc<parking_lot::RwLock<",
+  "Arc<tokio::sync::Mutex<",
+  "Arc<tokio::sync::RwLock<",
 ]
 
 [flat_directory]
@@ -211,10 +211,7 @@ max_depth = 2
 exempt_crates = []
 
 [readme_presence]
-exempt = [
-    "kithara-workspace-hack",
-    "kithara-test-macros",
-]
+exempt = ["kithara-workspace-hack", "kithara-test-macros"]
 min_bytes = 200
 
 [mixed_entities]
@@ -264,9 +261,9 @@ deny = 3
 #                     are scoped per module via `collect_scopes`; cross-module
 #                     name collisions don't create false positives
 #   - cross-impl aggregation: `impl X` + `impl Trait for X` are joined per type
-detect_field_passthrough    = true
-detect_nested_shorthand     = true
-detect_mutation_handle      = true
+detect_field_passthrough = true
+detect_nested_shorthand = true
+detect_mutation_handle = true
 detect_delegate_passthrough = true
 p1_severity = "warn"
 p2_severity = "warn"
@@ -279,12 +276,27 @@ ignore_deref = true
 # recurses into generic arguments — `Arc<AtomicUsize>` / `Option<&Mutex<T>>`
 # match because `AtomicUsize` / `Mutex` appears anywhere in the type tree.
 mutable_handle_types = [
-    "AtomicBool",
-    "AtomicI8", "AtomicI16", "AtomicI32", "AtomicI64", "AtomicIsize",
-    "AtomicU8", "AtomicU16", "AtomicU32", "AtomicU64", "AtomicUsize",
-    "AtomicPtr",
-    "Cell", "RefCell", "OnceCell", "LazyLock",
-    "Mutex", "RwLock", "Notify", "Semaphore", "Condvar",
+  "AtomicBool",
+  "AtomicI8",
+  "AtomicI16",
+  "AtomicI32",
+  "AtomicI64",
+  "AtomicIsize",
+  "AtomicU8",
+  "AtomicU16",
+  "AtomicU32",
+  "AtomicU64",
+  "AtomicUsize",
+  "AtomicPtr",
+  "Cell",
+  "RefCell",
+  "OnceCell",
+  "LazyLock",
+  "Mutex",
+  "RwLock",
+  "Notify",
+  "Semaphore",
+  "Condvar",
 ]
 
 # Method names that mutate when applied to `self.<field>` — `self.x.store(v)`,
@@ -292,17 +304,34 @@ mutable_handle_types = [
 # field as a `*_handle()` getter, AND used to detect direct `self.x = ...`
 # assignment (always counted regardless of this list).
 writer_methods = [
-    # Atomic*
-    "store", "swap",
-    "fetch_add", "fetch_sub", "fetch_or", "fetch_and", "fetch_xor",
-    "fetch_max", "fetch_min", "fetch_update", "fetch_nand",
-    "compare_exchange", "compare_exchange_weak",
-    # Cell / RefCell / OnceCell
-    "set", "replace", "replace_with", "take",
-    # Mutex / RwLock writers (manual `*guard = X` is also caught via plain assignment)
-    "write", "send", "send_replace", "send_modify",
-    # Notify
-    "notify_one", "notify_all", "notify_waiters",
+  # Atomic*
+  "store",
+  "swap",
+  "fetch_add",
+  "fetch_sub",
+  "fetch_or",
+  "fetch_and",
+  "fetch_xor",
+  "fetch_max",
+  "fetch_min",
+  "fetch_update",
+  "fetch_nand",
+  "compare_exchange",
+  "compare_exchange_weak",
+  # Cell / RefCell / OnceCell
+  "set",
+  "replace",
+  "replace_with",
+  "take",
+  # Mutex / RwLock writers (manual `*guard = X` is also caught via plain assignment)
+  "write",
+  "send",
+  "send_replace",
+  "send_modify",
+  # Notify
+  "notify_one",
+  "notify_all",
+  "notify_waiters",
 ]
 
 # Single-arg constructor calls treated as transparent over their argument:
@@ -310,23 +339,44 @@ writer_methods = [
 # detection. Patterns are matched as plain identifier (`Some`) or path suffix
 # (`Box::new` matches `std::boxed::Box::new`, `Box::new`, etc.).
 wrapper_ctors = [
-    "Some", "Ok", "Err",
-    "Box::new", "Arc::new", "Rc::new",
-    "Pin::new", "Pin::new_unchecked",
-    "Cow::Borrowed", "Cow::Owned",
-    "Cell::new", "RefCell::new", "Mutex::new", "RwLock::new", "OnceCell::new",
+  "Some",
+  "Ok",
+  "Err",
+  "Box::new",
+  "Arc::new",
+  "Rc::new",
+  "Pin::new",
+  "Pin::new_unchecked",
+  "Cow::Borrowed",
+  "Cow::Owned",
+  "Cell::new",
+  "RefCell::new",
+  "Mutex::new",
+  "RwLock::new",
+  "OnceCell::new",
 ]
 
 # 0-arg methods that expose internal data — `self.x.as_ref()` is treated as
 # `&self.x` for accessor detection. `*_mut` variants are emitted with the
 # `RefMut` access kind so P3 (mutation handle) can flag them.
 expose_methods = [
-    "as_ref", "as_mut", "as_str", "as_slice", "as_path", "as_bytes", "as_deref",
-    "deref", "deref_mut",
-    "borrow", "borrow_mut",
-    "read", "write", "lock",
-    "get", "get_mut",
-    "into_inner",
+  "as_ref",
+  "as_mut",
+  "as_str",
+  "as_slice",
+  "as_path",
+  "as_bytes",
+  "as_deref",
+  "deref",
+  "deref_mut",
+  "borrow",
+  "borrow_mut",
+  "read",
+  "write",
+  "lock",
+  "get",
+  "get_mut",
+  "into_inner",
 ]
 
 [single_impl_size]
@@ -368,10 +418,10 @@ kinds = ["fn", "method", "const", "static", "type", "struct", "enum", "trait"]
 # Crates treated as test-only scaffolding: a reference originating in one of
 # these counts as a test reference (not a production caller).
 test_crates = [
-    "kithara-integration-tests",
-    "kithara-test-utils",
-    "kithara-test-macros",
-    "kithara-fuzz",
+  "kithara-integration-tests",
+  "kithara-test-utils",
+  "kithara-test-macros",
+  "kithara-fuzz",
 ]
 # Skipped entirely: build tooling and the cargo-hakari workspace-hack shim
 # own no production contract and pull in unrelated symbol names.
@@ -408,13 +458,13 @@ export_attrs = ["no_mangle", "export_name", "wasm_bindgen", "uniffi"]
 #   path consumes-and-converts, losing the raw-notification granularity these
 #   tests assert.
 exempt = [
-    "advance_to_next_item",
-    "ensure_thread_pool",
-    "env_mutation_lock",
-    "active_named_thread_count",
-    "track_mut",
-    "try_pop_notification",
-    "drain_notifications",
+  "advance_to_next_item",
+  "ensure_thread_pool",
+  "env_mutation_lock",
+  "active_named_thread_count",
+  "track_mut",
+  "try_pop_notification",
+  "drain_notifications",
 ]
 # Path fragments whose defs `--fix` must never auto-delete: platform-gated
 # module dirs whose callers live in cfg-disabled or non-Rust (JNI) code the

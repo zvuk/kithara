@@ -2,7 +2,7 @@
 # `just similarity` / `just health`): the generated workspace-hack crate
 # and test-only infra crates that legitimately share boilerplate.
 excluded_crates = [
-    "kithara-workspace-hack",
-    "kithara-test-utils",
-    "kithara-test-macros",
+  "kithara-workspace-hack",
+  "kithara-test-utils",
+  "kithara-test-macros",
 ]

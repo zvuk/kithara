@@ -31,12 +31,7 @@ crates = ["kithara-assets", "kithara-stream"]
 [[layer]]
 index = 5
 name = "protocols"
-crates = [
-    "kithara-decode",
-    "kithara-encode",
-    "kithara-file",
-    "kithara-hls",
-]
+crates = ["kithara-decode", "kithara-encode", "kithara-file", "kithara-hls"]
 
 [[layer]]
 index = 6

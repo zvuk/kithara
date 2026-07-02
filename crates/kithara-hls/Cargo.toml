@@ -9,35 +9,8 @@ description = "HLS VOD engine: adaptive bitrate, segment cache, offline."
 keywords = ["hls", "streaming", "audio", "abr", "vod"]
 categories = ["multimedia::audio", "network-programming"]
 
-[lints]
-workspace = true
-
-[dependencies]
-kithara-abr = { workspace = true, default-features = false }
-kithara-assets = { workspace = true }
-kithara-bufpool = { workspace = true }
-kithara-events = { workspace = true, features = ["hls"] }
-kithara-drm = { workspace = true }
-kithara-net = { workspace = true, default-features = false }
-kithara-stream = { workspace = true, default-features = false }
-kithara-storage = { workspace = true }
-arc-swap = { workspace = true }
-bytes = { workspace = true }
-bitflags = { workspace = true }
-dashmap = { workspace = true }
-bon = { workspace = true }
-delegate = { workspace = true }
-futures = { workspace = true }
-hls_m3u8 = { workspace = true }
-thiserror = { workspace = true }
-url = { workspace = true }
-tracing = { workspace = true }
-kithara-platform = { workspace = true }
-kithara-test-utils = { workspace = true }
-rangemap = { workspace = true }
-re_mp4 = { workspace = true }
-num-traits = { workspace = true }
-hotpath = { workspace = true, optional = true }
+[package.metadata.cargo-machete]
+ignored = ["hotpath"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
@@ -69,12 +42,38 @@ tls-native = [
     "kithara-abr/tls-native",
 ]
 
+[dependencies]
+kithara-abr = { workspace = true, default-features = false }
+kithara-assets = { workspace = true }
+kithara-bufpool = { workspace = true }
+kithara-drm = { workspace = true }
+kithara-events = { workspace = true, features = ["hls"] }
+kithara-net = { workspace = true, default-features = false }
+kithara-platform = { workspace = true }
+kithara-storage = { workspace = true }
+kithara-stream = { workspace = true, default-features = false }
+kithara-test-utils = { workspace = true }
+
+arc-swap = { workspace = true }
+bitflags = { workspace = true }
+bon = { workspace = true }
+bytes = { workspace = true }
+dashmap = { workspace = true }
+delegate = { workspace = true }
+futures = { workspace = true }
+hls_m3u8 = { workspace = true }
+hotpath = { workspace = true, optional = true }
+num-traits = { workspace = true }
+rangemap = { workspace = true }
+re_mp4 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-aes = { workspace = true }
-cbc = { workspace = true }
 kithara-hls = { path = ".", default-features = false, features = ["probe"] }
 kithara-net = { workspace = true, default-features = false, features = [
     "probe",
@@ -82,14 +81,17 @@ kithara-net = { workspace = true, default-features = false, features = [
     "tls-rustls",
 ] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
-tempfile = { workspace = true }
+
+aes = { workspace = true }
+cbc = { workspace = true }
 serial_test = { workspace = true }
-wasm-bindgen-test = { workspace = true }
+tempfile = { workspace = true }
 unimock = { workspace = true }
+wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { workspace = true }
 tracing-subscriber = { workspace = true }
 
-[package.metadata.cargo-machete]
-ignored = ["hotpath"]
+[lints]
+workspace = true

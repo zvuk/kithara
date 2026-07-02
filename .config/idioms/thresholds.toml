@@ -36,9 +36,9 @@ warn_streak = 4
 # explicitly permits as a justified fallback. Other retry/attempt sites are NOT
 # exempted here; they stay visible (baseline) so the check keeps surfacing them.
 exempt_files = [
-    "**/tests/**",
-    "**/benches/**",
-    "crates/kithara-net/src/error.rs",
-    "crates/kithara-net/src/retry.rs",
-    "crates/kithara-net/src/types.rs",
+  "**/tests/**",
+  "**/benches/**",
+  "crates/kithara-net/src/error.rs",
+  "crates/kithara-net/src/retry.rs",
+  "crates/kithara-net/src/types.rs",
 ]

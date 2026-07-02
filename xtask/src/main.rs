@@ -8,9 +8,11 @@ mod apple_docgen;
 mod arch;
 mod ast_grep;
 mod common;
+mod format;
 mod health;
 mod idioms;
 mod lint;
+mod manifest;
 mod orphans;
 mod perf_compare;
 mod publish;
@@ -28,8 +30,10 @@ mod wasm;
 use android::AndroidCommand;
 use apple::AppleCommand;
 use ast_grep::AstGrepArgs;
+use format::FormatArgs;
 use health::HealthArgs;
 use lint::LintArgs;
+use manifest::ManifestArgs;
 use orphans::OrphansArgs;
 use publish::PublishArgs;
 use quality::QualityCommand;
@@ -106,12 +110,16 @@ enum Command {
     Scope(ScopeArgs),
     /// Run workspace tests through `cargo nextest`.
     Test(TestArgs),
+    /// Format Rust, manifests, TOML, JSON, and Markdown through project tooling.
+    Format(FormatArgs),
     /// Thin wrapper around `ast-grep scan` that bakes in the policy filter list.
     AstGrep(AstGrepArgs),
     /// Thin wrapper around `typos` that pins the workspace config.
     Typos(TyposArgs),
     /// Thin wrapper around `similarity-rs` with audit/advisory/strict profiles.
     Similarity(SimilarityArgs),
+    /// Cargo manifest hygiene checks.
+    Manifest(ManifestArgs),
     /// Per-package `cargo modules orphans` with `--cfg-test`.
     Orphans(OrphansArgs),
     /// Comprehensive workspace health check with markdown report.
@@ -138,9 +146,11 @@ fn main() -> anyhow::Result<()> {
         Command::Release(ref args) => release::run(args),
         Command::Scope(ref args) => scope::run(args),
         Command::Test(ref args) => test::run(args),
+        Command::Format(ref args) => format::run(args),
         Command::AstGrep(ref args) => ast_grep::run(args),
         Command::Typos(ref args) => typos::run(args),
         Command::Similarity(ref args) => similarity::run(args),
+        Command::Manifest(ref args) => manifest::run(args),
         Command::Orphans(ref args) => orphans::run(args),
         Command::Health(ref args) => health::run(args),
         Command::Viz(ref args) => viz::run(args),
