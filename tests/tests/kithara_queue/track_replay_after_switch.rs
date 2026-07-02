@@ -16,6 +16,7 @@ use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
     time::{self, Duration, sleep},
+    tokio,
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
@@ -125,7 +126,7 @@ fn build_queue_with_tick_cf(
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::spawn(async move {
+    let tick_handle = tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
             if queue_for_tick.tick().is_err() {

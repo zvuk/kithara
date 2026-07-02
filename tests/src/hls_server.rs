@@ -802,7 +802,7 @@ fn test_key_data() -> Vec<u8> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_platform::{flash::real_io, time::Duration};
+    use kithara_platform::{flash::real_io, time::Duration, tokio};
 
     use super::PackagedTestServer;
     use crate::kithara;
@@ -813,8 +813,8 @@ mod tests {
     /// hard timeout is synchronization on an observable — a real stall fails
     /// the budget rather than being masked.
     //
-    // This drives raw `reqwest`/`tokio::spawn` over a real socket against the
-    // shared test server (a real-time island, no flash ambient). The in-flight
+    // This drives raw `reqwest` through the platform spawn chokepoint against
+    // the shared test server (a real-time island, no flash ambient). The in-flight
     // request and its response live on the REAL clock, invisible to the flash
     // engine (no downloader `real_io` bracket wraps them). Hold a `RealIoScope`
     // across every wait on that real transit — the gated GET reaching the server
@@ -832,7 +832,7 @@ mod tests {
 
         let _real_io = real_io();
 
-        let fetch = tokio::spawn(async move { reqwest::get(url).await.map(|r| r.status()) });
+        let fetch = tokio::task::spawn(async move { reqwest::get(url).await.map(|r| r.status()) });
 
         time::timeout(Duration::from_secs(5), async {
             while gate.requested() == 0 {

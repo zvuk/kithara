@@ -12,6 +12,7 @@ use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
     time::{Duration, sleep, timeout},
+    tokio,
     tokio::sync::broadcast::error::TryRecvError,
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome, SessionDispatcher};
@@ -69,7 +70,7 @@ async fn run_tick_driver(queue: Arc<Queue>) {
 pub(crate) struct SimHarness {
     queue: Arc<Queue>,
     session: Arc<OfflineSession>,
-    tick: kithara_platform::tokio::task::JoinHandle<()>,
+    tick: tokio::task::JoinHandle<()>,
     _downloader: Downloader,
     _store: StoreOptions,
     track_ids: Vec<TrackId>,
@@ -131,7 +132,7 @@ impl SimHarness {
         // its `sleep` engine-virtual comes from `#[kithara::flash(true)]` on
         // `run_tick_driver` (the async chokepoint propagates ambient only) — see
         // that fn's doc for why a real-paced driver false-HANGs buffered sources.
-        let tick = kithara_platform::tokio::task::spawn(run_tick_driver(queue_for_tick));
+        let tick = tokio::task::spawn(run_tick_driver(queue_for_tick));
 
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
@@ -866,7 +867,7 @@ impl SimHarness {
                 no_progress_blocks = no_progress_blocks.saturating_add(1);
             }
             if block_idx % RENDER_YIELD_INTERVAL_BLOCKS == 0 {
-                kithara_platform::tokio::task::yield_now().await;
+                tokio::task::yield_now().await;
             }
         }
 

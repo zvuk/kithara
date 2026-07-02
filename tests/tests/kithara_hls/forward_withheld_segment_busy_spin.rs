@@ -58,6 +58,7 @@ use kithara_integration_tests::{
 use kithara_platform::{
     CancelToken,
     time::{Duration, Instant},
+    tokio,
     tokio::task::spawn_blocking,
 };
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
@@ -165,7 +166,7 @@ async fn forward_into_withheld_segment_parks_without_busy_spin() {
     let release_recorder = recorder.clone();
     let release_at_boundary = Arc::clone(&at_boundary);
     let release_flag = Arc::clone(&released);
-    let releaser = tokio::spawn(async move {
+    let releaser = tokio::task::spawn(async move {
         let deadline = Instant::now() + Duration::from_secs(8);
         loop {
             if release_gate.requested() > 0 && release_at_boundary.load(Ordering::Acquire) {

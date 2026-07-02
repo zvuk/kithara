@@ -21,6 +21,10 @@ workspace = true
 # as ground truth).
 flash = []
 signal = ["tokio/signal"]
+# Native socket surface for test/server plumbing. Keep this out of the default
+# production platform dependency so non-network consumers do not pull tokio net
+# or the async IO extension traits.
+tokio-net = ["tokio/net", "tokio/io-util"]
 
 [dependencies]
 delegate = { workspace = true }

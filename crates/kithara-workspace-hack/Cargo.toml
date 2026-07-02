@@ -45,7 +45,6 @@ smallvec = { version = "1", default-features = false, features = ["const_new", "
 syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "test-util"] }
 toml_parser = { version = "1" }
 
 [build-dependencies]
@@ -79,7 +78,6 @@ smallvec = { version = "1", default-features = false, features = ["const_new", "
 syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "test-util"] }
 toml_parser = { version = "1" }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
@@ -124,7 +122,6 @@ simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
-tokio = { version = "1", default-features = false, features = ["fs", "io-util", "net"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -182,7 +179,6 @@ simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
-tokio = { version = "1", default-features = false, features = ["fs", "io-util", "net"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -237,7 +233,6 @@ slab = { version = "0.4" }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
-tokio = { version = "1", default-features = false, features = ["fs", "io-util", "net"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -295,7 +290,6 @@ slab = { version = "0.4" }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
-tokio = { version = "1", default-features = false, features = ["fs", "io-util", "net"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -348,7 +342,6 @@ slab = { version = "0.4" }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
-tokio = { version = "1", default-features = false, features = ["fs", "io-util", "net"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -406,7 +399,6 @@ slab = { version = "0.4" }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
-tokio = { version = "1", default-features = false, features = ["fs", "io-util", "net"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -442,7 +434,6 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
-tokio = { version = "1", default-features = false, features = ["fs", "io-util", "net"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -481,7 +472,6 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
-tokio = { version = "1", default-features = false, features = ["fs", "io-util", "net"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }

@@ -16,6 +16,7 @@ use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
     time::{self, Duration, timeout},
+    tokio,
     tokio::sync::broadcast::error::RecvError,
 };
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
@@ -123,7 +124,7 @@ fn build_queue_with_tick(
     Arc<Queue>,
     Downloader,
     StoreOptions,
-    kithara_platform::tokio::task::JoinHandle<()>,
+    tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
@@ -131,7 +132,7 @@ fn build_queue_with_tick(
             .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
-    let tick_handle = kithara_platform::tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),

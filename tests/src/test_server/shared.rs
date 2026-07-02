@@ -3,6 +3,7 @@ use std::{
     thread,
 };
 
+use kithara_platform::tokio::runtime::Builder as RuntimeBuilder;
 use url::Url;
 
 use crate::{native::http_server::router_base_url_on_runtime, test_server_state::TestServerState};
@@ -25,7 +26,7 @@ pub(crate) fn shared() -> &'static SharedTestServer {
         thread::Builder::new()
             .name("kithara-shared-test-server".into())
             .spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
+                let rt = RuntimeBuilder::new_current_thread()
                     .enable_all()
                     .build()
                     .expect("build shared-server runtime");

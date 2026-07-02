@@ -13,6 +13,7 @@ use kithara_events::{
 use kithara_platform::{
     CancelToken,
     time::{Duration, Duration as StdDuration, Instant},
+    tokio,
 };
 use kithara_test_utils::kithara;
 
@@ -120,7 +121,7 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
     // fact, not a wall-clock gamble.
     let reader_bg = Arc::clone(&reader);
     let committed_bg = Arc::clone(&committed);
-    let ticker = kithara_platform::tokio::task::spawn(async move {
+    let ticker = tokio::task::spawn(async move {
         for _ in 0..30 {
             reader_bg.fetch_add(1, Ordering::AcqRel);
             committed_bg.fetch_add(1, Ordering::AcqRel);

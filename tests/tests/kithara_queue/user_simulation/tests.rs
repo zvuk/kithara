@@ -15,6 +15,7 @@ use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
     time::{Duration, sleep},
+    tokio,
 };
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
@@ -422,7 +423,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     // this makes the tick driver a quiescence participant with a
     // virtual `sleep`, so the virtual clock cannot race past the ticks
     // that drive loading. A raw spawn runs uncounted on real time.
-    let tick = kithara_platform::tokio::task::spawn(async move {
+    let tick = tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(50)).await;
             if q_for_tick.tick().is_err() {
@@ -684,7 +685,7 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let q_for_tick = Arc::clone(&queue);
-    let tick = tokio::spawn(async move {
+    let tick = tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
             if q_for_tick.tick().is_err() {
@@ -956,7 +957,7 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let q_for_tick = Arc::clone(&queue);
-    let tick = tokio::spawn(async move {
+    let tick = tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(50)).await;
             if q_for_tick.tick().is_err() {
@@ -1018,7 +1019,7 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let q_for_tick = Arc::clone(&queue);
-    let tick = tokio::spawn(async move {
+    let tick = tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
             if q_for_tick.tick().is_err() {

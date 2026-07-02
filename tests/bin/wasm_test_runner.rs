@@ -10,6 +10,8 @@ use std::{
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::time::{Duration, Instant, sleep};
 #[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::tokio;
+#[cfg(not(target_arch = "wasm32"))]
 use tempfile::TempDir;
 
 #[cfg(target_arch = "wasm32")]
@@ -172,7 +174,7 @@ async fn spawn_server_binary(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let test_server_port: u16 = env::var("TEST_SERVER_PORT")

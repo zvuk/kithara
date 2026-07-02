@@ -14,12 +14,13 @@ use kithara_integration_tests::{
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
-    time::{Duration, Instant, sleep, timeout},
+    time::{Duration, sleep, timeout},
+    tokio,
+    tokio::sync::OnceCell,
 };
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::sync::OnceCell;
 
 /// Per-process singleton: one offline audio session, one Downloader,
 /// one Queue. `#[case]` tests inside this file share it, so init cost
@@ -78,7 +79,7 @@ async fn shared_test_ctx() -> &'static TestCtx {
             let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
             let queue_for_tick = Arc::clone(&queue);
-            tokio::spawn(async move {
+            tokio::task::spawn(async move {
                 loop {
                     sleep(Duration::from_millis(50)).await;
                     let _ = queue_for_tick.tick();
@@ -823,7 +824,7 @@ async fn prod_tracks_sequential_startup_latency() {
     for url in TRACKS {
         let mut rx = ctx.queue.subscribe();
         let source = build_track_source(url, ctx, DecoderBackend::Apple, AbrMode::Auto(None));
-        let t0 = Instant::now();
+        let t0 = kithara_platform::time::Instant::now();
         let track_id = ctx.queue.append(source);
 
         let outcome: Result<(Duration, Duration), String> = async {

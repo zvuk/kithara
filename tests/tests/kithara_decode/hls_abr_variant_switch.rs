@@ -15,7 +15,7 @@ use kithara_integration_tests::{
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio, tokio::task::spawn_blocking};
 use tracing::info;
 
 /// Test that ABR variant switch does not cause byte reading glitches.
@@ -70,7 +70,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
     let variant_switches = Arc::new(StdMutex::new(Vec::new()));
     let variant_switches_clone = variant_switches.clone();
 
-    tokio::spawn(async move {
+    tokio::task::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
             match ev {
                 Event::Abr(AbrEvent::VariantApplied { from, to, .. }) => {
@@ -247,7 +247,7 @@ async fn test_abr_variant_switch_with_seek_backward(
     let variant_switches = Arc::new(StdMutex::new(Vec::new()));
     let variant_switches_clone = variant_switches.clone();
 
-    tokio::spawn(async move {
+    tokio::task::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
             if let Event::Abr(AbrEvent::VariantApplied { from, to, .. }) = ev {
                 println!("Variant switch: {} -> {}", from, to);

@@ -497,8 +497,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn commit_publishes_current_track_and_marks_displayed() {
+    #[test]
+    fn commit_publishes_current_track_and_marks_displayed() {
         let key = AnalysisKey::new("root_current");
         let analysis = analysis();
         let ids = [
@@ -521,8 +521,8 @@ mod tests {
         drop(tx);
     }
 
-    #[tokio::test]
-    async fn commit_caches_stale_track_without_publishing_or_marking_displayed() {
+    #[test]
+    fn commit_caches_stale_track_without_publishing_or_marking_displayed() {
         let key = AnalysisKey::new("root_stale");
         let analysis = analysis();
         let ids = [

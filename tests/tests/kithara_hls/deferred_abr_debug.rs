@@ -9,7 +9,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{TestTempDir, hls_server::TestServer, rt_cancel, temp_dir};
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
+use kithara_platform::{CancelToken, time::Duration, tokio, tokio::task::spawn_blocking};
 use tracing::info;
 
 /// Diagnostic version with detailed logging and safety limits
@@ -40,7 +40,7 @@ async fn debug_sequential_read(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     info!("Opening HLS stream...");
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    let events_handle = tokio::spawn(async move {
+    let events_handle = tokio::task::spawn(async move {
         while let Ok(event) = events_rx.recv().await {
             info!("HLS Event: {:?}", event);
         }

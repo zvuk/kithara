@@ -32,7 +32,6 @@ kithara-net = { workspace = true, features = ["mock", "probe"] }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-stream = { workspace = true, features = ["probe"] }
-# Async runtime
 
 # Channels/buffers
 bytes = { workspace = true }
@@ -70,6 +69,7 @@ async-trait = { workspace = true }
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara = { workspace = true }
+kithara-platform = { workspace = true, features = ["tokio-net"] }
 # fdk-aac пришёл из kithara-decode defaults до Phase 2 (workspace
 # default-features=false). HE-AAC v2 fMP4 фикстуры в rapid-scrub /
 # stress-seek тестах декодятся через symphonia path, и без fdk-aac
@@ -80,9 +80,6 @@ kithara-file = { workspace = true }
 kithara-play = { workspace = true, features = ["backend-cpal"] }
 firewheel = { workspace = true }
 num-traits = { workspace = true }
-
-# Additional tokio features (full runtime on native)
-tokio = { workspace = true, features = ["full"] }
 
 # HTTP server (axum stack not available on WASM)
 reqwest = { workspace = true, features = ["rustls", "stream"] }

@@ -13,11 +13,12 @@ use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
     time::{Duration, sleep, timeout},
+    tokio,
+    tokio::sync::OnceCell,
 };
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::sync::OnceCell;
 
 /// Staging zvq.me DRM track — `zvuk-stage` provider in `app.yaml`.
 /// Validates the per-provider X-Encrypted-Key salt shape: stage WAF
@@ -50,7 +51,7 @@ async fn shared_ctx() -> &'static Ctx {
         let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
         let q = Arc::clone(&queue);
-        tokio::spawn(async move {
+        tokio::task::spawn(async move {
             loop {
                 sleep(Duration::from_millis(50)).await;
                 let _ = q.tick();

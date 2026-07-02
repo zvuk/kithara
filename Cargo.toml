@@ -199,7 +199,7 @@ rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.5.0"
 unimock = { version = "0.6", features = ["std"] }
 backtrace = "0.3"
-tokio = { version = "1.52.3", default-features = false, features = ["sync", "macros", "rt", "time"] }
+tokio = { version = "1.52.3", default-features = false }
 tokio_with_wasm = { version = "0.9", features = ["full"] }
 tokio-stream = "0.1.18"
 futures = "0.3.32"

@@ -100,7 +100,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
     let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::spawn(async move {
+    let tick_handle = tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(16)).await;
             if queue_for_tick.tick().is_err() {

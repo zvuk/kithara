@@ -23,8 +23,11 @@ use kithara_integration_tests::{
 use kithara_platform::time;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::{thread, tokio::task::spawn_blocking};
-use kithara_platform::{time::Duration, tokio};
-use tokio::{sync::broadcast::error::RecvError, task::spawn};
+use kithara_platform::{
+    time::Duration,
+    tokio,
+    tokio::{sync::broadcast::error::RecvError, task::spawn},
+};
 use tracing::info;
 
 struct Consts;

@@ -142,7 +142,6 @@ cpal = { workspace = true, optional = true }
 futures = { workspace = true }
 kithara = { workspace = true, features = ["probe"] }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true }

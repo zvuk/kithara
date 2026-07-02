@@ -75,5 +75,5 @@ wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { workspace = true }
+kithara-platform = { workspace = true, features = ["tokio-net"] }
 memory-stats = { workspace = true }
-tokio = { workspace = true, features = ["net"] }

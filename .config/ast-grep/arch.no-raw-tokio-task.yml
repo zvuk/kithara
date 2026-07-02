@@ -1,0 +1,51 @@
+id: arch.no-raw-tokio-task
+message: |
+  Direct use of a raw `tokio` task primitive. Route through
+  `kithara_platform::tokio::task` so the quiescence engine accounts every task
+  under virtual time (`flash`):
+  - `tokio::spawn` / `tokio::task::spawn` -> `kithara_platform::tokio::task::spawn`
+  - `tokio::task::spawn_blocking`         -> `kithara_platform::tokio::task::spawn_blocking`
+  - `tokio::task::yield_now`              -> `kithara_platform::tokio::task::yield_now`
+
+  `spawn` wraps the future in the quiescence poll-wrapper (a raw spawn runs
+  UNCOUNTED and lets the virtual clock race past it). `spawn_blocking` propagates
+  ambient flash state and reserves an active slot while the blocking closure is
+  queued or running. `yield_now` must relinquish the virtual clock (a raw yield
+  self-wakes and pins the clock - a livelock).
+
+      // bad:  tokio::spawn(fut);           tokio::task::yield_now().await;
+      // good: use kithara_platform::tokio::task; task::spawn(fut); task::yield_now().await;
+
+  A `handle.spawn(fut)` on a specific runtime `Handle` must route through
+  `kithara_platform::tokio::task::spawn_on`.
+
+  This is an ERROR gate covering ALL workspace Rust - production AND tests.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+ignores:
+  # The platform crate OWNS the task primitives (binds them to the engine).
+  - crates/kithara-platform/**
+rule:
+  any:
+    # Imports where `tokio` is the CRATE ROOT (`use tokio::...`), never the
+    # platform alias `use kithara_platform::tokio::...`.
+    - kind: use_declaration
+      regex: '\buse\s+tokio::(spawn|task)\b'
+    - kind: use_declaration
+      regex: '\buse\s+tokio::task::(spawn|spawn_blocking|yield_now)\b'
+    - kind: use_declaration
+      regex: '\buse\s+tokio::\{[\s\S]*\btask::(spawn|spawn_blocking|yield_now)\b'
+    - kind: use_declaration
+      regex: '\buse\s+tokio::\{[\s\S]*\btask::\{[\s\S]*\b(spawn|spawn_blocking|yield_now)\b'
+    - kind: use_declaration
+      regex: '\buse\s+tokio::\{[\s\S]*\b(spawn|task)\b'
+    # Absolute root-crate `tokio` paths. Plain `tokio::...` may be the local
+    # alias from `use kithara_platform::tokio;`; direct dependencies are blocked
+    # by `arch.no-direct-tokio-dependency`.
+    - pattern: ::tokio::spawn($$$REST)
+    - pattern: ::tokio::task::spawn($$$REST)
+    - pattern: ::tokio::task::spawn_blocking($$$REST)
+    - pattern: ::tokio::task::yield_now($$$REST)

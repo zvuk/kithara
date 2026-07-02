@@ -48,6 +48,7 @@ use kithara_integration_tests::{
 use kithara_platform::{
     CancelToken,
     time::{Duration, Instant},
+    tokio,
     tokio::task::spawn_blocking,
 };
 use tracing::info;
@@ -148,7 +149,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
     // read no longer surfaces one at a slow boundary — it waits — so that would
     // deadlock; see the module doc.)
     let release_gate = gate.clone();
-    let releaser = tokio::spawn(async move {
+    let releaser = tokio::task::spawn(async move {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             if release_gate.requested() > 0 {
@@ -283,8 +284,6 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
 
 /// Join a `spawn_blocking` decode handle, surfacing a panic as a test
 /// failure (mirrors `.await.expect(...)` but keeps the call site terse).
-async fn spawn_blocking_join<T: Send + 'static>(
-    handle: kithara_platform::tokio::task::JoinHandle<T>,
-) -> T {
+async fn spawn_blocking_join<T: Send + 'static>(handle: tokio::task::JoinHandle<T>) -> T {
     handle.await.expect("decode task joins without panicking")
 }

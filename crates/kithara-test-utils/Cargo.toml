@@ -45,4 +45,3 @@ tracing-wasm = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 usdt = { workspace = true, optional = true }
 backtrace = { workspace = true }
-tokio = { workspace = true, features = ["time", "rt"] }

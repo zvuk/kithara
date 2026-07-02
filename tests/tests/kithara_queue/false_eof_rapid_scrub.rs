@@ -13,6 +13,7 @@ use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
     time::{Duration, Instant, sleep, timeout},
+    tokio,
 };
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
@@ -67,7 +68,7 @@ async fn build_ctx() -> Ctx {
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
     let q = Arc::clone(&queue);
-    tokio::spawn(async move {
+    tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
             let _ = q.tick();

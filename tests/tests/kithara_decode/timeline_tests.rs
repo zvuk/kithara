@@ -88,7 +88,7 @@ mod hls_timeline {
         hls_server::{HlsTestServer, HlsTestServerConfig},
         signal_pcm::signal,
     };
-    use kithara_platform::{CancelToken, time::Duration};
+    use kithara_platform::{CancelToken, time::Duration, tokio};
 
     use crate::common::test_defaults::SawWav;
 
