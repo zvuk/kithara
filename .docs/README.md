@@ -3,7 +3,7 @@
 `AGENTS.md` is the always-on repo contract. This directory owns the optional
 documents and reusable agent assets that should be loaded only when relevant.
 
-- `guides/`: lazy-loaded architecture, Rust style, review, and policy references.
+- `guides/`: lazy-loaded architecture, Rust style, review, tooling, and policy references.
 - `workflows/`: task, planning, handoff, and PR-description workflows.
 - `rules/`: tool-neutral entry rules exposed through tool-specific symlinks.
 - `agents/`: concrete subagent/scenario definitions exposed through symlinks.

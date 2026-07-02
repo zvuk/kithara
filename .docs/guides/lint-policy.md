@@ -35,7 +35,8 @@ when the corresponding flash wrappers consume the code.
 
 ## Failing Lints
 
-- Treat rustc, Clippy, ast-grep, and xtask findings as design feedback.
+- Treat rustc, Clippy, ast-grep, xtask, formatter, and dependency-audit findings
+  as design feedback.
 - Open only the reported rule/check by id.
 - Fix ownership, API, layer, or Rust-shape cause.
 - Do not scan the full lint tree before every task.

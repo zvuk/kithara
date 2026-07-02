@@ -146,7 +146,7 @@ Reject a design before coding when it:
 
 ## Linting, Formatting, And Unified Settings
 
-- Respect workspace-wide config such as `rustfmt.toml`, `clippy.toml`, `deny.toml`, and `sgconfig.yml`.
+- Respect workspace-wide config such as `rustfmt.toml`, `clippy.toml`, `deny.toml`, `.config/tomlfmt.toml`, `.config/typos.toml`, and `sgconfig.yml`.
 - Change lint policy in the shared config files instead of creating per-crate drift unless there is a strong reason.
 - The pre-commit hook expects clean formatting, linting, and tests. If they fail after your change, assume your change caused it until proven otherwise.
 - Treat **`rustc` warnings** (for example `unused-imports`, `dead_code`, `deprecated`, unfulfilled `#[expect]`, `unreachable_pub`) the same as Clippy: fix the cause in code you touch - remove dead code, update imports and APIs, replace deprecated items - rather than leaving warnings to accumulate.
@@ -157,6 +157,7 @@ Reject a design before coding when it:
 - No separator comments such as `// ====`.
 - Import names at the top of the file rather than using inline qualified paths in function bodies.
 - `lib.rs` and `mod.rs` should contain only module declarations and re-exports.
+- Cargo manifests stay sorted by `cargo-sort` with internal `kithara` / `kithara-*` dependencies first; non-Cargo TOML, JSON, and Markdown stay formatted by Rust-native tooling.
 
 ## General Quality Rules
 
@@ -218,6 +219,7 @@ Risks or follow-ups:
 - The stable task packet, handoff, and final report shapes live here. Do not create parallel template docs for them.
 - If a task needs a plan, follow `.docs/workflows/rust-ai.md` and `.docs/plans/_template.md`.
 - Load `.docs/guides/*` files only when the task, a red flag, or a failing lint points to that topic.
+- Load `.docs/guides/tooling.md` only when touching formatter, lint, dependency-audit, or external-tool policy.
 - If shared boundaries are unclear, stop and clarify before implementation.
 - Keep debate procedures, investigation journaling, and TDD choreography out of `AGENTS.md`. Put that guidance in workflow docs or owning `CONTEXT.md` files.
 - Do not restate the same repo rule in tool-specific files. Tool-specific files should only route the agent to canonical docs and scoped domain guidance.
