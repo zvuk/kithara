@@ -506,11 +506,28 @@ impl PackagedTestServer {
         variant: usize,
         segment: usize,
     ) -> (Self, crate::SegmentGateHandle) {
-        let server = Self::new().await;
-        let handle = server
-            ._helper
-            .register_segment_gate(server.plain.token(), variant, segment);
+        let (server, mut handles) = Self::with_segment_gates(&[(variant, segment)]).await;
+        let handle = handles.pop().expect("one segment gate handle");
         (server, handle)
+    }
+
+    /// Build a packaged server whose `plain` fixture withholds each listed
+    /// `(variant, segment)` GET body until its corresponding handle releases it.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub async fn with_segment_gates(
+        gates: &[(usize, usize)],
+    ) -> (Self, Vec<crate::SegmentGateHandle>) {
+        let server = Self::new().await;
+        let handles = gates
+            .iter()
+            .map(|&(variant, segment)| {
+                server
+                    ._helper
+                    .register_segment_gate(server.plain.token(), variant, segment)
+            })
+            .collect();
+        (server, handles)
     }
 
     /// Build a packaged server whose `plain` fixture withholds the **size**

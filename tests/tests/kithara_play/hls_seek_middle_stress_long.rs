@@ -1,16 +1,21 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    abr::AbrMode,
     assets::StoreOptions,
     decode::DecoderBackend,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration},
+    platform::{
+        CancelToken,
+        time::{Duration, sleep},
+        tokio::task::yield_now,
+    },
     play::{Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, fixture_protocol::DelayRule, offline::OfflinePlayer, temp_dir,
-    waits::render_until_position,
+    PackagedTestServer, SegmentGateHandle, offline::OfflinePlayer, temp_dir,
+    waits::render_until_position as raw_render_until_position,
 };
 
 use crate::common::test_defaults::Consts as Shared;
@@ -27,6 +32,16 @@ impl Consts {
     const STRESS_DELAY_MS: u64 = 500;
     const SEEK_TARGETS: [f64; 5] = [9.0, 5.0, 7.5, 11.0, 8.1];
     const STRESS_ITERATIONS: u32 = 20;
+    const GATED_VARIANT: usize = 0;
+    const GATED_SEGMENTS: [usize; 2] = [1, 2];
+    const GATE_REQUEST_TICKS: u32 = 2_000;
+    const GATE_HOLD_TICKS: u32 = 4;
+}
+
+struct ControlledGate {
+    segment: usize,
+    handle: SegmentGateHandle,
+    released: bool,
 }
 
 fn blocks_for_seconds(secs: f64) -> u32 {
@@ -40,6 +55,49 @@ fn blocks_for_seconds(secs: f64) -> u32 {
     result
 }
 
+#[kithara::flash(true)]
+async fn render_until_position(
+    player: &mut OfflinePlayer,
+    max_blocks: u32,
+    until_position: f64,
+    block_frames: usize,
+    min_wall_ms: u64,
+) {
+    raw_render_until_position(
+        player,
+        max_blocks,
+        until_position,
+        block_frames,
+        min_wall_ms,
+    )
+    .await;
+}
+
+fn segment_for_target(target: f64) -> usize {
+    if target < 8.0 { 1 } else { 2 }
+}
+
+#[kithara::flash(true)]
+async fn wait_for_gate_request(player: &mut OfflinePlayer, gate: &SegmentGateHandle, label: &str) {
+    const BATCH: u32 = 16;
+    for _ in 0..Consts::GATE_REQUEST_TICKS {
+        for _ in 0..BATCH {
+            let _ = player.render(Consts::BLOCK_FRAMES);
+        }
+        if gate.requested() > 0 {
+            for _ in 0..Consts::GATE_HOLD_TICKS {
+                for _ in 0..BATCH {
+                    let _ = player.render(Consts::BLOCK_FRAMES);
+                }
+                sleep(Duration::from_millis(1)).await;
+            }
+            return;
+        }
+        yield_now().await;
+    }
+    panic!("{label}: gated segment GET was never requested before release");
+}
+
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
@@ -51,13 +109,17 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let server = PackagedTestServer::with_delay_rules(vec![DelayRule {
-        variant: None,
-        segment_eq: None,
-        segment_gte: Some(1),
-        delay_ms: Consts::STRESS_DELAY_MS,
-    }])
-    .await;
+    let gate_specs = Consts::GATED_SEGMENTS.map(|segment| (Consts::GATED_VARIANT, segment));
+    let (server, handles) = PackagedTestServer::with_segment_gates(&gate_specs).await;
+    let mut gates: Vec<ControlledGate> = Consts::GATED_SEGMENTS
+        .into_iter()
+        .zip(handles)
+        .map(|(segment, handle)| ControlledGate {
+            segment,
+            handle,
+            released: false,
+        })
+        .collect();
     let master = server.url("/master.m3u8");
 
     let temp = temp_dir();
@@ -73,6 +135,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
         .name("t0".to_string())
         .store(store)
         .decoder_backend(backend)
+        .initial_abr_mode(AbrMode::manual(Consts::GATED_VARIANT))
         .build();
 
     let resource = Resource::new(cfg)
@@ -101,6 +164,17 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
         let target = Consts::SEEK_TARGETS[(iter as usize) % Consts::SEEK_TARGETS.len()];
         let pos_before = player.position();
         player.seek(target, u64::from(1 + iter));
+        let segment = segment_for_target(target);
+        if let Some(index) = gates
+            .iter()
+            .position(|gate| gate.segment == segment && !gate.released)
+        {
+            let gate = gates[index].handle.clone();
+            let label = format!("iter {iter} target {target:.2}s segment {segment}");
+            wait_for_gate_request(&mut player, &gate, &label).await;
+            gate.release();
+            gates[index].released = true;
+        }
         let post_target = target + Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS;
         render_until_position(
             &mut player,
