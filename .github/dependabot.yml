@@ -2,6 +2,8 @@ version: 2
 updates:
   - package-ecosystem: cargo
     directory: /
+    exclude-paths:
+      - crates/kithara-workspace-hack/Cargo.toml
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
