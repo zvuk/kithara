@@ -7,5 +7,6 @@ mod matrix;
 mod profile;
 mod report;
 mod slow;
+mod trace;
 
 pub(crate) use cli::{PerfArgs, run};

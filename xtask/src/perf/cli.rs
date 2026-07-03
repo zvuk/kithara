@@ -10,6 +10,7 @@ use crate::perf::{
     matrix::{self, MatrixParams},
     profile::{self, ProfileParams},
     report, slow,
+    trace::{self, TraceParams},
 };
 
 #[derive(Debug, Args)]
@@ -28,6 +29,8 @@ enum PerfCommand {
     Report(ReportCli),
     /// Aggregate matrix `JUnit` data into `slow.json` / `slow.md`.
     Slow(SlowCli),
+    /// Record one test under Instruments Time Profiler.
+    Trace(TraceCli),
 }
 
 #[derive(Debug, Args)]
@@ -93,6 +96,22 @@ struct ReportCli {
     lane: String,
 }
 
+#[derive(Debug, Args)]
+struct TraceCli {
+    #[arg(long)]
+    data_dir: PathBuf,
+    #[arg(long)]
+    run_id: String,
+    #[arg(long)]
+    target_root: PathBuf,
+    #[arg(long)]
+    lane: String,
+    #[arg(long)]
+    suite: String,
+    #[arg(long)]
+    test: String,
+}
+
 pub(crate) fn run(args: &PerfArgs) -> Result<()> {
     match &args.command {
         PerfCommand::Matrix(cli) => {
@@ -123,6 +142,17 @@ pub(crate) fn run(args: &PerfArgs) -> Result<()> {
         }
         PerfCommand::Report(cli) => report::run(&cli.data_dir, &cli.run_id, &cli.lane),
         PerfCommand::Slow(cli) => slow::run(&cli.data_dir, &cli.run_id, cli.threshold_ms),
+        PerfCommand::Trace(cli) => {
+            let params = TraceParams {
+                data_dir: cli.data_dir.clone(),
+                run_id: cli.run_id.clone(),
+                target_root: cli.target_root.clone(),
+                lane: cli.lane.clone(),
+                suite: cli.suite.clone(),
+                test: cli.test.clone(),
+            };
+            trace::run(&params)
+        }
     }
 }
 
