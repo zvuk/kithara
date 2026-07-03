@@ -1757,25 +1757,29 @@ public func FfiConverterTypeAudioPlayerItem_lower(_ value: AudioPlayerItem) -> U
 
 
 /**
- * Foreign on-disk layout callback. Mirrors [`kithara::assets::AssetLayout`]:
- * maps a fetched resource to a relative path inside the asset directory.
+ * Foreign on-disk layout callback: maps a resource URL to a relative path
+ * inside the asset's cache directory. The URL already carries everything a
+ * client scheme encodes (quality, segment number, extension).
  *
- * `rel_path` is a pure function - the same info must always yield the same
- * path. It runs on arbitrary background threads, must not block. It must not throw; a hostile or empty return is
- * rejected store-side with a typed error (never silently rewritten).
+ * `rel_path` is a pure function - the same URL must always yield the same
+ * path. It runs on arbitrary background threads, must not block and must not
+ * throw; a hostile or empty return is rejected store-side with a typed error
+ * (never silently rewritten).
  */
 public protocol FfiAssetLayout: AnyObject, Sendable {
     
-    func relPath(info: FfiResourceInfo)  -> String
+    func relPath(url: String)  -> String
     
 }
 /**
- * Foreign on-disk layout callback. Mirrors [`kithara::assets::AssetLayout`]:
- * maps a fetched resource to a relative path inside the asset directory.
+ * Foreign on-disk layout callback: maps a resource URL to a relative path
+ * inside the asset's cache directory. The URL already carries everything a
+ * client scheme encodes (quality, segment number, extension).
  *
- * `rel_path` is a pure function - the same info must always yield the same
- * path. It runs on arbitrary background threads, must not block. It must not throw; a hostile or empty return is
- * rejected store-side with a typed error (never silently rewritten).
+ * `rel_path` is a pure function - the same URL must always yield the same
+ * path. It runs on arbitrary background threads, must not block and must not
+ * throw; a hostile or empty return is rejected store-side with a typed error
+ * (never silently rewritten).
  */
 open class FfiAssetLayoutImpl: FfiAssetLayout, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -1830,11 +1834,11 @@ open class FfiAssetLayoutImpl: FfiAssetLayout, @unchecked Sendable {
     
 
     
-open func relPath(info: FfiResourceInfo) -> String  {
+open func relPath(url: String) -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_ffiassetlayout_rel_path(
             self.uniffiCloneHandle(),
-        FfiConverterTypeFfiResourceInfo_lower(info),$0
+        FfiConverterString.lower(url),$0
     )
 })
 }
@@ -1870,7 +1874,7 @@ fileprivate struct UniffiCallbackInterfaceFfiAssetLayout {
         },
         relPath: { (
             uniffiHandle: UInt64,
-            info: RustBuffer,
+            url: RustBuffer,
             uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
@@ -1880,7 +1884,7 @@ fileprivate struct UniffiCallbackInterfaceFfiAssetLayout {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.relPath(
-                     info: try FfiConverterTypeFfiResourceInfo_lift(info)
+                     url: try FfiConverterString.lift(url)
                 )
             }
 
@@ -3637,125 +3641,6 @@ public func FfiConverterTypeFfiPlayerSnapshot_lower(_ value: FfiPlayerSnapshot) 
 
 
 /**
- * Owned mirror of [`kithara::assets::Rendition`].
- */
-public struct FfiRendition: Equatable, Hashable {
-    public let bandwidth: UInt64?
-    public let name: String?
-    public let uriStem: String?
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(bandwidth: UInt64?, name: String?, uriStem: String?) {
-        self.bandwidth = bandwidth
-        self.name = name
-        self.uriStem = uriStem
-    }
-
-    
-
-    
-}
-
-#if compiler(>=6)
-extension FfiRendition: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeFfiRendition: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiRendition {
-        return
-            try FfiRendition(
-                bandwidth: FfiConverterOptionUInt64.read(from: &buf), 
-                name: FfiConverterOptionString.read(from: &buf), 
-                uriStem: FfiConverterOptionString.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: FfiRendition, into buf: inout [UInt8]) {
-        FfiConverterOptionUInt64.write(value.bandwidth, into: &buf)
-        FfiConverterOptionString.write(value.name, into: &buf)
-        FfiConverterOptionString.write(value.uriStem, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiRendition_lift(_ buf: RustBuffer) throws -> FfiRendition {
-    return try FfiConverterTypeFfiRendition.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiRendition_lower(_ value: FfiRendition) -> RustBuffer {
-    return FfiConverterTypeFfiRendition.lower(value)
-}
-
-
-/**
- * Owned mirror of [`kithara::assets::RenditionDesc`]. `siblings` is the full
- * master rendition set in master order; `idx` selects this rendition.
- */
-public struct FfiRenditionDesc: Equatable, Hashable {
-    public let idx: UInt32
-    public let siblings: [FfiRendition]
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(idx: UInt32, siblings: [FfiRendition]) {
-        self.idx = idx
-        self.siblings = siblings
-    }
-
-    
-
-    
-}
-
-#if compiler(>=6)
-extension FfiRenditionDesc: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeFfiRenditionDesc: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiRenditionDesc {
-        return
-            try FfiRenditionDesc(
-                idx: FfiConverterUInt32.read(from: &buf), 
-                siblings: FfiConverterSequenceTypeFfiRendition.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: FfiRenditionDesc, into buf: inout [UInt8]) {
-        FfiConverterUInt32.write(value.idx, into: &buf)
-        FfiConverterSequenceTypeFfiRendition.write(value.siblings, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiRenditionDesc_lift(_ buf: RustBuffer) throws -> FfiRenditionDesc {
-    return try FfiConverterTypeFfiRenditionDesc.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiRenditionDesc_lower(_ value: FfiRenditionDesc) -> RustBuffer {
-    return FfiConverterTypeFfiRenditionDesc.lower(value)
-}
-
-
-/**
  * FFI-friendly time range (seconds-based).
  */
 public struct FfiTimeRange: Equatable, Hashable {
@@ -3879,16 +3764,16 @@ public func FfiConverterTypeFfiVariant_lower(_ value: FfiVariant) -> RustBuffer 
 public struct StoreOptions {
     public let cacheDir: String?
     /**
-     * On-disk cache layout. `None` == [`FfiLayout::Default`].
+     * Foreign on-disk layout delegate. `None` == the store's default layout.
      */
-    public let layout: FfiLayout?
+    public let layout: FfiAssetLayout?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
     public init(cacheDir: String?, 
         /**
-         * On-disk cache layout. `None` == [`FfiLayout::Default`].
-         */layout: FfiLayout? = nil) {
+         * Foreign on-disk layout delegate. `None` == the store's default layout.
+         */layout: FfiAssetLayout? = nil) {
         self.cacheDir = cacheDir
         self.layout = layout
     }
@@ -3910,13 +3795,13 @@ public struct FfiConverterTypeStoreOptions: FfiConverterRustBuffer {
         return
             try StoreOptions(
                 cacheDir: FfiConverterOptionString.read(from: &buf), 
-                layout: FfiConverterOptionTypeFfiLayout.read(from: &buf)
+                layout: FfiConverterOptionTypeFfiAssetLayout.read(from: &buf)
         )
     }
 
     public static func write(_ value: StoreOptions, into buf: inout [UInt8]) {
         FfiConverterOptionString.write(value.cacheDir, into: &buf)
-        FfiConverterOptionTypeFfiLayout.write(value.layout, into: &buf)
+        FfiConverterOptionTypeFfiAssetLayout.write(value.layout, into: &buf)
     }
 }
 
@@ -4381,87 +4266,6 @@ public func FfiConverterTypeFfiItemStatus_lower(_ value: FfiItemStatus) -> RustB
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
- * On-disk layout selection for the shared asset store. `None` on
- * [`crate::config::StoreOptions`] keeps [`Default`](Self::Default).
- */
-
-public enum FfiLayout {
-    
-    case `default`
-    case pretty
-    case custom(delegate: FfiAssetLayout
-    )
-
-
-
-
-
-}
-
-#if compiler(>=6)
-extension FfiLayout: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeFfiLayout: FfiConverterRustBuffer {
-    typealias SwiftType = FfiLayout
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiLayout {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-        
-        case 1: return .`default`
-        
-        case 2: return .pretty
-        
-        case 3: return .custom(delegate: try FfiConverterTypeFfiAssetLayout.read(from: &buf)
-        )
-        
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: FfiLayout, into buf: inout [UInt8]) {
-        switch value {
-        
-        
-        case .`default`:
-            writeInt(&buf, Int32(1))
-        
-        
-        case .pretty:
-            writeInt(&buf, Int32(2))
-        
-        
-        case let .custom(delegate):
-            writeInt(&buf, Int32(3))
-            FfiConverterTypeFfiAssetLayout.write(delegate, into: &buf)
-            
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiLayout_lift(_ buf: RustBuffer) throws -> FfiLayout {
-    return try FfiConverterTypeFfiLayout.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiLayout_lower(_ value: FfiLayout) -> RustBuffer {
-    return FfiConverterTypeFfiLayout.lower(value)
-}
-
-
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
-/**
  * Typed player event dispatched through [`crate::observer::PlayerObserver::on_event`].
  *
  * Replaces raw integer status codes with typed enums. Swift receives
@@ -4779,118 +4583,6 @@ public func FfiConverterTypeFfiPlayerStatus_lower(_ value: FfiPlayerStatus) -> R
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
- * Owned mirror of [`kithara::assets::ResourceInfo`].
- */
-
-public enum FfiResourceInfo: Equatable, Hashable {
-    
-    case manifest(url: String, rendition: FfiRenditionDesc?
-    )
-    case initSegment(url: String, rendition: FfiRenditionDesc
-    )
-    case mediaSegment(url: String, rendition: FfiRenditionDesc, sequence: UInt64
-    )
-    case key(url: String
-    )
-    case track(url: String, name: String?, extHint: String?
-    )
-
-
-
-
-
-}
-
-#if compiler(>=6)
-extension FfiResourceInfo: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeFfiResourceInfo: FfiConverterRustBuffer {
-    typealias SwiftType = FfiResourceInfo
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiResourceInfo {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-        
-        case 1: return .manifest(url: try FfiConverterString.read(from: &buf), rendition: try FfiConverterOptionTypeFfiRenditionDesc.read(from: &buf)
-        )
-        
-        case 2: return .initSegment(url: try FfiConverterString.read(from: &buf), rendition: try FfiConverterTypeFfiRenditionDesc.read(from: &buf)
-        )
-        
-        case 3: return .mediaSegment(url: try FfiConverterString.read(from: &buf), rendition: try FfiConverterTypeFfiRenditionDesc.read(from: &buf), sequence: try FfiConverterUInt64.read(from: &buf)
-        )
-        
-        case 4: return .key(url: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 5: return .track(url: try FfiConverterString.read(from: &buf), name: try FfiConverterOptionString.read(from: &buf), extHint: try FfiConverterOptionString.read(from: &buf)
-        )
-        
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: FfiResourceInfo, into buf: inout [UInt8]) {
-        switch value {
-        
-        
-        case let .manifest(url,rendition):
-            writeInt(&buf, Int32(1))
-            FfiConverterString.write(url, into: &buf)
-            FfiConverterOptionTypeFfiRenditionDesc.write(rendition, into: &buf)
-            
-        
-        case let .initSegment(url,rendition):
-            writeInt(&buf, Int32(2))
-            FfiConverterString.write(url, into: &buf)
-            FfiConverterTypeFfiRenditionDesc.write(rendition, into: &buf)
-            
-        
-        case let .mediaSegment(url,rendition,sequence):
-            writeInt(&buf, Int32(3))
-            FfiConverterString.write(url, into: &buf)
-            FfiConverterTypeFfiRenditionDesc.write(rendition, into: &buf)
-            FfiConverterUInt64.write(sequence, into: &buf)
-            
-        
-        case let .key(url):
-            writeInt(&buf, Int32(4))
-            FfiConverterString.write(url, into: &buf)
-            
-        
-        case let .track(url,name,extHint):
-            writeInt(&buf, Int32(5))
-            FfiConverterString.write(url, into: &buf)
-            FfiConverterOptionString.write(name, into: &buf)
-            FfiConverterOptionString.write(extHint, into: &buf)
-            
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiResourceInfo_lift(_ buf: RustBuffer) throws -> FfiResourceInfo {
-    return try FfiConverterTypeFfiResourceInfo.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiResourceInfo_lower(_ value: FfiResourceInfo) -> RustBuffer {
-    return FfiConverterTypeFfiResourceInfo.lower(value)
-}
-
-
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
-/**
  * FFI-friendly mirror of [`TimeControlStatus`].
  */
 
@@ -5186,30 +4878,6 @@ public func FfiConverterTypeFfiTransition_lower(_ value: FfiTransition) -> RustB
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
-    typealias SwiftType = UInt64?
-
-    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
-        guard let value = value else {
-            writeInt(&buf, Int8(0))
-            return
-        }
-        writeInt(&buf, Int8(1))
-        FfiConverterUInt64.write(value, into: &buf)
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
-        switch try readInt(&buf) as Int8 {
-        case 0: return nil
-        case 1: return try FfiConverterUInt64.read(from: &buf)
-        default: throw UniffiInternalError.unexpectedOptionalTag
-        }
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
     typealias SwiftType = Int64?
 
@@ -5306,8 +4974,8 @@ fileprivate struct FfiConverterOptionTypeAudioPlayerItem: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterOptionTypeFfiRenditionDesc: FfiConverterRustBuffer {
-    typealias SwiftType = FfiRenditionDesc?
+fileprivate struct FfiConverterOptionTypeFfiAssetLayout: FfiConverterRustBuffer {
+    typealias SwiftType = FfiAssetLayout?
 
     public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         guard let value = value else {
@@ -5315,13 +4983,13 @@ fileprivate struct FfiConverterOptionTypeFfiRenditionDesc: FfiConverterRustBuffe
             return
         }
         writeInt(&buf, Int8(1))
-        FfiConverterTypeFfiRenditionDesc.write(value, into: &buf)
+        FfiConverterTypeFfiAssetLayout.write(value, into: &buf)
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
-        case 1: return try FfiConverterTypeFfiRenditionDesc.read(from: &buf)
+        case 1: return try FfiConverterTypeFfiAssetLayout.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -5346,30 +5014,6 @@ fileprivate struct FfiConverterOptionTypeFfiAbrMode: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeFfiAbrMode.read(from: &buf)
-        default: throw UniffiInternalError.unexpectedOptionalTag
-        }
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterOptionTypeFfiLayout: FfiConverterRustBuffer {
-    typealias SwiftType = FfiLayout?
-
-    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
-        guard let value = value else {
-            writeInt(&buf, Int8(0))
-            return
-        }
-        writeInt(&buf, Int8(1))
-        FfiConverterTypeFfiLayout.write(value, into: &buf)
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
-        switch try readInt(&buf) as Int8 {
-        case 0: return nil
-        case 1: return try FfiConverterTypeFfiLayout.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -5493,31 +5137,6 @@ fileprivate struct FfiConverterSequenceTypeFfiKeyRule: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeFfiKeyRule.read(from: &buf))
-        }
-        return seq
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterSequenceTypeFfiRendition: FfiConverterRustBuffer {
-    typealias SwiftType = [FfiRendition]
-
-    public static func write(_ value: [FfiRendition], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterTypeFfiRendition.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiRendition] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [FfiRendition]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeFfiRendition.read(from: &buf))
         }
         return seq
     }
@@ -5724,7 +5343,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_uuid_i64() != 18592) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_ffiassetlayout_rel_path() != 57899) {
+    if (uniffi_kithara_ffi_checksum_method_ffiassetlayout_rel_path() != 60234) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_ffikeyprocessor_process_key() != 2649) {

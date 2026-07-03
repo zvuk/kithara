@@ -3,8 +3,7 @@
 use std::sync::{Arc, OnceLock};
 
 use kithara_assets::{
-    AssetStore, AssetStoreBuilder, BytePool, EvictConfig, Rendition, ResourceInfo, ResourceKey,
-    StoreOptions,
+    AssetStore, AssetStoreBuilder, BytePool, EvictConfig, ResourceKey, StorageBackend, StoreOptions,
 };
 use kithara_events::{EventBus, VariantInfo};
 use kithara_net::{HttpClient, NetOptions};
@@ -36,7 +35,7 @@ use crate::{
 pub struct Hls;
 
 fn effective_look_ahead_segments(config: &HlsConfig) -> Option<usize> {
-    if !config.store.is_ephemeral {
+    if config.store.backend != StorageBackend::Memory {
         return None;
     }
     let capacity = config.store.cache_capacity?;
@@ -100,7 +99,7 @@ impl StreamType for Hls {
             byte_pool,
         );
 
-        let (master, media_playlists, renditions) = load_playlists(&stream_peer, &config).await?;
+        let (master, media_playlists) = load_playlists(&stream_peer, &config).await?;
 
         // Size the private per-stream LRU handle cache to the variant's
         // segment count when the caller left it at the default, so random
@@ -165,7 +164,6 @@ impl StreamType for Hls {
         let plan_ctx = PlanCtx {
             master_cancel: cancel.clone(),
             scope: stream_peer.scope(),
-            renditions: Arc::clone(&renditions),
             headers: config.headers.clone(),
             prefetch_budget: config.download_batch_size.max(1),
             seek_epoch: seek_obs.epoch(),
@@ -200,7 +198,6 @@ impl StreamType for Hls {
                 signal,
                 cancel: cancel.clone(),
                 scope: stream_peer.scope(),
-                renditions: Arc::clone(&renditions),
                 headers: config.headers.clone(),
             },
             playhead,
@@ -234,12 +231,11 @@ impl StreamType for Hls {
 }
 
 /// Build the playlist cache and load the master plus every variant media
-/// playlist (master order). Also returns the rendition facts so segment mint
-/// sites can build a rendition-aware layout path.
+/// playlist (master order).
 async fn load_playlists(
     stream_peer: &StreamPeer,
     config: &HlsConfig,
-) -> Result<(ParsedMaster, Vec<MediaPlaylist>, Arc<[Rendition]>), SourceError> {
+) -> Result<(ParsedMaster, Vec<MediaPlaylist>), SourceError> {
     let playlist_cache = PlaylistCache::new(
         stream_peer.scope(),
         stream_peer.peer_handle(),
@@ -249,10 +245,7 @@ async fn load_playlists(
     playlist_cache.set_base_url(config.base_url.clone());
     playlist_cache.set_headers(config.headers.clone());
 
-    let master_key = stream_peer.scope().key_for(&ResourceInfo::Manifest {
-        url: &config.url,
-        rendition: None,
-    });
+    let master_key = stream_peer.scope().key_for(&config.url);
     let master = MasterPlaylist::new(
         playlist_cache.clone(),
         &stream_peer.scope(),
@@ -261,39 +254,16 @@ async fn load_playlists(
     .load()
     .await?;
 
-    let renditions: Arc<[Rendition]> = master
-        .variants
-        .iter()
-        .map(|v| Rendition::new(v.bandwidth, v.name.clone(), variant_uri_stem(&v.uri)))
-        .collect();
-
     let media_playlists = load_variant_playlists(
         &playlist_cache,
         &stream_peer.scope(),
         &config.url,
         &master_key,
-        &renditions,
         &master.variants,
     )
     .await?;
 
-    Ok((master, media_playlists, renditions))
-}
-
-fn variant_uri_stem(uri: &str) -> Option<String> {
-    let path = uri.split(['?', '#']).next().unwrap_or(uri);
-    let leaf = path
-        .rsplit('/')
-        .find(|part| !part.is_empty())
-        .unwrap_or(path);
-    let stem = leaf.rsplit_once('.').map_or(leaf, |(stem, ext)| {
-        if !stem.is_empty() && ext.chars().all(|ch| ch.is_ascii_alphanumeric()) {
-            stem
-        } else {
-            leaf
-        }
-    });
-    (!stem.is_empty()).then(|| stem.to_string())
+    Ok((master, media_playlists))
 }
 
 /// Default transport when the caller injects none: a private `Downloader`
@@ -316,9 +286,8 @@ fn default_downloader(config: &HlsConfig, cancel: &CancelToken) -> Downloader {
 fn build_asset_store(config: &HlsConfig, cancel: CancelToken) -> AssetStore {
     AssetStoreBuilder::default()
         .cancel(cancel)
-        .root_dir(&config.store.cache_dir)
+        .backend(config.store.backend.clone())
         .evict_config(EvictConfig::from(&config.store))
-        .ephemeral(config.store.is_ephemeral)
         .maybe_layout(config.store.layout.clone())
         .maybe_pool(config.pool.clone())
         .maybe_cache_capacity(config.store.cache_capacity)
@@ -340,9 +309,8 @@ pub fn build_shared_asset_store(
     Arc::new(
         AssetStoreBuilder::default()
             .cancel(cancel)
-            .root_dir(&store.cache_dir)
+            .backend(store.backend.clone())
             .evict_config(EvictConfig::from(store))
-            .ephemeral(store.is_ephemeral)
             .maybe_layout(store.layout.clone())
             .maybe_pool(pool)
             .maybe_cache_capacity(store.cache_capacity)

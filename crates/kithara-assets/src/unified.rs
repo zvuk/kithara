@@ -243,12 +243,6 @@ impl AssetStore {
         None
     }
 
-    /// Whether this backend is ephemeral (in-memory).
-    #[must_use]
-    pub fn is_ephemeral(&self) -> bool {
-        matches!(self, Self::Mem { .. })
-    }
-
     /// Request the in-memory LRU handle cache hold up to `media_items`
     /// media resources (e.g. the variant segment count). The store applies
     /// its own non-media headroom and hard cap, returning the capacity
@@ -322,8 +316,7 @@ impl AssetStore {
     /// Bind this store to one `asset_root`, returning a scoped handle
     /// that drops the per-call `asset_root` argument. Cheap to clone --
     /// the backing store is shared, so many scopes over distinct asset
-    /// roots cooperate on one store. The scope inherits the store's
-    /// [`AssetLayout`]: one store, one on-disk layout.
+    /// roots cooperate on one store; the scope inherits the store's [`AssetLayout`].
     #[must_use]
     pub fn scope<R: Into<Arc<str>>>(&self, asset_root: R) -> AssetScope {
         AssetScope::new(self.clone(), asset_root.into())

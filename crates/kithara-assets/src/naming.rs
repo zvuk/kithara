@@ -12,7 +12,7 @@ impl Consts {
 /// Short stable fingerprint for names that must remain bounded while
 /// preserving URL identity.
 #[must_use]
-pub fn url_fingerprint(url: &Url) -> String {
+pub(crate) fn url_fingerprint(url: &Url) -> String {
     short_fingerprint(url.as_str())
 }
 
@@ -23,7 +23,7 @@ pub fn url_fingerprint(url: &Url) -> String {
 /// required, a fingerprint of `identity` is appended so long names do
 /// not collapse to the same component.
 #[must_use]
-pub fn safe_path_component(label: &str, identity: &str) -> String {
+pub(crate) fn safe_path_component(label: &str, identity: &str) -> String {
     let out: String = label
         .chars()
         .map(|ch| {

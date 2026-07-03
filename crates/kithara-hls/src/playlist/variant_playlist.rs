@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use kithara_assets::{AssetScope, Rendition, RenditionDesc, ResourceInfo, ResourceKey};
+use kithara_assets::{AssetScope, ResourceKey};
 use url::Url;
 
 use super::{
@@ -33,7 +33,6 @@ impl VariantPlaylist {
         scope: &AssetScope,
         master_url: &Url,
         master_key: &ResourceKey,
-        renditions: &[Rendition],
         variant: &VariantStream,
     ) -> HlsResult<Self> {
         let media_url = cache.resolve_url(master_url, &variant.uri)?;
@@ -42,10 +41,7 @@ impl VariantPlaylist {
         let key = if &media_url == master_url {
             master_key.clone()
         } else {
-            scope.key_for(&ResourceInfo::Manifest {
-                url: &media_url,
-                rendition: Some(RenditionDesc::new(variant.id.0, renditions)),
-            })
+            scope.key_for(&media_url)
         };
         let resource = ResourceHandle::new(scope.clone(), key, media_url);
         Ok(Self {
@@ -80,14 +76,11 @@ pub(crate) async fn load_variant_playlists(
     scope: &AssetScope,
     master_url: &Url,
     master_key: &ResourceKey,
-    renditions: &[Rendition],
     variants: &[VariantStream],
 ) -> HlsResult<Vec<MediaPlaylist>> {
     let loadables = variants
         .iter()
-        .map(|variant| {
-            VariantPlaylist::for_variant(cache, scope, master_url, master_key, renditions, variant)
-        })
+        .map(|variant| VariantPlaylist::for_variant(cache, scope, master_url, master_key, variant))
         .collect::<HlsResult<Vec<_>>>()?;
     futures::future::try_join_all(loadables.iter().map(VariantPlaylist::load)).await
 }

@@ -1,7 +1,7 @@
 use std::{io::Write, num::NonZeroUsize};
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     file::{File, FileConfig, FileSrc},
@@ -52,13 +52,14 @@ async fn run_case(
     let temp_dir = TestTempDir::new();
     let store = if ephemeral {
         StoreOptions::builder()
-            .cache_dir(temp_dir.path().into())
             .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
-            .is_ephemeral(true)
+            .backend(StorageBackend::Memory)
             .build()
     } else {
         StoreOptions::builder()
-            .cache_dir(temp_dir.path().into())
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().into(),
+            })
             .build()
     };
 
@@ -263,11 +264,9 @@ async fn decode_pcm_seconds(
         bit_rate,
     };
     let url = helper.sine(&spec, FREQ_HZ).await;
-    let temp_dir = TestTempDir::new();
     let store = StoreOptions::builder()
-        .cache_dir(temp_dir.path().into())
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .build();
     let file_config = FileConfig::for_src(url.into()).store(store).build();
     // Park on ring underrun instead of spinning on Pending.
@@ -572,11 +571,9 @@ async fn bit_rate_e2e_does_not_hang(#[case] format: SignalFormat, #[case] bit_ra
     };
     let url = helper.sine(&spec, FREQ_HZ).await;
 
-    let temp_dir = TestTempDir::new();
     let store = StoreOptions::builder()
-        .cache_dir(temp_dir.path().into())
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .build();
     let file_config = FileConfig::for_src(url.into()).store(store).build();
     let audio_config = AudioConfig::<File>::for_stream(file_config)
@@ -838,9 +835,8 @@ async fn build_aac_sine_audio(backend: DecoderBackend) -> Audio<Stream<File>> {
     // the store as an ephemeral cache, so the leaked guard is harmless in
     // this short-lived test and avoids threading a guard through the caller.
     let store = StoreOptions::builder()
-        .cache_dir(temp_dir.path().into())
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .build();
     std::mem::forget(temp_dir);
     let file_config = FileConfig::for_src(url.into()).store(store).build();

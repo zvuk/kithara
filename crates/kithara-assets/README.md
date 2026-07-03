@@ -29,10 +29,10 @@ Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-fil
 ## Usage
 
 ```rust
-use kithara_assets::AssetStoreBuilder;
+use kithara_assets::{AssetStoreBuilder, StorageBackend};
 
 let store = AssetStoreBuilder::default()
-    .root_dir(cache_dir)
+    .backend(StorageBackend::Disk { root: cache_dir })
     .cancel(cancel.clone())
     .build();
 // Bind a scope to one `asset_root`; it mints self-identifying keys.

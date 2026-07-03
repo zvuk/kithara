@@ -90,7 +90,7 @@ Encrypted segments parse `#EXT-X-KEY` from the media playlist; `KeyStore` resolv
 
 Each segment is stored as its own `AssetResource` via `AssetStore` (`kithara-assets`). Encrypted segments are acquired with `acquire_resource_with_ctx(key, Some(DecryptContext))` so decryption is part of the resource lifecycle. The optional `#EXT-X-ALLOW-CACHE` tag is parsed into playlist metadata for compatibility; the current cache policy is not switched by this flag.
 
-HLS cache naming is owned by the `AssetLayout` carried on the scope (`kithara-assets`). Keys are minted once at the semantic site via `scope.key_for(&ResourceInfo::{Manifest,InitSegment,MediaSegment,Key})`: `stream/hls.rs` resolves the layout (`HlsConfig.layout`, or `DefaultLayout`) and computes the master rendition set.
+HLS cache naming is owned by the `AssetLayout` carried on the scope (`kithara-assets`). Keys are minted once at the semantic site via `scope.key_for(&url)` — every resource (manifest, init, segment, key) is keyed by its URL alone; `stream/hls.rs` resolves the layout (`HlsConfig.layout`, or `DefaultLayout`).
 
 ## Seek and wait_range Contract
 

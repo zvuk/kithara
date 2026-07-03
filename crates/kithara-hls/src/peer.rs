@@ -147,7 +147,6 @@ impl HlsPeer {
                 look_ahead_bytes,
                 master_cancel: coord.cancel.clone(),
                 scope: coord.scope.clone(),
-                renditions: Arc::clone(&coord.renditions),
                 headers: coord.headers.clone(),
                 seek_epoch: self.seek_obs.epoch(),
                 signal: coord.signal(),
@@ -575,7 +574,6 @@ impl HlsTrackState {
         PlanCtx {
             master_cancel: self.coord.cancel.clone(),
             scope: self.coord.scope.clone(),
-            renditions: Arc::clone(&self.coord.renditions),
             headers: self.coord.headers.clone(),
             prefetch_budget: self.prefetch_budget,
             seek_epoch: self.seek_obs.epoch(),

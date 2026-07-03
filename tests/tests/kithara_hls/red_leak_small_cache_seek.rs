@@ -7,7 +7,7 @@ use std::{
 };
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
@@ -17,7 +17,7 @@ use kithara::{
     },
     stream::Stream,
 };
-use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
+use kithara_integration_tests::hls_server::TestServer;
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -61,15 +61,10 @@ impl Consts {
     const WARMUP_STABLE_SAMPLES: usize = 2;
 }
 
-async fn build_small_cache_stream(
-    server: &TestServer,
-    temp_path: &std::path::Path,
-    cancel: CancelToken,
-) -> Stream<Hls> {
+async fn build_small_cache_stream(server: &TestServer, cancel: CancelToken) -> Stream<Hls> {
     let url = server.url("/master.m3u8");
     let store = StoreOptions::builder()
-        .cache_dir(temp_path.into())
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
         .build();
     let config = HlsConfig::for_url(url)
@@ -99,9 +94,9 @@ fn exercise_stream_blocking(mut stream: Stream<Hls>) {
     drop(stream);
 }
 
-async fn run_small_cache_seek_cycle(server: &TestServer, temp_path: &std::path::Path) -> usize {
+async fn run_small_cache_seek_cycle(server: &TestServer) -> usize {
     let cancel = CancelToken::never();
-    let stream = build_small_cache_stream(server, temp_path, cancel.clone()).await;
+    let stream = build_small_cache_stream(server, cancel.clone()).await;
     spawn_blocking(move || exercise_stream_blocking(stream))
         .await
         .expect("blocking join");
@@ -109,12 +104,12 @@ async fn run_small_cache_seek_cycle(server: &TestServer, temp_path: &std::path::
     wait_thread_count_quiesced(4, Duration::from_secs(5)).await
 }
 
-async fn stable_live_thread_baseline(server: &TestServer, temp_path: &std::path::Path) -> usize {
+async fn stable_live_thread_baseline(server: &TestServer) -> usize {
     let mut last = None;
     let mut stable = 0usize;
 
     for _ in 0..Consts::WARMUP_MAX_STREAMS {
-        run_small_cache_seek_cycle(server, temp_path).await;
+        run_small_cache_seek_cycle(server).await;
         let now = live_thread_count();
         if Some(now) == last {
             stable += 1;
@@ -136,17 +131,16 @@ async fn stable_live_thread_baseline(server: &TestServer, temp_path: &std::path:
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-async fn red_small_cache_seek_stress_does_not_leak_threads(
-    temp_dir: TestTempDir,
-) -> Result<(), Box<dyn StdError + Send + Sync>> {
+async fn red_small_cache_seek_stress_does_not_leak_threads()
+-> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServer::new().await;
 
-    let threads_baseline = stable_live_thread_baseline(&server, temp_dir.path()).await;
+    let threads_baseline = stable_live_thread_baseline(&server).await;
 
     for i in 0..Consts::STREAM_ITERATIONS {
         // Wait until this iteration's per-stream tasks are reaped (thread count
         // stops dropping) before logging — not a fixed pacing delay.
-        let threads = run_small_cache_seek_cycle(&server, temp_dir.path()).await;
+        let threads = run_small_cache_seek_cycle(&server).await;
         tracing::info!(iter = i, threads, "post-drop");
     }
 

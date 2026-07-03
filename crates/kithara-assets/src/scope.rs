@@ -2,12 +2,9 @@
 
 use std::sync::Arc;
 
-use crate::{
-    error::AssetsResult,
-    key::ResourceKey,
-    layout::{AssetLayout, ResourceInfo},
-    unified::AssetStore,
-};
+use url::Url;
+
+use crate::{error::AssetsResult, key::ResourceKey, layout::AssetLayout, unified::AssetStore};
 
 /// A lightweight handle that holds one `asset_root` over a shared
 /// [`AssetStore`] and mints self-identifying [`ResourceKey`]s under it.
@@ -50,10 +47,10 @@ impl AssetScope {
         ResourceKey::relative(Arc::clone(&self.asset_root), rel_path)
     }
 
-    /// Mint a relative key for a resource under this scope's `asset_root`.
+    /// Mint a relative key for the resource at `url` under this scope's `asset_root`.
     #[must_use]
-    pub fn key_for(&self, info: &ResourceInfo<'_>) -> ResourceKey {
-        ResourceKey::relative(Arc::clone(&self.asset_root), self.layout.rel_path(info))
+    pub fn key_for(&self, url: &Url) -> ResourceKey {
+        ResourceKey::relative(Arc::clone(&self.asset_root), self.layout.rel_path(url))
     }
 
     /// The underlying shared store, where per-resource operations live.

@@ -1,7 +1,7 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
@@ -425,7 +425,9 @@ async fn stress_seek_audio_hls(
     let cancel = CancelToken::never();
 
     let mut store = StoreOptions::new(temp_dir.path());
-    store.is_ephemeral = ephemeral;
+    if ephemeral {
+        store.backend = StorageBackend::Memory;
+    }
     if let Some(cap) = cache_capacity_override {
         store.cache_capacity = Some(NonZeroUsize::new(cap).expect("nonzero cache capacity"));
     }

@@ -3,7 +3,7 @@
 use std::{error::Error as StdError, num::NonZeroUsize};
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig, AudioWorkerHandle, ChunkOutcome, PcmReader},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
@@ -16,9 +16,7 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, auto, temp_dir, waits::wait_thread_count_quiesced,
-};
+use kithara_integration_tests::{TestServerHelper, auto, waits::wait_thread_count_quiesced};
 use tracing::info;
 
 struct Consts;
@@ -55,15 +53,13 @@ async fn preload_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
 
 async fn run_drm_seek_resume_cycle(
     server: &TestServerHelper,
-    temp_dir: &TestTempDir,
     downloader: &Downloader,
     shared_worker: &AudioWorkerHandle,
     iter_idx: usize,
 ) {
     let url = server.asset("drm/master.m3u8");
     let store = StoreOptions::builder()
-        .cache_dir(temp_dir.path().into())
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
 
@@ -119,9 +115,8 @@ async fn run_drm_seek_resume_cycle(
     timeout(Duration::from_secs(120)),
     env(KITHARA_HANG_TIMEOUT_SECS = "10")
 )]
-async fn red_leak_native_drm_seek_resume_thread_budget(
-    temp_dir: TestTempDir,
-) -> Result<(), Box<dyn StdError + Send + Sync>> {
+async fn red_leak_native_drm_seek_resume_thread_budget()
+-> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServerHelper::new().await;
     let shared_worker = AudioWorkerHandle::with_cancel(CancelToken::never());
 
@@ -131,13 +126,13 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
             .build(),
     );
 
-    run_drm_seek_resume_cycle(&server, &temp_dir, &downloader, &shared_worker, 0).await;
+    run_drm_seek_resume_cycle(&server, &downloader, &shared_worker, 0).await;
     let threads_baseline = wait_thread_count_quiesced(Duration::from_secs(30)).await;
 
     info!(threads_baseline, "baseline after warmup DRM seek cycle");
 
     for i in 1..=Consts::ITERATIONS {
-        run_drm_seek_resume_cycle(&server, &temp_dir, &downloader, &shared_worker, i).await;
+        run_drm_seek_resume_cycle(&server, &downloader, &shared_worker, i).await;
         let now = wait_thread_count_quiesced(Duration::from_secs(30)).await;
         info!(
             iter = i,

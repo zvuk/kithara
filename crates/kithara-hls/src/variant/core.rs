@@ -7,7 +7,6 @@ use std::{
     },
 };
 
-use kithara_assets::{RenditionDesc, ResourceInfo};
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Mutex, time::Duration, traits::FromWithParams};
@@ -42,9 +41,6 @@ pub(crate) struct PlanCtx {
     /// [`SizeSignal::fire_ready_only`].
     pub(crate) signal: SizeSignal,
     pub(crate) scope: kithara_assets::AssetScope,
-    /// Rendition facts for the whole master, in master order, so mint sites
-    /// can build a [`RenditionDesc`](RenditionDesc).
-    pub(crate) renditions: Arc<[kithara_assets::Rendition]>,
     pub(crate) master_cancel: CancelToken,
     /// Per-resource HTTP headers applied to every init/segment fetch.
     /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
@@ -370,7 +366,6 @@ impl HlsVariant {
         ctx: &PlanCtx,
     ) -> Vec<Segment> {
         let scope = &ctx.scope;
-        let rendition = RenditionDesc::new(variant_idx, &ctx.renditions);
         let Some(num) = playlist_state.num_segments(variant_idx) else {
             return Vec::new();
         };
@@ -379,9 +374,6 @@ impl HlsVariant {
         let mut entries = Vec::with_capacity(num);
         for seg_idx in 0..num {
             let Some(url) = playlist_state.segment_url(variant_idx, seg_idx) else {
-                break;
-            };
-            let Some(sequence) = playlist_state.segment_sequence(variant_idx, seg_idx) else {
                 break;
             };
             let duration = playlist_state
@@ -395,11 +387,7 @@ impl HlsVariant {
                     SegmentSize::seed,
                 );
             entries.push(Segment::Media(MediaSegment {
-                resource_id: scope.key_for(&ResourceInfo::MediaSegment {
-                    url: &url,
-                    rendition,
-                    sequence,
-                }),
+                resource_id: scope.key_for(&url),
                 url,
                 state: SegmentSlotState::missing(),
                 size,

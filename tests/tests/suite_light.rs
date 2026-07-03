@@ -72,7 +72,6 @@ mod kithara_hls {
     mod keys_integration;
     mod playlist_integration;
     mod prefetch_403_fails_open;
-    mod pretty_layout;
     mod probe_not_ready_at_creation;
     mod red_abr_no_escape_from_stalled_variant;
     mod red_leak_pattern;

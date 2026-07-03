@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     events::VariantIndex,
     hls::{AbrMode, Hls, HlsConfig},
     platform::CancelToken,
@@ -98,7 +98,7 @@ impl HlsStreamBuilder {
         };
 
         let store_opts = StoreOptions::builder()
-            .cache_dir(store_path)
+            .backend(StorageBackend::Disk { root: store_path })
             .maybe_max_assets(self.max_assets)
             .maybe_max_bytes(self.max_bytes)
             .build();

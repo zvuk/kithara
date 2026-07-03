@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use kithara_assets::{AssetScope, ResourceInfo};
+use kithara_assets::AssetScope;
 use url::Url;
 
 use super::{parse::ParsedMaster, playlist_cache::PlaylistCache};
@@ -20,10 +20,7 @@ impl MasterPlaylist {
     /// Build a loadable for the master at `url`, resolving the per-resource
     /// [`ResourceHandle`] from `scope`.
     pub(crate) fn new(cache: PlaylistCache, scope: &AssetScope, url: Url) -> Self {
-        let key = scope.key_for(&ResourceInfo::Manifest {
-            url: &url,
-            rendition: None,
-        });
+        let key = scope.key_for(&url);
         let resource = ResourceHandle::new(scope.clone(), key, url);
         Self { cache, resource }
     }

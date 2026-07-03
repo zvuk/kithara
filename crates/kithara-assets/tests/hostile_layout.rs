@@ -1,10 +1,9 @@
-//! A custom [`AssetLayout`] that returns an unsafe `rel_path` must be
-//! rejected by store-side validation with a typed error, never silently
-//! rewritten. The built-in layouts sanitize; hostile custom ones do not.
+//! A custom [`AssetLayout`] that returns an unsafe `rel_path` must be rejected
+//! by store-side validation with a typed error, never silently rewritten.
 
 use std::sync::Arc;
 
-use kithara_assets::{AssetLayout, AssetStoreBuilder, AssetsError, ResourceInfo};
+use kithara_assets::{AssetLayout, AssetStoreBuilder, AssetsError, StorageBackend};
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
@@ -14,7 +13,7 @@ use url::Url;
 struct HostileLayout(&'static str);
 
 impl AssetLayout for HostileLayout {
-    fn rel_path(&self, _info: &ResourceInfo<'_>) -> String {
+    fn rel_path(&self, _url: &Url) -> String {
         self.0.to_string()
     }
 }
@@ -27,17 +26,15 @@ impl AssetLayout for HostileLayout {
 fn hostile_layout_rel_path_is_rejected(#[case] hostile: &'static str) {
     let dir = tempdir().unwrap();
     let store = AssetStoreBuilder::default()
-        .root_dir(dir.path())
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
         .layout(Arc::new(HostileLayout(hostile)))
         .build();
     let scope = store.scope("root");
 
     let url = Url::parse("https://example.com/audio.mp3").unwrap();
-    let key = scope.key_for(&ResourceInfo::Track {
-        url: &url,
-        name: None,
-        ext_hint: Some("mp3"),
-    });
+    let key = scope.key_for(&url);
 
     let err = scope
         .store()

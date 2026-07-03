@@ -41,4 +41,4 @@ When `FileSrc::Local(path)` is used, the crate opens the file via `AssetStore` w
 
 For `FileSrc::Remote(url)`, downloading is pull-driven: the peer requests fetches as the reader advances, with backpressure controlled by the read-demand cell shared between `FileCoord` and the asset demand lease. A missing range advances that demand and wakes the elected producer; each successful HTTP chunk write wakes the audio worker through `WorkerWake` so a parked probe re-runs when bytes arrive instead of waiting for the scheduler backstop. Seek miss enqueues an explicit range fetch for the requested offset.
 
-Remote file cache naming is owned by the `AssetLayout` carried on the scope (`kithara-assets`). The asset directory keeps the hash identity (`config.name` when present, otherwise query-aware for remote URLs); the single file resource is keyed via `scope.key_for(&ResourceInfo::Track)`.
+Remote file cache naming is owned by the `AssetLayout` carried on the scope (`kithara-assets`). The asset directory keeps the hash identity (`config.name` when present, otherwise query-aware for remote URLs); the single file resource is keyed by its URL via `scope.key_for(&url)`.

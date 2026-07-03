@@ -2,8 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use kithara_assets::{
     AcquisitionResult, AssetLayout, AssetReader, AssetStore, AssetStoreBuilder, AssetWriter,
-    AssetsError, BytePool, EvictConfig, ReadSide, ResourceInfo, ResourceKey, StoreOptions,
-    WriteSide,
+    AssetsError, BytePool, EvictConfig, ReadSide, ResourceKey, StoreOptions, WriteSide,
 };
 use kithara_events::EventBus;
 use kithara_net::{Headers, HttpClient, NetOptions};
@@ -40,22 +39,6 @@ struct RemoteFileOpen {
     key: ResourceKey,
     look_ahead_bytes: Option<u64>,
     url: url::Url,
-}
-
-fn track_ext_hint(url: &url::Url, name: Option<&str>) -> Option<String> {
-    name.and_then(extension_hint).or_else(|| {
-        url.path_segments()
-            .and_then(|mut segments| segments.next_back())
-            .and_then(extension_hint)
-    })
-}
-
-fn extension_hint(segment: &str) -> Option<String> {
-    let (_, ext) = segment.rsplit_once('.')?;
-    if ext.is_empty() || !ext.chars().all(|ch| ch.is_ascii_alphanumeric()) {
-        return None;
-    }
-    Some(ext.to_ascii_lowercase())
 }
 
 fn local_key(path: PathBuf) -> Result<ResourceKey, SourceError> {
@@ -230,19 +213,12 @@ impl File {
             store,
             ..
         } = config;
-        let ext_hint = track_ext_hint(&url, name.as_deref());
         let downloader = downloader.unwrap_or_else(|| default_downloader(&cancel, pool.clone()));
         let backend =
             asset_store.unwrap_or_else(|| build_shared_asset_store(&store, pool, cancel.clone()));
         let asset_root = remote_asset_root(&url, name.as_deref(), backend.layout());
 
-        let key = backend
-            .scope(asset_root.as_str())
-            .key_for(&ResourceInfo::Track {
-                url: &url,
-                name: name.as_deref(),
-                ext_hint: ext_hint.as_deref(),
-            });
+        let key = backend.scope(asset_root.as_str()).key_for(&url);
         let FileStreamState {
             backend,
             acq,
@@ -338,9 +314,8 @@ pub(crate) fn build_shared_asset_store(
     Arc::new(
         AssetStoreBuilder::default()
             .cancel(cancel)
-            .root_dir(&store.cache_dir)
+            .backend(store.backend.clone())
             .evict_config(EvictConfig::from(store))
-            .ephemeral(store.is_ephemeral)
             .maybe_layout(store.layout.clone())
             .maybe_pool(pool)
             .maybe_cache_capacity(store.cache_capacity)

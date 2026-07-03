@@ -18,7 +18,7 @@ use std::{
 use axum::{Router, body::Body, extract::State, http::header, response::Response, routing::get};
 use bytes::Bytes;
 use kithara::{
-    assets::AssetStoreBuilder,
+    assets::{AssetStoreBuilder, StorageBackend},
     file::{File, FileConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
@@ -72,7 +72,11 @@ async fn shared_store_one_get() {
     let server = TestHttpServer::new(app).await;
     let url = server.url("/audio.mp3");
 
-    let store = Arc::new(AssetStoreBuilder::default().ephemeral(true).build());
+    let store = Arc::new(
+        AssetStoreBuilder::default()
+            .backend(StorageBackend::Memory)
+            .build(),
+    );
 
     // Whole-file consumer (waveform) attaches first → wins the producer
     // election and drives the single download.

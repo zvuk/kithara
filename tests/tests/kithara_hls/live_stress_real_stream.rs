@@ -13,7 +13,7 @@ use kithara::platform::time;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::platform::{thread, tokio::task::spawn_blocking};
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::{DecoderBackend, PcmChunk},
     events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
@@ -187,12 +187,10 @@ async fn build_live_audio(
     server: &TestServerHelper,
     path: &str,
     cache_capacity: usize,
-    temp_dir: &TestTempDir,
 ) -> Audio<Stream<Hls>> {
     let url = server.asset(path);
     let store = StoreOptions::builder()
-        .cache_dir(temp_dir.path().into())
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(cache_capacity).expect("nonzero"))
         .build();
     let hls_config = HlsConfig::for_url(url)
@@ -318,13 +316,12 @@ async fn next_chunk(audio: &mut Audio<Stream<Hls>>, stage: &str) -> Option<PcmCh
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
-async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
+async fn live_real_drm_playback_smoke() {
     let server = TestServerHelper::new().await;
     let url = server.asset("drm/master.m3u8");
     info!(%url, "starting real DRM playback smoke");
     let store = StoreOptions::builder()
-        .cache_dir(temp_dir.path().into())
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
 
@@ -405,7 +402,6 @@ async fn live_ephemeral_revisit_sequence_regression(
     #[case] path: &str,
     #[case] label: &str,
     #[case] backend: DecoderBackend,
-    temp_dir: TestTempDir,
     _abr_fast: kithara::abr::AbrSettings,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -414,8 +410,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let store = StoreOptions::builder()
-        .cache_dir(temp_dir.path().into())
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(24).expect("nonzero"))
         .build();
 
@@ -637,11 +632,10 @@ async fn live_ephemeral_revisit_sequence_regression(
 async fn live_real_stream_fixed_seek_window_regression(
     #[case] path: &str,
     #[case] label: &str,
-    temp_dir: TestTempDir,
     _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let mut audio = build_live_audio(&server, path, 24, &temp_dir).await;
+    let mut audio = build_live_audio(&server, path, 24).await;
     let (stats, events_task) = spawn_live_stats_task(&mut audio);
 
     spawn_blocking(move || {
@@ -690,11 +684,10 @@ async fn live_real_stream_fixed_seek_window_regression(
 async fn live_real_stream_random_seek_prefix_regression(
     #[case] path: &str,
     #[case] label: &str,
-    temp_dir: TestTempDir,
     _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let mut audio = build_live_audio(&server, path, 24, &temp_dir).await;
+    let mut audio = build_live_audio(&server, path, 24).await;
     let (stats, events_task) = spawn_live_stats_task(&mut audio);
 
     spawn_blocking(move || {
@@ -738,16 +731,11 @@ async fn live_real_stream_random_seek_prefix_regression(
 )]
 #[case::hls("hls/master.m3u8", "HLS")]
 #[case::drm("drm/master.m3u8", "DRM")]
-async fn live_real_stream_seek_resume_native(
-    #[case] path: &str,
-    #[case] label: &str,
-    temp_dir: TestTempDir,
-) {
+async fn live_real_stream_seek_resume_native(#[case] path: &str, #[case] label: &str) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let store = StoreOptions::builder()
-        .cache_dir(temp_dir.path().into())
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
 
@@ -845,7 +833,7 @@ async fn live_stress_real_stream_seek_read_cache(
         let url = server.asset(path);
         let mut store = StoreOptions::new(temp_dir.path());
         if ephemeral {
-            store.is_ephemeral = true;
+            store.backend = StorageBackend::Memory;
             store.cache_capacity = Some(NonZeroUsize::new(24).expect("nonzero"));
         }
 
@@ -1158,16 +1146,11 @@ async fn live_stress_real_stream_seek_read_cache(
 )]
 #[case::hls("hls/master.m3u8", "HLS")]
 #[case::drm("drm/master.m3u8", "DRM")]
-async fn live_ephemeral_small_cache_playback(
-    #[case] path: &str,
-    #[case] label: &str,
-    temp_dir: TestTempDir,
-) {
+async fn live_ephemeral_small_cache_playback(#[case] path: &str, #[case] label: &str) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let store = StoreOptions::builder()
-        .cache_dir(temp_dir.path().into())
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
         .build();
 
@@ -1249,11 +1232,10 @@ async fn live_ephemeral_small_cache_seek_stress(
     #[case] path: &str,
     #[case] label: &str,
     #[case] backend: DecoderBackend,
-    temp_dir: TestTempDir,
 ) {
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (path, label, backend, temp_dir);
+        let _ = (path, label, backend);
         info!("browser seek stress is covered by selenium/trunk tests");
         return;
     }
@@ -1263,8 +1245,7 @@ async fn live_ephemeral_small_cache_seek_stress(
         let server = TestServerHelper::new().await;
         let url = server.asset(path);
         let store = StoreOptions::builder()
-            .cache_dir(temp_dir.path().into())
-            .is_ephemeral(true)
+            .backend(StorageBackend::Memory)
             .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
             .build();
 

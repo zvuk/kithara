@@ -2,7 +2,6 @@ use std::{ops::Range, sync::Arc};
 
 #[cfg(test)]
 use kithara_assets::ResourceKey;
-use kithara_assets::{RenditionDesc, ResourceInfo};
 use kithara_drm::DecryptContext;
 use kithara_stream::{StreamResult, dl::FetchCmd, needs_exact_byte_sizes};
 
@@ -63,10 +62,7 @@ impl HlsVariant {
             SegmentSize::default()
         };
         Some(Segment::Init(InitSegment {
-            resource_id: ctx.scope.key_for(&ResourceInfo::InitSegment {
-                url: &url,
-                rendition: RenditionDesc::new(variant_idx, &ctx.renditions),
-            }),
+            resource_id: ctx.scope.key_for(&url),
             url,
             state: SegmentSlotState::missing(),
             size,

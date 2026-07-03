@@ -7,7 +7,7 @@ use std::{
 
 use bytes::Bytes;
 use dashmap::DashMap;
-use kithara_assets::{AssetScope, ReadSide, ResourceInfo};
+use kithara_assets::{AssetScope, ReadSide};
 use kithara_drm::{DecryptContext, KeyProcessorRegistry};
 use kithara_net::Headers;
 use kithara_stream::dl::{FetchCmd, PeerHandle};
@@ -119,7 +119,7 @@ impl KeyStore {
                 .ok_or_else(|| HlsError::KeyProcessing(format!("DRM key not prefetched: {url}")));
         }
 
-        let cache_key = self.scope.key_for(&ResourceInfo::Key { url });
+        let cache_key = self.scope.key_for(url);
         let res = self
             .scope
             .store()
@@ -157,7 +157,7 @@ impl KeyStore {
         url: &Url,
         _iv: Option<[u8; Self::AES_KEY_LEN]>,
     ) -> HlsResult<Bytes> {
-        let cache_key = self.scope.key_for(&ResourceInfo::Key { url });
+        let cache_key = self.scope.key_for(url);
         let rule = self.key_registry.as_ref().and_then(|r| r.find(url));
         if rule.is_none() {
             let headers = self.merged_headers(None);

@@ -22,7 +22,7 @@ use axum::{
 use bytes::Bytes;
 use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     audio::{
         Audio, AudioConfig, AudioEffect, ResamplerParams, ResamplerProcessor, ResamplerQuality,
     },
@@ -329,8 +329,8 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
     group.bench_function("new_seek_read_cycle", |b| {
         let _ = &server_guard;
         b.iter_batched(
-            || TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}")),
-            |temp_dir| {
+            || (),
+            |()| {
                 let url = master_url.clone();
                 rt.block_on(async move {
                     let net = NetOptions::builder().pool_max_idle_per_host(8).build();
@@ -340,8 +340,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                             .build(),
                     );
                     let store = StoreOptions::builder()
-                        .cache_dir(temp_dir.path().into())
-                        .is_ephemeral(true)
+                        .backend(StorageBackend::Memory)
                         .max_bytes(200_000)
                         .build();
                     let config = HlsConfig::for_url(url)

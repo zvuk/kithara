@@ -55,7 +55,6 @@ pub(crate) struct HlsCoordEnv {
     /// "Event-driven read wait".
     pub(crate) signal: SizeSignal,
     pub(crate) scope: AssetScope,
-    pub(crate) renditions: Arc<[kithara_assets::Rendition]>,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
 }
@@ -71,7 +70,6 @@ pub(crate) struct HlsCoord {
     pub(crate) abr: AbrHandle,
     pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
     pub(crate) scope: AssetScope,
-    pub(crate) renditions: Arc<[kithara_assets::Rendition]>,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
     /// Backing playhead state — the coord owns the `Arc` directly and
@@ -155,7 +153,6 @@ impl HlsCoord {
             playlist_state,
             cancel: env.cancel,
             scope: env.scope,
-            renditions: env.renditions,
             headers: env.headers,
             variant_generation: AtomicU64::new(0),
             fence_at: AtomicU64::new(0),

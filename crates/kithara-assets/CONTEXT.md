@@ -2,6 +2,10 @@
 
 Detailed contracts and invariants for the kithara-assets crate; the README is the overview.
 
+## Storage backend
+
+`StorageBackend` selects where committed bytes live: `Memory` (contents die with the process) or `Disk { root }`. A builder with no backend gets a fresh unique temp directory (native) or memory (wasm — no filesystem, `Disk` requests build memory).
+
 ## Key mapping (normative)
 
 Resources are addressed by strings chosen by higher layers:
@@ -13,12 +17,9 @@ Disk mapping is `<cache_root>/<asset_root>/<rel_path>`. Assets does not "invent"
 
 ### Layout
 
-The `AssetStore` owns one `Arc<dyn AssetLayout>` (installed via `AssetStoreBuilder::layout` or `StoreOptions::layout`; default `DefaultLayout`); every `AssetScope` inherits it, so one store means one on-disk layout — mixing layouts inside one cache is impossible by construction. `AssetScope::key_for(&ResourceInfo)` is the mint funnel for URL-owned resources. The resulting `ResourceKey` remains the single identity used by cache, leases, eviction, demand, and availability.
+The `AssetStore` owns one `Arc<dyn AssetLayout>` (`AssetStoreBuilder::layout` / `StoreOptions::layout`, default `DefaultLayout`); every `AssetScope` inherits it, and `AssetScope::key_for(&Url)` mints the `ResourceKey` used by cache, leases, eviction, demand, and availability. Switching layouts over an existing cache keeps the asset directories but re-downloads resources under the new relative paths.
 
-`ResourceInfo` is a protocol-neutral descriptor: `Manifest` (`rendition: None` = master), `InitSegment`, `MediaSegment`, `Key`, `Track`. `RenditionDesc` carries the whole master rendition set (`siblings` + `idx`) so a layout can derive per-rendition folder labels as a pure function of the master alone. Each `Rendition` carries `bandwidth`, `name` (`NAME`), and `uri_stem` (the variant playlist's leaf stem).
-
-- `DefaultLayout` produces the HLS url-mirror naming: every streaming resource (manifest, init, segment, key) routes through `hls/<host>/<path>/<leaf>_<fp>.<ext>`; `Track` → `track.<ext>`.
-- `PrettyLayout` is semantic: `master.m3u8`, flat `<label>.m3u8` variant playlists next to the master, `<label>/init.<ext>`, `<label>/seg_<seq:05>.<ext>`, `keys/<fingerprint>.key`, and `<safe(name | leaf stem)>.<ext>` for a `Track`. Label ladder (each tier requires every rendition to have a non-empty, set-unique key): unique `NAME` → unique `uri_stem` → bandwidth rank (1 → `media`, 2 → `low`/`high`, 3 → `low`/`mid`/`high`, else `q<rank>_<kbps>kbps`); duplicate labels get `_<idx>` suffixes. `seq` is the media-sequence number (`EXT-X-MEDIA-SEQUENCE` + playlist position), so segment identity is stable across live playlist reloads.
+`DefaultLayout` is the fingerprinted URL mirror for every resource: `hls/<host>/<path>/<leaf>_<fp>.<ext>` — injective on any input; the `hls/` prefix is a fixed literal that on-disk caches address byte-for-byte. Any other policy is a caller-injected `AssetLayout`; the store validates each `rel_path` (non-empty, relative, no traversal) and rejects violations with `AssetsError::InvalidKey`.
 
 Auto-pin (lease) semantics: all resources opened through the leasing decorator (`LeaseAssets`) are automatically pinned by `asset_root` for the lifetime of the returned handle. The pin is an RAII guard stored inside the `LeaseWriter` / `LeaseReader`; drop the handle to release the pin.
 
@@ -110,7 +111,7 @@ All indices use `Atomic<R>` for crash-safe writes. **Availability persistence is
 
 - Each `asset_root` is tracked by a refcount. Concurrent leases on the same root increment it and drops decrement it. The on-disk pinned set only changes (and only flushes) on the 0→1 and 1→0 transitions; intermediate increments/decrements are pure in-memory updates.
 - Persistence is lazy: the disk file is materialised only on the first `flush`. A pre-existing on-disk file from a previous run is opened eagerly during `with_persist_at` (native only) for hydration. On wasm32 the index is always ephemeral.
-- Three call-sites share a single instance per `cache_dir`: `LeaseAssets` (pin/unpin on resource lifecycle), `EvictAssets` (read pinned set when picking eviction candidates), and `DiskAssetDeleter` (drop pin when an `asset_root` is fully removed).
+- Three call-sites share a single instance per disk root: `LeaseAssets` (pin/unpin on resource lifecycle), `EvictAssets` (read pinned set when picking eviction candidates), and `DiskAssetDeleter` (drop pin when an `asset_root` is fully removed).
 
 ## Byte Availability — single source of truth
 

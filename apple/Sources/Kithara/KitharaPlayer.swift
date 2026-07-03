@@ -285,17 +285,9 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
     }
 
-    /// On-disk cache layout policy: `.default` mirrors source URLs,
-    /// `.pretty` uses semantic names, `.custom` delegates to the app.
-    public typealias CacheLayout = FfiLayout
-
-    /// App-side delegate for ``CacheLayout/custom(delegate:)``. Must be a
-    /// pure, fast mapping: same input -> same path, no blocking, no calls
-    /// back into the player, must not throw.
+    /// App-side cache layout delegate: maps a resource URL to a relative path inside the
+    /// cache directory. Must be pure (same URL -> same path), fast, non-blocking, non-throwing.
     public typealias CacheLayoutDelegate = FfiAssetLayout
-
-    /// Resource descriptor passed to the layout delegate.
-    public typealias ResourceInfo = FfiResourceInfo
 
     /// Configuration for player creation.
     public struct Config: Sendable {
@@ -307,10 +299,8 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         public var keyRules: [KeyRule]
         /// Optional cache directory path. `nil` uses the platform default.
         public var cacheDir: String?
-        /// On-disk cache layout. `nil` keeps the default URL-mirror layout.
-        /// Switching layouts reuses the same asset directories but
-        /// re-downloads resources under the new relative paths.
-        public var layout: CacheLayout?
+        /// On-disk cache layout delegate; `nil` keeps the default URL-mirror layout.
+        public var layout: CacheLayoutDelegate?
 
         /// Construct a player config. All parameters have sensible
         /// defaults; pass DRM `keyRules` for encrypted streams.
@@ -318,7 +308,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             eqBandCount: Int = 10,
             keyRules: [KeyRule] = [],
             cacheDir: String? = nil,
-            layout: CacheLayout? = nil
+            layout: CacheLayoutDelegate? = nil
         ) {
             self.eqBandCount = eqBandCount
             self.keyRules = keyRules

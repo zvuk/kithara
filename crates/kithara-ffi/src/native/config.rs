@@ -1,6 +1,9 @@
 use std::{path::PathBuf, sync::Arc};
 
-use kithara::{assets::AssetLayout, play::ResourceConfig};
+use kithara::{
+    assets::{AssetLayout, StorageBackend},
+    play::ResourceConfig,
+};
 
 use crate::config::StoreOptions;
 
@@ -10,7 +13,9 @@ pub(crate) fn configure_resource(
     layout: Option<&Arc<dyn AssetLayout>>,
 ) {
     if let Some(ref dir) = store.cache_dir {
-        config.store.cache_dir = PathBuf::from(dir);
+        config.store.backend = StorageBackend::Disk {
+            root: PathBuf::from(dir),
+        };
     }
     if let Some(layout) = layout {
         config.store.layout = Some(Arc::clone(layout));
@@ -19,14 +24,10 @@ pub(crate) fn configure_resource(
 
 #[cfg(test)]
 mod tests {
-    use kithara::assets::ResourceInfo;
     use url::Url;
 
     use super::*;
-    use crate::{
-        layout::{FfiAssetLayout, FfiLayout, FfiResourceInfo},
-        native::layout::resolve_layout,
-    };
+    use crate::{layout::FfiAssetLayout, native::layout::resolve_layout};
 
     #[kithara::test]
     fn configure_resource_applies_explicit_cache_dir() {
@@ -37,8 +38,10 @@ mod tests {
         let mut config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
         configure_resource(&mut config, &store, None);
         assert_eq!(
-            config.store.cache_dir,
-            PathBuf::from("/tmp/kithara-ffi-config-test")
+            config.store.backend,
+            StorageBackend::Disk {
+                root: PathBuf::from("/tmp/kithara-ffi-config-test")
+            }
         );
     }
 
@@ -46,9 +49,9 @@ mod tests {
     fn configure_resource_preserves_default_when_unset() {
         let store = StoreOptions::default();
         let mut config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
-        let original = config.store.cache_dir.clone();
+        let original = config.store.backend.clone();
         configure_resource(&mut config, &store, None);
-        assert_eq!(config.store.cache_dir, original);
+        assert_eq!(config.store.backend, original);
     }
 
     #[kithara::test]
@@ -67,15 +70,13 @@ mod tests {
     fn custom_layout_reaches_store_layout() {
         struct FlatLayout;
         impl FfiAssetLayout for FlatLayout {
-            fn rel_path(&self, _info: FfiResourceInfo) -> String {
+            fn rel_path(&self, _url: String) -> String {
                 "flat/track.mp3".to_string()
             }
         }
         let store = StoreOptions {
             cache_dir: None,
-            layout: Some(FfiLayout::Custom {
-                delegate: Arc::new(FlatLayout),
-            }),
+            layout: Some(Arc::new(FlatLayout)),
         };
         let mut config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
         let resolved = resolve_layout(store.layout.as_ref());
@@ -83,11 +84,7 @@ mod tests {
 
         let layout = config.store.layout.expect("custom layout must reach store");
         let url = Url::parse("https://example.com/song.mp3").unwrap();
-        let rel = layout.rel_path(&ResourceInfo::Track {
-            url: &url,
-            name: None,
-            ext_hint: Some("mp3"),
-        });
+        let rel = layout.rel_path(&url);
         assert_eq!(rel, "flat/track.mp3");
     }
 }
