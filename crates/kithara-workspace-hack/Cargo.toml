@@ -72,7 +72,7 @@ hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
-itertools = { version = "0.13" }
+itertools = { version = "0.14" }
 libc = { version = "0.2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -115,7 +115,7 @@ futures-sink = { version = "0.3" }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
-itertools = { version = "0.13" }
+itertools = { version = "0.14" }
 libc = { version = "0.2" }
 objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
@@ -158,7 +158,7 @@ hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
-itertools = { version = "0.13" }
+itertools = { version = "0.14" }
 libc = { version = "0.2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -210,7 +210,7 @@ hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
-itertools = { version = "0.13" }
+itertools = { version = "0.14" }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
@@ -299,7 +299,7 @@ hotpath-macros = { version = "0.18", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
-itertools = { version = "0.13" }
+itertools = { version = "0.14" }
 libc = { version = "0.2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -346,7 +346,7 @@ hotpath-macros = { version = "0.18", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
-itertools = { version = "0.13" }
+itertools = { version = "0.14" }
 libc = { version = "0.2" }
 objc2-foundation = { version = "0.3" }
 percent-encoding = { version = "2" }
@@ -394,7 +394,7 @@ hotpath-macros = { version = "0.18", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
-itertools = { version = "0.13" }
+itertools = { version = "0.14" }
 libc = { version = "0.2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -451,7 +451,7 @@ hotpath-macros = { version = "0.18", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
-itertools = { version = "0.13" }
+itertools = { version = "0.14" }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
