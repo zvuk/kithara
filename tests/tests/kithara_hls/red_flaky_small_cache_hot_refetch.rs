@@ -6,10 +6,10 @@ use kithara::{
     assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     hls::{Hls, HlsConfig},
-    platform::{thread, time::Duration, tokio::task::spawn_blocking},
+    platform::{time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
-use kithara_integration_tests::{TestServerHelper, auto};
+use kithara_integration_tests::{TestServerHelper, auto, flash_pace::virtual_pace};
 use tracing::info;
 
 struct Consts;
@@ -68,7 +68,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
                 Ok(ChunkOutcome::Chunk(_)) => chunks_read += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,
                 Ok(ChunkOutcome::Pending { .. }) => {
-                    thread::sleep(Duration::from_micros(100));
+                    virtual_pace(Duration::from_micros(100));
                 }
                 Err(e) => panic!("warmup decode error: {e}"),
             }
@@ -83,13 +83,13 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
                     drained += 1;
                     // Load-bearing pacing: the reader must lag the network so
                     // the cap=1 LRU evicts segments behind/under the reader.
-                    thread::sleep(Duration::from_millis(Consts::READER_SLEEP_MS));
+                    virtual_pace(Duration::from_millis(Consts::READER_SLEEP_MS));
                 }
                 Ok(ChunkOutcome::Eof { .. }) => {
                     reached_eof = true;
                 }
                 Ok(ChunkOutcome::Pending { .. }) => {
-                    thread::sleep(Duration::from_micros(100));
+                    virtual_pace(Duration::from_micros(100));
                 }
                 Err(e) => panic!("drain decode error: {e}"),
             }
