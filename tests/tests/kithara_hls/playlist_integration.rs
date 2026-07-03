@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    assets::{Rendition, RenditionDesc, ResourceInfo, ResourceKey},
     hls::{HlsError, HlsResult, VariantId},
     platform::time::Duration,
 };
@@ -13,6 +14,25 @@ fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
     } else {
         Duration::from_secs(native_secs)
     }
+}
+
+fn master_key(assets: &TestAssets, url: &Url) -> ResourceKey {
+    assets.scope().key_for(&ResourceInfo::Manifest {
+        url,
+        rendition: None,
+    })
+}
+
+fn media_key(assets: &TestAssets, url: &Url, idx: usize) -> ResourceKey {
+    let siblings = [
+        Rendition::default(),
+        Rendition::default(),
+        Rendition::default(),
+    ];
+    assets.scope().key_for(&ResourceInfo::Manifest {
+        url,
+        rendition: Some(RenditionDesc::new(idx, &siblings)),
+    })
 }
 
 #[kithara::test(
@@ -29,7 +49,9 @@ async fn fetch_master_playlist_from_network(
     let server = test_server.await;
     let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
     let master_url = server.url("/master.m3u8");
-    let master_playlist = fetch_manager.master_playlist(&master_url).await?;
+    let master_playlist = fetch_manager
+        .master_playlist(&master_key(&assets_fixture, &master_url), &master_url)
+        .await?;
 
     assert_eq!(master_playlist.variants.len(), 3);
     Ok(())
@@ -51,7 +73,11 @@ async fn fetch_media_playlist_from_network(
     let media_url = server.url("/v0.m3u8");
 
     let media_playlist = fetch_manager
-        .media_playlist(&media_url, VariantId(0))
+        .media_playlist(
+            &media_key(&assets_fixture, &media_url, 0),
+            &media_url,
+            VariantId(0),
+        )
         .await?;
 
     let segment_count = media_playlist.segments.len();
@@ -103,13 +129,21 @@ async fn fetch_media_playlist_for_different_variants(
 
     let media_url_0 = server.url("/v0.m3u8");
     let media_playlist_0 = fetch_manager
-        .media_playlist(&media_url_0, VariantId(0))
+        .media_playlist(
+            &media_key(&assets_fixture, &media_url_0, 0),
+            &media_url_0,
+            VariantId(0),
+        )
         .await?;
     assert_eq!(media_playlist_0.segments.len(), 3);
 
     let media_url_1 = server.url("/v1.m3u8");
     let media_playlist_1 = fetch_manager
-        .media_playlist(&media_url_1, VariantId(1))
+        .media_playlist(
+            &media_key(&assets_fixture, &media_url_1, 1),
+            &media_url_1,
+            VariantId(1),
+        )
         .await?;
     assert_eq!(media_playlist_1.segments.len(), 3);
 
@@ -131,10 +165,14 @@ async fn fetch_manager_caching_behavior(
     let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
     let master_url = server.url("/master.m3u8");
 
-    let master1 = fetch_manager.master_playlist(&master_url).await?;
+    let master1 = fetch_manager
+        .master_playlist(&master_key(&assets_fixture, &master_url), &master_url)
+        .await?;
     assert_eq!(master1.variants.len(), 3);
 
-    let master2 = fetch_manager.master_playlist(&master_url).await?;
+    let master2 = fetch_manager
+        .master_playlist(&master_key(&assets_fixture, &master_url), &master_url)
+        .await?;
     assert_eq!(master2.variants.len(), 3);
 
     assert_eq!(master1.variants.len(), master2.variants.len());
@@ -157,7 +195,9 @@ async fn fetch_manager_error_handling_invalid_url(
     let invalid_url = Url::parse("http://127.0.0.1:9/master.m3u8")
         .map_err(|e| HlsError::InvalidUrl(e.to_string()))?;
 
-    let result = fetch_manager.master_playlist(&invalid_url).await;
+    let result = fetch_manager
+        .master_playlist(&master_key(&assets_fixture, &invalid_url), &invalid_url)
+        .await;
     assert!(result.is_err(), "invalid URL should fail, got Ok");
 
     Ok(())
@@ -214,14 +254,18 @@ async fn fetch_manager_with_different_base_urls(
     let server = test_server.await;
     let fetch_manager_no_base = test_playlist_cache(&assets_fixture, net_fixture.clone());
     let master_url = server.url("/master.m3u8");
-    let master_no_base = fetch_manager_no_base.master_playlist(&master_url).await?;
+    let master_no_base = fetch_manager_no_base
+        .master_playlist(&master_key(&assets_fixture, &master_url), &master_url)
+        .await?;
     assert_eq!(master_no_base.variants.len(), 3);
 
     let base_url = server.url("/custom/base/");
     let fetch_manager_with_base = test_playlist_cache(&assets_fixture, net_fixture);
     fetch_manager_with_base.set_base_url(Some(base_url));
 
-    let master_with_base = fetch_manager_with_base.master_playlist(&master_url).await?;
+    let master_with_base = fetch_manager_with_base
+        .master_playlist(&master_key(&assets_fixture, &master_url), &master_url)
+        .await?;
     assert_eq!(master_with_base.variants.len(), 3);
 
     Ok(())

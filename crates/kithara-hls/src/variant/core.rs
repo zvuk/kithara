@@ -7,6 +7,7 @@ use std::{
     },
 };
 
+use kithara_assets::{RenditionDesc, ResourceInfo};
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Mutex, time::Duration, traits::FromWithParams};
@@ -41,6 +42,9 @@ pub(crate) struct PlanCtx {
     /// [`SizeSignal::fire_ready_only`].
     pub(crate) signal: SizeSignal,
     pub(crate) scope: kithara_assets::AssetScope,
+    /// Rendition facts for the whole master, in master order, so mint sites
+    /// can build a [`RenditionDesc`](RenditionDesc).
+    pub(crate) renditions: Arc<[kithara_assets::Rendition]>,
     pub(crate) master_cancel: CancelToken,
     /// Per-resource HTTP headers applied to every init/segment fetch.
     /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
@@ -299,13 +303,13 @@ impl FromWithParams<&Arc<PlaylistState>, VariantParams<'_>> for Arc<HlsVariant> 
             playlist_state.as_ref(),
             variant_idx,
             init_decrypt_ctx,
-            &ctx.scope,
+            ctx,
         );
         let segments = HlsVariant::build_segment_entries(
             playlist_state.as_ref(),
             decrypt_contexts,
             variant_idx,
-            &ctx.scope,
+            ctx,
         );
         let codec = playlist_state.variant_codec(variant_idx);
         let container = playlist_state.variant_container(variant_idx);
@@ -363,8 +367,10 @@ impl HlsVariant {
         playlist_state: &PlaylistState,
         decrypt_contexts: &[Option<DecryptContext>],
         variant_idx: usize,
-        scope: &kithara_assets::AssetScope,
+        ctx: &PlanCtx,
     ) -> Vec<Segment> {
+        let scope = &ctx.scope;
+        let rendition = RenditionDesc::new(variant_idx, &ctx.renditions);
         let Some(num) = playlist_state.num_segments(variant_idx) else {
             return Vec::new();
         };
@@ -373,6 +379,9 @@ impl HlsVariant {
         let mut entries = Vec::with_capacity(num);
         for seg_idx in 0..num {
             let Some(url) = playlist_state.segment_url(variant_idx, seg_idx) else {
+                break;
+            };
+            let Some(sequence) = playlist_state.segment_sequence(variant_idx, seg_idx) else {
                 break;
             };
             let duration = playlist_state
@@ -386,7 +395,11 @@ impl HlsVariant {
                     SegmentSize::seed,
                 );
             entries.push(Segment::Media(MediaSegment {
-                resource_id: scope.key_from_url(&url),
+                resource_id: scope.key_for(&ResourceInfo::MediaSegment {
+                    url: &url,
+                    rendition,
+                    sequence,
+                }),
                 url,
                 state: SegmentSlotState::missing(),
                 size,

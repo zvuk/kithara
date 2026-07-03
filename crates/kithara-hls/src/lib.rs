@@ -6,7 +6,6 @@ pub mod error;
 mod decrypt_processor;
 mod handle;
 mod ids;
-mod naming;
 mod peer;
 mod playlist;
 mod reader;
@@ -21,8 +20,6 @@ pub use ids::VariantIndex;
 pub use kithara_abr::AbrMode;
 pub use kithara_drm::{KeyProcessor, KeyProcessorRegistry, KeyProcessorRule};
 pub use kithara_platform::traits::FromWithParams;
-#[doc(hidden)]
-pub use naming::HlsAssetScopeDelegate;
 pub use playlist::{
     KeyStore, MediaPlaylist, ParsedMaster, PlaylistCache, PlaylistState, SegmentState, VariantId,
     VariantState, VariantStream, parse_master_playlist, parse_media_playlist,

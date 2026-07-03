@@ -20,6 +20,7 @@ use crate::{
     flush::{FlushHub, FlushPolicy},
     index::{AvailabilityIndex, DemandIndex, EvictConfig},
     key::ResourceKey,
+    layout::{AssetLayout, DefaultLayout},
     lease::{LeaseAssets, LeaseGuard, LeaseReader, LeaseWriter},
     mem_store::{MemAssetStore, MemStoreSetup},
     process::{ProcessedReader, ProcessedWriter, ProcessingAssets},
@@ -68,6 +69,8 @@ pub struct StoreOptions {
     /// Default: `false`.
     #[builder(default)]
     pub is_ephemeral: bool,
+    /// On-disk layout policy for the store built from these options. `None` — [`DefaultLayout`].
+    pub layout: Option<Arc<dyn AssetLayout>>,
 }
 
 impl fmt::Debug for StoreOptions {
@@ -77,6 +80,7 @@ impl fmt::Debug for StoreOptions {
             .field("cache_capacity", &self.cache_capacity)
             .field("is_ephemeral", &self.is_ephemeral)
             .field("flush_hub", &self.flush_hub.as_ref().map(|_| "..."))
+            .field("layout", &self.layout)
             .field("max_assets", &self.max_assets)
             .field("max_bytes", &self.max_bytes)
             .finish()
@@ -154,6 +158,7 @@ struct AssetStoreBuildArgs {
     cancel: Option<CancelToken>,
     evict_config: Option<EvictConfig>,
     flush_hub: Option<Arc<FlushHub>>,
+    layout: Option<Arc<dyn AssetLayout>>,
     mem_resource_capacity: Option<usize>,
     pool: Option<BytePool>,
     root_dir: Option<PathBuf>,
@@ -175,6 +180,7 @@ impl AssetStoreBuilderFactory {
         cancel: Option<CancelToken>,
         evict_config: Option<EvictConfig>,
         flush_hub: Option<Arc<FlushHub>>,
+        layout: Option<Arc<dyn AssetLayout>>,
         mem_resource_capacity: Option<usize>,
         pool: Option<BytePool>,
         #[builder(into)] root_dir: Option<PathBuf>,
@@ -185,6 +191,7 @@ impl AssetStoreBuilderFactory {
             cancel,
             evict_config,
             flush_hub,
+            layout,
             mem_resource_capacity,
             pool,
             root_dir,
@@ -243,6 +250,10 @@ impl AssetStoreBuildArgs {
         // ephemeral cache's `on_invalidated` hook routes evicted keys into
         // it; the store hands subscribers per `asset_root`.
         let eviction = EvictionRouter::default();
+        let layout = self
+            .layout
+            .clone()
+            .unwrap_or_else(|| Arc::new(DefaultLayout));
         #[cfg(target_arch = "wasm32")]
         {
             let store = self.build_ephemeral_with_availability(&availability, &eviction);
@@ -251,6 +262,7 @@ impl AssetStoreBuildArgs {
                 availability,
                 demand,
                 eviction,
+                layout,
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -262,6 +274,7 @@ impl AssetStoreBuildArgs {
                     availability,
                     demand,
                     eviction,
+                    layout,
                 }
             } else {
                 let (store, base) = self.build_disk_with_availability(availability.clone());
@@ -271,6 +284,7 @@ impl AssetStoreBuildArgs {
                     demand,
                     eviction,
                     base: Some(base),
+                    layout,
                 }
             }
         }

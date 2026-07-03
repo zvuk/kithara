@@ -1,9 +1,9 @@
 use std::{path::PathBuf, sync::Arc};
 
 use kithara_assets::{
-    AcquisitionResult, AssetReader, AssetScopeDelegate, AssetStore, AssetStoreBuilder, AssetWriter,
-    AssetsError, BytePool, EvictConfig, ReadSide, ResourceKey, StoreOptions, WriteSide,
-    safe_path_component,
+    AcquisitionResult, AssetLayout, AssetReader, AssetStore, AssetStoreBuilder, AssetWriter,
+    AssetsError, BytePool, EvictConfig, ReadSide, ResourceInfo, ResourceKey, StoreOptions,
+    WriteSide,
 };
 use kithara_events::EventBus;
 use kithara_net::{Headers, HttpClient, NetOptions};
@@ -31,11 +31,6 @@ use crate::{
 /// Marker type for file streaming.
 pub struct File;
 
-#[derive(Debug)]
-struct FileAssetScopeDelegate {
-    extension_hint: Option<String>,
-}
-
 struct RemoteFileOpen {
     backend: Arc<AssetStore>,
     bus: EventBus,
@@ -47,25 +42,12 @@ struct RemoteFileOpen {
     url: url::Url,
 }
 
-impl FileAssetScopeDelegate {
-    fn new(url: &url::Url, name: Option<&str>) -> Self {
-        Self {
-            extension_hint: name.and_then(extension_hint).or_else(|| {
-                url.path_segments()
-                    .and_then(|mut segments| segments.next_back())
-                    .and_then(extension_hint)
-            }),
-        }
-    }
-}
-
-impl AssetScopeDelegate for FileAssetScopeDelegate {
-    fn rel_path_for_url(&self, _url: &url::Url) -> String {
-        self.extension_hint.as_ref().map_or_else(
-            || "track".to_string(),
-            |ext| format!("track.{}", safe_path_component(ext, ext)),
-        )
-    }
+fn track_ext_hint(url: &url::Url, name: Option<&str>) -> Option<String> {
+    name.and_then(extension_hint).or_else(|| {
+        url.path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .and_then(extension_hint)
+    })
 }
 
 fn extension_hint(segment: &str) -> Option<String> {
@@ -113,13 +95,11 @@ fn cached_source(
     FileSource::local(reader, coord, bus, backend, key, cancel, cached_codec)
 }
 
-fn remote_scope_parts(url: &url::Url, name: Option<&str>) -> (Arc<dyn AssetScopeDelegate>, String) {
+fn remote_asset_root(url: &url::Url, name: Option<&str>, layout: &Arc<dyn AssetLayout>) -> String {
     let name_or_query = name
         .or_else(|| url.query())
         .filter(|value| !value.is_empty());
-    let naming: Arc<dyn AssetScopeDelegate> = Arc::new(FileAssetScopeDelegate::new(url, name));
-    let asset_root = naming.asset_root_for_url(url, name_or_query);
-    (naming, asset_root)
+    layout.asset_root(url, name_or_query)
 }
 
 fn default_downloader(cancel: &CancelToken, pool: Option<BytePool>) -> Downloader {
@@ -250,14 +230,19 @@ impl File {
             store,
             ..
         } = config;
-        let (naming, asset_root) = remote_scope_parts(&url, name.as_deref());
+        let ext_hint = track_ext_hint(&url, name.as_deref());
         let downloader = downloader.unwrap_or_else(|| default_downloader(&cancel, pool.clone()));
         let backend =
             asset_store.unwrap_or_else(|| build_shared_asset_store(&store, pool, cancel.clone()));
+        let asset_root = remote_asset_root(&url, name.as_deref(), backend.layout());
 
         let key = backend
-            .scope_with_delegate(asset_root.as_str(), Arc::clone(&naming))
-            .key_from_url(&url);
+            .scope(asset_root.as_str())
+            .key_for(&ResourceInfo::Track {
+                url: &url,
+                name: name.as_deref(),
+                ext_hint: ext_hint.as_deref(),
+            });
         let FileStreamState {
             backend,
             acq,
@@ -356,6 +341,7 @@ pub(crate) fn build_shared_asset_store(
             .root_dir(&store.cache_dir)
             .evict_config(EvictConfig::from(store))
             .ephemeral(store.is_ephemeral)
+            .maybe_layout(store.layout.clone())
             .maybe_pool(pool)
             .maybe_cache_capacity(store.cache_capacity)
             .maybe_flush_hub(store.flush_hub.clone())

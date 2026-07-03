@@ -8,7 +8,9 @@ use std::{
 
 use clap::Parser;
 use kithara::{
-    assets::{AssetStoreBuilder, BytePool, EvictConfig, FlushHub, FlushPolicy, StoreOptions},
+    assets::{
+        AssetStoreBuilder, BytePool, EvictConfig, FlushHub, FlushPolicy, PrettyLayout, StoreOptions,
+    },
     audio::generate_log_spaced_bands,
     net::{HttpClient, NetOptions},
     play::{PlayerConfig, PlayerImpl, StretchControls},
@@ -122,6 +124,7 @@ fn main() -> AppResult {
             .root_dir(&store_options.cache_dir)
             .evict_config(EvictConfig::from(&store_options))
             .ephemeral(store_options.is_ephemeral)
+            .layout(Arc::new(PrettyLayout))
             .pool(byte_pool.clone())
             .maybe_cache_capacity(store_options.cache_capacity)
             .maybe_flush_hub(store_options.flush_hub.clone())

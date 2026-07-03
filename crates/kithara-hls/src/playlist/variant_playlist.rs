@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use kithara_assets::AssetScope;
+use kithara_assets::{AssetScope, Rendition, RenditionDesc, ResourceInfo, ResourceKey};
 use url::Url;
 
 use super::{
@@ -32,11 +32,22 @@ impl VariantPlaylist {
         cache: &PlaylistCache,
         scope: &AssetScope,
         master_url: &Url,
+        master_key: &ResourceKey,
+        renditions: &[Rendition],
         variant: &VariantStream,
     ) -> HlsResult<Self> {
         let media_url = cache.resolve_url(master_url, &variant.uri)?;
-        let resource =
-            ResourceHandle::new(scope.clone(), scope.key_from_url(&media_url), media_url);
+        // A single-rendition master can double as the media playlist: Reuse the master key so
+        // both point at one cache entry instead of minting a second.
+        let key = if &media_url == master_url {
+            master_key.clone()
+        } else {
+            scope.key_for(&ResourceInfo::Manifest {
+                url: &media_url,
+                rendition: Some(RenditionDesc::new(variant.id.0, renditions)),
+            })
+        };
+        let resource = ResourceHandle::new(scope.clone(), key, media_url);
         Ok(Self {
             cache: cache.clone(),
             resource,
@@ -51,7 +62,7 @@ impl VariantPlaylist {
     /// Returns an error when fetching or parsing fails.
     pub(crate) async fn load(&self) -> HlsResult<MediaPlaylist> {
         self.cache
-            .media_playlist(self.resource.url(), self.variant_id)
+            .media_playlist(self.resource.key(), self.resource.url(), self.variant_id)
             .await
     }
 }
@@ -68,11 +79,15 @@ pub(crate) async fn load_variant_playlists(
     cache: &PlaylistCache,
     scope: &AssetScope,
     master_url: &Url,
+    master_key: &ResourceKey,
+    renditions: &[Rendition],
     variants: &[VariantStream],
 ) -> HlsResult<Vec<MediaPlaylist>> {
     let loadables = variants
         .iter()
-        .map(|variant| VariantPlaylist::for_variant(cache, scope, master_url, variant))
+        .map(|variant| {
+            VariantPlaylist::for_variant(cache, scope, master_url, master_key, renditions, variant)
+        })
         .collect::<HlsResult<Vec<_>>>()?;
     futures::future::try_join_all(loadables.iter().map(VariantPlaylist::load)).await
 }

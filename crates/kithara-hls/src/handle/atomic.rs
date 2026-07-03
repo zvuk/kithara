@@ -79,11 +79,15 @@ impl<R: AtomicResource> AtomicFetch<R> {
     /// Returns an error when the network fetch fails or when the cache
     /// access layer reports an error other than a harmless concurrent
     /// commit.
-    pub(crate) async fn fetch(&self, url: &Url, headers: Option<Headers>) -> HlsResult<Bytes> {
-        let key = self.scope.key_from_url(url);
-        let rel_path = rel_path_for_log(&key);
+    pub(crate) async fn fetch(
+        &self,
+        key: &ResourceKey,
+        url: &Url,
+        headers: Option<Headers>,
+    ) -> HlsResult<Bytes> {
+        let rel_path = rel_path_for_log(key);
         if let Some(bytes) =
-            try_read_cached(&self.scope, &self.byte_pool, &key, url, rel_path, R::KIND)?
+            try_read_cached(&self.scope, &self.byte_pool, key, url, rel_path, R::KIND)?
         {
             return Ok(bytes);
         }
@@ -96,7 +100,7 @@ impl<R: AtomicResource> AtomicFetch<R> {
             "kithara-hls: cache miss -> fetching from network"
         );
 
-        let writer = match self.scope.store().acquire_resource(&key, None)? {
+        let writer = match self.scope.store().acquire_resource(key, None)? {
             AcquisitionResult::Pending(writer) => Some(writer.retain()),
             // Committed by a concurrent caller after our cache-miss probe (or any
             // future variant) — the network bytes below are still correct; skip
@@ -116,10 +120,9 @@ impl<R: AtomicResource> AtomicFetch<R> {
     ///
     /// # Errors
     /// Returns an error when the cache read fails.
-    pub(crate) fn try_cached(&self, url: &Url) -> HlsResult<Option<Bytes>> {
-        let key = self.scope.key_from_url(url);
-        let rel_path = rel_path_for_log(&key);
-        try_read_cached(&self.scope, &self.byte_pool, &key, url, rel_path, R::KIND)
+    pub(crate) fn try_cached(&self, key: &ResourceKey, url: &Url) -> HlsResult<Option<Bytes>> {
+        let rel_path = rel_path_for_log(key);
+        try_read_cached(&self.scope, &self.byte_pool, key, url, rel_path, R::KIND)
     }
 
     /// Best-effort cache write of `bytes` under the URL's resource key.
@@ -129,11 +132,10 @@ impl<R: AtomicResource> AtomicFetch<R> {
     ///
     /// # Errors
     /// Returns an error when acquiring the resource fails.
-    pub(crate) fn write_back(&self, url: &Url, bytes: &Bytes) -> HlsResult<()> {
-        let key = self.scope.key_from_url(url);
-        let rel_path = rel_path_for_log(&key);
+    pub(crate) fn write_back(&self, key: &ResourceKey, url: &Url, bytes: &Bytes) -> HlsResult<()> {
+        let rel_path = rel_path_for_log(key);
         if let AcquisitionResult::Pending(writer) =
-            self.scope.store().acquire_resource(&key, None)?
+            self.scope.store().acquire_resource(key, None)?
         {
             write_back_cache(writer.retain(), bytes, &self.scope, url, rel_path, R::KIND);
         }

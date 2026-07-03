@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use kithara_assets::AssetScope;
+use kithara_assets::{AssetScope, ResourceKey};
 use kithara_net::Headers;
 use kithara_platform::{sync::RwLock, tokio::sync::OnceCell};
 use kithara_stream::dl::PeerHandle;
@@ -55,12 +55,12 @@ impl PlaylistCache {
         }
     }
 
-    async fn fetch_and_parse<T, F>(&self, url: &Url, parse: F) -> HlsResult<T>
+    async fn fetch_and_parse<T, F>(&self, key: &ResourceKey, url: &Url, parse: F) -> HlsResult<T>
     where
         F: Fn(&[u8]) -> HlsResult<T>,
     {
         let headers = self.headers();
-        let bytes = self.fetch.fetch(url, headers).await?;
+        let bytes = self.fetch.fetch(key, url, headers).await?;
         parse(&bytes)
     }
 
@@ -74,10 +74,12 @@ impl PlaylistCache {
     ///
     /// # Errors
     /// Returns an error when fetching or parsing fails.
-    pub async fn master_playlist(&self, url: &Url) -> HlsResult<ParsedMaster> {
+    pub async fn master_playlist(&self, key: &ResourceKey, url: &Url) -> HlsResult<ParsedMaster> {
         let master = self
             .master
-            .get_or_try_init(|| async { self.fetch_and_parse(url, parse_master_playlist).await })
+            .get_or_try_init(|| async {
+                self.fetch_and_parse(key, url, parse_master_playlist).await
+            })
             .await?;
         Ok(master.clone())
     }
@@ -89,6 +91,7 @@ impl PlaylistCache {
     /// Returns an error when fetching or parsing fails.
     pub async fn media_playlist(
         &self,
+        key: &ResourceKey,
         url: &Url,
         variant_id: VariantId,
     ) -> HlsResult<MediaPlaylist> {
@@ -100,7 +103,7 @@ impl PlaylistCache {
 
         let playlist = cell
             .get_or_try_init(|| async {
-                self.fetch_and_parse(url, |bytes| parse_media_playlist(url.clone(), bytes))
+                self.fetch_and_parse(key, url, |bytes| parse_media_playlist(url.clone(), bytes))
                     .await
             })
             .await?;

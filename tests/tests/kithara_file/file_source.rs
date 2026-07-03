@@ -8,7 +8,7 @@ use std::{
 };
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{PrettyLayout, StoreOptions},
     file::{File, FileConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
     stream::{AudioCodec, ContainerFormat, Stream},
@@ -81,6 +81,45 @@ async fn remote_presigned_file_url_uses_bounded_cache_name(temp_dir: TestTempDir
     assert!(
         names.iter().all(|name| name.len() < 128),
         "cache file names must stay bounded: {names:?}"
+    );
+}
+
+/// With the pretty layout a remote MP3 lands as `<name>.mp3` (from the URL leaf stem).
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+async fn remote_file_pretty_layout_uses_named_file(temp_dir: TestTempDir) {
+    let helper = TestServerHelper::new().await;
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(Consts::AUDIO_DATA.to_vec()),
+            content_type: Some("audio/mpeg"),
+        },
+        delivery: Delivery::Range,
+    });
+    let url = handle.child_url("song.mp3");
+
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().to_path_buf())
+        .layout(Arc::new(PrettyLayout))
+        .build();
+    let config = FileConfig::for_src(url.into()).store(store).build();
+    let mut stream = Stream::<File>::new(config).await.unwrap();
+
+    spawn_blocking(move || {
+        let mut buf = [0u8; 64];
+        while stream.read(&mut buf).map(|n| n > 0).unwrap_or(false) {}
+    })
+    .await
+    .unwrap();
+
+    let mut names = Vec::new();
+    collect_file_names(temp_dir.path(), &mut names);
+    assert!(
+        names.contains(&"song.mp3".to_string()),
+        "pretty layout must name the file song.mp3, got: {names:?}"
+    );
+    assert!(
+        !names.contains(&"track.mp3".to_string()),
+        "pretty layout must not use the default track.mp3, got: {names:?}"
     );
 }
 

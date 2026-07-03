@@ -4643,6 +4643,7 @@ dependencies = [
  "rand 0.10.1",
  "rustls-platform-verifier",
  "send_wrapper",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "tracing-android",

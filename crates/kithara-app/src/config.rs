@@ -2,7 +2,9 @@ use std::{fmt, sync::Arc};
 
 use bon::Builder;
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, BytePool, EvictConfig, FlushHub, StoreOptions},
+    assets::{
+        AssetStore, AssetStoreBuilder, BytePool, EvictConfig, FlushHub, PrettyLayout, StoreOptions,
+    },
     hls::SizeProbeMethod,
     stream::dl::Downloader,
 };
@@ -107,6 +109,7 @@ impl AppConfig {
                 .root_dir(&store_options.cache_dir)
                 .evict_config(EvictConfig::from(&store_options))
                 .ephemeral(store_options.is_ephemeral)
+                .layout(Arc::new(PrettyLayout))
                 .pool(byte_pool.clone())
                 .maybe_cache_capacity(store_options.cache_capacity)
                 .maybe_flush_hub(store_options.flush_hub.clone())

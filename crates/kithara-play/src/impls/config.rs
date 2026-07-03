@@ -44,6 +44,7 @@ fn store_options_with_flush_hub(
         .cache_dir(store.cache_dir.clone())
         .maybe_cache_capacity(store.cache_capacity)
         .maybe_flush_hub(flush_hub.or_else(|| store.flush_hub.clone()))
+        .maybe_layout(store.layout.clone())
         .maybe_max_assets(store.max_assets)
         .maybe_max_bytes(store.max_bytes)
         .is_ephemeral(store.is_ephemeral)

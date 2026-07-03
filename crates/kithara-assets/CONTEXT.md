@@ -11,7 +11,14 @@ Resources are addressed by strings chosen by higher layers:
 
 Disk mapping is `<cache_root>/<asset_root>/<rel_path>`. Assets does not "invent" paths; it only enforces safety (no absolute paths, no `..`, no empty segments).
 
-`AssetScope` may carry an `AssetScopeDelegate` supplied by a protocol crate. The default delegate preserves the historical `asset_root_for_url` and URL-to-resource mapping. Protocol delegates own only naming: they may choose the asset directory name and the relative resource path before the store sees the key, but the resulting `ResourceKey` remains the single identity used by cache, leases, eviction, demand, and availability.
+### Layout
+
+The `AssetStore` owns one `Arc<dyn AssetLayout>` (installed via `AssetStoreBuilder::layout` or `StoreOptions::layout`; default `DefaultLayout`); every `AssetScope` inherits it, so one store means one on-disk layout — mixing layouts inside one cache is impossible by construction. `AssetScope::key_for(&ResourceInfo)` is the mint funnel for URL-owned resources. The resulting `ResourceKey` remains the single identity used by cache, leases, eviction, demand, and availability.
+
+`ResourceInfo` is a protocol-neutral descriptor: `Manifest` (`rendition: None` = master), `InitSegment`, `MediaSegment`, `Key`, `Track`. `RenditionDesc` carries the whole master rendition set (`siblings` + `idx`) so a layout can derive per-rendition folder labels as a pure function of the master alone. Each `Rendition` carries `bandwidth`, `name` (`NAME`), and `uri_stem` (the variant playlist's leaf stem).
+
+- `DefaultLayout` produces the HLS url-mirror naming: every streaming resource (manifest, init, segment, key) routes through `hls/<host>/<path>/<leaf>_<fp>.<ext>`; `Track` → `track.<ext>`.
+- `PrettyLayout` is semantic: `master.m3u8`, flat `<label>.m3u8` variant playlists next to the master, `<label>/init.<ext>`, `<label>/seg_<seq:05>.<ext>`, `keys/<fingerprint>.key`, and `<safe(name | leaf stem)>.<ext>` for a `Track`. Label ladder (each tier requires every rendition to have a non-empty, set-unique key): unique `NAME` → unique `uri_stem` → bandwidth rank (1 → `media`, 2 → `low`/`high`, 3 → `low`/`mid`/`high`, else `q<rank>_<kbps>kbps`); duplicate labels get `_<idx>` suffixes. `seq` is the media-sequence number (`EXT-X-MEDIA-SEQUENCE` + playlist position), so segment identity is stable across live playlist reloads.
 
 Auto-pin (lease) semantics: all resources opened through the leasing decorator (`LeaseAssets`) are automatically pinned by `asset_root` for the lifetime of the returned handle. The pin is an RAII guard stored inside the `LeaseWriter` / `LeaseReader`; drop the handle to release the pin.
 

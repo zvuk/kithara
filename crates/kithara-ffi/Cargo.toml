@@ -176,6 +176,7 @@ kithara = { workspace = true, features = ["probe"] }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 futures = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

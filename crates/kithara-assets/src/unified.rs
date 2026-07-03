@@ -20,7 +20,7 @@ use crate::{
     identity::RequestIdentity,
     index::{AvailabilityIndex, DemandEntry, DemandIndex, DemandLease, ProducerHandle},
     key::ResourceKey,
-    naming::AssetScopeDelegate,
+    layout::AssetLayout,
     process::ProcessCtx,
     scope::AssetScope,
     store::{AssetReader, AssetResource, MemStore},
@@ -54,6 +54,7 @@ pub enum AssetStore {
         demand: DemandIndex,
         eviction: EvictionRouter,
         base: Option<Arc<DiskAssetStore>>,
+        layout: Arc<dyn AssetLayout>,
     },
     /// In-memory storage (ephemeral, no disk artifacts).
     Mem {
@@ -61,6 +62,7 @@ pub enum AssetStore {
         availability: AvailabilityIndex,
         demand: DemandIndex,
         eviction: EvictionRouter,
+        layout: Arc<dyn AssetLayout>,
     },
 }
 
@@ -320,23 +322,21 @@ impl AssetStore {
     /// Bind this store to one `asset_root`, returning a scoped handle
     /// that drops the per-call `asset_root` argument. Cheap to clone --
     /// the backing store is shared, so many scopes over distinct asset
-    /// roots cooperate on one store.
+    /// roots cooperate on one store. The scope inherits the store's
+    /// [`AssetLayout`]: one store, one on-disk layout.
     #[must_use]
     pub fn scope<R: Into<Arc<str>>>(&self, asset_root: R) -> AssetScope {
         AssetScope::new(self.clone(), asset_root.into())
     }
 
-    /// Bind this store to one `asset_root` and protocol-specific naming
-    /// policy. The default [`Self::scope`] keeps the historical mapping;
-    /// use this when a protocol owns a safer on-disk representation for
-    /// URL resources.
+    /// The on-disk [`AssetLayout`] this store was built with.
     #[must_use]
-    pub fn scope_with_delegate<R: Into<Arc<str>>>(
-        &self,
-        asset_root: R,
-        delegate: Arc<dyn AssetScopeDelegate>,
-    ) -> AssetScope {
-        AssetScope::with_delegate(self.clone(), asset_root.into(), delegate)
+    pub fn layout(&self) -> &Arc<dyn AssetLayout> {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk { layout, .. } => layout,
+            Self::Mem { layout, .. } => layout,
+        }
     }
 }
 
@@ -358,6 +358,7 @@ impl From<DiskStore> for AssetStore {
             demand: DemandIndex::new(CancelToken::never()),
             eviction: EvictionRouter::default(),
             base: None,
+            layout: Arc::new(crate::layout::DefaultLayout),
         }
     }
 }
@@ -370,6 +371,7 @@ impl From<MemStore> for AssetStore {
             availability: AvailabilityIndex::new(),
             demand: DemandIndex::new(CancelToken::never()),
             eviction: EvictionRouter::default(),
+            layout: Arc::new(crate::layout::DefaultLayout),
         }
     }
 }

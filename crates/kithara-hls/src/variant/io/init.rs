@@ -1,8 +1,8 @@
 use std::{ops::Range, sync::Arc};
 
-use kithara_assets::AssetScope;
 #[cfg(test)]
 use kithara_assets::ResourceKey;
+use kithara_assets::{RenditionDesc, ResourceInfo};
 use kithara_drm::DecryptContext;
 use kithara_stream::{StreamResult, dl::FetchCmd, needs_exact_byte_sizes};
 
@@ -50,7 +50,7 @@ impl HlsVariant {
         playlist_state: &PlaylistState,
         variant_idx: usize,
         decrypt_ctx: Option<DecryptContext>,
-        scope: &AssetScope,
+        ctx: &PlanCtx,
     ) -> Option<Segment> {
         let url = playlist_state.init_url(variant_idx)?;
         let needs_exact = needs_exact_byte_sizes(
@@ -63,7 +63,10 @@ impl HlsVariant {
             SegmentSize::default()
         };
         Some(Segment::Init(InitSegment {
-            resource_id: scope.key_from_url(&url),
+            resource_id: ctx.scope.key_for(&ResourceInfo::InitSegment {
+                url: &url,
+                rendition: RenditionDesc::new(variant_idx, &ctx.renditions),
+            }),
             url,
             state: SegmentSlotState::missing(),
             size,

@@ -16,6 +16,8 @@ pub struct SegmentState {
     pub byte_range_len: Option<u64>,
     /// Absolute URL of the segment.
     pub url: Url,
+    /// Media-sequence number, stable across live playlist reloads.
+    pub sequence: u64,
     /// Bounded segment index within the variant's media playlist.
     pub(crate) index: SegmentIndex,
 }
@@ -94,6 +96,7 @@ impl FromWithParams<&[VariantStream], &[MediaPlaylist]> for PlaylistState {
                         Some(SegmentState {
                             index,
                             url,
+                            sequence: seg.sequence,
                             duration: seg.duration,
                             byte_range_len: seg.byte_range_len,
                         })
@@ -165,6 +168,7 @@ pub(crate) trait PlaylistAccess: Send + Sync {
         index: usize,
     ) -> Option<(Duration, Duration)>;
     fn segment_url(&self, variant: VariantIndex, index: usize) -> Option<Url>;
+    fn segment_sequence(&self, variant: VariantIndex, index: usize) -> Option<u64>;
 }
 
 impl PlaylistAccess for PlaylistState {
@@ -243,6 +247,12 @@ impl PlaylistAccess for PlaylistState {
         let state = lock.read();
         state.segments.get(index).map(|s| s.url.clone())
     }
+
+    fn segment_sequence(&self, variant: VariantIndex, index: usize) -> Option<u64> {
+        let lock = self.variants.get(variant)?;
+        let state = lock.read();
+        state.segments.get(index).map(|s| s.sequence)
+    }
 }
 
 impl PlaylistState {
@@ -300,6 +310,7 @@ mod tests {
             url: base_url()
                 .join(&format!("segment-{index}.m4s"))
                 .expect("valid segment URL"),
+            sequence: index as u64,
             duration: Duration::from_secs(4),
             byte_range_len: None,
         }
@@ -526,5 +537,42 @@ mod tests {
         );
 
         assert_eq!(state.segment_byte_range_len(0, 0), None);
+    }
+
+    #[kithara::test]
+    fn test_segment_sequence_survives_state_build() {
+        let variants = [VariantStream {
+            id: VariantId(0),
+            uri: "v0.m3u8".to_string(),
+            bandwidth: Some(128_000),
+            name: None,
+            codec: None,
+        }];
+        let playlist = MediaPlaylist {
+            url: test_url("https://cdn.example.com/audio/v0.m3u8"),
+            segments: vec![
+                MediaSegment {
+                    sequence: 100,
+                    uri: "segment-100.m4s".to_string(),
+                    duration: Duration::from_secs(4),
+                    key: None,
+                    byte_range_len: None,
+                },
+                MediaSegment {
+                    sequence: 101,
+                    uri: "segment-101.m4s".to_string(),
+                    duration: Duration::from_secs(4),
+                    key: None,
+                    byte_range_len: None,
+                },
+            ],
+            init_segment: None,
+            detected_container: None,
+        };
+
+        let state = PlaylistState::build(&variants[..], &[playlist]);
+        assert_eq!(state.segment_sequence(0, 0), Some(100));
+        assert_eq!(state.segment_sequence(0, 1), Some(101));
+        assert_eq!(state.segment_sequence(0, 2), None);
     }
 }

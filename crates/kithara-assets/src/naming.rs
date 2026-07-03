@@ -1,43 +1,13 @@
 #![forbid(unsafe_code)]
 
-use std::fmt;
-
 use sha2::{Digest, Sha256};
 use url::Url;
-
-use crate::key::{ResourceKey, asset_root_for_url};
 
 struct Consts;
 impl Consts {
     const DIGEST_PREFIX_BYTES: usize = 8;
     const MAX_PATH_COMPONENT_LEN: usize = 96;
 }
-
-/// Naming policy carried by an [`AssetScope`](crate::AssetScope).
-///
-/// The default implementation preserves the historical `asset_root`
-/// and URL resource-key mapping. Protocol crates can install a delegate
-/// when the logical resource identity should not be used literally as a
-/// filesystem path component.
-pub trait AssetScopeDelegate: fmt::Debug + Send + Sync {
-    /// Derive the on-disk asset directory name for a source URL.
-    #[must_use]
-    fn asset_root_for_url(&self, url: &Url, name: Option<&str>) -> String {
-        asset_root_for_url(url, name)
-    }
-
-    /// Derive the relative path for a URL-owned resource inside the scope.
-    #[must_use]
-    fn rel_path_for_url(&self, url: &Url) -> String {
-        ResourceKey::rel_path_from_url(url)
-    }
-}
-
-/// Historical asset-scope naming policy.
-#[derive(Debug, Default)]
-pub struct DefaultAssetScopeDelegate;
-
-impl AssetScopeDelegate for DefaultAssetScopeDelegate {}
 
 /// Short stable fingerprint for names that must remain bounded while
 /// preserving URL identity.
@@ -91,14 +61,6 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-
-    #[kithara::test]
-    fn default_delegate_preserves_legacy_query_aware_rel_path() {
-        let url = Url::parse("https://example.com/audio.mp3?token=abc").unwrap();
-        let delegate = DefaultAssetScopeDelegate;
-
-        assert_eq!(delegate.rel_path_for_url(&url), "audio.mp3_token=abc");
-    }
 
     #[kithara::test]
     fn safe_path_component_bounds_long_values() {

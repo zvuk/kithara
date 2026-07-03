@@ -285,6 +285,18 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
     }
 
+    /// On-disk cache layout policy: `.default` mirrors source URLs,
+    /// `.pretty` uses semantic names, `.custom` delegates to the app.
+    public typealias CacheLayout = FfiLayout
+
+    /// App-side delegate for ``CacheLayout/custom(delegate:)``. Must be a
+    /// pure, fast mapping: same input -> same path, no blocking, no calls
+    /// back into the player, must not throw.
+    public typealias CacheLayoutDelegate = FfiAssetLayout
+
+    /// Resource descriptor passed to the layout delegate.
+    public typealias ResourceInfo = FfiResourceInfo
+
     /// Configuration for player creation.
     public struct Config: Sendable {
         /// Number of EQ bands (log-spaced). Default: 10.
@@ -295,17 +307,23 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         public var keyRules: [KeyRule]
         /// Optional cache directory path. `nil` uses the platform default.
         public var cacheDir: String?
+        /// On-disk cache layout. `nil` keeps the default URL-mirror layout.
+        /// Switching layouts reuses the same asset directories but
+        /// re-downloads resources under the new relative paths.
+        public var layout: CacheLayout?
 
         /// Construct a player config. All parameters have sensible
         /// defaults; pass DRM `keyRules` for encrypted streams.
         public init(
             eqBandCount: Int = 10,
             keyRules: [KeyRule] = [],
-            cacheDir: String? = nil
+            cacheDir: String? = nil,
+            layout: CacheLayout? = nil
         ) {
             self.eqBandCount = eqBandCount
             self.keyRules = keyRules
             self.cacheDir = cacheDir
+            self.layout = layout
         }
     }
 
@@ -322,7 +340,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
         let ffiConfig = FfiPlayerConfig(
             keyOptions: FfiKeyOptions(rules: ffiRules),
-            store: StoreOptions(cacheDir: config.cacheDir),
+            store: StoreOptions(cacheDir: config.cacheDir, layout: config.layout),
             eqBandCount: UInt32(config.eqBandCount)
         )
         self._inner = AudioPlayer(config: ffiConfig)

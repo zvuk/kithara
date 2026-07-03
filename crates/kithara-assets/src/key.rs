@@ -90,21 +90,6 @@ impl ResourceKey {
         }
     }
 
-    /// Derive a unique `rel_path` from a URL.
-    ///
-    /// Last non-empty path segment (or `"index"`), plus a `_<query>`
-    /// suffix when a query is present so URLs differing only in query
-    /// (e.g. `?id=123` vs `?id=456`) produce distinct keys.
-    pub(crate) fn rel_path_from_url(url: &Url) -> String {
-        let segment = url
-            .path_segments()
-            .and_then(|mut segments| segments.next_back())
-            .filter(|s| !s.is_empty())
-            .unwrap_or("index");
-        url.query()
-            .map_or_else(|| segment.to_string(), |q| format!("{segment}_{q}"))
-    }
-
     /// Create a relative key under `asset_root`.
     pub(crate) fn relative(asset_root: impl Into<Arc<str>>, rel_path: impl Into<Arc<str>>) -> Self {
         Self::Relative {
