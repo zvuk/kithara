@@ -3,18 +3,6 @@ import Kithara
 import PlaygroundSupport
 import SwiftUI
 
-final class SeekHandler: SeekCallback, @unchecked Sendable {
-    private let onDone: @Sendable (Bool) -> Void
-
-    init(onDone: @escaping @Sendable (Bool) -> Void) {
-        self.onDone = onDone
-    }
-
-    func onComplete(finished: Bool) {
-        onDone(finished)
-    }
-}
-
 @MainActor
 final class PlaygroundModel: ObservableObject {
     @Published var url = "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview116/" +
@@ -87,11 +75,11 @@ final class PlaygroundModel: ObservableObject {
 
     func seek() {
         let target = currentTime
-        player.seek(to: target, tolerance: nil, completionHandler: SeekHandler { [weak self] done in
+        player.seek(to: target, tolerance: nil) { [weak self] done in
             Task { @MainActor in
                 self?.log = done ? "Seek done: \(Int(target))s" : "Seek failed"
             }
-        })
+        }
     }
 
     func commitVolume() {
