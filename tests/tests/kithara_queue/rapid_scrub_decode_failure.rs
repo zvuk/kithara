@@ -3,9 +3,20 @@
 
 use std::sync::Arc;
 
-use kithara_assets::StoreOptions;
-use kithara_events::{
-    AbrMode, AudioEvent, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
+use kithara::{
+    assets::StoreOptions,
+    events::{
+        AbrMode, AudioEvent, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
+    },
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{Duration, Instant, sleep, timeout},
+        tokio,
+    },
+    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -14,14 +25,6 @@ use kithara_integration_tests::{
     offline::OfflineSession,
     temp_dir,
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, Instant, sleep, timeout},
-};
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 
 /// Track shape: 30 segments × 4 s = 120 s. Long enough that 50 % and
 /// 90 % targets land in distinct cold regions.
@@ -100,7 +103,7 @@ async fn observe_scrub_outcome(
     seek_target: f64,
     budget: Duration,
 ) -> ScrubOutcome {
-    use kithara_platform::tokio::sync::broadcast::error::RecvError;
+    use kithara::platform::tokio::sync::broadcast::error::RecvError;
     let deadline = Instant::now() + budget;
     loop {
         if let Some(pos) = queue.position_seconds()
@@ -146,7 +149,7 @@ async fn wait_for_playback_progress(
     baseline_secs: f64,
     budget: Duration,
 ) -> Option<f64> {
-    use kithara_platform::tokio::sync::broadcast::error::RecvError;
+    use kithara::platform::tokio::sync::broadcast::error::RecvError;
     let fut = async {
         loop {
             match rx.recv().await {
@@ -240,7 +243,7 @@ impl Harness {
         let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
         let queue_for_tick = Arc::clone(&queue);
-        let tick = tokio::spawn(async move {
+        let tick = tokio::task::spawn(async move {
             loop {
                 sleep(Duration::from_millis(50)).await;
                 if queue_for_tick.tick().is_err() {

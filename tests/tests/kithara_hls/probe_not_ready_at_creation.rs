@@ -45,6 +45,11 @@ use kithara::{
     audio::{Audio, AudioConfig},
     hls::{Hls, HlsConfig},
     net::{NetOptions, RetryPolicy},
+    platform::{
+        CancelToken,
+        time::{Duration, Instant},
+        tokio,
+    },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -52,10 +57,6 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
-};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, Instant},
 };
 use tracing::info;
 
@@ -210,7 +211,7 @@ async fn audio_new_succeeds_when_first_segment_released_during_probe() {
     // Release the body as soon as its GET reaches the gate (no timer): the
     // construction probe must then await the data and build the decoder.
     let release_gate = gate.clone();
-    let releaser = tokio::spawn(async move {
+    let releaser = tokio::task::spawn(async move {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             if release_gate.requested() > 0 {

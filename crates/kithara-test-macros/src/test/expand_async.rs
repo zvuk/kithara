@@ -61,7 +61,7 @@ pub(crate) fn emit_async_runtime_test(
                 // timer advances the clock while the driver is between polls, so
                 // a `sleep`/`read` loop times out on a deadline that already
                 // jumped. Mirrors `emit_async_timeout_test`.
-                kithara_platform::flash::participate(
+                ::kithara_test_utils::kithara_platform::flash::participate(
                     ::kithara_test_utils::probe::OWNED_INSTALL_ID
                         .scope(__probe_install_id,
                             // `with_ambient` is the SOLE ambient holder of the
@@ -73,7 +73,7 @@ pub(crate) fn emit_async_runtime_test(
                             // forbidden here: its cancel-drop on a timeout
                             // `Elapsed` is a non-LIFO mode restore (stale
                             // ambient resurrect). Identity off the feature.
-                            kithara_platform::flash::with_ambient(#flash, async {
+                            ::kithara_test_utils::kithara_platform::flash::with_ambient(#flash, async {
                                 #inner_body
                             })),
                     ::core::panic::Location::caller(),
@@ -209,14 +209,14 @@ pub(crate) fn emit_async_timeout_test(
                         // test driver counts as a running participant while polled
                         // (identity off the sim path). Without this the virtual
                         // clock would race past the driver's own work between awaits.
-                        kithara_platform::flash::participate(
+                        ::kithara_test_utils::kithara_platform::flash::participate(
                             ::kithara_test_utils::probe::OWNED_INSTALL_ID.scope(
                                 __probe_install_id,
                                 async {
                                     // Wall-clock safety net: must fire on REAL
                                     // time even under `flash` (a hung test
                                     // hangs real time too).
-                                    kithara_platform::time::timeout(
+                                    ::kithara_test_utils::kithara_platform::time::timeout(
                                         __timeout_dur,
                                         // `with_ambient` is the SOLE ambient holder
                                         // of the async-native body: it re-asserts
@@ -229,7 +229,7 @@ pub(crate) fn emit_async_timeout_test(
                                         // mode restore (stale ambient resurrect).
                                         // `timeout` itself stays REAL (gates on
                                         // FLASH_ACTIVE, untouched here).
-                                        kithara_platform::flash::with_ambient(#flash, async {
+                                        ::kithara_test_utils::kithara_platform::flash::with_ambient(#flash, async {
                                             #inner_body
                                         }),
                                     )
@@ -286,7 +286,7 @@ pub(crate) fn emit_browser_test(
     let ambient = make_ambient_stmt(args);
     let wasm_body = quote! {
         #tracing_init
-        kithara_platform::tokio::ensure_thread_pool().await;
+        ::kithara_test_utils::kithara_platform::tokio::ensure_thread_pool().await;
         #preamble
         #ambient
         #(#body_stmts)*

@@ -1,10 +1,13 @@
 use std::{io, sync::Arc};
 
 use axum::Router;
-use kithara_platform::time::{Duration, sleep as tokio_sleep};
-use tokio::{
-    net::TcpListener,
-    sync::{oneshot, watch},
+use kithara::platform::{
+    time::{Duration, sleep as tokio_sleep},
+    tokio::{
+        net::TcpListener,
+        sync::{oneshot, watch},
+        task::spawn,
+    },
 };
 use url::Url;
 
@@ -74,7 +77,7 @@ impl TestHttpServer {
             shutdown_rx.await.ok();
         });
 
-        tokio::spawn(async move {
+        spawn(async move {
             server.await.expect("run test HTTP server");
             let _ = done_tx.send(true);
         });

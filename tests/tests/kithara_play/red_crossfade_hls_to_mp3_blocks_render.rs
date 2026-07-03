@@ -5,13 +5,13 @@ use std::sync::Arc;
 
 use kithara::{
     audio::{Audio, AudioConfig, AudioWorkerHandle},
+    file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
+    platform::{CancelToken, time::Duration},
     play::Resource,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_file::{File as FileSource, FileConfig, FileSrc};
 use kithara_integration_tests::offline::resource_from_reader;
-use kithara_platform::{CancelToken, time::Duration};
 use tracing::info;
 
 use crate::{common::test_defaults::Consts as Shared, continuity::render_offline_window};

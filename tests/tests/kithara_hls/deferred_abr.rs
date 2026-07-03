@@ -2,10 +2,10 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
+use kithara::platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use kithara_integration_tests::{
     TestTempDir, hls_fixture::HlsStreamBuilder, hls_server::TestServer, rt_cancel, temp_dir,
 };
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {

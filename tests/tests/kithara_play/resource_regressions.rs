@@ -6,16 +6,20 @@ use std::{io::Read, num::NonZeroUsize, sync::Arc};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
+    decode::DecoderBackend,
+    file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{Duration, Instant, sleep, timeout},
+    },
     play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig},
     stream::{
         AudioCodec, ContainerFormat, MediaInfo, Stream,
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_decode::DecoderBackend;
-use kithara_file::{File as FileSource, FileConfig, FileSrc};
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir,
     create_wav_exact_bytes,
@@ -24,10 +28,6 @@ use kithara_integration_tests::{
     offline::resource_from_reader,
     signal_pcm::signal,
     temp_dir,
-};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, Instant, sleep, timeout},
 };
 use tracing::{debug, info};
 

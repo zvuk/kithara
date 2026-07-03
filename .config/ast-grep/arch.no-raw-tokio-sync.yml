@@ -1,0 +1,50 @@
+id: arch.no-raw-tokio-sync
+message: |
+  Direct use of a raw `tokio::sync` async wait primitive. Route through
+  `kithara_platform` so every async wait participates in the quiescence engine
+  under virtual time (`flash`) (a raw one parks on the tokio runtime, invisible to the
+  virtual clock, so the clock races past it or the test crawls):
+  - `tokio::sync::Notify`    -> `kithara_platform::sync::Notify`
+  - `tokio::sync::mpsc`      -> `kithara_platform::tokio::sync::mpsc`
+  - `tokio::sync::oneshot`   -> `kithara_platform::tokio::sync::oneshot`
+  - `tokio::sync::Semaphore` -> `kithara_platform::tokio::sync::Semaphore`
+  - `tokio::sync::{watch, broadcast, OnceCell}` -> `kithara_platform::tokio::sync::{watch, broadcast, OnceCell}`
+  - `tokio::sync::{Mutex, RwLock, Barrier}` are not allowed on a flash-relevant
+    path; use the platform sync owner or add a `kithara_platform` wrapper first
+    (see `crates/kithara-platform/CONTEXT.md` "Virtual time (`flash`)").
+
+      // bad:  use tokio::sync::Notify;   tokio::sync::mpsc::channel(8);
+      // good: use kithara_platform::sync::Notify;
+      // good: use kithara_platform::tokio::sync::mpsc;
+
+  This is an ERROR gate covering ALL workspace Rust - production AND tests.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+ignores:
+  # The platform crate OWNS the async wait primitives (binds them to the engine).
+  - crates/kithara-platform/**
+rule:
+  any:
+    # Imports where `tokio` is the CRATE ROOT (`use tokio::...`), never the
+    # platform alias `use kithara_platform::tokio::...`.
+    - kind: use_declaration
+      regex: '\buse\s+tokio::sync::(Notify|mpsc|oneshot|Semaphore|Mutex|RwLock|watch|broadcast|Barrier|OnceCell)\b'
+    - kind: use_declaration
+      regex: '\buse\s+tokio::sync::\{[\s\S]*\b(Notify|mpsc|oneshot|Semaphore|Mutex|RwLock|watch|broadcast|Barrier|OnceCell)\b'
+    - kind: use_declaration
+      regex: '\buse\s+tokio::\{[\s\S]*\bsync::(Notify|mpsc|oneshot|Semaphore|Mutex|RwLock|watch|broadcast|Barrier|OnceCell)\b'
+    - kind: use_declaration
+      regex: '\buse\s+tokio::\{[\s\S]*\bsync::\{[\s\S]*\b(Notify|mpsc|oneshot|Semaphore|Mutex|RwLock|watch|broadcast|Barrier|OnceCell)\b'
+    # Absolute root-crate `tokio` paths. Plain `tokio::...` may be the local
+    # alias from `use kithara_platform::tokio;`; direct dependencies are blocked
+    # by `arch.no-direct-tokio-dependency`.
+    - pattern: ::tokio::sync::mpsc::channel($$$REST)
+    - pattern: ::tokio::sync::mpsc::unbounded_channel($$$REST)
+    - pattern: ::tokio::sync::oneshot::channel($$$REST)
+    - pattern: ::tokio::sync::Notify::new($$$REST)
+    - pattern: ::tokio::sync::Semaphore::new($$$REST)
+    - pattern: ::tokio::sync::OnceCell::new($$$REST)
+    - pattern: ::tokio::sync::OnceCell::const_new($$$REST)

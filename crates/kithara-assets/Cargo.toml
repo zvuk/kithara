@@ -9,9 +9,6 @@ description = "Disk cache with lease/pin semantics and LRU eviction."
 keywords = ["cache", "lru", "storage", "audio", "disk"]
 categories = ["caching"]
 
-[lints]
-workspace = true
-
 [features]
 default = ["client-reqwest", "tls-rustls"]
 probe = []
@@ -27,19 +24,20 @@ tls-rustls = ["kithara-storage/tls-rustls"]
 tls-native = ["kithara-storage/tls-native"]
 
 [dependencies]
-rkyv = { workspace = true }
+kithara-bufpool = { workspace = true }
+kithara-platform = { workspace = true }
+kithara-storage = { workspace = true }
+kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true }
+
 bitflags = { workspace = true }
 bon = { workspace = true }
 dashmap = { workspace = true }
 delegate = { workspace = true }
 hex = { workspace = true }
-kithara-bufpool = { workspace = true }
-kithara-storage = { workspace = true }
-kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true }
 lru = { workspace = true }
-kithara-platform = { workspace = true }
 rangemap = { workspace = true }
+rkyv = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
@@ -52,11 +50,15 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 tempfile = { workspace = true }
 
 [dev-dependencies]
+kithara-assets = { path = "." }
 kithara-drm = { workspace = true }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+
 aes = { workspace = true }
 cbc = { workspace = true }
-kithara-assets = { path = "." }
-tempfile = { workspace = true }
 serial_test = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }
+
+[lints]
+workspace = true

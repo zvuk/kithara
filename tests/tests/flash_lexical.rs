@@ -7,8 +7,10 @@
 //! Gated on `flash` (native only).
 #![cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 
-use kithara_platform::time::{self, Duration, Instant};
-use kithara_test_utils::kithara;
+use kithara::{
+    self,
+    platform::time::{self, Duration, Instant},
+};
 
 /// Prod-like fn WITHOUT a flash annotation. Its `Instant::now` is NOT rewritten
 /// and reads `flash_enabled()` (false), so it observes the REAL monotonic clock

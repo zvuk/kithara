@@ -2,21 +2,22 @@
 
 use std::sync::Arc;
 
+use kithara::{
+    assets::{FlushHub, FlushPolicy, StoreOptions},
+    decode::DecoderBackend,
+    events::{AbrMode, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{Duration, Instant, sleep, timeout},
+        tokio,
+    },
+    play::{PlayerConfig, PlayerImpl},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
+};
 use kithara_app::{config::AppConfig, sources::build_source};
-use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
-use kithara_decode::DecoderBackend;
-use kithara_events::{
-    AbrMode, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
-};
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, Instant, sleep, timeout},
-};
-use kithara_play::{PlayerConfig, PlayerImpl};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 
 /// Captured from `app.log @ 06:39:13`. `cdn-hls-slicer.zvuk.com` →
@@ -67,7 +68,7 @@ async fn build_ctx() -> Ctx {
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
     let q = Arc::clone(&queue);
-    tokio::spawn(async move {
+    tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
             let _ = q.tick();
@@ -99,7 +100,7 @@ async fn wait_for_loaded(
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
-    use kithara_platform::tokio::sync::broadcast::error::RecvError;
+    use kithara::platform::tokio::sync::broadcast::error::RecvError;
     if let Some(entry) = queue.track(track_id) {
         match &entry.status {
             TrackStatus::Loaded => return Ok(()),
@@ -130,7 +131,7 @@ async fn wait_for_loaded(
 }
 
 /// Wait until the decoder has produced at least one PCM chunk for the
-/// active track. Drives off the `kithara_decode::composed::build_chunk`
+/// active track. Drives off the `kithara::decode::composed::build_chunk`
 /// probe — fires the moment the demuxer + frame codec hand a chunk to
 /// the audio pipeline, which is the production-truth signal for
 /// "warmup complete". Replaces a wall-clock `wait_for_position`.
@@ -232,7 +233,7 @@ struct ScrubParams<'a> {
 }
 
 async fn observe_scrub_outcome(obs: ScrubObservation<'_>) -> ScrubOutcome {
-    use kithara_platform::tokio::sync::broadcast::error::RecvError;
+    use kithara::platform::tokio::sync::broadcast::error::RecvError;
     let ScrubParams {
         target_src,
         chunks_at_seek,

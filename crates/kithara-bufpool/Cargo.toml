@@ -9,22 +9,23 @@ description = "Sharded buffer pool for zero-allocation audio hot paths."
 keywords = ["buffer", "pool", "audio", "performance", "sharded"]
 categories = ["memory-management", "concurrency"]
 
+[features]
+perf = ["dep:hotpath", "hotpath/hotpath"]
+
 [dependencies]
 kithara-platform = { workspace = true }
+
 crossbeam-queue = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
-[features]
-perf = ["dep:hotpath", "hotpath/hotpath"]
-
-[lints]
-workspace = true
-
 [dev-dependencies]
 kithara-bufpool = { path = ".", default-features = false }
 kithara-test-macros = { path = "../kithara-test-macros" }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
+
+[lints]
+workspace = true

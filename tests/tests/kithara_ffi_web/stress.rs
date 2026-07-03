@@ -4,21 +4,23 @@ use std::sync::{
 };
 
 use gloo_timers::future::TimeoutFuture;
-use kithara_assets::StoreOptions;
-use kithara_audio::{Audio, AudioConfig};
-use kithara_events::{AudioEvent, Event, EventBus, SeekLifecycleStage};
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
+use kithara::{
+    assets::StoreOptions,
+    audio::{Audio, AudioConfig},
+    events::{AudioEvent, Event, EventBus, SeekLifecycleStage},
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    platform::time::{Duration, Instant},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+};
 use kithara_integration_tests::{
     HlsFixtureBuilder, SAW_PERIOD, TestServerHelper, auto,
     fixture_protocol::{DataMode, InitMode},
     phase_distance, phase_from_f32,
 };
-use kithara_platform::time::{Duration, Instant};
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
 use tracing::{info, warn};
 use url::Url;
 mod kithara {
-    pub(crate) use kithara_test_macros::test;
+    pub(crate) use ::kithara::test;
 }
 
 mod test_statics {

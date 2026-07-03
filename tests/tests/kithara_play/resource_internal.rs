@@ -9,13 +9,15 @@
 
 use std::num::NonZeroU32;
 
-use kithara_audio::ReadOutcome;
-use kithara_decode::PcmSpec;
-use kithara_events::{AudioEvent, AudioFormat, Event, EventBus};
+use kithara::{
+    self,
+    audio::ReadOutcome,
+    decode::PcmSpec,
+    events::{AudioEvent, AudioFormat, Event, EventBus},
+    platform::time::Duration,
+    play::Resource,
+};
 use kithara_integration_tests::audio_mock::TestPcmReader;
-use kithara_platform::time::Duration;
-use kithara_play::Resource;
-use kithara_test_utils::kithara;
 
 fn mock_spec() -> PcmSpec {
     PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
@@ -98,7 +100,10 @@ async fn test_resource_from_reader_seek() {
     let outcome = resource
         .seek(Duration::from_millis(500))
         .expect("BUG: seek");
-    assert!(matches!(outcome, kithara_audio::SeekOutcome::Landed { .. }));
+    assert!(matches!(
+        outcome,
+        kithara::audio::SeekOutcome::Landed { .. }
+    ));
     let pos = resource.position();
     assert!((pos.as_secs_f64() - 0.5).abs() < 0.001);
 }

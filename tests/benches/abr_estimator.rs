@@ -3,12 +3,14 @@
 use std::{hint::black_box, sync::Arc};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use kithara_abr::{
-    Abr, AbrController, AbrSettings, AbrState, BandwidthSource, Estimator, ThroughputEstimator,
+use kithara::{
+    abr::{
+        Abr, AbrController, AbrSettings, AbrState, BandwidthSource, Estimator, ThroughputEstimator,
+    },
+    events::{VariantDuration, VariantIndex, VariantInfo},
+    platform::{CancelToken, time::Duration},
 };
-use kithara_events::{VariantDuration, VariantIndex, VariantInfo};
 use kithara_integration_tests::auto;
-use kithara_platform::{CancelToken, time::Duration};
 
 fn settings() -> AbrSettings {
     AbrSettings::builder()

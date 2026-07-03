@@ -10,9 +10,6 @@ description = "Cross-platform primitives (sync, time, thread) for native and was
 keywords = ["platform", "wasm", "sync", "audio", "primitives"]
 categories = ["wasm", "concurrency"]
 
-[lints]
-workspace = true
-
 [features]
 # Virtual monotonic clock for fast, deterministic offline playback tests.
 # OFF by default and referenced by no shipping crate, so production builds are
@@ -21,6 +18,11 @@ workspace = true
 # as ground truth).
 flash = []
 signal = ["tokio/signal"]
+# Native socket surface for test/server plumbing. Keep this out of the default
+# production platform dependency so non-network consumers do not pull tokio net
+# or the async IO extension traits.
+tokio-net = ["tokio/net", "tokio/io-util"]
+tokio-rt-multi-thread = ["tokio/rt-multi-thread"]
 
 [dependencies]
 delegate = { workspace = true }
@@ -35,13 +37,13 @@ pin-project-lite = { workspace = true }
 tokio = { workspace = true, features = ["time", "sync", "rt", "macros"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-tokio_with_wasm = { workspace = true }
-wasm_safe_thread = { workspace = true }
+console_error_panic_hook = { workspace = true }
 js-sys = { workspace = true }
-web-sys = { workspace = true }
+tokio_with_wasm = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
-console_error_panic_hook = { workspace = true }
+wasm_safe_thread = { workspace = true }
+web-sys = { workspace = true }
 
 [dev-dependencies]
 kithara-platform = { path = ".", default-features = false }
@@ -52,6 +54,9 @@ wasm-bindgen-test = { workspace = true }
 # Native-only: criterion pulls a native-only toolchain, never wasm.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }
+
+[lints]
+workspace = true
 
 # Micro-benchmarks for the propagate-down cancel primitives (`CancelToken` /
 # `CancelGroup`). `cargo bench -p kithara-platform`.

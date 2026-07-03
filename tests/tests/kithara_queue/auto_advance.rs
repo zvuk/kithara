@@ -2,13 +2,15 @@
 
 use std::{num::NonZeroU32, sync::Arc};
 
-use kithara_decode::PcmSpec;
+use kithara::{
+    self,
+    decode::PcmSpec,
+    play::{PlayerConfig, Resource},
+    queue::{Queue, QueueConfig, Transition},
+};
 use kithara_integration_tests::{
     audio_mock::TestPcmReader, offline::resource_from_reader_with_src,
 };
-use kithara_play::{PlayerConfig, Resource};
-use kithara_queue::{Queue, QueueConfig, Transition};
-use kithara_test_utils::kithara;
 
 use super::offline_player_harness::OfflinePlayerHarness;
 
@@ -201,8 +203,10 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
 /// the real `Queue::tick` path.
 #[kithara::test(tokio)]
 async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
-    use kithara_events::{Event, PlayerEvent};
-    use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
+    use kithara::{
+        events::{Event, PlayerEvent},
+        platform::tokio::sync::broadcast::error::TryRecvError,
+    };
 
     const TRACK_SECS: f64 = 1.0;
     const CROSSFADE_SECS: f32 = 0.2;
@@ -400,8 +404,10 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
 /// a ghost position past the last EOF.
 #[kithara::test(tokio)]
 async fn queue_pauses_player_when_last_track_ends() {
-    use kithara_events::{Event, QueueEvent};
-    use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
+    use kithara::{
+        events::{Event, QueueEvent},
+        platform::tokio::sync::broadcast::error::TryRecvError,
+    };
 
     const TRACK_SECS: f64 = 0.4;
 

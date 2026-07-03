@@ -2,8 +2,8 @@ use kithara_events::AbrEvent;
 use kithara_platform::{
     time::{Duration, Instant, sleep},
     tokio,
+    tokio::task,
 };
-use tokio::task;
 
 use super::{
     core::{AbrController, AbrPeerId},

@@ -2,9 +2,16 @@
 
 use std::sync::Arc;
 
-use kithara_assets::StoreOptions;
-use kithara_decode::DecoderBackend;
-use kithara_events::{AudioEvent, Event};
+use kithara::{
+    assets::StoreOptions,
+    decode::DecoderBackend,
+    events::{AudioEvent, Event},
+    net::{HttpClient, NetOptions},
+    platform::{CancelToken, time::Duration, tokio},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
+};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::DelayRule,
@@ -13,11 +20,6 @@ use kithara_integration_tests::{
     temp_dir,
     waits::{wait_for_loader_done, wait_for_position_at_least},
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{CancelToken, time::Duration};
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 
 /// Cold-cache seek into a far segment over the offline backend.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
@@ -63,7 +65,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
     let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::spawn(async move {
+    let tick_handle = tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(16)).await;
             if queue_for_tick.tick().is_err() {

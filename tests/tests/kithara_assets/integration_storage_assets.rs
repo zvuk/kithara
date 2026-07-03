@@ -6,12 +6,12 @@ use kithara::{
     assets::{
         AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, ReadSide, ResourceKey,
         WriteSide,
+        index::schema::{ArchivedPinsIndexFile, PinsIndexFile},
     },
     bufpool::BytePool,
+    platform::{thread, time::Duration},
 };
-use kithara_assets::index::schema::{ArchivedPinsIndexFile, PinsIndexFile};
 use kithara_integration_tests::temp_dir;
-use kithara_platform::{thread, time::Duration};
 
 /// Helper to read bytes from resource into a pooled buffer
 fn read_bytes<R: ReadSide>(res: &R, offset: u64, len: usize) -> Vec<u8> {

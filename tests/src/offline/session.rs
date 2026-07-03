@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
-use kithara_platform::{
-    sync::{Mutex, mpsc},
-    thread::{JoinHandle, spawn_named},
-    time::{Duration, Instant},
+use kithara::{
+    platform::{
+        sync::{Mutex, mpsc},
+        thread::{JoinHandle, spawn_named},
+        time::{Duration, Instant},
+    },
+    play::{Cmd, PlayError, Reply, SessionDispatcher, SessionState, run_cmd},
 };
-use kithara_play::{Cmd, PlayError, Reply, SessionDispatcher, SessionState, run_cmd};
 use tracing::warn;
 
 use super::backend::{OfflineBackend, OfflineConfig};
@@ -48,7 +50,7 @@ impl OfflineSession {
 
     /// Convenience: `Arc<dyn SessionDispatcher>` over a fresh
     /// auto-render session. Use when the test wires the dispatcher
-    /// into [`kithara_play::EngineConfig::session`] and never calls
+    /// into [`kithara::play::EngineConfig::session`] and never calls
     /// [`render`](Self::render) directly.
     #[must_use]
     pub fn arc_auto() -> Arc<dyn SessionDispatcher> {

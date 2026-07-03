@@ -3,12 +3,12 @@ use kithara::{
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
+    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DataMode,
 };
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 const VARIANT_COUNT: usize = 3;

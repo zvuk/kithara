@@ -2,8 +2,10 @@
 
 use bytes::Bytes;
 use futures::{StreamExt, stream};
-use kithara::net::{ByteStream, Headers, Net, NetError, RangeSpec};
-use kithara_platform::time::{Duration, sleep};
+use kithara::{
+    net::{ByteStream, Headers, Net, NetError, RangeSpec},
+    platform::time::{Duration, sleep},
+};
 use url::Url;
 
 pub struct DelayedNet<N> {

@@ -1,0 +1,19 @@
+id: arch.no-direct-tokio-dependency
+message: |
+  Direct `tokio` dependency outside `kithara-platform`.
+
+  `kithara-platform` owns the tokio version, enabled features, and the allowed
+  facade surface. Other crates must depend on `kithara-platform` and import
+  `kithara_platform::tokio` (or narrower platform modules) instead of adding
+  `tokio = ...` to their own manifest.
+severity: error
+language: Yaml
+files:
+  - crates/**/Cargo.toml
+  - tests/Cargo.toml
+ignores:
+  - crates/kithara-platform/Cargo.toml
+rule:
+  all:
+    - kind: string_scalar
+    - regex: '(^|\n)\s*tokio\s*='

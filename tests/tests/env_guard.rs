@@ -1,7 +1,6 @@
 use std::env;
 
-use kithara_platform::time::Duration;
-use kithara_test_utils::kithara;
+use kithara::{self, platform::time::Duration};
 
 #[kithara::test(
     native,

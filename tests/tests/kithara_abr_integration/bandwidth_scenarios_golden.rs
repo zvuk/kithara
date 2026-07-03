@@ -1,7 +1,9 @@
-use kithara_abr::{AbrMode, AbrSettings, AbrState, AbrView};
-use kithara_events::{VariantDuration, VariantIndex, VariantInfo};
-use kithara_platform::time::{Duration as StdDuration, Duration, Instant};
-use kithara_test_utils::kithara;
+use kithara::{
+    self,
+    abr::{AbrMode, AbrSettings, AbrState, AbrView},
+    events::{VariantDuration, VariantIndex, VariantInfo},
+    platform::time::{Duration as StdDuration, Duration, Instant},
+};
 
 fn variants() -> Vec<VariantInfo> {
     [300_000u64, 900_000, 3_000_000]

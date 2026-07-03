@@ -9,14 +9,16 @@
 
 use std::{num::NonZeroU32, sync::Arc};
 
-use kithara_decode::PcmSpec;
-use kithara_events::{Event, EventBus, EventReceiver};
-use kithara_integration_tests::{audio_mock::TestPcmReader, offline::OfflineSession};
-use kithara_play::{
-    PlayError, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Resource, SeekOutcome,
-    SessionDispatcher,
+use kithara::{
+    self,
+    decode::PcmSpec,
+    events::{Event, EventBus, EventReceiver},
+    play::{
+        PlayError, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Resource, SeekOutcome,
+        SessionDispatcher,
+    },
 };
-use kithara_test_utils::kithara;
+use kithara_integration_tests::{audio_mock::TestPcmReader, offline::OfflineSession};
 
 #[derive(Clone, Copy)]
 enum InsertScenario {
@@ -65,7 +67,7 @@ fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl, Arc<OfflineSessi
 }
 
 fn drain_player_events(player: &PlayerImpl, rx: &mut EventReceiver) -> Vec<PlayerEvent> {
-    use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
+    use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
     player.process_notifications();
     let mut events = Vec::new();
     loop {

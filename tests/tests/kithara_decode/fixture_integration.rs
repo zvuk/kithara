@@ -2,6 +2,7 @@ use std::{fs, io::Cursor, process::Command};
 
 use kithara::{
     decode::{DecoderBackend, DecoderConfig, DecoderFactory, PcmChunk},
+    platform::time::Duration,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
@@ -9,7 +10,6 @@ use kithara_integration_tests::{
     SignalSpecLength, TestServerHelper, audio_fixture::EmbeddedAudio,
     decode_ext::DecoderChunkOutcomeTestExt, detect_direction, fixture_protocol::PackagedSignal,
 };
-use kithara_platform::time::Duration;
 use reqwest::Client;
 
 #[kithara::test(

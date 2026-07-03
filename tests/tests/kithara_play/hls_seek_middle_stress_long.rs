@@ -2,16 +2,16 @@
 
 use kithara::{
     assets::StoreOptions,
+    decode::DecoderBackend,
+    net::{HttpClient, NetOptions},
+    platform::{CancelToken, time::Duration},
     play::{Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
     PackagedTestServer, fixture_protocol::DelayRule, offline::OfflinePlayer, temp_dir,
     waits::render_until_position,
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{CancelToken, time::Duration};
 
 use crate::common::test_defaults::Consts as Shared;
 

@@ -6,15 +6,15 @@ use kithara::{
     assets::StoreOptions,
     events::EventBus,
     hls::{Hls, HlsConfig},
+    platform::{
+        CancelToken,
+        time::Duration,
+        tokio::{sync::oneshot, task::spawn},
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{
     TestTempDir, hls_fixture::HlsStreamBuilder, hls_server::TestServer, temp_dir,
-};
-use kithara_platform::{
-    CancelToken,
-    time::Duration,
-    tokio::{sync::oneshot, task::spawn},
 };
 use tracing::info;
 use url::Url;

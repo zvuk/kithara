@@ -19,17 +19,19 @@
 
 use std::sync::Arc;
 
-use kithara_assets::StoreOptions;
-use kithara_decode::DecoderBackend;
-use kithara_events::{AbrMode, PlayerEvent};
+use kithara::{
+    assets::StoreOptions,
+    decode::DecoderBackend,
+    events::{AbrMode, PlayerEvent},
+    net::{HttpClient, NetOptions},
+    platform::{CancelToken, time::Duration},
+    play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDispatcher},
+    queue::{Queue, QueueConfig, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
+};
 use kithara_integration_tests::{
     PackagedTestServer, SegmentGateHandle, TestTempDir, kithara, offline::OfflineSession,
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{CancelToken, time::Duration};
-use kithara_play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDispatcher};
-use kithara_queue::{Queue, QueueConfig, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -222,7 +224,7 @@ async fn run_case(mode: GateMode) {
         let _ = queue.tick();
         let _ = harness.render(BLOCK_FRAMES);
         while let Ok(ev) = rx.try_recv() {
-            if let kithara_events::Event::Player(pe) = ev {
+            if let kithara::events::Event::Player(pe) = ev {
                 match pe {
                     PlayerEvent::ItemDidFail { ref src, .. } if *src == target_src => {
                         trigger = Trigger::DidFail;

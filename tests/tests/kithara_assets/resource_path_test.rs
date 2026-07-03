@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara::assets::{
-    AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, ReadSide, WriteSide,
+use kithara::{
+    assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, ReadSide, WriteSide},
+    platform::time::Duration,
 };
 use kithara_integration_tests::{TestTempDir, temp_dir};
-use kithara_platform::time::Duration;
 
 fn asset_scope_with_root(temp_dir: &TestTempDir, asset_root: &str) -> AssetScope {
     AssetStoreBuilder::default()

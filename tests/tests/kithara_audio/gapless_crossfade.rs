@@ -1,10 +1,10 @@
 use std::num::NonZeroU32;
 
 use kithara::{
+    bufpool::PcmPool,
     decode::{GaplessInfo, GaplessTrimmer, PcmChunk, PcmMeta, PcmSpec},
     platform::time::Duration,
 };
-use kithara_bufpool::PcmPool;
 use kithara_integration_tests::signal_pcm::signal::{SignalFn, SineWave};
 
 use crate::gapless_common::{

@@ -1,22 +1,25 @@
 use std::{path::Path, sync::Arc};
 
-use kithara_abr::AbrHandle;
-use kithara_assets::StoreOptions;
-use kithara_decode::DecoderBackend;
-use kithara_events::{
-    AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage, TrackId,
-    TrackStatus, VariantInfo,
+use kithara::{
+    abr::AbrHandle,
+    assets::StoreOptions,
+    decode::DecoderBackend,
+    events::{
+        AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage, TrackId,
+        TrackStatus, VariantInfo,
+    },
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{Duration, sleep, timeout},
+        tokio,
+        tokio::sync::broadcast::error::TryRecvError,
+    },
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome, SessionDispatcher},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{kithara, offline::OfflineSession};
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep, timeout},
-    tokio::sync::broadcast::error::TryRecvError,
-};
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome, SessionDispatcher};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 use url::Url;
 
 use super::actions::Action;
@@ -45,7 +48,7 @@ const RENDER_YIELD_INTERVAL_BLOCKS: usize = 16;
 /// `sleep` resolves to the engine-backed virtual timer — without it the
 /// async spawn chokepoint only propagates the per-test ambient gate (it does
 /// NOT set the active flag, unlike the sync `spawn_named` pacer), and
-/// `kithara_platform::time::sleep` keys on the active flag, so the driver
+/// `kithara::platform::time::sleep` keys on the active flag, so the driver
 /// would run on a REAL timer. A real-paced driver keeps up with the virtual
 /// clock only while ongoing real I/O paces it (HLS); for a fully-buffered
 /// source (file / local mp3) the virtual clock collapses ahead of it, the
@@ -69,7 +72,7 @@ async fn run_tick_driver(queue: Arc<Queue>) {
 pub(crate) struct SimHarness {
     queue: Arc<Queue>,
     session: Arc<OfflineSession>,
-    tick: kithara_platform::tokio::task::JoinHandle<()>,
+    tick: tokio::task::JoinHandle<()>,
     _downloader: Downloader,
     _store: StoreOptions,
     track_ids: Vec<TrackId>,
@@ -131,7 +134,7 @@ impl SimHarness {
         // its `sleep` engine-virtual comes from `#[kithara::flash(true)]` on
         // `run_tick_driver` (the async chokepoint propagates ambient only) — see
         // that fn's doc for why a real-paced driver false-HANGs buffered sources.
-        let tick = kithara_platform::tokio::task::spawn(run_tick_driver(queue_for_tick));
+        let tick = tokio::task::spawn(run_tick_driver(queue_for_tick));
 
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
@@ -659,7 +662,7 @@ impl SimHarness {
         let mut pre_pos = self.position();
         let pre_track = self.current_track_id();
         let duration = self.duration();
-        let started = kithara_platform::time::Instant::now();
+        let started = kithara::platform::time::Instant::now();
 
         // Allow up to 2x the requested wall clock so we accept some
         // jitter, but anything beyond that with no progress is a hang.
@@ -866,7 +869,7 @@ impl SimHarness {
                 no_progress_blocks = no_progress_blocks.saturating_add(1);
             }
             if block_idx % RENDER_YIELD_INTERVAL_BLOCKS == 0 {
-                kithara_platform::tokio::task::yield_now().await;
+                tokio::task::yield_now().await;
             }
         }
 
@@ -936,7 +939,7 @@ fn drain_playback_progress(rx: &mut EventReceiver) -> bool {
 /// virtual clock — awaiting it is what lets the engine advance time
 /// (run the tick driver + decode worker) until real state changes.
 async fn recv_event(rx: &mut EventReceiver) -> Result<Option<Event>, String> {
-    use kithara_platform::tokio::sync::broadcast::error::RecvError;
+    use kithara::platform::tokio::sync::broadcast::error::RecvError;
     match rx.recv().await {
         Ok(ev) => Ok(Some(ev)),
         Err(RecvError::Lagged(_)) => Ok(None),

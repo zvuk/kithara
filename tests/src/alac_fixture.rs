@@ -104,7 +104,7 @@ fn try_ffmpeg(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_test_utils::kithara;
+    use kithara;
 
     use super::*;
 

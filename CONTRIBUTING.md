@@ -16,7 +16,7 @@ just lint-full         # full lint / policy checks
 
 Complete the environment setup below before relying on the `just` workflow. The
 canonical local workflow for both humans and AI agents lives in
-[.docs/workflow/rust-ai.md](.docs/workflow/rust-ai.md).
+[.docs/workflows/rust-ai.md](.docs/workflows/rust-ai.md).
 
 ## Environment Setup
 

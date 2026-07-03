@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kithara_platform::time::Duration;
+use kithara::platform::time::Duration;
 use url::Url;
 
 use crate::{
@@ -75,7 +75,7 @@ impl TestServer {
     }
 }
 
-#[::kithara_test_utils::kithara::fixture]
+#[::kithara::fixture]
 pub async fn test_server() -> TestServer {
     TestServer::new().await
 }
@@ -247,16 +247,19 @@ impl HlsTestServer {
             .create_hls(builder_from_config(&config))
             .await
             .expect("create configurable HLS fixture");
-        // Arm virtual-time delay gates from this (flash-ambient) setup context so
-        // the per-segment server delay manifests as VIRTUAL elapsed time the
-        // client observes — keeping the real socket while consuming zero real
-        // wall-clock (see `TestServerHelper::arm_delay_gates`).
-        helper.arm_delay_gates(
-            created.token(),
-            config.variant_count,
-            config.segments_per_variant,
-            &config.delay_rules,
-        );
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Arm virtual-time delay gates from this (flash-ambient) setup context so
+            // the per-segment server delay manifests as VIRTUAL elapsed time the
+            // client observes — keeping the real socket while consuming zero real
+            // wall-clock (see `TestServerHelper::arm_delay_gates`).
+            helper.arm_delay_gates(
+                created.token(),
+                config.variant_count,
+                config.segments_per_variant,
+                &config.delay_rules,
+            );
+        }
         Self {
             config,
             created,
@@ -540,7 +543,7 @@ impl PackagedTestServer {
     }
 }
 
-#[::kithara_test_utils::kithara::fixture]
+#[::kithara::fixture]
 pub async fn packaged_test_server() -> PackagedTestServer {
     PackagedTestServer::new().await
 }
@@ -802,7 +805,7 @@ fn test_key_data() -> Vec<u8> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_platform::{flash::real_io, time::Duration};
+    use kithara::platform::{flash::real_io, time::Duration, tokio};
 
     use super::PackagedTestServer;
     use crate::kithara;
@@ -813,8 +816,8 @@ mod tests {
     /// hard timeout is synchronization on an observable — a real stall fails
     /// the budget rather than being masked.
     //
-    // This drives raw `reqwest`/`tokio::spawn` over a real socket against the
-    // shared test server (a real-time island, no flash ambient). The in-flight
+    // This drives raw `reqwest` through the platform spawn chokepoint against
+    // the shared test server (a real-time island, no flash ambient). The in-flight
     // request and its response live on the REAL clock, invisible to the flash
     // engine (no downloader `real_io` bracket wraps them). Hold a `RealIoScope`
     // across every wait on that real transit — the gated GET reaching the server
@@ -832,7 +835,7 @@ mod tests {
 
         let _real_io = real_io();
 
-        let fetch = tokio::spawn(async move { reqwest::get(url).await.map(|r| r.status()) });
+        let fetch = tokio::task::spawn(async move { reqwest::get(url).await.map(|r| r.status()) });
 
         time::timeout(Duration::from_secs(5), async {
             while gate.requested() == 0 {

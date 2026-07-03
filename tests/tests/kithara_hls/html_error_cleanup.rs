@@ -6,12 +6,12 @@ use kithara::{
     assets::StoreOptions,
     events::{DownloaderEvent, Event, EventBus},
     hls::{Hls, HlsConfig},
+    platform::{CancelToken, time::Duration},
     stream::Stream,
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
 };
-use kithara_platform::{CancelToken, time::Duration};
 use url::Url;
 
 /// Walk `root` recursively and collect every file that is not inside the

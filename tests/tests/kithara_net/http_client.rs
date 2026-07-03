@@ -19,15 +19,17 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::{StreamExt, stream};
-use kithara::net::{
-    Headers, HttpClient, Net, NetError, NetExt, NetOptions, RangeSpec, RetryPolicy, Retryability,
-    TimeoutNet,
+use kithara::{
+    net::{
+        Headers, HttpClient, Net, NetError, NetExt, NetOptions, RangeSpec, RetryPolicy,
+        Retryability, TimeoutNet,
+    },
+    platform::{
+        CancelToken,
+        time::{Duration, sleep},
+    },
 };
 use kithara_integration_tests::TestHttpServer;
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep},
-};
 use url::Url;
 
 type TestServer = TestHttpServer;

@@ -1,12 +1,13 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use bytes::Bytes;
-use kithara::net::{Net, NetError, NetExt};
+use kithara::{
+    net::{Net, NetError, NetExt, mock::NetMock},
+    platform::time::Duration,
+};
 use kithara_integration_tests::net_fixture::{
     DelayedNet, assert_success_all_net_methods, leaked, ok_headers, success_stream, test_url,
 };
-use kithara_net::mock::NetMock;
-use kithara_platform::time::Duration;
 use unimock::{MockFn, Unimock, matching};
 
 fn mock_error() -> NetError {

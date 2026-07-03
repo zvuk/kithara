@@ -1,6 +1,6 @@
 use std::hint;
 
-use kithara_platform::{
+use kithara::platform::{
     time::Duration,
     tokio::task::{spawn_blocking, yield_now},
 };

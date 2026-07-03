@@ -5,6 +5,7 @@ use std::io::{Read, Seek, SeekFrom};
 use kithara::{
     assets::StoreOptions,
     hls::{AbrMode, Hls, HlsConfig},
+    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -12,7 +13,6 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
     rt_cancel, temp_dir,
 };
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 
 use crate::common::test_defaults::Consts as Shared;
 

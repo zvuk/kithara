@@ -1,5 +1,4 @@
-use kithara_bufpool::SharedPool;
-use kithara_test_utils::kithara;
+use kithara::{self, bufpool::SharedPool};
 
 #[kithara::test(serial)]
 fn test_steady_state_get_put_zero_allocs() {

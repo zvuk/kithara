@@ -4,9 +4,11 @@ use std::{
 };
 
 use assert_no_alloc::*;
-use kithara_bufpool::{PcmPool, SharedPool};
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
-use kithara_test_utils::kithara;
+use kithara::{
+    self,
+    bufpool::{PcmPool, SharedPool},
+    decode::{PcmChunk, PcmMeta, PcmSpec},
+};
 
 #[cfg(debug_assertions)]
 #[global_allocator]
@@ -77,8 +79,8 @@ fn test_pcm_chunk_access_allocation_free() {
     permit_alloc(|| drop(chunk));
 }
 
-fn active_resampler(pool: &PcmPool) -> kithara_audio::ResamplerProcessor {
-    use kithara_audio::{ResamplerParams, ResamplerProcessor};
+fn active_resampler(pool: &PcmPool) -> kithara::audio::ResamplerProcessor {
+    use kithara::audio::{ResamplerParams, ResamplerProcessor};
 
     let host_rate = Arc::new(AtomicU32::new(44_100));
     let params = ResamplerParams::builder()
@@ -97,7 +99,7 @@ fn active_resampler(pool: &PcmPool) -> kithara_audio::ResamplerProcessor {
 /// chunk's scratch growth.
 #[kithara::test]
 fn resampler_active_first_chunk_alloc_free() {
-    use kithara_audio::AudioEffect;
+    use kithara::audio::AudioEffect;
 
     let pool = make_pool();
 
@@ -122,7 +124,7 @@ fn resampler_active_first_chunk_alloc_free() {
 /// never reallocates.
 #[kithara::test]
 fn resampler_active_steady_state_alloc_free() {
-    use kithara_audio::AudioEffect;
+    use kithara::audio::AudioEffect;
 
     let pool = make_pool();
 
@@ -151,7 +153,7 @@ fn resampler_active_steady_state_alloc_free() {
 /// introduce (pro-DJ zero phase tolerance).
 #[kithara::test]
 fn resampler_presize_keeps_output_bit_exact() {
-    use kithara_audio::AudioEffect;
+    use kithara::audio::AudioEffect;
 
     let pool = make_pool();
     pool.pre_warm(64, |v| v.resize(16384, 0.0));
@@ -184,7 +186,7 @@ fn resampler_presize_keeps_output_bit_exact() {
 
 #[kithara::test]
 fn test_resampler_passthrough_allocation_free() {
-    use kithara_audio::{AudioEffect, ResamplerParams, ResamplerProcessor};
+    use kithara::audio::{AudioEffect, ResamplerParams, ResamplerProcessor};
 
     let pool = make_pool();
 

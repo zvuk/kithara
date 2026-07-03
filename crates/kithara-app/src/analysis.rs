@@ -361,9 +361,10 @@ fn resource_config_from_source(source: TrackSource, config: &AppConfig) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use kithara::{audio::Waveform, events::TrackId};
+    use ::kithara::{audio::Waveform, events::TrackId};
     use kithara_platform::{CancelToken, sync::Mutex, tokio::sync::watch};
     use kithara_queue::{Queue, QueueConfig};
+    use kithara_test_utils::kithara;
 
     use super::{AnalysisController, Plan, Run, pending_order, plan_analysis};
     use crate::{
@@ -497,8 +498,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn commit_publishes_current_track_and_marks_displayed() {
+    #[kithara::test(native, tokio)]
+    fn commit_publishes_current_track_and_marks_displayed() {
         let key = AnalysisKey::new("root_current");
         let analysis = analysis();
         let ids = [
@@ -521,8 +522,8 @@ mod tests {
         drop(tx);
     }
 
-    #[tokio::test]
-    async fn commit_caches_stale_track_without_publishing_or_marking_displayed() {
+    #[kithara::test(native, tokio)]
+    fn commit_caches_stale_track_without_publishing_or_marking_displayed() {
         let key = AnalysisKey::new("root_stale");
         let analysis = analysis();
         let ids = [

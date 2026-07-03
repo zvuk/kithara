@@ -8,18 +8,15 @@ doc_block_max_lines = 20
 fn_density_threshold_pct = 30
 fn_density_min_body_lines = 6
 allowed_inline_markers = [
-    "SAFETY:",
-    "TODO:",
-    "FIXME:",
-    "XXX:",
-    "NOTE:",
-    "WHY:",
-    "HACK:",
-    "kithara:",
-    "ast-grep-ignore:",
-    "xtask-lint-ignore:",
+  "SAFETY:",
+  "TODO:",
+  "FIXME:",
+  "XXX:",
+  "NOTE:",
+  "WHY:",
+  "HACK:",
+  "kithara:",
+  "ast-grep-ignore:",
+  "xtask-lint-ignore:",
 ]
-exclude_paths = [
-    "**/build.rs",
-    "**/tests/**/fixtures/**",
-]
+exclude_paths = ["**/build.rs", "**/tests/**/fixtures/**"]

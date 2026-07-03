@@ -21,6 +21,7 @@ impl Consts {
     /// is reported as SKIP instead of FAIL.
     const ENV_SKIP_MARKERS: &'static [&'static str] = &[
         "no such command:",
+        "command not found",
         "not found in registry",
         "Library not loaded",
     ];
@@ -122,11 +123,13 @@ pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
 
 fn build_stages(project: &ProjectConfig) -> Vec<Stage> {
     vec![
+        Stage::new("format-check", "cargo", &["xtask", "format", "--check"]),
         Stage::new(
-            "fmt-check",
+            "markdown-format-check",
             "cargo",
-            &["+nightly", "fmt", "--all", "--check"],
-        ),
+            &["xtask", "format", "--check", "--only", "markdown"],
+        )
+        .advisory(),
         Stage::new(
             "clippy",
             "cargo",
@@ -149,6 +152,7 @@ fn build_stages(project: &ProjectConfig) -> Vec<Stage> {
         .advisory(),
         Stage::new("orphans", "cargo", &["xtask", "orphans", "--deny"]),
         Stage::new("machete", "cargo", &["machete"]),
+        Stage::new("shear", "cargo", &["shear", "--deny-warnings"]),
         Stage::new("deny", "cargo", &["deny", "check"]),
         // NOTE: deliberately *not* passing `--no-dev-deps`. That flag asks
         Stage::new(
@@ -170,6 +174,18 @@ fn build_stages(project: &ProjectConfig) -> Vec<Stage> {
             &["semver-checks", "check-release", "--workspace"],
         )
         .exclude_crates(&project.health.workspace_exclude),
+        Stage::new(
+            "geiger",
+            "cargo",
+            &[
+                "geiger",
+                "--all-targets",
+                "--all-dependencies",
+                "--output-format",
+                "Ascii",
+            ],
+        )
+        .advisory(),
         Stage::new(
             "lockbud-deadlock",
             "cargo",

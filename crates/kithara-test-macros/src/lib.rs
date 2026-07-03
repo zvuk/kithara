@@ -50,6 +50,13 @@ pub fn flash(attr: TokenStream, item: TokenStream) -> TokenStream {
     flash::expand(attr, item)
 }
 
+/// Facade re-export variant of [`flash`]. It is emitted by the public
+/// `kithara` crate, so generated paths must resolve through that facade.
+#[proc_macro_attribute]
+pub fn facade_flash(attr: TokenStream, item: TokenStream) -> TokenStream {
+    flash::expand_facade(attr, item)
+}
+
 /// `#[kithara::probe]` — USDT + tracing-event instrumentation.
 /// Тело гейтится `cfg(any(test, feature = "probe"))` → no-op в проде; emit
 /// обёрнут в `rtsan::permit`, поэтому под `--cfg rtsan` пробы активны, но

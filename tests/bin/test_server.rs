@@ -2,7 +2,10 @@
 fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
-#[tokio::main]
+use kithara::platform::tokio;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     use kithara_integration_tests::run_test_server;
 

@@ -2,8 +2,13 @@
 
 use std::{num::NonZeroU32, path::Path};
 
-use kithara_assets::StoreOptions;
-use kithara_decode::{GaplessMode, SilenceTrimParams};
+use kithara::{
+    assets::StoreOptions,
+    decode::{GaplessMode, SilenceTrimParams},
+    platform::time::{Duration, Instant},
+    play::{PlayerConfig, Resource, ResourceConfig},
+    stream::AudioCodec,
+};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{
@@ -11,9 +16,6 @@ use kithara_integration_tests::{
     },
     temp_dir,
 };
-use kithara_platform::time::{Duration, Instant};
-use kithara_play::{PlayerConfig, Resource, ResourceConfig};
-use kithara_stream::AudioCodec;
 
 use super::offline_player_harness::OfflinePlayerHarness;
 use crate::gapless_common::{
@@ -90,7 +92,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
 }
 
 async fn create_delayed_gapless_hls_resource(
-    player: &kithara_play::PlayerImpl,
+    player: &kithara::play::PlayerImpl,
     server: &TestServerHelper,
     cache_dir: &Path,
 ) -> Resource {

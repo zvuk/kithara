@@ -1,7 +1,0 @@
----
-description: Core repo contract for Kithara agents.
-alwaysApply: true
----
-
-- Follow the canonical repo guidance in `AGENTS.md`.
-- Use `.docs/workflow/rust-ai.md` only when the task needs planning, split execution, or handoff structure.

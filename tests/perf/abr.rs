@@ -1,10 +1,12 @@
 #![cfg(feature = "perf")]
 
 use hotpath::HotpathGuardBuilder;
-use kithara_abr::{AbrController, AbrMode, AbrSettings};
-use kithara_events::{VariantDuration, VariantIndex, VariantInfo};
-use kithara_platform::{CancelToken, time::Duration};
-use kithara_test_utils::kithara;
+use kithara::{
+    self,
+    abr::{AbrController, AbrMode, AbrSettings},
+    events::{VariantDuration, VariantIndex, VariantInfo},
+    platform::{CancelToken, time::Duration},
+};
 
 fn create_variants(bitrates: &[u64]) -> Vec<VariantInfo> {
     bitrates

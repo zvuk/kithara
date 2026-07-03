@@ -10,12 +10,14 @@ use std::{
 
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::EvictConfig;
-use kithara::assets::{
-    AcquisitionResult, AssetScope, AssetStoreBuilder, ChunkSink, ProcessCtx, ReadSide,
-    ResourceProcessor, WriteSide,
+use kithara::{
+    assets::{
+        AcquisitionResult, AssetScope, AssetStoreBuilder, ChunkSink, ProcessCtx, ReadSide,
+        ResourceProcessor, WriteSide,
+    },
+    platform::time::Duration,
 };
 use kithara_integration_tests::temp_dir;
-use kithara_platform::time::Duration;
 
 #[derive(Debug)]
 struct XorProcessor {

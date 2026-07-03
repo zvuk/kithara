@@ -1,6 +1,5 @@
 {
   "goog:chromeOptions": {
-    "w3c": false,
     "args": [
       "--headless=new",
       "--disable-background-networking",
@@ -11,6 +10,7 @@
       "--autoplay-policy=no-user-gesture-required",
       "--enable-features=SharedArrayBuffer",
       "--js-flags=--experimental-wasm-threads"
-    ]
+    ],
+    "w3c": false
   }
 }

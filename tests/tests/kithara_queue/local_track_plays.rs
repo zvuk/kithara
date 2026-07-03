@@ -3,9 +3,21 @@
 
 use std::sync::Arc;
 
-use kithara_assets::StoreOptions;
-use kithara_decode::DecoderBackend;
-use kithara_events::{AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, TrackId};
+use kithara::{
+    assets::StoreOptions,
+    decode::DecoderBackend,
+    events::{AbrMode, AudioEvent, Event, EventReceiver, QueueEvent, TrackId},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{Duration, sleep, timeout},
+        tokio,
+        tokio::sync::broadcast::error::{RecvError, TryRecvError},
+    },
+    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
+};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::EncryptionRequest,
@@ -14,15 +26,6 @@ use kithara_integration_tests::{
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep, timeout},
-    tokio::sync::broadcast::error::{RecvError, TryRecvError},
-};
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 use url::Url;
 
 #[derive(Clone, Copy, Debug)]
@@ -187,7 +190,7 @@ fn build_queue_with_tick(
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::spawn(async move {
+    let tick_handle = tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
             if queue_for_tick.tick().is_err() {

@@ -3,12 +3,12 @@
 use kithara::{
     assets::StoreOptions,
     hls::{Hls, HlsConfig},
+    platform::{CancelToken, time::Duration},
     stream::Stream,
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
 };
-use kithara_platform::{CancelToken, time::Duration};
 
 /// CDN soft-error: server returns 200 OK with text/html body.
 /// The HLS engine must reject this before caching and return a

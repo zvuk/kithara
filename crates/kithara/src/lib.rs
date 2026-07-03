@@ -42,6 +42,11 @@ pub mod play {
     pub use kithara_play::*;
 }
 
+#[cfg(feature = "queue")]
+pub mod queue {
+    pub use kithara_queue::*;
+}
+
 pub mod stream {
     pub use kithara_stream::*;
 }
@@ -81,9 +86,12 @@ pub mod storage {
     pub use kithara_storage::*;
 }
 
-pub use kithara_test_macros::mock;
+pub use kithara_test_utils::kithara::mock;
 #[cfg(feature = "probe")]
-pub use kithara_test_macros::{fixture, flash, test};
+pub use kithara_test_utils::{
+    kithara::{fixture, test},
+    kithara_facade::flash,
+};
 
 #[cfg(feature = "mock")]
 pub mod mock {

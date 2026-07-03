@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use kithara::platform::time::Duration;
 use kithara_integration_tests::{audio_fixture::EmbeddedAudio, wav::create_test_wav};
-use kithara_platform::time::Duration;
 
 /// Default audio parameters for generated WAV test fixtures.
 ///

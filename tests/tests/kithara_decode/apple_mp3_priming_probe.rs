@@ -1,8 +1,10 @@
 use std::io::Cursor;
 
-use kithara::decode::{DecoderBackend, DecoderConfig, DecoderFactory, PcmChunk};
+use kithara::{
+    decode::{DecoderBackend, DecoderConfig, DecoderFactory, PcmChunk},
+    platform::time::Duration,
+};
 use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
-use kithara_platform::time::Duration;
 use reqwest::Client;
 
 const SAMPLE_RATE: u32 = 44_100;

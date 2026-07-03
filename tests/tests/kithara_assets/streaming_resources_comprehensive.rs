@@ -2,9 +2,11 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::EvictConfig;
-use kithara::assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, ReadSide, WriteSide};
+use kithara::{
+    assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, ReadSide, WriteSide},
+    platform::{thread, time::Duration},
+};
 use kithara_integration_tests::temp_dir;
-use kithara_platform::{thread, time::Duration};
 
 /// Helper to read bytes from resource into a new Vec
 fn read_bytes<R: ReadSide>(res: &R, offset: u64, len: usize) -> Vec<u8> {

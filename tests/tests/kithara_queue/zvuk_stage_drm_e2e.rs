@@ -2,22 +2,25 @@
 
 use std::sync::Arc;
 
+use kithara::{
+    assets::{FlushHub, FlushPolicy, StoreOptions},
+    decode::DecoderBackend,
+    events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{Duration, sleep, timeout},
+        tokio,
+        tokio::sync::OnceCell,
+    },
+    play::{PlayerConfig, PlayerImpl},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
+};
 use kithara_app::{config::AppConfig, sources::build_source};
-use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
-use kithara_decode::DecoderBackend;
-use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_integration_tests::{
     TestTempDir, kithara, offline::OfflineSession, waits::wait_for_position_at_least,
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep, timeout},
-};
-use kithara_play::{PlayerConfig, PlayerImpl};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
-use tokio::sync::OnceCell;
 
 /// Staging zvq.me DRM track — `zvuk-stage` provider in `app.yaml`.
 /// Validates the per-provider X-Encrypted-Key salt shape: stage WAF
@@ -50,7 +53,7 @@ async fn shared_ctx() -> &'static Ctx {
         let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
         let q = Arc::clone(&queue);
-        tokio::spawn(async move {
+        tokio::task::spawn(async move {
             loop {
                 sleep(Duration::from_millis(50)).await;
                 let _ = q.tick();
@@ -84,7 +87,7 @@ async fn wait_for_loaded(
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
-    use kithara_platform::tokio::sync::broadcast::error::RecvError;
+    use kithara::platform::tokio::sync::broadcast::error::RecvError;
     if let Some(entry) = queue.track(track_id) {
         match &entry.status {
             TrackStatus::Loaded => return Ok(()),

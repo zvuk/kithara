@@ -8,7 +8,7 @@ use axum::{
     response::IntoResponse,
     routing::{any, get},
 };
-use kithara_platform::time::{Duration, sleep};
+use kithara::platform::time::{Duration, sleep};
 
 use crate::{
     fixture_protocol::{HlsRouteKind, HttpErrorRule},

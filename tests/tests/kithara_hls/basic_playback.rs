@@ -2,21 +2,21 @@
 
 use std::{error::Error, io::Read};
 
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::platform::tokio::task::spawn_blocking;
 use kithara::{
     assets::StoreOptions,
     events::EventBus,
     hls::{Hls, HlsConfig},
+    platform::{
+        CancelToken,
+        time::Duration,
+        tokio::{sync::broadcast::error::RecvError, task::spawn},
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{
     TestTempDir, hls_fixture::HlsStreamBuilder, hls_server::TestServer, rt_cancel, temp_dir,
-};
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::tokio::task::spawn_blocking;
-use kithara_platform::{
-    CancelToken,
-    time::Duration,
-    tokio::{sync::broadcast::error::RecvError, task::spawn},
 };
 use tracing::info;
 use url::Url;

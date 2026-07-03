@@ -4,6 +4,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
     hls::{AbrMode, Hls, HlsConfig},
+    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -11,7 +12,6 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::{ReadLimit, read_for_concurrency_check},
 };
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;

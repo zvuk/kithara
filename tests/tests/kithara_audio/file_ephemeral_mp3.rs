@@ -8,12 +8,12 @@ use kithara::{
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     file::{File, FileConfig},
+    platform::{time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
 };
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 
 use crate::common::test_defaults::Consts;
 

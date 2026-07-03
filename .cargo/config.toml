@@ -5,26 +5,44 @@ xtask = "run --package xtask --"
 RUST_TEST_THREADS = "4"
 
 [target.wasm32-unknown-unknown]
-runner = ["cargo", "run", "--bin", "wasm_test_runner", "-p", "kithara-integration-tests", "--"]
+runner = [
+  "cargo",
+  "run",
+  "--bin",
+  "wasm_test_runner",
+  "-p",
+  "kithara-integration-tests",
+  "--",
+]
 rustflags = [
-    "-C", "target-feature=+atomics,+bulk-memory,+mutable-globals",
-    "-C", "link-arg=--shared-memory",
-    "-C", "link-arg=--import-memory",
-    # Pre-allocate 256 MiB of shared linear memory up front so dlmalloc never
-    # has to grow it at runtime. On wasm threads, a concurrent memory.grow
-    # during the worker/worklet startup storm leaves other instances with a
-    # stale memory bound, so any later heap deref (JsFuture/setTimeout resolve
-    # closures, RAF tick, AudioPlayer __wbg_ptr) traps with "memory access out
-    # of bounds". A large initial avoids the grow entirely. Must be <= max.
-    "-C", "link-arg=--initial-memory=268435456",
-    "-C", "link-arg=--max-memory=1610612736",
-    "-C", "link-arg=--export=__wasm_init_tls",
-    "-C", "link-arg=--export=__tls_size",
-    "-C", "link-arg=--export=__tls_align",
-    "-C", "link-arg=--export=__tls_base",
-    # panic=abort (NOT immediate-abort) so panic messages appear in the
-    # browser console.  console_error_panic_hook shows stack traces.
-    "-C", "panic=abort",
+  "-C",
+  "target-feature=+atomics,+bulk-memory,+mutable-globals",
+  "-C",
+  "link-arg=--shared-memory",
+  "-C",
+  "link-arg=--import-memory",
+  # Pre-allocate 256 MiB of shared linear memory up front so dlmalloc never
+  # has to grow it at runtime. On wasm threads, a concurrent memory.grow
+  # during the worker/worklet startup storm leaves other instances with a
+  # stale memory bound, so any later heap deref (JsFuture/setTimeout resolve
+  # closures, RAF tick, AudioPlayer __wbg_ptr) traps with "memory access out
+  # of bounds". A large initial avoids the grow entirely. Must be <= max.
+  "-C",
+  "link-arg=--initial-memory=268435456",
+  "-C",
+  "link-arg=--max-memory=1610612736",
+  "-C",
+  "link-arg=--export=__wasm_init_tls",
+  "-C",
+  "link-arg=--export=__tls_size",
+  "-C",
+  "link-arg=--export=__tls_align",
+  "-C",
+  "link-arg=--export=__tls_base",
+  # panic=abort (NOT immediate-abort) so panic messages appear in the
+  # browser console.  console_error_panic_hook shows stack traces.
+  "-C",
+  "panic=abort",
 ]
 
 # Only takes effect with nightly cargo (ignored by stable).

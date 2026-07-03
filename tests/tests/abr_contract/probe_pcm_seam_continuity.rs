@@ -1,6 +1,4 @@
-use kithara_decode::DecoderBackend;
-use kithara_platform::time::Duration;
-use kithara_test_utils::kithara;
+use kithara::{self, decode::DecoderBackend, platform::time::Duration};
 
 /// Variant indices in the wave fixture (4-variant ladder).
 const VARIANT_AAC_LQ: usize = 0;

@@ -3,24 +3,24 @@
 use kithara::{
     abr::AbrMode,
     assets::StoreOptions,
+    decode::DecoderBackend,
     net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        flash::real_io,
+        time::{self, Duration, Instant},
+    },
     play::{Resource, ResourceConfig},
     stream::{
         AudioCodec,
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
     offline::OfflinePlayer,
     swallow_detector::{assert_committed_reached, assert_no_committed_swallow},
-};
-use kithara_platform::{
-    CancelToken,
-    flash::real_io,
-    time::{self, Duration, Instant},
 };
 use kithara_test_utils::probe::capture as probe_capture;
 

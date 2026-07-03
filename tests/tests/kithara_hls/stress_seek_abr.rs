@@ -7,13 +7,13 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     hls::{Hls, HlsConfig},
+    platform::{
+        time::Duration,
+        tokio::task::{spawn, spawn_blocking},
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, abr_fast, auto, temp_dir};
-use kithara_platform::{
-    time::Duration,
-    tokio::task::{spawn, spawn_blocking},
-};
 use tracing::info;
 
 /// Stress test: 20 seconds of rapid seeking after ABR switch.
@@ -34,7 +34,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     temp_dir: TestTempDir,
     #[case] path: &str,
     #[case] label: &str,
-    _abr_fast: kithara_abr::AbrSettings,
+    _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
@@ -167,7 +167,7 @@ async fn seek_sequence_from_log_real_stream(
     temp_dir: TestTempDir,
     #[case] path: &str,
     #[case] label: &str,
-    _abr_fast: kithara_abr::AbrSettings,
+    _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);

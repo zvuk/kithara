@@ -1,6 +1,8 @@
-use kithara_abr::{AbrMode, AbrSettings, VariantIndex};
-use kithara_platform::time::Duration;
-use kithara_test_utils::kithara;
+use kithara::{
+    self,
+    abr::{AbrMode, AbrSettings, VariantIndex},
+    platform::time::Duration,
+};
 
 /// Auto ABR mode seeded with initial variant `idx`. Test-only shorthand for
 /// `AbrMode::Auto(Some(VariantIndex::new(idx)))`; production code only ever

@@ -156,7 +156,7 @@ most often get wrong.
 ## Where to look
 
 **Rules & process:** [`AGENTS.md`](AGENTS.md) (repo-wide invariants, conventions,
-coordination shapes) · [`.docs/workflow/rust-ai.md`](.docs/workflow/rust-ai.md)
+coordination shapes) · [`.docs/workflows/rust-ai.md`](.docs/workflows/rust-ai.md)
 (planning/split/handoff) · [`TESTING.md`](TESTING.md) (test gate + flash model).
 
 **Per-crate detail** — each `crates/<crate>/CONTEXT.md`:

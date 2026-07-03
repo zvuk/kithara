@@ -7,19 +7,21 @@ use std::{
 };
 
 use kithara::{
+    abr::Abr,
     assets::StoreOptions,
     hls::{Hls, HlsConfig},
-    stream::Stream,
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        thread::active_named_thread_count,
+        time::{self, Duration, Instant},
+    },
+    stream::{
+        Stream,
+        dl::{Downloader, DownloaderConfig, FetchCmd, Peer},
+    },
 };
-use kithara_abr::Abr;
 use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    thread::active_named_thread_count,
-    time::{self, Duration, Instant},
-};
-use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer};
 
 /// Settle window / hang budget for [`wait_thread_count_quiesced`].
 const SETTLE_WINDOW: usize = 4;

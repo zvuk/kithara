@@ -2,10 +2,12 @@
 
 use std::sync::Arc;
 
-use kithara_events::{Event, EventReceiver, PlayerEvent};
+use kithara::{
+    events::{Event, EventReceiver, PlayerEvent},
+    platform::sync::Mutex,
+    play::{PlayerConfig, PlayerImpl, SessionDispatcher},
+};
 use kithara_integration_tests::offline::OfflineSession;
-use kithara_platform::sync::Mutex;
-use kithara_play::{PlayerConfig, PlayerImpl, SessionDispatcher};
 
 pub(crate) struct OfflinePlayerHarness {
     events: Mutex<EventReceiver>,
@@ -41,7 +43,7 @@ impl OfflinePlayerHarness {
     /// Pump the player's notification ringbuf and drain `PlayerEvent`s
     /// from the bus subscriber.
     pub(crate) fn tick_and_drain(&self) -> Vec<PlayerEvent> {
-        use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
+        use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
         self.player.process_notifications();
 
         let mut events = Vec::new();

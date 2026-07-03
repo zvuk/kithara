@@ -1,4 +1,4 @@
-use kithara_platform::time::Duration;
+use kithara::platform::time::Duration;
 
 /// Saw-tooth period in frames. (u16 max value + 1)
 pub const SAW_PERIOD: usize = 65536;

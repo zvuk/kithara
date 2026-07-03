@@ -1,19 +1,21 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_abr::AbrHandle;
-use kithara_app::{config::AppConfig, sources::build_source};
-use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
-use kithara_decode::DecoderBackend;
-use kithara_events::{AbrMode, VariantInfo};
-use kithara_integration_tests::{TestTempDir, kithara, offline::OfflinePlayer};
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep},
+use kithara::{
+    abr::AbrHandle,
+    assets::{FlushHub, FlushPolicy, StoreOptions},
+    decode::DecoderBackend,
+    events::{AbrMode, VariantInfo},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{Duration, sleep},
+    },
+    play::Resource,
+    queue::TrackSource,
+    stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_play::Resource;
-use kithara_queue::TrackSource;
-use kithara_stream::dl::{Downloader, DownloaderConfig};
+use kithara_app::{config::AppConfig, sources::build_source};
+use kithara_integration_tests::{TestTempDir, kithara, offline::OfflinePlayer};
 use tracing::info;
 
 /// Production zvuk DRM master from the on-device AAC->FLAC recreate trace.

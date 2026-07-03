@@ -6,22 +6,22 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash(git commit)",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'cd \"$PROJECT_DIR\" && cargo check --workspace 2>&1 | tail -20 && cargo clippy --workspace -- -D warnings 2>&1 | tail -20'"
+            "command": "cargo xtask agent-hook pre-bash"
           }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'for f in $MODIFIED_FILES; do [[ \"$f\" == *.rs ]] && rustfmt --edition 2024 \"$f\" 2>/dev/null; done; true'"
+            "command": "cargo xtask agent-hook post-edit"
           }
         ]
       }

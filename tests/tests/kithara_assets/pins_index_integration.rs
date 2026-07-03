@@ -7,9 +7,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use kithara::{assets::DiskAssetStore, bufpool::BytePool};
+use kithara::{
+    assets::DiskAssetStore,
+    bufpool::BytePool,
+    platform::{CancelToken, time::Duration},
+};
 use kithara_integration_tests::{asset_fixture::PinsIndex, temp_dir};
-use kithara_platform::{CancelToken, time::Duration};
 
 fn pins_path(root: &Path) -> PathBuf {
     root.join("_index").join("pins.bin")

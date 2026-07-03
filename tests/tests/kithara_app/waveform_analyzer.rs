@@ -5,10 +5,13 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara::{audio::Bucket, prelude::ResourceConfig};
+use kithara::{
+    audio::Bucket,
+    platform::{CancelToken, time::Duration},
+    prelude::ResourceConfig,
+};
 use kithara_app::waveform::{TrackAnalysis, TrackAnalysisRunner};
 use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
-use kithara_platform::{CancelToken, time::Duration};
 
 fn silence_wav_spec() -> SignalSpec {
     SignalSpec {

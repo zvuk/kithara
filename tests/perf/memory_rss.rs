@@ -8,13 +8,13 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
     hls::{AbrMode, Hls, HlsConfig},
+    platform::{
+        time::{Duration, Instant},
+        tokio::task::spawn_blocking,
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
-use kithara_platform::{
-    time::{Duration, Instant},
-    tokio::task::spawn_blocking,
-};
 use memory_stats::memory_stats;
 use tracing::info;
 

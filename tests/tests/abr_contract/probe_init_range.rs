@@ -1,6 +1,4 @@
-use kithara_decode::DecoderBackend;
-use kithara_platform::time::Duration;
-use kithara_test_utils::kithara;
+use kithara::{self, decode::DecoderBackend, platform::time::Duration};
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
 #[ignore = "Plan 10 — pending — probe wiring deferred per .docs/plans/2026-05-12-abr-pull-driven-10-H-test-sweep.md"]

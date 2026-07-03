@@ -14,6 +14,12 @@ use kithara::{
         AbrEvent, AudioEvent, DownloaderEvent, Event, EventBus, EventReceiver, HlsEvent, RequestId,
     },
     hls::{AbrMode, Hls, HlsConfig},
+    platform::{
+        CancelToken,
+        sync::Mutex,
+        time::Duration,
+        tokio::task::{spawn, spawn_blocking},
+    },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
 };
 use kithara_integration_tests::{
@@ -24,12 +30,6 @@ use kithara_integration_tests::{
     signal_pcm::{Finite, SignalPcm, signal},
     waits::{wait_for_event, wait_until},
     wav::create_wav_header,
-};
-use kithara_platform::{
-    CancelToken,
-    sync::Mutex,
-    time::Duration,
-    tokio::task::{spawn, spawn_blocking},
 };
 use tracing::info;
 
@@ -131,7 +131,7 @@ impl EventCollector {
     /// `Lagged` is tolerated (mirrors the old task's `continue`); `Empty`/
     /// `Closed` end the drain. No `.await`, so it never pins the virtual clock.
     fn drain(&self) {
-        use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
+        use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
         let mut rx = self.rx.lock();
         loop {
             let ev = match rx.try_recv() {
@@ -510,8 +510,8 @@ async fn urgent_downswitch_rescues_reader_blocked_on_slow_variant() {
                     break;
                 }
                 Ok(_) => {}
-                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(kithara::platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(kithara::platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
     }));
@@ -1138,7 +1138,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     // If the wake is lost (the pinned bug) the harness timeout fails
     // the test.
     while collector.switch_count() == pre_switch {
-        kithara_platform::time::sleep(Duration::from_millis(50)).await;
+        kithara::platform::time::sleep(Duration::from_millis(50)).await;
     }
 
     let post_switch = collector.switch_count();
@@ -1279,7 +1279,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
 
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline && collector.switch_count() == pre_switch {
-        kithara_platform::time::sleep(Duration::from_millis(50)).await;
+        kithara::platform::time::sleep(Duration::from_millis(50)).await;
     }
 
     let post_switch = collector.switch_count();
@@ -1498,7 +1498,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     // local test environment (in-process server, no CDN latency)
     // recreate completes in ~50-100ms vs ~3-4s in prod. Sleep 0
     // (immediate) maximizes the chance of hitting the race here.
-    kithara_platform::time::sleep(Duration::from_millis(10)).await;
+    kithara::platform::time::sleep(Duration::from_millis(10)).await;
 
     // Second switch: same-codec sibling of v=0 (AAC v=1) — does NOT
     // bump fence, but shrinks `served_until` on whatever variant is
@@ -1794,10 +1794,10 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
                     applied_bg.lock().push(to.get());
                 }
                 Ok(_) => {}
-                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                Err(kithara::platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                     continue;
                 }
-                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(kithara::platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
     });

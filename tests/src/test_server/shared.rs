@@ -3,6 +3,7 @@ use std::{
     thread,
 };
 
+use kithara::platform::tokio::runtime::Builder as RuntimeBuilder;
 use url::Url;
 
 use crate::{native::http_server::router_base_url_on_runtime, test_server_state::TestServerState};
@@ -25,7 +26,7 @@ pub(crate) fn shared() -> &'static SharedTestServer {
         thread::Builder::new()
             .name("kithara-shared-test-server".into())
             .spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
+                let rt = RuntimeBuilder::new_current_thread()
                     .enable_all()
                     .build()
                     .expect("build shared-server runtime");
@@ -38,7 +39,7 @@ pub(crate) fn shared() -> &'static SharedTestServer {
                     // begins, so per-request THROTTLE sleeps stay on the sim clock
                     // and still collapse under `flash`.
                     let base_url = {
-                        let _real = kithara_platform::flash::flash_real();
+                        let _real = kithara::platform::flash::flash_real();
                         router_base_url_on_runtime(state_for_thread).await
                     };
                     tx.send(base_url).expect("send shared server base url");

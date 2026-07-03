@@ -1,15 +1,19 @@
 //! Mirror of the tokio surface the workspace is allowed to touch, flash side.
 //! Enumerated on purpose: a glob re-export is how flash-blind primitives
-//! leak in unnoticed (see design doc §2). `time`/`fs`/`io`/`process` and the
-//! root `spawn`/`spawn_blocking` are intentionally ABSENT. `runtime`,
-//! `ensure_thread_pool` and `task_local!` add no flash semantics and are
-//! re-imported from `native`; the channels and `task` are flash-aware.
+//! leak in unnoticed (see design doc §2). `time`/`fs`/`process` and the root
+//! `spawn`/`spawn_blocking` are intentionally ABSENT. `runtime`, feature-gated
+//! `net`/minimal `io`, `ensure_thread_pool` and `task_local!` add no flash
+//! semantics and are re-imported from `native`; the channels and `task` are
+//! flash-aware.
 
 #[cfg(feature = "signal")]
 pub use crate::native::tokio::signal;
-pub use crate::native::tokio::{join, pin, select, task_local, try_join};
+#[cfg(feature = "tokio-net")]
+pub use crate::native::tokio::{io, net};
+pub use crate::native::tokio::{join, main, pin, select, task_local, try_join};
 
 pub mod broadcast;
+mod errors;
 pub mod mpsc;
 pub mod oncecell;
 pub mod oneshot;

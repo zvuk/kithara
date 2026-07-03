@@ -5,6 +5,11 @@ use kithara::{
     events::{AbrEvent, Event, EventBus},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
+    platform::{
+        CancelToken,
+        time::{Duration, Instant, sleep},
+        tokio::task::spawn_blocking,
+    },
     stream::{AudioCodec, Stream},
 };
 use kithara_integration_tests::{
@@ -13,11 +18,6 @@ use kithara_integration_tests::{
     flash_pace::virtual_pace,
     offline::{OfflinePlayer, resource_from_reader},
     temp_dir,
-};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, Instant, sleep},
-    tokio::task::spawn_blocking,
 };
 use tracing::info;
 

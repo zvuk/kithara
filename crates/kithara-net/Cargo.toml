@@ -9,9 +9,6 @@ description = "Streaming HTTP for audio: retry, timeout, byte ranges."
 keywords = ["http", "networking", "streaming", "audio", "download"]
 categories = ["network-programming", "asynchronous"]
 
-[lints]
-workspace = true
-
 [features]
 default = ["client-reqwest", "tls-rustls"]
 # HTTP client backend. Pick exactly one per target. `client-reqwest`
@@ -32,21 +29,18 @@ mock = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
+kithara-bufpool = { workspace = true }
+kithara-platform = { workspace = true }
+kithara-test-macros = { workspace = true }
+
+async-trait = { workspace = true }
 bitflags = { workspace = true }
 bon = { workspace = true }
-kithara-platform = { workspace = true }
-kithara-bufpool = { workspace = true }
-kithara-test-macros = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true, optional = true }
 futures = { workspace = true }
-num-traits = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-url = { workspace = true }
-async-trait = { workspace = true }
-unimock = { workspace = true }
 hotpath = { workspace = true, optional = true }
+num-traits = { workspace = true }
 # `client-reqwest` backend (native + wasm). reqwest gates its own TLS /
 # compression deps behind `cfg(not(wasm32))`, so the compression / cookie / TLS
 # features here are inert on wasm and selected on native.
@@ -58,21 +52,10 @@ reqwest = { workspace = true, optional = true, features = [
     "zstd",
     "cookies",
 ] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
-tower-layer = { workspace = true, optional = true }
-tower-service = { workspace = true, optional = true }
-# `client-wreq` backend (native only — BoringSSL has no wasm target).
-wreq = { workspace = true, optional = true, features = [
-    "brotli",
-    "cookies",
-    "deflate",
-    "gzip",
-    "stream",
-    "zstd",
-] }
-wreq-util = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+unimock = { workspace = true }
+url = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 block2 = { workspace = true, optional = true }
@@ -97,17 +80,37 @@ objc2-foundation = { workspace = true, optional = true, features = [
     "NSURLSession",
 ] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+tower-layer = { workspace = true, optional = true }
+tower-service = { workspace = true, optional = true }
+# `client-wreq` backend (native only — BoringSSL has no wasm target).
+wreq = { workspace = true, optional = true, features = [
+    "brotli",
+    "cookies",
+    "deflate",
+    "gzip",
+    "stream",
+    "zstd",
+] }
+wreq-util = { workspace = true, optional = true }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 gloo-timers = { workspace = true }
 
 [dev-dependencies]
 kithara-net = { path = ".", default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
+
 futures = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-platform = { workspace = true, features = ["tokio-net"] }
+
 axum = { workspace = true }
 memory-stats = { workspace = true }
+
+[lints]
+workspace = true

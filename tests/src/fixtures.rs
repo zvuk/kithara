@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use kithara_platform::CancelToken;
-use kithara_test_utils::kithara;
+use kithara::{self, platform::CancelToken};
 
 /// Cross-platform temporary directory.
 ///

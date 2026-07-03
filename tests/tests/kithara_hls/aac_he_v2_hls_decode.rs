@@ -3,12 +3,12 @@
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
+    decode::DecoderBackend,
     hls::{Hls, HlsConfig},
+    platform::{thread, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
-use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{HlsFixtureBuilder, TestServerHelper, TestTempDir, temp_dir};
-use kithara_platform::{thread, time::Duration, tokio::task::spawn_blocking};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;

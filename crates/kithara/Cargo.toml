@@ -9,32 +9,6 @@ description = "Cross-platform streaming audio player: HLS + progressive, gapless
 keywords = ["audio", "streaming", "hls", "player", "dj"]
 categories = ["multimedia::audio"]
 
-[lints]
-workspace = true
-
-[dependencies]
-kithara-audio = { workspace = true, default-features = false }
-kithara-decode = { workspace = true, default-features = false }
-kithara-events = { workspace = true }
-kithara-platform = { workspace = true }
-kithara-play = { workspace = true, default-features = false, features = ["backend-cpal"] }
-kithara-stream = { workspace = true, default-features = false }
-kithara-file = { workspace = true, optional = true, default-features = false }
-kithara-hls = { workspace = true, optional = true, default-features = false }
-kithara-assets = { workspace = true, optional = true }
-kithara-storage = { workspace = true, optional = true }
-kithara-net = { workspace = true, optional = true, default-features = false }
-kithara-abr = { workspace = true, optional = true, default-features = false }
-kithara-bufpool = { workspace = true }
-kithara-drm = { workspace = true, optional = true }
-kithara-test-macros = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-kithara-play = { workspace = true, default-features = false, features = ["backend-cpal", "wasm-bindgen"] }
-
 [features]
 default = ["file", "hls", "symphonia", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep. Optional deps
@@ -44,9 +18,12 @@ default = ["file", "hls", "symphonia", "client-reqwest", "tls-rustls"]
 client-reqwest = [
     "kithara-net?/client-reqwest",
     "kithara-stream/client-reqwest",
+    "kithara-assets?/client-reqwest",
     "kithara-file?/client-reqwest",
     "kithara-hls?/client-reqwest",
     "kithara-play/client-reqwest",
+    "kithara-queue?/client-reqwest",
+    "kithara-storage?/client-reqwest",
     "kithara-audio/client-reqwest",
     "kithara-decode/client-reqwest",
     "kithara-events/client-reqwest",
@@ -55,9 +32,12 @@ client-reqwest = [
 client-wreq = [
     "kithara-net?/client-wreq",
     "kithara-stream/client-wreq",
+    "kithara-assets?/client-wreq",
     "kithara-file?/client-wreq",
     "kithara-hls?/client-wreq",
     "kithara-play/client-wreq",
+    "kithara-queue?/client-wreq",
+    "kithara-storage?/client-wreq",
     "kithara-audio/client-wreq",
     "kithara-decode/client-wreq",
     "kithara-events/client-wreq",
@@ -66,9 +46,12 @@ client-wreq = [
 tls-rustls = [
     "kithara-net?/tls-rustls",
     "kithara-stream/tls-rustls",
+    "kithara-assets?/tls-rustls",
     "kithara-file?/tls-rustls",
     "kithara-hls?/tls-rustls",
     "kithara-play/tls-rustls",
+    "kithara-queue?/tls-rustls",
+    "kithara-storage?/tls-rustls",
     "kithara-audio/tls-rustls",
     "kithara-decode/tls-rustls",
     "kithara-events/tls-rustls",
@@ -77,9 +60,12 @@ tls-rustls = [
 tls-native = [
     "kithara-net?/tls-native",
     "kithara-stream/tls-native",
+    "kithara-assets?/tls-native",
     "kithara-file?/tls-native",
     "kithara-hls?/tls-native",
     "kithara-play/tls-native",
+    "kithara-queue?/tls-native",
+    "kithara-storage?/tls-native",
     "kithara-audio/tls-native",
     "kithara-decode/tls-native",
     "kithara-events/tls-native",
@@ -87,11 +73,11 @@ tls-native = [
 ]
 # Enable the Symphonia software decoder path. Disable to compile with
 # only a hardware backend (apple/android) and no software fallback.
-symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia"]
+symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia", "kithara-queue?/symphonia"]
 # libfdk-aac override for HE-AAC v1/v2 streams. Symphonia ships an
 # LC-only AAC decoder; without this feature, HE-AAC v2 (parametric
 # stereo + SBR) streams fail in the software pipeline.
-fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
+fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac", "kithara-queue?/fdk-aac"]
 # Native-only C++ time-stretch backends (selectable at runtime in the DJ
 # deck). Each pulls a C++ toolchain; without one, key-lock is compiled out.
 stretch-signalsmith = ["kithara-audio/stretch-signalsmith"]
@@ -104,17 +90,36 @@ hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-
 assets = ["dep:kithara-assets", "dep:kithara-storage"]
 net = ["dep:kithara-net"]
 bufpool = []
+queue = ["dep:kithara-queue"]
+flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
+tokio-net = ["kithara-platform/tokio-net"]
+tokio-rt-multi-thread = ["kithara-platform/tokio-rt-multi-thread"]
+backend-cpal = ["kithara-play/backend-cpal", "kithara-queue?/backend-cpal"]
+backend-web-audio = ["kithara-play/backend-web-audio", "kithara-play/wasm-bindgen", "kithara-queue?/backend-web-audio"]
 probe = [
+    "kithara-abr?/probe",
+    "kithara-assets?/probe",
     "kithara-audio/probe",
     "kithara-decode/probe",
-    "kithara-stream/probe",
+    "kithara-file?/probe",
+    "kithara-hls?/probe",
+    "kithara-net?/probe",
     "kithara-play/probe",
+    "kithara-queue?/probe",
+    "kithara-storage?/probe",
+    "kithara-stream/probe",
+    "kithara-test-utils/probe",
 ]
 mock = [
+    "kithara-abr?/mock",
+    "kithara-assets?/mock",
     "kithara-audio/mock",
     "kithara-decode/mock",
-    "kithara-stream/mock",
+    "kithara-net?/mock",
     "kithara-play/mock",
+    "kithara-storage?/mock",
+    "kithara-stream/mock",
+    "kithara-test-utils/mock",
 ]
 perf = [
     "kithara-audio/perf",
@@ -132,21 +137,44 @@ perf = [
 # coupled to symphonia for desktop/WASM software fallback builds only. HTTP
 # backend selection is separate so macOS desktop/tests can use the decoder
 # without pulling the real-clock NSURLSession backend.
-apple = ["kithara-audio/apple", "kithara-play/apple"]
+apple = ["kithara-audio/apple", "kithara-decode/apple", "kithara-play/apple", "kithara-queue?/apple"]
 # Apple HTTP backend for the shipped FFI framework build. It uses NSURLSession,
 # which passes the DRM keyserver anti-bot WAF natively and removes the wreq /
 # BoringSSL TLS stack from Apple framework builds. Weak (`?`) so it only flips
 # when `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
 apple-net = ["kithara-net?/client-apple", "kithara-stream/client-apple"]
-android = [
-    "kithara-audio/android",
-    "kithara-decode/android",
-    "kithara-net?/client-wreq",
-]
+android = ["kithara-audio/android", "kithara-decode/android", "kithara-net?/client-wreq"]
 full = ["file", "hls", "assets", "net", "bufpool"]
+
+[dependencies]
+kithara-abr = { workspace = true, optional = true, default-features = false }
+kithara-assets = { workspace = true, optional = true }
+kithara-audio = { workspace = true, default-features = false }
+kithara-bufpool = { workspace = true }
+kithara-decode = { workspace = true, default-features = false }
+kithara-drm = { workspace = true, optional = true }
+kithara-events = { workspace = true }
+kithara-file = { workspace = true, optional = true, default-features = false }
+kithara-hls = { workspace = true, optional = true, default-features = false }
+kithara-net = { workspace = true, optional = true, default-features = false }
+kithara-platform = { workspace = true }
+kithara-play = { workspace = true, default-features = false, features = ["backend-cpal"] }
+kithara-queue = { workspace = true, optional = true, default-features = false }
+kithara-storage = { workspace = true, optional = true }
+kithara-stream = { workspace = true, default-features = false }
+kithara-test-utils = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+kithara-play = { workspace = true, default-features = false, features = ["backend-cpal", "wasm-bindgen"] }
 
 [dev-dependencies]
 kithara = { path = ".", default-features = false }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
+
+[lints]
+workspace = true

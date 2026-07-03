@@ -1,13 +1,15 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_audio::{Audio, AudioConfig, ReadOutcome};
-use kithara_events::{AudioEvent, Event, SeekEpoch, SeekLifecycleStage};
+use kithara::{
+    audio::{Audio, AudioConfig, ReadOutcome},
+    events::{AudioEvent, Event, SeekEpoch, SeekLifecycleStage},
+    platform::time::{self, Duration, Instant},
+    stream::Stream,
+};
 use kithara_integration_tests::{
     create_test_wav, kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
 };
-use kithara_platform::time::{self, Duration, Instant};
-use kithara_stream::Stream;
 
 fn wav_stream(samples: usize) -> AudioConfig<MemStream> {
     let wav = create_test_wav(samples, 44_100, 2);

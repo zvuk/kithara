@@ -11,20 +11,23 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use kithara_assets::StoreOptions;
-use kithara_events::{AbrMode, TrackId, TrackStatus};
+use kithara::{
+    assets::StoreOptions,
+    events::{AbrMode, TrackId, TrackStatus},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{Duration, sleep},
+        tokio,
+    },
+    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
+};
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
     offline::OfflineSession, temp_dir, waits::wait_for_loader_done,
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep},
-};
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 use url::Url;
 
 struct Consts;
@@ -100,7 +103,7 @@ fn build_queue_with_tick(
             .with_player(player),
     ));
     let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::spawn(async move {
+    let tick_handle = tokio::task::spawn(async move {
         loop {
             sleep(Duration::from_millis(50)).await;
             if queue_for_tick.tick().is_err() {
@@ -124,7 +127,7 @@ fn is_loading(queue: &Queue, id: TrackId) -> bool {
 }
 
 async fn wait_until_loading(queue: &Queue, id: TrackId, deadline: Duration) -> Result<(), String> {
-    let start = kithara_platform::time::Instant::now();
+    let start = kithara::platform::time::Instant::now();
     loop {
         if is_loading(queue, id) {
             return Ok(());

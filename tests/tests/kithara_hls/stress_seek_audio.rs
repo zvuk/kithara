@@ -5,6 +5,7 @@ use kithara::{
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
+    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -14,7 +15,6 @@ use kithara_integration_tests::{
     phase_distance, phase_from_f32,
     signal_pcm::signal,
 };
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 use tracing::info;
 

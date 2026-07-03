@@ -472,14 +472,15 @@ mod tests {
         },
     };
 
-    // `::tokio` (the real crate) — `super::*` re-exports `kithara_platform::tokio`.
-    use ::tokio::net::TcpListener;
     use axum::{
         Router,
         http::StatusCode,
         routing::{get, post},
     };
-    use kithara_platform::time::Duration;
+    use kithara_platform::{
+        time::Duration,
+        tokio::{net::TcpListener, task::spawn},
+    };
 
     use super::*;
     use crate::types::RetryPolicy;
@@ -507,7 +508,7 @@ mod tests {
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr: SocketAddr = listener.local_addr().expect("local_addr");
-        ::tokio::spawn(async move {
+        spawn(async move {
             axum::serve(listener, app.into_make_service())
                 .await
                 .expect("serve");
@@ -537,7 +538,7 @@ mod tests {
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr: SocketAddr = listener.local_addr().expect("local_addr");
-        ::tokio::spawn(async move {
+        spawn(async move {
             axum::serve(listener, app.into_make_service())
                 .await
                 .expect("serve");

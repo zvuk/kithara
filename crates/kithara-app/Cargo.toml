@@ -5,8 +5,9 @@ edition.workspace = true
 license = "MIT OR Apache-2.0"
 publish = false
 
-[lints]
-workspace = true
+[[bin]]
+name = "kithara"
+path = "src/main.rs"
 
 [features]
 default = ["tui", "gui", "beat-nn"]
@@ -48,14 +49,15 @@ kithara-test-utils = { workspace = true }
 # for the iOS framework closure. Keeping them off iOS lets the workspace-hack
 # leave env-filter (and regex/regex-automata/aho-corasick) out of the iOS build.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
+kithara-platform = { workspace = true, features = ["signal"] }
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+bon = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
 crabtime = { workspace = true }
-bon = { workspace = true }
 crossterm = { workspace = true, optional = true }
 iced = { workspace = true, optional = true }
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
-kithara-platform = { workspace = true, features = ["signal"] }
 num-traits = { workspace = true }
 obfstr = { workspace = true }
 rand = { workspace = true }
@@ -65,9 +67,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 url = { workspace = true }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-kithara = { workspace = true, default-features = false, features = ["apple", "client-wreq"] }
-
 # Desktop (non-Apple, non-Android, native) — fall back to symphonia
 # software decoding. workspace.dependencies now disables kithara's
 # defaults at the workspace level, so without this target.cfg
@@ -76,12 +75,22 @@ kithara = { workspace = true, default-features = false, features = ["apple", "cl
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
 kithara = { workspace = true, default-features = false, features = ["symphonia", "fdk-aac", "client-reqwest", "tls-rustls"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+kithara = { workspace = true, default-features = false, features = ["apple", "client-wreq"] }
+
+[build-dependencies]
+serde = { workspace = true }
+serde_yml = { workspace = true }
+
 [dev-dependencies]
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
+
 futures = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dev-dependencies]
+kithara-net = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
 
 # Dev-only kithara-net mirrors the per-target production backend so test
 # builds stay single-stack: macOS tests run wreq (matching the `apple`
@@ -91,13 +100,5 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 kithara-net = { workspace = true, default-features = false, features = ["client-wreq"] }
 
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dev-dependencies]
-kithara-net = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
-
-[build-dependencies]
-serde = { workspace = true }
-serde_yml = { workspace = true }
-
-[[bin]]
-name = "kithara"
-path = "src/main.rs"
+[lints]
+workspace = true

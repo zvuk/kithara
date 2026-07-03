@@ -5,10 +5,12 @@
 //! read loop, so the read contract (engine-aware blocking, finiteness checks,
 //! `Pending => re-park`) lives in exactly one place.
 
-use kithara_audio::{Audio, ReadOutcome};
 #[cfg(target_arch = "wasm32")]
-use kithara_platform::{thread, time::Duration};
-use kithara_stream::{Stream, StreamType};
+use kithara::platform::{thread, time::Duration};
+use kithara::{
+    audio::{Audio, ReadOutcome},
+    stream::{Stream, StreamType},
+};
 
 /// Default audio read buffer; large enough to keep syscall overhead low but
 /// small enough to exercise the pipeline in short bursts.

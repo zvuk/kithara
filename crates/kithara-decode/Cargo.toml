@@ -9,38 +9,8 @@ description = "Pluggable audio decode (Symphonia / Apple / Android) to PCM."
 keywords = ["audio", "decoder", "codec", "pcm", "hls"]
 categories = ["multimedia::audio"]
 
-[lints]
-workspace = true
-
-[dependencies]
-kithara-stream = { workspace = true, default-features = false }
-kithara-bufpool = { workspace = true }
-kithara-platform = { workspace = true }
-kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true }
-bon = { workspace = true }
-derive_more = { workspace = true }
-num-traits = { workspace = true }
-re_mp4 = { workspace = true }
-smallvec = { workspace = true }
-symphonia = { workspace = true, optional = true }
-symphonia-core = { workspace = true, optional = true }
-fdk-aac = { workspace = true, optional = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-hotpath = { workspace = true, optional = true }
-unimock = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
-
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-core-foundation = { workspace = true, optional = true }
-core-foundation-sys = { workspace = true, optional = true }
-
-[target.'cfg(target_os = "android")'.dependencies]
-jni = { workspace = true }
-ndk-context = { workspace = true }
+[package.metadata.cargo-machete]
+ignored = ["hotpath"]
 
 [features]
 # Default pulls in Symphonia + fdk-aac so `cargo build` on any platform
@@ -50,11 +20,7 @@ ndk-context = { workspace = true }
 # libfdk-aac (LGPL + patent constraints) keep `["symphonia"]` only.
 default = ["symphonia", "fdk-aac", "client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
-apple = [
-    "dep:core-foundation",
-    "dep:core-foundation-sys",
-    "dep:symphonia-core",
-]
+apple = ["dep:core-foundation", "dep:core-foundation-sys", "dep:symphonia-core"]
 # In-tree fdk-aac adapter needs symphonia-core macros (`codec_profile!`,
 # `support_audio_codec!`) which expand to `symphonia_core::*` paths.
 android = []
@@ -72,10 +38,41 @@ client-wreq = ["kithara-stream/client-wreq"]
 tls-rustls = ["kithara-stream/tls-rustls"]
 tls-native = ["kithara-stream/tls-native"]
 
+[dependencies]
+kithara-bufpool = { workspace = true }
+kithara-platform = { workspace = true }
+kithara-stream = { workspace = true, default-features = false }
+kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true }
+
+bon = { workspace = true }
+derive_more = { workspace = true }
+fdk-aac = { workspace = true, optional = true }
+hotpath = { workspace = true, optional = true }
+num-traits = { workspace = true }
+re_mp4 = { workspace = true }
+smallvec = { workspace = true }
+symphonia = { workspace = true, optional = true }
+symphonia-core = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+unimock = { workspace = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+core-foundation = { workspace = true, optional = true }
+core-foundation-sys = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { workspace = true }
+ndk-context = { workspace = true }
+
 [dev-dependencies]
 kithara-storage = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
 
-[package.metadata.cargo-machete]
-ignored = ["hotpath"]
+[lints]
+workspace = true

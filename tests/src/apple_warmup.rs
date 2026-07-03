@@ -42,8 +42,8 @@ const K_AUDIO_FORMAT_FLAG_IS_PACKED: u32 = 1 << 3;
 /// #[cfg(any(target_os = "macos", target_os = "ios"))]
 /// kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 /// ```
-pub fn warm_if_apple(backend: kithara_decode::DecoderBackend) {
-    if matches!(backend, kithara_decode::DecoderBackend::Apple) {
+pub fn warm_if_apple(backend: kithara::decode::DecoderBackend) {
+    if matches!(backend, kithara::decode::DecoderBackend::Apple) {
         ensure_apple_decoder_warm();
     }
 }

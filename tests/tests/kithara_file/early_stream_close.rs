@@ -10,6 +10,13 @@ use kithara::{
     assets::StoreOptions,
     events::{DownloaderEvent, Event, EventBus, EventReceiver, FileEvent},
     file::{File, FileConfig, FileSrc},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        flash::real_io,
+        time::{self, Duration, Instant},
+        tokio::task::spawn_blocking,
+    },
     stream::{
         Stream,
         dl::{Downloader, DownloaderConfig},
@@ -17,13 +24,6 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
-};
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    flash::real_io,
-    time::{self, Duration, Instant},
-    tokio::task::spawn_blocking,
 };
 
 struct Consts;
@@ -75,7 +75,7 @@ async fn wait_for_download_terminal(rx: &mut EventReceiver, within: Duration) ->
 /// bytes at 700KB — proof the on-demand resume path works.
 #[kithara::test(
     tokio,
-    tracing("kithara_file=debug,kithara_stream::writer=debug,kithara_storage=debug")
+    tracing("kithara_file=debug,kithara::stream::writer=debug,kithara_storage=debug")
 )]
 async fn file_stream_closes_early_seek_still_works() {
     let clean_temp_dir = clean_temp_dir();
@@ -203,7 +203,7 @@ async fn file_stream_closes_early_seek_still_works() {
 /// Phase 2: reopen same URL with same cache dir, seek to 700KB → on-demand Range.
 #[kithara::test(
     tokio,
-    tracing("kithara_file=debug,kithara_stream::writer=debug,kithara_storage=debug")
+    tracing("kithara_file=debug,kithara::stream::writer=debug,kithara_storage=debug")
 )]
 async fn partial_cache_resume_works() {
     let cache_dir = clean_temp_dir();

@@ -6,21 +6,25 @@ use std::{
     sync::Arc,
 };
 
-use kithara_assets::StoreOptions;
-use kithara_decode::DecoderBackend;
-use kithara_events::{AbrMode, AudioEvent, DownloaderEvent, Event, HlsEvent, RequestId};
+use kithara::{
+    assets::StoreOptions,
+    decode::DecoderBackend,
+    events::{AbrMode, AudioEvent, DownloaderEvent, Event, HlsEvent, RequestId},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{self, Duration, Instant, sleep},
+        tokio,
+        tokio::sync::broadcast::error::{RecvError, TryRecvError},
+    },
+    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
+};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
     offline::OfflineSession, temp_dir, waits::wait_for_loader_done,
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{self, Duration, Instant, sleep},
-};
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::probe::capture as probe_capture;
 use url::Url;
 
@@ -101,7 +105,7 @@ fn build_queue_with_tick(
     Arc<PlayerImpl>,
     Downloader,
     StoreOptions,
-    kithara_platform::tokio::task::JoinHandle<()>,
+    tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
@@ -111,7 +115,7 @@ fn build_queue_with_tick(
     let queue = Arc::new(Queue::new(
         QueueConfig::default().with_player(Arc::clone(&player)),
     ));
-    let tick_handle = kithara_platform::tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .max_concurrent(Consts::MAX_CONCURRENT)
@@ -214,10 +218,8 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
                     break;
                 }
                 Ok(_) => {}
-                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    continue;
-                }
-                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
             }
         }
     })
@@ -231,9 +233,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
                 pre_seek_enqueued.insert(request_id);
             }
             Ok(_) => {}
-            Err(kithara_platform::tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
-                continue;
-            }
+            Err(TryRecvError::Lagged(_)) => continue,
             Err(_) => break,
         }
     }
@@ -424,7 +424,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
 }
 
 async fn observe_post_seek(
-    rx: &mut kithara_events::EventReceiver,
+    rx: &mut kithara::events::EventReceiver,
     _seek_at: Instant,
     pre_seek_enqueued: &HashSet<RequestId>,
 ) -> PostSeekObservation {
@@ -485,10 +485,8 @@ async fn observe_post_seek(
                     }
                     _ => {}
                 },
-                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    continue;
-                }
-                Err(kithara_platform::tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
             }
 
             if obs.reader_seek.is_some()

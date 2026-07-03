@@ -1,9 +1,9 @@
 use std::{env, sync::Arc};
 
 use axum::{Router, routing::get};
-use kithara_platform::{
+use kithara::platform::{
     time::{Duration, sleep},
-    tokio::task::spawn,
+    tokio::task::{spawn, spawn_blocking},
 };
 use tower_http::cors::CorsLayer;
 use tracing::trace;
@@ -117,7 +117,7 @@ impl TestServerHelper {
         // encoder off the tokio worker thread.
         let cache_key = encoded_signal_cache_key(internal_kind, &token_with_ext);
         let state = Arc::clone(&self.state);
-        tokio::task::spawn_blocking(move || {
+        spawn_blocking(move || {
             if let Some(encoded) = encode_signal_payload(&request) {
                 state.insert_encoded_signal(cache_key, encoded);
             }

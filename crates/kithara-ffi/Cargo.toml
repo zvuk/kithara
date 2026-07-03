@@ -16,22 +16,6 @@ name = "uniffi-bindgen"
 path = "src/uniffi_bindgen.rs"
 required-features = ["uniffi-bindgen-cli"]
 
-[lints]
-workspace = true
-
-[dependencies]
-# Cross-platform deps (used by both the native UniFFI modules and `src/web`).
-# `kithara-play` is the canonical owner of the shared play types
-# (`PlayError`, `PlayerStatus`, `TimeRange`, …) that `core::types` mirrors,
-# so the cross-platform `AudioPlayer` facade resolves them from one crate on
-# both targets. The native arm pulls a host backend below; the wasm arm pulls
-# the web-audio backend in the wasm32 target block.
-kithara-platform = { workspace = true }
-kithara-events = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-
 # Native-only deps for the UniFFI surface (`src/{cipher,config,item,…}.rs`).
 # Moved to `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` so
 # wasm32 builds don't pull `uniffi` (Future + Send incompatible with wasm)
@@ -113,6 +97,19 @@ dev = []
 # release AAR.
 test = ["kithara/probe", "kithara-play/probe", "dep:cpal"]
 
+[dependencies]
+kithara-events = { workspace = true }
+# Cross-platform deps (used by both the native UniFFI modules and `src/web`).
+# `kithara-play` is the canonical owner of the shared play types
+# (`PlayError`, `PlayerStatus`, `TimeRange`, …) that `core::types` mirrors,
+# so the cross-platform `AudioPlayer` facade resolves them from one crate on
+# both targets. The native arm pulls a host backend below; the wasm arm pulls
+# the web-audio backend in the wasm32 target block.
+kithara-platform = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # `default-features = false` on kithara/kithara-queue: their defaults pull
 # `symphonia`, which would leak into apple/android device builds (compiled
@@ -120,29 +117,53 @@ test = ["kithara/probe", "kithara-play/probe", "dep:cpal"]
 # crate-local `symphonia` feature (in the default set, off on device).
 kithara = { workspace = true, default-features = false, features = ["file", "hls"] }
 kithara-drm = { workspace = true }
-kithara-queue = { workspace = true, default-features = false, features = ["backend-cpal"] }
 # Direct dep so the cross-platform `core::types` / `core::item` can resolve
 # the shared play types from `kithara_play` on native too (the wasm arm pulls
 # the same crate with the web-audio backend). The `probe` feature is gated
 # behind the crate's own `test` feature below.
 kithara-play = { workspace = true, default-features = false, features = ["backend-cpal"] }
+kithara-queue = { workspace = true, default-features = false, features = ["backend-cpal"] }
+
 bytes = { workspace = true }
-dashmap = { workspace = true }
-rand = { workspace = true }
-unimock = { workspace = true }
-url = { workspace = true }
-uuid = { workspace = true }
-uniffi = { workspace = true, optional = true, default-features = false }
 # Pulled in by firewheel-cpal transitively; surfaced as a direct dep under
 # `test` so the probe JNI can enumerate host/device configs without
 # touching the production firewheel backend types.
 cpal = { workspace = true, optional = true }
+dashmap = { workspace = true }
+rand = { workspace = true }
+uniffi = { workspace = true, optional = true, default-features = false }
+unimock = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-futures = { workspace = true }
-kithara = { workspace = true, features = ["probe"] }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+kithara-abr = { workspace = true, default-features = false }
+kithara-drm = { workspace = true }
+# The wasm worker reaches the shared DRM key-options, ABR-mode, and
+# key-processor types directly (native reaches the same types through the
+# `kithara` facade and a native-only `kithara-drm` dep).
+kithara-hls = { workspace = true, default-features = false }
+kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen", "symphonia"] }
+kithara-queue = { workspace = true, default-features = false, features = ["backend-web-audio", "symphonia"] }
+kithara-test-macros = { workspace = true }
+
+bytes = { workspace = true }
+console_error_panic_hook = { workspace = true }
+js-sys = { workspace = true }
+num-traits = { workspace = true }
+# Wraps the `!Send` `js_sys::Function` behind a `Send + Sync` guard (with a
+# runtime same-thread assertion) so the JS-backed observer impls satisfy the
+# `core::observer` traits' real `Send + Sync` supertraits on wasm.
+send_wrapper = { workspace = true }
+tracing-log = { workspace = true }
+tracing-wasm = { workspace = true }
+# `core::item` derives the per-item `uuid_i64` handle via UUIDv5 (pure SHA-1,
+# no RNG) — the workspace dep is `v5`-only, so no `getrandom` wasm backend is
+# pulled.
+uuid = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+web-sys = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true }
@@ -150,30 +171,11 @@ ndk-context = { workspace = true }
 rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-kithara-test-macros = { workspace = true }
-kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen", "symphonia"] }
-kithara-queue = { workspace = true, default-features = false, features = ["backend-web-audio", "symphonia"] }
-# The wasm worker reaches the shared DRM key-options, ABR-mode, and
-# key-processor types directly (native reaches the same types through the
-# `kithara` facade and a native-only `kithara-drm` dep).
-kithara-hls = { workspace = true, default-features = false }
-kithara-abr = { workspace = true, default-features = false }
-kithara-drm = { workspace = true }
-bytes = { workspace = true }
-console_error_panic_hook = { workspace = true }
-js-sys = { workspace = true }
-num-traits = { workspace = true }
-# `core::item` derives the per-item `uuid_i64` handle via UUIDv5 (pure SHA-1,
-# no RNG) — the workspace dep is `v5`-only, so no `getrandom` wasm backend is
-# pulled.
-uuid = { workspace = true }
-# Wraps the `!Send` `js_sys::Function` behind a `Send + Sync` guard (with a
-# runtime same-thread assertion) so the JS-backed observer impls satisfy the
-# `core::observer` traits' real `Send + Sync` supertraits on wasm.
-send_wrapper = { workspace = true }
-tracing-log = { workspace = true }
-tracing-wasm = { workspace = true }
-wasm-bindgen = { workspace = true }
-wasm-bindgen-futures = { workspace = true }
-web-sys = { workspace = true }
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara = { workspace = true, features = ["probe"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
+
+futures = { workspace = true }
+
+[lints]
+workspace = true

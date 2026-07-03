@@ -1,8 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use bytes::Bytes;
+use kithara::drm::UniqueBinaryCipher;
 use kithara_app::baked::build_baked_drm_registry;
-use kithara_drm::UniqueBinaryCipher;
 use kithara_integration_tests::kithara;
 use url::Url;
 
