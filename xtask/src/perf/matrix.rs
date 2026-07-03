@@ -67,7 +67,11 @@ pub(crate) fn run(params: &MatrixParams) -> Result<()> {
             println!("[perf matrix] {lane_name} rep{repeat}: running full suite");
             let status = cmd.status().context("spawn nextest")?;
             let duration_secs = clock.elapsed().as_secs_f64();
-            let junit_src = target_dir.join("nextest").join("perf").join("junit.xml");
+            // Nextest pins junit to workspace target, not CARGO_TARGET_DIR/--target-dir; sequential lanes copy.
+            let junit_src = Path::new("target")
+                .join("nextest")
+                .join("perf")
+                .join("junit.xml");
             if !junit_src.exists() {
                 eprintln!(
                     "[perf matrix] {lane_name}: no junit at {} - lane skipped (build failure?)",
