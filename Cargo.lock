@@ -11463,6 +11463,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
+ "roxmltree",
  "rustdoc-types",
  "serde",
  "serde_json",
