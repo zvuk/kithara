@@ -372,18 +372,14 @@ class PlayerViewModelBase: ObservableObject {
 
     func onSeekEnded(_ value: TimeInterval) {
         currentTime = value
-        player.seek(
-            to: value,
-            tolerance: nil,
-            completionHandler: SeekHandler { [weak self] finished in
-                DispatchQueue.main.async {
-                    self?.isSeeking = false
-                    if !finished {
-                        self?.errorMessage = "Seek failed"
-                    }
+        player.seek(to: value, tolerance: nil) { [weak self] finished in
+            DispatchQueue.main.async {
+                self?.isSeeking = false
+                if !finished {
+                    self?.errorMessage = "Seek failed"
                 }
             }
-        )
+        }
     }
 
     // MARK: - Helpers used by both subclasses
@@ -422,20 +418,6 @@ class PlayerViewModelBase: ObservableObject {
     func trackLabel(_ entryId: TrackId) -> String {
         let name = playlist.first(where: { $0.id == entryId })?.name ?? "unknown"
         return "[\(name)]"
-    }
-}
-
-// MARK: - SeekCallback implementation
-
-final class SeekHandler: SeekCallback, @unchecked Sendable {
-    private let handler: (Bool) -> Void
-
-    init(handler: @escaping (Bool) -> Void) {
-        self.handler = handler
-    }
-
-    func onComplete(finished: Bool) {
-        handler(finished)
     }
 }
 
