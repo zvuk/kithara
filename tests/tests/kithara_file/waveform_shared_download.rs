@@ -18,12 +18,12 @@ use kithara::{
     assets::AssetStoreBuilder,
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     file::{File, FileConfig, FileSrc},
+    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     prelude::ResourceConfig,
     stream::Stream,
 };
 use kithara_app::waveform::TrackAnalysisRunner;
 use kithara_integration_tests::{TestHttpServer, create_test_wav};
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 
 const WAVEFORM_BUCKETS: usize = 100;
 

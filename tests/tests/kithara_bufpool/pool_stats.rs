@@ -1,6 +1,5 @@
-use kithara_bufpool::*;
+use kithara::{self, bufpool::*};
 use kithara_integration_tests::bufpool_ext::PoolShardTestExt;
-use kithara_test_utils::kithara;
 
 #[kithara::test]
 fn test_pool_stats_tracks_hits() {

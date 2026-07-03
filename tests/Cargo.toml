@@ -39,7 +39,7 @@ selenium = []
 # waits collapse to virtual time. Off by default; enabling it compiles every
 # path-dep against the virtual `kithara_platform::time::Instant`. Used by the
 # phase-continuity equivalence proof.
-flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
+flash = ["kithara/flash", "kithara-test-utils/flash"]
 # Run integration tests with the native Apple HTTP backend (`NSURLSession`).
 # This is separate from `apple`, which only brings Apple decode/audio variants
 # into scope for tests.
@@ -47,20 +47,7 @@ apple-net = ["kithara/apple-net"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
-kithara = { workspace = true, features = ["full", "probe"] }
-kithara-abr = { workspace = true, features = ["probe"] }
-kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
-kithara-assets = { workspace = true, features = ["probe"] }
-kithara-audio = { workspace = true, features = ["probe", "symphonia"] }
-kithara-bufpool = { workspace = true }
-kithara-drm = { workspace = true }
-kithara-events = { workspace = true }
-kithara-hls = { workspace = true, features = ["probe"] }
-kithara-net = { workspace = true, features = ["mock", "probe"] }
-kithara-platform = { workspace = true }
-kithara-queue = { workspace = true, features = ["backend-cpal", "probe"] }
-kithara-storage = { workspace = true }
-kithara-stream = { workspace = true, features = ["probe"] }
+kithara = { workspace = true, features = ["full", "queue", "probe", "mock", "symphonia"] }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 # Crypto (for HLS encryption tests)
@@ -97,6 +84,9 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
+kithara = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
+
 # --- Apple hardware backend (macOS/iOS only) ---
 # Forwarded so `DecoderBackend::Apple` is in scope for tests that
 # parametrise over backends. The variant is `#[cfg]`-gated on
@@ -104,22 +94,16 @@ uuid = { workspace = true }
 # the test crate cannot reference it.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 kithara = { workspace = true, features = ["apple", "client-wreq"] }
-kithara-audio = { workspace = true, features = ["apple"] }
-kithara-decode = { workspace = true, features = ["apple"] }
-kithara-play = { workspace = true, features = ["apple"] }
 
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara = { workspace = true }
+kithara = { workspace = true, features = ["backend-cpal", "fdk-aac", "tokio-net", "tokio-rt-multi-thread"] }
+kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
 # fdk-aac пришёл из kithara-decode defaults до Phase 2 (workspace
 # default-features=false). HE-AAC v2 fMP4 фикстуры в rapid-scrub /
 # stress-seek тестах декодятся через symphonia path, и без fdk-aac
 # отдается LC-only — добавляем явно.
-kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia", "fdk-aac"] }
 kithara-encode = { workspace = true }
-kithara-file = { workspace = true }
-kithara-platform = { workspace = true, features = ["tokio-net"] }
-kithara-play = { workspace = true, features = ["backend-cpal"] }
 
 assert_no_alloc = { workspace = true }
 axum = { workspace = true }
@@ -156,13 +140,14 @@ unimock = { workspace = true }
 
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-kithara-test-macros = { workspace = true }
+kithara = { workspace = true, features = ["backend-web-audio", "client-reqwest"] }
 
 console_error_panic_hook = { workspace = true }
 gloo-timers = { workspace = true }
 
 # WASM-specific
 js-sys = { workspace = true }
+reqwest = { workspace = true }
 tracing-wasm = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
@@ -171,8 +156,7 @@ web-sys = { workspace = true }
 
 # --- Android hardware backend (android only) ---
 [target.'cfg(target_os = "android")'.dependencies]
-kithara-audio = { workspace = true, features = ["android"] }
-kithara-decode = { workspace = true, features = ["android"] }
+kithara = { workspace = true, features = ["android", "client-wreq"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }

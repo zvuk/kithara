@@ -5,9 +5,11 @@
 use std::path::Path;
 
 use bytes::Bytes;
-use kithara::assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, WriteSide};
+use kithara::{
+    assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, WriteSide},
+    platform::{CancelToken, time::Duration},
+};
 use kithara_integration_tests::{cancel_token, temp_dir};
-use kithara_platform::{CancelToken, time::Duration};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {

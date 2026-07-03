@@ -10,12 +10,12 @@ use std::{
 use kithara::{
     assets::StoreOptions,
     file::{File, FileConfig},
+    platform::{time::Duration, tokio::task::spawn_blocking},
     stream::{AudioCodec, ContainerFormat, Stream},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
 };
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use url::Url;
 
 struct Consts;

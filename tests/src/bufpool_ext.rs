@@ -1,4 +1,4 @@
-use kithara_bufpool::{Pool, Reuse};
+use kithara::bufpool::{Pool, Reuse};
 
 pub trait PoolShardTestExt {
     /// Instance-form of [`Pool::shard_index`] so tests holding a `&Pool`

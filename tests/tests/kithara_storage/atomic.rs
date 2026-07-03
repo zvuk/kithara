@@ -1,15 +1,15 @@
 #[cfg(target_arch = "wasm32")]
+use kithara::platform::thread;
+#[cfg(target_arch = "wasm32")]
 use kithara::storage::MemResource;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::storage::{MmapOptions, MmapResource, Resource};
 use kithara::{
     bufpool::BytePool,
+    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     storage::{ResourceRead, StorageError, StorageResource},
 };
 use kithara_integration_tests::{TestTempDir, cancel_token, cancel_token_cancelled, temp_dir};
-#[cfg(target_arch = "wasm32")]
-use kithara_platform::thread;
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 
 #[cfg(not(target_arch = "wasm32"))]
 type TestResource = MmapResource;

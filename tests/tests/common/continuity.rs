@@ -1,9 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 use std::fmt;
 
-use kithara::events::{AudioEvent, Event, EventReceiver};
+use kithara::{
+    events::{AudioEvent, Event, EventReceiver},
+    platform::time::{Duration, Instant},
+};
 use kithara_integration_tests::{flash_pace::virtual_pace, offline::OfflinePlayer};
-use kithara_platform::time::{Duration, Instant};
 pub(crate) const CONTINUITY_BLOCK_FRAMES: usize = 512;
 pub(crate) const CONTINUITY_SAMPLE_RATE: u32 = 44_100;
 const ACTIVE_SAMPLE_THRESHOLD: f32 = 0.001;

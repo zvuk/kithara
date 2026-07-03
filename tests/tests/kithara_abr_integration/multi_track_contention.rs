@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
-use kithara_abr::{AbrController, AbrMode, AbrSettings, AbrState, ThroughputEstimator};
-use kithara_events::{BandwidthSource, VariantDuration, VariantIndex, VariantInfo};
-use kithara_platform::{CancelToken, time::Duration};
-use kithara_test_utils::kithara;
+use kithara::{
+    self,
+    abr::{AbrController, AbrMode, AbrSettings, AbrState, ThroughputEstimator},
+    events::{BandwidthSource, VariantDuration, VariantIndex, VariantInfo},
+    platform::{CancelToken, time::Duration},
+};
 
 fn settings_fast() -> AbrSettings {
     AbrSettings::builder()
@@ -18,7 +20,7 @@ struct TestPeer {
     variants: Vec<VariantInfo>,
 }
 
-impl kithara_abr::Abr for TestPeer {
+impl kithara::abr::Abr for TestPeer {
     fn variants(&self) -> Vec<VariantInfo> {
         self.variants.clone()
     }
@@ -42,9 +44,9 @@ fn variants(bitrates: &[u64]) -> Vec<VariantInfo> {
         .collect()
 }
 
-fn new_peer(bitrates: &[u64]) -> (Arc<AbrState>, Arc<dyn kithara_abr::Abr>) {
+fn new_peer(bitrates: &[u64]) -> (Arc<AbrState>, Arc<dyn kithara::abr::Abr>) {
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-    let peer: Arc<dyn kithara_abr::Abr> = Arc::new(TestPeer {
+    let peer: Arc<dyn kithara::abr::Abr> = Arc::new(TestPeer {
         state: Arc::clone(&state),
         variants: variants(bitrates),
     });

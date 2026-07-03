@@ -1,4 +1,4 @@
-use kithara_assets::{AssetResourceState, AssetStore, ResourceKey};
+use kithara::assets::{AssetResourceState, AssetStore, ResourceKey};
 
 /// Test-only convenience over the public [`AssetStore::resource_state`]:
 /// "is there a committed resource for this key?". Production code inspects

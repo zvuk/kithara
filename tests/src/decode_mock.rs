@@ -6,12 +6,14 @@ use std::{
     },
 };
 
-use kithara_bufpool::PcmPool;
-use kithara_decode::{
-    DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, DecoderTrackInfo, PcmChunk,
-    PcmMeta, PcmSpec, mock::DecoderMock,
+use kithara::{
+    bufpool::PcmPool,
+    decode::{
+        DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, DecoderTrackInfo, PcmChunk,
+        PcmMeta, PcmSpec, mock::DecoderMock,
+    },
+    platform::time::Duration,
 };
-use kithara_platform::time::Duration;
 use unimock::{MockFn, Unimock, matching};
 
 /// Minimal mutex wrapper with infallible `lock()` for tests.
@@ -236,7 +238,7 @@ where
                     landed_at: pos,
                     landed_frame: 0,
                     landed_byte: None,
-                    preroll: kithara_stream::PrerollHint::NotNeeded,
+                    preroll: kithara::stream::PrerollHint::NotNeeded,
                 })
             }))
             .at_least_times(0),

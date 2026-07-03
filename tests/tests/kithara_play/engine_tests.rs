@@ -1,11 +1,13 @@
 use std::sync::{Mutex as StdMutex, OnceLock};
 
-use kithara_events::EventBus;
-use kithara_play::{
-    Engine, EngineConfig, EngineEvent, EngineImpl, PlayError, SessionDuckingMode, SlotId,
-    traits::dj::crossfade::CrossfadeConfig,
+use kithara::{
+    self,
+    events::EventBus,
+    play::{
+        Engine, EngineConfig, EngineEvent, EngineImpl, PlayError, SessionDuckingMode, SlotId,
+        traits::dj::crossfade::CrossfadeConfig,
+    },
 };
-use kithara_test_utils::kithara;
 
 fn slot_id(value: u64) -> SlotId {
     SlotId::new(value)
@@ -50,7 +52,7 @@ fn engine_config_builder() {
         .max_slots(8)
         .sample_rate(48000)
         .channels(1)
-        .eq_layout(kithara_audio::generate_log_spaced_bands(5))
+        .eq_layout(kithara::audio::generate_log_spaced_bands(5))
         .build();
     assert_eq!(config.max_slots, 8);
     assert_eq!(config.sample_rate, 48000);
@@ -111,7 +113,7 @@ fn engine_set_master_volume_emits_event() {
     engine.set_master_volume(0.75);
     let event = rx.try_recv().unwrap();
     assert!(
-        matches!(event, kithara_events::Event::Engine(EngineEvent::MasterVolumeChanged { volume }) if (volume - 0.75).abs() < f32::EPSILON)
+        matches!(event, kithara::events::Event::Engine(EngineEvent::MasterVolumeChanged { volume }) if (volume - 0.75).abs() < f32::EPSILON)
     );
 }
 

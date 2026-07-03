@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use kithara_platform::{sync::Notify, tokio::sync::watch};
+use kithara::platform::{sync::Notify, tokio::sync::watch};
 use moka::sync::Cache;
 use uuid::Uuid;
 

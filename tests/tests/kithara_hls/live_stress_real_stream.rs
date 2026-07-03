@@ -8,25 +8,25 @@ use std::{fs, path::Path};
 
 #[cfg(target_arch = "wasm32")]
 use gloo_timers::future::TimeoutFuture;
+#[cfg(target_arch = "wasm32")]
+use kithara::platform::time;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::platform::{thread, tokio::task::spawn_blocking};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::{DecoderBackend, PcmChunk},
     events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
     hls::{Hls, HlsConfig},
+    platform::{
+        time::Duration,
+        tokio,
+        tokio::{sync::broadcast::error::RecvError, task::spawn},
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64, abr_fast, auto, temp_dir,
-};
-#[cfg(target_arch = "wasm32")]
-use kithara_platform::time;
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::{thread, tokio::task::spawn_blocking};
-use kithara_platform::{
-    time::Duration,
-    tokio,
-    tokio::{sync::broadcast::error::RecvError, task::spawn},
 };
 use tracing::info;
 
@@ -388,7 +388,7 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
     timeout(Consts::browser_timeout(30, 120)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
     tracing(
-        "kithara_audio=info,kithara_audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
+        "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
     )
 )]
 #[case::hls_sw("hls/master.m3u8", "HLS", DecoderBackend::Symphonia)]
@@ -406,7 +406,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     #[case] label: &str,
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
-    _abr_fast: kithara_abr::AbrSettings,
+    _abr_fast: kithara::abr::AbrSettings,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
@@ -638,7 +638,7 @@ async fn live_real_stream_fixed_seek_window_regression(
     #[case] path: &str,
     #[case] label: &str,
     temp_dir: TestTempDir,
-    _abr_fast: kithara_abr::AbrSettings,
+    _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let mut audio = build_live_audio(&server, path, 24, &temp_dir).await;
@@ -691,7 +691,7 @@ async fn live_real_stream_random_seek_prefix_regression(
     #[case] path: &str,
     #[case] label: &str,
     temp_dir: TestTempDir,
-    _abr_fast: kithara_abr::AbrSettings,
+    _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let mut audio = build_live_audio(&server, path, 24, &temp_dir).await;
@@ -733,7 +733,7 @@ async fn live_real_stream_random_seek_prefix_regression(
     timeout(Duration::from_secs(90)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
     tracing(
-        "kithara_audio=info,kithara_audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
+        "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
     )
 )]
 #[case::hls("hls/master.m3u8", "HLS")]
@@ -830,7 +830,7 @@ async fn live_stress_real_stream_seek_read_cache(
     #[case] label: &str,
     #[case] ephemeral: bool,
     temp_dir: TestTempDir,
-    _abr_fast: kithara_abr::AbrSettings,
+    _abr_fast: kithara::abr::AbrSettings,
 ) {
     #[cfg(target_arch = "wasm32")]
     {

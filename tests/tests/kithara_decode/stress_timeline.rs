@@ -1,8 +1,10 @@
 use std::io::Cursor;
 
-use kithara::decode::{DecoderConfig, DecoderFactory};
+use kithara::{
+    decode::{DecoderConfig, DecoderFactory},
+    platform::time::Duration,
+};
 use kithara_integration_tests::{Xorshift64, wav::create_test_wav};
-use kithara_platform::time::Duration;
 
 use crate::common::test_defaults::SawWav;
 
@@ -40,9 +42,9 @@ fn stress_seeks_preserve_timeline_integrity() {
 
         for j in 0..CHUNKS_PER_BURST {
             let chunk = match decoder.next_chunk() {
-                Ok(kithara_decode::DecoderChunkOutcome::Chunk(c)) => c,
-                Ok(kithara_decode::DecoderChunkOutcome::Pending(_)) => continue,
-                Ok(kithara_decode::DecoderChunkOutcome::Eof) => break,
+                Ok(kithara::decode::DecoderChunkOutcome::Chunk(c)) => c,
+                Ok(kithara::decode::DecoderChunkOutcome::Pending(_)) => continue,
+                Ok(kithara::decode::DecoderChunkOutcome::Eof) => break,
                 Err(e) => panic!("next_chunk failed at seek #{i}, burst #{j}: {e}"),
             };
 

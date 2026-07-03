@@ -10,21 +10,23 @@
 use std::{num::NonZeroU32, sync::Arc};
 
 use firewheel::node::ProcBuffers;
-use kithara_bufpool::PcmPool;
-use kithara_decode::PcmSpec;
-use kithara_integration_tests::audio_mock::TestPcmReader;
-use kithara_platform::sync::Mutex as PlatformMutex;
-use kithara_play::{
-    Resource,
-    impls::{
-        player_notification::PlayerNotification,
-        player_processor::{PlayerCmd, PlayerNodeProcessor},
-        player_resource::PlayerResource,
-        player_track::{TrackState, TrackTransition},
-        shared_player_state::SharedPlayerState,
+use kithara::{
+    self,
+    bufpool::PcmPool,
+    decode::PcmSpec,
+    platform::sync::Mutex as PlatformMutex,
+    play::{
+        Resource,
+        impls::{
+            player_notification::PlayerNotification,
+            player_processor::{PlayerCmd, PlayerNodeProcessor},
+            player_resource::PlayerResource,
+            player_track::{TrackState, TrackTransition},
+            shared_player_state::SharedPlayerState,
+        },
     },
 };
-use kithara_test_utils::kithara;
+use kithara_integration_tests::audio_mock::TestPcmReader;
 use ringbuf::{
     HeapProd, HeapRb,
     traits::{Producer, Split},

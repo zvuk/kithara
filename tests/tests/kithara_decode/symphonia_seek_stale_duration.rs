@@ -2,8 +2,10 @@
 
 use std::io::Cursor;
 
-use kithara::decode::{DecoderConfig, DecoderFactory};
-use kithara_platform::time::Duration;
+use kithara::{
+    decode::{DecoderConfig, DecoderFactory},
+    platform::time::Duration,
+};
 
 struct Consts;
 impl Consts {

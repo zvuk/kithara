@@ -1,7 +1,9 @@
+use kithara::{
+    self,
+    stream::{AudioCodec, ContainerFormat},
+};
 use kithara_encode::BytesEncodeTarget;
 use kithara_integration_tests::encode_ext::BytesEncodeTargetExt;
-use kithara_stream::{AudioCodec, ContainerFormat};
-use kithara_test_utils::kithara;
 
 #[kithara::test]
 fn bytes_target_maps_to_expected_media_info() {

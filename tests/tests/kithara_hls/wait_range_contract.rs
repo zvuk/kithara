@@ -6,13 +6,13 @@ use std::{
 use kithara::{
     assets::StoreOptions,
     hls::{AbrMode, Hls, HlsConfig},
+    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{
     TestTempDir, Xorshift64,
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 
 struct Consts;
 impl Consts {

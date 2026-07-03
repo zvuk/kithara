@@ -5,7 +5,7 @@ use aes::{
     cipher::{Array, BlockCipherDecrypt, KeyInit},
 };
 use bytes::Bytes;
-use kithara_drm::UniqueBinaryCipher;
+use kithara::drm::UniqueBinaryCipher;
 use kithara_integration_tests::kithara;
 use reqwest::Client;
 

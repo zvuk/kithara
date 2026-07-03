@@ -99,7 +99,7 @@ pub(crate) mod phase_oracle {
 
     #[cfg(test)]
     mod tests {
-        use kithara_test_utils::kithara;
+        use kithara;
 
         use super::*;
 
@@ -182,18 +182,16 @@ pub(crate) mod phase_oracle {
 pub(crate) mod params {
     use kithara::{
         assets::StoreOptions,
-        audio::Audio,
+        audio::{Audio, AudioConfig},
         decode::DecoderBackend,
         hls::{AbrMode, Hls, HlsConfig},
-        stream::Stream,
+        platform::CancelToken,
+        stream::{AudioCodec, Stream},
     };
-    use kithara_audio::AudioConfig;
     use kithara_integration_tests::{
         HlsFixtureBuilder,
         fixture_protocol::{DelayRule, PackagedSignal},
     };
-    use kithara_platform::CancelToken;
-    use kithara_stream::AudioCodec;
 
     use super::Consts;
 
@@ -299,7 +297,7 @@ pub(crate) mod counters {
         path::Path,
     };
 
-    use kithara_platform::time::Instant;
+    use kithara::platform::time::Instant;
     use kithara_test_utils::probe::capture::{ProbeEvent, Recorder};
 
     /// One `dispatch` USDT event lifted into typed form.

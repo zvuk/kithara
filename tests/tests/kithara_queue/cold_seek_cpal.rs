@@ -2,18 +2,20 @@
 
 use std::sync::Arc;
 
-use kithara_assets::StoreOptions;
-use kithara_decode::DecoderBackend;
-use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_integration_tests::{kithara, temp_dir, waits::wait_for_position_at_least};
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken, time,
-    time::{Duration, Instant, timeout},
+use kithara::{
+    assets::StoreOptions,
+    decode::DecoderBackend,
+    events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken, time,
+        time::{Duration, Instant, timeout},
+    },
+    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
+use kithara_integration_tests::{kithara, temp_dir, waits::wait_for_position_at_least};
 
 fn install_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
@@ -77,7 +79,7 @@ async fn wait_for_status(
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 #[ignore = "real network + real cpal; run manually: \
     cargo test --test suite_e2e \
-    kithara_queue::cold_seek_cpal::cpal_cold_seek_silvercomet_hls \
+    kithara::queue::cold_seek_cpal::cpal_cold_seek_silvercomet_hls \
     -- --ignored --nocapture --test-threads=1"]
 async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]

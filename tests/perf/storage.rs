@@ -3,8 +3,10 @@
 use std::io::Write;
 
 use hotpath::HotpathGuardBuilder;
-use kithara::storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
-use kithara_platform::CancelToken;
+use kithara::{
+    platform::CancelToken,
+    storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt},
+};
 use tempfile::NamedTempFile;
 
 /// Helper to create test storage with data.

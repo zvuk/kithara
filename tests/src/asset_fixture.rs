@@ -2,8 +2,10 @@
 
 use std::collections::HashSet;
 
-use kithara_assets::{Assets, AssetsResult, BytePool, index::PinsIndex as InnerPinsIndex};
-use kithara_platform::CancelToken;
+use kithara::{
+    assets::{Assets, AssetsResult, BytePool, index::PinsIndex as InnerPinsIndex},
+    platform::CancelToken,
+};
 
 /// Test-only handle for interacting with the persisted pins index.
 ///

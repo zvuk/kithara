@@ -2,23 +2,25 @@
 
 use std::sync::Arc;
 
-use kithara_assets::StoreOptions;
-use kithara_events::{AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
+use kithara::{
+    assets::StoreOptions,
+    events::{AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{Duration, Instant, sleep, timeout},
+        tokio,
+        tokio::sync::broadcast::error::RecvError,
+    },
+    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
+};
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
     fixture_protocol::DelayRule, kithara, offline::OfflineSession, temp_dir,
     waits::wait_for_position_event,
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, Instant, sleep, timeout},
-    tokio,
-    tokio::sync::broadcast::error::RecvError,
-};
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 
 fn install_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};

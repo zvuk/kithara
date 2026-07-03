@@ -4,12 +4,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use kithara::{
-    drm::{DecryptContext, aes128_cbc_process_chunk},
+    drm::{DecryptContext, KeyRequest, KeyRequestFactory, aes128_cbc_process_chunk},
     hls::{HlsError, HlsResult, KeyProcessorRegistry, KeyProcessorRule},
+    platform::time::Duration,
 };
-use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_integration_tests::{hls_fixture::*, hls_server::*};
-use kithara_platform::time::Duration;
 use url::Url;
 
 fn registry_for_host(host: &str, processor: kithara::hls::KeyProcessor) -> KeyProcessorRegistry {

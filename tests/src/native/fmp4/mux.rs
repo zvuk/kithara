@@ -1,7 +1,7 @@
 use std::{borrow::Cow, sync::Arc};
 
+use kithara::stream::AudioCodec;
 use kithara_encode::{EncodedAccessUnit, EncodedTrack};
-use kithara_stream::AudioCodec;
 use thiserror::Error;
 
 use crate::{
@@ -491,9 +491,11 @@ fn push_identity_matrix(buf: &mut Mp4Bytes) {
 
 #[cfg(test)]
 mod tests {
+    use kithara::{
+        self,
+        stream::{ContainerFormat, MediaInfo},
+    };
     use kithara_encode::{EncodedAccessUnit, EncodedTrack};
-    use kithara_stream::{ContainerFormat, MediaInfo};
-    use kithara_test_utils::kithara;
 
     use super::*;
 

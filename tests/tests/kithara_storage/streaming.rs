@@ -8,14 +8,16 @@ use kithara::storage::MemResource;
 use kithara::storage::Resource;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::storage::{MmapOptions, MmapResource};
-use kithara::storage::{ResourceRead, ResourceStatus, StorageError, StorageResource, WaitOutcome};
+use kithara::{
+    platform::{
+        CancelToken, thread,
+        time::{Duration, Instant},
+    },
+    storage::{ResourceRead, ResourceStatus, StorageError, StorageResource, WaitOutcome},
+};
 #[cfg(target_arch = "wasm32")]
 use kithara_integration_tests::storage_ext::mem_resource_with_bytes;
 use kithara_integration_tests::{TestTempDir, cancel_token, temp_dir};
-use kithara_platform::{
-    CancelToken, thread,
-    time::{Duration, Instant},
-};
 
 #[cfg(not(target_arch = "wasm32"))]
 type TestResource = MmapResource;

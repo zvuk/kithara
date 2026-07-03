@@ -2,7 +2,7 @@
 //!
 //! This is a test-only firewheel `AudioBackend` plus a per-instance
 //! [`OfflineSession`] that drives the audio graph without touching real
-//! hardware. Hosts wire it into [`kithara_play::EngineConfig::session`]
+//! hardware. Hosts wire it into [`kithara::play::EngineConfig::session`]
 //! so tests can render samples deterministically.
 
 pub mod backend;

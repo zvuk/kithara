@@ -1,13 +1,12 @@
 use std::{io::Cursor, num::NonZeroU32};
 
-use kithara::{decode::probe_mp4_gapless, platform::time::Duration};
+use kithara::{decode::probe_mp4_gapless, platform::time::Duration, stream::AudioCodec};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
 };
-use kithara_stream::AudioCodec;
 use reqwest::Client;
 
 use crate::gapless_common::{

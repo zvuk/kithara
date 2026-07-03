@@ -1,6 +1,8 @@
-use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-use kithara_platform::time::Duration;
-use kithara_test_utils::kithara;
+use kithara::{
+    self,
+    abr::{AbrMode, AbrReason, AbrState, VariantIndex},
+    platform::time::Duration,
+};
 
 fn fresh_state(initial: usize) -> AbrState {
     AbrState::new(AbrMode::Auto(Some(VariantIndex::new(initial))))

@@ -1,7 +1,9 @@
+use kithara::{
+    self,
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
+};
 use kithara_encode::{EncoderFactory, PackagedEncodeRequest};
 use kithara_integration_tests::encode_test_pcm::SawtoothPcmFixture;
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
-use kithara_test_utils::kithara;
 
 #[kithara::test]
 fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {

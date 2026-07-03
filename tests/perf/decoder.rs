@@ -3,9 +3,11 @@
 use std::io::Cursor;
 
 use hotpath::HotpathGuardBuilder;
-use kithara::decode::{Decoder, DecoderConfig, DecoderFactory, PcmChunk};
+use kithara::{
+    decode::{Decoder, DecoderConfig, DecoderFactory, PcmChunk},
+    platform::time::Instant,
+};
 use kithara_integration_tests::create_test_wav;
-use kithara_platform::time::Instant;
 
 fn create_wav_decoder(frames: usize) -> Box<dyn Decoder> {
     let wav_data = create_test_wav(frames, 44100, 2);

@@ -3,25 +3,27 @@
 
 use std::{fmt::Write, sync::Arc};
 
+use kithara::{
+    assets::{FlushHub, FlushPolicy, StoreOptions},
+    decode::DecoderBackend,
+    events::AbrMode,
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{Duration, sleep},
+        tokio,
+    },
+    play::{PlayerConfig, PlayerImpl},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::{
+        AudioCodec,
+        dl::{Downloader, DownloaderConfig},
+    },
+};
 use kithara_app::{config::AppConfig, sources::build_source};
-use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
-use kithara_decode::DecoderBackend;
-use kithara_events::AbrMode;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::EncryptionRequest, kithara,
     offline::OfflineSession, temp_dir,
-};
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep},
-    tokio,
-};
-use kithara_play::{PlayerConfig, PlayerImpl};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::{
-    AudioCodec,
-    dl::{Downloader, DownloaderConfig},
 };
 use url::Url;
 
@@ -405,7 +407,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
             .build(),
     );
     let store = StoreOptions::new(temp.path());
-    let cfg = kithara_play::ResourceConfig::for_src(spec.url.as_str())
+    let cfg = kithara::play::ResourceConfig::for_src(spec.url.as_str())
         .expect("valid track URL")
         .downloader(downloader.clone())
         .store(store)
@@ -448,7 +450,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     let outcome = queue
         .seek(target)
         .unwrap_or_else(|e| panic!("queue.seek Err: {e}"));
-    if let kithara_play::SeekOutcome::PastEof {
+    if let kithara::play::SeekOutcome::PastEof {
         duration: reported_dur,
         ..
     } = outcome
@@ -722,7 +724,7 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
 }
 
 async fn apply_action_to_queue(queue: &Arc<Queue>, action: &Action) {
-    use kithara_play::SeekOutcome;
+    use kithara::play::SeekOutcome;
     let label = action.label();
     let duration = queue.duration_seconds().unwrap_or(0.0);
     assert!(duration > 0.0, "[{label}] duration unknown");
@@ -736,7 +738,7 @@ async fn apply_action_to_queue(queue: &Arc<Queue>, action: &Action) {
             if matches!(outcome, SeekOutcome::PastEof { .. }) {
                 return;
             }
-            let started = kithara_platform::time::Instant::now();
+            let started = kithara::platform::time::Instant::now();
             let budget = Duration::from_secs(10);
             let mut landed = false;
             while started.elapsed() < budget {
@@ -1010,7 +1012,7 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
 /// decoder hasn't parsed the init segment's mvhd yet, so seek targets
 /// past the demuxer-known timestamp fail `OutOfRange`.
 async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
-    use kithara_play::SeekOutcome;
+    use kithara::play::SeekOutcome;
     let prod = build_prod_ctx();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
@@ -1042,12 +1044,12 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     // ratio of the track. Before mvhd parsing `duration_seconds()`
     // returns `None`, which is the deliberate "unknown" signal. Without
     // this wait, the test would race the demuxer.
-    let dur_deadline = kithara_platform::time::Instant::now() + Duration::from_secs(30);
+    let dur_deadline = kithara::platform::time::Instant::now() + Duration::from_secs(30);
     let duration = loop {
         if let Some(d) = queue.duration_seconds() {
             break d;
         }
-        if kithara_platform::time::Instant::now() >= dur_deadline {
+        if kithara::platform::time::Instant::now() >= dur_deadline {
             panic!("duration never became known within 30 s after Loaded");
         }
         sleep(Duration::from_millis(50)).await;
@@ -1066,7 +1068,7 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
              reported_dur={reported_dur:?} queue.duration={duration:.2}s"
         );
     }
-    let started = kithara_platform::time::Instant::now();
+    let started = kithara::platform::time::Instant::now();
     let budget = Duration::from_secs(15);
     let mut landed = false;
     while started.elapsed() < budget {
@@ -1174,7 +1176,7 @@ fn render_audio_frames(session: &OfflineSession, queue: &Queue, target_frames: u
 fn wait_for_handover(
     session: &OfflineSession,
     queue: &Queue,
-    track_id: kithara_events::TrackId,
+    track_id: kithara::events::TrackId,
     label: &str,
 ) {
     for attempt in 0..HANDOVER_BLOCK_LIMIT {
@@ -1256,7 +1258,7 @@ const PROD_PLAIN_PLAYLIST: &[&str] = &[
 /// commits the seek-landed position before any chunk is decoded).
 /// Reading PCM is the ground truth.
 async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
-    use kithara_play::SessionDispatcher;
+    use kithara::play::SessionDispatcher;
 
     let prod = build_prod_ctx();
     let session = Arc::new(OfflineSession::new_manual());

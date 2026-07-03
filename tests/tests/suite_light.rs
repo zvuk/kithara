@@ -19,6 +19,7 @@ mod kithara_assets;
 mod kithara_audio;
 mod kithara_bufpool;
 
+#[cfg(not(target_arch = "wasm32"))]
 mod kithara_encode {
     mod aac_tests;
     mod bytes_tests;

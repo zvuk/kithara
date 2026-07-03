@@ -9,17 +9,19 @@
 
 use std::{num::NonZeroU32, sync::Arc};
 
-use kithara_audio::{DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome};
-use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmSpec, TrackMetadata};
-use kithara_events::EventBus;
-use kithara_integration_tests::audio_mock::TestPcmReader;
-use kithara_platform::time::Duration;
-use kithara_play::{
-    Resource,
-    impls::player_resource::{PlayerResource, ReadOutcome as BlockReadOutcome},
+use kithara::{
+    self,
+    audio::{DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome},
+    bufpool::PcmPool,
+    decode::{PcmSpec, TrackMetadata},
+    events::EventBus,
+    platform::time::Duration,
+    play::{
+        Resource,
+        impls::player_resource::{PlayerResource, ReadOutcome as BlockReadOutcome},
+    },
 };
-use kithara_test_utils::kithara;
+use kithara_integration_tests::audio_mock::TestPcmReader;
 
 fn mock_spec() -> PcmSpec {
     PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))

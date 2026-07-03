@@ -9,12 +9,14 @@ use std::{
 };
 
 use futures::executor::block_on;
-use kithara_platform::time::Duration;
-use kithara_storage::WaitOutcome;
-use kithara_stream::{
-    Activity, AudioCodec, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState, PlayheadWrite,
-    ReadOutcome, SeekControl, SeekObserve, SeekState, Source, SourceError, SourcePhase, Stream,
-    StreamResult, StreamType,
+use kithara::{
+    platform::time::Duration,
+    storage::WaitOutcome,
+    stream::{
+        Activity, AudioCodec, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
+        PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState, Source, SourceError,
+        SourcePhase, Stream, StreamResult, StreamType,
+    },
 };
 
 use crate::{
@@ -210,7 +212,7 @@ pub fn signal_stream<S: signal::SignalFn + Sync>(
 
 #[cfg(test)]
 mod tests {
-    use kithara_test_utils::kithara;
+    use kithara;
 
     use super::*;
     use crate::signal_pcm::{Finite, Infinite};

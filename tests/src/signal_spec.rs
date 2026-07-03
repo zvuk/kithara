@@ -522,7 +522,7 @@ fn validate_pcm_budget(total_frames: usize, channels: u16) -> Result<(), SignalR
 
 #[cfg(test)]
 mod tests {
-    use kithara_test_utils::kithara;
+    use kithara;
 
     use super::*;
 

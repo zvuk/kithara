@@ -1,4 +1,4 @@
-use kithara_decode::DecoderChunkOutcome;
+use kithara::decode::DecoderChunkOutcome;
 
 /// Test-only `Chunk`-variant predicate for [`DecoderChunkOutcome`]. The
 /// decoder integration tests assert on chunk-vs-eof outcomes; production

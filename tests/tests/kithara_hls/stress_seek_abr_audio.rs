@@ -4,6 +4,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     hls::{Hls, HlsConfig},
+    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -15,7 +16,6 @@ use kithara_integration_tests::{
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -279,7 +279,7 @@ async fn stress_seek_abr_audio(#[case] fixture: AbrAudioFixture) {
 
         info!("Phase 1: waiting for ABR switch (ascending -> descending)...");
 
-        let warmup_start = kithara_platform::time::Instant::now();
+        let warmup_start = kithara::platform::time::Instant::now();
         let warmup_timeout = Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
         let mut warmup_ascending_chunks = 0u64;
         let mut warmup_unknown_chunks = 0u64;

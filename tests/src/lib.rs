@@ -16,6 +16,7 @@ pub use abr_fixtures::auto;
 pub mod alac_fixture;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod apple_warmup;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod asset_fixture;
 pub mod assets_ext;
 pub mod audio_fixture;
@@ -27,6 +28,7 @@ pub mod decode_ext;
 pub mod decode_mock;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod encode_ext;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod encode_test_pcm;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod fixture_cache;
@@ -59,6 +61,7 @@ pub mod signal_source_utils;
 pub mod signal_spec;
 pub mod signal_url;
 pub mod storage_ext;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod swallow_detector;
 pub mod test_server;
 pub mod token_store;
@@ -79,7 +82,7 @@ pub use hls_url::{
     HlsSpec, encode_hls_spec, hls_init_path, hls_key_path, hls_master_path, hls_media_path,
     hls_segment_path,
 };
-pub use kithara_test_utils::kithara;
+pub use kithara;
 pub use log_filter::rust_log_filter;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::*;
@@ -89,8 +92,9 @@ pub use signal_source_utils::*;
 pub use signal_url::{
     SignalFormat, SignalKind, SignalSpec, SignalSpecLength, SweepMode, signal_path,
 };
+#[cfg(not(target_arch = "wasm32"))]
 pub use test_server::{
-    BehaviorHandle, Content, CreateHlsError, CreatedHls, Delivery, FixtureBehavior,
-    HlsFixtureBuilder, InitGateHandle, SegmentGateHandle, TestServerHelper,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, InitGateHandle, SegmentGateHandle,
 };
+pub use test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, TestServerHelper};
 pub use wav::{create_test_wav, create_wav_exact_bytes};

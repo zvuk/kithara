@@ -1,7 +1,9 @@
+use kithara::{
+    self,
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
+};
 use kithara_encode::{EncoderFactory, PackagedEncodeRequest, normalize_flac_codec_config};
 use kithara_integration_tests::encode_test_pcm::SawtoothPcmFixture;
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
-use kithara_test_utils::kithara;
 
 const CHANNELS: u16 = 2;
 const SAMPLE_RATE: u32 = 48_000;

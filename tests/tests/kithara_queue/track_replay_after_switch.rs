@@ -3,8 +3,19 @@
 
 use std::{fmt::Write, sync::Arc};
 
-use kithara_assets::StoreOptions;
-use kithara_events::{AbrMode, Event, QueueEvent, TrackId, TrackStatus};
+use kithara::{
+    assets::StoreOptions,
+    events::{AbrMode, Event, QueueEvent, TrackId, TrackStatus},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{self, Duration, sleep},
+        tokio,
+    },
+    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
+};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
@@ -12,15 +23,6 @@ use kithara_integration_tests::{
     offline::OfflineSession,
     temp_dir,
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{self, Duration, sleep},
-    tokio,
-};
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 use url::Url;
 
 /// Reproduces the bug the user keeps hitting manually: play track A, switch
@@ -176,7 +178,7 @@ async fn wait_for_loader_done(
 /// missed. Bounded by a safety deadline so a stuck switch fails fast
 /// instead of hanging.
 async fn wait_for_current_track(
-    rx: &mut kithara_events::EventReceiver,
+    rx: &mut kithara::events::EventReceiver,
     expected: TrackId,
     deadline: Duration,
 ) {

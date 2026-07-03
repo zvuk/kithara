@@ -4,7 +4,7 @@ use std::{
     process::{Child, Command, Stdio},
 };
 
-use kithara_platform::time::{self, Duration, Instant};
+use kithara::platform::time::{self, Duration, Instant};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};

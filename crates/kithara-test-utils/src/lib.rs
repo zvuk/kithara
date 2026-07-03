@@ -23,3 +23,7 @@ pub mod kithara {
         rtsan_forbid_blocking, test,
     };
 }
+
+pub mod kithara_facade {
+    pub use kithara_test_macros::facade_flash as flash;
+}

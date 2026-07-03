@@ -3,13 +3,18 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::{fs, path::Path};
 
-use kithara::assets::{AcquisitionResult, AssetStoreBuilder, ReadSide, WriteSide};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::platform::tokio::task::spawn_blocking;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+};
+use kithara::{
+    assets::{AcquisitionResult, AssetStoreBuilder, ReadSide, WriteSide},
+    platform::{CancelToken, time::Duration},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::TestTempDir;
@@ -18,9 +23,6 @@ use kithara_integration_tests::create_wav_exact_bytes;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::hls_server::{HlsTestServer, HlsTestServerConfig};
 use kithara_integration_tests::signal_pcm::signal;
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::tokio::task::spawn_blocking;
-use kithara_platform::{CancelToken, time::Duration};
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;

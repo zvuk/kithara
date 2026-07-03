@@ -11,13 +11,15 @@ use std::{
     },
 };
 
-use kithara_platform::{time::Duration, tokio::runtime::Runtime};
-use kithara_storage::WaitOutcome;
-use kithara_stream::{
-    Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve,
-    SeekState, Source, SourcePhase, Stream, StreamResult, StreamType,
+use kithara::{
+    self,
+    platform::{time::Duration, tokio::runtime::Runtime},
+    storage::WaitOutcome,
+    stream::{
+        Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
+        SeekObserve, SeekState, Source, SourcePhase, Stream, StreamResult, StreamType,
+    },
 };
-use kithara_test_utils::kithara;
 
 /// Minimal mock source with known length.
 struct MockSource {
@@ -129,10 +131,10 @@ impl StreamType for MockStream {
     type Source = MockSource;
     type Events = ();
 
-    async fn create(config: Self::Config) -> Result<Self::Source, kithara_stream::SourceError> {
+    async fn create(config: Self::Config) -> Result<Self::Source, kithara::stream::SourceError> {
         config
             .source
-            .ok_or_else(|| kithara_stream::SourceError::other(IoError::other("no source")))
+            .ok_or_else(|| kithara::stream::SourceError::other(IoError::other("no source")))
     }
 }
 

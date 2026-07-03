@@ -1,4 +1,4 @@
-use kithara_platform::time::Duration;
+use kithara::platform::time::Duration;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 use super::actions::Action;

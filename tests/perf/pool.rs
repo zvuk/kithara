@@ -3,8 +3,7 @@
 use std::{mem, sync::Arc, thread};
 
 use hotpath::HotpathGuardBuilder;
-use kithara::bufpool::PcmPool;
-use kithara_platform::time::Instant;
+use kithara::{bufpool::PcmPool, platform::time::Instant};
 
 #[hotpath::measure]
 fn pool_get_put_cycle(pool: &PcmPool) {

@@ -4,14 +4,14 @@ use kithara::{
     assets::StoreOptions,
     events::{DownloaderEvent, Event, EventBus, FileEvent},
     file::{File, FileConfig},
+    platform::{
+        CancelToken,
+        time::{Duration, Instant, timeout},
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
-};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, Instant, timeout},
 };
 
 const CAPTIVE_PORTAL_HTML: &str = "<html><body>VPN required to access this resource</body></html>";
@@ -47,7 +47,7 @@ fn collect_cache_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// synchronously in the validator-reject path and a late subscriber
 /// would race the publish.
 async fn wait_for_download_terminal(
-    rx: &mut kithara_events::EventReceiver,
+    rx: &mut kithara::events::EventReceiver,
     within: Duration,
 ) -> bool {
     let deadline = Instant::now() + within;

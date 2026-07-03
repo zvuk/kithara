@@ -1,12 +1,14 @@
 use std::{collections::HashSet, fmt, num::NonZeroUsize, path::Path, sync::Arc};
 
-use kithara_assets::{
-    AcquisitionResult, AssetResourceState, AssetStoreBuilder, BytePool, ChunkSink, DiskAssetStore,
-    EvictConfig, ProcessCtx, ReadSide, ResourceProcessor, WriteSide,
+use kithara::{
+    self,
+    assets::{
+        AcquisitionResult, AssetResourceState, AssetStoreBuilder, BytePool, ChunkSink,
+        DiskAssetStore, EvictConfig, ProcessCtx, ReadSide, ResourceProcessor, WriteSide,
+    },
+    platform::{CancelToken, time::Duration},
 };
 use kithara_integration_tests::{asset_fixture::PinsIndex, assets_ext::AssetStoreTestExt};
-use kithara_platform::{CancelToken, time::Duration};
-use kithara_test_utils::kithara;
 use tempfile::tempdir;
 
 #[derive(Debug)]

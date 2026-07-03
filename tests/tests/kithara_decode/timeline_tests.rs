@@ -1,8 +1,10 @@
 use std::io::Cursor;
 
-use kithara::decode::{DecoderConfig, DecoderFactory, PcmChunk};
+use kithara::{
+    decode::{DecoderConfig, DecoderFactory, PcmChunk},
+    platform::time::Duration,
+};
 use kithara_integration_tests::audio_fixture::EmbeddedAudio;
-use kithara_platform::time::Duration;
 #[kithara::test]
 fn test_progressive_file_timeline_monotonic() {
     let audio = EmbeddedAudio::get();
@@ -14,7 +16,7 @@ fn test_progressive_file_timeline_monotonic() {
     let mut prev_frame_end = 0u64;
     let mut chunk_count = 0u64;
 
-    while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
+    while let Ok(kithara::decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
         let meta = chunk.meta;
 
         assert_eq!(meta.spec.sample_rate.get(), 44100);
@@ -81,6 +83,7 @@ mod hls_timeline {
         assets::StoreOptions,
         decode::{DecoderConfig, DecoderFactory},
         hls::{AbrMode, Hls, HlsConfig},
+        platform::{CancelToken, time::Duration, tokio},
         stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
     };
     use kithara_integration_tests::{
@@ -88,7 +91,6 @@ mod hls_timeline {
         hls_server::{HlsTestServer, HlsTestServerConfig},
         signal_pcm::signal,
     };
-    use kithara_platform::{CancelToken, time::Duration, tokio};
 
     use crate::common::test_defaults::SawWav;
 
@@ -147,7 +149,8 @@ mod hls_timeline {
             let mut chunk_count = 0u64;
             let mut max_segment_index = 0u32;
 
-            while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
+            while let Ok(kithara::decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk()
+            {
                 let meta = chunk.meta;
 
                 assert_eq!(meta.spec.sample_rate.get(), SawWav::DEFAULT.sample_rate);

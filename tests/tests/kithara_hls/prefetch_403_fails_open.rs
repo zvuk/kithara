@@ -5,6 +5,7 @@ use std::error::Error;
 use kithara::{
     assets::StoreOptions,
     hls::{Hls, HlsConfig},
+    platform::{CancelToken, time::Duration},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -12,7 +13,6 @@ use kithara_integration_tests::{
     fixture_protocol::{HlsRouteKind, HttpErrorRule},
     temp_dir,
 };
-use kithara_platform::{CancelToken, time::Duration};
 
 #[kithara::test(
     tokio,
@@ -37,9 +37,9 @@ async fn prefetch_403_returns_err_quickly(
         .cancel(CancelToken::never())
         .build();
 
-    let started = kithara_platform::time::Instant::now();
+    let started = kithara::platform::time::Instant::now();
     let result =
-        kithara_platform::time::timeout(Duration::from_secs(1), Stream::<Hls>::new(config))
+        kithara::platform::time::timeout(Duration::from_secs(1), Stream::<Hls>::new(config))
             .await
             .map_err(|_| "Stream::<Hls>::new did not return within 1s — silent hang regression")?;
     let elapsed = started.elapsed();

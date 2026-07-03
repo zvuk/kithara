@@ -9,12 +9,14 @@ use std::{
 };
 
 use futures::executor::block_on;
-use kithara_events::EventBus;
-use kithara_platform::time::Duration;
-use kithara_storage::WaitOutcome;
-use kithara_stream::{
-    Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve,
-    SeekState, Source, SourceError, SourcePhase, Stream, StreamResult, StreamType,
+use kithara::{
+    events::EventBus,
+    platform::time::Duration,
+    storage::WaitOutcome,
+    stream::{
+        Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
+        SeekObserve, SeekState, Source, SourceError, SourcePhase, Stream, StreamResult, StreamType,
+    },
 };
 
 /// Error type for memory-backed sources.

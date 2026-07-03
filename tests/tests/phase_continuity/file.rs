@@ -3,14 +3,14 @@ use std::{io::Write, num::NonZeroUsize};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
+    decode::DecoderBackend,
     file::{File, FileConfig, FileSrc},
+    platform::{time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
-use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
     SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir,
 };
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 use super::common::{

@@ -1,6 +1,4 @@
-use kithara_decode::DecoderBackend;
-use kithara_platform::time::Duration;
-use kithara_test_utils::kithara;
+use kithara::{self, decode::DecoderBackend, platform::time::Duration};
 
 const VARIANT_AAC_LQ: usize = 0;
 const VARIANT_FLAC: usize = 2;

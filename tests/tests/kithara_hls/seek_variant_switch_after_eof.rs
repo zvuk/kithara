@@ -5,6 +5,7 @@ use std::io::{Read, Seek, SeekFrom};
 use kithara::{
     assets::StoreOptions,
     hls::{AbrMode, Hls, HlsConfig},
+    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -13,7 +14,6 @@ use kithara_integration_tests::{
     hls_test_helpers::pin_abr_variant,
     rt_cancel, temp_dir,
 };
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::info;
 
 /// Seek after ABR variant switch at EOF must not deadlock.

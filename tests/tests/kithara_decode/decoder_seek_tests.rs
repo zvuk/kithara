@@ -4,10 +4,10 @@ use kithara::{
     decode::DecoderBackend,
     events::{AudioEvent, Event, EventBus},
     file::{File, FileConfig},
+    platform::time::{self, Duration},
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
-use kithara_platform::time::{self, Duration};
 
 #[kithara::fixture]
 async fn server() -> TestServerHelper {

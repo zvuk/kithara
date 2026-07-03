@@ -1,5 +1,7 @@
-use kithara::storage::{MemOptions, MemResource};
-use kithara_platform::CancelToken;
+use kithara::{
+    platform::CancelToken,
+    storage::{MemOptions, MemResource},
+};
 
 /// Build a committed in-memory resource pre-filled with `data`.
 ///

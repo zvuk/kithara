@@ -22,7 +22,7 @@
 //! (transition to `WaitingForSource(Playback)` and re-check the source's
 //! forward read-ahead window cheaply on each wake) — it must NOT re-run
 //! `decode_one_step` on a hot loop. Counted directly off the
-//! `kithara_audio::decode_one_step` probe: a parked worker fires it only on
+//! `kithara::audio::decode_one_step` probe: a parked worker fires it only on
 //! the occasional wake; the busy-spin fires it thousands of times over the
 //! same window. Once the body is released, decoding must resume.
 //!
@@ -47,6 +47,12 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     hls::{AbrMode, Hls, HlsConfig},
+    platform::{
+        CancelToken,
+        time::{Duration, Instant},
+        tokio,
+        tokio::task::spawn_blocking,
+    },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -54,12 +60,6 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
-};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, Instant},
-    tokio,
-    tokio::task::spawn_blocking,
 };
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 use tracing::info;

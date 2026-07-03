@@ -2,15 +2,17 @@
 
 use std::num::NonZeroU32;
 
-use kithara_assets::StoreOptions;
-use kithara_decode::{GaplessMode, SilenceTrimParams};
+use kithara::{
+    assets::StoreOptions,
+    decode::{GaplessMode, SilenceTrimParams},
+    platform::time::{self, Duration, Instant},
+    play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig},
+};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
     temp_dir,
 };
-use kithara_platform::time::{self, Duration, Instant};
-use kithara_play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig};
 
 use super::offline_player_harness::OfflinePlayerHarness;
 use crate::gapless_common::{
@@ -225,7 +227,7 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
 }
 
 async fn create_gapless_hls_resource(
-    player: &kithara_play::PlayerImpl,
+    player: &kithara::play::PlayerImpl,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     signal: PackagedSignal,
@@ -239,7 +241,7 @@ async fn create_gapless_hls_resource(
                 .segments_per_variant(AAC_GAPLESS_SEGMENTS)
                 .segment_duration_secs(AAC_GAPLESS_SEGMENT_SECS)
                 .packaged_audio(PackagedAudioRequest {
-                    codec: kithara_stream::AudioCodec::AacLc,
+                    codec: kithara::stream::AudioCodec::AacLc,
                     sample_rate: GAPLESS_SAMPLE_RATE,
                     channels: GAPLESS_CHANNELS,
                     start_frame: NonZeroU32::new(

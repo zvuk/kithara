@@ -6,23 +6,25 @@ use std::{
     sync::Arc,
 };
 
-use kithara_assets::StoreOptions;
-use kithara_decode::DecoderBackend;
-use kithara_events::{AbrMode, AudioEvent, DownloaderEvent, Event, HlsEvent, RequestId};
+use kithara::{
+    assets::StoreOptions,
+    decode::DecoderBackend,
+    events::{AbrMode, AudioEvent, DownloaderEvent, Event, HlsEvent, RequestId},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{self, Duration, Instant, sleep},
+        tokio,
+        tokio::sync::broadcast::error::{RecvError, TryRecvError},
+    },
+    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
+};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
     offline::OfflineSession, temp_dir, waits::wait_for_loader_done,
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{self, Duration, Instant, sleep},
-    tokio,
-    tokio::sync::broadcast::error::{RecvError, TryRecvError},
-};
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::probe::capture as probe_capture;
 use url::Url;
 
@@ -422,7 +424,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
 }
 
 async fn observe_post_seek(
-    rx: &mut kithara_events::EventReceiver,
+    rx: &mut kithara::events::EventReceiver,
     _seek_at: Instant,
     pre_seek_enqueued: &HashSet<RequestId>,
 ) -> PostSeekObservation {

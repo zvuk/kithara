@@ -6,7 +6,7 @@ use firewheel::{
     node::StreamStatus,
     processor::FirewheelProcessor,
 };
-use kithara_platform::time::Duration;
+use kithara::platform::time::Duration;
 
 /// Minimal firewheel `AudioBackend` that renders offline (no real device).
 pub struct OfflineBackend {
@@ -43,7 +43,7 @@ pub struct OfflineError;
 impl AudioBackend for OfflineBackend {
     type Config = OfflineConfig;
     type Enumerator = ();
-    type Instant = kithara_platform::time::Instant;
+    type Instant = kithara::platform::time::Instant;
     type StartStreamError = OfflineError;
     type StreamError = OfflineError;
 
@@ -105,7 +105,7 @@ impl OfflineBackend {
                 frames,
                 num_in_channels: 0,
                 num_out_channels: channels,
-                process_timestamp: kithara_platform::time::Instant::now(),
+                process_timestamp: kithara::platform::time::Instant::now(),
                 duration_since_stream_start: {
                     let frames_f64: f64 = num_traits::cast::AsPrimitive::as_(self.frames_rendered);
                     Duration::from_secs_f64(frames_f64 / f64::from(self.sample_rate))

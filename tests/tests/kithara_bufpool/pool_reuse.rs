@@ -1,10 +1,9 @@
-use kithara_bufpool::*;
+use kithara::{self, bufpool::*};
 use kithara_integration_tests::bufpool_ext::PoolShardTestExt;
-use kithara_test_utils::kithara;
 
 #[kithara::test]
 fn test_reuse_trim_zero_preserves_capacity() {
-    use kithara_bufpool::Reuse;
+    use kithara::bufpool::Reuse;
     let mut v: Vec<u8> = Vec::with_capacity(1024);
     v.push(1);
     let accepted = v.reuse(0);
@@ -14,7 +13,7 @@ fn test_reuse_trim_zero_preserves_capacity() {
 
 #[kithara::test]
 fn test_reuse_skip_trim_when_within_range() {
-    use kithara_bufpool::Reuse;
+    use kithara::bufpool::Reuse;
     let mut v: Vec<f32> = Vec::with_capacity(4096);
     v.resize(100, 0.0);
     let cap_before = v.capacity();
@@ -25,7 +24,7 @@ fn test_reuse_skip_trim_when_within_range() {
 
 #[kithara::test]
 fn test_reuse_trim_when_oversize() {
-    use kithara_bufpool::Reuse;
+    use kithara::bufpool::Reuse;
     let mut v: Vec<f32> = Vec::with_capacity(100_000);
     v.resize(100, 0.0);
     let accepted = v.reuse(4096);
@@ -127,7 +126,7 @@ fn test_ensure_len_f32_basic() {
 
 #[kithara::test]
 fn test_ensure_len_f32_budget_exceeded() {
-    use kithara_bufpool::BudgetExhausted;
+    use kithara::bufpool::BudgetExhausted;
     let pool = SharedPool::<4, Vec<f32>>::with_byte_budget(16, 4096, ByteBudget(1024));
     let mut buf = pool.get();
     let result = buf.ensure_len(1000);

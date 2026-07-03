@@ -9,12 +9,13 @@ use std::{
 };
 
 use bytes::Bytes;
-use kithara::net::{Net, NetError, NetExt, RetryPolicy};
+use kithara::{
+    net::{Net, NetError, NetExt, RetryPolicy, mock::NetMock},
+    platform::{CancelToken, time::Duration},
+};
 use kithara_integration_tests::net_fixture::{
     assert_success_all_net_methods, leaked, ok_headers, success_stream, test_url,
 };
-use kithara_net::mock::NetMock;
-use kithara_platform::{CancelToken, time::Duration};
 use unimock::{MockFn, Unimock, matching};
 
 fn should_fail(attempts: &Arc<AtomicUsize>, failures_before_success: usize) -> bool {

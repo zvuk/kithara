@@ -8,9 +8,9 @@ use std::{
 };
 
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::time::{Duration, Instant, sleep};
+use kithara::platform::time::{Duration, Instant, sleep};
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::tokio;
+use kithara::platform::tokio;
 #[cfg(not(target_arch = "wasm32"))]
 use tempfile::TempDir;
 

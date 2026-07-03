@@ -6,17 +6,19 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, AudioWorkerHandle, ChunkOutcome, PcmReader},
     hls::{Hls, HlsConfig},
-    stream::Stream,
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{self, Duration},
+    },
+    stream::{
+        Stream,
+        dl::{Downloader, DownloaderConfig},
+    },
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, auto, temp_dir, waits::wait_thread_count_quiesced,
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{self, Duration},
-};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tracing::info;
 
 struct Consts;

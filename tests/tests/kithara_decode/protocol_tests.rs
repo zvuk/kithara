@@ -1,14 +1,16 @@
 use std::io::Cursor;
 
-use kithara_decode::{Decoder, DecoderConfig, DecoderFactory, PcmChunk};
+use kithara::{
+    self,
+    decode::{Decoder, DecoderConfig, DecoderFactory, PcmChunk},
+    platform::time::Duration,
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
+};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcomeTestExt};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_integration_tests::{encode_test_pcm::SawtoothPcmFixture, ensure_silence_1s_alac_m4a};
-use kithara_platform::time::Duration;
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
-use kithara_test_utils::kithara;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use num_traits::AsPrimitive;
 
@@ -53,8 +55,8 @@ impl Backend {
         self.make_decoder(bytes, &info)
     }
 
-    fn to_choice(self) -> kithara_decode::DecoderBackend {
-        use kithara_decode::DecoderBackend;
+    fn to_choice(self) -> kithara::decode::DecoderBackend {
+        use kithara::decode::DecoderBackend;
         match self {
             Self::Symphonia => DecoderBackend::Symphonia,
             #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -79,11 +81,11 @@ fn drain_all(decoder: &mut dyn Decoder) -> Vec<f32> {
     let mut all = Vec::new();
     loop {
         match decoder.next_chunk().expect("decode should succeed") {
-            kithara_decode::DecoderChunkOutcome::Chunk(chunk) => {
+            kithara::decode::DecoderChunkOutcome::Chunk(chunk) => {
                 all.extend_from_slice(&chunk.samples);
             }
-            kithara_decode::DecoderChunkOutcome::Pending(_) => continue,
-            kithara_decode::DecoderChunkOutcome::Eof => break,
+            kithara::decode::DecoderChunkOutcome::Pending(_) => continue,
+            kithara::decode::DecoderChunkOutcome::Eof => break,
         }
     }
     all

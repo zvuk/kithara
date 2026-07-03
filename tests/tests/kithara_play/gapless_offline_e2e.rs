@@ -2,8 +2,13 @@
 
 use std::{num::NonZeroU32, sync::Arc};
 
-use kithara_assets::StoreOptions;
-use kithara_decode::{GaplessMode, SilenceTrimParams};
+use kithara::{
+    assets::StoreOptions,
+    decode::{GaplessMode, SilenceTrimParams},
+    platform::time::{self, Duration, Instant},
+    play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig},
+    stream::AudioCodec,
+};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{
@@ -11,9 +16,6 @@ use kithara_integration_tests::{
     },
     temp_dir,
 };
-use kithara_platform::time::{self, Duration, Instant};
-use kithara_play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig};
-use kithara_stream::AudioCodec;
 
 use super::offline_player_harness::OfflinePlayerHarness;
 use crate::gapless_common::{
@@ -495,7 +497,7 @@ fn goertzel_magnitude(samples: &[f32], freq_hz: f64, sample_rate: usize) -> f64 
 }
 
 async fn create_resource(
-    player: &kithara_play::PlayerImpl,
+    player: &kithara::play::PlayerImpl,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     item_id: &'static str,
@@ -521,7 +523,7 @@ async fn create_resource(
     reason = "fixture builder: each parameter pins one HLS-fixture knob"
 )]
 async fn create_resource_with_encoding(
-    player: &kithara_play::PlayerImpl,
+    player: &kithara::play::PlayerImpl,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     item_id: &'static str,

@@ -8,6 +8,11 @@ use kithara::{
     audio::{Audio, AudioConfig},
     events::EventBus,
     hls::{Hls, HlsConfig},
+    platform::{
+        CancelToken,
+        time::Duration,
+        tokio::task::{spawn, spawn_blocking},
+    },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -18,11 +23,6 @@ use kithara_integration_tests::{
     signal_pcm::{Finite, SignalPcm, signal},
     temp_dir,
     wav::create_wav_header,
-};
-use kithara_platform::{
-    CancelToken,
-    time::Duration,
-    tokio::task::{spawn, spawn_blocking},
 };
 use tracing::info;
 
@@ -69,7 +69,7 @@ fn create_pcm_segments() -> Vec<u8> {
 )]
 async fn abr_auto_switch_during_playback(
     temp_dir: TestTempDir,
-    _abr_fast: kithara_abr::AbrSettings,
+    _abr_fast: kithara::abr::AbrSettings,
 ) {
     let init_segment = Arc::new(create_wav_init_segment());
     let pcm_data = Arc::new(create_pcm_segments());
@@ -106,7 +106,7 @@ async fn abr_auto_switch_during_playback(
     let switches_bg = switches.clone();
     let mut events_rx = bus.subscribe();
     spawn(async move {
-        use kithara_platform::tokio::sync::broadcast::error::RecvError;
+        use kithara::platform::tokio::sync::broadcast::error::RecvError;
         loop {
             match events_rx.recv().await {
                 Ok(ev) => {

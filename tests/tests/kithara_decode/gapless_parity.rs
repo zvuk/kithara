@@ -5,13 +5,12 @@ use kithara::{
         DecodeResult, Decoder, DecoderBackend, DecoderConfig, DecoderFactory, GaplessTrimmer,
     },
     platform::time::Duration,
-    stream::{AudioCodec as StreamAudioCodec, ContainerFormat, MediaInfo},
+    stream::{AudioCodec as StreamAudioCodec, AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
 };
-use kithara_stream::AudioCodec;
 use reqwest::Client;
 
 use crate::gapless_common::{

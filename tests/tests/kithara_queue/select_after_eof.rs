@@ -2,14 +2,16 @@
 
 use std::{num::NonZero, sync::Arc};
 
-use kithara_decode::PcmSpec;
-use kithara_events::TrackStatus;
+use kithara::{
+    self,
+    decode::PcmSpec,
+    events::TrackStatus,
+    play::{PlayerConfig, Resource},
+    queue::{Queue, QueueConfig, Transition},
+};
 use kithara_integration_tests::{
     audio_mock::TestPcmReader, offline::resource_from_reader_with_src,
 };
-use kithara_play::{PlayerConfig, Resource};
-use kithara_queue::{Queue, QueueConfig, Transition};
-use kithara_test_utils::kithara;
 
 use super::offline_player_harness::OfflinePlayerHarness;
 

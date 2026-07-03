@@ -44,14 +44,14 @@ use std::num::NonZeroUsize;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    decode::DecoderBackend,
     hls::{Hls, HlsConfig},
+    platform::{time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
-use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto, fixture_protocol::DelayRule, temp_dir,
 };
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 
 struct Consts;
 impl Consts {
@@ -131,9 +131,9 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
     // starts, but the new variant's bytes never land. The engine-aware park is
     // the canonical offline-consumer contract (pull, never sleep-poll).
     let drained = spawn_blocking(move || {
-        let deadline = kithara_platform::time::Instant::now() + Consts::DRAIN_BUDGET;
+        let deadline = kithara::platform::time::Instant::now() + Consts::DRAIN_BUDGET;
         let mut chunks = 0usize;
-        while chunks < Consts::MIN_CHUNKS && kithara_platform::time::Instant::now() < deadline {
+        while chunks < Consts::MIN_CHUNKS && kithara::platform::time::Instant::now() < deadline {
             match PcmReader::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => chunks += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,

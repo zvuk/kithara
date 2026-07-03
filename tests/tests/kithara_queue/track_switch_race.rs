@@ -23,22 +23,24 @@
 
 use std::sync::Arc;
 
-use kithara_assets::StoreOptions;
-use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
+use kithara::{
+    assets::StoreOptions,
+    events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{Duration, sleep},
+        tokio,
+        tokio::sync::broadcast::error::RecvError,
+    },
+    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
+};
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, InitGateHandle, TestServerHelper, TestTempDir, kithara,
     offline::OfflineSession, temp_dir,
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep},
-    tokio,
-    tokio::sync::broadcast::error::RecvError,
-};
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 use url::Url;
 
 struct Consts;
@@ -178,13 +180,13 @@ async fn next_queue_event<F>(
 where
     F: FnMut(&QueueEvent) -> bool,
 {
-    let start = kithara_platform::time::Instant::now();
+    let start = kithara::platform::time::Instant::now();
     loop {
         let remaining = deadline.saturating_sub(start.elapsed());
         if remaining.is_zero() {
             return None;
         }
-        match kithara_platform::time::timeout(remaining, rx.recv()).await {
+        match kithara::platform::time::timeout(remaining, rx.recv()).await {
             Ok(Ok(Event::Queue(ev))) if pred(&ev) => return Some(ev),
             Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => continue,
             Ok(Err(RecvError::Closed)) | Err(_) => return None,
@@ -273,7 +275,7 @@ async fn wait_for_current_id(
 /// proof that the loader is parked on the gate (not merely slow), and
 /// synchronizes on an observable rather than on wall-clock timing.
 async fn wait_for_init_requested(gate: &InitGateHandle, deadline: Duration) -> Result<(), String> {
-    let start = kithara_platform::time::Instant::now();
+    let start = kithara::platform::time::Instant::now();
     loop {
         if gate.requested() >= 1 {
             return Ok(());
@@ -463,7 +465,7 @@ async fn supersede_while_loading_cancels_slow_track() {
 /// Drain any backlog already buffered on `rx` so the completion-race watch
 /// observes only events that follow the selects under test.
 fn drain_event_backlog(rx: &mut EventReceiver) {
-    use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
+    use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
     loop {
         match rx.try_recv() {
             Ok(_) => {}
@@ -558,7 +560,7 @@ async fn concurrent_completion_race_does_not_barge_in() {
         // watch as a hard safety cap, not as a pacing wait — every step blocks
         // on the next real current-track change. The initial `current()`
         // snapshot catches a change that landed before we start consuming.
-        let watch = kithara_platform::time::Instant::now();
+        let watch = kithara::platform::time::Instant::now();
         let mut history: Vec<Option<TrackId>> = vec![queue.current().map(|e| e.id)];
         let mut saw_fast = history.last().copied().flatten() == Some(fast_id);
         loop {

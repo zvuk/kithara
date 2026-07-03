@@ -10,8 +10,10 @@ use std::{
     },
 };
 
-use kithara::test as kithara_test;
-use kithara_platform::time::{Duration, Instant};
+use kithara::{
+    platform::time::{Duration, Instant},
+    test as kithara_test,
+};
 
 /// Locate the compiled `suite_light` binary next to our own test binary.
 ///

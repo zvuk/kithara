@@ -10,19 +10,21 @@
 use std::{num::NonZeroU32, sync::Arc};
 
 use firewheel::dsp::fade::FadeCurve;
-use kithara_bufpool::PcmPool;
-use kithara_decode::PcmSpec;
-use kithara_integration_tests::audio_mock::TestPcmReader;
-use kithara_platform::sync::Mutex;
-use kithara_play::{
-    Resource,
-    impls::{
-        player_notification::{PlayerNotification, TrackPlaybackStopReason},
-        player_resource::PlayerResource,
-        player_track::{PlayerTrack, TrackReadOutcome, TrackState},
+use kithara::{
+    self,
+    bufpool::PcmPool,
+    decode::PcmSpec,
+    platform::sync::Mutex,
+    play::{
+        Resource,
+        impls::{
+            player_notification::{PlayerNotification, TrackPlaybackStopReason},
+            player_resource::PlayerResource,
+            player_track::{PlayerTrack, TrackReadOutcome, TrackState},
+        },
     },
 };
-use kithara_test_utils::kithara;
+use kithara_integration_tests::audio_mock::TestPcmReader;
 use ringbuf::{
     HeapRb,
     traits::{Consumer, Split},

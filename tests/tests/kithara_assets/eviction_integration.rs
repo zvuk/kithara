@@ -3,10 +3,14 @@
 
 use std::{fs, path::Path};
 
-use kithara::assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, WriteSide};
-use kithara_assets::index::schema::{ArchivedPinsIndexFile, PinsIndexFile};
+use kithara::{
+    assets::{
+        AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, WriteSide,
+        index::schema::{ArchivedPinsIndexFile, PinsIndexFile},
+    },
+    platform::{thread, time::Duration},
+};
 use kithara_integration_tests::temp_dir;
-use kithara_platform::{thread, time::Duration};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {

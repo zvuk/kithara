@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+use kithara::stream::{AudioCodec, ContainerFormat, MediaInfo};
 
 /// RFC 6381 codec-string generation for test fixtures.
 ///
@@ -79,8 +79,10 @@ pub(crate) const fn audio_codec_supports_fmp4_packaging(codec: AudioCodec) -> bo
 
 #[cfg(test)]
 mod tests {
-    use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
-    use kithara_test_utils::kithara;
+    use kithara::{
+        self,
+        stream::{AudioCodec, ContainerFormat, MediaInfo},
+    };
 
     use super::{Rfc6381Ext, audio_codec_supports_fmp4_packaging};
 

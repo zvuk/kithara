@@ -1,4 +1,5 @@
 use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Ident, ItemFn, LitBool, parse_macro_input, parse_quote};
 
@@ -37,6 +38,18 @@ enum Mode {
 /// Off the `flash` feature all three are no-ops, so the attribute
 /// compiles away to the bare body.
 pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_with_flash_path(attr, item, &quote!(::kithara_platform::flash))
+}
+
+pub(crate) fn expand_facade(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_with_flash_path(attr, item, &quote!(::kithara::platform::flash))
+}
+
+fn expand_with_flash_path(
+    attr: TokenStream,
+    item: TokenStream,
+    flash_path: &TokenStream2,
+) -> TokenStream {
     let mode = if attr.is_empty() {
         Mode::Dynamic(true)
     } else if let Ok(b) = syn::parse::<LitBool>(attr.clone()) {
@@ -55,14 +68,14 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let block = &f.block;
     *f.block = match mode {
         Mode::Dynamic(on) if f.sig.asyncness.is_some() => parse_quote!({
-            ::kithara_platform::flash::dynamic(#on, async move #block).await
+            #flash_path::dynamic(#on, async move #block).await
         }),
         Mode::Dynamic(on) => parse_quote!({
-            let __flash_guard = ::kithara_platform::flash::enter_dynamic(#on);
+            let __flash_guard = #flash_path::enter_dynamic(#on);
             #block
         }),
         Mode::Io => parse_quote!({
-            let __real_io_guard = ::kithara_platform::flash::real_io();
+            let __real_io_guard = #flash_path::real_io();
             #block
         }),
     };

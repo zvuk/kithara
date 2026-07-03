@@ -20,10 +20,10 @@ use bytes::Bytes;
 use kithara::{
     assets::AssetStoreBuilder,
     file::{File, FileConfig},
+    platform::{time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::TestHttpServer;
-use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 
 /// Deterministic 60-byte body served in one response.
 const BODY: &[u8] = b"0123456789abcdefghijABCDEFGHIJ0123456789abcdefghijABCDEFGHIJ";

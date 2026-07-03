@@ -3,20 +3,22 @@
 use kithara::{
     abr::AbrMode,
     assets::StoreOptions,
+    decode::DecoderBackend,
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{Duration, Instant, sleep},
+    },
     play::{Resource, ResourceConfig},
-    stream::dl::{Downloader, DownloaderConfig},
+    stream::{
+        AudioCodec,
+        dl::{Downloader, DownloaderConfig},
+    },
 };
-use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule,
     offline::OfflinePlayer,
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, Instant, sleep},
-};
-use kithara_stream::AudioCodec;
 use tracing::{info, warn};
 
 use crate::phase_continuity::common::{

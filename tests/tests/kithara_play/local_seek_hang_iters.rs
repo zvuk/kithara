@@ -3,19 +3,19 @@
 
 use kithara::{
     assets::StoreOptions,
+    decode::DecoderBackend,
     events::{AbrMode, AudioEvent, Event, EventReceiver},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{self, Duration, Instant, timeout},
+        tokio::sync::broadcast::error::TryRecvError,
+    },
     play::{Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, offline::OfflinePlayer, temp_dir,
-};
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{self, Duration, Instant, timeout},
-    tokio::sync::broadcast::error::TryRecvError,
 };
 use url::Url;
 

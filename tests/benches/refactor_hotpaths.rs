@@ -23,24 +23,25 @@ use bytes::Bytes;
 use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, AudioEffect, ResamplerQuality},
+    audio::{
+        Audio, AudioConfig, AudioEffect, ResamplerParams, ResamplerProcessor, ResamplerQuality,
+    },
     bufpool::PcmPool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
     file::{File, FileConfig},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::Duration,
+        tokio::runtime::{Builder, Runtime},
+    },
     stream::{
         Stream,
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_audio::{ResamplerParams, ResamplerProcessor};
 use kithara_integration_tests::{TestHttpServer, auto};
-use kithara_platform::{
-    CancelToken,
-    time::Duration,
-    tokio::runtime::{Builder, Runtime},
-};
 use tempfile::TempDir;
 use url::Url;
 
@@ -295,11 +296,11 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
                     let mut total = 0usize;
                     while total < Consts::AUDIO_READ_TARGET_SAMPLES {
                         match audio.read(&mut buf) {
-                            Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => {
+                            Ok(kithara::audio::ReadOutcome::Frames { count, .. }) => {
                                 total += count.get();
                             }
-                            Ok(kithara_audio::ReadOutcome::Pending { .. }) => continue,
-                            Ok(kithara_audio::ReadOutcome::Eof { .. }) => break,
+                            Ok(kithara::audio::ReadOutcome::Pending { .. }) => continue,
+                            Ok(kithara::audio::ReadOutcome::Eof { .. }) => break,
                             Err(e) => panic!("audio read failed: {e}"),
                         }
                     }

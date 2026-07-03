@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kithara_platform::time::Duration;
+use kithara::platform::time::Duration;
 use url::Url;
 
 use crate::{
@@ -75,7 +75,7 @@ impl TestServer {
     }
 }
 
-#[::kithara_test_utils::kithara::fixture]
+#[::kithara::fixture]
 pub async fn test_server() -> TestServer {
     TestServer::new().await
 }
@@ -247,16 +247,19 @@ impl HlsTestServer {
             .create_hls(builder_from_config(&config))
             .await
             .expect("create configurable HLS fixture");
-        // Arm virtual-time delay gates from this (flash-ambient) setup context so
-        // the per-segment server delay manifests as VIRTUAL elapsed time the
-        // client observes — keeping the real socket while consuming zero real
-        // wall-clock (see `TestServerHelper::arm_delay_gates`).
-        helper.arm_delay_gates(
-            created.token(),
-            config.variant_count,
-            config.segments_per_variant,
-            &config.delay_rules,
-        );
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Arm virtual-time delay gates from this (flash-ambient) setup context so
+            // the per-segment server delay manifests as VIRTUAL elapsed time the
+            // client observes — keeping the real socket while consuming zero real
+            // wall-clock (see `TestServerHelper::arm_delay_gates`).
+            helper.arm_delay_gates(
+                created.token(),
+                config.variant_count,
+                config.segments_per_variant,
+                &config.delay_rules,
+            );
+        }
         Self {
             config,
             created,
@@ -540,7 +543,7 @@ impl PackagedTestServer {
     }
 }
 
-#[::kithara_test_utils::kithara::fixture]
+#[::kithara::fixture]
 pub async fn packaged_test_server() -> PackagedTestServer {
     PackagedTestServer::new().await
 }
@@ -802,7 +805,7 @@ fn test_key_data() -> Vec<u8> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_platform::{flash::real_io, time::Duration, tokio};
+    use kithara::platform::{flash::real_io, time::Duration, tokio};
 
     use super::PackagedTestServer;
     use crate::kithara;

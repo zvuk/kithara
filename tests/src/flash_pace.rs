@@ -15,7 +15,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_platform::time::Duration;
+use kithara::platform::time::Duration;
 
 /// A `thread::sleep` that runs on the flash virtual clock inside an ambient flash
 /// test, and on the real clock otherwise.
@@ -26,5 +26,5 @@ use kithara_platform::time::Duration;
 /// happens" use [`crate::waits`].
 #[kithara::flash(true)]
 pub fn virtual_pace(duration: Duration) {
-    kithara_platform::thread::sleep(duration);
+    kithara::platform::thread::sleep(duration);
 }

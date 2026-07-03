@@ -4,6 +4,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     hls::{Hls, HlsConfig},
+    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -14,7 +15,6 @@ use kithara_integration_tests::{
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
-use kithara_platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;
@@ -71,7 +71,7 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
 #[case::mmap(false)]
 async fn stress_seek_lifecycle_with_zero_reset(
     #[case] ephemeral: bool,
-    abr_fast: kithara_abr::AbrSettings,
+    abr_fast: kithara::abr::AbrSettings,
 ) {
     let init_segment = Arc::new(create_wav_header(
         Consts::D.sample_rate,

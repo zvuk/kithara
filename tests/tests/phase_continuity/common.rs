@@ -6,13 +6,13 @@ use std::{
 use kithara::{
     audio::{Audio, PcmReader, ReadOutcome},
     events::EventBus,
+    platform::{
+        thread::paced_backoff,
+        time::{Duration, sleep},
+    },
     stream::{Stream, StreamType},
 };
 use kithara_integration_tests::Xorshift64;
-use kithara_platform::{
-    thread::paced_backoff,
-    time::{Duration, sleep},
-};
 use num_traits::ToPrimitive;
 use tracing::{info, warn};
 
@@ -470,7 +470,7 @@ pub(crate) fn scan_rendered_pcm(
 
 #[cfg(test)]
 mod tests {
-    use kithara_test_utils::kithara;
+    use kithara;
 
     use super::*;
 

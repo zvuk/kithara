@@ -2,9 +2,11 @@
 
 use std::num::NonZeroU32;
 
-use kithara_decode::{DecoderTrackInfo, GaplessInfo, PcmSpec};
+use kithara::{
+    self,
+    decode::{DecoderTrackInfo, GaplessInfo, PcmSpec},
+};
 use kithara_integration_tests::decode_mock::scripted_inner_decoder_with_track_info_loose;
-use kithara_test_utils::kithara;
 
 #[kithara::test]
 fn scripted_decoder_exposes_gapless_track_info() {

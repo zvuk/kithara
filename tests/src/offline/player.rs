@@ -1,13 +1,15 @@
 use std::sync::{Arc, atomic::Ordering};
 
 use firewheel::{FirewheelConfig, FirewheelCtx, channel_config::ChannelCount};
-use kithara_audio::PcmReader;
-use kithara_platform::sync::Mutex;
-use kithara_play::{
-    PlayerNode, Resource,
-    impls::{
-        player_processor::PlayerCmd, player_resource::PlayerResource,
-        player_track::TrackTransition, shared_player_state::SharedPlayerState,
+use kithara::{
+    audio::PcmReader,
+    platform::sync::Mutex,
+    play::{
+        PlayerNode, Resource,
+        impls::{
+            player_processor::PlayerCmd, player_resource::PlayerResource,
+            player_track::TrackTransition, shared_player_state::SharedPlayerState,
+        },
     },
 };
 use ringbuf::{
@@ -53,7 +55,7 @@ impl OfflinePlayer {
         let player_node = PlayerNode::with_channel(
             cmd_rx,
             Arc::clone(&shared_state),
-            kithara_bufpool::PcmPool::default().clone(),
+            kithara::bufpool::PcmPool::default().clone(),
         );
         let node_id = ctx.add_node(player_node, None);
         let graph_out = ctx.graph_out_node_id();
@@ -78,7 +80,7 @@ impl OfflinePlayer {
         let pr = PlayerResource::new(
             resource,
             Arc::clone(&src),
-            &kithara_bufpool::PcmPool::default(),
+            &kithara::bufpool::PcmPool::default(),
         );
         self.cmd_tx
             .try_push(PlayerCmd::LoadTrack {
@@ -147,7 +149,7 @@ impl OfflinePlayer {
         let mut rx = self.shared_state.notification_rx.lock();
         let mut out = Vec::new();
         while let Some(n) = rx.try_pop() {
-            use kithara_play::impls::player_notification::PlayerNotification as N;
+            use kithara::play::impls::player_notification::PlayerNotification as N;
             out.push(match n {
                 N::Loaded { .. } => NotificationKind::Loaded,
                 N::Unloaded { .. } => NotificationKind::Unloaded,

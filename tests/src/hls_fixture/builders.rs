@@ -4,9 +4,9 @@ use kithara::{
     assets::StoreOptions,
     events::VariantIndex,
     hls::{AbrMode, Hls, HlsConfig},
+    platform::CancelToken,
     stream::Stream,
 };
-use kithara_platform::CancelToken;
 
 use crate::hls_server::TestServer;
 

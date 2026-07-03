@@ -22,6 +22,7 @@ signal = ["tokio/signal"]
 # production platform dependency so non-network consumers do not pull tokio net
 # or the async IO extension traits.
 tokio-net = ["tokio/net", "tokio/io-util"]
+tokio-rt-multi-thread = ["tokio/rt-multi-thread"]
 
 [dependencies]
 delegate = { workspace = true }

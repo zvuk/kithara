@@ -8,6 +8,7 @@ use kithara::{
     assets::StoreOptions,
     events::{AbrEvent, Event, EventBus, HlsEvent},
     hls::{AbrMode, Hls, HlsConfig},
+    platform::{CancelToken, time::Duration, tokio, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -15,7 +16,6 @@ use kithara_integration_tests::{
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
-use kithara_platform::{CancelToken, time::Duration, tokio, tokio::task::spawn_blocking};
 use tracing::info;
 
 /// Test that ABR variant switch does not cause byte reading glitches.

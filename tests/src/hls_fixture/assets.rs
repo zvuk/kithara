@@ -4,9 +4,9 @@ use kithara::{
     assets::{AssetScope, AssetStore, AssetStoreBuilder},
     hls::{KeyStore, PlaylistCache},
     net::{HttpClient, NetOptions},
+    platform::CancelToken,
+    stream::dl::{Downloader, DownloaderConfig, Peer, PeerHandle},
 };
-use kithara_platform::CancelToken;
-use kithara_stream::dl::{Downloader, DownloaderConfig, Peer, PeerHandle};
 
 use crate::TestTempDir;
 
@@ -99,7 +99,7 @@ pub fn test_playlist_cache(assets: &TestAssets, _net: HttpClient) -> PlaylistCac
     PlaylistCache::new(
         assets.scope(),
         create_test_peer_handle(),
-        kithara_bufpool::BytePool::default(),
+        kithara::bufpool::BytePool::default(),
     )
 }
 
@@ -108,14 +108,14 @@ pub fn test_playlist_cache(assets: &TestAssets, _net: HttpClient) -> PlaylistCac
 /// `Hls::create` so integration tests exercise the same wiring.
 pub fn test_key_store(
     assets: &TestAssets,
-    key_registry: Option<kithara_drm::KeyProcessorRegistry>,
+    key_registry: Option<kithara::drm::KeyProcessorRegistry>,
 ) -> KeyStore {
     KeyStore::new(
         create_test_peer_handle(),
         assets.scope(),
         None,
         key_registry,
-        kithara_bufpool::BytePool::default(),
+        kithara::bufpool::BytePool::default(),
     )
 }
 

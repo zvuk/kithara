@@ -4,16 +4,15 @@ use kithara::{
     abr::AbrMode,
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
+    decode::DecoderBackend,
     hls::{Hls, HlsConfig},
-    stream::Stream,
+    platform::{CancelToken, time::Duration},
+    stream::{AudioCodec, Stream},
 };
-use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, auto,
     fixture_protocol::{EncryptionRequest, PackagedSignal},
 };
-use kithara_platform::{CancelToken, time::Duration};
-use kithara_stream::AudioCodec;
 use tracing::{info, warn};
 
 use super::common::{CHANNELS, FREQ_HZ, SAMPLE_RATE, SinePhaseSpec, scripted_phase_scan};
@@ -533,7 +532,7 @@ async fn phase_continuity_hls_diag_paced(
 /// 1–5 s forward position jump every 10–30 s during sustained FLAC playback on
 /// the real-time (cpal) player. That is invisible to offline `Audio::read()`
 /// pulls (which spin on `Pending` and never skip content). A player-loop offline
-/// repro (`kithara_play::flac_realtime_player_continuity`, driving the real
+/// repro (`kithara::play::flac_realtime_player_continuity`, driving the real
 /// `PlayerProcessor` via `OfflinePlayer::render`) was built and stays green
 /// across sustained FLAC, the AAC→FLAC switch, 48 kHz resampling, and forced
 /// underruns — so the symptom needs true real-time cpal pressure or the live

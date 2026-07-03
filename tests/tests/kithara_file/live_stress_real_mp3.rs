@@ -11,14 +11,14 @@ use kithara::{
     decode::PcmChunk,
     events::{DownloaderEvent, Event, FileEvent},
     file::{File, FileConfig},
+    platform::{
+        thread,
+        time::Duration,
+        tokio::task::{spawn, spawn_blocking},
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, Xorshift64, temp_dir};
-use kithara_platform::{
-    thread,
-    time::Duration,
-    tokio::task::{spawn, spawn_blocking},
-};
 use tracing::info;
 
 struct Consts;

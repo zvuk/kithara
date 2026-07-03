@@ -6,12 +6,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use kithara_assets::{
-    AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, WriteSide,
-    index::schema::{ArchivedAvailabilityFile, ArchivedLruIndexFile, ArchivedPinsIndexFile},
+use kithara::{
+    assets::{
+        AcquisitionResult, AssetScope, AssetStoreBuilder, EvictConfig, WriteSide,
+        index::schema::{ArchivedAvailabilityFile, ArchivedLruIndexFile, ArchivedPinsIndexFile},
+    },
+    platform::time::Duration,
 };
 use kithara_integration_tests::{kithara, temp_dir};
-use kithara_platform::time::Duration;
 use rkyv::option::ArchivedOption;
 
 fn index_dir(root: &Path) -> PathBuf {

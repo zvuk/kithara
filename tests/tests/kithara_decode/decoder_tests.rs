@@ -64,7 +64,7 @@ fn decode_complete(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &st
     let mut total_samples = 0;
     let mut chunk_count = 0;
 
-    while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
+    while let Ok(kithara::decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
         total_samples += chunk.samples.len();
         chunk_count += 1;
     }
@@ -195,7 +195,7 @@ fn multiple_chunks_consistent(audio: EmbeddedAudio) {
     let mut prev_len = None;
     let mut chunk_count = 0;
 
-    while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
+    while let Ok(kithara::decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
         chunk_count += 1;
 
         assert_eq!(chunk.samples.len() % spec.channels as usize, 0);

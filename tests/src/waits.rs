@@ -10,13 +10,15 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_events::{AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_platform::{
-    thread::active_named_thread_count,
-    time::{Duration, Instant, sleep, timeout},
-    tokio::sync::broadcast::error::RecvError,
+use kithara::{
+    events::{AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    platform::{
+        thread::active_named_thread_count,
+        time::{Duration, Instant, sleep, timeout},
+        tokio::sync::broadcast::error::RecvError,
+    },
+    queue::Queue,
 };
-use kithara_queue::Queue;
 
 use crate::offline::OfflinePlayer;
 

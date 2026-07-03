@@ -1,21 +1,21 @@
 use std::{path::Path, sync::Arc};
 
+#[cfg(target_arch = "wasm32")]
+use kithara::platform::thread;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
     hls::{AbrMode, Hls, HlsConfig},
+    platform::{
+        CancelToken,
+        time::{Duration, sleep},
+        tokio::task::{JoinHandle, spawn, spawn_blocking},
+    },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     TestTempDir,
     hls_server::{HlsTestServer, HlsTestServerConfig},
-};
-#[cfg(target_arch = "wasm32")]
-use kithara_platform::thread;
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep},
-    tokio::task::{JoinHandle, spawn, spawn_blocking},
 };
 use tracing::info;
 

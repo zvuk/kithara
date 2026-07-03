@@ -5,17 +5,17 @@ use std::{fs::File, io::Write, path::Path};
 
 use kithara::{
     assets::StoreOptions,
+    decode::DecoderBackend,
     events::AbrMode,
     net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken, thread,
+        time::{Duration, Instant, timeout},
+    },
     play::{Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{offline::OfflinePlayer, temp_dir};
-use kithara_platform::{
-    CancelToken, thread,
-    time::{Duration, Instant, timeout},
-};
 
 use crate::common::test_defaults::Consts as Shared;
 

@@ -45,6 +45,11 @@ use kithara::{
     audio::{Audio, AudioConfig},
     hls::{Hls, HlsConfig},
     net::{NetOptions, RetryPolicy},
+    platform::{
+        CancelToken,
+        time::{Duration, Instant},
+        tokio,
+    },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -52,11 +57,6 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
-};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, Instant},
-    tokio,
 };
 use tracing::info;
 

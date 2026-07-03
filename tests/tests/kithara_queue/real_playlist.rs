@@ -2,25 +2,27 @@
 
 use std::sync::Arc;
 
+use kithara::{
+    assets::{FlushHub, FlushPolicy, StoreOptions},
+    decode::DecoderBackend,
+    events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::{Duration, sleep, timeout},
+        tokio,
+        tokio::sync::OnceCell,
+    },
+    play::{PlayerConfig, PlayerImpl},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
+    stream::dl::{Downloader, DownloaderConfig},
+};
 use kithara_app::{baked, config::AppConfig, sources::build_source};
-use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
-use kithara_decode::DecoderBackend;
-use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_integration_tests::{
     TestTempDir, Xorshift64, kithara,
     offline::OfflineSession,
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep, timeout},
-    tokio,
-    tokio::sync::OnceCell,
-};
-use kithara_play::{PlayerConfig, PlayerImpl};
-use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
 
 /// Per-process singleton: one offline audio session, one Downloader,
 /// one Queue. `#[case]` tests inside this file share it, so init cost
@@ -102,7 +104,7 @@ async fn wait_for_status(
     target: TrackStatus,
     deadline: Duration,
 ) -> Result<(), String> {
-    use kithara_platform::tokio::sync::broadcast::error::RecvError;
+    use kithara::platform::tokio::sync::broadcast::error::RecvError;
     if let Some(entry) = queue.track(track_id) {
         if entry.status == target {
             return Ok(());
@@ -551,7 +553,7 @@ async fn wait_for_queue_event<F>(
 where
     F: FnMut(&QueueEvent) -> bool,
 {
-    use kithara_platform::tokio::sync::broadcast::error::RecvError;
+    use kithara::platform::tokio::sync::broadcast::error::RecvError;
     let res = timeout(deadline, async {
         loop {
             match rx.recv().await {
@@ -824,7 +826,7 @@ async fn prod_tracks_sequential_startup_latency() {
     for url in TRACKS {
         let mut rx = ctx.queue.subscribe();
         let source = build_track_source(url, ctx, DecoderBackend::Apple, AbrMode::Auto(None));
-        let t0 = kithara_platform::time::Instant::now();
+        let t0 = kithara::platform::time::Instant::now();
         let track_id = ctx.queue.append(source);
 
         let outcome: Result<(Duration, Duration), String> = async {

@@ -9,15 +9,15 @@ use std::{
 use kithara::{
     assets::StoreOptions,
     hls::{AbrMode, Hls, HlsConfig},
+    platform::{
+        CancelToken,
+        thread::active_named_thread_count,
+        time::{self, Duration, Instant},
+        tokio::task::spawn_blocking,
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
-use kithara_platform::{
-    CancelToken,
-    thread::active_named_thread_count,
-    time::{self, Duration, Instant},
-    tokio::task::spawn_blocking,
-};
 
 use crate::common::test_defaults::Consts as Shared;
 

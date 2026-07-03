@@ -2,7 +2,7 @@
 fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::tokio;
+use kithara::platform::tokio;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[tokio::main(flavor = "current_thread")]

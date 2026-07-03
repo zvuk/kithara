@@ -3,19 +3,21 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-use kithara_abr::{
-    AbrController, AbrDecision, AbrMode, AbrReason, AbrSettings, AbrState, ThroughputEstimator,
+use kithara::{
+    self,
+    abr::{
+        AbrController, AbrDecision, AbrMode, AbrReason, AbrSettings, AbrState, ThroughputEstimator,
+    },
+    events::{
+        AbrEvent, AbrProgressSnapshot, BandwidthSource, DEFAULT_EVENT_BUS_CAPACITY, Event,
+        EventBus, VariantDuration, VariantIndex, VariantInfo,
+    },
+    platform::{
+        CancelToken,
+        time::{Duration, Duration as StdDuration, Instant},
+        tokio,
+    },
 };
-use kithara_events::{
-    AbrEvent, AbrProgressSnapshot, BandwidthSource, DEFAULT_EVENT_BUS_CAPACITY, Event, EventBus,
-    VariantDuration, VariantIndex, VariantInfo,
-};
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, Duration as StdDuration, Instant},
-    tokio,
-};
-use kithara_test_utils::kithara;
 
 fn fast_settings() -> AbrSettings {
     AbrSettings::builder()
@@ -34,7 +36,7 @@ struct AdvancingPeer {
     variants: Vec<VariantInfo>,
 }
 
-impl kithara_abr::Abr for AdvancingPeer {
+impl kithara::abr::Abr for AdvancingPeer {
     fn variants(&self) -> Vec<VariantInfo> {
         self.variants.clone()
     }
@@ -75,7 +77,7 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let reader = Arc::new(AtomicUsize::new(0));
     let committed = Arc::new(AtomicUsize::new(3));
-    let peer: Arc<dyn kithara_abr::Abr> = Arc::new(AdvancingPeer {
+    let peer: Arc<dyn kithara::abr::Abr> = Arc::new(AdvancingPeer {
         state: Arc::clone(&state),
         reader: Arc::clone(&reader),
         committed: Arc::clone(&committed),
@@ -125,7 +127,7 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
         for _ in 0..30 {
             reader_bg.fetch_add(1, Ordering::AcqRel);
             committed_bg.fetch_add(1, Ordering::AcqRel);
-            kithara_platform::time::sleep(StdDuration::from_millis(20)).await;
+            kithara::platform::time::sleep(StdDuration::from_millis(20)).await;
         }
     });
 
@@ -154,7 +156,7 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
             "watcher window never closed: reader did not advance past the \
              switch mark within the incoherence deadline"
         );
-        kithara_platform::time::sleep(StdDuration::from_millis(5)).await;
+        kithara::platform::time::sleep(StdDuration::from_millis(5)).await;
     }
     ticker.abort();
 

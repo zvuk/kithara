@@ -34,7 +34,7 @@ pub(crate) fn make_sync_test_attrs() -> TokenStream2 {
 pub(crate) fn make_runtime_builder(args: &TestArgs) -> TokenStream2 {
     if args.is_multi_thread {
         quote! {
-            kithara_platform::tokio::runtime::Builder::new_multi_thread()
+            ::kithara_test_utils::kithara_platform::tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
                 .build()
@@ -42,7 +42,7 @@ pub(crate) fn make_runtime_builder(args: &TestArgs) -> TokenStream2 {
         }
     } else {
         quote! {
-            kithara_platform::tokio::runtime::Builder::new_current_thread()
+            ::kithara_test_utils::kithara_platform::tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .expect("kithara test runtime")
@@ -116,7 +116,7 @@ pub(crate) fn wrap_with_timeout(
                 let __body = async { #body };
                 // Wall-clock safety net: must fire on REAL time even under
                 // `flash` (a hung test hangs real time too).
-                kithara_platform::time::timeout(__timeout_dur, __body)
+                ::kithara_test_utils::kithara_platform::time::timeout(__timeout_dur, __body)
                     .await
                     .unwrap_or_else(|_| panic!(
                         "test `{}` timed out after {:?}",
@@ -244,7 +244,7 @@ pub(crate) fn make_env_setup(env_vars: &[(String, String)]) -> TokenStream2 {
                 }
             }
 
-            let __lock = kithara_platform::env::mutation_lock()
+            let __lock = ::kithara_test_utils::kithara_platform::env::mutation_lock()
                 .lock()
                 .unwrap_or_else(|err| err.into_inner());
 

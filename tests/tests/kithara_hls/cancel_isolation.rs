@@ -9,12 +9,12 @@ use std::{
 use kithara::{
     assets::StoreOptions,
     hls::{Hls, HlsConfig},
+    platform::{CancelToken, thread, time::Duration, tokio::task},
     stream::Stream,
 };
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
 };
-use kithara_platform::{CancelToken, thread, time::Duration, tokio::task};
 
 struct Consts;
 impl Consts {

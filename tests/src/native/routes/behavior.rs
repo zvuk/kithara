@@ -10,7 +10,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::stream;
-use kithara_platform::time::{Duration, sleep};
+use kithara::platform::time::{Duration, sleep};
 
 use crate::{
     routes::range::build_range_response,

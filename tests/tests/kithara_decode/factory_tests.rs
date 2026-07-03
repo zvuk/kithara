@@ -2,8 +2,10 @@ use std::io::Cursor;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use std::sync::{Arc, atomic::AtomicU64};
 
-use kithara_decode::{DecodeError, DecoderBackend, DecoderConfig, DecoderFactory};
-use kithara_test_utils::kithara;
+use kithara::{
+    self,
+    decode::{DecodeError, DecoderBackend, DecoderConfig, DecoderFactory},
+};
 
 const TEST_MP3_BYTES: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/test.mp3"));
@@ -54,7 +56,7 @@ fn create_with_probe_with_mp3_hint_succeeds() {
 
 #[kithara::test]
 fn create_from_media_info_surfaces_error_without_native_probe_fallback() {
-    use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+    use kithara::stream::{AudioCodec, ContainerFormat, MediaInfo};
 
     let media_info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4));
     let source = Cursor::new(TEST_MP3_BYTES.to_vec());

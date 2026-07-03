@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
-use kithara::hls::{HlsError, HlsResult, VariantId};
+use kithara::{
+    hls::{HlsError, HlsResult, VariantId},
+    platform::time::Duration,
+};
 use kithara_integration_tests::{hls_fixture::*, hls_server::*};
-use kithara_platform::time::Duration;
 use url::Url;
 
 fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {

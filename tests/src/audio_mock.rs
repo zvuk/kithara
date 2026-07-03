@@ -8,10 +8,12 @@
 
 use std::num::NonZeroUsize;
 
-use kithara_audio::{PcmReader, PendingReason, ReadOutcome, SeekOutcome};
-use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
-use kithara_events::EventBus;
-use kithara_platform::time::Duration;
+use kithara::{
+    audio::{PcmReader, PendingReason, ReadOutcome, SeekOutcome},
+    decode::{DecodeError, PcmSpec, TrackMetadata},
+    events::EventBus,
+    platform::time::Duration,
+};
 
 /// A stateful `PcmReader` for testing facades that depend on audio playback.
 ///

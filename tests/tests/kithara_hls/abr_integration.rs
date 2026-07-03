@@ -1,9 +1,11 @@
 #![forbid(unsafe_code)]
 
-use kithara::hls::{ParsedMaster, parse_master_playlist};
-use kithara_abr::{AbrController, AbrMode, AbrSettings};
-use kithara_events::{VariantDuration, VariantIndex, VariantInfo};
-use kithara_platform::{CancelToken, time::Duration};
+use kithara::{
+    abr::{AbrController, AbrMode, AbrSettings},
+    events::{VariantDuration, VariantIndex, VariantInfo},
+    hls::{ParsedMaster, parse_master_playlist},
+    platform::{CancelToken, time::Duration},
+};
 
 /// Convert HLS master playlist variants to ABR variant list (test helper).
 fn variants_from_master(master: &ParsedMaster) -> Vec<VariantInfo> {
