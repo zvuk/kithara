@@ -8,6 +8,7 @@ use clap::{Args, Subcommand};
 
 use crate::perf::{
     matrix::{self, MatrixParams},
+    profile::{self, ProfileParams},
     slow,
 };
 
@@ -21,6 +22,8 @@ pub(crate) struct PerfArgs {
 enum PerfCommand {
     /// Run the full suite across feature lanes, saving `JUnit` + metadata.
     Matrix(MatrixCli),
+    /// Profile every slow-list test in isolation under samply.
+    Profile(ProfileCli),
     /// Aggregate matrix `JUnit` data into `slow.json` / `slow.md`.
     Slow(SlowCli),
 }
@@ -58,6 +61,25 @@ struct SlowCli {
     threshold_ms: f64,
 }
 
+#[derive(Debug, Args)]
+struct ProfileCli {
+    #[arg(long)]
+    data_dir: PathBuf,
+    #[arg(long)]
+    run_id: String,
+    #[arg(long)]
+    target_root: PathBuf,
+    /// Lane whose build/list is used for binaries (default: primary).
+    #[arg(long, default_value = "flash-on-wreq")]
+    lane: String,
+    /// Kill a profiled test after this many seconds.
+    #[arg(long, default_value_t = 180)]
+    timeout_secs: u64,
+    /// Profile only the first N slow tests (pilot use).
+    #[arg(long)]
+    limit: Option<usize>,
+}
+
 pub(crate) fn run(args: &PerfArgs) -> Result<()> {
     match &args.command {
         PerfCommand::Matrix(cli) => {
@@ -74,6 +96,17 @@ pub(crate) fn run(args: &PerfArgs) -> Result<()> {
                 extra: cli.extra.clone(),
             };
             matrix::run(&params)
+        }
+        PerfCommand::Profile(cli) => {
+            let params = ProfileParams {
+                data_dir: cli.data_dir.clone(),
+                run_id: cli.run_id.clone(),
+                target_root: cli.target_root.clone(),
+                lane: cli.lane.clone(),
+                timeout_secs: cli.timeout_secs,
+                limit: cli.limit,
+            };
+            profile::run(&params)
         }
         PerfCommand::Slow(cli) => slow::run(&cli.data_dir, &cli.run_id, cli.threshold_ms),
     }
