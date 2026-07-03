@@ -9,7 +9,7 @@ use clap::{Args, Subcommand};
 use crate::perf::{
     matrix::{self, MatrixParams},
     profile::{self, ProfileParams},
-    slow,
+    report, slow,
 };
 
 #[derive(Debug, Args)]
@@ -24,6 +24,8 @@ enum PerfCommand {
     Matrix(MatrixCli),
     /// Profile every slow-list test in isolation under samply.
     Profile(ProfileCli),
+    /// Render merged slow/profile report markdown.
+    Report(ReportCli),
     /// Aggregate matrix `JUnit` data into `slow.json` / `slow.md`.
     Slow(SlowCli),
 }
@@ -80,6 +82,17 @@ struct ProfileCli {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Args)]
+struct ReportCli {
+    #[arg(long)]
+    data_dir: PathBuf,
+    #[arg(long)]
+    run_id: String,
+    /// Lane whose isolated profiles are read.
+    #[arg(long, default_value = "flash-on-wreq")]
+    lane: String,
+}
+
 pub(crate) fn run(args: &PerfArgs) -> Result<()> {
     match &args.command {
         PerfCommand::Matrix(cli) => {
@@ -108,6 +121,7 @@ pub(crate) fn run(args: &PerfArgs) -> Result<()> {
             };
             profile::run(&params)
         }
+        PerfCommand::Report(cli) => report::run(&cli.data_dir, &cli.run_id, &cli.lane),
         PerfCommand::Slow(cli) => slow::run(&cli.data_dir, &cli.run_id, cli.threshold_ms),
     }
 }
