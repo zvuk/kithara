@@ -67,3 +67,8 @@ leak-timeout = "2s"
 [[profile.cache.scripts]]
 filter = 'package(kithara-integration-tests)'
 setup = ['fixture-cache']
+
+# Perf-measurement profile: behavior identical to default (profiles inherit
+# it); adds JUnit so `cargo xtask perf` gets exact per-test timings.
+[profile.perf.junit]
+path = "junit.xml"
