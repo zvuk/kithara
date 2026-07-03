@@ -6,7 +6,10 @@ use std::{
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
-use crate::perf::matrix::{self, MatrixParams};
+use crate::perf::{
+    matrix::{self, MatrixParams},
+    slow,
+};
 
 #[derive(Debug, Args)]
 pub(crate) struct PerfArgs {
@@ -18,6 +21,8 @@ pub(crate) struct PerfArgs {
 enum PerfCommand {
     /// Run the full suite across feature lanes, saving `JUnit` + metadata.
     Matrix(MatrixCli),
+    /// Aggregate matrix `JUnit` data into `slow.json` / `slow.md`.
+    Slow(SlowCli),
 }
 
 #[derive(Debug, Args)]
@@ -42,6 +47,17 @@ struct MatrixCli {
     extra: Vec<String>,
 }
 
+#[derive(Debug, Args)]
+struct SlowCli {
+    #[arg(long)]
+    data_dir: PathBuf,
+    #[arg(long)]
+    run_id: String,
+    /// Slow threshold in milliseconds.
+    #[arg(long, default_value_t = 1000.0)]
+    threshold_ms: f64,
+}
+
 pub(crate) fn run(args: &PerfArgs) -> Result<()> {
     match &args.command {
         PerfCommand::Matrix(cli) => {
@@ -59,6 +75,7 @@ pub(crate) fn run(args: &PerfArgs) -> Result<()> {
             };
             matrix::run(&params)
         }
+        PerfCommand::Slow(cli) => slow::run(&cli.data_dir, &cli.run_id, cli.threshold_ms),
     }
 }
 
