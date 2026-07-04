@@ -21,6 +21,7 @@ use super::{
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer},
 };
+use crate::effects::transport::PitchBend;
 
 /// Pull-based PCM facade backed by a shared renderer worker.
 pub struct Audio<S> {
@@ -57,6 +58,7 @@ pub(super) struct Session {
 pub(super) struct Controls {
     pub(super) host_sample_rate: Arc<AtomicU32>,
     pub(super) playback_rate: Arc<AtomicF32>,
+    pub(super) pitch_bend: PitchBend,
     pub(super) stretch: Option<Arc<StretchControls>>,
     pub(super) service_class: Arc<AtomicServiceClass>,
 }
@@ -172,11 +174,13 @@ impl<S> Audio<S> {
     /// Returns [`DecodeError`] when the producer reports a failure or closes early.
     pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         let recv = recv_ctx(&self.session, &self.lease);
+        let pitch_bend = self.controls.pitch_bend.multiplier();
         let read = self.cursor.read(
             &mut self.ring,
             &mut self.events,
             self.session.playhead.as_ref(),
             recv,
+            pitch_bend,
             buf,
         )?;
         Ok(self
@@ -239,7 +243,7 @@ impl<S> Audio<S> {
 impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         self.ring.preloaded = true;
-        let chunk = if let Some(chunk) = self.ring.current_chunk.take() {
+        let chunk = if let Some(chunk) = self.ring.take_buffered() {
             Some(chunk)
         } else {
             let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
@@ -275,11 +279,13 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
         &mut self,
         output: &'a mut [&'a mut [f32]],
     ) -> Result<ReadOutcome, DecodeError> {
+        let pitch_bend = self.controls.pitch_bend.multiplier();
         let read = self.cursor.read_planar(
             &mut self.ring,
             &mut self.events,
             self.session.playhead.as_ref(),
             recv_ctx(&self.session, &self.lease),
+            pitch_bend,
             output,
         )?;
         Ok(self
@@ -351,6 +357,10 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmControl for Audio<S> {
         } else {
             self.controls.playback_rate.store(rate, Ordering::Relaxed);
         }
+    }
+
+    fn set_transport_bend(&self, bend: f32) {
+        self.controls.pitch_bend.set_bend(bend);
     }
 
     fn set_service_class(&self, class: ServiceClass) {
@@ -456,6 +466,7 @@ mod tests {
                     controls: Controls {
                         host_sample_rate: Arc::new(AtomicU32::new(0)),
                         playback_rate: Arc::new(AtomicF32::new(1.0)),
+                        pitch_bend: PitchBend::new(),
                         stretch: None,
                         service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
                     },
@@ -478,5 +489,14 @@ mod tests {
             .seek(Duration::from_millis(250))
             .expect("seek should arm epoch");
         assert!(!fixture.audio.session.preload_gate.is_ready());
+    }
+
+    #[kithara::test]
+    fn transport_bend_control_updates_consume_rate() {
+        let fixture = AudioFixture::default();
+
+        PcmControl::set_transport_bend(&fixture.audio, 1.02);
+
+        assert_eq!(fixture.audio.controls.pitch_bend.multiplier(), 1.02);
     }
 }

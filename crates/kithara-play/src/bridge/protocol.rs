@@ -28,6 +28,8 @@ pub enum PlayerCmd {
     SetPrefetchDuration(f32),
     /// Update the playback rate for all active tracks.
     SetPlaybackRate(f32),
+    /// Update the transport pitch-bend multiplier for all active tracks.
+    SetPitchBend(f32),
 }
 
 impl fmt::Debug for PlayerCmd {
@@ -53,6 +55,7 @@ impl fmt::Debug for PlayerCmd {
             Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),
             Self::SetPrefetchDuration(d) => f.debug_tuple("SetPrefetchDuration").field(d).finish(),
             Self::SetPlaybackRate(r) => f.debug_tuple("SetPlaybackRate").field(r).finish(),
+            Self::SetPitchBend(b) => f.debug_tuple("SetPitchBend").field(b).finish(),
         }
     }
 }

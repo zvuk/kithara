@@ -33,6 +33,7 @@ use super::{
     },
     ring::{RingConsumer, RingParts, create_channels, create_trash_channel},
 };
+use crate::effects::transport::PitchBend;
 
 const WARM_DECODE_FRAMES: usize = 4608;
 
@@ -218,6 +219,7 @@ where
         let metadata = decoder.metadata();
         let epoch = Arc::new(AtomicU64::new(0));
         let playback_rate = config_playback_rate.unwrap_or_else(|| Arc::new(AtomicF32::new(1.0)));
+        let pitch_bend = PitchBend::new();
         let effects = create_effects(initial_spec, stretch.as_ref(), &pcm_pool, custom_effects);
         log_pipeline_ready(initial_spec, &host_sample_rate);
 
@@ -281,6 +283,7 @@ where
             controls: Controls {
                 host_sample_rate: registered.host_sample_rate,
                 playback_rate,
+                pitch_bend,
                 stretch,
                 service_class: registered.service_class,
             },

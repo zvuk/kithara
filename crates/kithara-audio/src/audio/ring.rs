@@ -26,6 +26,13 @@ pub(super) enum RecvOutcome {
 }
 
 #[derive(Clone, Copy)]
+pub(super) enum Lookahead {
+    Available,
+    Eof,
+    Pending,
+}
+
+#[derive(Clone, Copy)]
 pub(super) struct RecvCtx<'a> {
     pub(super) cancel: Option<&'a CancelToken>,
     pub(super) worker: Option<&'a AudioWorkerHandle>,
@@ -37,6 +44,7 @@ pub(super) struct RingConsumer {
     pub(super) validator: EpochValidator,
     pub(super) phase: ConsumerPhase,
     pub(super) current_chunk: Option<PcmChunk>,
+    pub(super) lookahead: Option<PcmChunk>,
     trash_tx: Outlet<PcmChunk>,
     reader_wake: Arc<ThreadWake>,
     _epoch: Arc<AtomicU64>,
@@ -59,6 +67,7 @@ impl RingConsumer {
             validator: EpochValidator::default(),
             phase: ConsumerPhase::Buffering,
             current_chunk: None,
+            lookahead: None,
             trash_tx: parts.trash_tx,
             reader_wake: parts.reader_wake,
             _epoch: parts.epoch,
@@ -68,13 +77,32 @@ impl RingConsumer {
     }
 
     pub(super) fn fill(&mut self, cursor: &mut ChunkCursor, ctx: RecvCtx<'_>) -> bool {
-        let Some(chunk) = self.recv_valid_chunk(ctx) else {
+        let Some(chunk) = self.take_buffered().or_else(|| self.recv_valid_chunk(ctx)) else {
             return false;
         };
         cursor.begin_chunk(&chunk);
         self.current_chunk = Some(chunk);
         self.promote_playing();
         true
+    }
+
+    pub(super) fn ensure_lookahead(&mut self, ctx: RecvCtx<'_>) -> Lookahead {
+        if self.lookahead.is_some() {
+            return Lookahead::Available;
+        }
+
+        match self.recv_valid_chunk(ctx) {
+            Some(chunk) => {
+                self.lookahead = Some(chunk);
+                Lookahead::Available
+            }
+            None if self.phase == ConsumerPhase::AtEof => Lookahead::Eof,
+            None => Lookahead::Pending,
+        }
+    }
+
+    pub(super) fn take_buffered(&mut self) -> Option<PcmChunk> {
+        self.current_chunk.take().or_else(|| self.lookahead.take())
     }
 
     #[kithara::hang_watchdog]
@@ -149,6 +177,12 @@ impl RingConsumer {
         }
     }
 
+    pub(super) fn recycle_lookahead(&mut self) {
+        if let Some(chunk) = self.lookahead.take() {
+            self.discard(chunk);
+        }
+    }
+
     pub(super) fn discard(&mut self, chunk: PcmChunk) {
         if let Err(_overflow) = self.trash_tx.try_push(chunk) {
             debug_assert!(
@@ -162,6 +196,7 @@ impl RingConsumer {
     pub(super) fn begin_seek_epoch(&mut self, epoch: u64, cursor: &mut ChunkCursor) {
         self.validator.epoch = epoch;
         self.recycle_current();
+        self.recycle_lookahead();
         cursor.clear();
         self.phase = ConsumerPhase::SeekPending { epoch };
 
@@ -422,6 +457,23 @@ mod tests {
     }
 
     #[kithara::test]
+    fn seek_recycles_current_chunk_and_varispeed_lookahead() {
+        let current = make_chunk(&[0.1, 0.2]);
+        let lookahead = make_chunk(&[0.3, 0.4]);
+        let mut fixture = RingFixture::new(true);
+        fixture.cursor.begin_chunk(&current);
+        fixture.ring.current_chunk = Some(current);
+        fixture.ring.lookahead = Some(lookahead);
+
+        fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
+
+        assert!(fixture.ring.current_chunk.is_none());
+        assert!(fixture.ring.lookahead.is_none());
+        assert!(fixture._trash_rx.try_pop().is_some());
+        assert!(fixture._trash_rx.try_pop().is_some());
+    }
+
+    #[kithara::test]
     fn seek_drain_preserves_new_epoch_chunk_after_stale_chunks() {
         let mut fixture = RingFixture::new(true);
         fixture
@@ -441,6 +493,7 @@ mod tests {
                 &mut fixture.events,
                 fixture.playhead.as_ref(),
                 empty_ctx(),
+                1.0,
                 &mut buf,
             )
             .expect("post-seek read succeeds");
@@ -471,6 +524,7 @@ mod tests {
                 &mut fixture.events,
                 fixture.playhead.as_ref(),
                 empty_ctx(),
+                1.0,
                 &mut buf,
             )
             .expect("post-seek eof read succeeds");

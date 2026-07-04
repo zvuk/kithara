@@ -106,6 +106,11 @@ impl PlayerNodeProcessor {
                         .iter()
                         .for_each(|(_, track)| track.resource().set_playback_rate(rate));
                 }
+                PlayerCmd::SetPitchBend(bend) => {
+                    self.tracks
+                        .iter()
+                        .for_each(|(_, track)| track.resource().set_transport_bend(bend));
+                }
             }
         }
     }

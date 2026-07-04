@@ -164,6 +164,7 @@ impl PlayerImpl {
         let item = self.core.items.take_for_load(
             index,
             self.core.timestretch.speed(),
+            self.core.params.pitch_bend(),
             self.core.engine.master_sample_rate(),
             self.core.engine.pcm_pool(),
         )?;

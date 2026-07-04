@@ -101,6 +101,7 @@ impl ItemQueue {
         &self,
         index: usize,
         rate: f32,
+        pitch_bend: f32,
         host_sample_rate: u32,
         pool: &PcmPool,
     ) -> Option<TakenItem> {
@@ -116,6 +117,7 @@ impl ItemQueue {
             .map_or(0.0, |duration| duration.as_secs_f64());
         let abr_handle = resource.abr_handle();
         resource.set_playback_rate(rate);
+        resource.set_transport_bend(pitch_bend);
         if let Some(sample_rate) = NonZeroU32::new(host_sample_rate) {
             resource.set_host_sample_rate(sample_rate);
         }

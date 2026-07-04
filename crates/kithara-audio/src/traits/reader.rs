@@ -166,6 +166,12 @@ pub trait PcmControl {
     /// The actual pitch-shifting is done by the resampler.
     fn set_playback_rate(&self, _rate: f32) {}
 
+    /// Set the transport pitch-bend multiplier.
+    ///
+    /// `1.0` leaves source-frame consumption unchanged. Values above or
+    /// below unity speed up or slow down the transport reader.
+    fn set_transport_bend(&self, _bend: f32) {}
+
     /// Update the scheduling priority hint for the shared worker.
     ///
     /// Maps track playback state to worker priority: `Audible` tracks

@@ -97,6 +97,13 @@ impl PlayerImpl {
             .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd));
     }
 
+    /// Set the transport pitch-bend multiplier.
+    pub fn set_pitch_bend(&self, bend: f32) {
+        self.core
+            .params
+            .set_pitch_bend(bend, |cmd| self.send_to_slot(cmd));
+    }
+
     /// Pump audio backend/runtime state.
     pub fn tick(&self) -> Result<(), PlayError> {
         self.core.engine.tick()

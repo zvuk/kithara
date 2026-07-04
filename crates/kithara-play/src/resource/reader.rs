@@ -114,6 +114,8 @@ impl Resource {
             pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
             /// Set the playback rate for the active stretch controls.
             pub fn set_playback_rate(&self, rate: f32);
+            /// Set the transport pitch-bend multiplier.
+            pub(crate) fn set_transport_bend(&self, bend: f32);
             /// Update the scheduling priority hint for the shared worker.
             pub fn set_service_class(&self, class: ServiceClass);
             /// Get current PCM specification.

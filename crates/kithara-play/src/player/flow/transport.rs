@@ -99,6 +99,8 @@ impl PlayerImpl {
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
         self.load_current_item();
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(rate));
+        let bend = self.core.params.pitch_bend();
+        self.set_pitch_bend(bend);
         let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
 
         self.enter_playing();
