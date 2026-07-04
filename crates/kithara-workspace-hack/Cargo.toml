@@ -25,7 +25,7 @@ futures-channel = { version = "0.3", default-features = false, features = ["sink
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
-hotpath = { version = "0.18", features = ["hotpath", "hotpath-alloc"] }
+hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 indexmap = { version = "2", features = ["serde"] }
 memchr = { version = "2" }
 num-integer = { version = "0.1", features = ["i128"] }
@@ -91,6 +91,7 @@ slab = { version = "0.4" }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -126,6 +127,7 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -177,6 +179,7 @@ slab = { version = "0.4" }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -227,6 +230,7 @@ simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -248,7 +252,7 @@ futures-channel = { version = "0.3", default-features = false, features = ["sink
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
-hotpath = { version = "0.18", features = ["hotpath", "hotpath-alloc"] }
+hotpath = { version = "0.19", features = ["hotpath", "hotpath-alloc"] }
 indexmap = { version = "2", features = ["serde"] }
 memchr = { version = "2" }
 num-integer = { version = "0.1", features = ["i128"] }
@@ -295,7 +299,7 @@ futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hotpath-macros = { version = "0.18", features = ["hotpath"] }
+hotpath-macros = { version = "0.19", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -319,6 +323,7 @@ slab = { version = "0.4" }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -342,7 +347,7 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
-hotpath-macros = { version = "0.18", features = ["hotpath"] }
+hotpath-macros = { version = "0.19", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -358,6 +363,7 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -390,7 +396,7 @@ futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hotpath-macros = { version = "0.18", features = ["hotpath"] }
+hotpath-macros = { version = "0.19", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -414,6 +420,7 @@ slab = { version = "0.4" }
 symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
@@ -447,7 +454,7 @@ getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-f
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hotpath-macros = { version = "0.18", features = ["hotpath"] }
+hotpath-macros = { version = "0.19", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -469,6 +476,7 @@ simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }

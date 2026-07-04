@@ -28,7 +28,6 @@
     ]
   },
   "enabledPlugins": {
-    "ralph-loop@claude-plugins-official": true,
-    "claude-octopus@nyldn-plugins": true
+    "ralph-loop@claude-plugins-official": true
   }
 }

@@ -3,11 +3,11 @@ use std::{num::NonZeroUsize, ops::Range, sync::Arc};
 use kithara_assets::{AssetReader, AssetStore, ReadSide, ResourceKey};
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Mutex, time::Duration};
-use kithara_storage::WaitOutcome;
+use kithara_storage::{ResourceStatus, StorageError, WaitOutcome};
 use kithara_stream::{
-    Activity, AudioCodec, MediaInfo, PlayheadRead, PlayheadWrite, ReadOutcome, SeekControl,
-    SeekObserve, SegmentDescriptor, SourceError as StreamSourceError, SourcePhase, StreamError,
-    WorkerWake, dl::PeerHandle,
+    Activity, AudioCodec, MediaInfo, NotReadyCause, PendingReason, PlayheadRead, PlayheadWrite,
+    ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor, SourceError as StreamSourceError,
+    SourcePhase, StreamError, WorkerWake, dl::PeerHandle,
 };
 use tracing::trace;
 use url::Url;
@@ -115,6 +115,26 @@ impl FileSource {
         }
     }
 
+    fn zero_read_outcome(&self, offset: u64) -> kithara_stream::StreamResult<ReadOutcome> {
+        match self.inner.asset.reader.status() {
+            ResourceStatus::Active => Ok(ReadOutcome::Pending(PendingReason::NotReady(
+                NotReadyCause::SourcePending,
+            ))),
+            ResourceStatus::Committed {
+                final_len: Some(len),
+            } if offset < len => Ok(ReadOutcome::Pending(PendingReason::NotReady(
+                NotReadyCause::SourcePending,
+            ))),
+            ResourceStatus::Committed { .. } => Ok(ReadOutcome::Eof),
+            ResourceStatus::Failed(reason) => Err(StreamError::Source(
+                FileSourceError::Storage(StorageError::Failed(reason)).into(),
+            )),
+            ResourceStatus::Cancelled => Err(StreamError::Source(
+                FileSourceError::Storage(StorageError::Cancelled).into(),
+            )),
+        }
+    }
+
     /// Build a `FileSource` over a pre-constructed [`FileInner`]. The
     /// inner is created up in `stream.rs::Stream<File>::open` and shared
     /// with [`FilePeer`](super::FilePeer); the Downloader owns the fetch
@@ -159,7 +179,12 @@ impl kithara_stream::Source for FileSource {
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         let Some(readable) = self.readable_part(range.clone()) else {
-            return SourcePhase::Eof;
+            return match self.inner.asset.reader.status() {
+                ResourceStatus::Committed { .. } => SourcePhase::Eof,
+                ResourceStatus::Active | ResourceStatus::Failed(_) | ResourceStatus::Cancelled => {
+                    SourcePhase::Waiting
+                }
+            };
         };
         let contains = readable.is_empty() || self.inner.asset.reader.contains_range(readable);
         if contains {
@@ -198,7 +223,7 @@ impl kithara_stream::Source for FileSource {
             .map_err(|e| StreamError::Source(FileSourceError::Storage(e).into()))?;
 
         let Some(count) = NonZeroUsize::new(n) else {
-            return Ok(ReadOutcome::Eof);
+            return self.zero_read_outcome(offset);
         };
 
         trace!(offset, bytes = n, "FileSource read complete");
