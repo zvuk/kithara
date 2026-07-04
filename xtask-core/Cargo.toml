@@ -10,6 +10,13 @@ repository = "https://github.com/zvuk/kithara"
 [package.metadata.cargo-machete]
 ignored = ["kithara-workspace-hack"]
 
+[features]
+default = ["lint", "viz"]
+# Enables the arch/style/idioms lint command family.
+lint = ["dep:quote"]
+# Enables architecture visualization commands.
+viz = []
+
 [dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../crates/kithara-workspace-hack" }
 
@@ -18,7 +25,7 @@ cargo_metadata = { workspace = true }
 clap = { workspace = true }
 glob = { workspace = true }
 proc-macro2 = { workspace = true, features = ["span-locations"] }
-quote = { workspace = true }
+quote = { workspace = true, optional = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

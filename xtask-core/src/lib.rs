@@ -1,10 +1,13 @@
+#[cfg(feature = "lint")]
 pub mod arch;
 pub mod ast_grep;
 pub mod common;
 pub mod ctx;
 pub mod format;
 pub mod health;
+#[cfg(feature = "lint")]
 pub mod idioms;
+#[cfg(feature = "lint")]
 pub mod lint;
 pub mod manifest;
 pub mod orphans;
@@ -12,10 +15,12 @@ pub mod perf_compare;
 pub mod quality;
 pub mod scope;
 pub mod similarity;
+#[cfg(feature = "lint")]
 pub mod style;
 pub mod test;
 pub mod typos;
 pub mod util;
+#[cfg(feature = "viz")]
 pub mod viz;
 
 pub use ctx::Ctx;
@@ -34,6 +39,7 @@ pub enum CoreCommand {
     Manifest(manifest::ManifestArgs),
     /// Per-package `cargo modules orphans` with `--cfg-test`.
     Orphans(orphans::OrphansArgs),
+    #[cfg(feature = "lint")]
     /// Workspace linters: arch, style, idioms (run all, or one via subcommand).
     Lint(lint::LintArgs),
     /// Compare perf results.
@@ -49,6 +55,7 @@ pub enum CoreCommand {
     Test(test::TestArgs),
     /// Comprehensive workspace health check with markdown report.
     Health(health::HealthArgs),
+    #[cfg(feature = "viz")]
     /// Architecture visualization tools (hierarchy, arc-map).
     Viz(viz::VizArgs),
 }
@@ -66,12 +73,14 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         CoreCommand::Similarity(args) => similarity::run(args, ctx),
         CoreCommand::Manifest(args) => manifest::run(args, ctx),
         CoreCommand::Orphans(args) => orphans::run(args, ctx),
+        #[cfg(feature = "lint")]
         CoreCommand::Lint(args) => lint::run(args),
         CoreCommand::PerfCompare(args) => perf_compare::run(args),
         CoreCommand::Quality { command } => quality::run(command),
         CoreCommand::Scope(args) => scope::run(args),
         CoreCommand::Test(args) => test::run(args),
         CoreCommand::Health(args) => health::run(args),
+        #[cfg(feature = "viz")]
         CoreCommand::Viz(args) => viz::run(args),
     }
 }
