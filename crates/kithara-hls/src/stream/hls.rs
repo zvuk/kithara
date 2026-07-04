@@ -3,8 +3,7 @@
 use std::sync::{Arc, OnceLock};
 
 use kithara_assets::{
-    AssetScopeDelegate, AssetStore, AssetStoreBuilder, BytePool, EvictConfig, ResourceKey,
-    StoreOptions,
+    AssetStore, AssetStoreBuilder, BytePool, EvictConfig, ResourceKey, StorageBackend, StoreOptions,
 };
 use kithara_events::{EventBus, VariantInfo};
 use kithara_net::{HttpClient, NetOptions};
@@ -23,7 +22,6 @@ use super::{
 use crate::{
     config::HlsConfig,
     handle::StreamPeer,
-    naming::HlsAssetScopeDelegate,
     peer::HlsPeer,
     playlist::{
         KeyStore, MasterPlaylist, MediaPlaylist, ParsedMaster, PlaylistCache, PlaylistState,
@@ -37,7 +35,7 @@ use crate::{
 pub struct Hls;
 
 fn effective_look_ahead_segments(config: &HlsConfig) -> Option<usize> {
-    if !config.store.is_ephemeral {
+    if config.store.backend != StorageBackend::Memory {
         return None;
     }
     let capacity = config.store.cache_capacity?;
@@ -54,9 +52,6 @@ impl StreamType for Hls {
     type Source = HlsSource;
 
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
-        let naming: Arc<dyn AssetScopeDelegate> = Arc::new(HlsAssetScopeDelegate);
-        let asset_root = naming.asset_root_for_url(&config.url, config.name.as_deref());
-        let asset_root_arc: Arc<str> = Arc::from(asset_root.as_str());
         let stream_scope = CancelScope::new(config.cancel.clone());
         let cancel = stream_scope.token();
 
@@ -76,8 +71,12 @@ impl StreamType for Hls {
             .asset_store
             .clone()
             .unwrap_or_else(|| Arc::new(build_asset_store(&config, cancel.clone())));
+        let asset_root = store
+            .layout()
+            .asset_root(&config.url, config.name.as_deref());
+        let asset_root_arc: Arc<str> = Arc::from(asset_root.as_str());
         let invalidation_guard = store.subscribe_eviction(Arc::clone(&asset_root_arc), evict_tx);
-        let scope = store.scope_with_delegate(asset_root_arc, naming);
+        let scope = store.scope(asset_root_arc);
 
         let byte_pool = config
             .pool
@@ -232,8 +231,7 @@ impl StreamType for Hls {
 }
 
 /// Build the playlist cache and load the master plus every variant media
-/// playlist (master order). Folds the general→specific playlist load out of
-/// `Hls::create` so the master and media playlists arrive together.
+/// playlist (master order).
 async fn load_playlists(
     stream_peer: &StreamPeer,
     config: &HlsConfig,
@@ -247,6 +245,7 @@ async fn load_playlists(
     playlist_cache.set_base_url(config.base_url.clone());
     playlist_cache.set_headers(config.headers.clone());
 
+    let master_key = stream_peer.scope().key_for(&config.url);
     let master = MasterPlaylist::new(
         playlist_cache.clone(),
         &stream_peer.scope(),
@@ -259,6 +258,7 @@ async fn load_playlists(
         &playlist_cache,
         &stream_peer.scope(),
         &config.url,
+        &master_key,
         &master.variants,
     )
     .await?;
@@ -286,9 +286,9 @@ fn default_downloader(config: &HlsConfig, cancel: &CancelToken) -> Downloader {
 fn build_asset_store(config: &HlsConfig, cancel: CancelToken) -> AssetStore {
     AssetStoreBuilder::default()
         .cancel(cancel)
-        .root_dir(&config.store.cache_dir)
+        .backend(config.store.backend.clone())
         .evict_config(EvictConfig::from(&config.store))
-        .ephemeral(config.store.is_ephemeral)
+        .maybe_layout(config.store.layout.clone())
         .maybe_pool(config.pool.clone())
         .maybe_cache_capacity(config.store.cache_capacity)
         .maybe_flush_hub(config.store.flush_hub.clone())
@@ -309,9 +309,9 @@ pub fn build_shared_asset_store(
     Arc::new(
         AssetStoreBuilder::default()
             .cancel(cancel)
-            .root_dir(&store.cache_dir)
+            .backend(store.backend.clone())
             .evict_config(EvictConfig::from(store))
-            .ephemeral(store.is_ephemeral)
+            .maybe_layout(store.layout.clone())
             .maybe_pool(pool)
             .maybe_cache_capacity(store.cache_capacity)
             .maybe_flush_hub(store.flush_hub.clone())

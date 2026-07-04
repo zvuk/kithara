@@ -2,6 +2,10 @@
 
 Detailed contracts and invariants for the kithara-assets crate; the README is the overview.
 
+## Storage backend
+
+`StorageBackend` selects where committed bytes live: `Memory` (contents die with the process) or `Disk { root }`. A builder with no backend gets a fresh unique temp directory (native) or memory (wasm — no filesystem, `Disk` requests build memory).
+
 ## Key mapping (normative)
 
 Resources are addressed by strings chosen by higher layers:
@@ -11,7 +15,11 @@ Resources are addressed by strings chosen by higher layers:
 
 Disk mapping is `<cache_root>/<asset_root>/<rel_path>`. Assets does not "invent" paths; it only enforces safety (no absolute paths, no `..`, no empty segments).
 
-`AssetScope` may carry an `AssetScopeDelegate` supplied by a protocol crate. The default delegate preserves the historical `asset_root_for_url` and URL-to-resource mapping. Protocol delegates own only naming: they may choose the asset directory name and the relative resource path before the store sees the key, but the resulting `ResourceKey` remains the single identity used by cache, leases, eviction, demand, and availability.
+### Layout
+
+The `AssetStore` owns one `Arc<dyn AssetLayout>` (`AssetStoreBuilder::layout` / `StoreOptions::layout`, default `DefaultLayout`); every `AssetScope` inherits it, and `AssetScope::key_for(&Url)` mints the `ResourceKey` used by cache, leases, eviction, demand, and availability. Switching layouts over an existing cache keeps the asset directories but re-downloads resources under the new relative paths.
+
+`DefaultLayout` is the fingerprinted URL mirror for every resource: `hls/<host>/<path>/<leaf>_<fp>.<ext>` — injective on any input; the `hls/` prefix is a fixed literal that on-disk caches address byte-for-byte. Any other policy is a caller-injected `AssetLayout`; the store validates each `rel_path` (non-empty, relative, no traversal) and rejects violations with `AssetsError::InvalidKey`.
 
 Auto-pin (lease) semantics: all resources opened through the leasing decorator (`LeaseAssets`) are automatically pinned by `asset_root` for the lifetime of the returned handle. The pin is an RAII guard stored inside the `LeaseWriter` / `LeaseReader`; drop the handle to release the pin.
 
@@ -103,7 +111,7 @@ All indices use `Atomic<R>` for crash-safe writes. **Availability persistence is
 
 - Each `asset_root` is tracked by a refcount. Concurrent leases on the same root increment it and drops decrement it. The on-disk pinned set only changes (and only flushes) on the 0→1 and 1→0 transitions; intermediate increments/decrements are pure in-memory updates.
 - Persistence is lazy: the disk file is materialised only on the first `flush`. A pre-existing on-disk file from a previous run is opened eagerly during `with_persist_at` (native only) for hydration. On wasm32 the index is always ephemeral.
-- Three call-sites share a single instance per `cache_dir`: `LeaseAssets` (pin/unpin on resource lifecycle), `EvictAssets` (read pinned set when picking eviction candidates), and `DiskAssetDeleter` (drop pin when an `asset_root` is fully removed).
+- Three call-sites share a single instance per disk root: `LeaseAssets` (pin/unpin on resource lifecycle), `EvictAssets` (read pinned set when picking eviction candidates), and `DiskAssetDeleter` (drop pin when an `asset_root` is fully removed).
 
 ## Byte Availability — single source of truth
 

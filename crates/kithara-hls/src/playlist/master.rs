@@ -20,7 +20,8 @@ impl MasterPlaylist {
     /// Build a loadable for the master at `url`, resolving the per-resource
     /// [`ResourceHandle`] from `scope`.
     pub(crate) fn new(cache: PlaylistCache, scope: &AssetScope, url: Url) -> Self {
-        let resource = ResourceHandle::new(scope.clone(), scope.key_from_url(&url), url);
+        let key = scope.key_for(&url);
+        let resource = ResourceHandle::new(scope.clone(), key, url);
         Self { cache, resource }
     }
 
@@ -30,6 +31,8 @@ impl MasterPlaylist {
     /// # Errors
     /// Returns an error when fetching or parsing fails.
     pub(crate) async fn load(&self) -> HlsResult<ParsedMaster> {
-        self.cache.master_playlist(self.resource.url()).await
+        self.cache
+            .master_playlist(self.resource.key(), self.resource.url())
+            .await
     }
 }

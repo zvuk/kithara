@@ -3,7 +3,8 @@
 use std::{fs, path::Path};
 
 use kithara_assets::{
-    AcquisitionResult, AssetStoreBuilder, FlushHub, FlushPolicy, ReadSide, WriteSide,
+    AcquisitionResult, AssetStoreBuilder, FlushHub, FlushPolicy, ReadSide, StorageBackend,
+    WriteSide,
 };
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_test_utils::kithara;
@@ -54,7 +55,9 @@ fn segment_path(root: &Path) -> std::path::PathBuf {
 /// shutdown would produce. The closure runs *after* checkpoint and
 /// before drop — the place to inject a "crash" by mangling files.
 fn seed_clean_state_then(dir: &Path, mangle: impl FnOnce(&Path)) {
-    let store = AssetStoreBuilder::default().root_dir(dir).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk { root: (dir).into() })
+        .build();
     let scope = store.scope(Consts::ASSET_ROOT);
     let key = scope.key(Consts::KEY_NAME);
     write_commit(
@@ -72,7 +75,11 @@ fn truncated_pins_bin_is_treated_as_empty() {
         fs::write(pins_bin(root), b"").unwrap();
     });
 
-    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
+        .build();
 
     let scope = store.scope(Consts::ASSET_ROOT);
     let key = scope.key(Consts::KEY_NAME);
@@ -88,7 +95,11 @@ fn garbage_pins_bin_is_treated_as_empty() {
         fs::write(pins_bin(root), b"NOT-RKYV-PAYLOAD-AT-ALL").unwrap();
     });
 
-    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
+        .build();
     let scope = store.scope(Consts::ASSET_ROOT);
     let key = scope.key(Consts::KEY_NAME);
     let _res = store
@@ -103,7 +114,11 @@ fn garbage_lru_bin_is_treated_as_empty() {
         fs::write(lru_bin(root), [0xff; 64]).unwrap();
     });
 
-    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
+        .build();
 
     let scope = store.scope(Consts::ASSET_ROOT);
     let key = scope.key(Consts::KEY_NAME);
@@ -118,7 +133,11 @@ fn garbage_availability_bin_is_treated_as_empty() {
         fs::write(availability_bin(root), b"corrupted-bytes-here").unwrap();
     });
 
-    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
+        .build();
 
     let scope = store.scope(Consts::ASSET_ROOT);
     let key = scope.key(Consts::KEY_NAME);
@@ -137,7 +156,11 @@ fn segment_deleted_externally_after_checkpoint_degrades_gracefully() {
         fs::remove_file(segment_path(root)).unwrap();
     });
 
-    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
+        .build();
     let scope = store.scope(Consts::ASSET_ROOT);
     let key = scope.key(Consts::KEY_NAME);
 
@@ -167,7 +190,11 @@ fn partial_segment_with_no_commit_and_no_checkpoint_is_invisible_after_crash() {
     let dir = tempdir().unwrap();
 
     {
-        let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Disk {
+                root: (dir.path()).into(),
+            })
+            .build();
         let scope = store.scope(Consts::ASSET_ROOT);
         let res = pending(
             store
@@ -178,7 +205,11 @@ fn partial_segment_with_no_commit_and_no_checkpoint_is_invisible_after_crash() {
         drop(res);
     }
 
-    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
+        .build();
     let scope = store.scope(Consts::ASSET_ROOT);
     let key = scope.key(Consts::KEY_NAME);
 
@@ -191,7 +222,11 @@ fn partial_uncommitted_write_flushed_before_drop_is_invisible_after_crash() {
     let dir = tempdir().unwrap();
 
     {
-        let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Disk {
+                root: (dir.path()).into(),
+            })
+            .build();
         let scope = store.scope(Consts::ASSET_ROOT);
         let res = pending(
             store
@@ -208,7 +243,11 @@ fn partial_uncommitted_write_flushed_before_drop_is_invisible_after_crash() {
         drop(res);
     }
 
-    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
+        .build();
     let scope = store.scope(Consts::ASSET_ROOT);
     let key = scope.key(Consts::KEY_NAME);
 
@@ -221,7 +260,11 @@ fn commit_then_crash_before_checkpoint_recovers_via_slow_path() {
     let dir = tempdir().unwrap();
 
     {
-        let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Disk {
+                root: (dir.path()).into(),
+            })
+            .build();
         let scope = store.scope(Consts::ASSET_ROOT);
         write_commit(
             store
@@ -231,7 +274,11 @@ fn commit_then_crash_before_checkpoint_recovers_via_slow_path() {
         );
     }
 
-    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
+        .build();
     let scope = store.scope(Consts::ASSET_ROOT);
     let key = scope.key(Consts::KEY_NAME);
 
@@ -249,11 +296,15 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
 
     {
         let store_a = AssetStoreBuilder::default()
-            .root_dir(&dir_a)
+            .backend(StorageBackend::Disk {
+                root: (&dir_a).into(),
+            })
             .flush_hub(hub.clone())
             .build();
         let store_b = AssetStoreBuilder::default()
-            .root_dir(&dir_b)
+            .backend(StorageBackend::Disk {
+                root: (&dir_b).into(),
+            })
             .flush_hub(hub.clone())
             .build();
 
@@ -276,8 +327,16 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
         store_a.checkpoint().unwrap();
     }
 
-    let rebuilt_a = AssetStoreBuilder::default().root_dir(&dir_a).build();
-    let rebuilt_b = AssetStoreBuilder::default().root_dir(&dir_b).build();
+    let rebuilt_a = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (&dir_a).into(),
+        })
+        .build();
+    let rebuilt_b = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (&dir_b).into(),
+        })
+        .build();
     let scope_a = rebuilt_a.scope("track-a");
     let scope_b = rebuilt_b.scope("track-b");
     let key_a = scope_a.key(Consts::KEY_NAME);
@@ -296,7 +355,11 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn red_segment_file_must_not_be_visible_at_canonical_path_before_commit() {
     let dir = tempdir().unwrap();
-    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
+        .build();
     let scope = store.scope(Consts::ASSET_ROOT);
     let res = pending(
         store
@@ -318,7 +381,11 @@ fn red_segment_file_must_not_be_visible_at_canonical_path_before_commit() {
 fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
     let dir = tempdir().unwrap();
     {
-        let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+        let store = AssetStoreBuilder::default()
+            .backend(StorageBackend::Disk {
+                root: (dir.path()).into(),
+            })
+            .build();
         let scope = store.scope(Consts::ASSET_ROOT);
         let res = pending(
             store
@@ -341,7 +408,11 @@ fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
         );
     }
 
-    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
+        .build();
     let scope = store.scope(Consts::ASSET_ROOT);
     let key = scope.key(Consts::KEY_NAME);
     assert_eq!(
@@ -355,7 +426,11 @@ fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
 fn red_canonical_path_must_have_exact_bytes_after_commit_no_initial_mmap_padding() {
     let dir = tempdir().unwrap();
     let payload = b"exactly-12-b";
-    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
+        .build();
     let scope = store.scope(Consts::ASSET_ROOT);
     let res = pending(
         store
@@ -391,7 +466,11 @@ fn doubly_corrupted_indexes_do_not_panic_and_slow_path_serves_data() {
         fs::write(availability_bin(root), b"PARTIAL!").unwrap();
     });
 
-    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
+        .build();
     let scope = store.scope(Consts::ASSET_ROOT);
     let key = scope.key(Consts::KEY_NAME);
 

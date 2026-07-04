@@ -13,7 +13,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara::{
-    assets::{AcquisitionResult, AssetStoreBuilder, ReadSide, WriteSide},
+    assets::{AcquisitionResult, AssetStoreBuilder, ReadSide, StorageBackend, WriteSide},
     platform::{CancelToken, time::Duration},
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -37,14 +37,17 @@ use tracing::info;
 )]
 #[case::ephemeral_mem(true, false)]
 #[case::disk_mmap(false, true)]
-fn backend_resource_path_follows_ephemeral_flag(
-    #[case] ephemeral: bool,
-    #[case] expect_path: bool,
-) {
+fn resource_path_follows_storage_backend(#[case] ephemeral: bool, #[case] expect_path: bool) {
     let temp = TestTempDir::new();
+    let backend = if ephemeral {
+        StorageBackend::Memory
+    } else {
+        StorageBackend::Disk {
+            root: temp.path().into(),
+        }
+    };
     let scope = AssetStoreBuilder::default()
-        .ephemeral(ephemeral)
-        .maybe_root_dir((!ephemeral).then_some(temp.path()))
+        .backend(backend)
         .build()
         .scope("test");
 
@@ -127,8 +130,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
     let hls_config = HlsConfig::for_url(url)
         .store(
             StoreOptions::builder()
-                .cache_dir(temp_dir.path().into())
-                .is_ephemeral(true)
+                .backend(StorageBackend::Memory)
                 .build(),
         )
         .cancel(cancel)

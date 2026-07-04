@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kithara_assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, WriteSide};
+use kithara_assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, StorageBackend, WriteSide};
 use kithara_drm::DecryptContext;
 use kithara_platform::{CancelToken, sync::ThreadGate, time::Duration};
 use kithara_storage::WaitOutcome;
@@ -32,7 +32,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     let cancel = CancelToken::never();
     let backend = Arc::new(
         AssetStoreBuilder::default()
-            .ephemeral(true)
+            .backend(StorageBackend::Memory)
             .cancel(cancel.clone())
             .build(),
     );
@@ -54,7 +54,7 @@ fn make_init(size: u64, scope: &AssetScope) -> Option<Segment> {
         return None;
     }
     let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
-    let resource_id = scope.key_from_url(&url);
+    let resource_id = scope.key_for(&url);
     Some(Segment::Init(InitSegment {
         url,
         resource_id,
@@ -68,7 +68,7 @@ fn make_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
     let url: Url = format!("https://example.com/seg{idx}.m4s")
         .parse()
         .expect("valid url");
-    let resource_id = scope.key_from_url(&url);
+    let resource_id = scope.key_for(&url);
     Segment::Media(MediaSegment {
         url,
         resource_id,
@@ -84,7 +84,7 @@ fn make_placeholder_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
     let url: Url = format!("https://example.com/seg{idx}.m4s")
         .parse()
         .expect("valid url");
-    let resource_id = scope.key_from_url(&url);
+    let resource_id = scope.key_for(&url);
     Segment::Media(MediaSegment {
         url,
         resource_id,
@@ -725,7 +725,7 @@ fn init_with_url_but_unknown_size_is_pending() {
         segments: Vec::new(),
     }]);
 
-    let init = HlsVariant::build_init_entry(&playlist, 0, None, &ctx.scope);
+    let init = HlsVariant::build_init_entry(&playlist, 0, None, &ctx);
 
     assert!(
         matches!(init, Some(Segment::Init(_))),
@@ -746,7 +746,7 @@ fn read_at_zero_holds_pending_while_init_unsized() {
     let ctx = test_ctx(3);
     let init_url: Url = "https://example.com/init.mp4".parse().expect("valid url");
     let init = Some(Segment::Init(InitSegment {
-        resource_id: ctx.scope.key_from_url(&init_url),
+        resource_id: ctx.scope.key_for(&init_url),
         url: init_url,
         state: SegmentSlotState::missing(),
         size: SegmentSize::seed(0),
@@ -1272,7 +1272,7 @@ fn on_evict_returns_none_for_foreign_asset() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100], &ctx);
     let foreign: Url = "https://other.example.com/x.m4s".parse().expect("url");
-    let foreign_key = ctx.scope.key_from_url(&foreign);
+    let foreign_key = ctx.scope.key_for(&foreign);
     let res = v.on_evict(&foreign_key);
     assert_eq!(res, None);
 }
@@ -1297,7 +1297,7 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     let ctx = test_ctx(3);
     let init = make_init(0, &ctx.scope);
     let url: Url = "https://example.com/seg0.m4s".parse().expect("valid url");
-    let resource_id = ctx.scope.key_from_url(&url);
+    let resource_id = ctx.scope.key_for(&url);
     let key = *b"0123456789abcdef";
     let seg = Segment::Media(MediaSegment {
         url,

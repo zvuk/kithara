@@ -1,6 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_assets::{AcquisitionResult, AssetStoreBuilder, FlushHub, FlushPolicy, WriteSide};
+use kithara_assets::{
+    AcquisitionResult, AssetStoreBuilder, FlushHub, FlushPolicy, StorageBackend, WriteSide,
+};
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
@@ -23,7 +25,9 @@ fn shared_hub_registers_three_indexes_per_store() {
     assert_eq!(hub.live_source_count(), 0, "fresh hub has no sources");
 
     let _store_a = AssetStoreBuilder::default()
-        .root_dir(dir.path().join("a"))
+        .backend(StorageBackend::Disk {
+            root: dir.path().join("a"),
+        })
         .flush_hub(hub.clone())
         .build();
 
@@ -34,7 +38,9 @@ fn shared_hub_registers_three_indexes_per_store() {
     );
 
     let _store_b = AssetStoreBuilder::default()
-        .root_dir(dir.path().join("b"))
+        .backend(StorageBackend::Disk {
+            root: dir.path().join("b"),
+        })
         .flush_hub(hub.clone())
         .build();
 
@@ -51,11 +57,15 @@ fn shared_hub_gcs_dropped_store_indexes() {
     let hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
 
     let store_a = AssetStoreBuilder::default()
-        .root_dir(dir.path().join("a"))
+        .backend(StorageBackend::Disk {
+            root: dir.path().join("a"),
+        })
         .flush_hub(hub.clone())
         .build();
     let store_b = AssetStoreBuilder::default()
-        .root_dir(dir.path().join("b"))
+        .backend(StorageBackend::Disk {
+            root: dir.path().join("b"),
+        })
         .flush_hub(hub.clone())
         .build();
     assert_eq!(hub.live_source_count(), INDEXES_PER_DISK_STORE * 2);
@@ -98,11 +108,15 @@ fn shared_hub_flush_now_persists_every_store() {
     let hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
 
     let store_a = AssetStoreBuilder::default()
-        .root_dir(dir.path().join("a"))
+        .backend(StorageBackend::Disk {
+            root: dir.path().join("a"),
+        })
         .flush_hub(hub.clone())
         .build();
     let store_b = AssetStoreBuilder::default()
-        .root_dir(dir.path().join("b"))
+        .backend(StorageBackend::Disk {
+            root: dir.path().join("b"),
+        })
         .flush_hub(hub.clone())
         .build();
 

@@ -285,6 +285,10 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
     }
 
+    /// App-side cache layout delegate: maps a resource URL to a relative path inside the
+    /// cache directory. Must be pure (same URL -> same path), fast, non-blocking, non-throwing.
+    public typealias CacheLayoutDelegate = FfiAssetLayout
+
     /// Configuration for player creation.
     public struct Config: Sendable {
         /// Number of EQ bands (log-spaced). Default: 10.
@@ -295,17 +299,21 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         public var keyRules: [KeyRule]
         /// Optional cache directory path. `nil` uses the platform default.
         public var cacheDir: String?
+        /// On-disk cache layout delegate; `nil` keeps the default URL-mirror layout.
+        public var layout: CacheLayoutDelegate?
 
         /// Construct a player config. All parameters have sensible
         /// defaults; pass DRM `keyRules` for encrypted streams.
         public init(
             eqBandCount: Int = 10,
             keyRules: [KeyRule] = [],
-            cacheDir: String? = nil
+            cacheDir: String? = nil,
+            layout: CacheLayoutDelegate? = nil
         ) {
             self.eqBandCount = eqBandCount
             self.keyRules = keyRules
             self.cacheDir = cacheDir
+            self.layout = layout
         }
     }
 
@@ -322,7 +330,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
         let ffiConfig = FfiPlayerConfig(
             keyOptions: FfiKeyOptions(rules: ffiRules),
-            store: StoreOptions(cacheDir: config.cacheDir),
+            store: StoreOptions(cacheDir: config.cacheDir, layout: config.layout),
             eqBandCount: UInt32(config.eqBandCount)
         )
         self._inner = AudioPlayer(config: ffiConfig)

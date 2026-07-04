@@ -7,7 +7,9 @@
 //!
 //! See `.docs/plans/2026-05-20-inflight-asset-sharing.md` step 1.
 
-use kithara_assets::{AcquisitionResult, AssetStoreBuilder, ReadSide, RequestIdentity, WriteSide};
+use kithara_assets::{
+    AcquisitionResult, AssetStoreBuilder, ReadSide, RequestIdentity, StorageBackend, WriteSide,
+};
 use kithara_platform::time::Duration;
 use kithara_storage::ResourceStatus;
 use kithara_test_utils::kithara;
@@ -23,7 +25,9 @@ fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn one_store_same_url_same_identity_shares_inner() {
-    let store = AssetStoreBuilder::default().ephemeral(true).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Memory)
+        .build();
     let scope = store.scope("asset_a");
     let key = scope.key("audio.mp3");
     let id = RequestIdentity::from_headers([("authorization", b"Bearer x".as_slice())]);
@@ -45,7 +49,9 @@ fn one_store_same_url_same_identity_shares_inner() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn one_store_same_url_different_identity_yields_different_inner() {
-    let store = AssetStoreBuilder::default().ephemeral(true).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Memory)
+        .build();
     let scope = store.scope("asset_a");
     let key = scope.key("audio.mp3");
     let id1 = RequestIdentity::from_headers([("authorization", b"Bearer a".as_slice())]);
@@ -70,7 +76,9 @@ fn one_store_same_url_different_identity_yields_different_inner() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn one_store_two_asset_roots_isolated() {
-    let store = AssetStoreBuilder::default().ephemeral(true).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Memory)
+        .build();
     let scope_a = store.scope("root_a");
     let scope_b = store.scope("root_b");
     let id = RequestIdentity::empty();
@@ -96,8 +104,12 @@ fn one_store_two_asset_roots_isolated() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn two_stores_isolated_even_with_same_identity() {
-    let store_a = AssetStoreBuilder::default().ephemeral(true).build();
-    let store_b = AssetStoreBuilder::default().ephemeral(true).build();
+    let store_a = AssetStoreBuilder::default()
+        .backend(StorageBackend::Memory)
+        .build();
+    let store_b = AssetStoreBuilder::default()
+        .backend(StorageBackend::Memory)
+        .build();
     let scope_a = store_a.scope("root");
     let scope_b = store_b.scope("root");
     let id = RequestIdentity::empty();
@@ -124,7 +136,11 @@ fn two_stores_isolated_even_with_same_identity() {
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn drop_first_leaves_second_alive() {
     let dir = tempdir().unwrap();
-    let store = AssetStoreBuilder::default().root_dir(dir.path()).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Disk {
+            root: (dir.path()).into(),
+        })
+        .build();
     let scope = store.scope("root");
     let key = scope.key("audio.mp3");
     let id = RequestIdentity::empty();
@@ -153,7 +169,9 @@ fn drop_first_leaves_second_alive() {
 /// same data.
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn shared_inner_propagates_commit_and_final_len() {
-    let store = AssetStoreBuilder::default().ephemeral(true).build();
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Memory)
+        .build();
     let scope = store.scope("asset_a");
     let key = scope.key("audio.mp3");
 

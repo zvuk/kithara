@@ -4,16 +4,14 @@
 use std::sync::Arc;
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     file::{File, FileConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
-use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
-};
+use kithara_integration_tests::{Content, Delivery, FixtureBehavior, TestServerHelper};
 
 use crate::common::test_defaults::Consts;
 
@@ -50,13 +48,10 @@ async fn audio_file_mp3_decodes_with_duration(
         Some(s) => handle.child_url(s),
         None => handle.url(),
     };
-    let temp_dir = TestTempDir::new();
-
     let file_config = FileConfig::for_src(url.clone().into())
         .store(
             StoreOptions::builder()
-                .cache_dir(temp_dir.path().into())
-                .is_ephemeral(true)
+                .backend(StorageBackend::Memory)
                 .build(),
         )
         .build();
@@ -137,13 +132,10 @@ async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
         },
     });
     let url = handle.url();
-    let temp_dir = TestTempDir::new();
-
     let file_config = FileConfig::for_src(url.clone().into())
         .store(
             StoreOptions::builder()
-                .cache_dir(temp_dir.path().into())
-                .is_ephemeral(true)
+                .backend(StorageBackend::Memory)
                 .build(),
         )
         .build();
@@ -177,13 +169,10 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
         },
         delivery: Delivery::Range,
     });
-    let temp_dir = TestTempDir::new();
-
     let file_config = FileConfig::for_src(handle.url().into())
         .store(
             StoreOptions::builder()
-                .cache_dir(temp_dir.path().into())
-                .is_ephemeral(true)
+                .backend(StorageBackend::Memory)
                 .build(),
         )
         .build();

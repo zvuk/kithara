@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
@@ -42,9 +42,15 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     .await;
     let url = server.url("/master.m3u8");
 
+    let backend = if ephemeral {
+        StorageBackend::Memory
+    } else {
+        StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        }
+    };
     let store = StoreOptions::builder()
-        .cache_dir(temp_dir.path().into())
-        .is_ephemeral(ephemeral)
+        .backend(backend)
         .cache_capacity(NonZeroUsize::new(256).unwrap())
         .build();
     let config = HlsConfig::for_url(url)
@@ -144,7 +150,6 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
 )]
 #[cfg(not(target_arch = "wasm32"))]
 async fn ephemeral_small_cache_reads_entire_stream() {
-    let temp_dir = TestTempDir::new();
     let server = HlsTestServer::new(HlsTestServerConfig {
         segment_size: 20_000,
         segments_per_variant: 10,
@@ -155,8 +160,7 @@ async fn ephemeral_small_cache_reads_entire_stream() {
     let total_bytes = server.total_bytes();
 
     let store = StoreOptions::builder()
-        .cache_dir(temp_dir.path().into())
-        .is_ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(5).expect("5 > 0"))
         .build();
     let config = HlsConfig::for_url(url)

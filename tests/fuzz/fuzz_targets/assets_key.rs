@@ -1,7 +1,7 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
+use kithara_assets::{AssetStoreBuilder, StorageBackend, asset_root_for_url};
 use libfuzzer_sys::fuzz_target;
 use url::Url;
 
@@ -29,9 +29,19 @@ fuzz_target!(|input: Input| {
     assert_eq!(root.len(), 32);
     assert!(root.bytes().all(|b| b.is_ascii_hexdigit()));
 
-    let store = AssetStoreBuilder::default().ephemeral(true).build();
-    let key = store.scope(root.clone()).key_from_url(&url);
+    let store = AssetStoreBuilder::default()
+        .backend(StorageBackend::Memory)
+        .build();
+    let scope = store.scope(root.clone());
+    let key = scope.key_for(&url);
     assert!(!key.is_absolute());
+
+    let rel = key.rel_path().expect("url key is relative");
+    assert!(rel.is_ascii());
+    assert!(
+        rel.split('/')
+            .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+    );
 
     if url.host().is_some() {
         let mut without_query = url.clone();

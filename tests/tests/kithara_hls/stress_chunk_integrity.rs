@@ -1,7 +1,7 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::{PcmChunk, PcmMeta},
     hls::{Hls, HlsConfig},
@@ -172,7 +172,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     if ephemeral {
         store.cache_capacity =
             Some(NonZeroUsize::new(Consts::SEGMENT_COUNT * 2 + 10).expect("nonzero"));
-        store.is_ephemeral = true;
+        store.backend = StorageBackend::Memory;
     }
 
     let hls_config = HlsConfig::for_url(url)

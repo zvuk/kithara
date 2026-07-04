@@ -414,6 +414,15 @@ segment0.m4s
 segment1.m4s
 #EXT-X-ENDLIST";
 
+        pub(super) const LIVE_MEDIA_PLAYLIST_SEQUENCE_100: &[u8] = b"#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:100
+#EXTINF:4.0,
+segment100.ts
+#EXTINF:4.0,
+segment101.ts";
+
         pub(super) const INVALID_PLAYLIST: &[u8] = b"NOT A VALID PLAYLIST";
 
         pub(super) const EMPTY_MASTER_PLAYLIST: &[u8] = b"#EXTM3U
@@ -476,6 +485,17 @@ audio_flac.m3u8";
 
         assert_eq!(media.segments[1].uri, "segment1.ts");
         assert_eq!(media.segments[1].sequence, 1);
+    }
+
+    #[kithara::test]
+    fn test_parse_live_media_playlist_offsets_sequence() {
+        let url: Url = "http://example.com/v0.m3u8".parse().expect("test url");
+        let media = parse_media_playlist(url, fixtures::LIVE_MEDIA_PLAYLIST_SEQUENCE_100)
+            .expect("parse live media playlist");
+
+        assert_eq!(media.segments.len(), 2);
+        assert_eq!(media.segments[0].sequence, 100);
+        assert_eq!(media.segments[1].sequence, 101);
     }
 
     #[kithara::test]

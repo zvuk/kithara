@@ -1,6 +1,8 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
-use kithara_assets::{AcquisitionResult, AssetReader, AssetStoreBuilder, WriteSide};
+use kithara_assets::{
+    AcquisitionResult, AssetReader, AssetStoreBuilder, StorageBackend, WriteSide,
+};
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_storage::WaitOutcome;
@@ -70,7 +72,7 @@ fn file_coord_total_bytes_roundtrip() {
 
 fn create_committed_resource(data: &[u8]) -> AssetReader {
     let store = AssetStoreBuilder::default()
-        .ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();
 
@@ -84,7 +86,7 @@ fn create_committed_resource(data: &[u8]) -> AssetReader {
 
 fn create_active_resource(data: &[u8]) -> (AssetReader, kithara_assets::AssetWriter) {
     let store = AssetStoreBuilder::default()
-        .ephemeral(true)
+        .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();
 

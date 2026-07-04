@@ -5,7 +5,7 @@ use std::sync::{
 
 use gloo_timers::future::TimeoutFuture;
 use kithara::{
-    assets::StoreOptions,
+    assets::{StorageBackend, StoreOptions},
     audio::{Audio, AudioConfig},
     events::{AudioEvent, Event, EventBus, SeekLifecycleStage},
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
@@ -122,7 +122,11 @@ async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
 
     let hls_config = HlsConfig::for_url(url)
         .events(bus)
-        .store(StoreOptions::builder().is_ephemeral(true).build())
+        .store(
+            StoreOptions::builder()
+                .backend(StorageBackend::Memory)
+                .build(),
+        )
         .with_abr_options(AbrOptions {
             mode: auto(0),
             ..Default::default()

@@ -119,7 +119,7 @@ impl KeyStore {
                 .ok_or_else(|| HlsError::KeyProcessing(format!("DRM key not prefetched: {url}")));
         }
 
-        let cache_key = self.scope.key_from_url(url);
+        let cache_key = self.scope.key_for(url);
         let res = self
             .scope
             .store()
@@ -157,10 +157,11 @@ impl KeyStore {
         url: &Url,
         _iv: Option<[u8; Self::AES_KEY_LEN]>,
     ) -> HlsResult<Bytes> {
+        let cache_key = self.scope.key_for(url);
         let rule = self.key_registry.as_ref().and_then(|r| r.find(url));
         if rule.is_none() {
             let headers = self.merged_headers(None);
-            return self.key_peer.fetch(url, headers).await;
+            return self.key_peer.fetch(&cache_key, url, headers).await;
         }
 
         if let Some(cached) = self.decrypted_keys.get(url).map(|r| r.value().clone()) {
@@ -168,7 +169,7 @@ impl KeyStore {
             return Ok(cached);
         }
 
-        if let Some(bytes) = self.key_peer.try_cached(url)? {
+        if let Some(bytes) = self.key_peer.try_cached(&cache_key, url)? {
             tracing::info!(%url, bytes = bytes.len(), "drm key: served from disk cache");
             self.decrypted_keys.insert(url.clone(), bytes.clone());
             return Ok(bytes);
@@ -209,7 +210,7 @@ impl KeyStore {
             "drm key: fetched + decrypted, caching to asset store"
         );
 
-        self.key_peer.write_back(url, &decrypted)?;
+        self.key_peer.write_back(&cache_key, url, &decrypted)?;
 
         self.decrypted_keys.insert(url.clone(), decrypted.clone());
         Ok(decrypted)

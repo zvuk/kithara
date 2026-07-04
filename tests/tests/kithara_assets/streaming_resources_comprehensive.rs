@@ -3,7 +3,9 @@
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::EvictConfig;
 use kithara::{
-    assets::{AcquisitionResult, AssetScope, AssetStoreBuilder, ReadSide, WriteSide},
+    assets::{
+        AcquisitionResult, AssetScope, AssetStoreBuilder, ReadSide, StorageBackend, WriteSide,
+    },
     platform::{thread, time::Duration},
 };
 use kithara_integration_tests::temp_dir;
@@ -30,7 +32,9 @@ fn asset_scope_with_root(
     #[cfg(not(target_arch = "wasm32"))]
     {
         AssetStoreBuilder::default()
-            .root_dir(temp_dir.path())
+            .backend(StorageBackend::Disk {
+                root: (temp_dir.path()).into(),
+            })
             .evict_config(EvictConfig {
                 max_assets: None,
                 max_bytes: None,
@@ -42,7 +46,7 @@ fn asset_scope_with_root(
     {
         let _ = temp_dir;
         AssetStoreBuilder::default()
-            .ephemeral(true)
+            .backend(StorageBackend::Memory)
             .build()
             .scope(asset_root)
     }

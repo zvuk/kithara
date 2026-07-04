@@ -299,13 +299,13 @@ impl FromWithParams<&Arc<PlaylistState>, VariantParams<'_>> for Arc<HlsVariant> 
             playlist_state.as_ref(),
             variant_idx,
             init_decrypt_ctx,
-            &ctx.scope,
+            ctx,
         );
         let segments = HlsVariant::build_segment_entries(
             playlist_state.as_ref(),
             decrypt_contexts,
             variant_idx,
-            &ctx.scope,
+            ctx,
         );
         let codec = playlist_state.variant_codec(variant_idx);
         let container = playlist_state.variant_container(variant_idx);
@@ -363,8 +363,9 @@ impl HlsVariant {
         playlist_state: &PlaylistState,
         decrypt_contexts: &[Option<DecryptContext>],
         variant_idx: usize,
-        scope: &kithara_assets::AssetScope,
+        ctx: &PlanCtx,
     ) -> Vec<Segment> {
+        let scope = &ctx.scope;
         let Some(num) = playlist_state.num_segments(variant_idx) else {
             return Vec::new();
         };
@@ -386,7 +387,7 @@ impl HlsVariant {
                     SegmentSize::seed,
                 );
             entries.push(Segment::Media(MediaSegment {
-                resource_id: scope.key_from_url(&url),
+                resource_id: scope.key_for(&url),
                 url,
                 state: SegmentSlotState::missing(),
                 size,
