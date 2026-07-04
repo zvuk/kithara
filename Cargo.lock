@@ -5094,6 +5094,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-xtask-core"
+version = "0.0.1-alpha4"
+dependencies = [
+ "anyhow",
+ "cargo_metadata 0.23.1",
+ "clap",
+ "kithara-workspace-hack",
+]
+
+[[package]]
 name = "konst"
 version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11469,6 +11479,7 @@ dependencies = [
  "clap",
  "glob",
  "kithara-workspace-hack",
+ "kithara-xtask-core",
  "plist",
  "proc-macro2",
  "quote",

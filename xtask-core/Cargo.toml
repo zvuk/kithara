@@ -1,0 +1,21 @@
+[package]
+name = "kithara-xtask-core"
+version = "0.0.1-alpha4"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+description = "Reusable, config-driven xtask command core (lint, format, test, health and friends)"
+repository = "https://github.com/zvuk/kithara"
+
+[package.metadata.cargo-machete]
+ignored = ["kithara-workspace-hack"]
+
+[dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../crates/kithara-workspace-hack" }
+
+anyhow = { workspace = true }
+cargo_metadata = { workspace = true }
+clap = { workspace = true }
+
+[lints]
+workspace = true

@@ -27,6 +27,7 @@ members = [
     "tests",
     "tests/fuzz",
     "xtask",
+    "xtask-core",
 ]
 default-members = [
     "crates/kithara",
@@ -195,6 +196,7 @@ kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha4", def
 kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha4" }
 kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha4", default-features = false }
 kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha4" }
+kithara-xtask-core = { path = "xtask-core", version = "0.0.1-alpha4" }
 
 # misc
 aes = "0.9.1"
