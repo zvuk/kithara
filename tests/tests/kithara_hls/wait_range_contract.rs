@@ -105,15 +105,19 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
                 break;
             }
 
-            for (i, &byte) in tail_buf[..n].iter().enumerate() {
-                let expected = server.expected_byte_at(0, offset + i as u64);
-                assert_eq!(
-                    byte,
-                    expected,
-                    "tail byte mismatch at absolute offset {}",
-                    offset + i as u64
-                );
-            }
+            server.for_each_expected_byte_mismatch(
+                0,
+                offset,
+                &tail_buf[..n],
+                |i, expected, byte| {
+                    assert_eq!(
+                        byte,
+                        expected,
+                        "tail byte mismatch at absolute offset {}",
+                        offset + i as u64
+                    );
+                },
+            );
 
             offset += n as u64;
             total_read += n as u64;

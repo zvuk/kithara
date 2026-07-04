@@ -23,7 +23,7 @@ use tracing::info;
 /// 3. Compute total byte length from server config
 /// 4. Compute optimal random chunk size proportional to stream
 /// 5. Sample `seek_iterations` random seek positions in `(0, len - chunk_size)`
-/// 6. For each: seek → read → verify every byte matches `expected_byte_at`
+/// 6. For each: seek → read → verify every byte matches the fixture data
 /// 7. Final: seek to `len - chunk_size`, read all → verify EOF
 #[kithara::test(
     tokio,
@@ -178,21 +178,18 @@ async fn stress_random_seek_read_hls(
             );
 
             if !with_encryption {
-                for (j, &byte) in buf[..n].iter().enumerate() {
-                    let expected = server.expected_byte_at(0, pos + j as u64);
-                    if byte != expected {
-                        byte_mismatches += 1;
-                        if byte_mismatches <= 5 {
-                            info!(
-                                iteration = i,
-                                offset = pos + j as u64,
-                                expected,
-                                actual = byte,
-                                "Byte mismatch"
-                            );
-                        }
+                server.for_each_expected_byte_mismatch(0, pos, &buf[..n], |j, expected, byte| {
+                    byte_mismatches += 1;
+                    if byte_mismatches <= 5 {
+                        info!(
+                            iteration = i,
+                            offset = pos + j as u64,
+                            expected,
+                            actual = byte,
+                            "Byte mismatch"
+                        );
                     }
-                }
+                });
             }
 
             successful_reads += 1;
@@ -238,16 +235,19 @@ async fn stress_random_seek_read_hls(
                     break;
                 }
 
-                for (j, &byte) in buf[..n].iter().enumerate() {
-                    let expected =
-                        server.expected_byte_at(0, final_seek + remaining_bytes + j as u64);
-                    assert_eq!(
-                        byte,
-                        expected,
-                        "tail byte mismatch at offset {}",
-                        final_seek + remaining_bytes + j as u64
-                    );
-                }
+                server.for_each_expected_byte_mismatch(
+                    0,
+                    final_seek + remaining_bytes,
+                    &buf[..n],
+                    |j, expected, byte| {
+                        assert_eq!(
+                            byte,
+                            expected,
+                            "tail byte mismatch at offset {}",
+                            final_seek + remaining_bytes + j as u64
+                        );
+                    },
+                );
                 remaining_bytes += n as u64;
             }
 
