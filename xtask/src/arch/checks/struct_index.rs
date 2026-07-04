@@ -5,16 +5,15 @@ use std::{
 
 use anyhow::Result;
 use glob::Pattern;
+use kithara_xtask_core::common::{
+    parse::parse_file,
+    suppress::Suppressions,
+    walker::{matches_any, relative_to, workspace_rs_files_scoped},
+};
 use quote::ToTokens;
 use syn::{
     Block, Expr, ExprCall, ExprMethodCall, ExprStruct, Fields, ImplItem, Item, ItemImpl, Pat, Stmt,
     Type, Visibility, visit::Visit,
-};
-
-use crate::common::{
-    parse::parse_file,
-    suppress::Suppressions,
-    walker::{matches_any, relative_to, workspace_rs_files_scoped},
 };
 
 #[derive(Debug)]
@@ -62,7 +61,7 @@ pub(crate) struct WorkspaceStructIndex {
 
 pub(crate) fn build_index(
     workspace_root: &Path,
-    scope: &crate::common::scope::Scope,
+    scope: &kithara_xtask_core::common::scope::Scope,
     exempt_globs: &[Pattern],
 ) -> Result<WorkspaceStructIndex> {
     let mut idx = WorkspaceStructIndex::default();

@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use anyhow::Result;
 use cargo_metadata::{DependencyKind, Metadata, Node, Package};
+use kithara_xtask_core::common::{scope::packages_in_scope, violation::Violation};
 
 use super::{Check, Context};
-use crate::common::{scope::packages_in_scope, violation::Violation};
 
 pub(crate) const ID: &str = "direction";
 

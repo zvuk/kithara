@@ -1,20 +1,18 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    parse::parse_file,
+    violation::Violation,
+    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+};
 use syn::{
     Expr, FnArg, ImplItem, Item, ItemFn, ItemImpl, Local, Pat, PatIdent, Stmt, Type, TypePath,
     visit::{self, Visit},
 };
 
 use super::{Check, Context};
-use crate::{
-    common::{
-        parse::parse_file,
-        violation::Violation,
-        walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
-    },
-    idioms::config::NoPassthroughBuilderConfig,
-};
+use crate::idioms::config::NoPassthroughBuilderConfig;
 
 pub(crate) const ID: &str = "no_passthrough_builder";
 

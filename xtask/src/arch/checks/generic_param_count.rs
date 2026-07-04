@@ -1,12 +1,12 @@
 use anyhow::Result;
-use syn::{Generics, ImplItem, Item, ItemImpl};
-
-use super::{Check, Context};
-use crate::common::{
+use kithara_xtask_core::common::{
     parse::parse_file,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
+use syn::{Generics, ImplItem, Item, ItemImpl};
+
+use super::{Check, Context};
 
 pub(crate) const ID: &str = "generic_param_count";
 

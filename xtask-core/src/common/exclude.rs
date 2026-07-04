@@ -14,7 +14,7 @@ use crate::common::{
 };
 
 /// Drop violations whose path portion matches any glob. A no-op when empty.
-pub(crate) fn apply_path_excludes(report: &mut Report, patterns: &[String]) {
+pub fn apply_path_excludes(report: &mut Report, patterns: &[String]) {
     if patterns.is_empty() {
         return;
     }
@@ -30,7 +30,7 @@ pub(crate) fn apply_path_excludes(report: &mut Report, patterns: &[String]) {
 /// code but are not matched by path globs. Only `test`-keyed cfgs count —
 /// `#[cfg(feature = ...)]` and other cfgs are left untouched. Files that fail
 /// to parse are skipped (their violations are kept).
-pub(crate) fn apply_cfg_test_exclusion(report: &mut Report, workspace_root: &Path) {
+pub fn apply_cfg_test_exclusion(report: &mut Report, workspace_root: &Path) {
     let ranges = ranges_by_file(report, workspace_root, |items, out| {
         collect_cfg_test_ranges(items, out);
     });
@@ -41,11 +41,7 @@ pub(crate) fn apply_cfg_test_exclusion(report: &mut Report, workspace_root: &Pat
 /// `::`-path matches a glob. Complements the path-glob and `#[cfg(test)]`
 /// passes with sub-file, module-scoped exclusion (e.g. scope out a whole
 /// `mod legacy {}` without listing files). A no-op when `patterns` is empty.
-pub(crate) fn apply_module_excludes(
-    report: &mut Report,
-    patterns: &[String],
-    workspace_root: &Path,
-) {
+pub fn apply_module_excludes(report: &mut Report, patterns: &[String], workspace_root: &Path) {
     if patterns.is_empty() {
         return;
     }
@@ -118,7 +114,8 @@ pub(crate) fn key_line(key: &str) -> Option<usize> {
 /// so the line-based [`apply_cfg_test_exclusion`] pass cannot reach them — they
 /// fold the same test-code exclusion in here instead, measuring only the
 /// production surface. Returns the raw line count when `src` fails to parse.
-pub(crate) fn non_test_line_count(src: &str) -> usize {
+#[must_use]
+pub fn non_test_line_count(src: &str) -> usize {
     let total = src.lines().count();
     let Ok(file) = syn::parse_file(src) else {
         return total;
@@ -205,7 +202,8 @@ fn item_attrs(item: &Item) -> &[syn::Attribute] {
 /// (`#[cfg(test)]`) or as a bare predicate inside `any(...)` / `all(...)`
 /// (`#[cfg(any(test, feature = "x"))]`). `#[cfg(not(test))]`, `feature = "test"`,
 /// and non-cfg attributes are intentionally not matched.
-pub(crate) fn attrs_have_cfg_test(attrs: &[syn::Attribute]) -> bool {
+#[must_use]
+pub fn attrs_have_cfg_test(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|a| match &a.meta {
         Meta::List(list) if list.path.is_ident("cfg") => meta_tokens_have_test(&list.tokens),
         _ => false,

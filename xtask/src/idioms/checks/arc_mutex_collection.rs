@@ -1,4 +1,10 @@
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    parse::parse_file,
+    suppress::Suppressions,
+    violation::Violation,
+    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+};
 use syn::{
     GenericArgument, Path, PathArguments, Type, TypePath,
     spanned::Spanned,
@@ -6,12 +12,6 @@ use syn::{
 };
 
 use super::{Check, Context};
-use crate::common::{
-    parse::parse_file,
-    suppress::Suppressions,
-    violation::Violation,
-    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
-};
 
 pub(crate) const ID: &str = "arc_mutex_collection";
 

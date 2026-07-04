@@ -1,9 +1,9 @@
 use std::fs;
 
 use anyhow::Result;
+use kithara_xtask_core::common::violation::Violation;
 
 use super::{Check, Context};
-use crate::common::violation::Violation;
 
 pub(crate) const ID: &str = "stray_rs_files";
 

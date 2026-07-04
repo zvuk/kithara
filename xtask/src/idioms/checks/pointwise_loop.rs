@@ -1,13 +1,13 @@
 use anyhow::Result;
-use syn::{BinOp, Block, Expr, ExprForLoop, Stmt, visit::Visit};
-
-use super::{Check, Context};
-use crate::common::{
+use kithara_xtask_core::common::{
     parse::parse_file,
     suppress::Suppressions,
     violation::Violation,
     walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
 };
+use syn::{BinOp, Block, Expr, ExprForLoop, Stmt, visit::Visit};
+
+use super::{Check, Context};
 
 pub(crate) const ID: &str = "pointwise_loop";
 

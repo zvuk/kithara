@@ -7,8 +7,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
 use clap::{Args, Subcommand};
-
-use crate::util::ensure_clean_tree;
+use kithara_xtask_core::util::ensure_clean_tree;
 
 #[derive(Debug, Args)]
 pub(crate) struct ManifestArgs {

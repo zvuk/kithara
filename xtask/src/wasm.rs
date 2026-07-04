@@ -2,9 +2,8 @@ use std::{fs, path::Path, process::Command, sync::LazyLock};
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
+use kithara_xtask_core::{common::project::ProjectConfig, util::check_tool};
 use regex::Regex;
-
-use crate::{common::project::ProjectConfig, util::check_tool};
 
 #[derive(Debug, clap::Subcommand)]
 pub(crate) enum WasmCommand {

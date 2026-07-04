@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use syn::{Block, ExprForLoop, Stmt, spanned::Spanned, visit::Visit};
-
-use super::{Check, Context};
-use crate::common::{
+use kithara_xtask_core::common::{
     parse::{canonical_subject, parse_file},
     violation::Violation,
     walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
 };
+use syn::{Block, ExprForLoop, Stmt, spanned::Spanned, visit::Visit};
+
+use super::{Check, Context};
 
 pub(crate) const ID: &str = "parallel_loops";
 

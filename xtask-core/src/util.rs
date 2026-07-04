@@ -13,7 +13,7 @@ use crate::common::project::ProjectConfig;
 /// scratch / cache / temp dirs so the reusable xtask carries no project-name
 /// literals. Resolved once from the working dir; falls back to `xtask` when
 /// unset or unreadable.
-pub(crate) fn project_name() -> &'static str {
+pub fn project_name() -> &'static str {
     static NAME: OnceLock<String> = OnceLock::new();
     NAME.get_or_init(|| {
         let resolved = ProjectConfig::load(Path::new("."))
@@ -29,7 +29,11 @@ pub(crate) fn project_name() -> &'static str {
 }
 
 /// Check that an external tool is available.
-pub(crate) fn check_tool(tool: &str, args: &[&str], install_hint: &str) -> Result<()> {
+///
+/// # Errors
+///
+/// Returns an error if `tool` cannot be executed successfully with `args`.
+pub fn check_tool(tool: &str, args: &[&str], install_hint: &str) -> Result<()> {
     let ok = Command::new(tool)
         .args(args)
         .stdout(Stdio::null())
@@ -48,7 +52,12 @@ pub(crate) fn check_tool(tool: &str, args: &[&str], install_hint: &str) -> Resul
 /// our edits will mix with their own.
 ///
 /// `scope_label` identifies the caller in the error message (e.g. "typos").
-pub(crate) fn ensure_clean_tree(allow_dirty: bool, scope_label: &str) -> Result<()> {
+///
+/// # Errors
+///
+/// Returns an error if the git status command fails or the worktree is dirty
+/// while `allow_dirty` is false.
+pub fn ensure_clean_tree(allow_dirty: bool, scope_label: &str) -> Result<()> {
     if allow_dirty {
         return Ok(());
     }
@@ -78,7 +87,12 @@ pub(crate) fn ensure_clean_tree(allow_dirty: bool, scope_label: &str) -> Result<
 }
 
 /// Check whether a Rust target is installed (via `rustup`).
-pub(crate) fn check_rust_target(target: &str) -> Result<bool> {
+///
+/// # Errors
+///
+/// Returns an error if `rustup target list --installed` cannot be executed or
+/// its output cannot be read.
+pub fn check_rust_target(target: &str) -> Result<bool> {
     let output = Command::new("rustup")
         .args(["target", "list", "--installed"])
         .output()

@@ -2,12 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use cargo_metadata::TargetKind;
+use kithara_xtask_core::common::{
+    parse::parse_file, scope::packages_in_scope, violation::Violation, walker::walk_rs_files,
+};
 use syn::{ImplItem, Item, ItemImpl, Type, UseTree, Visibility, spanned::Spanned};
 
 use super::{Check, Context};
-use crate::common::{
-    parse::parse_file, scope::packages_in_scope, violation::Violation, walker::walk_rs_files,
-};
 
 pub(crate) const ID: &str = "redundant_reexport";
 

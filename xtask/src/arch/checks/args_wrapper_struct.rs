@@ -1,10 +1,12 @@
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    suppress::Suppressions, violation::Violation, walker::compile_globs,
+};
 
 use super::{
     Check, Context,
     struct_index::{WorkspaceStructIndex, build_index, unique_consumer},
 };
-use crate::common::{suppress::Suppressions, violation::Violation, walker::compile_globs};
 
 pub(crate) const ID: &str = "args_wrapper_struct";
 
@@ -80,8 +82,10 @@ fn emit(
 
 #[cfg(test)]
 mod tests {
+    use kithara_xtask_core::common::scope::Scope;
+
     use super::*;
-    use crate::{arch::checks::struct_index::build_index_from_source, common::scope::Scope};
+    use crate::arch::checks::struct_index::build_index_from_source;
 
     fn count(src: &str) -> usize {
         let idx = build_index_from_source(src);

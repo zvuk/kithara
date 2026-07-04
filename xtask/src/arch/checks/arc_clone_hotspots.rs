@@ -1,15 +1,15 @@
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    parse::parse_file,
+    violation::Violation,
+    walker::{relative_to, workspace_rs_files_scoped},
+};
 use syn::{
     Expr, ImplItem, Item, ItemImpl, Type,
     visit::{self, Visit},
 };
 
 use super::{Check, Context};
-use crate::common::{
-    parse::parse_file,
-    violation::Violation,
-    walker::{relative_to, workspace_rs_files_scoped},
-};
 
 pub(crate) const ID: &str = "arc_clone_hotspots";
 

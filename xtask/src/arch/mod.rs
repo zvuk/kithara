@@ -19,8 +19,7 @@ mod config;
 
 use checks::{Context, registry};
 use config::ArchConfig;
-
-use crate::common::{
+use kithara_xtask_core::common::{
     baseline::{Baseline, RatchetDiff},
     exclude::{apply_cfg_test_exclusion, apply_module_excludes, apply_path_excludes},
     project::ProjectConfig,
@@ -91,7 +90,7 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
     };
 
     if args.fix {
-        let mut outcome = crate::common::fix::FixOutcome::default();
+        let mut outcome = kithara_xtask_core::common::fix::FixOutcome::default();
         for check in &registry {
             if let Some(filter) = &filter
                 && !filter.contains(check.id())

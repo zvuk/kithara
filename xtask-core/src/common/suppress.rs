@@ -4,7 +4,7 @@ const DIRECTIVE_PREFIX: &str = "xtask-lint-ignore";
 
 /// Per-file map of suppressions extracted from comment directives.
 #[derive(Debug, Default)]
-pub(crate) struct Suppressions {
+pub struct Suppressions {
     /// Line number (1-based) → set of check ids suppressed for that
     /// line. An empty set means "suppress everything for this line".
     by_line: HashMap<usize, Suppress>,
@@ -21,7 +21,7 @@ struct Suppress {
 impl Suppressions {
     /// Parse a Rust source file and collect every `xtask-lint-ignore`
     /// directive. Cheap (single linear scan).
-    pub(crate) fn parse(source: &str) -> Self {
+    pub fn parse(source: &str) -> Self {
         let mut by_line: HashMap<usize, Suppress> = HashMap::new();
         let mut pending: Option<Suppress> = None;
         for (idx, line) in source.lines().enumerate() {
@@ -46,7 +46,8 @@ impl Suppressions {
     }
 
     /// Whether `check_id` is suppressed at `line` (1-based).
-    pub(crate) fn is_suppressed(&self, line: usize, check_id: &str) -> bool {
+    #[must_use]
+    pub fn is_suppressed(&self, line: usize, check_id: &str) -> bool {
         let Some(s) = self.by_line.get(&line) else {
             return false;
         };

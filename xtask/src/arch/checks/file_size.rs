@@ -1,13 +1,13 @@
 use std::fs;
 
 use anyhow::Result;
-
-use super::{Check, Context};
-use crate::common::{
+use kithara_xtask_core::common::{
     exclude::non_test_line_count,
     violation::Violation,
     walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
 };
+
+use super::{Check, Context};
 
 pub(crate) const ID: &str = "file_size";
 

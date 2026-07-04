@@ -6,10 +6,12 @@ use std::{
 use anyhow::Result;
 use cargo_metadata::Package;
 use glob::Pattern;
+use kithara_xtask_core::common::{
+    scope::packages_in_scope, violation::Violation, walker::walk_rs_files,
+};
 use syn::{Item, UseTree};
 
 use super::{Check, Context};
-use crate::common::{scope::packages_in_scope, violation::Violation, walker::walk_rs_files};
 
 pub(crate) const ID: &str = "module_layers";
 

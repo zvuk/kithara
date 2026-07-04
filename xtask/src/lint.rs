@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
+use kithara_xtask_core::common::style::bold_cyan;
 
-use crate::{arch, common::style::bold_cyan, idioms, style};
+use crate::{arch, idioms, style};
 
 #[derive(Debug, Args)]
 pub(crate) struct LintArgs {

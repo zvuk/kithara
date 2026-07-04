@@ -15,8 +15,8 @@ pub(crate) mod rewriter;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use block::{ExpansionError, expand_blocks};
-pub(crate) use rewriter::SourceRewriter;
+pub use block::{ExpansionError, expand_blocks};
+pub use rewriter::SourceRewriter;
 
 /// Outcome of running a single check's `fix()` across the workspace.
 ///
@@ -27,11 +27,11 @@ pub(crate) use rewriter::SourceRewriter;
 /// could change semantics. A single fix run can both patch some files
 /// and skip others; both pieces of information are surfaced.
 #[derive(Debug, Default)]
-pub(crate) struct FixOutcome {
-    pub(crate) writes: usize,
-    pub(crate) skipped: Vec<String>,
+pub struct FixOutcome {
+    pub writes: usize,
+    pub skipped: Vec<String>,
     /// Human-readable description of each change the fix made (or, in a dry
     /// run, would make). Surfaced by the runner so `--fix` without `--apply`
     /// shows exactly what will be removed.
-    pub(crate) changes: Vec<String>,
+    pub changes: Vec<String>,
 }

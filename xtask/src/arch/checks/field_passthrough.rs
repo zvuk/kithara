@@ -1,16 +1,16 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::Result;
-use quote::ToTokens;
-use syn::{Field, Fields, GenericArgument, Item, ItemStruct, PathArguments, Type, TypePath};
-
-use super::{Check, Context};
-use crate::common::{
+use kithara_xtask_core::common::{
     parse::parse_file,
     suppress::Suppressions,
     violation::Violation,
     walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
 };
+use quote::ToTokens;
+use syn::{Field, Fields, GenericArgument, Item, ItemStruct, PathArguments, Type, TypePath};
+
+use super::{Check, Context};
 
 pub(crate) const ID: &str = "field_passthrough";
 

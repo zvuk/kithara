@@ -1,14 +1,14 @@
 use std::{collections::HashSet, fs};
 
 use anyhow::Result;
-use syn::{File, Item, ItemMod, spanned::Spanned};
-
-use super::{Check, Context};
-use crate::common::{
+use kithara_xtask_core::common::{
     parse::parse_file,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
+use syn::{File, Item, ItemMod, spanned::Spanned};
+
+use super::{Check, Context};
 
 pub(crate) const ID: &str = "shared_state";
 

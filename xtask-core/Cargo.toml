@@ -16,6 +16,15 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../crates/kithara-w
 anyhow = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { workspace = true }
+glob = { workspace = true }
+proc-macro2 = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+syn = { workspace = true, features = ["full", "visit"] }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

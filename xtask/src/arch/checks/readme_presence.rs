@@ -1,9 +1,9 @@
 use std::fs;
 
 use anyhow::Result;
+use kithara_xtask_core::common::{scope::packages_in_scope, violation::Violation};
 
 use super::{Check, Context};
-use crate::common::{scope::packages_in_scope, violation::Violation};
 
 pub(crate) const ID: &str = "readme_presence";
 

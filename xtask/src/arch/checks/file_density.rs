@@ -1,11 +1,11 @@
 use anyhow::{Context as _, Result};
-
-use super::{Check, Context};
-use crate::common::{
+use kithara_xtask_core::common::{
     parse::{count_items, parse_file},
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
+
+use super::{Check, Context};
 
 pub(crate) const ID: &str = "file_density";
 

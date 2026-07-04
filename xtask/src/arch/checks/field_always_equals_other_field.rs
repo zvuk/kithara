@@ -1,10 +1,12 @@
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    suppress::Suppressions, violation::Violation, walker::compile_globs,
+};
 
 use super::{
     Check, Context,
     struct_index::{LiteralSite, WorkspaceStructIndex, build_index, full_literal_sites},
 };
-use crate::common::{suppress::Suppressions, violation::Violation, walker::compile_globs};
 
 pub(crate) const ID: &str = "field_always_equals_other_field";
 

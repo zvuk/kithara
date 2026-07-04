@@ -3,9 +3,8 @@ use std::{fs, path::Path, process::Command};
 use anyhow::{Context, Result, bail};
 use cargo_metadata::{Metadata, MetadataCommand};
 use clap::{Args, ValueEnum};
+use kithara_xtask_core::util::check_tool;
 use serde::Deserialize;
-
-use crate::util::check_tool;
 
 struct Consts;
 impl Consts {

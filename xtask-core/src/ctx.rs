@@ -2,8 +2,11 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
+use crate::common::project::ProjectConfig;
+
 pub struct Ctx {
     pub root: PathBuf,
+    pub config: ProjectConfig,
 }
 
 impl Ctx {
@@ -12,14 +15,17 @@ impl Ctx {
     /// # Errors
     ///
     /// Returns an error if Cargo metadata cannot be resolved for the current
-    /// working directory.
+    /// working directory or the project config cannot be loaded.
     pub fn load() -> Result<Self> {
         let metadata = cargo_metadata::MetadataCommand::new()
             .no_deps()
             .exec()
             .context("resolving workspace root via cargo metadata")?;
         let root = PathBuf::from(metadata.workspace_root.as_std_path());
-        Ok(Self { root })
+        let config_path = root.join(".config/xtask.toml");
+        let config = ProjectConfig::load(&root)
+            .with_context(|| format!("loading {}", config_path.display()))?;
+        Ok(Self { root, config })
     }
 }
 
@@ -65,5 +71,6 @@ mod tests {
         let ctx = Ctx::load().expect("ctx loads inside the kithara workspace");
         assert!(ctx.root.join("Cargo.toml").is_file());
         assert!(ctx.root.join("xtask-core").is_dir());
+        assert_eq!(ctx.config.project.name, "kithara");
     }
 }

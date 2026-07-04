@@ -6,12 +6,12 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
-
-use crate::{
-    BuildProfile,
+use kithara_xtask_core::{
     common::project::ProjectConfig,
     util::{check_rust_target, check_tool},
 };
+
+use crate::BuildProfile;
 
 /// Module constants for `cargo xtask android run`. Grouped per the
 /// `style.multiple-private-module-consts` lint.

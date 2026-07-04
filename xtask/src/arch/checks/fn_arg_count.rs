@@ -1,12 +1,12 @@
 use anyhow::Result;
-use syn::{FnArg, ImplItem, Item, ItemImpl, Signature};
-
-use super::{Check, Context};
-use crate::common::{
+use kithara_xtask_core::common::{
     parse::parse_file,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
+use syn::{FnArg, ImplItem, Item, ItemImpl, Signature};
+
+use super::{Check, Context};
 
 pub(crate) const ID: &str = "fn_arg_count";
 

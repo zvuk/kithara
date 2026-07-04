@@ -4,6 +4,11 @@ use std::{
 };
 
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    parse::{parse_file, self_ty_name},
+    violation::Violation,
+    walker::{relative_to, workspace_rs_files_scoped},
+};
 use proc_macro2::{TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::{
@@ -12,11 +17,6 @@ use syn::{
 };
 
 use super::{Check, Context};
-use crate::common::{
-    parse::{parse_file, self_ty_name},
-    violation::Violation,
-    walker::{relative_to, workspace_rs_files_scoped},
-};
 
 pub(crate) const ID: &str = "const_locality";
 

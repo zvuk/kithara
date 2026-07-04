@@ -1,12 +1,12 @@
 use std::fs;
 
 use anyhow::Result;
-
-use super::{Check, Context};
-use crate::common::{
+use kithara_xtask_core::common::{
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
+
+use super::{Check, Context};
 
 pub(crate) const ID: &str = "platform_layer_hygiene";
 

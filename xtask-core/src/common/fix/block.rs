@@ -6,14 +6,14 @@ use std::ops::Range;
 /// the item is reordered. `item_bytes` points to the bare item span and is
 /// kept around for diagnostics and ordering keys.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BlockRange {
-    pub(crate) bytes: Range<usize>,
-    pub(crate) item_bytes: Range<usize>,
+pub struct BlockRange {
+    pub bytes: Range<usize>,
+    pub item_bytes: Range<usize>,
 }
 
 /// Reasons the engine refuses to compute block ranges for a sequence.
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum ExpansionError {
+pub enum ExpansionError {
     /// A line-comment was found between two items, separated from both by a
     /// blank line. Reordering would silently break its visual association.
     FloatingComment { line: usize, snippet: String },
@@ -42,7 +42,13 @@ pub(crate) enum ExpansionError {
 ///
 /// `item_spans` must be in source order and must each lie entirely inside
 /// `scope_bytes`.
-pub(crate) fn expand_blocks(
+///
+/// # Errors
+///
+/// Returns an error when a span is out of range, item spans are out of source
+/// order, adjacent expanded blocks overlap, or a floating comment would be
+/// detached from its item.
+pub fn expand_blocks(
     src: &str,
     scope_bytes: Range<usize>,
     item_spans: &[Range<usize>],

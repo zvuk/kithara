@@ -2,8 +2,7 @@ use std::{collections::BTreeSet, path::Path, process::Command};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
-
-use crate::common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig};
+use kithara_xtask_core::common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig};
 
 #[derive(Debug, Args)]
 #[command(trailing_var_arg = true)]

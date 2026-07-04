@@ -1,6 +1,11 @@
 use std::collections::HashSet;
 
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    parse::parse_file,
+    violation::Violation,
+    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+};
 use syn::{
     Block, Expr, ExprPath, Local, PatIdent, Stmt,
     spanned::Spanned,
@@ -8,14 +13,7 @@ use syn::{
 };
 
 use super::{Check, Context};
-use crate::{
-    common::{
-        parse::parse_file,
-        violation::Violation,
-        walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
-    },
-    idioms::config::GuardCascadeConfig,
-};
+use crate::idioms::config::GuardCascadeConfig;
 
 pub(crate) const ID: &str = "guard_cascade";
 

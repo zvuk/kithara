@@ -423,8 +423,12 @@ test_crates = [
   "kithara-test-macros",
   "kithara-fuzz",
 ]
-# Skipped entirely: build tooling and the cargo-hakari workspace-hack shim
-# own no production contract and pull in unrelated symbol names.
+# Ignored as export owners: build tooling and the cargo-hakari workspace-hack
+# shim own no production contract, so their definitions are never collected.
+# Ignored crates may still credit workspace APIs through explicit
+# `workspace_crate::...` paths and matching `use workspace_crate::...` leaves;
+# bare idents, unrooted method names, unqualified macro tokens, and attribute
+# tokens remain ignored.
 ignore_crates = ["xtask", "kithara-workspace-hack"]
 # Attribute path segments marking an external entry point with no in-tree
 # Rust caller; such definitions are never flagged.

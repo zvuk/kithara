@@ -7,10 +7,11 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
+use kithara_xtask_core::common::project::ProjectConfig;
 use plist::Value as PlistValue;
 use regex::Regex;
 
-use crate::{apple_docgen, common::project::ProjectConfig};
+use crate::apple_docgen;
 
 /// Module constants for `cargo xtask apple run`. Grouped per the
 /// `style.multiple-private-module-consts` lint.
@@ -742,7 +743,10 @@ fn run_single(profile: crate::BuildProfile) -> Result<()> {
     let rx_src = resolve_rxswift(&root)?;
     println!("==> RxSwift source: {}", rx_src.display());
 
-    let temp = TempWorkDir::create(&format!("{}-apple-single", crate::util::project_name()))?;
+    let temp = TempWorkDir::create(&format!(
+        "{}-apple-single",
+        kithara_xtask_core::util::project_name()
+    ))?;
     let work = temp.path().to_path_buf();
     let merged = work.join("merged");
     fs::create_dir_all(&merged)?;

@@ -1,15 +1,15 @@
 use std::collections::{BTreeMap, HashSet};
 
 use anyhow::Result;
-use syn::{Block, Expr, Fields, ImplItem, Item, ItemImpl, ItemStruct, Stmt, Type};
-
-use super::{Check, Context};
-use crate::common::{
+use kithara_xtask_core::common::{
     exclude::attrs_have_cfg_test,
     parse::parse_file,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
+use syn::{Block, Expr, Fields, ImplItem, Item, ItemImpl, ItemStruct, Stmt, Type};
+
+use super::{Check, Context};
 
 pub(crate) const ID: &str = "god_struct";
 

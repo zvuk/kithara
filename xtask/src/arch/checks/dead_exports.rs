@@ -6,9 +6,15 @@ use std::{
 
 use anyhow::Result;
 use cargo_metadata::{Package, Target, TargetKind};
+use kithara_xtask_core::common::{
+    fix::{FixOutcome, SourceRewriter, expand_blocks},
+    parse::{is_pub_visibility, parse_file},
+    violation::Violation,
+};
 use quote::ToTokens;
 use syn::{
-    Attribute, Ident, ImplItem, Item, Meta, UseGroup, UsePath, UseTree, Visibility,
+    Attribute, Expr, Fields, FnArg, Ident, ImplItem, Item, ItemStruct, ItemUse, Local, Member,
+    Meta, Pat, Type, UseGroup, UsePath, UseTree, Visibility,
     punctuated::Punctuated,
     spanned::Spanned,
     token,
@@ -16,11 +22,6 @@ use syn::{
 };
 
 use super::{super::config::DeadExportsThreshold, Check, Context};
-use crate::common::{
-    fix::{FixOutcome, SourceRewriter, expand_blocks},
-    parse::{is_pub_visibility, parse_file},
-    violation::Violation,
-};
 
 pub(crate) const ID: &str = "dead_exports";
 
@@ -44,9 +45,10 @@ impl Check for DeadExports {
     }
 }
 
-/// Walk every non-ignored workspace member: collect strict-`pub` definitions
-/// from production-crate `src/`, and identifier references (prod vs test) from
-/// everywhere. Shared by `run` (report) and `fix` (delete).
+/// Walk every workspace member: collect strict-`pub` definitions from
+/// production-crate `src/`, and identifier references (prod vs test) from
+/// everywhere. Ignored crates contribute only workspace-qualified references.
+/// Shared by `run` (report) and `fix` (delete).
 fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
     let kinds: HashSet<&str> = cfg.kinds.iter().map(String::as_str).collect();
     let member_ids: HashSet<_> = ctx.metadata.workspace_members.iter().collect();
@@ -56,6 +58,10 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
         .iter()
         .filter(|p| member_ids.contains(&p.id))
         .collect();
+    let workspace_crates: HashSet<String> = members
+        .iter()
+        .map(|pkg| pkg.name.replace('-', "_"))
+        .collect();
 
     let mut refs = Refs::default();
     let mut defs: Vec<Def> = Vec::new();
@@ -64,9 +70,6 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
 
     for pkg in &members {
         let role = classify(pkg, cfg);
-        if role == Role::Ignored {
-            continue;
-        }
         for target in targets_sorted(pkg) {
             if target.kind.contains(&TargetKind::CustomBuild) {
                 continue;
@@ -74,7 +77,9 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
             let Some(root) = target.src_path.parent() else {
                 continue;
             };
-            let base_in_test = role == Role::TestOnly || target_is_testish(target);
+            let qualified_only = role == Role::Ignored;
+            let base_in_test =
+                !qualified_only && (role == Role::TestOnly || target_is_testish(target));
             for path in walk_rs(root.as_std_path()) {
                 if !seen.insert(path.clone()) {
                     continue;
@@ -86,6 +91,11 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
                     in_test: base_in_test,
                     external: role == Role::TestOnly,
                     refs: &mut refs,
+                    qualified_only,
+                    workspace_crates: &workspace_crates,
+                    workspace_imports: HashSet::new(),
+                    workspace_values: HashSet::new(),
+                    workspace_self_fields: HashSet::new(),
                 }
                 .visit_file(&file);
 
@@ -693,6 +703,11 @@ struct RefCollector<'a> {
     in_test: bool,
     external: bool,
     refs: &'a mut Refs,
+    qualified_only: bool,
+    workspace_crates: &'a HashSet<String>,
+    workspace_imports: HashSet<String>,
+    workspace_values: HashSet<String>,
+    workspace_self_fields: HashSet<String>,
 }
 
 impl RefCollector<'_> {
@@ -720,6 +735,184 @@ impl RefCollector<'_> {
         }
     }
 
+    fn is_workspace_crate(&self, ident: &Ident) -> bool {
+        self.workspace_crates
+            .iter()
+            .any(|crate_name| ident == crate_name.as_str())
+    }
+
+    fn is_workspace_import(&self, ident: &Ident) -> bool {
+        self.workspace_imports
+            .iter()
+            .any(|import| ident == import.as_str())
+    }
+
+    fn is_workspace_value(&self, ident: &Ident) -> bool {
+        self.workspace_values
+            .iter()
+            .any(|value| ident == value.as_str())
+    }
+
+    fn path_is_workspace_rooted(&self, path: &syn::Path) -> bool {
+        path.segments.first().is_some_and(|first| {
+            self.is_workspace_crate(&first.ident) || self.is_workspace_import(&first.ident)
+        })
+    }
+
+    fn record_qualified_path(&mut self, path: &syn::Path) {
+        let Some(first) = path.segments.first() else {
+            return;
+        };
+        if self.qualified_only
+            && !self.is_workspace_crate(&first.ident)
+            && (!self.is_workspace_import(&first.ident) || path.segments.len() == 1)
+        {
+            return;
+        }
+        for seg in &path.segments {
+            self.record(seg.ident.to_string());
+        }
+    }
+
+    fn record_qualified_use_tree(&mut self, tree: &UseTree, rooted: bool) {
+        match tree {
+            UseTree::Path(path) => {
+                let next_rooted = rooted || self.is_workspace_crate(&path.ident);
+                if next_rooted && use_tree_imports_self(&path.tree) {
+                    self.workspace_imports.insert(path.ident.to_string());
+                }
+                if next_rooted {
+                    self.record_qualified_use_tree(&path.tree, next_rooted);
+                }
+            }
+            UseTree::Name(name) if rooted => {
+                self.record(name.ident.to_string());
+                if name.ident != "self" {
+                    self.workspace_imports.insert(name.ident.to_string());
+                }
+            }
+            UseTree::Rename(rename) if rooted => {
+                self.record(rename.ident.to_string());
+                self.workspace_imports.insert(rename.rename.to_string());
+            }
+            UseTree::Group(group) => {
+                for item in &group.items {
+                    self.record_qualified_use_tree(item, rooted);
+                }
+            }
+            UseTree::Glob(_) | UseTree::Name(_) | UseTree::Rename(_) => {}
+        }
+    }
+
+    fn record_workspace_inputs(&mut self, inputs: &Punctuated<FnArg, token::Comma>) {
+        for input in inputs {
+            let FnArg::Typed(arg) = input else {
+                continue;
+            };
+            if !self.type_is_workspace(&arg.ty) {
+                continue;
+            }
+            if let Some(ident) = pat_ident(&arg.pat) {
+                self.workspace_values.insert(ident.to_string());
+            }
+        }
+    }
+
+    fn record_workspace_local(&mut self, local: &Local) {
+        let typed_workspace = pat_type(&local.pat).is_some_and(|ty| self.type_is_workspace(ty));
+        let init_workspace = local
+            .init
+            .as_ref()
+            .is_some_and(|init| self.expr_returns_workspace_value(&init.expr));
+        if !typed_workspace && !init_workspace {
+            return;
+        }
+        if let Some(ident) = pat_ident(&local.pat) {
+            self.workspace_values.insert(ident.to_string());
+        }
+    }
+
+    fn record_workspace_fields(&mut self, fields: &Fields) {
+        for field in fields {
+            if self.type_is_workspace(&field.ty)
+                && let Some(ident) = &field.ident
+            {
+                self.workspace_self_fields.insert(ident.to_string());
+            }
+        }
+    }
+
+    fn type_is_workspace(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Path(path) => self.path_is_workspace_rooted(&path.path),
+            Type::Reference(reference) => self.type_is_workspace(&reference.elem),
+            Type::Group(group) => self.type_is_workspace(&group.elem),
+            Type::Paren(paren) => self.type_is_workspace(&paren.elem),
+            _ => false,
+        }
+    }
+
+    fn expr_returns_workspace_value(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Call(call) => self.expr_call_returns_workspace_value(&call.func),
+            Expr::Try(expr_try) => self.expr_returns_workspace_value(&expr_try.expr),
+            Expr::Group(group) => self.expr_returns_workspace_value(&group.expr),
+            Expr::Paren(paren) => self.expr_returns_workspace_value(&paren.expr),
+            Expr::Reference(reference) => self.expr_returns_workspace_value(&reference.expr),
+            _ => self.expr_is_workspace_value(expr),
+        }
+    }
+
+    fn expr_call_returns_workspace_value(&self, func: &Expr) -> bool {
+        let Expr::Path(path) = func else {
+            return false;
+        };
+        let Some(first) = path.path.segments.first() else {
+            return false;
+        };
+        path.path.segments.len() > 1
+            && self.is_workspace_import(&first.ident)
+            && starts_with_uppercase(&first.ident)
+    }
+
+    fn expr_is_workspace_value(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Path(path) => {
+                let Some(first) = path.path.segments.first() else {
+                    return false;
+                };
+                self.is_workspace_value(&first.ident)
+                    || self.is_workspace_crate(&first.ident)
+                    || (self.is_workspace_import(&first.ident) && path.path.segments.len() > 1)
+            }
+            Expr::Field(field) => self.expr_field_is_workspace_value(field),
+            Expr::Call(call) => self.expr_call_returns_workspace_value(&call.func),
+            Expr::Try(expr_try) => self.expr_is_workspace_value(&expr_try.expr),
+            Expr::Group(group) => self.expr_is_workspace_value(&group.expr),
+            Expr::Paren(paren) => self.expr_is_workspace_value(&paren.expr),
+            Expr::Reference(reference) => self.expr_is_workspace_value(&reference.expr),
+            _ => false,
+        }
+    }
+
+    fn expr_field_is_workspace_value(&self, field: &syn::ExprField) -> bool {
+        let Expr::Path(base) = field.base.as_ref() else {
+            return false;
+        };
+        let Some(first) = base.path.segments.first() else {
+            return false;
+        };
+        if first.ident != "self" {
+            return false;
+        }
+        let Member::Named(member) = &field.member else {
+            return false;
+        };
+        self.workspace_self_fields
+            .iter()
+            .any(|field_name| member == field_name.as_str())
+    }
+
     /// Record every identifier inside a token stream (macro body or attribute
     /// args). `syn` does not parse these — `assert_eq!(x.foo())`,
     /// `tracing::info!(bar)`, `#[builder(default = BAZ)]` — so without this a
@@ -727,6 +920,9 @@ impl RefCollector<'_> {
     /// dead. Over-recording here is safe: it can only suppress a flag, never
     /// cause a false deletion.
     fn record_tokens(&mut self, ts: &proc_macro2::TokenStream) {
+        if self.qualified_only {
+            return;
+        }
         for tree in ts.clone() {
             match tree {
                 proc_macro2::TokenTree::Ident(id) => self.record(id.to_string()),
@@ -735,6 +931,96 @@ impl RefCollector<'_> {
             }
         }
     }
+
+    fn record_qualified_tokens(&mut self, ts: &proc_macro2::TokenStream) {
+        let tokens: Vec<proc_macro2::TokenTree> = ts.clone().into_iter().collect();
+        let mut idx = 0;
+        while idx < tokens.len() {
+            match &tokens[idx] {
+                proc_macro2::TokenTree::Ident(ident)
+                    if self.is_workspace_crate(ident) || self.is_workspace_import(ident) =>
+                {
+                    if let Some((next, names)) = qualified_token_path(&tokens, idx) {
+                        for name in names {
+                            self.record(name);
+                        }
+                        idx = next;
+                        continue;
+                    }
+                }
+                proc_macro2::TokenTree::Group(group) => {
+                    self.record_qualified_tokens(&group.stream());
+                }
+                _ => {}
+            }
+            idx += 1;
+        }
+    }
+}
+
+fn qualified_token_path(
+    tokens: &[proc_macro2::TokenTree],
+    start: usize,
+) -> Option<(usize, Vec<String>)> {
+    let proc_macro2::TokenTree::Ident(root) = &tokens[start] else {
+        return None;
+    };
+    let mut names = vec![root.to_string()];
+    let mut idx = start;
+    while token_path_sep_at(tokens, idx + 1) {
+        let next_ident = idx + 3;
+        let Some(proc_macro2::TokenTree::Ident(ident)) = tokens.get(next_ident) else {
+            break;
+        };
+        names.push(ident.to_string());
+        idx = next_ident;
+    }
+    (names.len() > 1).then_some((idx + 1, names))
+}
+
+fn token_path_sep_at(tokens: &[proc_macro2::TokenTree], idx: usize) -> bool {
+    let Some(proc_macro2::TokenTree::Punct(first)) = tokens.get(idx) else {
+        return false;
+    };
+    let Some(proc_macro2::TokenTree::Punct(second)) = tokens.get(idx + 1) else {
+        return false;
+    };
+    first.as_char() == ':' && second.as_char() == ':'
+}
+
+fn use_tree_imports_self(tree: &UseTree) -> bool {
+    match tree {
+        UseTree::Path(path) => use_tree_imports_self(&path.tree),
+        UseTree::Name(name) => name.ident == "self",
+        UseTree::Rename(rename) => rename.ident == "self",
+        UseTree::Group(group) => group.items.iter().any(use_tree_imports_self),
+        UseTree::Glob(_) => false,
+    }
+}
+
+fn pat_ident(pat: &Pat) -> Option<&Ident> {
+    match pat {
+        Pat::Ident(ident) => Some(&ident.ident),
+        Pat::Reference(reference) => pat_ident(reference.pat.as_ref()),
+        Pat::Type(pat_type) => pat_ident(pat_type.pat.as_ref()),
+        _ => None,
+    }
+}
+
+fn pat_type(pat: &Pat) -> Option<&Type> {
+    match pat {
+        Pat::Reference(reference) => pat_type(reference.pat.as_ref()),
+        Pat::Type(pat_type) => Some(pat_type.ty.as_ref()),
+        _ => None,
+    }
+}
+
+fn starts_with_uppercase(ident: &Ident) -> bool {
+    ident
+        .to_string()
+        .chars()
+        .next()
+        .is_some_and(char::is_uppercase)
 }
 
 impl<'ast> Visit<'ast> for RefCollector<'_> {
@@ -746,52 +1032,122 @@ impl<'ast> Visit<'ast> for RefCollector<'_> {
     }
 
     fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
-        let prev = self.in_test;
-        self.in_test = prev || attrs_mark_test(&f.attrs);
+        let prev_in_test = self.in_test;
+        let prev_values = self.workspace_values.clone();
+        self.in_test = prev_in_test || attrs_mark_test(&f.attrs);
+        if self.qualified_only {
+            self.record_workspace_inputs(&f.sig.inputs);
+        }
         visit::visit_item_fn(self, f);
-        self.in_test = prev;
+        self.workspace_values = prev_values;
+        self.in_test = prev_in_test;
     }
 
     fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
-        let prev = self.in_test;
-        self.in_test = prev || attrs_mark_test(&f.attrs);
+        let prev_in_test = self.in_test;
+        let prev_values = self.workspace_values.clone();
+        self.in_test = prev_in_test || attrs_mark_test(&f.attrs);
+        if self.qualified_only {
+            self.record_workspace_inputs(&f.sig.inputs);
+        }
         visit::visit_impl_item_fn(self, f);
-        self.in_test = prev;
+        self.workspace_values = prev_values;
+        self.in_test = prev_in_test;
+    }
+
+    fn visit_item_struct(&mut self, item_struct: &'ast ItemStruct) {
+        if self.qualified_only {
+            self.record_workspace_fields(&item_struct.fields);
+        }
+        visit::visit_item_struct(self, item_struct);
+    }
+
+    fn visit_local(&mut self, local: &'ast Local) {
+        if self.qualified_only {
+            self.record_workspace_local(local);
+        }
+        visit::visit_local(self, local);
     }
 
     fn visit_attribute(&mut self, a: &'ast Attribute) {
+        if self.qualified_only {
+            return;
+        }
         if let Meta::List(list) = &a.meta {
             self.record_tokens(&list.tokens);
         }
     }
 
     fn visit_macro(&mut self, m: &'ast syn::Macro) {
+        if self.qualified_only {
+            self.record_qualified_tokens(&m.tokens);
+            return;
+        }
         for seg in &m.path.segments {
             self.record(seg.ident.to_string());
         }
         self.record_tokens(&m.tokens);
     }
 
-    fn visit_path(&mut self, p: &'ast syn::Path) {
-        for seg in &p.segments {
-            self.record(seg.ident.to_string());
+    fn visit_item_use(&mut self, item_use: &'ast ItemUse) {
+        if self.qualified_only {
+            self.record_qualified_use_tree(&item_use.tree, false);
+        } else {
+            visit::visit_item_use(self, item_use);
         }
+    }
+
+    fn visit_path(&mut self, p: &'ast syn::Path) {
+        self.record_qualified_path(p);
         visit::visit_path(self, p);
     }
 
     fn visit_expr_method_call(&mut self, mc: &'ast syn::ExprMethodCall) {
-        self.record(mc.method.to_string());
+        if self.qualified_only {
+            if self.expr_is_workspace_value(&mc.receiver) {
+                self.record(mc.method.to_string());
+            }
+        } else {
+            self.record(mc.method.to_string());
+        }
         visit::visit_expr_method_call(self, mc);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, fs, path::Path};
+    use std::{
+        collections::{HashMap, HashSet},
+        fs,
+        path::Path,
+    };
 
-    use super::mod_chain_gated;
+    use syn::visit::Visit;
+
+    use super::{RefCollector, Refs, mod_chain_gated};
 
     const GATE: &str = "#[cfg(all(not(target_arch = \"wasm32\"), feature = \"flash\"))]";
+
+    fn collect_refs(src: &str, qualified_only: bool) -> Refs {
+        let file = syn::parse_file(src).unwrap();
+        let workspace_crates: HashSet<String> = ["kithara_xtask_core"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let mut refs = Refs::default();
+        RefCollector {
+            in_test: false,
+            external: false,
+            refs: &mut refs,
+            qualified_only,
+            workspace_crates: &workspace_crates,
+            workspace_imports: HashSet::new(),
+            workspace_values: HashSet::new(),
+            workspace_self_fields: HashSet::new(),
+        }
+        .visit_file(&file);
+        refs
+    }
 
     fn write(root: &Path, rel: &str, content: &str) {
         let path = root.join(rel);
@@ -802,6 +1158,112 @@ mod tests {
     fn gated(root: &Path, rel: &str) -> bool {
         let mut cache = HashMap::new();
         mod_chain_gated(&root.join("lib.rs"), &root.join(rel), &mut cache)
+    }
+
+    #[test]
+    fn qualified_only_records_workspace_qualified_inline_path() {
+        let refs = collect_refs(
+            r#"
+            fn run() {
+                kithara_xtask_core::util::check_tool();
+            }
+            "#,
+            true,
+        );
+
+        assert!(refs.prod.contains("check_tool"));
+    }
+
+    #[test]
+    fn qualified_only_records_workspace_qualified_use_leaf() {
+        let refs = collect_refs(
+            r#"
+            use kithara_xtask_core::util::{check_tool as ct, project_name};
+
+            fn run() {
+                ct();
+                project_name();
+            }
+            "#,
+            true,
+        );
+
+        assert!(refs.prod.contains("check_tool"));
+        assert!(refs.prod.contains("project_name"));
+        assert!(
+            !refs.prod.contains("ct"),
+            "a renamed import credits the source name, not the local alias"
+        );
+    }
+
+    #[test]
+    fn qualified_only_ignores_unqualified_names_methods_macros_and_attrs() {
+        let refs = collect_refs(
+            r#"
+            #[kithara_xtask_core::marker(check_tool)]
+            fn run() {
+                check_tool();
+                target.check_tool();
+                kithara_xtask_core::some_macro!(check_tool);
+            }
+            "#,
+            true,
+        );
+
+        assert!(!refs.prod.contains("check_tool"));
+        assert!(!refs.prod.contains("some_macro"));
+    }
+
+    #[test]
+    fn qualified_only_records_methods_on_workspace_imported_values() {
+        let refs = collect_refs(
+            r#"
+            use kithara_xtask_core::common::{
+                baseline::Baseline,
+                report,
+                scope::Scope,
+            };
+
+            fn run(scope: &Scope) {
+                let baseline = Baseline::from_report(&report);
+                let saved = baseline.save();
+                let scoped = scope.key_in_scope("x");
+                print!("{}", report::render_json(saved, scoped));
+            }
+            "#,
+            true,
+        );
+
+        assert!(refs.prod.contains("from_report"));
+        assert!(refs.prod.contains("save"));
+        assert!(refs.prod.contains("key_in_scope"));
+        assert!(refs.prod.contains("render_json"));
+    }
+
+    #[test]
+    fn normal_collection_keeps_existing_reference_sources() {
+        let refs = collect_refs(
+            r#"
+            use kithara_xtask_core::util::imported_leaf;
+
+            #[some_attr(attr_token)]
+            fn run() {
+                kithara_xtask_core::util::inline_path();
+                receiver.method_name();
+                tracing::info!(macro_token);
+            }
+            "#,
+            false,
+        );
+
+        assert!(refs.prod.contains("inline_path"));
+        assert!(refs.prod.contains("method_name"));
+        assert!(refs.prod.contains("macro_token"));
+        assert!(refs.prod.contains("attr_token"));
+        assert!(
+            !refs.prod.contains("imported_leaf"),
+            "normal mode must not start counting use-tree leaves"
+        );
     }
 
     #[test]

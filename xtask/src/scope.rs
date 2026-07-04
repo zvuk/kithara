@@ -1,8 +1,7 @@
 use anyhow::Result;
 use cargo_metadata::MetadataCommand;
 use clap::Args;
-
-use crate::common::scope::{Scope, Tool};
+use kithara_xtask_core::common::scope::{Scope, Tool};
 
 #[derive(Debug, Args)]
 pub(crate) struct ScopeArgs {

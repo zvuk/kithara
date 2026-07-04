@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use syn::{Fields, Item, ItemStruct};
-
-use super::{Check, Context};
-use crate::common::{
+use kithara_xtask_core::common::{
     parse::{is_strict_pub, parse_file},
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
+use syn::{Fields, Item, ItemStruct};
+
+use super::{Check, Context};
 
 pub(crate) const ID: &str = "pub_struct_open_fields";
 

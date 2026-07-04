@@ -1,18 +1,16 @@
 use std::collections::HashSet;
 
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    parse::{parse_file, self_ty_name},
+    suppress::Suppressions,
+    violation::Violation,
+    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+};
 use syn::{ImplItem, Item, ItemImpl, ReturnType, Type};
 
 use super::{Check, Context};
-use crate::{
-    arch::config::MultiConstructorThreshold,
-    common::{
-        parse::{parse_file, self_ty_name},
-        suppress::Suppressions,
-        violation::Violation,
-        walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
-    },
-};
+use crate::arch::config::MultiConstructorThreshold;
 
 pub(crate) const ID: &str = "multi_constructor";
 
@@ -155,8 +153,9 @@ fn is_result_of_self(tp: &syn::TypePath, target: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use kithara_xtask_core::common::suppress::Suppressions;
+
     use super::*;
-    use crate::common::suppress::Suppressions;
 
     fn count(src: &str) -> usize {
         let cfg = MultiConstructorThreshold::default();

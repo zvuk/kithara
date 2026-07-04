@@ -1,13 +1,11 @@
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    violation::Violation,
+    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+};
 
 use super::{Check, Context};
-use crate::{
-    arch::config::AccessorSeverity,
-    common::{
-        violation::Violation,
-        walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
-    },
-};
+use crate::arch::config::AccessorSeverity;
 
 pub(crate) const ID: &str = "single_word_filenames";
 

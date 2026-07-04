@@ -1,6 +1,11 @@
 use std::path::Path;
 
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    parse::parse_file,
+    violation::Violation,
+    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+};
 use syn::{
     BinOp, ExprBinary, ExprIf, ExprMatch, ImplItem, Item, ItemImpl, Local, Stmt,
     spanned::Spanned,
@@ -8,11 +13,6 @@ use syn::{
 };
 
 use super::{Check, Context};
-use crate::common::{
-    parse::parse_file,
-    violation::Violation,
-    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
-};
 
 pub(crate) const ID: &str = "function_branch_density";
 

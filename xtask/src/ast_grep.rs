@@ -6,9 +6,8 @@ use std::{
 
 use anyhow::{Result, bail};
 use clap::Args;
+use kithara_xtask_core::{common::project::ProjectConfig, util::ensure_clean_tree};
 use serde::Deserialize;
-
-use crate::{common::project::ProjectConfig, util::ensure_clean_tree};
 
 #[derive(Debug, Args)]
 pub(crate) struct AstGrepArgs {
@@ -259,7 +258,7 @@ fn print_grouped(groups: &BTreeMap<String, RuleGroup>) {
             println!();
         }
         let summary = format!("×{} {}", group.hits.len(), group.severity);
-        crate::common::report::print_check_block(
+        kithara_xtask_core::common::report::print_check_block(
             rule_id,
             &group.severity,
             &summary,

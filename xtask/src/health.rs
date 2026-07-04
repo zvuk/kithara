@@ -7,8 +7,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::Args;
-
-use crate::common::{project::ProjectConfig, timestamp::utc_timestamp};
+use kithara_xtask_core::common::{project::ProjectConfig, timestamp::utc_timestamp};
 
 struct Consts;
 impl Consts {

@@ -8,9 +8,9 @@
 use std::path::Path;
 
 use anyhow::Result;
+use kithara_xtask_core::common::{fix::FixOutcome, scope::Scope, violation::Violation};
 
 use super::config::StyleConfig;
-use crate::common::{fix::FixOutcome, scope::Scope, violation::Violation};
 
 pub(crate) mod comment_hygiene;
 pub(crate) mod const_locality;

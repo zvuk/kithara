@@ -1,18 +1,16 @@
 use std::{cmp::Ordering, ops::Range};
 
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    fix::{ExpansionError, FixOutcome, SourceRewriter, expand_blocks},
+    parse::parse_file,
+    violation::Violation,
+    walker::{relative_to, workspace_rs_files_scoped},
+};
 use syn::{Field, Fields, Item, Type, Visibility, spanned::Spanned};
 
 use super::{Check, Context};
-use crate::{
-    common::{
-        fix::{ExpansionError, FixOutcome, SourceRewriter, expand_blocks},
-        parse::parse_file,
-        violation::Violation,
-        walker::{relative_to, workspace_rs_files_scoped},
-    },
-    style::config::StructFieldOrderConfig,
-};
+use crate::style::config::StructFieldOrderConfig;
 
 pub(crate) const ID: &str = "struct_field_order";
 

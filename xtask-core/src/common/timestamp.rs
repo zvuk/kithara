@@ -1,4 +1,5 @@
-pub(crate) fn utc_timestamp() -> String {
+#[must_use]
+pub fn utc_timestamp() -> String {
     let now = std::time::SystemTime::now();
     let secs = now
         .duration_since(std::time::UNIX_EPOCH)

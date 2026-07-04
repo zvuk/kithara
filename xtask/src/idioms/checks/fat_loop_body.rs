@@ -1,16 +1,14 @@
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    parse::parse_file,
+    suppress::Suppressions,
+    violation::Violation,
+    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+};
 use syn::{Block, Expr, ExprForLoop, ExprLoop, ExprWhile, Stmt, visit::Visit};
 
 use super::{Check, Context};
-use crate::{
-    common::{
-        parse::parse_file,
-        suppress::Suppressions,
-        violation::Violation,
-        walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
-    },
-    idioms::config::FatLoopBodyConfig,
-};
+use crate::idioms::config::FatLoopBodyConfig;
 
 pub(crate) const ID: &str = "fat_loop_body";
 

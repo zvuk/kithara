@@ -1,10 +1,10 @@
 use std::{collections::BTreeSet, fs};
 
 use anyhow::{Context as _, Result};
+use kithara_xtask_core::common::{scope::packages_in_scope, violation::Violation};
 use toml::Value;
 
 use super::{Check, Context};
-use crate::common::{scope::packages_in_scope, violation::Violation};
 
 pub(crate) const ID: &str = "tokio_dep_quarantine";
 

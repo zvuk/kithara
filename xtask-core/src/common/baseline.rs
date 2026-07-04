@@ -12,14 +12,14 @@ use super::violation::{Report, Severity, Violation};
 const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
-pub(crate) struct Baseline {
+pub struct Baseline {
     #[serde(default = "default_schema_version")]
     pub(crate) schema_version: u32,
     /// Per-check entries: `check_id` → (`key` → recorded count).
     /// Cannot use `deny_unknown_fields` here because `serde(flatten)` over a
     /// map collects all remaining fields — those are the per-check sections.
     #[serde(flatten)]
-    pub(crate) checks: BTreeMap<String, BTreeMap<String, u64>>,
+    pub checks: BTreeMap<String, BTreeMap<String, u64>>,
 }
 
 fn default_schema_version() -> u32 {
@@ -31,7 +31,12 @@ impl Baseline {
         config_dir.join("baseline.toml")
     }
 
-    pub(crate) fn load(config_dir: &Path) -> Result<Self> {
+    /// Load the ratchet baseline from `config_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the baseline file cannot be read or parsed.
+    pub fn load(config_dir: &Path) -> Result<Self> {
         let path = Self::path(config_dir);
         if !path.exists() {
             return Ok(Self::default());
@@ -44,7 +49,11 @@ impl Baseline {
     /// Return a copy of this baseline with only entries whose key passes
     /// the predicate. Used to drop out-of-scope baseline entries before
     /// ratchet diffing on a scoped run.
-    pub(crate) fn filter_keys(&self, predicate: impl Fn(&str) -> bool) -> Self {
+    #[must_use]
+    pub fn filter_keys<P>(&self, predicate: P) -> Self
+    where
+        P: Fn(&str) -> bool,
+    {
         let mut out = Self {
             schema_version: self.schema_version,
             checks: BTreeMap::new(),
@@ -63,7 +72,8 @@ impl Baseline {
     }
 
     /// Build a fresh baseline from the report's current observations.
-    pub(crate) fn from_report(report: &Report) -> Self {
+    #[must_use]
+    pub fn from_report(report: &Report) -> Self {
         let mut checks: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
         for v in &report.violations {
             *checks
@@ -78,7 +88,13 @@ impl Baseline {
         }
     }
 
-    pub(crate) fn save(&self, config_dir: &Path) -> Result<PathBuf> {
+    /// Save the ratchet baseline into `config_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created, the baseline
+    /// cannot be serialized, or the file cannot be written.
+    pub fn save(&self, config_dir: &Path) -> Result<PathBuf> {
         fs::create_dir_all(config_dir)
             .with_context(|| format!("create config dir: {}", config_dir.display()))?;
         let path = Self::path(config_dir);
@@ -91,7 +107,8 @@ impl Baseline {
     }
 
     /// Compare observations against this baseline.
-    pub(crate) fn diff<'a>(&self, observed: &'a [Violation]) -> RatchetDiff<'a> {
+    #[must_use]
+    pub fn diff<'a>(&self, observed: &'a [Violation]) -> RatchetDiff<'a> {
         // Match on the canonical (line-insensitive) identity so that edits
         // which merely shift line numbers — e.g. rustfmt re-wrapping an import
         // block above a violation — do not re-fingerprint an unchanged
@@ -183,20 +200,21 @@ fn canonical_key(key: &str) -> String {
 }
 
 #[derive(Debug)]
-pub(crate) struct RatchetDiff<'a> {
-    pub(crate) regressions: Vec<&'a Violation>,
-    pub(crate) new_violations: Vec<&'a Violation>,
-    pub(crate) improvements: Vec<Improvement>,
+pub struct RatchetDiff<'a> {
+    pub regressions: Vec<&'a Violation>,
+    pub new_violations: Vec<&'a Violation>,
+    pub improvements: Vec<Improvement>,
 }
 
 impl RatchetDiff<'_> {
-    pub(crate) fn has_failures(&self) -> bool {
+    #[must_use]
+    pub fn has_failures(&self) -> bool {
         !self.regressions.is_empty() || !self.new_violations.is_empty()
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct Improvement {
+pub struct Improvement {
     pub(crate) check: String,
     pub(crate) key: String,
     pub(crate) from: u64,

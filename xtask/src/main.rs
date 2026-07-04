@@ -8,7 +8,6 @@ mod apple;
 mod apple_docgen;
 mod arch;
 mod ast_grep;
-mod common;
 mod format;
 mod health;
 mod idioms;
@@ -24,7 +23,6 @@ mod similarity;
 mod style;
 mod test;
 mod typos;
-mod util;
 mod viz;
 mod wasm;
 

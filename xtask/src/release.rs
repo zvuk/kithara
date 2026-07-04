@@ -5,12 +5,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use serde_json::{Value, json};
-
-use crate::{
+use kithara_xtask_core::{
     common::project::{ProjectConfig, ReleaseConfig},
     util::check_tool,
 };
+use serde_json::{Value, json};
 
 const MANIFEST: &str = "Package.swift";
 
@@ -454,7 +453,10 @@ fn pages(cfg: &ReleaseConfig, git_ref: &str) -> Result<()> {
         );
     }
 
-    let staging = env::temp_dir().join(format!("{}-pages-{tag}", crate::util::project_name()));
+    let staging = env::temp_dir().join(format!(
+        "{}-pages-{tag}",
+        kithara_xtask_core::util::project_name()
+    ));
     if staging.exists() {
         fs::remove_dir_all(&staging).with_context(|| format!("clean {}", staging.display()))?;
     }
@@ -489,8 +491,10 @@ fn single_subdir(dir: &Path) -> Result<PathBuf> {
 }
 
 fn deploy_pages_branch(branch: &str, content: &Path, tag: &str) -> Result<()> {
-    let worktree =
-        env::temp_dir().join(format!("{}-{branch}-worktree", crate::util::project_name()));
+    let worktree = env::temp_dir().join(format!(
+        "{}-{branch}-worktree",
+        kithara_xtask_core::util::project_name()
+    ));
     let _ = Command::new("git")
         .args(["worktree", "remove", "--force"])
         .arg(&worktree)
@@ -1065,7 +1069,7 @@ fn cache_named(tag: &str, name: &str) -> Result<PathBuf> {
     let home = env::var_os("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home)
         .join("Library/Caches")
-        .join(crate::util::project_name())
+        .join(kithara_xtask_core::util::project_name())
         .join("releases")
         .join(tag)
         .join(name))

@@ -1,20 +1,18 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    parse::{
+        AccessKind, AccessPath, PassthroughOpts, collect_scopes, collect_self_field_writes,
+        extract_passthrough_with, is_strict_pub, parse_file, pub_methods, returns_handle_type,
+        self_ty_name,
+    },
+    violation::Violation,
+    walker::{relative_to, workspace_rs_files_scoped},
+};
 
 use super::{Check, Context};
-use crate::{
-    arch::config::AccessorSeverity,
-    common::{
-        parse::{
-            AccessKind, AccessPath, PassthroughOpts, collect_scopes, collect_self_field_writes,
-            extract_passthrough_with, is_strict_pub, parse_file, pub_methods, returns_handle_type,
-            self_ty_name,
-        },
-        violation::Violation,
-        walker::{relative_to, workspace_rs_files_scoped},
-    },
-};
+use crate::arch::config::AccessorSeverity;
 
 pub(crate) const ID: &str = "redundant_accessors";
 
@@ -407,11 +405,10 @@ fn is_deref_impl(im: &syn::ItemImpl) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use kithara_xtask_core::common::{parse::collect_scopes, violation::Severity};
+
     use super::*;
-    use crate::{
-        arch::config::{AccessorSeverity, RedundantAccessorsThreshold},
-        common::{parse::collect_scopes, violation::Severity},
-    };
+    use crate::arch::config::{AccessorSeverity, RedundantAccessorsThreshold};
 
     /// Run only the P4 detector across one or more synthetic source files,
     /// returning the violations it produces. Pairs of `(file_rel, source)`

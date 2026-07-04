@@ -7,11 +7,11 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
+use kithara_xtask_core::util::{check_tool, ensure_clean_tree};
 
 use crate::{
     manifest,
     manifest::{DependencyOrderArgs, ManifestArgs, ManifestCommand},
-    util::{check_tool, ensure_clean_tree},
 };
 
 const CHUNK_SIZE: usize = 128;

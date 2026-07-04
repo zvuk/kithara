@@ -5100,7 +5100,14 @@ dependencies = [
  "anyhow",
  "cargo_metadata 0.23.1",
  "clap",
+ "glob",
  "kithara-workspace-hack",
+ "proc-macro2",
+ "regex",
+ "serde",
+ "syn 2.0.118",
+ "tempfile",
+ "toml 1.1.2+spec-1.1.0",
 ]
 
 [[package]]

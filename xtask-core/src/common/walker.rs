@@ -9,7 +9,11 @@ use glob::Pattern;
 use super::scope::Scope;
 
 /// Recursively collect all `.rs` files under `dir`, returning them sorted.
-pub(crate) fn walk_rs_files(dir: &Path) -> Result<Vec<PathBuf>> {
+///
+/// # Errors
+///
+/// Returns an error if a directory entry cannot be read while walking `dir`.
+pub fn walk_rs_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     walk_rs_files_inner(dir, &mut out)?;
     out.sort();
@@ -33,21 +37,25 @@ fn walk_rs_files_inner(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 }
 
 /// Compile glob patterns; ignore unparseable ones (rare; a config error would surface elsewhere).
-pub(crate) fn compile_globs(raw: &[String]) -> Vec<Pattern> {
+#[must_use]
+pub fn compile_globs(raw: &[String]) -> Vec<Pattern> {
     raw.iter().filter_map(|s| Pattern::new(s).ok()).collect()
 }
 
-pub(crate) fn matches_any(patterns: &[Pattern], rel: &Path) -> bool {
+#[must_use]
+pub fn matches_any(patterns: &[Pattern], rel: &Path) -> bool {
     let s = rel.to_string_lossy();
     patterns.iter().any(|p| p.matches(&s))
 }
 
 /// Walk `.rs` files under each root in `scope` (defaults to `<workspace>/crates`
 /// when scope is empty). Results are de-duplicated and sorted.
-pub(crate) fn workspace_rs_files_scoped(
-    workspace_root: &Path,
-    scope: &Scope,
-) -> Result<Vec<PathBuf>> {
+///
+/// # Errors
+///
+/// Returns an error if a directory entry cannot be read while walking any
+/// scoped root.
+pub fn workspace_rs_files_scoped(workspace_root: &Path, scope: &Scope) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     for root in scope.roots(workspace_root) {
         walk_rs_files_inner(&root, &mut out)?;
@@ -57,6 +65,7 @@ pub(crate) fn workspace_rs_files_scoped(
     Ok(out)
 }
 
-pub(crate) fn relative_to<'a>(root: &Path, full: &'a Path) -> &'a Path {
+#[must_use]
+pub fn relative_to<'a>(root: &Path, full: &'a Path) -> &'a Path {
     full.strip_prefix(root).unwrap_or(full)
 }

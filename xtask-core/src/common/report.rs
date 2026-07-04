@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt::Write};
 
 use super::{
     baseline::RatchetDiff,
@@ -29,7 +29,7 @@ fn severity_glyphs(severity: &str) -> (&'static str, fn(&str) -> String) {
 /// per-instance message (numbers, threshold details), printed under the
 /// location at deeper indent. Pass `None` for `fact` when there is
 /// nothing instance-specific to add.
-pub(crate) fn print_check_block<I, L>(
+pub fn print_check_block<I, L>(
     name: &str,
     severity: &str,
     summary: &str,
@@ -92,7 +92,7 @@ pub(crate) fn print_check_block<I, L>(
 /// with header, optional rule description (when an explanation is
 /// attached to any of its violations), then per-location lines with the
 /// instance fact.
-pub(crate) fn print_grouped(report: &Report, diff: &RatchetDiff<'_>) {
+pub fn print_grouped(report: &Report, diff: &RatchetDiff<'_>) {
     if report.violations.is_empty() && diff.improvements.is_empty() {
         return;
     }
@@ -173,7 +173,7 @@ pub(crate) fn print_grouped(report: &Report, diff: &RatchetDiff<'_>) {
 /// contributor must actually act on. Printed last and on stderr so it never
 /// pollutes structured stdout (`--json` / `--report`) and is the final thing on
 /// screen before the bail — no more hunting "which of 600 lines is the new one".
-pub(crate) fn print_ratchet_failures(diff: &RatchetDiff<'_>) {
+pub fn print_ratchet_failures(diff: &RatchetDiff<'_>) {
     if !diff.has_failures() {
         return;
     }
@@ -221,11 +221,8 @@ fn eprint_failing(v: &Violation) {
     }
 }
 
-pub(crate) fn render_markdown(
-    report: &Report,
-    ran: &[&'static str],
-    diff: &RatchetDiff<'_>,
-) -> String {
+#[must_use]
+pub fn render_markdown(report: &Report, ran: &[&'static str], diff: &RatchetDiff<'_>) -> String {
     let mut out = String::new();
     out.push_str("# Architectural Audit\n\n");
     out.push_str(&format!(
@@ -272,8 +269,8 @@ pub(crate) fn render_markdown(
     out
 }
 
-pub(crate) fn render_json(report: &Report, ran: &[&'static str], diff: &RatchetDiff<'_>) -> String {
-    use std::fmt::Write;
+#[must_use]
+pub fn render_json(report: &Report, ran: &[&'static str], diff: &RatchetDiff<'_>) -> String {
     let mut out = String::from("{\n");
     let _ = writeln!(
         out,

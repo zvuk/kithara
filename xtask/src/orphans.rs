@@ -7,8 +7,7 @@ use std::{
 use anyhow::{Result, bail};
 use cargo_metadata::MetadataCommand;
 use clap::Args;
-
-use crate::{common::project::ProjectConfig, util::check_tool};
+use kithara_xtask_core::{common::project::ProjectConfig, util::check_tool};
 
 struct Consts;
 impl Consts {

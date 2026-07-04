@@ -1,20 +1,18 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    parse::parse_file,
+    suppress::Suppressions,
+    violation::Violation,
+    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+};
 use syn::{
     BinOp, Expr, ExprBinary, ExprLit, ExprUnary, Item, ItemConst, Lit, LitInt, Type, TypePath,
 };
 
 use super::{Check, Context};
-use crate::{
-    common::{
-        parse::parse_file,
-        suppress::Suppressions,
-        violation::Violation,
-        walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
-    },
-    idioms::config::ConstGroupEnumShapeConfig,
-};
+use crate::idioms::config::ConstGroupEnumShapeConfig;
 
 pub(crate) const ID: &str = "const_group_enum_shape";
 

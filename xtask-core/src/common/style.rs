@@ -54,6 +54,7 @@ pub(crate) fn bold_yellow(s: &str) -> String {
     wrap("1;33", s)
 }
 
-pub(crate) fn bold_cyan(s: &str) -> String {
+#[must_use]
+pub fn bold_cyan(s: &str) -> String {
     wrap("1;36", s)
 }

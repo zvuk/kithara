@@ -7,10 +7,9 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
+use kithara_xtask_core::common::project::{DocgenConfig, ProjectConfig};
 use regex::Regex;
 use rustdoc_types::{Crate, ItemEnum};
-
-use crate::common::project::{DocgenConfig, ProjectConfig};
 
 pub(crate) fn run(check: bool) -> Result<()> {
     let root = workspace_root()?;
@@ -42,7 +41,10 @@ pub(crate) fn run(check: bool) -> Result<()> {
     let documented = check_swift_docs(&root, &docgen.swift_dirs)?;
 
     if check {
-        let temp = TempDir::create(&format!("{}-apple-docgen", crate::util::project_name()))?;
+        let temp = TempDir::create(&format!(
+            "{}-apple-docgen",
+            kithara_xtask_core::util::project_name()
+        ))?;
         write_pages(temp.path(), &pages)?;
         println!(
             "docgen --check: {}/{} allowlisted symbols covered, {documented} public Swift symbols documented, format_version={}",

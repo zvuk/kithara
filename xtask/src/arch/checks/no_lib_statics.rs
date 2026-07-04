@@ -1,14 +1,14 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
-use syn::{Item, ItemMacro, Type};
-
-use super::{Check, Context};
-use crate::common::{
+use kithara_xtask_core::common::{
     parse::parse_file,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
+use syn::{Item, ItemMacro, Type};
+
+use super::{Check, Context};
 
 pub(crate) const ID: &str = "no_lib_statics";
 

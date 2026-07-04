@@ -20,8 +20,7 @@ mod config;
 
 use checks::{Check, Context, registry};
 use config::StyleConfig;
-
-use crate::common::{
+use kithara_xtask_core::common::{
     baseline::{Baseline, RatchetDiff},
     exclude::{apply_cfg_test_exclusion, apply_module_excludes, apply_path_excludes},
     project::ProjectConfig,
@@ -190,7 +189,7 @@ fn run_fix(
     ctx: &Context<'_>,
     allow_dirty: bool,
 ) -> Result<()> {
-    crate::util::ensure_clean_tree(allow_dirty, "xtask lint style")?;
+    kithara_xtask_core::util::ensure_clean_tree(allow_dirty, "xtask lint style")?;
     let mut total_writes = 0_usize;
     let mut all_skipped: Vec<String> = Vec::new();
     for check in registry {

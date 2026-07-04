@@ -2,8 +2,7 @@ use std::process::Command;
 
 use anyhow::{Result, bail};
 use clap::Args;
-
-use crate::util::{check_tool, ensure_clean_tree};
+use kithara_xtask_core::util::{check_tool, ensure_clean_tree};
 
 struct Consts;
 impl Consts {

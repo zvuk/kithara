@@ -2,18 +2,16 @@ use std::ops::Range;
 
 use anyhow::Result;
 use glob::Pattern;
+use kithara_xtask_core::common::{
+    fix::FixOutcome,
+    parse::parse_file,
+    violation::Violation,
+    walker::{relative_to, workspace_rs_files_scoped},
+};
 use syn::{File, Item, spanned::Spanned, visit::Visit};
 
 use super::{Check, Context};
-use crate::{
-    common::{
-        fix::FixOutcome,
-        parse::parse_file,
-        violation::Violation,
-        walker::{relative_to, workspace_rs_files_scoped},
-    },
-    style::config::CommentHygieneConfig,
-};
+use crate::style::config::CommentHygieneConfig;
 
 pub(crate) const ID: &str = "comment_hygiene";
 

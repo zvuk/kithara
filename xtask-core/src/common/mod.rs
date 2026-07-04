@@ -7,15 +7,15 @@
 //! - `parse` — `syn` AST helpers (file parsing, scope/impl traversal, passthrough analysis)
 //! - `report` — markdown / JSON renderers
 
-pub(crate) mod baseline;
-pub(crate) mod exclude;
-pub(crate) mod fix;
-pub(crate) mod parse;
-pub(crate) mod project;
-pub(crate) mod report;
-pub(crate) mod scope;
-pub(crate) mod style;
-pub(crate) mod suppress;
-pub(crate) mod timestamp;
-pub(crate) mod violation;
-pub(crate) mod walker;
+pub mod baseline;
+pub mod exclude;
+pub mod fix;
+pub mod parse;
+pub mod project;
+pub mod report;
+pub mod scope;
+pub mod style;
+pub mod suppress;
+pub mod timestamp;
+pub mod violation;
+pub mod walker;

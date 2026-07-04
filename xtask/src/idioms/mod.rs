@@ -21,8 +21,7 @@ mod config;
 
 use checks::{Context, registry};
 use config::IdiomsConfig;
-
-use crate::common::{
+use kithara_xtask_core::common::{
     baseline::{Baseline, RatchetDiff},
     exclude::{apply_cfg_test_exclusion, apply_module_excludes, apply_path_excludes},
     project::ProjectConfig,

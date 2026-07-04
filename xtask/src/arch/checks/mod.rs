@@ -7,9 +7,9 @@ use std::path::Path;
 
 use anyhow::Result;
 use cargo_metadata::Metadata;
+use kithara_xtask_core::common::{fix::FixOutcome, scope::Scope, violation::Violation};
 
 use super::config::ArchConfig;
-use crate::common::{fix::FixOutcome, scope::Scope, violation::Violation};
 
 pub(crate) mod arc_clone_hotspots;
 pub(crate) mod args_wrapper_struct;

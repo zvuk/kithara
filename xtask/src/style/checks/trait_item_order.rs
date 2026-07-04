@@ -1,18 +1,16 @@
 use std::{cmp::Ordering, ops::Range};
 
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    fix::{ExpansionError, FixOutcome, SourceRewriter, expand_blocks},
+    parse::{parse_file, self_ty_name},
+    violation::Violation,
+    walker::{relative_to, workspace_rs_files_scoped},
+};
 use syn::{ImplItem, Item, ItemImpl, ItemTrait, TraitItem, spanned::Spanned};
 
 use super::{Check, Context};
-use crate::{
-    common::{
-        fix::{ExpansionError, FixOutcome, SourceRewriter, expand_blocks},
-        parse::{parse_file, self_ty_name},
-        violation::Violation,
-        walker::{relative_to, workspace_rs_files_scoped},
-    },
-    style::config::TraitItemOrderConfig,
-};
+use crate::style::config::TraitItemOrderConfig;
 
 pub(crate) const ID: &str = "trait_item_order";
 

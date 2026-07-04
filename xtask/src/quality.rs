@@ -6,9 +6,10 @@ use std::{
 use anyhow::{Result, bail};
 use cargo_metadata::MetadataCommand;
 use clap::Subcommand;
+use kithara_xtask_core::common::{
+    project::ProjectConfig, timestamp::utc_timestamp, walker::walk_rs_files,
+};
 use regex::Regex;
-
-use crate::common::{project::ProjectConfig, timestamp::utc_timestamp, walker::walk_rs_files};
 
 #[derive(Clone, Copy, Debug, Subcommand)]
 pub(crate) enum QualityCommand {

@@ -8,9 +8,9 @@
 use std::path::Path;
 
 use anyhow::Result;
+use kithara_xtask_core::common::{scope::Scope, violation::Violation};
 
 use super::config::IdiomsConfig;
-use crate::common::{scope::Scope, violation::Violation};
 
 pub(crate) mod accumulator_loops;
 pub(crate) mod arc_mutex_collection;

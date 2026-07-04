@@ -9,27 +9,33 @@ use syn::{
 
 /// Counts of items in a parsed `.rs` file.
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct ItemStats {
-    pub(crate) types: usize,
-    pub(crate) fns: usize,
+pub struct ItemStats {
+    pub types: usize,
+    pub fns: usize,
 }
 
 /// Per-type accounting: how much code targets each type defined in the file.
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct TypeWeight {
+pub struct TypeWeight {
     /// Total `fn`s across all `impl X` and `impl Trait for X` blocks targeting `X`.
-    pub(crate) impl_fns: usize,
+    pub impl_fns: usize,
     /// Number of distinct `impl` blocks targeting this type (own + trait impls).
-    pub(crate) impl_blocks: usize,
+    pub impl_blocks: usize,
 }
 
-pub(crate) fn parse_file(path: &Path) -> Result<File> {
+/// Parse a Rust source file into a `syn` file.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or parsed as Rust source.
+pub fn parse_file(path: &Path) -> Result<File> {
     let source = std::fs::read_to_string(path)?;
     let file = syn::parse_file(&source)?;
     Ok(file)
 }
 
-pub(crate) fn count_items(file: &File) -> ItemStats {
+#[must_use]
+pub fn count_items(file: &File) -> ItemStats {
     let mut s = ItemStats::default();
     walk_items(&file.items, &mut s);
     s
@@ -37,7 +43,8 @@ pub(crate) fn count_items(file: &File) -> ItemStats {
 
 /// Returns `local_type_name → TypeWeight` for types defined in this file.
 /// Impl blocks targeting external types are ignored.
-pub(crate) fn type_weights(file: &File) -> BTreeMap<String, TypeWeight> {
+#[must_use]
+pub fn type_weights(file: &File) -> BTreeMap<String, TypeWeight> {
     let mut local_types: BTreeMap<String, TypeWeight> = BTreeMap::new();
     collect_local_types(&file.items, &mut local_types);
     accumulate_impls(&file.items, &mut local_types);
@@ -94,7 +101,8 @@ fn accumulate_impls(items: &[Item], local_types: &mut BTreeMap<String, TypeWeigh
     }
 }
 
-pub(crate) fn self_ty_name(ty: &Type) -> Option<String> {
+#[must_use]
+pub fn self_ty_name(ty: &Type) -> Option<String> {
     match ty {
         Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
         _ => None,
@@ -105,7 +113,8 @@ pub(crate) fn self_ty_name(ty: &Type) -> Option<String> {
 /// method calls, references). Returns `None` for literals/calls/closures —
 /// expressions that cannot be a sensible canonical key for grouping or
 /// equality (e.g. for matching same-source loops or accumulator targets).
-pub(crate) fn canonical_subject(e: &Expr) -> Option<String> {
+#[must_use]
+pub fn canonical_subject(e: &Expr) -> Option<String> {
     match e {
         Expr::Path(p) => Some(
             p.path
@@ -135,27 +144,29 @@ pub(crate) fn canonical_subject(e: &Expr) -> Option<String> {
     }
 }
 
-/// Whether a method's signature is publicly visible (`pub` or `pub(crate)`).
-pub(crate) fn is_pub_visibility(vis: &syn::Visibility) -> bool {
+/// Whether a method's signature is publicly visible (`pub` or restricted).
+#[must_use]
+pub fn is_pub_visibility(vis: &syn::Visibility) -> bool {
     matches!(
         vis,
         syn::Visibility::Public(_) | syn::Visibility::Restricted(_)
     )
 }
 
-/// Strictly-`pub` (not `pub(crate)`).
-pub(crate) fn is_strict_pub(vis: &syn::Visibility) -> bool {
+/// Strictly bare `pub` visibility.
+#[must_use]
+pub fn is_strict_pub(vis: &syn::Visibility) -> bool {
     matches!(vis, syn::Visibility::Public(_))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AccessPath {
-    pub(crate) kind: AccessKind,
-    pub(crate) fields: Vec<String>,
+pub struct AccessPath {
+    pub kind: AccessKind,
+    pub fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AccessKind {
+pub enum AccessKind {
     Ref,
     RefMut,
     Clone,
@@ -163,13 +174,13 @@ pub(crate) enum AccessKind {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct PassthroughOpts {
+pub struct PassthroughOpts {
     /// `Some`, `Ok`, `Box::new`, `Cow::Borrowed`, ... — single-arg ctors that
     /// wrap a passthrough value and preserve data identity.
-    pub(crate) wrapper_ctors: Vec<String>,
+    pub wrapper_ctors: Vec<String>,
     /// `as_ref`, `as_mut`, `as_str`, `as_slice`, `borrow`, `lock`, `read`, ... —
     /// 0-arg methods that expose internal data.
-    pub(crate) expose_methods: Vec<String>,
+    pub expose_methods: Vec<String>,
 }
 
 impl Default for PassthroughOpts {
@@ -181,7 +192,8 @@ impl Default for PassthroughOpts {
     }
 }
 
-pub(crate) fn default_wrapper_ctors() -> Vec<String> {
+#[must_use]
+pub fn default_wrapper_ctors() -> Vec<String> {
     [
         "Some",
         "Ok",
@@ -204,7 +216,8 @@ pub(crate) fn default_wrapper_ctors() -> Vec<String> {
     .collect()
 }
 
-pub(crate) fn default_expose_methods() -> Vec<String> {
+#[must_use]
+pub fn default_expose_methods() -> Vec<String> {
     [
         "as_ref",
         "as_mut",
@@ -229,10 +242,8 @@ pub(crate) fn default_expose_methods() -> Vec<String> {
     .collect()
 }
 
-pub(crate) fn extract_passthrough_with(
-    method: &ImplItemFn,
-    opts: &PassthroughOpts,
-) -> Option<AccessPath> {
+#[must_use]
+pub fn extract_passthrough_with(method: &ImplItemFn, opts: &PassthroughOpts) -> Option<AccessPath> {
     let tail = block_tail_expr(&method.block)?;
     expr_to_passthrough(tail, opts)
 }
@@ -379,9 +390,10 @@ pub(crate) fn first_self_field(e: &Expr) -> Option<String> {
 /// `Arc<&T>`, etc., where any path segment in the type tree matches one of
 /// `mutable_types` (by last identifier of that segment).
 ///
-/// Used by P3 (mutation handle detection) to flag `pub fn x_handle(&self) ->
+/// Used by P3 (mutation handle detection) to flag `pub(crate) fn x_handle(&self) ->
 /// Arc<AtomicUsize>` style methods, not just `&AtomicUsize` references.
-pub(crate) fn returns_handle_type(sig: &Signature, mutable_types: &[String]) -> bool {
+#[must_use]
+pub fn returns_handle_type(sig: &Signature, mutable_types: &[String]) -> bool {
     let ReturnType::Type(_, ty) = &sig.output else {
         return false;
     };
@@ -417,10 +429,8 @@ fn type_exposes_handle(ty: &Type, mutable_types: &[String]) -> bool {
 ///   - `self.X = ...` (direct assignment),
 ///   - `self.X.<writer>(...)` for `<writer>` in the configurable list
 ///     (`store`, `set`, `swap`, `replace`, `fetch_add`, ...).
-pub(crate) fn collect_self_field_writes(
-    method: &ImplItemFn,
-    writer_methods: &[String],
-) -> Vec<String> {
+#[must_use]
+pub fn collect_self_field_writes(method: &ImplItemFn, writer_methods: &[String]) -> Vec<String> {
     struct WriteVisitor<'a> {
         out: Vec<String>,
         writers: &'a [String],
@@ -456,15 +466,16 @@ pub(crate) fn collect_self_field_writes(
 /// in it. Used by checks that match impls against structs in the same module
 /// to avoid cross-module name aliasing.
 #[derive(Debug)]
-pub(crate) struct Scope<'a> {
+pub struct Scope<'a> {
     /// Module path components, e.g. `["foo", "bar"]`. Empty for file root.
-    pub(crate) path: Vec<String>,
-    pub(crate) structs: Vec<&'a syn::ItemStruct>,
-    pub(crate) impls: Vec<&'a ItemImpl>,
+    pub path: Vec<String>,
+    pub structs: Vec<&'a syn::ItemStruct>,
+    pub impls: Vec<&'a ItemImpl>,
 }
 
 /// Recursively collect one `Scope` per module level in the file.
-pub(crate) fn collect_scopes(file: &File) -> Vec<Scope<'_>> {
+#[must_use]
+pub fn collect_scopes(file: &File) -> Vec<Scope<'_>> {
     let mut out = Vec::new();
     collect_scope_inner(&file.items, &mut Vec::new(), &mut out);
     out
@@ -498,8 +509,8 @@ fn collect_scope_inner<'a>(items: &'a [Item], path: &mut Vec<String>, out: &mut 
     }
 }
 
-/// Iterate `pub`/`pub(crate)` methods of an impl block (skipping non-fn items).
-pub(crate) fn pub_methods(im: &ItemImpl) -> impl Iterator<Item = &ImplItemFn> {
+/// Iterate `pub`/restricted methods of an impl block (skipping non-fn items).
+pub fn pub_methods(im: &ItemImpl) -> impl Iterator<Item = &ImplItemFn> {
     im.items.iter().filter_map(|it| match it {
         ImplItem::Fn(f) if is_pub_visibility(&f.vis) => Some(f),
         _ => None,

@@ -1,10 +1,10 @@
 use std::{collections::HashMap, fs};
 
 use anyhow::Result;
+use kithara_xtask_core::common::{violation::Violation, walker::walk_rs_files};
 use regex::Regex;
 
 use super::{Check, Context};
-use crate::common::{violation::Violation, walker::walk_rs_files};
 
 pub(crate) const ID: &str = "duplicate_error_enums";
 

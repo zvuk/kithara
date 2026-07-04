@@ -8,7 +8,7 @@ use clap::ValueEnum;
 /// `cargo xtask scope --for=<TOOL>` for shell-substitution in justfile
 /// recipes (`just audit`, etc.).
 #[derive(Debug, Clone, Copy, ValueEnum)]
-pub(crate) enum Tool {
+pub enum Tool {
     Xtask,
     Clippy,
     Fmt,
@@ -52,7 +52,7 @@ fn classify_token(tok: &str, workspace_root: &Path) -> Result<ScopeToken> {
 }
 
 #[derive(Debug, Default, Clone)]
-pub(crate) struct Scope {
+pub struct Scope {
     /// Crate names from `--crate <name>`. Resolved against
     /// `<workspace>/crates/<name>/`.
     pub(crate) crates: Vec<String>,
@@ -65,7 +65,8 @@ pub(crate) struct Scope {
 }
 
 impl Scope {
-    pub(crate) fn new(crates: Vec<String>, paths: Vec<PathBuf>) -> Self {
+    #[must_use]
+    pub fn new(crates: Vec<String>, paths: Vec<PathBuf>) -> Self {
         Self {
             crates,
             paths,
@@ -77,7 +78,12 @@ impl Scope {
     /// positional `cargo xtask scope` args) into a `Scope`. Each token is
     /// classified as a bare crate name, a `crates/<name>[/...]` path, or
     /// a non-crate workspace path (`tests/`, `xtask/`, …).
-    pub(crate) fn resolve(tokens: &[String], workspace_root: &Path) -> Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any token is not a known crate name, crate path,
+    /// or supported top-level workspace path.
+    pub fn resolve(tokens: &[String], workspace_root: &Path) -> Result<Self> {
         let mut scope = Self::default();
         for tok in tokens {
             match classify_token(tok, workspace_root)? {
@@ -111,7 +117,8 @@ impl Scope {
 
     /// Emit space-separated flag tokens for the requested downstream tool.
     /// See `cargo xtask scope` documentation for the full output table.
-    pub(crate) fn flags_for(&self, tool: Tool) -> Vec<String> {
+    #[must_use]
+    pub fn flags_for(&self, tool: Tool) -> Vec<String> {
         let is_empty = self.is_empty();
         let crate_paths_names = self.crate_names_from_paths();
         match tool {
@@ -212,7 +219,8 @@ impl Scope {
         out
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
         self.crates.is_empty() && self.paths.is_empty()
     }
 
@@ -221,7 +229,8 @@ impl Scope {
     /// path keys) before ratchet diffing on a scoped run — without this,
     /// a scoped run would report out-of-scope baseline entries as
     /// "improvements" because they don't appear in the scoped report.
-    pub(crate) fn key_in_scope(&self, key: &str) -> bool {
+    #[must_use]
+    pub fn key_in_scope(&self, key: &str) -> bool {
         if self.is_empty() {
             return true;
         }
@@ -241,7 +250,8 @@ impl Scope {
     /// Roots to walk. Empty scope → `<root>/crates` (the legacy default,
     /// preserves current xtask behavior). Non-empty → one entry per crate
     /// or path, resolved against `workspace_root`.
-    pub(crate) fn roots(&self, workspace_root: &Path) -> Vec<PathBuf> {
+    #[must_use]
+    pub fn roots(&self, workspace_root: &Path) -> Vec<PathBuf> {
         if self.is_empty() {
             return vec![workspace_root.join("crates")];
         }
@@ -267,7 +277,8 @@ impl Scope {
 /// Empty scope returns all workspace members. Non-empty scope keeps only
 /// packages whose names appear in `scope.crates`. `scope.paths` is
 /// ignored here (path scoping applies to walker-based checks only).
-pub(crate) fn packages_in_scope<'a>(metadata: &'a Metadata, scope: &Scope) -> Vec<&'a Package> {
+#[must_use]
+pub fn packages_in_scope<'a>(metadata: &'a Metadata, scope: &Scope) -> Vec<&'a Package> {
     if scope.is_empty() {
         return metadata.workspace_packages().into_iter().collect();
     }

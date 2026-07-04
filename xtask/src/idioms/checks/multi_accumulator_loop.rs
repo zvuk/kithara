@@ -1,6 +1,11 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    parse::{canonical_subject, parse_file},
+    violation::Violation,
+    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+};
 use syn::{
     BinOp, Block, Expr, ExprBinary, ExprForLoop, ExprMethodCall, Stmt,
     spanned::Spanned,
@@ -8,14 +13,7 @@ use syn::{
 };
 
 use super::{Check, Context};
-use crate::{
-    common::{
-        parse::{canonical_subject, parse_file},
-        violation::Violation,
-        walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
-    },
-    idioms::config::MultiAccumulatorLoopConfig,
-};
+use crate::idioms::config::MultiAccumulatorLoopConfig;
 
 pub(crate) const ID: &str = "multi_accumulator_loop";
 

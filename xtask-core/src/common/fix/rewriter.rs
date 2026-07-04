@@ -1,7 +1,7 @@
 use std::{fmt, ops::Range};
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum RewriteError {
+pub enum RewriteError {
     Overlap { a: Range<usize>, b: Range<usize> },
     OutOfRange { range: Range<usize>, src_len: usize },
     InvertedRange { range: Range<usize> },
@@ -33,13 +33,14 @@ impl std::error::Error for RewriteError {}
 
 /// Stages a sequence of replacements over `src` and produces the rewritten
 /// string in `finish()`. No write is performed until `finish()` is called.
-pub(crate) struct SourceRewriter<'src> {
+pub struct SourceRewriter<'src> {
     src: &'src str,
     edits: Vec<(Range<usize>, String)>,
 }
 
 impl<'src> SourceRewriter<'src> {
-    pub(crate) fn new(src: &'src str) -> Self {
+    #[must_use]
+    pub fn new(src: &'src str) -> Self {
         Self {
             src,
             edits: Vec::new(),
@@ -48,19 +49,28 @@ impl<'src> SourceRewriter<'src> {
 
     /// Stage a replacement of `range` with `with`. Order of `replace` calls
     /// does not matter; `finish()` sorts and validates them.
-    pub(crate) fn replace(&mut self, range: Range<usize>, with: impl Into<String>) {
+    pub fn replace<T>(&mut self, range: Range<usize>, with: T)
+    where
+        T: Into<String>,
+    {
         self.edits.push((range, with.into()));
     }
 
     /// True iff no replacements were staged. Caller can use this to skip
     /// `fs::write` and uphold invariant I3 (no-op safety).
-    pub(crate) fn is_empty(&self) -> bool {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
         self.edits.is_empty()
     }
 
     /// Validate ranges, sort them, and apply replacements producing the new
     /// source. Errors out on overlap or out-of-range edits.
-    pub(crate) fn finish(mut self) -> Result<String, RewriteError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any edit has an inverted range, extends past the
+    /// source length, or overlaps another edit.
+    pub fn finish(mut self) -> Result<String, RewriteError> {
         let src_len = self.src.len();
         for (range, _) in &self.edits {
             if range.start > range.end {

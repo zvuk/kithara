@@ -1,4 +1,9 @@
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    parse::parse_file,
+    violation::Violation,
+    walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
+};
 use syn::{
     BinOp, Block, Expr, ExprAwait, ExprBinary, ExprBreak, ExprContinue, ExprForLoop, ExprIf,
     ExprMethodCall, ExprReturn, Pat, PatIdent, Stmt,
@@ -7,14 +12,7 @@ use syn::{
 };
 
 use super::{Check, Context};
-use crate::{
-    common::{
-        parse::parse_file,
-        violation::Violation,
-        walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
-    },
-    idioms::config::AccumulatorLoopsConfig,
-};
+use crate::idioms::config::AccumulatorLoopsConfig;
 
 pub(crate) const ID: &str = "accumulator_loops";
 

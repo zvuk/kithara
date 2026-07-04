@@ -1,13 +1,13 @@
 use std::{collections::BTreeSet, fs};
 
 use anyhow::Result;
-use syn::{Attribute, Item, Meta, parse_file};
-
-use super::{Check, Context};
-use crate::common::{
+use kithara_xtask_core::common::{
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
+use syn::{Attribute, Item, Meta, parse_file};
+
+use super::{Check, Context};
 
 pub(crate) const ID: &str = "cancel_root_sites";
 

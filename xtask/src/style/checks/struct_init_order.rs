@@ -1,6 +1,12 @@
 use std::{cmp::Ordering, collections::HashSet, ops::Range};
 
 use anyhow::Result;
+use kithara_xtask_core::common::{
+    fix::{ExpansionError, FixOutcome, SourceRewriter, expand_blocks},
+    parse::parse_file,
+    violation::Violation,
+    walker::{relative_to, workspace_rs_files_scoped},
+};
 use proc_macro2::Span;
 use syn::{
     ExprStruct, FieldValue, Member,
@@ -9,15 +15,7 @@ use syn::{
 };
 
 use super::{Check, Context};
-use crate::{
-    common::{
-        fix::{ExpansionError, FixOutcome, SourceRewriter, expand_blocks},
-        parse::parse_file,
-        violation::Violation,
-        walker::{relative_to, workspace_rs_files_scoped},
-    },
-    style::config::StructInitOrderConfig,
-};
+use crate::style::config::StructInitOrderConfig;
 
 pub(crate) const ID: &str = "struct_init_order";
 
