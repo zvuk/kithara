@@ -7,8 +7,8 @@ use kithara_events::EventBus;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    PlayheadState, ReadOutcome, SeekState, Source, SourceError as StreamSourceError, SourcePhase,
-    StreamError,
+    NotReadyCause, PendingReason, PlayheadState, ReadOutcome, SeekState, Source,
+    SourceError as StreamSourceError, SourcePhase, StreamError,
 };
 use kithara_test_utils::kithara;
 
@@ -131,6 +131,22 @@ fn test_file_source_read_at() {
 }
 
 #[kithara::test]
+fn file_source_read_at_active_gap_reports_pending() {
+    let (res, _writer) = create_active_resource(b"hello");
+    let coord = make_coord();
+    let bus = EventBus::new(16);
+    let mut source = make_source(res, coord, bus);
+
+    let mut buf = [0u8; 5];
+    let outcome = Source::read_at(&mut source, 5, &mut buf).unwrap();
+
+    assert_eq!(
+        outcome,
+        ReadOutcome::Pending(PendingReason::NotReady(NotReadyCause::SourcePending))
+    );
+}
+
+#[kithara::test]
 fn test_file_source_len() {
     let res = create_committed_resource(b"abc");
 
@@ -159,6 +175,19 @@ fn file_source_phase_at_range(
     let source = make_source(res, coord, bus);
 
     assert_eq!(source.phase_at(range), expected);
+}
+
+#[kithara::test]
+fn file_source_phase_at_known_end_waits_until_active_commit() {
+    let data = b"hello";
+    let (res, _writer) = create_active_resource(data);
+    let coord = make_coord();
+    let bus = EventBus::new(16);
+    let total = u64::try_from(data.len()).expect("test data length fits u64");
+    coord.set_total_bytes(Some(total));
+    let source = make_source(res, coord, bus);
+
+    assert_eq!(source.phase_at(total..total + 1), SourcePhase::Waiting);
 }
 
 #[kithara::test]
