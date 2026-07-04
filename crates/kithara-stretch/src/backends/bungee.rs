@@ -1,19 +1,11 @@
 use bungee_rs::Stream;
-use kithara_decode::PcmSpec;
 use num_traits::cast::AsPrimitive;
 use tracing::warn;
 
-use super::stretch_backend::{StretchBackend, StretchBackendError};
+use crate::{StretchBackend, StretchBackendError};
 
-/// `Stream::new` fixes the maximum input frames per `process` call; typical
-/// decoder chunks (~4k frames) fit in one call, larger ones are sub-blocked.
 const MAX_INPUT_FRAMES: usize = 8192;
 
-/// Adapter over `bungee-rs` (C++ FFI, native-only). The library is planar
-/// and granular, so the adapter deinterleaves into per-channel scratch,
-/// drives the high-level `Stream`, and interleaves the result back. The
-/// time ratio is the output:input frame-length ratio; pitch is a separate
-/// `Stream::process` argument.
 pub(crate) struct BungeeBackend {
     inner: Option<Stream>,
     in_planar: Vec<Vec<f32>>,
@@ -24,16 +16,15 @@ pub(crate) struct BungeeBackend {
 }
 
 impl BungeeBackend {
-    pub(crate) fn new(spec: PcmSpec) -> Self {
-        let channels = usize::from(spec.channels.max(1));
-        let sample_rate: usize = spec.sample_rate.get().as_();
+    pub(crate) fn new(sample_rate: u32, channels: usize) -> Self {
+        let channels = channels.max(1);
+        let sample_rate: usize = sample_rate.as_();
         let inner = match Stream::new(sample_rate, channels, MAX_INPUT_FRAMES) {
             Ok(stream) => Some(stream),
             Err(e) => {
                 warn!(
                     error = e,
-                    ?spec,
-                    "bungee Stream::new failed; backend disabled"
+                    sample_rate, channels, "bungee Stream::new failed; backend disabled"
                 );
                 None
             }

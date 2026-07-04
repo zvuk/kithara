@@ -2,16 +2,13 @@ use std::sync::{Arc, atomic::Ordering};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_stretch::{
+    ActiveRegion, RegionPlan, StretchBackend, StretchBackendKind, build_backend,
+};
 use portable_atomic::AtomicF32;
 use tracing::warn;
 
-use super::{
-    controls::StretchControls,
-    region_plan::{ActiveRegion, RegionPlan},
-    stretch_backend::StretchBackend,
-    stretch_factory::build_backend,
-    stretch_kind::StretchBackendKind,
-};
+use super::controls::StretchControls;
 use crate::traits::AudioEffect;
 
 /// Pre-resampler time-stretch slot. Reads live key-lock, backend, and speed
@@ -78,7 +75,11 @@ impl TimeStretchProcessor {
         pool: PcmPool,
     ) -> Self {
         let current_kind = controls.backend();
-        let mut backend = build_backend(current_kind, spec);
+        let mut backend = build_backend(
+            current_kind,
+            spec.sample_rate.get(),
+            usize::from(spec.channels.max(1)),
+        );
         if let Err(e) = backend.set_pitch(1.0) {
             warn!(error = %e, "time-stretch set_pitch(1.0) failed");
         }
@@ -151,7 +152,11 @@ impl TimeStretchProcessor {
     /// Rebuild the backend for `kind` at the current `spec`, discarding any
     /// buffered state. Used on a live backend swap and on a source-spec change.
     fn rebuild_backend(&mut self, kind: StretchBackendKind) {
-        self.backend = build_backend(kind, self.spec);
+        self.backend = build_backend(
+            kind,
+            self.spec.sample_rate.get(),
+            usize::from(self.spec.channels.max(1)),
+        );
         if let Err(e) = self.backend.set_pitch(1.0) {
             warn!(error = %e, "time-stretch set_pitch(1.0) failed");
         }

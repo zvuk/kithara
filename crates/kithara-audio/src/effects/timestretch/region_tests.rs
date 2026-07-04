@@ -2,16 +2,12 @@ use std::{num::NonZero, sync::Arc};
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_stretch::{GridSegment, RegionPlan, RegionPlanError, StretchBackendKind};
 use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
 
-use super::{
-    controls::StretchControls,
-    processor::TimeStretchProcessor,
-    region_plan::{RegionPlan, RegionPlanError},
-    stretch_kind::StretchBackendKind,
-};
-use crate::{traits::AudioEffect, waveform::GridSegment};
+use super::{StretchControls, TimeStretchProcessor};
+use crate::traits::AudioEffect;
 
 const SR: u32 = 44_100;
 const CH: usize = 2;
@@ -39,11 +35,7 @@ fn u64_of(x: usize) -> u64 {
 }
 
 fn seg(start: usize, end: usize, ratio: f64) -> GridSegment {
-    GridSegment {
-        start_frame: u64_of(start),
-        end_frame: u64_of(end),
-        ratio_correction: ratio,
-    }
+    GridSegment::new(u64_of(start), u64_of(end), ratio)
 }
 
 fn spec() -> PcmSpec {

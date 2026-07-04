@@ -6,9 +6,8 @@ use portable_atomic::AtomicF32;
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
 use {
-    super::region_plan::RegionPlan,
-    super::stretch_kind::StretchBackendKind,
     arc_swap::ArcSwapOption,
+    kithara_stretch::{RegionPlan, StretchBackendKind},
     std::sync::atomic::{AtomicBool, AtomicU8},
 };
 

@@ -398,11 +398,11 @@ fn build_segments(
         if end_frame <= start_frame {
             continue;
         }
-        segments.push(GridSegment {
+        segments.push(GridSegment::new(
             start_frame,
             end_frame,
-            ratio_correction: ratio_correction(nominal_bar, span.3),
-        });
+            ratio_correction(nominal_bar, span.3),
+        ));
     }
     segments
 }

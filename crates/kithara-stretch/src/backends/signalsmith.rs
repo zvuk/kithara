@@ -1,27 +1,20 @@
-use kithara_decode::PcmSpec;
 use num_traits::cast::AsPrimitive;
 use signalsmith_stretch::Stretch;
 
-use super::stretch_backend::{StretchBackend, StretchBackendError};
+use crate::{StretchBackend, StretchBackendError};
 
-/// Adapter over `signalsmith-stretch` (C++ FFI, native-only). Unlike the
-/// other backends it has no `set_ratio`: the time ratio is implicit in the
-/// input:output frame-length ratio passed to `process`, so the adapter
-/// stores the ratio and sizes the output buffer itself.
 pub(crate) struct SignalsmithBackend {
     inner: Stretch,
-    /// The latency tail was already drained; `flush` is one-shot per stream
-    /// end or the caller's EOF drain loop would never finish.
     flushed: bool,
     ratio: f64,
     channels: usize,
 }
 
 impl SignalsmithBackend {
-    pub(crate) fn new(spec: PcmSpec) -> Self {
-        let channels = usize::from(spec.channels.max(1));
+    pub(crate) fn new(sample_rate: u32, channels: usize) -> Self {
+        let channels = channels.max(1);
         let inner =
-            Stretch::preset_default(u32::from(spec.channels.max(1)), spec.sample_rate.get());
+            Stretch::preset_default(u32::try_from(channels).unwrap_or(u32::MAX), sample_rate);
         Self {
             inner,
             channels,

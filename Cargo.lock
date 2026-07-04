@@ -4453,7 +4453,6 @@ dependencies = [
  "axum",
  "biquad",
  "bon",
- "bungee-rs",
  "bytes",
  "cbc",
  "crossbeam-queue",
@@ -4474,6 +4473,7 @@ dependencies = [
  "kithara-platform",
  "kithara-storage",
  "kithara-stream",
+ "kithara-stretch",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -4483,7 +4483,6 @@ dependencies = [
  "ringbuf 0.5.0",
  "rubato",
  "serde",
- "signalsmith-stretch",
  "smallvec",
  "tempfile",
  "thiserror 2.0.18",
@@ -4957,6 +4956,18 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "wasm_safe_thread",
+]
+
+[[package]]
+name = "kithara-stretch"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bungee-rs",
+ "kithara-workspace-hack",
+ "num-traits",
+ "signalsmith-stretch",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
