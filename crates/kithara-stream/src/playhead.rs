@@ -62,7 +62,7 @@ pub trait PlayheadWrite: PlayheadRead {
     fn land(&self, pos: &ChunkPosition);
     fn set_duration(&self, duration: Option<Duration>);
     fn set_decoded_frontier(&self, t: Duration);
-    /// Partial-chunk fixup — raw store, no duration cap.
+    /// Partial-chunk fixup — capped at total duration like full-chunk commits.
     fn set_position(&self, position: Duration);
 }
 
@@ -144,9 +144,8 @@ impl PlayheadWrite for PlayheadState {
     }
 
     fn set_position(&self, position: Duration) {
-        let nanos = u64::try_from(position.as_nanos())
-            .expect("BUG: position.as_nanos() fits in u64 for any realistic playback time");
-        self.position_ns.store(nanos, Ordering::Release);
+        let nanos = u64::try_from(position.as_nanos()).unwrap_or(u64::MAX);
+        self.write_ns_capped(nanos);
     }
 }
 
@@ -161,8 +160,7 @@ mod tests {
         let s = PlayheadState::new();
         s.set_duration(Some(Duration::from_secs(5)));
         s.set_position(Duration::from_secs(9));
-        // set_position is a raw store — no cap.
-        assert_eq!(s.position(), Duration::from_secs(9));
+        assert_eq!(s.position(), Duration::from_secs(5));
     }
 
     #[kithara::test]

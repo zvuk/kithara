@@ -20,7 +20,7 @@ use ringbuf::{
 };
 use smallvec::SmallVec;
 use thunderdome::Index;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::{
     arena_registry::ArenaRegistry,
@@ -396,11 +396,16 @@ impl PlayerNodeProcessor {
                 && ot != nt
             {
                 old_track = Some(Arc::clone(ot));
+                debug!(src = %ot, "registering FadeOut transition");
                 self.tracks_transitions
                     .push_back(TrackTransition::FadeOut(Arc::clone(ot)));
             }
         }
 
+        match &transition {
+            TrackTransition::FadeIn(src) => debug!(src = %src, "registering FadeIn transition"),
+            TrackTransition::FadeOut(src) => debug!(src = %src, "registering FadeOut transition"),
+        }
         self.tracks_transitions.push_back(transition);
 
         let shared_state = Arc::clone(&self.shared_state);
@@ -412,9 +417,19 @@ impl PlayerNodeProcessor {
                 match transition {
                     TrackTransition::FadeIn(_) => {
                         if track.position() > Self::FADE_IN_SEEK_THRESHOLD {
+                            debug!(
+                                src = %track_src,
+                                position = track.position(),
+                                "FadeIn transition: position past threshold, force-seeking to 0.0"
+                            );
                             track.seek(0.0);
                         }
                         track.fade_in();
+                        debug!(
+                            src = %track_src,
+                            position = track.position(),
+                            "FadeIn transition applied"
+                        );
                         shared_state
                             .position
                             .store(track.position(), Ordering::Relaxed);
@@ -649,6 +664,12 @@ impl PlayerNodeProcessor {
                         let Some(next_track) = tracks.get_by_index_mut(*next_handle) else {
                             continue;
                         };
+                        debug!(
+                            next_arena_idx,
+                            src = %next_track.src(),
+                            handover_offset = offset,
+                            "EOF handover: promoting first Preloading arena track"
+                        );
                         next_track.play();
                         let _ = next_track.read(
                             &mut read_bufs,
