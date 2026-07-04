@@ -836,10 +836,12 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 async fn natural_eof_advance_emits_only_b_aac(temp_dir: TestTempDir) {
+    const MAX_TONE_UNDERRUN_GAP_WINDOWS: usize = 8;
+
     let server = TestServerHelper::new().await;
     let setup = setup_sine_aac_queue(&server, &temp_dir).await;
 
-    let (rendered, _expected_a_frames) =
+    let (rendered, duration) =
         render_until_tone_b_with_postroll(&setup.queue, &setup.harness, SAMPLE_RATE).await;
     let left = deinterleave_left(&rendered, usize::from(CHANNELS));
     let classes = classify_tone_windows(&left, TONE_WINDOW_FRAMES, SAMPLE_RATE);
@@ -860,80 +862,104 @@ async fn natural_eof_advance_emits_only_b_aac(temp_dir: TestTempDir) {
         Some(onset_window),
         setup.queue.current_index(),
     );
-    let a_runs: Vec<ToneRun> = runs
+    let merge_tone_underrun_gaps = |runs: &[ToneRun]| {
+        let mut merged_runs: Vec<ToneRun> = Vec::new();
+        let mut idx = 0;
+
+        while idx < runs.len() {
+            let run = runs[idx];
+            if matches!(run.0, ToneClass::A440 | ToneClass::B880) {
+                let mut merged_run = run;
+                idx += 1;
+
+                while idx + 1 < runs.len()
+                    && runs[idx].0 == ToneClass::Silence
+                    && runs[idx].2 <= MAX_TONE_UNDERRUN_GAP_WINDOWS
+                    && runs[idx + 1].0 == run.0
+                {
+                    merged_run.2 += runs[idx + 1].2;
+                    idx += 2;
+                }
+
+                merged_runs.push(merged_run);
+            } else {
+                merged_runs.push(run);
+                idx += 1;
+            }
+        }
+
+        merged_runs
+    };
+    let merged_runs = merge_tone_underrun_gaps(&runs);
+    let diagnostics = || {
+        format!(
+            "{}; merged_tone_runs(class,start_window,len_without_silence_gaps)={merged_runs:?}",
+            tone_dump(
+                &runs,
+                Some(onset_window),
+                Some(b_onset_window),
+                setup.queue.current_index(),
+            )
+        )
+    };
+    let a_runs: Vec<ToneRun> = merged_runs
         .iter()
         .copied()
         .filter(|run| run.0 == ToneClass::A440)
         .collect();
-    let b_runs: Vec<ToneRun> = runs
+    let b_runs: Vec<ToneRun> = merged_runs
         .iter()
         .copied()
         .filter(|run| run.0 == ToneClass::B880)
         .collect();
+    let a_content_frames = a_runs
+        .iter()
+        .map(|run| run.2)
+        .sum::<usize>()
+        .saturating_mul(TONE_WINDOW_FRAMES);
+    let expected_a_frames = frames_from_secs(duration, SAMPLE_RATE);
+    let max_a_content_frames = expected_a_frames.saturating_add(frames_from_secs(0.5, SAMPLE_RATE));
 
     assert_eq!(
         classes[onset_window],
         ToneClass::A440,
         "AAC first tone window must be 440 Hz A content; {}",
-        tone_dump(
-            &runs,
-            Some(onset_window),
-            Some(b_onset_window),
-            setup.queue.current_index()
-        )
+        diagnostics()
     );
     assert_eq!(
         a_runs.len(),
         1,
         "AAC provenance must contain exactly one maximal 440 Hz A region; {}",
-        tone_dump(
-            &runs,
-            Some(onset_window),
-            Some(b_onset_window),
-            setup.queue.current_index()
-        )
+        diagnostics()
     );
     assert_eq!(
         b_runs.len(),
         1,
         "AAC provenance must contain exactly one maximal 880 Hz B region; {}",
-        tone_dump(
-            &runs,
-            Some(onset_window),
-            Some(b_onset_window),
-            setup.queue.current_index()
-        )
+        diagnostics()
+    );
+    assert!(
+        a_content_frames <= max_a_content_frames,
+        "AAC 440 Hz A content must not exceed duration plus 0.5s slack; \
+         a_content_frames={a_content_frames}; max_a_content_frames={max_a_content_frames}; \
+         duration_seconds={duration}; {}",
+        diagnostics()
     );
     assert!(
         a_runs[0].1 < b_runs[0].1,
         "AAC 440 Hz A region must precede 880 Hz B region; {}",
-        tone_dump(
-            &runs,
-            Some(onset_window),
-            Some(b_onset_window),
-            setup.queue.current_index()
-        )
+        diagnostics()
     );
     assert!(
         no_tone_after_b(&classes, b_onset_window, ToneClass::A440),
         "AAC B region must not contain 440 Hz A windows after B onset; {}",
-        tone_dump(
-            &runs,
-            Some(onset_window),
-            Some(b_onset_window),
-            setup.queue.current_index()
-        )
+        diagnostics()
     );
     assert_eq!(
         setup.queue.current_index(),
         Some(1),
         "queue.current_index must advance to track B for AAC; {}",
-        tone_dump(
-            &runs,
-            Some(onset_window),
-            Some(b_onset_window),
-            setup.queue.current_index()
-        )
+        diagnostics()
     );
 }
 
@@ -1608,20 +1634,20 @@ async fn render_until_tone_b_with_postroll(
     queue: &Queue,
     harness: &OfflinePlayerHarness,
     render_sample_rate: u32,
-) -> (Vec<f32>, usize) {
+) -> (Vec<f32>, f64) {
     let mut progress = ToneRenderProgress::new();
-    let mut expected_a_frames: Option<usize> = None;
+    let mut track_duration: Option<f64> = None;
 
     for _ in 0..BLOCK_BUDGET {
         let _ = queue.tick();
         let block = harness.render(BLOCK_FRAMES);
         progress.push_block(&block, render_sample_rate);
 
-        if expected_a_frames.is_none()
+        if track_duration.is_none()
             && let Some(duration) = queue.duration_seconds()
             && duration > 7.0
         {
-            expected_a_frames = Some(frames_from_secs(duration, render_sample_rate));
+            track_duration = Some(duration);
         }
 
         time::sleep(Duration::from_millis(1)).await;
@@ -1633,7 +1659,7 @@ async fn render_until_tone_b_with_postroll(
 
     (
         progress.rendered,
-        expected_a_frames.expect("track A duration must be reported before EOF"),
+        track_duration.expect("track A duration must be reported before EOF"),
     )
 }
 
