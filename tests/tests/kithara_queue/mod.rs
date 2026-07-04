@@ -2,6 +2,7 @@
 #[path = "../common/offline_player_harness.rs"]
 mod offline_player_harness;
 
+mod advance_boundary_provenance;
 mod auto_advance;
 mod cold_seek_middle;
 mod cpal_cold_seek_synthetic;

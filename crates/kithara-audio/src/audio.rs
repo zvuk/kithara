@@ -591,7 +591,7 @@ impl<S> Audio<S> {
                     let interpolated = u128::from(start_ns).saturating_add(consumed_ns_offset);
                     let interpolated_ns = u64::try_from(interpolated).unwrap_or(u64::MAX);
                     self.playhead
-                        .set_position(Duration::from_nanos(interpolated_ns));
+                        .advance_partial(Duration::from_nanos(interpolated_ns));
                 }
             }
 
@@ -1794,6 +1794,22 @@ mod tests {
         chunk
     }
 
+    fn make_timed_chunk(spec: PcmSpec, frames: u32, start: Duration, end: Duration) -> PcmChunk {
+        let channels = usize::from(spec.channels.max(1));
+        let frame_count = usize::try_from(frames).expect("test frame count fits usize");
+        let samples = vec![0.5; frame_count * channels];
+        PcmChunk::new(
+            PcmMeta {
+                spec,
+                timestamp: start,
+                end_timestamp: end,
+                frames,
+                ..Default::default()
+            },
+            PcmPool::default().attach(samples),
+        )
+    }
+
     #[kithara::test]
     fn consumer_phase_starts_buffering() {
         let audio = empty_audio();
@@ -1809,6 +1825,33 @@ mod tests {
 
         assert!(audio.fill_buffer());
         assert_eq!(audio.consumer_phase, ConsumerPhase::Playing);
+    }
+
+    #[kithara::test]
+    fn partial_resampled_chunk_position_caps_at_duration() {
+        let (mut audio, mut tx) = audio_with_channel();
+        let spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
+        let duration = Duration::from_nanos(36_360_000_000);
+        let chunk = make_timed_chunk(
+            spec,
+            148,
+            duration.saturating_sub(Duration::from_millis(2)),
+            duration.saturating_add(Duration::from_millis(2)),
+        );
+
+        audio.playhead.set_duration(Some(duration));
+        tx.try_push(Fetch::new(chunk, false, 0))
+            .expect("chunk reaches test ring");
+
+        let mut buf = vec![0.0f32; 200];
+        let outcome = audio.read(&mut buf).expect("partial read succeeds");
+        let ReadOutcome::Frames { count, position } = outcome else {
+            panic!("expected frames from partial resampled chunk");
+        };
+
+        assert_eq!(count.get(), 200);
+        assert_eq!(position, duration);
+        assert_eq!(audio.current_chunk_consumed_frames, 100);
     }
 
     #[kithara::test]
