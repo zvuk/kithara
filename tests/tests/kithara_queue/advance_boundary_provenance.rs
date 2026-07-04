@@ -836,8 +836,6 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 async fn natural_eof_advance_emits_only_b_aac(temp_dir: TestTempDir) {
-    const MAX_TONE_UNDERRUN_GAP_WINDOWS: usize = 8;
-
     let server = TestServerHelper::new().await;
     let setup = setup_sine_aac_queue(&server, &temp_dir).await;
 
@@ -862,34 +860,6 @@ async fn natural_eof_advance_emits_only_b_aac(temp_dir: TestTempDir) {
         Some(onset_window),
         setup.queue.current_index(),
     );
-    let merge_tone_underrun_gaps = |runs: &[ToneRun]| {
-        let mut merged_runs: Vec<ToneRun> = Vec::new();
-        let mut idx = 0;
-
-        while idx < runs.len() {
-            let run = runs[idx];
-            if matches!(run.0, ToneClass::A440 | ToneClass::B880) {
-                let mut merged_run = run;
-                idx += 1;
-
-                while idx + 1 < runs.len()
-                    && runs[idx].0 == ToneClass::Silence
-                    && runs[idx].2 <= MAX_TONE_UNDERRUN_GAP_WINDOWS
-                    && runs[idx + 1].0 == run.0
-                {
-                    merged_run.2 += runs[idx + 1].2;
-                    idx += 2;
-                }
-
-                merged_runs.push(merged_run);
-            } else {
-                merged_runs.push(run);
-                idx += 1;
-            }
-        }
-
-        merged_runs
-    };
     let merged_runs = merge_tone_underrun_gaps(&runs);
     let diagnostics = || {
         format!(
@@ -2328,6 +2298,38 @@ fn tone_runs(classes: &[ToneClass]) -> Vec<ToneRun> {
 
     runs.push(current);
     runs
+}
+
+/// Merges same-tone runs across silence underrun gaps.
+///
+/// Underrun gaps are unbounded under load, and silence carries no provenance,
+/// so it should never fragment a tone region or contribute to its length.
+fn merge_tone_underrun_gaps(runs: &[ToneRun]) -> Vec<ToneRun> {
+    let mut merged_runs = Vec::new();
+    let mut idx = 0;
+
+    while idx < runs.len() {
+        let run = runs[idx];
+        if matches!(run.0, ToneClass::A440 | ToneClass::B880) {
+            let mut merged_run = run;
+            idx += 1;
+
+            while idx + 1 < runs.len()
+                && runs[idx].0 == ToneClass::Silence
+                && runs[idx + 1].0 == run.0
+            {
+                merged_run.2 += runs[idx + 1].2;
+                idx += 2;
+            }
+
+            merged_runs.push(merged_run);
+        } else {
+            merged_runs.push(run);
+            idx += 1;
+        }
+    }
+
+    merged_runs
 }
 
 fn collapse_short_unknown_islands(runs: &[ClassRun]) -> Vec<ClassRun> {
