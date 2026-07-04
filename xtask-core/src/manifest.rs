@@ -7,22 +7,23 @@ use std::{
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
 use clap::{Args, Subcommand};
-use kithara_xtask_core::util::ensure_clean_tree;
+
+use crate::{Ctx, util::ensure_clean_tree};
 
 #[derive(Debug, Args)]
-pub(crate) struct ManifestArgs {
+pub struct ManifestArgs {
     #[command(subcommand)]
     pub command: ManifestCommand,
 }
 
 #[derive(Debug, Subcommand)]
-pub(crate) enum ManifestCommand {
+pub enum ManifestCommand {
     /// Keep internal kithara dependencies before external dependencies.
     DependencyOrder(DependencyOrderArgs),
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct DependencyOrderArgs {
+pub struct DependencyOrderArgs {
     /// Rewrite manifests in place.
     #[arg(long)]
     pub fix: bool,
@@ -48,7 +49,7 @@ struct DependencyBlock<'a> {
     lines: Vec<&'a str>,
 }
 
-pub(crate) fn run(args: &ManifestArgs) -> Result<()> {
+pub(crate) fn run(args: &ManifestArgs, _ctx: &Ctx) -> Result<()> {
     match &args.command {
         ManifestCommand::DependencyOrder(args) => dependency_order(args),
     }

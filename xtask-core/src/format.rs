@@ -7,17 +7,17 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
-use kithara_xtask_core::util::{check_tool, ensure_clean_tree};
 
 use crate::{
-    manifest,
+    Ctx, manifest,
     manifest::{DependencyOrderArgs, ManifestArgs, ManifestCommand},
+    util::{check_tool, ensure_clean_tree},
 };
 
 const CHUNK_SIZE: usize = 128;
 
 #[derive(Debug, Args)]
-pub(crate) struct FormatArgs {
+pub struct FormatArgs {
     /// Check formatting without modifying files.
     #[arg(long)]
     check: bool,
@@ -44,13 +44,13 @@ enum FileKind {
     Json,
 }
 
-pub(crate) fn run(args: &FormatArgs) -> Result<()> {
+pub(crate) fn run(args: &FormatArgs, ctx: &Ctx) -> Result<()> {
     if !args.check {
         ensure_clean_tree(args.allow_dirty, "format")?;
     }
 
     for target in selected_targets(args) {
-        run_target(target, args.check)
+        run_target(target, args.check, ctx)
             .with_context(|| format!("format target `{}`", target.name()))?;
     }
     Ok(())
@@ -72,10 +72,10 @@ fn selected_targets(args: &FormatArgs) -> Vec<FormatTarget> {
     }
 }
 
-fn run_target(target: FormatTarget, check: bool) -> Result<()> {
+fn run_target(target: FormatTarget, check: bool, ctx: &Ctx) -> Result<()> {
     match target {
         FormatTarget::Rust => run_rustfmt(check),
-        FormatTarget::Manifest => run_manifest_format(check),
+        FormatTarget::Manifest => run_manifest_format(check, ctx),
         FormatTarget::Toml => run_toml_format(check),
         FormatTarget::Json => run_json_format(check),
         FormatTarget::Markdown => run_markdown_format(check),
@@ -102,7 +102,7 @@ fn run_rustfmt(check: bool) -> Result<()> {
     run_status("cargo", &args)
 }
 
-fn run_manifest_format(check: bool) -> Result<()> {
+fn run_manifest_format(check: bool, ctx: &Ctx) -> Result<()> {
     if !check {
         check_tool(
             "cargo",
@@ -121,12 +121,15 @@ fn run_manifest_format(check: bool) -> Result<()> {
         )?;
     }
 
-    manifest::run(&ManifestArgs {
-        command: ManifestCommand::DependencyOrder(DependencyOrderArgs {
-            fix: !check,
-            allow_dirty: true,
-        }),
-    })
+    manifest::run(
+        &ManifestArgs {
+            command: ManifestCommand::DependencyOrder(DependencyOrderArgs {
+                fix: !check,
+                allow_dirty: true,
+            }),
+        },
+        ctx,
+    )
 }
 
 fn run_toml_format(check: bool) -> Result<()> {

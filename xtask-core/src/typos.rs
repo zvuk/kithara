@@ -2,7 +2,11 @@ use std::process::Command;
 
 use anyhow::{Result, bail};
 use clap::Args;
-use kithara_xtask_core::util::{check_tool, ensure_clean_tree};
+
+use crate::{
+    Ctx,
+    util::{check_tool, ensure_clean_tree},
+};
 
 struct Consts;
 impl Consts {
@@ -11,7 +15,7 @@ impl Consts {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct TyposArgs {
+pub struct TyposArgs {
     /// Apply suggested fixes by passing `--write-changes` to typos.
     /// Refuses to run on a dirty working tree unless `--allow-dirty`.
     #[arg(long)]
@@ -24,7 +28,7 @@ pub(crate) struct TyposArgs {
     pub paths: Vec<String>,
 }
 
-pub(crate) fn run(args: &TyposArgs) -> Result<()> {
+pub(crate) fn run(args: &TyposArgs, _ctx: &Ctx) -> Result<()> {
     check_tool("typos", &["--version"], Consts::INSTALL_HINT)?;
     if args.fix {
         ensure_clean_tree(args.allow_dirty, "typos")?;

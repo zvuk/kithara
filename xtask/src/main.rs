@@ -1,47 +1,36 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use kithara_xtask_core::{CoreCommand, Ctx};
 
 mod agent_hook;
 mod android;
 mod apple;
 mod apple_docgen;
 mod arch;
-mod ast_grep;
-mod format;
 mod health;
 mod idioms;
 mod lint;
-mod manifest;
-mod orphans;
 mod perf_compare;
 mod publish;
 mod quality;
 mod release;
 mod scope;
-mod similarity;
 mod style;
 mod test;
-mod typos;
 mod viz;
 mod wasm;
 
 use agent_hook::AgentHookArgs;
 use android::AndroidCommand;
 use apple::AppleCommand;
-use ast_grep::AstGrepArgs;
-use format::FormatArgs;
 use health::HealthArgs;
 use lint::LintArgs;
-use manifest::ManifestArgs;
-use orphans::OrphansArgs;
 use publish::PublishArgs;
 use quality::QualityCommand;
 use release::ReleaseArgs;
 use scope::ScopeArgs;
-use similarity::SimilarityArgs;
 use test::TestArgs;
-use typos::TyposArgs;
 use viz::VizArgs;
 use wasm::WasmCommand;
 
@@ -112,18 +101,8 @@ enum Command {
     AgentHook(AgentHookArgs),
     /// Run workspace tests through `cargo nextest`.
     Test(TestArgs),
-    /// Format Rust, manifests, TOML, JSON, and Markdown through project tooling.
-    Format(FormatArgs),
-    /// Thin wrapper around `ast-grep scan` that bakes in the policy filter list.
-    AstGrep(AstGrepArgs),
-    /// Thin wrapper around `typos` that pins the workspace config.
-    Typos(TyposArgs),
-    /// Thin wrapper around `similarity-rs` with audit/advisory/strict profiles.
-    Similarity(SimilarityArgs),
-    /// Cargo manifest hygiene checks.
-    Manifest(ManifestArgs),
-    /// Per-package `cargo modules orphans` with `--cfg-test`.
-    Orphans(OrphansArgs),
+    #[command(flatten)]
+    Core(CoreCommand),
     /// Comprehensive workspace health check with markdown report.
     Health(HealthArgs),
     /// Architecture visualization tools (hierarchy, arc-map).
@@ -132,6 +111,7 @@ enum Command {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let ctx = Ctx::load()?;
 
     match cli.command {
         Command::PerfCompare {
@@ -149,12 +129,7 @@ fn main() -> anyhow::Result<()> {
         Command::Scope(ref args) => scope::run(args),
         Command::AgentHook(ref args) => agent_hook::run(args),
         Command::Test(ref args) => test::run(args),
-        Command::Format(ref args) => format::run(args),
-        Command::AstGrep(ref args) => ast_grep::run(args),
-        Command::Typos(ref args) => typos::run(args),
-        Command::Similarity(ref args) => similarity::run(args),
-        Command::Manifest(ref args) => manifest::run(args),
-        Command::Orphans(ref args) => orphans::run(args),
+        Command::Core(cmd) => kithara_xtask_core::run(&cmd, &ctx),
         Command::Health(ref args) => health::run(args),
         Command::Viz(ref args) => viz::run(args),
     }

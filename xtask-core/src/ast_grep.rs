@@ -1,16 +1,16 @@
 use std::{
     collections::BTreeMap,
-    path::Path,
     process::{Command, Stdio},
 };
 
 use anyhow::{Result, bail};
 use clap::Args;
-use kithara_xtask_core::{common::project::ProjectConfig, util::ensure_clean_tree};
 use serde::Deserialize;
 
+use crate::{Ctx, common::report::print_check_block, util::ensure_clean_tree};
+
 #[derive(Debug, Args)]
-pub(crate) struct AstGrepArgs {
+pub struct AstGrepArgs {
     /// Promote every warning to an error (passes `--warning` to ast-grep).
     /// Use for exhaustive sweeps when warning-level rules should also fail.
     #[arg(long)]
@@ -54,15 +54,15 @@ struct Position {
     column: u32,
 }
 
-pub(crate) fn run(args: &AstGrepArgs) -> Result<()> {
+pub(crate) fn run(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
     if args.fix {
         ensure_clean_tree(args.allow_dirty, "ast-grep")?;
-        return run_native(args);
+        return run_native(args, ctx);
     }
     if args.raw {
-        return run_native(args);
+        return run_native(args, ctx);
     }
-    run_grouped(args)
+    run_grouped(args, ctx)
 }
 
 /// Exclude test code from ast-grep at the source, consistent with the
@@ -72,22 +72,21 @@ pub(crate) fn run(args: &AstGrepArgs) -> Result<()> {
 /// ast-grep's `--globs` "always overrides any other ignore logic". (Inline
 /// `#[cfg(test)]` is not handled — ast-grep does no cfg evaluation; rules that
 /// care use a `not: inside cfg(test)` clause.)
-fn add_exclude_globs(cmd: &mut Command) -> Result<()> {
-    let project = ProjectConfig::load(Path::new("."))?;
+fn add_exclude_globs(cmd: &mut Command, ctx: &Ctx) {
+    let project = &ctx.config;
     for pat in &project.lint_exclude.paths {
         cmd.arg("--globs").arg(format!("!{pat}"));
     }
-    Ok(())
 }
 
-fn run_native(args: &AstGrepArgs) -> Result<()> {
+fn run_native(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
     let mut cmd = Command::new("ast-grep");
     cmd.arg("scan")
         .arg("--config")
         .arg("sgconfig.yml")
         .arg("--report-style")
         .arg("short");
-    add_exclude_globs(&mut cmd)?;
+    add_exclude_globs(&mut cmd, ctx);
     if args.strict {
         cmd.arg("--warning");
     }
@@ -130,15 +129,15 @@ fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) {
     }
 }
 
-fn run_grouped(args: &AstGrepArgs) -> Result<()> {
-    let project = ProjectConfig::load(Path::new("."))?;
+fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
+    let project = &ctx.config;
 
     let mut cmd = Command::new("ast-grep");
     cmd.arg("scan")
         .arg("--config")
         .arg("sgconfig.yml")
         .arg("--json=stream");
-    add_exclude_globs(&mut cmd)?;
+    add_exclude_globs(&mut cmd, ctx);
     if args.strict {
         cmd.arg("--warning");
     }
@@ -258,7 +257,7 @@ fn print_grouped(groups: &BTreeMap<String, RuleGroup>) {
             println!();
         }
         let summary = format!("×{} {}", group.hits.len(), group.severity);
-        kithara_xtask_core::common::report::print_check_block(
+        print_check_block(
             rule_id,
             &group.severity,
             &summary,

@@ -7,7 +7,8 @@ use std::{
 use anyhow::{Result, bail};
 use cargo_metadata::MetadataCommand;
 use clap::Args;
-use kithara_xtask_core::{common::project::ProjectConfig, util::check_tool};
+
+use crate::{Ctx, util::check_tool};
 
 struct Consts;
 impl Consts {
@@ -17,7 +18,7 @@ impl Consts {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct OrphansArgs {
+pub struct OrphansArgs {
     /// Limit to specific packages. Repeatable. Empty = all non-excluded
     /// workspace packages.
     #[arg(long = "package", short = 'p', value_name = "NAME")]
@@ -33,14 +34,14 @@ pub(crate) struct OrphansArgs {
     pub audit_mode: bool,
 }
 
-pub(crate) fn run(args: &OrphansArgs) -> Result<()> {
+pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
     check_tool(
         "cargo-modules",
         &["modules", "--version"],
         Consts::INSTALL_HINT,
     )?;
 
-    let excluded = excluded_packages()?;
+    let excluded = &ctx.config.orphans.exclude_packages;
     let packages: Vec<String> = if args.packages.is_empty() {
         if args.audit_mode {
             println!(
@@ -49,7 +50,7 @@ pub(crate) fn run(args: &OrphansArgs) -> Result<()> {
             );
             return Ok(());
         }
-        all_non_excluded(&excluded)?
+        all_non_excluded(excluded)?
     } else {
         let mut kept = Vec::new();
         let mut skipped = Vec::new();
@@ -133,12 +134,6 @@ pub(crate) fn run(args: &OrphansArgs) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn excluded_packages() -> Result<Vec<String>> {
-    let metadata = MetadataCommand::new().no_deps().exec()?;
-    let root = metadata.workspace_root.as_std_path();
-    Ok(ProjectConfig::load(root)?.orphans.exclude_packages)
 }
 
 fn all_non_excluded(excluded: &[String]) -> Result<Vec<String>> {

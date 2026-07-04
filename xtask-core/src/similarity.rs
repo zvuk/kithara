@@ -3,8 +3,9 @@ use std::{fs, path::Path, process::Command};
 use anyhow::{Context, Result, bail};
 use cargo_metadata::{Metadata, MetadataCommand};
 use clap::{Args, ValueEnum};
-use kithara_xtask_core::util::check_tool;
 use serde::Deserialize;
+
+use crate::{Ctx, util::check_tool};
 
 struct Consts;
 impl Consts {
@@ -33,7 +34,7 @@ fn load_config(workspace_root: &Path) -> Result<SimilarityConfig> {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-pub(crate) enum Profile {
+pub enum Profile {
     /// Blocking, low-noise: 0.96 / min-lines 12 / skip-test / fail-on-duplicates.
     Audit,
     /// Informational, default for `just similarity`: 0.85 / 10 / skip-test.
@@ -43,7 +44,7 @@ pub(crate) enum Profile {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct SimilarityArgs {
+pub struct SimilarityArgs {
     #[arg(long, value_enum, default_value_t = Profile::Advisory)]
     pub profile: Profile,
     /// Optional roots to scan. Empty = all production crate `src/` dirs
@@ -51,7 +52,7 @@ pub(crate) struct SimilarityArgs {
     pub paths: Vec<String>,
 }
 
-pub(crate) fn run(args: &SimilarityArgs) -> Result<()> {
+pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {
     check_tool("similarity-rs", &["--version"], Consts::INSTALL_HINT)?;
     let mut cmd = Command::new("similarity-rs");
 
@@ -74,7 +75,7 @@ pub(crate) fn run(args: &SimilarityArgs) -> Result<()> {
     cmd.arg("--exclude").arg(".worktrees");
 
     let metadata = MetadataCommand::new().no_deps().exec()?;
-    let config = load_config(metadata.workspace_root.as_std_path())?;
+    let config = load_config(&ctx.root)?;
     let excluded = &config.excluded_crates;
 
     let roots = if args.paths.is_empty() {
