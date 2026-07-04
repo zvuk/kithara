@@ -685,8 +685,18 @@ mod seek_trim_tests {
     use super::{test_counting_codec::CountingCodec, *};
     use crate::{
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Frame, TrackInfo},
+        duration_for_frames,
         traits::Decoder,
     };
+
+    struct Consts;
+
+    impl Consts {
+        const CHANNELS: u16 = 2;
+        const PACKET_COUNT: u64 = 6;
+        const PACKET_FRAMES: u32 = 1024;
+        const SAMPLE_RATE: u32 = 44_100;
+    }
 
     struct ThreeFrameDemuxer {
         track: TrackInfo,
@@ -705,6 +715,12 @@ mod seek_trim_tests {
         held: Vec<u8>,
         frames: Vec<BoundaryFrame>,
         idx: usize,
+    }
+
+    #[derive(Clone, Copy)]
+    enum SeekTrimLayout {
+        RegularPackets,
+        RoundedPastTarget,
     }
 
     impl Demuxer for ThreeFrameDemuxer {
@@ -792,6 +808,42 @@ mod seek_trim_tests {
         }
     }
 
+    fn packet_duration() -> Duration {
+        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES))
+    }
+
+    fn regular_seek_frames() -> Vec<BoundaryFrame> {
+        (0..Consts::PACKET_COUNT)
+            .map(|packet_idx| BoundaryFrame {
+                pts: duration_for_frames(
+                    Consts::SAMPLE_RATE,
+                    packet_idx.saturating_mul(u64::from(Consts::PACKET_FRAMES)),
+                ),
+                duration: packet_duration(),
+            })
+            .collect()
+    }
+
+    fn rounded_past_target_frames(target: Duration) -> Vec<BoundaryFrame> {
+        vec![
+            BoundaryFrame {
+                pts: Duration::ZERO,
+                duration: target.saturating_add(Duration::from_nanos(1)),
+            },
+            BoundaryFrame {
+                pts: target,
+                duration: packet_duration(),
+            },
+        ]
+    }
+
+    fn seek_frames_for(target: Duration, layout: SeekTrimLayout) -> Vec<BoundaryFrame> {
+        match layout {
+            SeekTrimLayout::RegularPackets => regular_seek_frames(),
+            SeekTrimLayout::RoundedPastTarget => rounded_past_target_frames(target),
+        }
+    }
+
     #[kithara::test]
     fn pre_target_frames_are_decoded_and_dropped_by_pending_seek_target() {
         const FRAME_FRAMES: u32 = 882;
@@ -866,6 +918,71 @@ mod seek_trim_tests {
         );
         assert_eq!(chunk.meta.frame_offset, u64::from(PACKET_FRAMES));
         assert_eq!(chunk.meta.timestamp, target);
+    }
+
+    #[kithara::test]
+    #[case::packet_boundary(
+        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES)),
+        SeekTrimLayout::RegularPackets
+    )]
+    #[case::mid_packet(
+        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) + 512),
+        SeekTrimLayout::RegularPackets
+    )]
+    #[case::rounding_hair_past_boundary(
+        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES))
+            .saturating_add(Duration::from_nanos(1)),
+        SeekTrimLayout::RoundedPastTarget
+    )]
+    #[case::multiple_fully_pre_target_packets(
+        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) * 3 + 512),
+        SeekTrimLayout::RegularPackets
+    )]
+    fn seek_trim_lands_first_chunk_on_exact_target_frame(
+        #[case] target: Duration,
+        #[case] layout: SeekTrimLayout,
+    ) {
+        let codec = CountingCodec::new(
+            PcmSpec::new(
+                Consts::CHANNELS,
+                NonZeroU32::new(Consts::SAMPLE_RATE).expect("test rate"),
+            ),
+            Consts::PACKET_FRAMES,
+        );
+        let demuxer = BoundaryFrameDemuxer {
+            track: empty_track(),
+            held: Vec::new(),
+            frames: seek_frames_for(target, layout),
+            idx: 0,
+        };
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+
+        let _ = decoder.seek(target).expect("BUG: seek");
+        let outcome = decoder.next_chunk().expect("BUG: next_chunk");
+        let DecoderChunkOutcome::Chunk(chunk) = outcome else {
+            panic!("expected Chunk, got {outcome:?}");
+        };
+        let expected_frame = frame_offset_for(target, Consts::SAMPLE_RATE);
+        let packet_offset = expected_frame % u64::from(Consts::PACKET_FRAMES);
+        let expected_frames = if packet_offset == 0 {
+            Consts::PACKET_FRAMES
+        } else {
+            Consts::PACKET_FRAMES - u32::try_from(packet_offset).expect("packet offset fits in u32")
+        };
+
+        assert_eq!(chunk.meta.frame_offset, expected_frame);
+        assert_eq!(chunk.meta.timestamp, target);
+        assert_eq!(
+            frame_offset_for(chunk.meta.timestamp, Consts::SAMPLE_RATE),
+            expected_frame
+        );
+        assert!(
+            chunk.meta.timestamp >= target,
+            "first chunk timestamp {:?} before seek target {:?}",
+            chunk.meta.timestamp,
+            target
+        );
+        assert_eq!(chunk.meta.frames, expected_frames);
     }
 }
 

@@ -4013,6 +4013,100 @@ mod splice_continuity_tests {
             "variant-switch stitch discontinuity {switch_peak:.6} is {ratio:.1}x the worst same-variant segment boundary {control_peak:.6} — audible click at the splice",
         );
     }
+
+    #[kithara::test(tokio)]
+    async fn hls_aac_lc_same_variant_recreate_continuity_metric() {
+        let state = Arc::new(SpliceState::new(vec![build_variant_layout(
+            "slq",
+            Consts::SLQ_VARIANT,
+        )]));
+        let mut source = splice_source(Arc::clone(&state)).await;
+        let recreate_after =
+            Duration::from_secs(u64::from(Consts::SPLICE_SEGMENT) * Consts::SEGMENT_DURATION_SECS);
+        let capture_frames = usize::try_from(
+            Consts::CAPTURE_END_SEGMENT
+                .saturating_mul(Consts::SEGMENT_DURATION_SECS)
+                .saturating_mul(u64::from(Consts::SAMPLE_RATE)),
+        )
+        .expect("capture frame count fits usize");
+        let mut left = Vec::with_capacity(capture_frames);
+        let mut recreated = false;
+        let mut recreate_frame = None;
+
+        while left.len() < capture_frames {
+            run_pending_rebuild_inline(&mut source);
+            match source.step_track() {
+                TrackStep::Produced(fetch) => {
+                    let chunk = fetch.into_inner();
+                    append_left_channel(&mut left, &chunk);
+                    source.playhead.advance(&ChunkPosition::from(&chunk.meta));
+                    if !recreated
+                        && chunk.meta.segment_index == Some(Consts::SPLICE_SEGMENT - 1)
+                        && chunk.meta.end_timestamp >= recreate_after
+                    {
+                        let active = state.active_index();
+                        assert_eq!(
+                            active,
+                            Consts::SLQ_VARIANT,
+                            "same-variant recreate test must stay on the SLQ variant",
+                        );
+                        source.start_recreating_decoder(RecreateState {
+                            cause: RecreateCause::VariantSwitch,
+                            media_info: media_info(active),
+                            next: RecreateNext::ApplySeek(SeekRequest {
+                                seek: SeekContext {
+                                    epoch: source.epoch.load(Ordering::Acquire),
+                                    target: chunk.meta.end_timestamp,
+                                },
+                                emit_request: false,
+                            }),
+                            offset: state.active_layout().init_range.start,
+                        });
+                        recreated = true;
+                        recreate_frame = Some(left.len());
+                    }
+                }
+                TrackStep::StateChanged | TrackStep::Blocked(_) => {}
+                TrackStep::Eof => break,
+                TrackStep::Failed => {
+                    panic!("same-variant recreate source failed before metric collection");
+                }
+            }
+        }
+
+        assert!(recreated, "test must trigger the same-variant recreate");
+        assert_eq!(
+            state.active_index(),
+            Consts::SLQ_VARIANT,
+            "same-variant recreate must not change the active variant",
+        );
+        let recreate_frame = recreate_frame.expect("recreate frame should be captured");
+        let recreate_peak = peak_first_diff(&left, recreate_frame, 64);
+        let mut control_peak = 0.0_f32;
+        let mut control_count = 0usize;
+        for k in 1..Consts::TOTAL_SEGMENTS {
+            let boundary = k
+                .saturating_mul(Consts::SEGMENT_DURATION_SECS as usize)
+                .saturating_mul(Consts::SAMPLE_RATE as usize);
+            if boundary >= left.len() || boundary.abs_diff(recreate_frame) <= 4096 {
+                continue;
+            }
+            control_peak = control_peak.max(peak_first_diff(&left, boundary, 64));
+            control_count += 1;
+        }
+        assert!(
+            control_count >= 2,
+            "recreate continuity metric needs at least two same-content control boundaries, got {control_count}",
+        );
+        let ratio = recreate_peak / control_peak.max(f32::EPSILON);
+        println!(
+            "RECREATE_CONTINUITY recreate_peak={recreate_peak:.6} control_peak={control_peak:.6} ratio={ratio:.3}"
+        );
+        assert!(
+            ratio < 3.0,
+            "same-variant recreate discontinuity {recreate_peak:.6} is {ratio:.1}x the worst same-content segment boundary {control_peak:.6}",
+        );
+    }
 }
 
 #[cfg(test)]
