@@ -7,16 +7,12 @@ mod agent_hook;
 mod android;
 mod apple;
 mod apple_docgen;
-mod arch;
 mod health;
-mod idioms;
-mod lint;
 mod perf_compare;
 mod publish;
 mod quality;
 mod release;
 mod scope;
-mod style;
 mod test;
 mod viz;
 mod wasm;
@@ -25,7 +21,6 @@ use agent_hook::AgentHookArgs;
 use android::AndroidCommand;
 use apple::AppleCommand;
 use health::HealthArgs;
-use lint::LintArgs;
 use publish::PublishArgs;
 use quality::QualityCommand;
 use release::ReleaseArgs;
@@ -68,8 +63,6 @@ enum Command {
         #[arg(long, default_value_t = 10)]
         threshold: u32,
     },
-    /// Workspace linters: arch, style, idioms (run all, or one via subcommand).
-    Lint(LintArgs),
     /// Code quality checks.
     Quality {
         #[command(subcommand)]
@@ -119,7 +112,6 @@ fn main() -> anyhow::Result<()> {
             baseline,
             threshold,
         } => perf_compare::run(&current, &baseline, threshold),
-        Command::Lint(ref args) => lint::run(args),
         Command::Quality { command } => quality::run(command),
         Command::Android { command } => android::run(command),
         Command::Apple { command } => apple::run(command),

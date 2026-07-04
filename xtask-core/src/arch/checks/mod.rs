@@ -1,0 +1,109 @@
+//! Registry of architectural checks.
+//!
+//! Each check implements `Check`. The runner iterates the registry and
+//! aggregates `Violation`s into a `Report`.
+
+use std::path::Path;
+
+use anyhow::Result;
+use cargo_metadata::Metadata;
+
+use super::config::ArchConfig;
+use crate::common::{fix::FixOutcome, scope::Scope, violation::Violation};
+
+pub(crate) mod arc_clone_hotspots;
+pub(crate) mod args_wrapper_struct;
+pub(crate) mod cancel_root_sites;
+pub(crate) mod canonical_types;
+pub(crate) mod cfg_density;
+pub(crate) mod dead_exports;
+pub(crate) mod direction;
+pub(crate) mod duplicate_error_enums;
+pub(crate) mod field_always_constant;
+pub(crate) mod field_always_equals_other_field;
+pub(crate) mod field_passthrough;
+pub(crate) mod file_density;
+pub(crate) mod file_size;
+pub(crate) mod flat_directory;
+pub(crate) mod fn_arg_count;
+pub(crate) mod generic_param_count;
+pub(crate) mod god_module;
+pub(crate) mod god_struct;
+pub(crate) mod god_trait;
+pub(crate) mod max_nesting;
+pub(crate) mod mixed_entities;
+pub(crate) mod module_fan_out;
+pub(crate) mod module_layers;
+pub(crate) mod multi_constructor;
+pub(crate) mod no_lib_statics;
+pub(crate) mod platform_layer_hygiene;
+pub(crate) mod pub_struct_open_fields;
+pub(crate) mod readme_presence;
+pub(crate) mod redundant_accessors;
+pub(crate) mod redundant_reexport;
+pub(crate) mod shared_state;
+pub(crate) mod single_impl_size;
+pub(crate) mod single_word_filenames;
+pub(crate) mod stray_rs_files;
+pub(crate) mod struct_index;
+pub(crate) mod tokio_dep_quarantine;
+pub(crate) mod trait_impl_count;
+
+pub(crate) struct Context<'a> {
+    pub(crate) workspace_root: &'a Path,
+    pub(crate) metadata: &'a Metadata,
+    pub(crate) config: &'a ArchConfig,
+    pub(crate) scope: &'a Scope,
+}
+
+pub(crate) trait Check {
+    fn id(&self) -> &'static str;
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>>;
+
+    /// Apply an automatic fix. Default is a no-op (read-only check). `apply`
+    /// distinguishes a dry run (report only) from writing changes to disk.
+    fn fix(&self, _ctx: &Context<'_>, _apply: bool) -> Result<FixOutcome> {
+        Ok(FixOutcome::default())
+    }
+}
+
+pub(crate) fn registry() -> Vec<Box<dyn Check>> {
+    vec![
+        Box::new(cancel_root_sites::CancelRootSites),
+        Box::new(platform_layer_hygiene::PlatformLayerHygiene),
+        Box::new(tokio_dep_quarantine::TokioDepQuarantine),
+        Box::new(cfg_density::CfgDensity),
+        Box::new(dead_exports::DeadExports),
+        Box::new(direction::Direction),
+        Box::new(args_wrapper_struct::ArgsWrapperStruct),
+        Box::new(canonical_types::CanonicalTypes),
+        Box::new(arc_clone_hotspots::ArcCloneHotspots),
+        Box::new(fn_arg_count::FnArgCount),
+        Box::new(generic_param_count::GenericParamCount),
+        Box::new(god_module::GodModule),
+        Box::new(god_struct::GodStruct),
+        Box::new(god_trait::GodTrait),
+        Box::new(module_fan_out::ModuleFanOut),
+        Box::new(multi_constructor::MultiConstructor),
+        Box::new(no_lib_statics::NoLibStatics),
+        Box::new(pub_struct_open_fields::PubStructOpenFields),
+        Box::new(trait_impl_count::TraitImplCount),
+        Box::new(duplicate_error_enums::DuplicateErrorEnums),
+        Box::new(field_always_constant::FieldAlwaysConstant),
+        Box::new(field_always_equals_other_field::FieldAlwaysEqualsOtherField),
+        Box::new(field_passthrough::FieldPassthrough),
+        Box::new(stray_rs_files::StrayRsFiles),
+        Box::new(file_size::FileSize),
+        Box::new(flat_directory::FlatDirectory),
+        Box::new(shared_state::SharedState),
+        Box::new(max_nesting::MaxNesting),
+        Box::new(readme_presence::ReadmePresence),
+        Box::new(file_density::FileDensity),
+        Box::new(mixed_entities::MixedEntities),
+        Box::new(redundant_accessors::RedundantAccessors),
+        Box::new(redundant_reexport::RedundantReexport),
+        Box::new(single_impl_size::SingleImplSize),
+        Box::new(single_word_filenames::SingleWordFilenames),
+        Box::new(module_layers::ModuleLayers),
+    ]
+}

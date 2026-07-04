@@ -1,10 +1,14 @@
+pub mod arch;
 pub mod ast_grep;
 pub mod common;
 pub mod ctx;
 pub mod format;
+pub mod idioms;
+pub mod lint;
 pub mod manifest;
 pub mod orphans;
 pub mod similarity;
+pub mod style;
 pub mod typos;
 pub mod util;
 
@@ -24,6 +28,8 @@ pub enum CoreCommand {
     Manifest(manifest::ManifestArgs),
     /// Per-package `cargo modules orphans` with `--cfg-test`.
     Orphans(orphans::OrphansArgs),
+    /// Workspace linters: arch, style, idioms (run all, or one via subcommand).
+    Lint(lint::LintArgs),
 }
 
 /// Runs a core xtask command.
@@ -39,5 +45,6 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         CoreCommand::Similarity(args) => similarity::run(args, ctx),
         CoreCommand::Manifest(args) => manifest::run(args, ctx),
         CoreCommand::Orphans(args) => orphans::run(args, ctx),
+        CoreCommand::Lint(args) => lint::run(args),
     }
 }
