@@ -526,8 +526,10 @@ async fn stress_seek_audio_hls(
         let mut channel_mismatches = 0u64;
         let mut continuity_errors = 0u64;
         let mut position_errors = 0u64;
+        let mut position_error_details: Vec<String> = Vec::new();
 
         let channels = spec.channels as usize;
+        let bytes_per_frame = usize::from(Consts::D.channels) * 2;
 
         for (i, &pos_secs) in seek_positions.iter().enumerate() {
             let position = Duration::from_secs_f64(pos_secs);
@@ -601,6 +603,16 @@ async fn stress_seek_audio_hls(
             let dist = phase_distance(actual_phase, expected_phase);
             if dist > 1200 {
                 position_errors += 1;
+                if position_error_details.len() < 10 {
+                    let requested_byte = 44 + expected_frame_idx * bytes_per_frame;
+                    let segment_index =
+                        (requested_byte / Consts::D.segment_size).min(segment_count - 1);
+                    position_error_details.push(format!(
+                        "#{i}: requested={pos_secs:.6}s expected_frame={expected_frame_idx} \
+                         expected_phase={expected_phase} actual_phase={actual_phase} \
+                         delta={dist} segment={segment_index}"
+                    ));
+                }
                 if position_errors <= 3 {
                     info!(
                         iteration = i,
@@ -668,7 +680,9 @@ async fn stress_seek_audio_hls(
         }
         assert!(
             position_errors <= 3,
-            "{position_errors} position mismatches (>3 tolerance) - seek landed in wrong place"
+            "{position_errors} position mismatches (>3 tolerance) - seek landed in wrong place. \
+             First mismatches (capped at 10):\n{}",
+            position_error_details.join("\n")
         );
 
         let final_seek_secs = total_secs - chunk_duration_secs;
