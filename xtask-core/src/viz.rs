@@ -6,14 +6,15 @@ use std::{
 use anyhow::{Context, Result};
 use cargo_metadata::MetadataCommand;
 use clap::{Args, Subcommand};
-use kithara_xtask_core::common::{
+use syn::{Expr, Item, Type, visit::Visit};
+
+use crate::common::{
     parse::{is_pub_visibility, parse_file},
     walker::{relative_to, walk_rs_files},
 };
-use syn::{Expr, Item, Type, visit::Visit};
 
 #[derive(Debug, Args)]
-pub(crate) struct VizArgs {
+pub struct VizArgs {
     #[command(subcommand)]
     pub(crate) command: VizCommand,
 }

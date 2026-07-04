@@ -6,13 +6,12 @@ use std::{
 use anyhow::{Result, bail};
 use cargo_metadata::MetadataCommand;
 use clap::Subcommand;
-use kithara_xtask_core::common::{
-    project::ProjectConfig, timestamp::utc_timestamp, walker::walk_rs_files,
-};
 use regex::Regex;
 
+use crate::common::{project::ProjectConfig, timestamp::utc_timestamp, walker::walk_rs_files};
+
 #[derive(Clone, Copy, Debug, Subcommand)]
-pub(crate) enum QualityCommand {
+pub enum QualityCommand {
     /// Generate a quality report.
     Report {
         #[arg(long)]
@@ -95,7 +94,7 @@ fn count_rs_files_in(dir: &Path) -> Result<usize> {
     Ok(files.len())
 }
 
-pub(crate) fn run(cmd: QualityCommand) -> Result<()> {
+pub(crate) fn run(cmd: &QualityCommand) -> Result<()> {
     match cmd {
         QualityCommand::Report {
             min_unimock_traits,
@@ -104,11 +103,11 @@ pub(crate) fn run(cmd: QualityCommand) -> Result<()> {
             min_bench_targets,
             max_local_http_servers,
         } => run_report(
-            min_unimock_traits,
-            min_rstest_cases,
-            min_perf_test_files,
-            min_bench_targets,
-            max_local_http_servers,
+            *min_unimock_traits,
+            *min_rstest_cases,
+            *min_perf_test_files,
+            *min_bench_targets,
+            *max_local_http_servers,
         ),
         QualityCommand::RstestAudit => run_rstest_audit(),
         QualityCommand::TraitMockAudit => run_trait_mock_audit(),

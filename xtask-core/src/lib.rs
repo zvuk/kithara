@@ -3,14 +3,20 @@ pub mod ast_grep;
 pub mod common;
 pub mod ctx;
 pub mod format;
+pub mod health;
 pub mod idioms;
 pub mod lint;
 pub mod manifest;
 pub mod orphans;
+pub mod perf_compare;
+pub mod quality;
+pub mod scope;
 pub mod similarity;
 pub mod style;
+pub mod test;
 pub mod typos;
 pub mod util;
+pub mod viz;
 
 pub use ctx::Ctx;
 
@@ -30,6 +36,21 @@ pub enum CoreCommand {
     Orphans(orphans::OrphansArgs),
     /// Workspace linters: arch, style, idioms (run all, or one via subcommand).
     Lint(lint::LintArgs),
+    /// Compare perf results.
+    PerfCompare(perf_compare::PerfCompareArgs),
+    /// Code quality checks.
+    Quality {
+        #[command(subcommand)]
+        command: quality::QualityCommand,
+    },
+    /// Translate scope tokens to tool-specific flags (used by `just audit`).
+    Scope(scope::ScopeArgs),
+    /// Run workspace tests through `cargo nextest`.
+    Test(test::TestArgs),
+    /// Comprehensive workspace health check with markdown report.
+    Health(health::HealthArgs),
+    /// Architecture visualization tools (hierarchy, arc-map).
+    Viz(viz::VizArgs),
 }
 
 /// Runs a core xtask command.
@@ -46,5 +67,11 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         CoreCommand::Manifest(args) => manifest::run(args, ctx),
         CoreCommand::Orphans(args) => orphans::run(args, ctx),
         CoreCommand::Lint(args) => lint::run(args),
+        CoreCommand::PerfCompare(args) => perf_compare::run(args),
+        CoreCommand::Quality { command } => quality::run(command),
+        CoreCommand::Scope(args) => scope::run(args),
+        CoreCommand::Test(args) => test::run(args),
+        CoreCommand::Health(args) => health::run(args),
+        CoreCommand::Viz(args) => viz::run(args),
     }
 }

@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use clap::{Parser, Subcommand};
 use kithara_xtask_core::{CoreCommand, Ctx};
 
@@ -7,26 +5,15 @@ mod agent_hook;
 mod android;
 mod apple;
 mod apple_docgen;
-mod health;
-mod perf_compare;
 mod publish;
-mod quality;
 mod release;
-mod scope;
-mod test;
-mod viz;
 mod wasm;
 
 use agent_hook::AgentHookArgs;
 use android::AndroidCommand;
 use apple::AppleCommand;
-use health::HealthArgs;
 use publish::PublishArgs;
-use quality::QualityCommand;
 use release::ReleaseArgs;
-use scope::ScopeArgs;
-use test::TestArgs;
-use viz::VizArgs;
 use wasm::WasmCommand;
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -53,21 +40,6 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Compare perf results.
-    PerfCompare {
-        /// Path to the current results file.
-        current: PathBuf,
-        /// Path to the baseline results file.
-        baseline: PathBuf,
-        /// Regression threshold percentage.
-        #[arg(long, default_value_t = 10)]
-        threshold: u32,
-    },
-    /// Code quality checks.
-    Quality {
-        #[command(subcommand)]
-        command: QualityCommand,
-    },
     /// Android build tasks.
     Android {
         #[command(subcommand)]
@@ -88,18 +60,10 @@ enum Command {
     /// Apple release flow: prepare (stamp manifests) and publish
     /// (GitHub release + `GitLab` mirror).
     Release(ReleaseArgs),
-    /// Translate scope tokens to tool-specific flags (used by `just audit`).
-    Scope(ScopeArgs),
     /// Agent editor/shell hooks for tool-specific adapters.
     AgentHook(AgentHookArgs),
-    /// Run workspace tests through `cargo nextest`.
-    Test(TestArgs),
     #[command(flatten)]
     Core(CoreCommand),
-    /// Comprehensive workspace health check with markdown report.
-    Health(HealthArgs),
-    /// Architecture visualization tools (hierarchy, arc-map).
-    Viz(VizArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -107,22 +71,12 @@ fn main() -> anyhow::Result<()> {
     let ctx = Ctx::load()?;
 
     match cli.command {
-        Command::PerfCompare {
-            current,
-            baseline,
-            threshold,
-        } => perf_compare::run(&current, &baseline, threshold),
-        Command::Quality { command } => quality::run(command),
         Command::Android { command } => android::run(command),
         Command::Apple { command } => apple::run(command),
         Command::Wasm { command } => wasm::run(command),
         Command::Publish(ref args) => publish::run(args),
         Command::Release(ref args) => release::run(args),
-        Command::Scope(ref args) => scope::run(args),
         Command::AgentHook(ref args) => agent_hook::run(args),
-        Command::Test(ref args) => test::run(args),
         Command::Core(cmd) => kithara_xtask_core::run(&cmd, &ctx),
-        Command::Health(ref args) => health::run(args),
-        Command::Viz(ref args) => viz::run(args),
     }
 }

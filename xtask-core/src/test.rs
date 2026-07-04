@@ -2,11 +2,12 @@ use std::{collections::BTreeSet, path::Path, process::Command};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use kithara_xtask_core::common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig};
+
+use crate::common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig};
 
 #[derive(Debug, Args)]
 #[command(trailing_var_arg = true)]
-pub(crate) struct TestArgs {
+pub struct TestArgs {
     /// Arguments for the configured test command. Recipe-level flags accepted anywhere:
     /// `--lane=<configured-name>`, `--flash=true|false|on|off`, `--no-flash`,
     /// and `--net-backend=<configured-name>`.

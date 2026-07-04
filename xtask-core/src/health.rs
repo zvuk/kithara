@@ -7,7 +7,8 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::Args;
-use kithara_xtask_core::common::{project::ProjectConfig, timestamp::utc_timestamp};
+
+use crate::common::{project::ProjectConfig, timestamp::utc_timestamp};
 
 struct Consts;
 impl Consts {
@@ -27,7 +28,7 @@ impl Consts {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct HealthArgs {}
+pub struct HealthArgs {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Status {

@@ -1,7 +1,18 @@
-use std::{fs, path::Path};
+use std::{fs, path::PathBuf};
 
 use anyhow::{Result, bail};
 use regex::Regex;
+
+#[derive(Debug, clap::Args)]
+pub struct PerfCompareArgs {
+    /// Path to the current results file.
+    pub current: PathBuf,
+    /// Path to the baseline results file.
+    pub baseline: PathBuf,
+    /// Regression threshold percentage.
+    #[arg(long, default_value_t = 10)]
+    pub threshold: u32,
+}
 
 /// Parse a pipe-delimited hotpath timing table and extract `(function_name, avg_time)` pairs.
 ///
@@ -66,7 +77,10 @@ fn to_nanoseconds(value: &str) -> Option<f64> {
     Some(num * factor)
 }
 
-pub(crate) fn run(current: &Path, baseline: &Path, threshold: u32) -> Result<()> {
+pub(crate) fn run(args: &PerfCompareArgs) -> Result<()> {
+    let current = args.current.as_path();
+    let baseline = args.baseline.as_path();
+    let threshold = args.threshold;
     if !current.exists() {
         bail!("current results file not found: {}", current.display());
     }
@@ -207,7 +221,11 @@ mod tests {
         fs::write(&current_path, current).ok();
         fs::write(&baseline_path, baseline).ok();
 
-        let result = run(&current_path, &baseline_path, 10);
+        let result = run(&PerfCompareArgs {
+            current: current_path.clone(),
+            baseline: baseline_path.clone(),
+            threshold: 10,
+        });
         assert!(result.is_ok());
 
         let _ = fs::remove_dir_all(&dir);
@@ -229,7 +247,11 @@ mod tests {
         fs::write(&current_path, current).ok();
         fs::write(&baseline_path, baseline).ok();
 
-        let result = run(&current_path, &baseline_path, 10);
+        let result = run(&PerfCompareArgs {
+            current: current_path.clone(),
+            baseline: baseline_path.clone(),
+            threshold: 10,
+        });
         assert!(result.is_err(), "expected regression to be detected");
         let err = result.err().map(|e| e.to_string()).unwrap_or_default();
         assert!(
@@ -254,7 +276,11 @@ mod tests {
         fs::write(&current_path, current).ok();
         fs::write(&baseline_path, baseline).ok();
 
-        let result = run(&current_path, &baseline_path, 10);
+        let result = run(&PerfCompareArgs {
+            current: current_path.clone(),
+            baseline: baseline_path.clone(),
+            threshold: 10,
+        });
         assert!(result.is_err());
         let err = result.err().map(|e| e.to_string()).unwrap_or_default();
         assert!(
@@ -275,7 +301,11 @@ mod tests {
                        | decode_chunk | 1000 | 1.00ms | 1.20ms | 1.00s | 50% |";
         fs::write(&current_path, content).ok();
 
-        let result = run(&current_path, &baseline_path, 10);
+        let result = run(&PerfCompareArgs {
+            current: current_path.clone(),
+            baseline: baseline_path.clone(),
+            threshold: 10,
+        });
         assert!(result.is_ok());
 
         let _ = fs::remove_dir_all(&dir);

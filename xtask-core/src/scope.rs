@@ -1,10 +1,11 @@
 use anyhow::Result;
 use cargo_metadata::MetadataCommand;
 use clap::Args;
-use kithara_xtask_core::common::scope::{Scope, Tool};
+
+use crate::common::scope::{Scope, Tool};
 
 #[derive(Debug, Args)]
-pub(crate) struct ScopeArgs {
+pub struct ScopeArgs {
     /// Downstream tool whose flag dialect should be emitted.
     #[arg(long = "for", value_enum)]
     pub for_tool: Tool,
