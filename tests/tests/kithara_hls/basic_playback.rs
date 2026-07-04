@@ -167,7 +167,7 @@ async fn test_hls_with_different_options(
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-#[case("http://invalid-domain-that-does-not-exist-12345.com/master.m3u8")]
+#[case("http://127.0.0.1:9/master.m3u8")]
 #[case("not-a-valid-url")]
 #[case("")]
 async fn test_hls_invalid_url_handling(
