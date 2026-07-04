@@ -591,7 +591,7 @@ impl<S> Audio<S> {
                     let interpolated = u128::from(start_ns).saturating_add(consumed_ns_offset);
                     let interpolated_ns = u64::try_from(interpolated).unwrap_or(u64::MAX);
                     self.playhead
-                        .set_position(Duration::from_nanos(interpolated_ns));
+                        .advance_partial(Duration::from_nanos(interpolated_ns));
                 }
             }
 

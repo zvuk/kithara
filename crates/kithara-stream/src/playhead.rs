@@ -58,12 +58,14 @@ pub trait PlayheadRead: Send + Sync {
 pub trait PlayheadWrite: PlayheadRead {
     /// Advance to the end of a consumed chunk (caps at total duration).
     fn advance(&self, pos: &ChunkPosition);
-    /// Pin after a seek (caps at total duration).
+    /// Pin after a seek to decoder truth, even when duration metadata is stale.
     fn land(&self, pos: &ChunkPosition);
     fn set_duration(&self, duration: Option<Duration>);
     fn set_decoded_frontier(&self, t: Duration);
-    /// Partial-chunk fixup — capped at total duration like full-chunk commits.
+    /// Absolute seek/reset write, not capped by duration metadata.
     fn set_position(&self, position: Duration);
+    /// Partial playback-progress write, capped at total duration.
+    fn advance_partial(&self, position: Duration);
 }
 
 impl PlayheadState {
@@ -87,6 +89,10 @@ impl PlayheadState {
     fn write_ns_capped(&self, ns: u64) {
         self.position_ns
             .store(ns.min(self.cap()), Ordering::Release);
+    }
+
+    fn write_ns(&self, ns: u64) {
+        self.position_ns.store(ns, Ordering::Release);
     }
 
     /// Capped playhead write that also fires the `committed_ns` USDT probe.
@@ -128,7 +134,7 @@ impl PlayheadWrite for PlayheadState {
     }
 
     fn land(&self, pos: &ChunkPosition) {
-        self.write_playhead(pos);
+        self.write_ns(pos.end_position_ns);
     }
 
     fn set_duration(&self, duration: Option<Duration>) {
@@ -145,6 +151,11 @@ impl PlayheadWrite for PlayheadState {
 
     fn set_position(&self, position: Duration) {
         let nanos = u64::try_from(position.as_nanos()).unwrap_or(u64::MAX);
+        self.write_ns(nanos);
+    }
+
+    fn advance_partial(&self, position: Duration) {
+        let nanos = u64::try_from(position.as_nanos()).unwrap_or(u64::MAX);
         self.write_ns_capped(nanos);
     }
 }
@@ -156,11 +167,19 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn position_caps_at_duration() {
+    fn partial_advance_caps_at_duration() {
+        let s = PlayheadState::new();
+        s.set_duration(Some(Duration::from_secs(5)));
+        s.advance_partial(Duration::from_secs(9));
+        assert_eq!(s.position(), Duration::from_secs(5));
+    }
+
+    #[kithara::test]
+    fn set_position_allows_seek_landing_past_stale_duration() {
         let s = PlayheadState::new();
         s.set_duration(Some(Duration::from_secs(5)));
         s.set_position(Duration::from_secs(9));
-        assert_eq!(s.position(), Duration::from_secs(5));
+        assert_eq!(s.position(), Duration::from_secs(9));
     }
 
     #[kithara::test]
@@ -213,7 +232,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn land_caps_at_duration() {
+    fn land_allows_seek_landing_past_stale_duration() {
         let s = PlayheadState::new();
         s.set_duration(Some(Duration::from_secs(5)));
         let pos = ChunkPosition {
@@ -224,7 +243,7 @@ mod tests {
             source_byte_offset: None,
         };
         s.land(&pos);
-        assert_eq!(s.position(), Duration::from_secs(5));
+        assert_eq!(s.position(), Duration::from_secs(9));
     }
 
     #[kithara::test]
