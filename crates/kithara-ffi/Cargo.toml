@@ -41,6 +41,8 @@ android = ["kithara/android"]
 # (target_os-gated) DecoderBackend variant exists, so without a
 # backend feature `DecoderBackend` would be an empty enum.
 symphonia = ["kithara/symphonia", "kithara-queue/symphonia"]
+stretch-signalsmith = ["kithara/stretch-signalsmith"]
+stretch-bungee = ["kithara/stretch-bungee"]
 # Marker feature for wasm32 build matrix (parallel to apple/android).
 # Actual wasm-only deps live under [target.'cfg(target_arch = "wasm32")'].
 # Forwards the reqwest stack so the wasm build (which runs with

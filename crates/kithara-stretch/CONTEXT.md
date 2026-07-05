@@ -63,6 +63,11 @@ To add a backend:
 4. Re-export the adapter from `backends/mod.rs` under the same gate.
 5. Document any target or tail-drain limitations here.
 
+Bungee on iOS is an opt-in backend. Its CMake C++ build must see
+`IPHONEOS_DEPLOYMENT_TARGET=16.0`; `xtask apple` exports that env before
+invoking `cargo swift package`. Preserve the same env for manual
+`-F stretch-bungee` Apple builds.
+
 The next reserved discriminant is `3` for the future pure-Rust native engine.
 Do not declare the feature or add `backends/native.rs` until that engine exists.
 

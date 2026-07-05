@@ -116,9 +116,9 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         .collect();
 
     let features: &str = if matches!(profile, BuildProfile::Release) {
-        "uniffi,android"
+        "uniffi,android,stretch-signalsmith"
     } else {
-        "uniffi,android,dev,test"
+        "uniffi,android,dev,test,stretch-signalsmith"
     };
 
     let mut cmd = Command::new("cargo");
