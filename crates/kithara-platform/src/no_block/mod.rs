@@ -13,4 +13,4 @@ mod watch;
 pub(crate) use api::forbid;
 pub use api::{forbid_bridged, pause, permit};
 pub use ctx::{Pause, Permit};
-pub use watch::{PermitPoll, Watched, permit_poll, watch_blanket, watch_budget};
+pub use watch::{PermitPoll, Watched, permit_poll, watch_blanket, watch_blanket_at, watch_budget};

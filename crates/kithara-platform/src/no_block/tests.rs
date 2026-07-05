@@ -1,14 +1,24 @@
 use std::{
+    env, fs,
     future::Future,
+    path::PathBuf,
     pin::pin,
+    process,
+    sync::atomic::{AtomicUsize, Ordering},
     task::{Context, Poll, Waker},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use super::{
-    mode::{Mode, force_mode},
+    mode::{Mode, force_log_path, force_mode},
     *,
 };
+
+const FIRST_LOG_FILE_ID: usize = 0;
+const CENSUS_LOG_BUDGET_MS: u64 = 10_000;
+const CENSUS_LOG_SLEEP_MS: u64 = 1;
+
+static LOG_FILE_ID: AtomicUsize = AtomicUsize::new(FIRST_LOG_FILE_ID);
 
 fn poll_once<F: Future>(fut: F) -> Poll<F::Output> {
     let mut fut = pin!(fut);
@@ -17,8 +27,18 @@ fn poll_once<F: Future>(fut: F) -> Poll<F::Output> {
     fut.as_mut().poll(&mut cx)
 }
 
+fn temp_log_path(name: &str) -> PathBuf {
+    let mut path = env::temp_dir();
+    let id = LOG_FILE_ID.fetch_add(1, Ordering::Relaxed);
+    path.push(format!(
+        "kithara-no-block-{name}-{}-{id}.log",
+        process::id()
+    ));
+    path
+}
+
 fn spin_for(d: Duration) {
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     while start.elapsed() < d {
         std::hint::spin_loop();
     }
@@ -60,6 +80,24 @@ fn fast_poll_passes() {
         poll_once(watch_budget("ok", 10, async {})),
         Poll::Ready(())
     ));
+}
+
+#[test]
+fn census_writes_to_forced_log_path() {
+    force_mode(Mode::Census);
+
+    let path = temp_log_path("census");
+    let _ = fs::remove_file(&path);
+    force_log_path(path.clone());
+
+    let fut = watch_budget("census_file_task", CENSUS_LOG_BUDGET_MS, async {
+        crate::thread::sleep(Duration::from_millis(CENSUS_LOG_SLEEP_MS));
+    });
+    let _ = poll_once(fut);
+
+    let contents = fs::read_to_string(&path).expect("read census log");
+    assert!(contents.contains("census_file_task"), "got: {contents}");
+    let _ = fs::remove_file(path);
 }
 
 #[test]

@@ -54,8 +54,6 @@ schema_version = 1
 
 [dead_exports]
 "crates/kithara-assets/src/cache.rs::release" = 1
-"crates/kithara-platform/src/common/no_block_inert.rs::watch_blanket" = 1
-"crates/kithara-platform/src/no_block/watch.rs::watch_blanket" = 1
 "crates/kithara-assets/src/flush/core.rs::live_source_count" = 1
 "crates/kithara-assets/src/identity.rs::from_headers" = 1
 "crates/kithara-assets/src/index/demand.rs::note_progress" = 1

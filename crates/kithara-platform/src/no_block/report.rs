@@ -1,6 +1,6 @@
-use std::{panic::Location, time::Duration};
+use std::{fs::OpenOptions, io::Write, panic::Location, time::Duration};
 
-use super::mode::{Mode, mode};
+use super::mode::{Mode, log_path, mode};
 
 const SPIN_CPU_FRACTION: f64 = 0.8;
 
@@ -12,10 +12,13 @@ pub(super) fn forbidden(
 ) {
     match mode() {
         Mode::Off => {}
-        Mode::Census => eprintln!(
-            "[no_block][census] blocking {what} inside async poll of `{task}` \
-             (spawned at {spawned}) at {at}"
-        ),
+        Mode::Census => {
+            let line = format!(
+                "[no_block][census] blocking {what} inside async poll of `{task}` \
+                 (spawned at {spawned}) at {at}"
+            );
+            census_emit(&line);
+        }
         Mode::Panic => panic!(
             "[no_block] blocking {what} inside async poll of `{task}` \
              (spawned at {spawned})\n  at {at}\n  sanctioned bridge? mark the fn \
@@ -31,11 +34,14 @@ pub(super) fn bridged(
 ) {
     match mode() {
         Mode::Off => {}
-        Mode::Census => eprintln!(
-            "[no_block][census] BRIDGED sync wait inside async poll of `{task}` \
-             (spawned at {spawned}, flash task {spawn_loc:?}) - in prod this blocks \
-             a runtime worker"
-        ),
+        Mode::Census => {
+            let line = format!(
+                "[no_block][census] BRIDGED sync wait inside async poll of `{task}` \
+                 (spawned at {spawned}, flash task {spawn_loc:?}) - in prod this blocks \
+                 a runtime worker"
+            );
+            census_emit(&line);
+        }
         Mode::Panic => panic!(
             "[no_block] BRIDGED sync wait inside async poll of `{task}` \
              (spawned at {spawned}, flash task {spawn_loc:?}) - in prod this blocks \
@@ -54,15 +60,30 @@ pub(super) fn over_budget(
     let kind = classify(wall, cpu);
     match mode() {
         Mode::Off => {}
-        Mode::Census => eprintln!(
-            "[no_block][census] task `{task}` (spawned at {spawned}): single poll took \
-             {wall:?} (cpu {cpu:?}, budget {budget:?}) - {kind}"
-        ),
+        Mode::Census => {
+            let line = format!(
+                "[no_block][census] task `{task}` (spawned at {spawned}): single poll took \
+                 {wall:?} (cpu {cpu:?}, budget {budget:?}) - {kind}"
+            );
+            census_emit(&line);
+        }
         Mode::Panic => panic!(
             "[no_block] task `{task}` (spawned at {spawned}): single poll took {wall:?} \
              (cpu {cpu:?}, budget {budget:?}) - {kind}\n  sanctioned blocking? mark \
              the blocking fn with #[kithara::allow_block]"
         ),
+    }
+}
+
+fn census_emit(line: &str) {
+    eprintln!("{line}");
+
+    if let Some(path) = log_path() {
+        let _ = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .and_then(|mut file| writeln!(file, "{line}"));
     }
 }
 

@@ -69,10 +69,20 @@ pub fn permit_poll<F: Future>(fut: F) -> PermitPoll<F> {
 #[must_use]
 #[track_caller]
 pub fn watch_blanket<F: Future>(name: &'static str, fut: F) -> Watched<F> {
+    watch_blanket_at(name, Location::caller(), fut)
+}
+
+#[doc(hidden)]
+#[must_use]
+pub fn watch_blanket_at<F: Future>(
+    name: &'static str,
+    loc: &'static Location<'static>,
+    fut: F,
+) -> Watched<F> {
     Watched {
         fut,
         name,
-        loc: Location::caller(),
+        loc,
         budget: mode::blanket_budget(),
     }
 }

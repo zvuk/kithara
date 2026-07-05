@@ -1,6 +1,6 @@
 #[cfg(test)]
-use std::cell::Cell;
-use std::{sync::OnceLock, time::Duration};
+use std::cell::{Cell, RefCell};
+use std::{path::PathBuf, sync::OnceLock, time::Duration};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
@@ -13,6 +13,7 @@ struct Consts;
 
 impl Consts {
     const ENV_MODE: &str = "KITHARA_NO_BLOCK";
+    const ENV_LOG: &str = "KITHARA_NO_BLOCK_LOG";
     const ENV_BUDGET_MS: &str = "KITHARA_NO_BLOCK_BUDGET_MS";
     const FALLBACK_BLANKET: Duration = Duration::from_millis(250);
 }
@@ -20,6 +21,7 @@ impl Consts {
 #[cfg(test)]
 thread_local! {
     static FORCED: Cell<Option<Mode>> = const { Cell::new(None) };
+    static FORCED_LOG: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
 pub(super) fn mode() -> Mode {
@@ -49,7 +51,26 @@ pub(super) fn blanket_budget() -> Duration {
     })
 }
 
+pub(super) fn log_path() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        if let Some(path) = FORCED_LOG.with(|forced| forced.borrow().clone()) {
+            return Some(path);
+        }
+    }
+
+    static CACHED: OnceLock<Option<PathBuf>> = OnceLock::new();
+    CACHED
+        .get_or_init(|| std::env::var_os(Consts::ENV_LOG).map(PathBuf::from))
+        .clone()
+}
+
 #[cfg(test)]
 pub(crate) fn force_mode(m: Mode) {
     FORCED.with(|forced| forced.set(Some(m)));
+}
+
+#[cfg(test)]
+pub(crate) fn force_log_path(path: PathBuf) {
+    FORCED_LOG.with(|forced| forced.replace(Some(path)));
 }
