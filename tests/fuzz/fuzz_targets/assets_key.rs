@@ -1,7 +1,7 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use kithara_assets::{AssetStoreBuilder, StorageBackend, asset_root_for_url};
+use kithara::assets::{AssetStoreBuilder, StorageBackend, asset_root_for_url};
 use libfuzzer_sys::fuzz_target;
 use url::Url;
 

@@ -17,6 +17,6 @@ pub use resource::{
     Active, Committed, Reader, Resource, ResourcePhase, ResourceRead, ResourceReader,
     ResourceWriter,
 };
-#[cfg(any(test, feature = "probe"))]
+#[cfg(any(test, feature = "mock"))]
 pub use traits::DriverIoMock;
 pub use traits::{AvailabilityObserver, Driver, DriverIo};

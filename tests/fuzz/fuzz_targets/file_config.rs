@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use arbitrary::{Arbitrary, Unstructured};
-use kithara_file::{FileConfig, FileSrc};
+use kithara::file::{FileConfig, FileSrc};
 use libfuzzer_sys::fuzz_target;
 use url::Url;
 

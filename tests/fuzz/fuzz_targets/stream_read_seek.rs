@@ -11,11 +11,13 @@ use std::{
 };
 
 use arbitrary::{Arbitrary, Unstructured};
-use kithara_platform::{time::Duration, tokio::runtime::Builder};
-use kithara_storage::WaitOutcome;
-use kithara_stream::{
-    Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve,
-    SeekState, Source, SourcePhase, Stream, StreamResult, StreamType,
+use kithara::{
+    platform::{time::Duration, tokio::runtime::Builder},
+    storage::WaitOutcome,
+    stream::{
+        Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
+        SeekObserve, SeekState, Source, SourcePhase, Stream, StreamResult, StreamType,
+    },
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -183,7 +185,7 @@ impl StreamType for DummyType {
     type Events = ();
     type Source = ScriptSource;
 
-    async fn create(config: Self::Config) -> Result<Self::Source, kithara_stream::SourceError> {
+    async fn create(config: Self::Config) -> Result<Self::Source, kithara::stream::SourceError> {
         Ok(config)
     }
 }
@@ -199,9 +201,9 @@ fuzz_target!(|input: Input| {
             Some(nz) => ReadOutcome::Bytes(nz),
             None => ReadOutcome::Eof,
         },
-        ReadStep::Retry => ReadOutcome::Pending(kithara_stream::PendingReason::Retry),
+        ReadStep::Retry => ReadOutcome::Pending(kithara::stream::PendingReason::Retry),
         ReadStep::VariantChange => {
-            ReadOutcome::Pending(kithara_stream::PendingReason::VariantChange)
+            ReadOutcome::Pending(kithara::stream::PendingReason::VariantChange)
         }
     });
 
