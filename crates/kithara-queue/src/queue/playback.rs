@@ -195,12 +195,6 @@ impl Queue {
         self.advance_loaded_successor(entry.id, transition);
     }
 
-    /// Pause playback and freeze the queue-visible head position.
-    pub fn pause(&self) {
-        self.player.pause();
-        self.freeze_cached_position();
-    }
-
     /// Platform audio-route changed while playback may be active.
     ///
     /// Recreates the native output stream below the queue without
@@ -213,6 +207,12 @@ impl Queue {
     pub fn notify_audio_route_changed(&self, reason: &str) -> Result<(), QueueError> {
         self.player.invalidate_audio_route(reason)?;
         Ok(())
+    }
+
+    /// Pause playback and freeze the queue-visible head position.
+    pub fn pause(&self) {
+        self.player.pause();
+        self.freeze_cached_position();
     }
 
     /// Start playback. The player consumes the current slot's resource
@@ -232,15 +232,6 @@ impl Queue {
         }
     }
 
-    /// Latest monotonic playback position for the current track in
-    /// seconds. Updated on every [`Self::tick`]; skips transient 0.0
-    /// samples the engine produces on pause/resume so downstream UIs
-    /// see stable values.
-    #[must_use]
-    pub fn position_seconds(&self) -> Option<f64> {
-        self.read_cached_position().into()
-    }
-
     /// Single coherent read of the player's live playback state.
     ///
     /// Pollers (the FFI time thread, `snapshot`) get position, duration,
@@ -258,6 +249,15 @@ impl Queue {
             .unwrap_or_default();
         view.position = self.position_seconds();
         view
+    }
+
+    /// Latest monotonic playback position for the current track in
+    /// seconds. Updated on every [`Self::tick`]; skips transient 0.0
+    /// samples the engine produces on pause/resume so downstream UIs
+    /// see stable values.
+    #[must_use]
+    pub fn position_seconds(&self) -> Option<f64> {
+        self.read_cached_position().into()
     }
 
     fn process_player_event(&self, ev: &Event) {

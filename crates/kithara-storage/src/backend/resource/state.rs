@@ -24,6 +24,7 @@ pub(super) struct CommonState {
 
 /// Shared inner storage.
 pub(super) struct Inner<D: DriverIo> {
+    pub(super) available_snapshot: ArcSwap<RangeSet<u64>>,
     /// Lock-free lifecycle flag: `true` while the resource is committed, `false`
     /// once `reactivate` reopens it for a re-download. Distinct from the driver's
     /// committed snapshot, which stays published across a reactivate so reads
@@ -32,7 +33,6 @@ pub(super) struct Inner<D: DriverIo> {
     /// taking the state mutex.
     pub(super) committed: AtomicBool,
     pub(super) cancel: CancelToken,
-    pub(super) available_snapshot: ArcSwap<RangeSet<u64>>,
     /// Guarded readiness state plus its condvar, unified in the shared
     /// [`CondvarGate`] — the gold-standard single-lock event-driven wait the
     /// project's other readiness gates are modelled on. `lock()` guards
@@ -114,9 +114,9 @@ impl<D: Driver> ResourceCore<D> {
                 committed: AtomicBool::new(is_committed),
                 available_snapshot: ArcSwap::from_pointee(available.clone()),
                 gate: CondvarGate::new(CommonState {
-                    failed: None,
                     final_len,
                     available,
+                    failed: None,
                     committed: is_committed,
                 }),
             }),

@@ -32,36 +32,36 @@ use crate::common::{
 
 #[derive(Debug, Default, Args)]
 pub struct StyleArgs {
-    /// Run only one check by id. Repeatable.
-    #[arg(long = "check")]
-    pub check: Vec<String>,
     /// Write a markdown report to the given path.
     #[arg(long)]
     pub report: Option<PathBuf>,
-    /// Emit JSON to stdout (suppresses human output).
-    #[arg(long)]
-    pub json: bool,
-    /// Re-write baseline.toml from current observations (does not fail on regressions).
-    #[arg(long = "update-baseline")]
-    pub update_baseline: bool,
-    /// Apply each check's autofix in place. Refuses to run on a dirty
-    /// working tree unless `--allow-dirty`. After fixes, re-runs the
-    /// checks so the printed report reflects what remains.
-    #[arg(long)]
-    pub fix: bool,
-    /// Skip the dirty-tree gate that protects `--fix` from mixing with
-    /// uncommitted user edits.
-    #[arg(long = "allow-dirty")]
-    pub allow_dirty: bool,
     /// Override config directory (default `.config/style`).
     #[arg(long, default_value = ".config/style")]
     pub config_dir: PathBuf,
+    /// Run only one check by id. Repeatable.
+    #[arg(long = "check")]
+    pub check: Vec<String>,
     /// Restrict scan to specific crate(s) by name. Repeatable.
     #[arg(long = "crate", value_name = "NAME")]
     pub crates: Vec<String>,
     /// Restrict scan to workspace-relative path(s). Repeatable.
     #[arg(long = "path", value_name = "PATH")]
     pub paths: Vec<PathBuf>,
+    /// Skip the dirty-tree gate that protects `--fix` from mixing with
+    /// uncommitted user edits.
+    #[arg(long = "allow-dirty")]
+    pub allow_dirty: bool,
+    /// Apply each check's autofix in place. Refuses to run on a dirty
+    /// working tree unless `--allow-dirty`. After fixes, re-runs the
+    /// checks so the printed report reflects what remains.
+    #[arg(long)]
+    pub fix: bool,
+    /// Emit JSON to stdout (suppresses human output).
+    #[arg(long)]
+    pub json: bool,
+    /// Re-write baseline.toml from current observations (does not fail on regressions).
+    #[arg(long = "update-baseline")]
+    pub update_baseline: bool,
 }
 
 pub(crate) fn run(args: &StyleArgs) -> Result<()> {

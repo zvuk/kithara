@@ -24,8 +24,8 @@ bitflags! {
 /// observes the EXACT flag also observes the byte store that precedes it.
 #[derive(Debug)]
 pub(crate) struct SegmentSize {
-    route_bytes: AtomicU64,
     read_bytes: AtomicU64,
+    route_bytes: AtomicU64,
     flags: AtomicU8,
 }
 
@@ -46,17 +46,6 @@ impl SegmentSize {
         self.route_bytes.load(Ordering::Acquire)
     }
 
-    /// Read byte value. Before exact resolution this mirrors the route value
-    /// so descriptors are still routeable; after resolution it reports the
-    /// committed/probed byte length.
-    pub(crate) fn read_len(&self) -> u64 {
-        if self.is_exact() {
-            self.read_bytes.load(Ordering::Acquire)
-        } else {
-            self.get()
-        }
-    }
-
     /// Whether the byte length is known and can be used for readiness/EOF.
     pub(crate) fn is_exact(&self) -> bool {
         SizeFlags::from_bits_truncate(self.flags.load(Ordering::Acquire)).contains(SizeFlags::EXACT)
@@ -68,6 +57,17 @@ impl SegmentSize {
         let size = Self::default();
         size.route_bytes.store(n, Ordering::Release);
         size
+    }
+
+    /// Read byte value. Before exact resolution this mirrors the route value
+    /// so descriptors are still routeable; after resolution it reports the
+    /// committed/probed byte length.
+    pub(crate) fn read_len(&self) -> u64 {
+        if self.is_exact() {
+            self.read_bytes.load(Ordering::Acquire)
+        } else {
+            self.get()
+        }
     }
 
     /// Seed the size from an exact playlist/probe value.

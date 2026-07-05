@@ -52,8 +52,8 @@ pub(crate) type Refetch =
 struct State {
     inner: ByteStream,
     cancel: CancelToken,
-    expected_len: Option<u64>,
     stall: Duration,
+    expected_len: Option<u64>,
     refetch: Refetch,
     policy: RetryPolicy,
     /// Resume re-fetches already performed, bounded by `policy.max_retries`.
@@ -65,6 +65,11 @@ struct State {
 }
 
 impl State {
+    fn body_complete(&self) -> bool {
+        self.expected_len
+            .is_some_and(|expected| self.consumed >= expected)
+    }
+
     /// Heal one transient failure: spend a unit of retry budget, back off
     /// (virtual under flash), and re-establish from the consumed offset.
     ///
@@ -106,11 +111,6 @@ impl State {
         self.consumed = self.consumed.saturating_add(len - skip);
         let rest = bytes.split_off(skip.to_usize().unwrap_or(bytes.len()));
         (!rest.is_empty()).then_some(rest)
-    }
-
-    fn body_complete(&self) -> bool {
-        self.expected_len
-            .is_some_and(|expected| self.consumed >= expected)
     }
 }
 
@@ -164,8 +164,8 @@ pub(crate) fn resumable_body(
         stall,
         policy,
         cancel,
-        inner: first,
         expected_len,
+        inner: first,
         consumed: 0,
         to_skip: 0,
         resumes: 0,

@@ -38,9 +38,9 @@ pub struct AbrState {
     current_variant: Arc<AtomicUsize>,
     last_switch_at_nanos: AtomicU64,
     max_bandwidth_bps: AtomicU64,
+    flags: AtomicU8,
     lock_count: AtomicUsize,
     mode: AtomicUsize,
-    flags: AtomicU8,
     reference_instant: Instant,
     /// Phase 2 boundary-commit slot. `Some` means a switch has been
     /// requested via [`request_target`](AbrState::request_target) and
@@ -151,6 +151,13 @@ impl AbrState {
         now.duration_since(last) >= min_interval
     }
 
+    /// Clear the escape condition — the active variant is delivering again, or
+    /// a switch off it has been published. Idempotent.
+    pub fn clear_escape(&self) {
+        self.flags
+            .fetch_and(!AbrFlags::ESCAPE.bits(), Ordering::AcqRel);
+    }
+
     #[must_use]
     pub fn current_variant_index(&self) -> VariantIndex {
         VariantIndex::new(self.current_variant.load(Ordering::Acquire))
@@ -200,29 +207,11 @@ impl AbrState {
         }
     }
 
-    /// Clear the escape condition — the active variant is delivering again, or
-    /// a switch off it has been published. Idempotent.
-    pub fn clear_escape(&self) {
-        self.flags
-            .fetch_and(!AbrFlags::ESCAPE.bits(), Ordering::AcqRel);
-    }
-
     /// `true` while the active variant is flagged non-delivering. Read by
     /// `evaluate()` to exclude the variant and skip the buffer up-switch gate.
     #[must_use]
     pub fn is_escaping(&self) -> bool {
         AbrFlags::from_bits_truncate(self.flags.load(Ordering::Acquire)).contains(AbrFlags::ESCAPE)
-    }
-
-    /// Flag the active variant as non-delivering — set by the HLS stall
-    /// detector when the reader is parked at a clean boundary on a segment
-    /// whose in-flight fetch has crossed the downloader's `soft_timeout`.
-    /// Idempotent. The caller triggers an out-of-band re-tick (see
-    /// [`AbrHandle::reevaluate`](crate::AbrHandle::reevaluate)) so `evaluate()`
-    /// observes it.
-    pub fn mark_escape(&self) {
-        self.flags
-            .fetch_or(AbrFlags::ESCAPE.bits(), Ordering::AcqRel);
     }
 
     #[must_use]
@@ -244,6 +233,17 @@ impl AbrState {
     #[must_use]
     pub fn lock_count(&self) -> usize {
         self.lock_count.load(Ordering::Acquire)
+    }
+
+    /// Flag the active variant as non-delivering — set by the HLS stall
+    /// detector when the reader is parked at a clean boundary on a segment
+    /// whose in-flight fetch has crossed the downloader's `soft_timeout`.
+    /// Idempotent. The caller triggers an out-of-band re-tick (see
+    /// [`AbrHandle::reevaluate`](crate::AbrHandle::reevaluate)) so `evaluate()`
+    /// observes it.
+    pub fn mark_escape(&self) {
+        self.flags
+            .fetch_or(AbrFlags::ESCAPE.bits(), Ordering::AcqRel);
     }
 
     #[must_use]

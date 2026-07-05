@@ -18,15 +18,15 @@ const CHUNK_SIZE: usize = 128;
 
 #[derive(Debug, Args)]
 pub struct FormatArgs {
-    /// Check formatting without modifying files.
-    #[arg(long)]
-    check: bool,
-    /// Skip the dirty-tree gate when formatting in place.
-    #[arg(long = "allow-dirty")]
-    allow_dirty: bool,
     /// Restrict the formatter to one or more targets.
     #[arg(long = "only", value_enum)]
     only: Vec<FormatTarget>,
+    /// Skip the dirty-tree gate when formatting in place.
+    #[arg(long = "allow-dirty")]
+    allow_dirty: bool,
+    /// Check formatting without modifying files.
+    #[arg(long)]
+    check: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, ValueEnum)]

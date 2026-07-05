@@ -163,12 +163,12 @@ impl CurrentFsm {
         matches!(self, Self::Failed(_))
     }
 
-    pub(crate) fn recreating(state: RecreateState) -> Self {
-        Self::RecreatingDecoder(Track::new(state))
-    }
-
     pub(crate) fn rebuilding(state: RebuildState) -> Self {
         Self::RebuildingDecoder(Track::new(state))
+    }
+
+    pub(crate) fn recreating(state: RecreateState) -> Self {
+        Self::RecreatingDecoder(Track::new(state))
     }
 
     pub(crate) fn seek_requested(request: SeekRequest) -> Self {
@@ -245,16 +245,16 @@ pub(crate) struct RecreateState {
 }
 
 pub(crate) struct RebuildState {
-    pub(crate) ticket: u64,
-    pub(crate) recreate: RecreateState,
-    pub(crate) started_seek_epoch: u64,
     pub(crate) completion: Arc<ArrayQueue<DecoderRebuildComplete>>,
     pub(crate) superseded_seek: Option<SeekRequest>,
+    pub(crate) recreate: RecreateState,
+    pub(crate) started_seek_epoch: u64,
+    pub(crate) ticket: u64,
 }
 
 pub(crate) struct DecoderRebuildComplete {
-    pub(crate) ticket: u64,
     pub(crate) result: Result<Box<dyn Decoder>, RecreateOutcome>,
+    pub(crate) ticket: u64,
 }
 
 /// Outcome of one `execute_recreation` call.

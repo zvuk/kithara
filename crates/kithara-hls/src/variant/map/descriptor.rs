@@ -7,6 +7,20 @@ use kithara_test_utils::kithara;
 use super::HlsVariant;
 
 impl HlsVariant {
+    /// Segment that owns fetch demand for `byte_offset`.
+    ///
+    /// `find_at_offset` is intentionally media-only: bytes inside an fMP4 init
+    /// prefix are not media bytes. The peer planner asks a different question:
+    /// if the reader is parked in the active init prefix, segment 0 is the
+    /// fetch plan that must carry the init + first media bytes needed by a
+    /// decoder recreate.
+    pub(crate) fn demand_segment_at_offset(&self, byte_offset: u64) -> Option<u32> {
+        if self.init_descriptor_at(byte_offset).is_some() && !self.segments.is_empty() {
+            return Some(0);
+        }
+        self.find_at_offset(byte_offset).map(|(idx, _, _)| idx)
+    }
+
     pub(crate) fn descriptor(&self, idx: usize) -> Option<SegmentDescriptor> {
         let entry = self.segments.get(idx)?.as_media()?;
         let seg_idx_u32 = u32::try_from(idx).ok()?;
@@ -97,19 +111,5 @@ impl HlsVariant {
             return None;
         }
         Some(range)
-    }
-
-    /// Segment that owns fetch demand for `byte_offset`.
-    ///
-    /// `find_at_offset` is intentionally media-only: bytes inside an fMP4 init
-    /// prefix are not media bytes. The peer planner asks a different question:
-    /// if the reader is parked in the active init prefix, segment 0 is the
-    /// fetch plan that must carry the init + first media bytes needed by a
-    /// decoder recreate.
-    pub(crate) fn demand_segment_at_offset(&self, byte_offset: u64) -> Option<u32> {
-        if self.init_descriptor_at(byte_offset).is_some() && !self.segments.is_empty() {
-            return Some(0);
-        }
-        self.find_at_offset(byte_offset).map(|(idx, _, _)| idx)
     }
 }

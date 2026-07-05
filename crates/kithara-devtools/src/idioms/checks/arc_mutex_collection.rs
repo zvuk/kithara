@@ -77,9 +77,9 @@ impl Check for ArcMutexCollection {
 }
 
 struct TypeVisitor<'a> {
-    rel: &'a str,
     suppress: &'a Suppressions,
     out: &'a mut Vec<Violation>,
+    rel: &'a str,
 }
 
 impl<'ast> Visit<'ast> for TypeVisitor<'_> {

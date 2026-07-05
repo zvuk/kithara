@@ -194,15 +194,15 @@ pub(super) struct ActivateParams {
 }
 
 pub(super) struct Layout {
+    /// Immutable published geometry. Readers `load` it lock-free and
+    /// allocation-free; writers swap in a fresh `Arc<Frame>` under `write_lock`.
+    frame: ArcSwap<Frame>,
     /// Lock-free snapshot of [`Frame::sizes_complete`], republished from the
     /// frame at the end of every write-lock mutation. The produce-core EOF
     /// gates (`wait_range` / `phase_at` / `read_at`) read it without taking
     /// the lock, alongside `total`.
     sizes_complete: AtomicBool,
     total: AtomicU64,
-    /// Immutable published geometry. Readers `load` it lock-free and
-    /// allocation-free; writers swap in a fresh `Arc<Frame>` under `write_lock`.
-    frame: ArcSwap<Frame>,
     /// Serializes off-RT writers so a concurrent load-clone-mutate-store pair
     /// cannot lose an update (the old `RwLock` serialized writes; `ArcSwap`
     /// alone does not). Never taken on the produce-core read path.
@@ -227,20 +227,6 @@ impl Layout {
             total: AtomicU64::new(snapshot.total),
             sizes_complete: AtomicBool::new(snapshot.sizes_complete),
         }
-    }
-
-    /// Serialized load-clone-mutate-store for off-RT writers with a known
-    /// `init_size`. Takes `write_lock`, clones the live frame, applies `f` to
-    /// the owned copy, materialises the EOF snapshot, swaps the new frame in,
-    /// and republishes the atomics. Concurrent writers cannot lose an update
-    /// because each runs the whole cycle under `write_lock`.
-    fn mutate_frame(&self, segments: &[Segment], init_size: u64, f: impl FnOnce(&mut Frame)) {
-        let _w = self.write_lock.lock();
-        let mut frame = (**self.frame.load()).clone();
-        f(&mut frame);
-        let snapshot = frame.snapshot(segments, init_size);
-        self.frame.store(Arc::new(frame));
-        self.republish(snapshot);
     }
 
     /// Pin `from_seg` at `seg_boundary` in virtual space and serve
@@ -311,28 +297,6 @@ impl Layout {
         self.frame.load().find_natural(byte, segments)
     }
 
-    /// Coherent "is this variant historical?" check: `served_from` and
-    /// `served_until` are read from one published frame, closing the
-    /// coord-level torn read between two separate accessor calls.
-    pub(super) fn is_shrunk(&self, num_segments: u32) -> bool {
-        let frame = self.frame.load();
-        frame.served_from > 0 || frame.served_until < num_segments
-    }
-
-    pub(super) fn natural_offset(&self, idx: usize) -> Option<u64> {
-        self.frame.load().offsets.get(idx).copied()
-    }
-
-    /// Republish the lock-free `total` + `sizes_complete` snapshot computed
-    /// from the just-published frame. The two atomics together form the
-    /// produce-core EOF view, stored in one place at the tail of every
-    /// mutation.
-    fn republish(&self, snapshot: FrameSnapshot) {
-        self.total.store(snapshot.total, Ordering::Release);
-        self.sizes_complete
-            .store(snapshot.sizes_complete, Ordering::Release);
-    }
-
     /// True when the frame is already the canonical single-variant
     /// full-range layout (`byte_shift == 0`, `served = [0, num)`, no
     /// `init_seed`, offsets sized to `segments`) AND every served size is
@@ -352,6 +316,42 @@ impl Layout {
             && frame.served_until == num
             && frame.init_seed == 0
             && frame.offsets.len() == segments.len()
+    }
+
+    /// Coherent "is this variant historical?" check: `served_from` and
+    /// `served_until` are read from one published frame, closing the
+    /// coord-level torn read between two separate accessor calls.
+    pub(super) fn is_shrunk(&self, num_segments: u32) -> bool {
+        let frame = self.frame.load();
+        frame.served_from > 0 || frame.served_until < num_segments
+    }
+
+    /// Serialized load-clone-mutate-store for off-RT writers with a known
+    /// `init_size`. Takes `write_lock`, clones the live frame, applies `f` to
+    /// the owned copy, materialises the EOF snapshot, swaps the new frame in,
+    /// and republishes the atomics. Concurrent writers cannot lose an update
+    /// because each runs the whole cycle under `write_lock`.
+    fn mutate_frame(&self, segments: &[Segment], init_size: u64, f: impl FnOnce(&mut Frame)) {
+        let _w = self.write_lock.lock();
+        let mut frame = (**self.frame.load()).clone();
+        f(&mut frame);
+        let snapshot = frame.snapshot(segments, init_size);
+        self.frame.store(Arc::new(frame));
+        self.republish(snapshot);
+    }
+
+    pub(super) fn natural_offset(&self, idx: usize) -> Option<u64> {
+        self.frame.load().offsets.get(idx).copied()
+    }
+
+    /// Republish the lock-free `total` + `sizes_complete` snapshot computed
+    /// from the just-published frame. The two atomics together form the
+    /// produce-core EOF view, stored in one place at the tail of every
+    /// mutation.
+    fn republish(&self, snapshot: FrameSnapshot) {
+        self.total.store(snapshot.total, Ordering::Release);
+        self.sizes_complete
+            .store(snapshot.sizes_complete, Ordering::Release);
     }
 
     /// Collapse to a single-variant layout: `byte_shift = 0`,

@@ -48,21 +48,6 @@ impl<T> OnceCell<T> {
         }
     }
 
-    /// Get the value, or run `f` to initialize it.
-    pub async fn get_or_init<F, Fut>(&self, f: F) -> &T
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = T>,
-    {
-        match self
-            .get_or_try_init(|| async { Ok::<T, Infallible>(f().await) })
-            .await
-        {
-            Ok(value) => value,
-            Err(never) => match never {},
-        }
-    }
-
     /// Release the init claim and wake every parked waiter so each re-checks the
     /// value (set ⇒ resolves) or contends for the next turn (init failed). On
     /// the flash path one `signal_channel(_, true)` wakes all engine waiters.
@@ -79,6 +64,21 @@ impl<T> OnceCell<T> {
                     waker.wake();
                 }
             }
+        }
+    }
+
+    /// Get the value, or run `f` to initialize it.
+    pub async fn get_or_init<F, Fut>(&self, f: F) -> &T
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = T>,
+    {
+        match self
+            .get_or_try_init(|| async { Ok::<T, Infallible>(f().await) })
+            .await
+        {
+            Ok(value) => value,
+            Err(never) => match never {},
         }
     }
 

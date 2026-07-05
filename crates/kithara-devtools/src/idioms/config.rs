@@ -20,41 +20,41 @@ impl IdiomsConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ThresholdsConfig {
     #[serde(default)]
-    pub(crate) branch_chains: BranchChainsConfig,
-    #[serde(default)]
-    pub(crate) guard_cascade: GuardCascadeConfig,
-    #[serde(default)]
     pub(crate) accumulator_loops: AccumulatorLoopsConfig,
-    #[serde(default)]
-    pub(crate) multi_accumulator_loop: MultiAccumulatorLoopConfig,
-    #[serde(default)]
-    pub(crate) parallel_loops: ParallelLoopsConfig,
-    #[serde(default)]
-    pub(crate) function_branch_density: FunctionBranchDensityConfig,
-    #[serde(default)]
-    pub(crate) manual_question_mark: ManualQuestionMarkConfig,
-    #[serde(default)]
-    pub(crate) loop_allocation: LoopAllocationConfig,
-    #[serde(default)]
-    pub(crate) box_concrete_type: BoxConcreteTypeConfig,
     #[serde(default)]
     pub(crate) arc_mutex_collection: ArcMutexCollectionConfig,
     #[serde(default)]
     pub(crate) await_under_guard: AwaitUnderGuardConfig,
     #[serde(default)]
-    pub(crate) retry_fallback: RetryFallbackConfig,
+    pub(crate) box_concrete_type: BoxConcreteTypeConfig,
     #[serde(default)]
-    pub(crate) pointwise_loop: PointwiseLoopConfig,
+    pub(crate) branch_chains: BranchChainsConfig,
+    #[serde(default)]
+    pub(crate) const_group_enum_shape: ConstGroupEnumShapeConfig,
     #[serde(default)]
     pub(crate) fat_loop_body: FatLoopBodyConfig,
     #[serde(default)]
+    pub(crate) function_branch_density: FunctionBranchDensityConfig,
+    #[serde(default)]
+    pub(crate) guard_cascade: GuardCascadeConfig,
+    #[serde(default)]
+    pub(crate) loop_allocation: LoopAllocationConfig,
+    #[serde(default)]
     pub(crate) loop_flag_accumulator: LoopFlagAccumulatorConfig,
     #[serde(default)]
-    pub(crate) const_group_enum_shape: ConstGroupEnumShapeConfig,
+    pub(crate) manual_question_mark: ManualQuestionMarkConfig,
+    #[serde(default)]
+    pub(crate) multi_accumulator_loop: MultiAccumulatorLoopConfig,
     #[serde(default)]
     pub(crate) nested_if_let_pyramid: NestedIfLetPyramidConfig,
     #[serde(default)]
     pub(crate) no_passthrough_builder: NoPassthroughBuilderConfig,
+    #[serde(default)]
+    pub(crate) parallel_loops: ParallelLoopsConfig,
+    #[serde(default)]
+    pub(crate) pointwise_loop: PointwiseLoopConfig,
+    #[serde(default)]
+    pub(crate) retry_fallback: RetryFallbackConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,16 +75,16 @@ impl Default for PointwiseLoopConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FatLoopBodyConfig {
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
     #[serde(default = "default_for_stmt_threshold")]
     pub(crate) for_stmt_threshold: usize,
-    #[serde(default = "default_while_stmt_threshold")]
-    pub(crate) while_stmt_threshold: usize,
     #[serde(default = "default_loop_stmt_threshold")]
     pub(crate) loop_stmt_threshold: usize,
     #[serde(default = "default_nested_ctrl_threshold")]
     pub(crate) nested_ctrl_threshold: usize,
-    #[serde(default = "default_exempt_files")]
-    pub(crate) exempt_files: Vec<String>,
+    #[serde(default = "default_while_stmt_threshold")]
+    pub(crate) while_stmt_threshold: usize,
 }
 
 fn default_for_stmt_threshold() -> usize {
@@ -130,12 +130,12 @@ impl Default for LoopFlagAccumulatorConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ConstGroupEnumShapeConfig {
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
     #[serde(default = "default_min_group_size")]
     pub(crate) min_group_size: usize,
     #[serde(default = "default_min_prefix_chars")]
     pub(crate) min_prefix_chars: usize,
-    #[serde(default = "default_exempt_files")]
-    pub(crate) exempt_files: Vec<String>,
 }
 
 fn default_min_group_size() -> usize {
@@ -158,10 +158,10 @@ impl Default for ConstGroupEnumShapeConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NestedIfLetPyramidConfig {
-    #[serde(default = "default_pyramid_min_depth")]
-    pub(crate) min_depth: usize,
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
+    #[serde(default = "default_pyramid_min_depth")]
+    pub(crate) min_depth: usize,
 }
 
 fn default_pyramid_min_depth() -> usize {
@@ -180,25 +180,25 @@ impl Default for NestedIfLetPyramidConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BranchChainsConfig {
-    /// Threshold for homogeneous chains (all arms test the same expression
-    /// with the same operator) — strongest match-conversion hint.
-    #[serde(default = "default_homogeneous_arms")]
-    pub(crate) homogeneous_arms: usize,
-    /// Threshold for heterogeneous chains (arms test unrelated predicates).
-    /// Hint: extract predicates or build a tag enum + match.
-    #[serde(default = "default_heterogeneous_arms")]
-    pub(crate) heterogeneous_arms: usize,
-    /// Threshold for any chain regardless of structure — generic cognitive-load
-    /// signal.
-    #[serde(default = "default_general_arms")]
-    pub(crate) general_arms: usize,
-    /// If false, `if let` chains are excluded (they often have no `match` form).
-    #[serde(default)]
-    pub(crate) count_if_let: bool,
     /// Glob patterns relative to the workspace root that exempt a file from
     /// the check.
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
+    /// If false, `if let` chains are excluded (they often have no `match` form).
+    #[serde(default)]
+    pub(crate) count_if_let: bool,
+    /// Threshold for any chain regardless of structure — generic cognitive-load
+    /// signal.
+    #[serde(default = "default_general_arms")]
+    pub(crate) general_arms: usize,
+    /// Threshold for heterogeneous chains (arms test unrelated predicates).
+    /// Hint: extract predicates or build a tag enum + match.
+    #[serde(default = "default_heterogeneous_arms")]
+    pub(crate) heterogeneous_arms: usize,
+    /// Threshold for homogeneous chains (all arms test the same expression
+    /// with the same operator) — strongest match-conversion hint.
+    #[serde(default = "default_homogeneous_arms")]
+    pub(crate) homogeneous_arms: usize,
 }
 
 impl Default for BranchChainsConfig {
@@ -232,16 +232,16 @@ fn default_exempt_files() -> Vec<String> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardCascadeConfig {
-    /// Threshold for consecutive guard statements (early-return ifs and
-    /// let-else) inside one block to flag the block as a guard cascade.
-    #[serde(default = "default_cascade_warn_streak")]
-    pub(crate) warn_streak: usize,
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
     /// Macro idents that count as terminators in the guard body
     /// (`panic!()`, `bail!()`, …).
     #[serde(default = "default_terminator_macros")]
     pub(crate) terminator_macros: Vec<String>,
-    #[serde(default = "default_exempt_files")]
-    pub(crate) exempt_files: Vec<String>,
+    /// Threshold for consecutive guard statements (early-return ifs and
+    /// let-else) inside one block to flag the block as a guard cascade.
+    #[serde(default = "default_cascade_warn_streak")]
+    pub(crate) warn_streak: usize,
 }
 
 impl Default for GuardCascadeConfig {
@@ -275,6 +275,8 @@ fn default_terminator_macros() -> Vec<String> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FunctionBranchDensityConfig {
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
     /// Warn when a single function body owns more than this many branch
     /// decisions (if / match-dispatch / loop / `&&` / `||` / let-else).
     /// Density is attributed to the function that *owns* the branches, not
@@ -284,8 +286,6 @@ pub(crate) struct FunctionBranchDensityConfig {
     /// on every audit run so the noise stays visible until restructured.
     #[serde(default = "default_density_warn_own")]
     pub(crate) warn_own: usize,
-    #[serde(default = "default_exempt_files")]
-    pub(crate) exempt_files: Vec<String>,
 }
 
 impl Default for FunctionBranchDensityConfig {
@@ -308,12 +308,12 @@ pub(crate) struct AccumulatorLoopsConfig {
     /// `count` (conditional `+= 1` inside an `if`).
     #[serde(default = "default_accumulator_patterns")]
     pub(crate) detect: Vec<String>,
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
     /// Skip loops with `break`/`continue`/`return` inside the body — converting
     /// to an iterator chain there changes control flow semantics.
     #[serde(default = "default_true")]
     pub(crate) ignore_with_break: bool,
-    #[serde(default = "default_exempt_files")]
-    pub(crate) exempt_files: Vec<String>,
 }
 
 impl Default for AccumulatorLoopsConfig {
@@ -336,14 +336,14 @@ fn default_accumulator_patterns() -> Vec<String> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NoPassthroughBuilderConfig {
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
     /// Minimum number of input fields routed straight through to the
     /// target builder before the function is flagged. Below this
     /// threshold a 2-3 field carrier is considered too small to be
     /// worth removing.
     #[serde(default = "default_min_passthrough_fields")]
     pub(crate) min_passthrough_fields: usize,
-    #[serde(default = "default_exempt_files")]
-    pub(crate) exempt_files: Vec<String>,
 }
 
 impl Default for NoPassthroughBuilderConfig {
@@ -366,11 +366,11 @@ fn default_true() -> bool {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MultiAccumulatorLoopConfig {
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
     /// Skip loops with `break`/`continue`/`return` inside.
     #[serde(default = "default_true")]
     pub(crate) ignore_with_break: bool,
-    #[serde(default = "default_exempt_files")]
-    pub(crate) exempt_files: Vec<String>,
 }
 
 impl Default for MultiAccumulatorLoopConfig {

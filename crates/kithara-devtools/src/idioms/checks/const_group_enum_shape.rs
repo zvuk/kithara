@@ -106,9 +106,9 @@ fn entry(c: &ItemConst) -> Option<ConstEntry> {
     let ty = primitive_int_type(&c.ty)?;
     let value = literal_value(&c.expr)?;
     Some(ConstEntry {
-        name: c.ident.to_string(),
         ty,
         value,
+        name: c.ident.to_string(),
         line: c.ident.span().start().line,
     })
 }

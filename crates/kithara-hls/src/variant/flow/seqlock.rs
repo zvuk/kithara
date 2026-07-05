@@ -50,20 +50,20 @@ impl SeqVersion {
 /// (0 = `None`), which off-RT consumers may CAS to 0. Reads are lock-free and
 /// allocation-free on both produce-core and off-RT threads.
 pub(super) struct SeqAnchorCell {
-    seq: SeqVersion,
+    segment: AtomicU32,
     /// Present generation: 0 = absent, otherwise the current monotonic generation.
     active: AtomicU64,
+    anchor: AtomicU64,
     /// Monotonic generation source. Bumped only by the on-core SET path.
     next_gen: AtomicU64,
-    segment: AtomicU32,
-    anchor: AtomicU64,
+    seq: SeqVersion,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct AnchorEntry {
-    pub(super) generation: u64,
     pub(super) segment: u32,
     pub(super) anchor: u64,
+    pub(super) generation: u64,
 }
 
 impl SeqAnchorCell {
@@ -75,6 +75,10 @@ impl SeqAnchorCell {
             segment: AtomicU32::new(0),
             anchor: AtomicU64::new(0),
         }
+    }
+
+    pub(super) fn clear(&self) {
+        self.active.store(0, Ordering::Release);
     }
 
     pub(super) fn load(&self) -> Option<AnchorEntry> {
@@ -93,30 +97,13 @@ impl SeqAnchorCell {
             // the snapshot. Generations are monotonic, so there is no ABA.
             if self.active.load(Ordering::Acquire) == generation {
                 return Some(AnchorEntry {
-                    generation,
                     segment,
                     anchor,
+                    generation,
                 });
             }
             spin_loop();
         }
-    }
-
-    /// On-core single-writer publish. Hides the demand (`active = 0`) for the
-    /// duration of the body write so a racing off-RT reader never pairs a fresh
-    /// generation with a half-written body.
-    pub(super) fn set(&self, segment: u32, anchor: u64) {
-        let generation = self.next_gen();
-        self.active.store(0, Ordering::Release);
-        self.seq.begin();
-        self.segment.store(segment, Ordering::Relaxed);
-        self.anchor.store(anchor, Ordering::Relaxed);
-        self.seq.end();
-        self.active.store(generation, Ordering::Release);
-    }
-
-    pub(super) fn clear(&self) {
-        self.active.store(0, Ordering::Release);
     }
 
     fn next_gen(&self) -> u64 {
@@ -133,6 +120,19 @@ impl SeqAnchorCell {
             generation
         }
     }
+
+    /// On-core single-writer publish. Hides the demand (`active = 0`) for the
+    /// duration of the body write so a racing off-RT reader never pairs a fresh
+    /// generation with a half-written body.
+    pub(super) fn set(&self, segment: u32, anchor: u64) {
+        let generation = self.next_gen();
+        self.active.store(0, Ordering::Release);
+        self.seq.begin();
+        self.segment.store(segment, Ordering::Relaxed);
+        self.anchor.store(anchor, Ordering::Relaxed);
+        self.seq.end();
+        self.active.store(generation, Ordering::Release);
+    }
 }
 
 const NONE_ANCHOR: u64 = u64::MAX;
@@ -142,18 +142,18 @@ const NONE_ANCHOR: u64 = u64::MAX;
 /// resolved off-RT and tagged with the base generation it belongs to, so a
 /// stale resolver can never attach an exact anchor to a newer alias base.
 pub(super) struct AtomicSeekAlias {
-    base: SeqAnchorCell,
     /// Resolved exact anchor (`u64::MAX` = none).
     exact_anchor: AtomicU64,
     /// Base generation `exact_anchor` belongs to (0 = none).
     exact_gen: AtomicU64,
+    base: SeqAnchorCell,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct AliasSnapshot {
+    pub(super) exact_anchor: Option<u64>,
     pub(super) segment: u32,
     pub(super) anchor: u64,
-    pub(super) exact_anchor: Option<u64>,
 }
 
 impl AliasSnapshot {
@@ -171,6 +171,12 @@ impl AtomicSeekAlias {
         }
     }
 
+    pub(super) fn clear(&self) {
+        self.base.clear();
+        self.exact_gen.store(0, Ordering::Release);
+        self.exact_anchor.store(NONE_ANCHOR, Ordering::Relaxed);
+    }
+
     pub(super) fn load(&self) -> Option<AliasSnapshot> {
         let base = self.base.load()?;
         // Accept `exact_anchor` only when its tag matches the live base
@@ -184,24 +190,10 @@ impl AtomicSeekAlias {
             None
         };
         Some(AliasSnapshot {
+            exact_anchor,
             segment: base.segment,
             anchor: base.anchor,
-            exact_anchor,
         })
-    }
-
-    /// On-core single-writer publish of a fresh base; clears any prior exact
-    /// anchor before the new generation goes live.
-    pub(super) fn set(&self, anchor: u64, segment: u32) {
-        self.exact_gen.store(0, Ordering::Release);
-        self.exact_anchor.store(NONE_ANCHOR, Ordering::Relaxed);
-        self.base.set(segment, anchor);
-    }
-
-    pub(super) fn clear(&self) {
-        self.base.clear();
-        self.exact_gen.store(0, Ordering::Release);
-        self.exact_anchor.store(NONE_ANCHOR, Ordering::Relaxed);
     }
 
     /// Off-RT: attach a resolved exact anchor to the matching base demand. A
@@ -217,6 +209,14 @@ impl AtomicSeekAlias {
         self.exact_anchor.store(exact_anchor, Ordering::Relaxed);
         self.exact_gen.store(base.generation, Ordering::Release);
     }
+
+    /// On-core single-writer publish of a fresh base; clears any prior exact
+    /// anchor before the new generation goes live.
+    pub(super) fn set(&self, anchor: u64, segment: u32) {
+        self.exact_gen.store(0, Ordering::Release);
+        self.exact_anchor.store(NONE_ANCHOR, Ordering::Relaxed);
+        self.base.set(segment, anchor);
+    }
 }
 
 /// `Option<u64>` packed into a single atomic, `u64::MAX` reserved for `None`
@@ -227,16 +227,16 @@ pub(super) struct AtomicOptU64 {
 }
 
 impl AtomicOptU64 {
-    pub(super) const fn none() -> Self {
-        Self {
-            value: AtomicU64::new(u64::MAX),
-        }
-    }
-
     pub(super) fn load(&self) -> Option<u64> {
         match self.value.load(Ordering::Acquire) {
             u64::MAX => None,
             value => Some(value),
+        }
+    }
+
+    pub(super) const fn none() -> Self {
+        Self {
+            value: AtomicU64::new(u64::MAX),
         }
     }
 

@@ -22,9 +22,9 @@ pub(super) enum SizeDemand {
 
 #[derive(Default)]
 pub(super) struct SizeDemandState {
-    queue: VecDeque<SizeDemand>,
-    queued: BTreeSet<SizeDemand>,
     inflight: BTreeSet<SizeDemand>,
+    queued: BTreeSet<SizeDemand>,
+    queue: VecDeque<SizeDemand>,
 }
 
 impl SizeDemandState {
@@ -52,15 +52,60 @@ impl SizeDemandState {
 }
 
 impl HlsVariant {
-    pub(crate) fn dispatch_size_only(
+    fn apply_cached_size(&self, demand: SizeDemand) -> bool {
+        let len = match demand {
+            SizeDemand::Init => self.init_committed_final_len(),
+            SizeDemand::Segment(idx) => self.committed_final_len(idx),
+        };
+        len.filter(|n| *n > 0)
+            .is_some_and(|n| self.apply_resolved_size(demand, n))
+    }
+
+    pub(super) fn apply_resolved_size(&self, demand: SizeDemand, len: u64) -> bool {
+        if len == 0 {
+            return false;
+        }
+        let mut changed = false;
+        self.layout.apply_commit(&self.segments, || {
+            changed = match demand {
+                SizeDemand::Init => self
+                    .segments
+                    .init
+                    .as_ref()
+                    .filter(|segment| matches!(segment.content(), SegmentContent::Plain))
+                    .is_some_and(|segment| segment.set_resolved_size(len)),
+                SizeDemand::Segment(idx) => self
+                    .segments
+                    .get(idx as usize)
+                    .filter(|segment| matches!(segment.content(), SegmentContent::Plain))
+                    .is_some_and(|segment| segment.set_resolved_size(len)),
+            };
+            self.init_route_size()
+        });
+        if changed {
+            self.complete_exact_seek_if_ready();
+        }
+        changed
+    }
+
+    fn build_size_probe_cmd(
         self: &Arc<Self>,
         ctx: &PlanCtx,
-        budget: usize,
-    ) -> Vec<FetchCmd> {
-        let mut out = Vec::new();
-        let mut remaining = budget;
-        self.dispatch_size_demands(ctx, &mut out, &mut remaining);
-        out
+        demand: SizeDemand,
+    ) -> Option<FetchCmd> {
+        let url = self.size_probe_url(demand)?;
+        let cancel = self.cancel_handle();
+        let weak = Arc::downgrade(self);
+        let signal = ctx.signal.clone();
+        let writer: WriterFn = Box::new(|_| Ok(()));
+        let on_complete: OnCompleteFn = Box::new(move |_bytes_written, headers, err| {
+            if let Some(variant) = weak.upgrade() {
+                variant.finish_size_probe(demand, headers, err);
+            }
+            signal.fire();
+        });
+        let segment_peer = SegmentPeer::new(self.profile.headers.clone());
+        Some(segment_peer.size_probe(url, ctx.size_probe_method, cancel, writer, on_complete))
     }
 
     pub(super) fn dispatch_size_demands(
@@ -112,6 +157,17 @@ impl HlsVariant {
         }
     }
 
+    pub(crate) fn dispatch_size_only(
+        self: &Arc<Self>,
+        ctx: &PlanCtx,
+        budget: usize,
+    ) -> Vec<FetchCmd> {
+        let mut out = Vec::new();
+        let mut remaining = budget;
+        self.dispatch_size_demands(ctx, &mut out, &mut remaining);
+        out
+    }
+
     fn dispatchable_size_demand(&self) -> Option<SizeDemand> {
         self.seek.size_demand.lock().pop_dispatchable()
     }
@@ -158,13 +214,6 @@ impl HlsVariant {
         self.apply_resolved_size(demand, size);
     }
 
-    fn size_probe_url(&self, demand: SizeDemand) -> Option<Url> {
-        match demand {
-            SizeDemand::Init => Some(self.segments.init.as_ref()?.url().clone()),
-            SizeDemand::Segment(idx) => Some(self.segments.get(idx as usize)?.url().clone()),
-        }
-    }
-
     pub(super) fn size_probe_allowed(&self, demand: SizeDemand) -> bool {
         match demand {
             SizeDemand::Init => self.segments.init.as_ref().is_some_and(|segment| {
@@ -176,59 +225,10 @@ impl HlsVariant {
         }
     }
 
-    fn build_size_probe_cmd(
-        self: &Arc<Self>,
-        ctx: &PlanCtx,
-        demand: SizeDemand,
-    ) -> Option<FetchCmd> {
-        let url = self.size_probe_url(demand)?;
-        let cancel = self.cancel_handle();
-        let weak = Arc::downgrade(self);
-        let signal = ctx.signal.clone();
-        let writer: WriterFn = Box::new(|_| Ok(()));
-        let on_complete: OnCompleteFn = Box::new(move |_bytes_written, headers, err| {
-            if let Some(variant) = weak.upgrade() {
-                variant.finish_size_probe(demand, headers, err);
-            }
-            signal.fire();
-        });
-        let segment_peer = SegmentPeer::new(self.profile.headers.clone());
-        Some(segment_peer.size_probe(url, ctx.size_probe_method, cancel, writer, on_complete))
-    }
-
-    fn apply_cached_size(&self, demand: SizeDemand) -> bool {
-        let len = match demand {
-            SizeDemand::Init => self.init_committed_final_len(),
-            SizeDemand::Segment(idx) => self.committed_final_len(idx),
-        };
-        len.filter(|n| *n > 0)
-            .is_some_and(|n| self.apply_resolved_size(demand, n))
-    }
-
-    pub(super) fn apply_resolved_size(&self, demand: SizeDemand, len: u64) -> bool {
-        if len == 0 {
-            return false;
+    fn size_probe_url(&self, demand: SizeDemand) -> Option<Url> {
+        match demand {
+            SizeDemand::Init => Some(self.segments.init.as_ref()?.url().clone()),
+            SizeDemand::Segment(idx) => Some(self.segments.get(idx as usize)?.url().clone()),
         }
-        let mut changed = false;
-        self.layout.apply_commit(&self.segments, || {
-            changed = match demand {
-                SizeDemand::Init => self
-                    .segments
-                    .init
-                    .as_ref()
-                    .filter(|segment| matches!(segment.content(), SegmentContent::Plain))
-                    .is_some_and(|segment| segment.set_resolved_size(len)),
-                SizeDemand::Segment(idx) => self
-                    .segments
-                    .get(idx as usize)
-                    .filter(|segment| matches!(segment.content(), SegmentContent::Plain))
-                    .is_some_and(|segment| segment.set_resolved_size(len)),
-            };
-            self.init_route_size()
-        });
-        if changed {
-            self.complete_exact_seek_if_ready();
-        }
-        changed
     }
 }

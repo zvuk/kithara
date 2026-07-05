@@ -45,8 +45,8 @@ type RawByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>>>>;
 pub struct ByteStream {
     /// Response headers from the HTTP request that produced this stream.
     pub headers: Headers,
-    partial: bool,
     inner: RawByteStream,
+    partial: bool,
 }
 
 impl ByteStream {
@@ -56,14 +56,10 @@ impl ByteStream {
         Self::with_partial(headers, inner, false)
     }
 
-    /// Create a new `ByteStream` and record whether the response was partial.
+    /// Consume the wrapper, returning just the raw byte stream.
     #[must_use]
-    pub fn with_partial(headers: Headers, inner: RawByteStream, partial: bool) -> Self {
-        Self {
-            headers,
-            partial,
-            inner,
-        }
+    pub fn into_inner(self) -> RawByteStream {
+        self.inner
     }
 
     /// Whether this stream was produced by an HTTP partial-content response.
@@ -72,10 +68,14 @@ impl ByteStream {
         self.partial
     }
 
-    /// Consume the wrapper, returning just the raw byte stream.
+    /// Create a new `ByteStream` and record whether the response was partial.
     #[must_use]
-    pub fn into_inner(self) -> RawByteStream {
-        self.inner
+    pub fn with_partial(headers: Headers, inner: RawByteStream, partial: bool) -> Self {
+        Self {
+            headers,
+            inner,
+            partial,
+        }
     }
 }
 
@@ -99,14 +99,6 @@ pub trait Net: MaybeSend + MaybeSync {
     /// Get all bytes from a URL
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError>;
 
-    /// POST `body` to a URL and return the full response body.
-    async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> Result<Bytes, NetError>;
-
     /// Get a range of bytes from a URL
     async fn get_range(
         &self,
@@ -120,6 +112,14 @@ pub trait Net: MaybeSend + MaybeSync {
     /// This is intended for lightweight metadata probes (e.g. `Content-Length`,
     /// `Accept-Ranges`, `Content-Type`). Implementations should return response headers.
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError>;
+
+    /// POST `body` to a URL and return the full response body.
+    async fn post_bytes(
+        &self,
+        url: Url,
+        body: Bytes,
+        headers: Option<Headers>,
+    ) -> Result<Bytes, NetError>;
 
     /// Stream bytes from a URL
     async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError>;

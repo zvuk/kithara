@@ -5,10 +5,10 @@ use serde::Deserialize;
 
 #[derive(Debug, Default)]
 pub(crate) struct ArchConfig {
-    pub(crate) direction: DirectionConfig,
     pub(crate) canonical_types: CanonicalTypesConfig,
-    pub(crate) thresholds: ThresholdsConfig,
+    pub(crate) direction: DirectionConfig,
     pub(crate) module_layers: ModuleLayersConfig,
+    pub(crate) thresholds: ThresholdsConfig,
 }
 
 impl ArchConfig {
@@ -25,18 +25,18 @@ impl ArchConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DirectionConfig {
-    #[serde(default, rename = "layer")]
-    pub(crate) layers: Vec<Layer>,
     #[serde(default)]
     pub(crate) exemptions: BTreeMap<String, String>,
+    #[serde(default, rename = "layer")]
+    pub(crate) layers: Vec<Layer>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Layer {
-    pub(crate) index: u32,
     pub(crate) name: String,
     pub(crate) crates: Vec<String>,
+    pub(crate) index: u32,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -58,15 +58,31 @@ pub(crate) struct CanonicalType {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ThresholdsConfig {
     #[serde(default)]
+    pub(crate) arc_clone_hotspots: ArcCloneHotspotsThreshold,
+    #[serde(default)]
+    pub(crate) args_wrapper_struct: ArgsWrapperStructThreshold,
+    #[serde(default)]
+    pub(crate) cancel_root_sites: CancelRootSitesThreshold,
+    #[serde(default)]
     pub(crate) cfg_density: CfgDensityThreshold,
     #[serde(default)]
-    pub(crate) file_size: FileSizeThreshold,
+    pub(crate) dead_exports: DeadExportsThreshold,
+    #[serde(default)]
+    pub(crate) field_always_constant: FieldAlwaysConstantThreshold,
+    #[serde(default)]
+    pub(crate) field_always_equals_other_field: FieldAlwaysEqualsOtherFieldThreshold,
+    #[serde(default)]
+    pub(crate) field_passthrough: FieldPassthroughThreshold,
     #[serde(default)]
     pub(crate) file_density: FileDensityThreshold,
     #[serde(default)]
-    pub(crate) shared_state: SharedStateThreshold,
+    pub(crate) file_size: FileSizeThreshold,
     #[serde(default)]
-    pub(crate) arc_clone_hotspots: ArcCloneHotspotsThreshold,
+    pub(crate) flat_directory: FlatDirectoryThreshold,
+    #[serde(default)]
+    pub(crate) fn_arg_count: FnArgCountThreshold,
+    #[serde(default)]
+    pub(crate) generic_param_count: GenericParamCountThreshold,
     #[serde(default)]
     pub(crate) god_module: GodModuleThreshold,
     #[serde(default)]
@@ -74,49 +90,33 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) god_trait: GodTraitThreshold,
     #[serde(default)]
-    pub(crate) pub_struct_open_fields: PubStructOpenFieldsThreshold,
-    #[serde(default)]
-    pub(crate) trait_impl_count: TraitImplCountThreshold,
-    #[serde(default)]
-    pub(crate) fn_arg_count: FnArgCountThreshold,
-    #[serde(default)]
-    pub(crate) generic_param_count: GenericParamCountThreshold,
-    #[serde(default)]
-    pub(crate) no_lib_statics: NoLibStaticsThreshold,
-    #[serde(default)]
-    pub(crate) module_fan_out: ModuleFanOutThreshold,
-    #[serde(default)]
-    pub(crate) flat_directory: FlatDirectoryThreshold,
-    #[serde(default)]
     pub(crate) max_nesting: MaxNestingThreshold,
-    #[serde(default)]
-    pub(crate) readme_presence: ReadmePresenceThreshold,
     #[serde(default)]
     pub(crate) mixed_entities: MixedEntitiesThreshold,
     #[serde(default)]
-    pub(crate) redundant_accessors: RedundantAccessorsThreshold,
-    #[serde(default)]
-    pub(crate) single_word_filenames: SingleWordFilenamesThreshold,
-    #[serde(default)]
-    pub(crate) single_impl_size: SingleImplSizeThreshold,
-    #[serde(default)]
-    pub(crate) redundant_reexport: RedundantReexportThreshold,
+    pub(crate) module_fan_out: ModuleFanOutThreshold,
     #[serde(default)]
     pub(crate) multi_constructor: MultiConstructorThreshold,
     #[serde(default)]
-    pub(crate) field_passthrough: FieldPassthroughThreshold,
+    pub(crate) no_lib_statics: NoLibStaticsThreshold,
     #[serde(default)]
-    pub(crate) args_wrapper_struct: ArgsWrapperStructThreshold,
+    pub(crate) pub_struct_open_fields: PubStructOpenFieldsThreshold,
     #[serde(default)]
-    pub(crate) field_always_constant: FieldAlwaysConstantThreshold,
+    pub(crate) readme_presence: ReadmePresenceThreshold,
     #[serde(default)]
-    pub(crate) field_always_equals_other_field: FieldAlwaysEqualsOtherFieldThreshold,
+    pub(crate) redundant_accessors: RedundantAccessorsThreshold,
     #[serde(default)]
-    pub(crate) cancel_root_sites: CancelRootSitesThreshold,
+    pub(crate) redundant_reexport: RedundantReexportThreshold,
+    #[serde(default)]
+    pub(crate) shared_state: SharedStateThreshold,
+    #[serde(default)]
+    pub(crate) single_impl_size: SingleImplSizeThreshold,
+    #[serde(default)]
+    pub(crate) single_word_filenames: SingleWordFilenamesThreshold,
     #[serde(default)]
     pub(crate) tokio_dep_quarantine: TokioDepQuarantineThreshold,
     #[serde(default)]
-    pub(crate) dead_exports: DeadExportsThreshold,
+    pub(crate) trait_impl_count: TraitImplCountThreshold,
 }
 
 #[derive(Debug, Deserialize)]
@@ -155,12 +155,12 @@ pub(crate) struct FieldPassthroughThreshold {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ArgsWrapperStructThreshold {
-    #[serde(default = "default_args_wrapper_min_fields")]
-    pub(crate) min_fields: usize,
-    #[serde(default = "default_args_wrapper_min_call_sites")]
-    pub(crate) min_call_sites: usize,
     #[serde(default)]
     pub(crate) exempt_files: Vec<String>,
+    #[serde(default = "default_args_wrapper_min_call_sites")]
+    pub(crate) min_call_sites: usize,
+    #[serde(default = "default_args_wrapper_min_fields")]
+    pub(crate) min_fields: usize,
 }
 
 impl Default for ArgsWrapperStructThreshold {
@@ -184,10 +184,10 @@ fn default_args_wrapper_min_call_sites() -> usize {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FieldAlwaysConstantThreshold {
-    #[serde(default = "default_field_always_min_call_sites")]
-    pub(crate) min_call_sites: usize,
     #[serde(default)]
     pub(crate) exempt_files: Vec<String>,
+    #[serde(default = "default_field_always_min_call_sites")]
+    pub(crate) min_call_sites: usize,
 }
 
 impl Default for FieldAlwaysConstantThreshold {
@@ -202,10 +202,10 @@ impl Default for FieldAlwaysConstantThreshold {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FieldAlwaysEqualsOtherFieldThreshold {
-    #[serde(default = "default_field_always_min_call_sites")]
-    pub(crate) min_call_sites: usize,
     #[serde(default)]
     pub(crate) exempt_files: Vec<String>,
+    #[serde(default = "default_field_always_min_call_sites")]
+    pub(crate) min_call_sites: usize,
 }
 
 impl Default for FieldAlwaysEqualsOtherFieldThreshold {
@@ -251,12 +251,12 @@ fn default_redundant_reexport_detect() -> Vec<String> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CfgDensityThreshold {
-    pub(crate) warn: usize,
-    pub(crate) deny: usize,
-    #[serde(default)]
-    pub(crate) exempt_crates: Vec<String>,
     #[serde(default)]
     pub(crate) exclude_globs: Vec<String>,
+    #[serde(default)]
+    pub(crate) exempt_crates: Vec<String>,
+    pub(crate) deny: usize,
+    pub(crate) warn: usize,
 }
 
 impl Default for CfgDensityThreshold {
@@ -273,10 +273,10 @@ impl Default for CfgDensityThreshold {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FileSizeThreshold {
-    pub(crate) warn: usize,
-    pub(crate) deny: usize,
     #[serde(default)]
     pub(crate) exclude_globs: Vec<String>,
+    pub(crate) deny: usize,
+    pub(crate) warn: usize,
 }
 
 impl Default for FileSizeThreshold {
@@ -292,8 +292,8 @@ impl Default for FileSizeThreshold {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FileDensityThreshold {
-    pub(crate) warn_fns_per_type: f64,
     pub(crate) deny_fns_per_type: f64,
+    pub(crate) warn_fns_per_type: f64,
     pub(crate) min_fns_to_evaluate: usize,
 }
 
@@ -310,10 +310,10 @@ impl Default for FileDensityThreshold {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SharedStateThreshold {
-    pub(crate) warn: usize,
-    pub(crate) deny: usize,
     #[serde(default = "default_shared_state_patterns")]
     pub(crate) patterns: Vec<String>,
+    pub(crate) deny: usize,
+    pub(crate) warn: usize,
 }
 
 impl Default for SharedStateThreshold {
@@ -341,13 +341,13 @@ impl Default for ArcCloneHotspotsThreshold {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GodModuleThreshold {
-    /// Default warn threshold = number of `pub`/`pub(crate)` items in one
-    /// module file that triggers a violation.
-    pub(crate) warn: usize,
     /// Per-crate override map: crate-name → custom warn threshold. Lets
     /// app/test/macro crates relax the default without baselining each file.
     #[serde(default)]
     pub(crate) overrides: BTreeMap<String, usize>,
+    /// Default warn threshold = number of `pub`/`pub(crate)` items in one
+    /// module file that triggers a violation.
+    pub(crate) warn: usize,
 }
 
 impl Default for GodModuleThreshold {
@@ -362,6 +362,13 @@ impl Default for GodModuleThreshold {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GodStructThreshold {
+    /// Trait names whose impl methods are standard conformance (idiomatic
+    /// plumbing), not accreted responsibility — `Drop`, `Default`, `From`,
+    /// arithmetic, ordering, IO adapters, ... Matched on the trait's last
+    /// path segment. Methods from these impls do not count toward the total;
+    /// domain-trait methods still do.
+    #[serde(default = "default_std_traits")]
+    pub(crate) std_traits: Vec<String>,
     /// Substantial methods per type, aggregated across every `impl` block of
     /// the owning crate. "Substantial" excludes thin forwarders/accessors
     /// (short, branch-free bodies — idiomatic facade plumbing), `#[cfg(test)]`
@@ -370,13 +377,6 @@ pub(crate) struct GodStructThreshold {
     /// but is owned by `pub_struct_open_fields`, not summed in here — so this
     /// check measures behaviour concentration, not state size or API breadth.
     pub(crate) warn: usize,
-    /// Trait names whose impl methods are standard conformance (idiomatic
-    /// plumbing), not accreted responsibility — `Drop`, `Default`, `From`,
-    /// arithmetic, ordering, IO adapters, ... Matched on the trait's last
-    /// path segment. Methods from these impls do not count toward the total;
-    /// domain-trait methods still do.
-    #[serde(default = "default_std_traits")]
-    pub(crate) std_traits: Vec<String>,
 }
 
 impl Default for GodStructThreshold {
@@ -503,13 +503,13 @@ impl Default for FnArgCountThreshold {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ModuleFanOutThreshold {
+    /// Per-crate override map: crate-name → custom warn threshold.
+    #[serde(default)]
+    pub(crate) overrides: BTreeMap<String, usize>,
     /// Default warn threshold = number of distinct intra-crate sibling
     /// modules a single file imports from before being flagged as an
     /// orchestrator candidate.
     pub(crate) warn: usize,
-    /// Per-crate override map: crate-name → custom warn threshold.
-    #[serde(default)]
-    pub(crate) overrides: BTreeMap<String, usize>,
 }
 
 impl Default for ModuleFanOutThreshold {
@@ -534,40 +534,60 @@ pub(crate) struct NoLibStaticsThreshold {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CancelRootSitesThreshold {
-    /// Crates whose production *is* test scaffolding (helpers, mocks). Their
-    /// hard-coded `CancelToken::root()` / `CancelToken::never()` calls are
-    /// indistinguishable from test fixtures and don't root an orphan tree.
-    /// Project-specific — supplied via config.
-    #[serde(default)]
-    pub(crate) exempt_crates: Vec<String>,
     /// Relative file paths where minting a fresh cancel root
     /// (`CancelToken::root` / `CancelToken::never`) is sanctioned: consumer-crate
     /// owner tops, FFI bridges, `CancelScope`, and the dedicated sentinel / latch
     /// sites.
     #[serde(default)]
     pub(crate) allowed_files: Vec<String>,
+    /// Crates whose production *is* test scaffolding (helpers, mocks). Their
+    /// hard-coded `CancelToken::root()` / `CancelToken::never()` calls are
+    /// indistinguishable from test fixtures and don't root an orphan tree.
+    /// Project-specific — supplied via config.
+    #[serde(default)]
+    pub(crate) exempt_crates: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TokioDepQuarantineThreshold {
-    /// Crates whose direct tokio dependency is never flagged: the
-    /// workspace-hack feature-unification shim (must name every transitive
-    /// dep) and the test-support crates (their tokio is test scaffolding).
-    /// Project-specific — supplied via config.
-    #[serde(default)]
-    pub(crate) exempt_crates: Vec<String>,
     /// Crates whose *production* tokio coupling is not yet migrated to the
     /// platform re-exports (W6 quarantine debt). Entries here are tracked work
     /// to remove, not a standing exemption — adding a NEW crate with direct
     /// production tokio still fails the gate.
     #[serde(default)]
     pub(crate) allowed_crates: Vec<String>,
+    /// Crates whose direct tokio dependency is never flagged: the
+    /// workspace-hack feature-unification shim (must name every transitive
+    /// dep) and the test-support crates (their tokio is test scaffolding).
+    /// Project-specific — supplied via config.
+    #[serde(default)]
+    pub(crate) exempt_crates: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DeadExportsThreshold {
+    /// Symbol names that are never flagged (e.g. FFI entry points the scanner
+    /// cannot see called from non-Rust callers).
+    #[serde(default)]
+    pub(crate) exempt: Vec<String>,
+    /// Attribute path segments that mark a definition as an external entry
+    /// point with no in-tree Rust caller (`no_mangle`, `wasm_bindgen`, ...).
+    /// Configured in `.config/arch/thresholds.toml` (`[dead_exports]`).
+    #[serde(default)]
+    pub(crate) export_attrs: Vec<String>,
+    /// Workspace-relative path fragments whose definitions `--fix` must never
+    /// auto-delete: platform-gated module directories (e.g. `android/`) whose
+    /// callers live in build configurations or non-Rust code this scan cannot
+    /// see. Reporting still flags them; only autofix is held back.
+    #[serde(default)]
+    pub(crate) fix_protect_paths: Vec<String>,
+    /// Crates skipped entirely (neither defs collected nor refs counted):
+    /// build tooling and workspace-hack shims. Configured in
+    /// `.config/arch/thresholds.toml` (`[dead_exports]`).
+    #[serde(default)]
+    pub(crate) ignore_crates: Vec<String>,
     /// Definition kinds to evaluate: `fn`, `method`, `const`, `static`,
     /// `type`, `struct`, `enum`, `trait`.
     #[serde(default = "default_dead_exports_kinds")]
@@ -578,26 +598,6 @@ pub(crate) struct DeadExportsThreshold {
     /// `.config/arch/thresholds.toml` (`[dead_exports]`).
     #[serde(default)]
     pub(crate) test_crates: Vec<String>,
-    /// Crates skipped entirely (neither defs collected nor refs counted):
-    /// build tooling and workspace-hack shims. Configured in
-    /// `.config/arch/thresholds.toml` (`[dead_exports]`).
-    #[serde(default)]
-    pub(crate) ignore_crates: Vec<String>,
-    /// Symbol names that are never flagged (e.g. FFI entry points the scanner
-    /// cannot see called from non-Rust callers).
-    #[serde(default)]
-    pub(crate) exempt: Vec<String>,
-    /// Workspace-relative path fragments whose definitions `--fix` must never
-    /// auto-delete: platform-gated module directories (e.g. `android/`) whose
-    /// callers live in build configurations or non-Rust code this scan cannot
-    /// see. Reporting still flags them; only autofix is held back.
-    #[serde(default)]
-    pub(crate) fix_protect_paths: Vec<String>,
-    /// Attribute path segments that mark a definition as an external entry
-    /// point with no in-tree Rust caller (`no_mangle`, `wasm_bindgen`, ...).
-    /// Configured in `.config/arch/thresholds.toml` (`[dead_exports]`).
-    #[serde(default)]
-    pub(crate) export_attrs: Vec<String>,
 }
 
 impl Default for DeadExportsThreshold {
@@ -669,10 +669,10 @@ fn default_shared_state_patterns() -> Vec<String> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FlatDirectoryThreshold {
-    pub(crate) warn: usize,
-    pub(crate) deny: usize,
     #[serde(default)]
     pub(crate) ignore_globs: Vec<String>,
+    pub(crate) deny: usize,
+    pub(crate) warn: usize,
 }
 
 impl Default for FlatDirectoryThreshold {
@@ -688,9 +688,9 @@ impl Default for FlatDirectoryThreshold {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MaxNestingThreshold {
-    pub(crate) max_depth: usize,
     #[serde(default)]
     pub(crate) exempt_crates: Vec<String>,
+    pub(crate) max_depth: usize,
 }
 
 impl Default for MaxNestingThreshold {
@@ -730,11 +730,11 @@ pub(crate) enum AccessorSeverity {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SingleImplSizeThreshold {
+    /// Hard threshold: deny at this many lines.
+    pub(crate) deny_lines: usize,
     /// Soft threshold: warn at this many lines spanned by a single `impl`
     /// block (own or trait impl).
     pub(crate) warn_lines: usize,
-    /// Hard threshold: deny at this many lines.
-    pub(crate) deny_lines: usize,
 }
 
 impl Default for SingleImplSizeThreshold {
@@ -749,18 +749,18 @@ impl Default for SingleImplSizeThreshold {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SingleWordFilenamesThreshold {
-    /// Maximum number of `_`-separated tokens in the filename stem.
-    /// Default 1 = filenames must be a single word (`peer.rs`, `source.rs`).
-    /// `stream_type.rs` has 2 tokens; `a_b_c.rs` has 3.
-    pub(crate) max_words: usize,
+    /// `warn` (track via baseline) or `deny` (fail on new offenders) or `off`.
+    pub(crate) severity: AccessorSeverity,
     /// Filenames that always pass regardless of word count
     /// (`mod.rs`, `lib.rs`, `main.rs`, `build.rs`).
     pub(crate) exempt_filenames: Vec<String>,
     /// Glob patterns of paths to skip entirely (e.g. `**/tests/**`).
     #[serde(default)]
     pub(crate) exempt_globs: Vec<String>,
-    /// `warn` (track via baseline) or `deny` (fail on new offenders) or `off`.
-    pub(crate) severity: AccessorSeverity,
+    /// Maximum number of `_`-separated tokens in the filename stem.
+    /// Default 1 = filenames must be a single word (`peer.rs`, `source.rs`).
+    /// `stream_type.rs` has 2 tokens; `a_b_c.rs` has 3.
+    pub(crate) max_words: usize,
 }
 
 impl Default for SingleWordFilenamesThreshold {
@@ -784,37 +784,37 @@ fn default_single_word_exempt_filenames() -> Vec<String> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RedundantAccessorsThreshold {
-    pub(crate) detect_field_passthrough: bool,
-    pub(crate) detect_nested_shorthand: bool,
-    pub(crate) detect_mutation_handle: bool,
-    pub(crate) detect_delegate_passthrough: bool,
     pub(crate) p1_severity: AccessorSeverity,
     pub(crate) p2_severity: AccessorSeverity,
     pub(crate) p3_severity: AccessorSeverity,
     pub(crate) p4_severity: AccessorSeverity,
-    pub(crate) public_only: bool,
-    pub(crate) ignore_deref: bool,
-    /// Types whose presence in a return type signals interior mutability
-    /// (`AtomicU32`, `Mutex`, `RwLock`, ...). Detection recurses into generic
-    /// arguments, so `Arc<AtomicUsize>` / `Option<&Mutex<T>>` are caught.
-    #[serde(default = "default_mutable_handle_types")]
-    pub(crate) mutable_handle_types: Vec<String>,
-    /// Method names that mutate when applied to `self.<field>`: `store`, `set`,
-    /// `swap`, `fetch_add`, ... Used by P3 to find a setter that targets the
-    /// same field as a `*_handle()` getter.
-    #[serde(default = "default_writer_methods")]
-    pub(crate) writer_methods: Vec<String>,
-    /// Single-arg constructor calls treated as transparent over their argument
-    /// (`Some(&self.x)`, `Box::new(...)`, `Cow::Borrowed(...)`, `Arc::new(...)`,
-    /// ...). Patterns are matched as plain (`Some`) or path suffix (`Box::new`).
-    #[serde(default = "crate::common::parse::default_wrapper_ctors")]
-    pub(crate) wrapper_ctors: Vec<String>,
     /// 0-arg methods that expose internal data (`as_ref`, `as_str`, `lock`,
     /// `borrow`, `read`, ...). The receiver chain is treated as the data path.
     /// `_mut` variants (`as_mut`, `borrow_mut`, `deref_mut`, `get_mut`,
     /// `write`) are emitted with `RefMut` access kind.
     #[serde(default = "crate::common::parse::default_expose_methods")]
     pub(crate) expose_methods: Vec<String>,
+    /// Types whose presence in a return type signals interior mutability
+    /// (`AtomicU32`, `Mutex`, `RwLock`, ...). Detection recurses into generic
+    /// arguments, so `Arc<AtomicUsize>` / `Option<&Mutex<T>>` are caught.
+    #[serde(default = "default_mutable_handle_types")]
+    pub(crate) mutable_handle_types: Vec<String>,
+    /// Single-arg constructor calls treated as transparent over their argument
+    /// (`Some(&self.x)`, `Box::new(...)`, `Cow::Borrowed(...)`, `Arc::new(...)`,
+    /// ...). Patterns are matched as plain (`Some`) or path suffix (`Box::new`).
+    #[serde(default = "crate::common::parse::default_wrapper_ctors")]
+    pub(crate) wrapper_ctors: Vec<String>,
+    /// Method names that mutate when applied to `self.<field>`: `store`, `set`,
+    /// `swap`, `fetch_add`, ... Used by P3 to find a setter that targets the
+    /// same field as a `*_handle()` getter.
+    #[serde(default = "default_writer_methods")]
+    pub(crate) writer_methods: Vec<String>,
+    pub(crate) detect_delegate_passthrough: bool,
+    pub(crate) detect_field_passthrough: bool,
+    pub(crate) detect_mutation_handle: bool,
+    pub(crate) detect_nested_shorthand: bool,
+    pub(crate) ignore_deref: bool,
+    pub(crate) public_only: bool,
 }
 
 impl Default for RedundantAccessorsThreshold {
@@ -903,6 +903,8 @@ fn default_writer_methods() -> Vec<String> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MixedEntitiesThreshold {
+    /// Files with this many sizable types → deny.
+    pub(crate) deny: usize,
     /// A type is "sizable" if its `impl` surface has at least this many `fn`s
     /// across `impl X` and `impl Trait for X` blocks combined.
     pub(crate) min_fns_per_type: usize,
@@ -912,8 +914,6 @@ pub(crate) struct MixedEntitiesThreshold {
     pub(crate) min_impl_blocks: usize,
     /// Files with this many sizable types → warn.
     pub(crate) warn: usize,
-    /// Files with this many sizable types → deny.
-    pub(crate) deny: usize,
 }
 
 impl Default for MixedEntitiesThreshold {
@@ -945,9 +945,9 @@ pub(crate) struct CrateLayers {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ModuleLayer {
-    pub(crate) index: u32,
     pub(crate) name: String,
     pub(crate) paths: Vec<String>,
+    pub(crate) index: u32,
 }
 
 fn load_optional<T: Default + for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {

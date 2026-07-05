@@ -30,13 +30,6 @@ impl PooledPlanar {
         }
     }
 
-    fn fill_interleaved(&mut self, input: &[f32], start: usize, frames: usize, channels: usize) {
-        for (channel, samples) in self.channels.iter_mut().take(channels).enumerate() {
-            samples.clear();
-            samples.extend((0..frames).map(|frame| input[(start + frame) * channels + channel]));
-        }
-    }
-
     fn ensure_len(&mut self, frames: usize) -> Result<(), BudgetExhausted> {
         for samples in &mut self.channels {
             let mut pooled = self.pool.attach(std::mem::take(samples));
@@ -45,6 +38,13 @@ impl PooledPlanar {
             result?;
         }
         Ok(())
+    }
+
+    fn fill_interleaved(&mut self, input: &[f32], start: usize, frames: usize, channels: usize) {
+        for (channel, samples) in self.channels.iter_mut().take(channels).enumerate() {
+            samples.clear();
+            samples.extend((0..frames).map(|frame| input[(start + frame) * channels + channel]));
+        }
     }
 }
 
@@ -72,10 +72,10 @@ pub(crate) struct BungeeBackend {
     inner: Option<Stream>,
     in_planar: PooledPlanar,
     out_planar: PooledPlanar,
-    max_input_frames: usize,
     pitch: f64,
     ratio: f64,
     channels: usize,
+    max_input_frames: usize,
 }
 
 impl BungeeBackend {
@@ -123,10 +123,10 @@ impl BungeeBackend {
             inner,
             channels,
             max_input_frames,
-            ratio: 1.0,
-            pitch: 1.0,
             in_planar,
             out_planar,
+            ratio: 1.0,
+            pitch: 1.0,
         }
     }
 }

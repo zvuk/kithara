@@ -28,8 +28,8 @@ impl<T> RwLock<T> {
     pub fn new(value: T) -> Self {
         let meta = diag::register(PrimKind::RwLock, None, Location::caller());
         Self {
-            inner: NativeRwLock::new(value),
             meta,
+            inner: NativeRwLock::new(value),
         }
     }
 

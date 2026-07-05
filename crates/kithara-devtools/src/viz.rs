@@ -150,9 +150,9 @@ fn run_arc_map(args: &ArcMapArgs) -> Result<()> {
 
 #[derive(Debug)]
 struct ArcSite {
-    line: usize,
     kind: ArcKind,
     label: String,
+    line: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -313,8 +313,8 @@ impl<'ast> Visit<'ast> for ArcCallVisitor<'_> {
 }
 
 struct CrateLoc {
-    name: String,
     src_dir: PathBuf,
+    name: String,
 }
 
 fn workspace_root() -> Result<PathBuf> {
@@ -341,7 +341,7 @@ fn select_crates(workspace_root: &Path, name_filter: Option<&str>) -> Result<Vec
         }
         let src_dir = path.join("src");
         if src_dir.exists() {
-            out.push(CrateLoc { name, src_dir });
+            out.push(CrateLoc { src_dir, name });
         }
     }
     if let Some(want) = name_filter

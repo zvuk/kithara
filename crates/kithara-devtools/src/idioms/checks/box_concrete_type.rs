@@ -83,20 +83,20 @@ impl Check for BoxConcreteType {
 }
 
 struct BoxVisitor<'a> {
-    rel: &'a str,
     suppress: &'a Suppressions,
     out: &'a mut Vec<Violation>,
+    rel: &'a str,
 }
 
 impl<'ast> Visit<'ast> for BoxVisitor<'_> {
-    fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
-        self.scan_fn(&f.block);
-        visit::visit_item_fn(self, f);
-    }
-
     fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
         self.scan_fn(&f.block);
         visit::visit_impl_item_fn(self, f);
+    }
+
+    fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
+        self.scan_fn(&f.block);
+        visit::visit_item_fn(self, f);
     }
 }
 
@@ -148,6 +148,13 @@ struct CallFinder<'ast> {
 }
 
 impl<'ast> Visit<'ast> for CallFinder<'ast> {
+    fn visit_expr_call(&mut self, c: &'ast ExprCall) {
+        if is_box_new_concrete(c) && !self.calls.iter().any(|(seen, _)| std::ptr::eq(*seen, c)) {
+            self.calls.push((c, None));
+        }
+        visit::visit_expr_call(self, c);
+    }
+
     fn visit_local(&mut self, loc: &'ast Local) {
         if let Some(init) = &loc.init
             && let Expr::Call(call) = &*init.expr
@@ -158,13 +165,6 @@ impl<'ast> Visit<'ast> for CallFinder<'ast> {
             return;
         }
         visit::visit_local(self, loc);
-    }
-
-    fn visit_expr_call(&mut self, c: &'ast ExprCall) {
-        if is_box_new_concrete(c) && !self.calls.iter().any(|(seen, _)| std::ptr::eq(*seen, c)) {
-            self.calls.push((c, None));
-        }
-        visit::visit_expr_call(self, c);
     }
 }
 
@@ -178,15 +178,6 @@ struct EscapeScanner {
 }
 
 impl<'ast> Visit<'ast> for EscapeScanner {
-    fn visit_expr_cast(&mut self, c: &'ast ExprCast) {
-        if matches!(&*c.ty, Type::Ptr(_))
-            && let Some(name) = root_ident(&c.expr)
-        {
-            self.escaped.push(name);
-        }
-        visit::visit_expr_cast(self, c);
-    }
-
     fn visit_expr_call(&mut self, c: &'ast ExprCall) {
         if is_box_into_raw(c)
             && let Some(arg) = c.args.first()
@@ -195,6 +186,15 @@ impl<'ast> Visit<'ast> for EscapeScanner {
             self.escaped.push(name);
         }
         visit::visit_expr_call(self, c);
+    }
+
+    fn visit_expr_cast(&mut self, c: &'ast ExprCast) {
+        if matches!(&*c.ty, Type::Ptr(_))
+            && let Some(name) = root_ident(&c.expr)
+        {
+            self.escaped.push(name);
+        }
+        visit::visit_expr_cast(self, c);
     }
 }
 

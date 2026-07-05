@@ -20,11 +20,11 @@ pub trait Engine: MaybeSend + MaybeSync + 'static {
     fn crossfade(&self, from: SlotId, to: SlotId, config: CrossfadeConfig)
     -> Result<(), PlayError>;
 
+    fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError>;
+
     fn is_crossfading(&self) -> bool;
 
     fn is_running(&self) -> bool;
-
-    fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError>;
 
     fn master_channels(&self) -> u16;
 

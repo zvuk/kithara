@@ -29,22 +29,22 @@ pub(in crate::flash) enum PrimKind {
 
 /// A thread currently blocked trying to acquire a lock.
 struct AcquireRec {
-    thread: ThreadDesc,
     at: &'static Location<'static>,
+    thread: ThreadDesc,
 }
 
 /// The current holder of a lock (the write side, for `RwLock`).
 struct HolderRec {
-    thread: ThreadDesc,
     at: &'static Location<'static>,
+    thread: ThreadDesc,
 }
 
 /// A current read holder of an `RwLock`. `count` covers a thread that re-enters
 /// the read lock (`parking_lot` permits recursive reads), so the entry survives
 /// until the thread's last read guard drops.
 struct ReaderRec {
-    thread: ThreadDesc,
     at: &'static Location<'static>,
+    thread: ThreadDesc,
     count: u32,
 }
 
@@ -52,35 +52,24 @@ struct ReaderRec {
 /// `native` lock (NEVER the wrapped `flash` lock — that would recurse).
 #[derive(Default)]
 struct LockState {
-    holder: Option<HolderRec>,
-    readers: BTreeMap<ThreadKey, ReaderRec>,
     pending: BTreeMap<ThreadKey, AcquireRec>,
+    readers: BTreeMap<ThreadKey, ReaderRec>,
+    holder: Option<HolderRec>,
 }
 
 /// One registered live primitive plus its runtime state. Held by an `Arc` on the
 /// primitive itself; the registry keeps a `Weak`, so the entry is pruned
 /// automatically when the primitive drops.
 pub(in crate::flash) struct PrimEntry {
-    id: u64,
-    kind: PrimKind,
-    cvid: Option<u64>,
     created_at: &'static Location<'static>,
-    created_on: ThreadDesc,
     state: Mutex<LockState>,
+    cvid: Option<u64>,
+    kind: PrimKind,
+    created_on: ThreadDesc,
+    id: u64,
 }
 
 impl PrimEntry {
-    /// Record that the current thread is now blocked trying to acquire this lock
-    /// (call BEFORE the blocking acquire). Cleared by [`Self::acquired`].
-    pub(in crate::flash) fn enter_pending(&self, at: &'static Location<'static>) {
-        let thread = ThreadDesc::current();
-        let key = thread.key;
-        self.state
-            .lock()
-            .pending
-            .insert(key, AcquireRec { thread, at });
-    }
-
     /// Record that the current thread now holds this lock, clearing any pending
     /// record for it. Used by both `lock()` (after [`Self::enter_pending`]) and a
     /// successful `try_lock()` (directly).
@@ -92,10 +81,26 @@ impl PrimEntry {
         s.holder = Some(HolderRec { thread, at });
     }
 
-    /// Record that the holder released this lock (guard dropped, or the unlocked
-    /// window of [`Condvar`](crate::sync::Condvar) wait).
-    pub(in crate::flash) fn released(&self) {
-        self.state.lock().holder = None;
+    /// Record that the current thread is now blocked trying to acquire this lock
+    /// (call BEFORE the blocking acquire). Cleared by [`Self::acquired`].
+    pub(in crate::flash) fn enter_pending(&self, at: &'static Location<'static>) {
+        let thread = ThreadDesc::current();
+        let key = thread.key;
+        self.state
+            .lock()
+            .pending
+            .insert(key, AcquireRec { thread, at });
+    }
+
+    #[cfg(test)]
+    fn id_tag(&self) -> String {
+        format!("#{} ", self.id)
+    }
+
+    fn is_contended(&self) -> bool {
+        self.state
+            .try_lock()
+            .is_ok_and(|s| (s.holder.is_some() || !s.readers.is_empty()) && !s.pending.is_empty())
     }
 
     /// Record that the current thread now holds a read lock (`RwLock::read`),
@@ -126,6 +131,12 @@ impl PrimEntry {
                 s.readers.remove(&key);
             }
         }
+    }
+
+    /// Record that the holder released this lock (guard dropped, or the unlocked
+    /// window of [`Condvar`](crate::sync::Condvar) wait).
+    pub(in crate::flash) fn released(&self) {
+        self.state.lock().holder = None;
     }
 
     /// Append this primitive's diagnostic lines to `out`. `try_lock` on the state
@@ -161,22 +172,11 @@ impl PrimEntry {
         }
         out.push('\n');
     }
-
-    fn is_contended(&self) -> bool {
-        self.state
-            .try_lock()
-            .is_ok_and(|s| (s.holder.is_some() || !s.readers.is_empty()) && !s.pending.is_empty())
-    }
-
-    #[cfg(test)]
-    fn id_tag(&self) -> String {
-        format!("#{} ", self.id)
-    }
 }
 
 struct RegistryInner {
-    next_id: u64,
     entries: BTreeMap<u64, Weak<PrimEntry>>,
+    next_id: u64,
 }
 
 static REGISTRY: LazyLock<Mutex<RegistryInner>> = LazyLock::new(|| {

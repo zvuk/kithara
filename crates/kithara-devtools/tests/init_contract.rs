@@ -11,8 +11,8 @@ fn ctx(root: &Path, name: &str) -> Ctx {
     let mut config = ProjectConfig::default();
     config.project.name = name.to_string();
     Ctx {
-        root: root.to_path_buf(),
         config,
+        root: root.to_path_buf(),
     }
 }
 

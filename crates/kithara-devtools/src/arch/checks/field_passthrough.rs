@@ -39,10 +39,10 @@ struct StructField {
 
 #[derive(Debug)]
 struct StructDecl {
-    rel: String,
-    line: usize,
     name: String,
+    rel: String,
     fields: Vec<StructField>,
+    line: usize,
 }
 
 impl Check for FieldPassthrough {
@@ -111,10 +111,10 @@ fn struct_decl(rel: &str, s: &ItemStruct) -> Option<StructDecl> {
         });
     }
     Some(StructDecl {
+        fields,
         rel: rel.to_string(),
         line: s.ident.span().start().line,
         name: s.ident.to_string(),
-        fields,
     })
 }
 

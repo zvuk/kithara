@@ -39,15 +39,15 @@ type DataStart = (
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SharedSessionKey {
     total_timeout: Option<Duration>,
-    max_connections_per_host: usize,
     is_insecure: bool,
+    max_connections_per_host: usize,
 }
 
 #[derive(Clone)]
 struct SharedSession {
-    key: SharedSessionKey,
     delegate: Retained<AppleSessionDelegate>,
     session: Retained<NSURLSession>,
+    key: SharedSessionKey,
 }
 
 /// SAFETY: Apple documents `NSURLSession` as thread-safe
@@ -56,12 +56,12 @@ struct SharedSession {
 /// the retained Objective-C object is itself thread-safe.
 #[derive(Clone)]
 pub(crate) struct AppleSession {
-    accept_encoding: String,
     byte_pool: BytePool,
-    body_queue_capacity: usize,
-    body_queue_resume_at: usize,
     connection_metrics: ConnectionMetrics,
     shared: SharedSession,
+    accept_encoding: String,
+    body_queue_capacity: usize,
+    body_queue_resume_at: usize,
 }
 
 impl AppleSession {
@@ -76,10 +76,10 @@ impl AppleSession {
         Self {
             accept_encoding,
             byte_pool,
-            body_queue_capacity: options.body_queue_capacity,
-            body_queue_resume_at: options.body_queue_resume_at,
             connection_metrics,
             shared,
+            body_queue_capacity: options.body_queue_capacity,
+            body_queue_resume_at: options.body_queue_resume_at,
         }
     }
 

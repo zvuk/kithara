@@ -106,16 +106,16 @@ impl Resource {
         self.inner.abr_handle()
     }
 
-    /// Get total duration (if known).
-    #[must_use]
-    pub fn duration(&self) -> Option<Duration> {
-        self.inner.duration()
-    }
-
     /// Decoded-ahead frontier of the underlying reader (always `>=` position).
     #[must_use]
     pub fn decoded_frontier(&self) -> Duration {
         self.inner.decoded_frontier()
+    }
+
+    /// Get total duration (if known).
+    #[must_use]
+    pub fn duration(&self) -> Option<Duration> {
+        self.inner.duration()
     }
 
     /// Get a reference to the underlying `EventBus`.

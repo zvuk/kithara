@@ -41,11 +41,11 @@ impl Consts {
 /// identity (e.g. AES `key||iv`); `begin()` mints a fresh [`ChunkSink`] per
 /// commit so chaining state (e.g. a CBC IV) restarts from the seed.
 pub trait ResourceProcessor: Send + Sync + Debug {
-    /// Immutable byte identity of this processor; exact `Eq` for the cache key.
-    fn identity(&self) -> &[u8];
-
     /// Mint a fresh mutable chaining state for one commit.
     fn begin(&self) -> Box<dyn ChunkSink>;
+
+    /// Immutable byte identity of this processor; exact `Eq` for the cache key.
+    fn identity(&self) -> &[u8];
 }
 
 /// Mutable per-commit chaining state driven chunk-by-chunk on commit.
@@ -605,14 +605,14 @@ mod tests {
     /// mints a fresh sink that counts its `process` calls.
     #[derive(Debug)]
     struct XorProcessor {
-        xor_key: u8,
-        identity: Box<[u8]>,
         call_count: Arc<AtomicUsize>,
+        identity: Box<[u8]>,
+        xor_key: u8,
     }
 
     struct XorSink {
-        xor_key: u8,
         call_count: Arc<AtomicUsize>,
+        xor_key: u8,
     }
 
     impl ChunkSink for XorSink {
@@ -631,15 +631,15 @@ mod tests {
     }
 
     impl ResourceProcessor for XorProcessor {
-        fn identity(&self) -> &[u8] {
-            &self.identity
-        }
-
         fn begin(&self) -> Box<dyn ChunkSink> {
             Box::new(XorSink {
                 xor_key: self.xor_key,
                 call_count: Arc::clone(&self.call_count),
             })
+        }
+
+        fn identity(&self) -> &[u8] {
+            &self.identity
         }
     }
 

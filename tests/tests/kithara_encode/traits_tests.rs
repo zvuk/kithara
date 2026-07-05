@@ -1,4 +1,3 @@
-use kithara;
 use kithara_encode::InnerEncoder;
 
 #[kithara::test]

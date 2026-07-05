@@ -26,6 +26,9 @@ pub struct AppConfig {
     pub asset_store: Arc<AssetStore>,
     /// Shared `AssetStore` flush coordinator for every track.
     pub flush_hub: Arc<FlushHub>,
+    /// App-wide shared byte pool for network and cache buffers.
+    #[builder(default = BytePool::default())]
+    pub byte_pool: BytePool,
     /// App master cancel. Single owner for the whole app subtree; the
     /// queue, player, stores, and UI listener all derive children from
     /// it (see `main.rs`). The chain flag reaches the audio worker and HLS
@@ -34,9 +37,6 @@ pub struct AppConfig {
     pub shutdown: CancelToken,
     /// Shared HTTP downloader for every track.
     pub downloader: Downloader,
-    /// App-wide shared byte pool for network and cache buffers.
-    #[builder(default = BytePool::default())]
-    pub byte_pool: BytePool,
     /// DRM key processing registry.
     #[builder(default = baked::build_baked_drm_registry())]
     pub key_registry: KeyProcessorRegistry,

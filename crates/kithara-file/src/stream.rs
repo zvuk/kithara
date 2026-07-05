@@ -32,12 +32,12 @@ pub struct File;
 
 struct RemoteFileOpen {
     backend: Arc<AssetStore>,
-    bus: EventBus,
     cancel: CancelToken,
     downloader: Downloader,
+    bus: EventBus,
     headers: Option<Headers>,
-    key: ResourceKey,
     look_ahead_bytes: Option<u64>,
+    key: ResourceKey,
     url: url::Url,
 }
 
@@ -126,9 +126,9 @@ impl RemoteFileOpen {
                 reader,
                 headers,
                 backend,
+                key,
                 writer: Mutex::new(Some(writer)),
                 raw: Some(raw),
-                key,
             },
             FilePhase::Init,
             Some(demand_lease),
@@ -236,12 +236,12 @@ impl File {
             }
             AcquisitionResult::Pending(writer) => Ok(RemoteFileOpen {
                 backend,
-                bus,
                 cancel,
                 downloader,
+                bus,
                 headers,
-                key,
                 look_ahead_bytes,
+                key,
                 url,
             }
             .into_source(writer)),

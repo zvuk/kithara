@@ -219,12 +219,12 @@ impl WasmInner {
         crate::web::interop::next_request_id()
     }
 
-    pub(crate) fn pause(&self) {
-        self.send(WorkerCmd::Pause);
-    }
-
     pub(crate) fn notify_audio_route_changed(&self, _reason: &str) -> Result<(), FfiError> {
         Ok(())
+    }
+
+    pub(crate) fn pause(&self) {
+        self.send(WorkerCmd::Pause);
     }
 
     pub(crate) fn play(&self) {

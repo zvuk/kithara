@@ -7,18 +7,18 @@ use ringbuf::{
 
 /// A signal to wake up a blocked consumer.
 pub(crate) trait WakeSignal: Send + Sync + 'static {
-    /// Wake up the consumer. Fired on every successful ring push so a reader
-    /// parked in a blocking `recv` is unparked whenever new output lands —
-    /// redundant unparks are cheap and close the park/push race.
-    fn wake(&self);
+    /// Flush any wake-side deferred signals from the scheduler shell.
+    fn flush_deferred(&self) {}
 
     /// Signal that the ring went from empty to non-empty. Fired only on that
     /// transition so an event-driven (non-blocking) reader gets one wake hint
     /// per drain cycle without flooding the shared event bus. Default no-op.
     fn on_data_available(&self) {}
 
-    /// Flush any wake-side deferred signals from the scheduler shell.
-    fn flush_deferred(&self) {}
+    /// Wake up the consumer. Fired on every successful ring push so a reader
+    /// parked in a blocking `recv` is unparked whenever new output lands —
+    /// redundant unparks are cheap and close the park/push race.
+    fn wake(&self);
 }
 
 /// The output port of a node.
@@ -52,6 +52,13 @@ impl<T> Outlet<T> {
         self.push_or_park(item)
     }
 
+    /// Flush any deferred work owned by the wake signal.
+    pub(crate) fn flush_wake_signals(&self) {
+        if let Some(wake) = &self.wake {
+            wake.flush_deferred();
+        }
+    }
+
     /// Whether an item is currently parked in the overflow slot.
     pub(crate) fn has_pending(&self) -> bool {
         self.overflow.is_some()
@@ -75,13 +82,6 @@ impl<T> Outlet<T> {
     fn notify_data_available(&self) {
         if let Some(wake) = &self.wake {
             wake.on_data_available();
-        }
-    }
-
-    /// Flush any deferred work owned by the wake signal.
-    pub(crate) fn flush_wake_signals(&self) {
-        if let Some(wake) = &self.wake {
-            wake.flush_deferred();
         }
     }
 
@@ -200,12 +200,12 @@ mod tests {
     }
 
     impl WakeSignal for CountingWake {
-        fn wake(&self) {
-            self.count.fetch_add(1, Ordering::SeqCst);
-        }
-
         fn on_data_available(&self) {
             self.data_available.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn wake(&self) {
+            self.count.fetch_add(1, Ordering::SeqCst);
         }
     }
 

@@ -20,17 +20,20 @@ use crate::common::{
 #[derive(Debug)]
 pub(crate) struct StructInfo {
     pub(crate) rel: String,
-    pub(crate) line: usize,
     /// Field names in declaration order.
     pub(crate) field_names: Vec<String>,
     /// `true` for bare `pub` (cross-crate API). Such structs are skipped by
     /// most heuristics — external callers may build them in ways the index
     /// can't see.
     pub(crate) is_pub: bool,
+    pub(crate) line: usize,
 }
 
 #[derive(Debug)]
 pub(crate) struct LiteralSite {
+    /// `field_name → normalised token string of the assigned expression`.
+    /// Includes shorthand (`X { a }` becomes `a → "a"`).
+    pub(crate) field_exprs: BTreeMap<String, String>,
     /// Name of the function this literal is an argument to, when the
     /// surrounding expression is a direct call. `None` when the literal is in
     /// a non-argument position (return value, `let` binding, field of another
@@ -40,23 +43,20 @@ pub(crate) struct LiteralSite {
     /// explicitly listed. `field_exprs` then contains only the fields that
     /// were spelled out.
     pub(crate) has_rest: bool,
-    /// `field_name → normalised token string of the assigned expression`.
-    /// Includes shorthand (`X { a }` becomes `a → "a"`).
-    pub(crate) field_exprs: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct WorkspaceStructIndex {
-    pub(crate) structs: BTreeMap<String, StructInfo>,
+    /// Map struct-name → set of function names whose first statement is
+    /// the destructuring pattern `let StructName { ... } = arg;`. Used to
+    /// identify single-purpose destructuring consumers.
+    pub(crate) destructuring_consumers: BTreeMap<String, BTreeSet<String>>,
     /// Number of `fn` items declared in inherent `impl X` blocks. Excludes
     /// trait impls (so `#[derive]`-generated and hand-written `impl Default`
     /// don't count).
     pub(crate) impl_method_counts: BTreeMap<String, usize>,
     pub(crate) literals: BTreeMap<String, Vec<LiteralSite>>,
-    /// Map struct-name → set of function names whose first statement is
-    /// the destructuring pattern `let StructName { ... } = arg;`. Used to
-    /// identify single-purpose destructuring consumers.
-    pub(crate) destructuring_consumers: BTreeMap<String, BTreeSet<String>>,
+    pub(crate) structs: BTreeMap<String, StructInfo>,
     pub(crate) suppressions: HashMap<String, Suppressions>,
 }
 
@@ -185,9 +185,9 @@ impl LiteralVisitor<'_> {
             field_exprs.insert(key, render_expr(&fv.expr));
         }
         let site = LiteralSite {
+            field_exprs,
             parent_fn: parent_fn.map(ToString::to_string),
             has_rest: es.rest.is_some(),
-            field_exprs,
         };
         self.idx.literals.entry(name).or_default().push(site);
     }

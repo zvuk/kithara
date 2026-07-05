@@ -19,17 +19,17 @@ use super::{player_notification::PlayerNotification, player_track::PlayerTrack};
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct PlaybackSnapshot {
-    /// Playback position in seconds.
-    pub position: f64,
+    /// Whether playback is active.
+    pub playing: bool,
+    /// Total media duration in seconds; `0.0` when unknown.
+    pub duration: f64,
     /// Decoded-ahead frontier (buffered/playable seconds). Always
     /// `>= position`.
     pub frontier: f64,
-    /// Total media duration in seconds; `0.0` when unknown.
-    pub duration: f64,
+    /// Playback position in seconds.
+    pub position: f64,
     /// Current output sample rate.
     pub sample_rate: u32,
-    /// Whether playback is active.
-    pub playing: bool,
 }
 
 /// Shared state that bridges the main thread and the audio processor.
@@ -43,14 +43,14 @@ pub struct SharedPlayerState {
     ///
     /// Source of truth is the per-track `PlayheadState` in the audio pipeline.
     pub duration: AtomicF64,
-    /// Last observed playback position snapshot in seconds.
-    ///
-    /// Source of truth is the per-track `PlayheadState` in the audio pipeline.
-    pub position: AtomicF64,
     /// Last observed decoded-ahead frontier (buffered/playable seconds) for the
     /// current (leading) track. Authoritative, polled source for the FFI loaded
     /// ranges — written by the processor each render cycle alongside `position`.
     pub frontier: AtomicF64,
+    /// Last observed playback position snapshot in seconds.
+    ///
+    /// Source of truth is the per-track `PlayheadState` in the audio pipeline.
+    pub position: AtomicF64,
     /// Current sample rate from the audio stream.
     pub sample_rate: AtomicU32,
     /// Diagnostic: how many times `process()` has been called on the audio

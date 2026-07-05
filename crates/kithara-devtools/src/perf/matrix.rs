@@ -18,11 +18,11 @@ use crate::{
 
 pub(crate) struct MatrixParams {
     pub(crate) data_dir: PathBuf,
-    pub(crate) run_id: String,
     pub(crate) target_root: PathBuf,
-    pub(crate) repeats: u32,
-    pub(crate) lanes: Vec<String>,
+    pub(crate) run_id: String,
     pub(crate) extra: Vec<String>,
+    pub(crate) lanes: Vec<String>,
+    pub(crate) repeats: u32,
 }
 
 pub(crate) fn run(params: &MatrixParams, project: &ProjectConfig) -> Result<()> {
@@ -91,13 +91,13 @@ pub(crate) fn run(params: &MatrixParams, project: &ProjectConfig) -> Result<()> 
                 |case| format!("{}::{}", case.suite, case.name),
             );
             let meta = RepeatMeta {
+                repeat,
+                started_unix,
+                duration_secs,
                 run_id: params.run_id.clone(),
                 lane: lane_name.clone(),
                 features: features.clone(),
-                repeat,
                 commit: commit.clone(),
-                started_unix,
-                duration_secs,
                 exit_code: status.code(),
             };
             let meta_json = serde_json::to_vec_pretty(&meta).context("serialize meta")?;

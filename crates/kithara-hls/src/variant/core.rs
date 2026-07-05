@@ -30,16 +30,6 @@ use crate::{
 pub(super) const INIT_PLACEHOLDER_BYTES: u64 = 16 * 1024;
 
 pub(crate) struct PlanCtx {
-    /// Unified reader-wake handle (owned by [`HlsCoord`]). Every `FetchCmd` this
-    /// plan emits fires it on each segment byte write and on settle
-    /// (commit/fail) — [`SizeSignal::fire`] wakes both the off-RT reader parked
-    /// in `wait_range(_, None)` (the moment its range fills, no wall-clock poll)
-    /// and the RT decoder's audio worker (re-ticked on data arrival rather than
-    /// on its 10 ms scheduler poll). The late-bound worker wake inside is filled
-    /// once by `HlsSource::set_worker_wake`; only the two downloader-thread sites
-    /// fire it — the coord's RT-reachable fence/seek signals use
-    /// [`SizeSignal::fire_ready_only`].
-    pub(crate) signal: SizeSignal,
     pub(crate) scope: kithara_assets::AssetScope,
     pub(crate) master_cancel: CancelToken,
     /// Per-resource HTTP headers applied to every init/segment fetch.
@@ -63,13 +53,23 @@ pub(crate) struct PlanCtx {
     /// lookahead can otherwise prefetch more resources than the cache can retain
     /// and trigger eviction/rebuild thrash.
     pub(crate) look_ahead_segments: Option<usize>,
+    pub(crate) size_probe_method: SizeProbeMethod,
+    /// Unified reader-wake handle (owned by [`HlsCoord`]). Every `FetchCmd` this
+    /// plan emits fires it on each segment byte write and on settle
+    /// (commit/fail) — [`SizeSignal::fire`] wakes both the off-RT reader parked
+    /// in `wait_range(_, None)` (the moment its range fills, no wall-clock poll)
+    /// and the RT decoder's audio worker (re-ticked on data arrival rather than
+    /// on its 10 ms scheduler poll). The late-bound worker wake inside is filled
+    /// once by `HlsSource::set_worker_wake`; only the two downloader-thread sites
+    /// fire it — the coord's RT-reachable fence/seek signals use
+    /// [`SizeSignal::fire_ready_only`].
+    pub(crate) signal: SizeSignal,
     /// Snapshot of `SeekObserve::epoch()` at plan-time. Tagged on
     /// every emitted `FetchCmd`'s probe so integration tests can
     /// distinguish fetches that pre-date a user seek from those that
     /// the scheduler issued *after* observing the new epoch.
     pub(crate) seek_epoch: u64,
     pub(crate) prefetch_budget: usize,
-    pub(crate) size_probe_method: SizeProbeMethod,
 }
 
 /// Inputs to [`HlsVariant::activate_at_segment_with_shift`]: pin `from_seg`
@@ -110,6 +110,7 @@ pub(super) struct VariantProfile {
 }
 
 pub(super) struct VariantFlow {
+    pub(super) prefetch_anchor: AtomicU64,
     /// The variant's cancel epoch: the per-track parent (mirror of
     /// `coord.cancel` = `PlanCtx::master_cancel`) plus the rotating
     /// per-activation child. Survives variant re-activation — a cross-codec
@@ -117,7 +118,6 @@ pub(super) struct VariantFlow {
     /// `v_old`, and the second activation of `v_old` must dispatch fetches
     /// under a *live* cancel, so [`HlsVariant::rearm_cancel`] rotates the child.
     pub(super) cancel_epoch: CancelEpoch,
-    pub(super) prefetch_anchor: AtomicU64,
     pub(super) queue: Mutex<VecDeque<PlannedFetch>>,
     /// Reader-side runtime: the shared byte cursor, peer wake handle, and the
     /// timeline consulted for `is_flushing` gating. The probe-tagged
@@ -126,12 +126,18 @@ pub(super) struct VariantFlow {
 }
 
 pub(super) struct VariantSeek {
+    /// Lock-free, allocation-free exact-byte-seek demand, read and cleared on
+    /// the produce-core metadata-phase gate
+    /// ([`HlsVariant::exact_byte_metadata_phase`]). A single `AtomicU64` with a
+    /// `u64::MAX` none sentinel.
+    pub(super) exact_byte_seek: AtomicOptU64,
     /// Lock-free, allocation-free seek-alias snapshot. The produce-core read
     /// path ([`HlsVariant::seek_alias_at`], reached on every `find_at_offset`)
     /// and the steady-read-path clear (`advance`) touch only atomics; the base
     /// is single-writer (on-core), the resolved exact anchor is published
     /// off-RT under a generation tag. See `flow/seqlock.rs`.
     pub(super) alias: AtomicSeekAlias,
+    pub(super) segment_aware_tail: AtomicU32,
     /// Lock-free, allocation-free exact-seek demand, read on the produce-core
     /// metadata-phase gate ([`HlsVariant::exact_seek_metadata_phase`]). Body is
     /// MULTI-writer: the on-core seek path (`seek_time_anchor`) and the off-RT
@@ -140,12 +146,6 @@ pub(super) struct VariantSeek {
     /// and the RT reader bails to not-ready (never spins) on a write-in-flight.
     /// Off-RT completers CAS-consume the generation.
     pub(super) exact_seek: CasAnchorCell,
-    /// Lock-free, allocation-free exact-byte-seek demand, read and cleared on
-    /// the produce-core metadata-phase gate
-    /// ([`HlsVariant::exact_byte_metadata_phase`]). A single `AtomicU64` with a
-    /// `u64::MAX` none sentinel.
-    pub(super) exact_byte_seek: AtomicOptU64,
-    pub(super) segment_aware_tail: AtomicU32,
     pub(super) size_demand: Mutex<SizeDemandState>,
 }
 
@@ -201,7 +201,6 @@ impl VariantFlow {
             // Preallocate to the worst-case rebuild size (init + every media
             // segment + the seg-0 decoder probe) so the per-seek
             // `clear` + `extend` in `rebuild_queue` never reallocates on the
-            // produce core.
             queue: Mutex::new(VecDeque::with_capacity(queue_capacity)),
             reader: ReaderRuntime::new(seek_obs),
         }
@@ -277,11 +276,11 @@ pub(super) fn segment_placeholder_size(duration: Duration, bandwidth_bps: Option
 /// AES-128 keys through [`KeyStore`](crate::playlist::KeyStore) before
 /// construction.
 pub(crate) struct VariantParams<'a> {
-    pub(crate) variant_idx: usize,
+    pub(crate) ctx: &'a PlanCtx,
+    pub(crate) decrypt_contexts: &'a [Option<DecryptContext>],
     pub(crate) seek_obs: Arc<dyn SeekObserve>,
     pub(crate) init_decrypt_ctx: Option<DecryptContext>,
-    pub(crate) decrypt_contexts: &'a [Option<DecryptContext>],
-    pub(crate) ctx: &'a PlanCtx,
+    pub(crate) variant_idx: usize,
 }
 
 /// Production constructor: read parsed playlist metadata and assemble the

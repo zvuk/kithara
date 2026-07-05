@@ -22,17 +22,11 @@ pub(crate) mod trait_item_order;
 
 pub(crate) struct Context<'a> {
     pub(crate) workspace_root: &'a Path,
-    pub(crate) config: &'a StyleConfig,
     pub(crate) scope: &'a Scope,
+    pub(crate) config: &'a StyleConfig,
 }
 
 pub(crate) trait Check {
-    fn id(&self) -> &'static str;
-    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>>;
-    fn uses_global_lint_excludes(&self) -> bool {
-        true
-    }
-
     /// Apply the check's autofix in place. Default: no autofix; the
     /// violation stays in the report and the user resolves it manually.
     /// Implementations must uphold the four invariants from
@@ -43,6 +37,12 @@ pub(crate) trait Check {
             skipped: vec![format!("check '{}' has no autofix", self.id())],
             changes: Vec::new(),
         })
+    }
+    fn id(&self) -> &'static str;
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>>;
+
+    fn uses_global_lint_excludes(&self) -> bool {
+        true
     }
 }
 

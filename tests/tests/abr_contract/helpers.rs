@@ -99,7 +99,6 @@ pub(crate) mod phase_oracle {
 
     #[cfg(test)]
     mod tests {
-        use kithara;
 
         use super::*;
 

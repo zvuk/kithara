@@ -2,10 +2,10 @@ use anyhow::{Context, Result};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CaseTiming {
-    pub(crate) suite: String,
     pub(crate) name: String,
-    pub(crate) secs: f64,
+    pub(crate) suite: String,
     pub(crate) failed: bool,
+    pub(crate) secs: f64,
 }
 
 pub(crate) fn parse_junit(xml: &str) -> Result<Vec<CaseTiming>> {
@@ -23,10 +23,10 @@ pub(crate) fn parse_junit(xml: &str) -> Result<Vec<CaseTiming>> {
             .children()
             .any(|c| c.has_tag_name("failure") || c.has_tag_name("error"));
         cases.push(CaseTiming {
-            suite,
             name,
-            secs,
+            suite,
             failed,
+            secs,
         });
     }
     Ok(cases)

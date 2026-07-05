@@ -12,13 +12,22 @@ pub struct Suppressions {
 
 #[derive(Debug, Default)]
 struct Suppress {
+    ids: HashSet<String>,
     /// `true` when at least one directive on the preceding lines used
     /// the bare `// xtask-lint-ignore` form, suppressing every check.
     suppress_all: bool,
-    ids: HashSet<String>,
 }
 
 impl Suppressions {
+    /// Whether `check_id` is suppressed at `line` (1-based).
+    #[must_use]
+    pub fn is_suppressed(&self, line: usize, check_id: &str) -> bool {
+        let Some(s) = self.by_line.get(&line) else {
+            return false;
+        };
+        s.suppress_all || s.ids.iter().any(|id| id == check_id)
+    }
+
     /// Parse a Rust source file and collect every `xtask-lint-ignore`
     /// directive. Cheap (single linear scan).
     pub fn parse(source: &str) -> Self {
@@ -43,15 +52,6 @@ impl Suppressions {
             }
         }
         Self { by_line }
-    }
-
-    /// Whether `check_id` is suppressed at `line` (1-based).
-    #[must_use]
-    pub fn is_suppressed(&self, line: usize, check_id: &str) -> bool {
-        let Some(s) = self.by_line.get(&line) else {
-            return false;
-        };
-        s.suppress_all || s.ids.iter().any(|id| id == check_id)
     }
 }
 

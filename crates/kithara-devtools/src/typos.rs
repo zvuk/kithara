@@ -16,16 +16,16 @@ impl Consts {
 
 #[derive(Debug, Args)]
 pub struct TyposArgs {
-    /// Apply suggested fixes by passing `--write-changes` to typos.
-    /// Refuses to run on a dirty working tree unless `--allow-dirty`.
-    #[arg(long)]
-    pub fix: bool,
+    /// Optional paths to scan. Empty = whole workspace (typos default).
+    pub paths: Vec<String>,
     /// Skip the dirty-tree gate that protects `--fix` from mixing with
     /// uncommitted user edits. Mirrors `cargo fmt`/`cargo fix` UX.
     #[arg(long = "allow-dirty")]
     pub allow_dirty: bool,
-    /// Optional paths to scan. Empty = whole workspace (typos default).
-    pub paths: Vec<String>,
+    /// Apply suggested fixes by passing `--write-changes` to typos.
+    /// Refuses to run on a dirty working tree unless `--allow-dirty`.
+    #[arg(long)]
+    pub fix: bool,
 }
 
 pub(crate) fn run(args: &TyposArgs, _ctx: &Ctx) -> Result<()> {

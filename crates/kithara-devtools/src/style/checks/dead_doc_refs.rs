@@ -80,9 +80,9 @@ fn target_allowed(patterns: &[Pattern], target: &str) -> bool {
 
 #[derive(Debug, Eq, PartialEq)]
 struct DeadDocRef {
-    line_no: usize,
     reference: String,
     target: String,
+    line_no: usize,
 }
 
 impl DeadDocRef {
@@ -153,8 +153,8 @@ fn add_candidate<F>(
     }
     out.push(DeadDocRef {
         line_no,
-        reference: reference.to_string(),
         target,
+        reference: reference.to_string(),
     });
 }
 
@@ -176,8 +176,8 @@ fn markdown_link_targets(line: &str) -> Vec<MarkdownTarget> {
         let raw = &line[target_start..target_end];
         if let Some(target) = parse_markdown_target(raw) {
             out.push(MarkdownTarget {
-                reference: raw.trim().to_string(),
                 target,
+                reference: raw.trim().to_string(),
             });
         }
         search_start = target_end + 1;

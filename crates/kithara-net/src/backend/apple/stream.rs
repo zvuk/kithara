@@ -26,10 +26,10 @@ use crate::{ByteStream, error::NetError, types::Headers};
 pub(crate) struct AppleStreamResponse {
     pub(crate) headers: Headers,
     pub(crate) status: Option<u16>,
-    partial: bool,
-    body_queue: Arc<AppleBodyQueue>,
     task: AppleTask,
+    body_queue: Arc<AppleBodyQueue>,
     cancel: CancelToken,
+    partial: bool,
 }
 
 impl AppleStreamResponse {
@@ -53,9 +53,9 @@ impl From<AppleStreamResponse> for ByteStream {
             body_queue,
             task,
             cancel,
+            expected_len,
             cancel_wake: None,
             done: false,
-            expected_len,
             received: 0,
         };
         Self::with_partial(headers, Box::pin(stream), partial)
@@ -63,19 +63,19 @@ impl From<AppleStreamResponse> for ByteStream {
 }
 
 pub(super) struct StartedStream {
-    pub(super) body_queue: Arc<AppleBodyQueue>,
     pub(super) task: AppleTask,
+    pub(super) body_queue: Arc<AppleBodyQueue>,
     pub(super) head_receiver: oneshot::Receiver<Result<StreamHead, NetError>>,
     pub(super) task_id: TaskId,
 }
 
 struct AppleBodyStream {
-    body_queue: Arc<AppleBodyQueue>,
     task: AppleTask,
+    body_queue: Arc<AppleBodyQueue>,
     cancel: CancelToken,
     cancel_wake: Option<CancelWakerGuard>,
-    done: bool,
     expected_len: Option<u64>,
+    done: bool,
     received: u64,
 }
 
@@ -136,18 +136,18 @@ impl Stream for AppleBodyStream {
 }
 
 pub(super) struct AppleBodyQueue {
+    task: AppleTask,
     byte_pool: BytePool,
     inner: Mutex<AppleBodyQueueInner>,
-    task: AppleTask,
     capacity: usize,
     resume_at: usize,
 }
 
 struct AppleBodyQueueInner {
-    closed: bool,
-    items: VecDeque<Result<Bytes, NetError>>,
-    suspended: bool,
     waker: Option<Waker>,
+    items: VecDeque<Result<Bytes, NetError>>,
+    closed: bool,
+    suspended: bool,
 }
 
 impl AppleBodyQueue {
@@ -193,14 +193,24 @@ impl AppleBodyQueue {
         }
     }
 
-    pub(super) fn push_data(&self, data: &NSData) {
-        match copy_data(data, &self.byte_pool) {
-            Ok(bytes) => self.push(bytes),
-            Err(error) => {
-                self.task.cancel();
-                self.close(Some(error));
+    fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, NetError>>> {
+        let mut inner = self.inner.lock();
+        if let Some(item) = inner.items.pop_front() {
+            let resume = inner.suspended && inner.items.len() <= self.resume_at;
+            if resume {
+                inner.suspended = false;
             }
+            drop(inner);
+            if resume {
+                self.task.resume();
+            }
+            return Poll::Ready(Some(item));
         }
+        if inner.closed {
+            return Poll::Ready(None);
+        }
+        inner.waker = Some(cx.waker().clone());
+        Poll::Pending
     }
 
     pub(super) fn push(&self, bytes: Bytes) {
@@ -225,24 +235,14 @@ impl AppleBodyQueue {
         }
     }
 
-    fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, NetError>>> {
-        let mut inner = self.inner.lock();
-        if let Some(item) = inner.items.pop_front() {
-            let resume = inner.suspended && inner.items.len() <= self.resume_at;
-            if resume {
-                inner.suspended = false;
+    pub(super) fn push_data(&self, data: &NSData) {
+        match copy_data(data, &self.byte_pool) {
+            Ok(bytes) => self.push(bytes),
+            Err(error) => {
+                self.task.cancel();
+                self.close(Some(error));
             }
-            drop(inner);
-            if resume {
-                self.task.resume();
-            }
-            return Poll::Ready(Some(item));
         }
-        if inner.closed {
-            return Poll::Ready(None);
-        }
-        inner.waker = Some(cx.waker().clone());
-        Poll::Pending
     }
 }
 

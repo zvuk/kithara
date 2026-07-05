@@ -162,13 +162,13 @@ impl StreamType for Hls {
         let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
 
         let plan_ctx = PlanCtx {
+            look_ahead_bytes,
+            look_ahead_segments,
             master_cancel: cancel.clone(),
             scope: stream_peer.scope(),
             headers: config.headers.clone(),
             prefetch_budget: config.download_batch_size.max(1),
             seek_epoch: seek_obs.epoch(),
-            look_ahead_bytes,
-            look_ahead_segments,
             signal: signal.clone(),
             size_probe_method: config.size_probe_method,
         };
@@ -182,9 +182,9 @@ impl StreamType for Hls {
                 FromWithParams::build(
                     &playlist_state,
                     VariantParams {
+                        init_decrypt_ctx,
                         variant_idx: idx,
                         seek_obs: Arc::clone(&seek_obs),
-                        init_decrypt_ctx,
                         decrypt_contexts: &decrypt_contexts,
                         ctx: &plan_ctx,
                     },

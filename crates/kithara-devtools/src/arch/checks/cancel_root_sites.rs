@@ -61,7 +61,6 @@ fn scan_source(content: &str) -> Vec<(usize, &'static str)> {
     // Fresh-root minting calls denied outside the allowlist: the owning-master
     // `CancelToken::root` and the never-cancelled sentinel `CancelToken::never`.
     // Both root a new cancel tree; `.child()` (the sanctioned derivation) is
-    // never matched.
     const PATTERNS: &[&str] = &["CancelToken::root", "CancelToken::never"];
     if !PATTERNS.iter().any(|p| content.contains(p)) {
         return Vec::new();

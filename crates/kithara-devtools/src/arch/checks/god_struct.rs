@@ -37,9 +37,9 @@ impl Check for GodStruct {
             let mut methods: BTreeMap<String, usize> = BTreeMap::new();
             collect(&file.items, &std_traits, &mut structs, &mut methods);
             scans.push(FileScan {
-                rel,
-                structs,
                 methods,
+                structs,
+                rel,
             });
         }
 
@@ -62,9 +62,9 @@ impl Check for GodStruct {
 /// methods, std-trait conformance, and `#[cfg(test)]` items are already
 /// filtered out by [`collect`].
 struct FileScan {
-    rel: String,
-    structs: BTreeMap<String, usize>,
     methods: BTreeMap<String, usize>,
+    structs: BTreeMap<String, usize>,
+    rel: String,
 }
 
 /// A flagged type after cross-file aggregation. `key` is `<def-file>::<name>`.
@@ -77,10 +77,10 @@ struct GodHit {
 
 #[derive(Default)]
 struct CrateScan {
-    /// `name -> (file where the struct is defined, field count)`.
-    structs: BTreeMap<String, (String, usize)>,
     /// `name -> substantial methods summed across this crate's files`.
     methods: BTreeMap<String, usize>,
+    /// `name -> (file where the struct is defined, field count)`.
+    structs: BTreeMap<String, (String, usize)>,
 }
 
 /// Aggregate a type's substantial-method count across every file of its owning
@@ -113,10 +113,10 @@ fn aggregate(scans: Vec<FileScan>, warn: usize) -> Vec<GodHit> {
             let methods = entry.methods.get(name).copied().unwrap_or(0);
             if methods >= warn {
                 hits.push(GodHit {
+                    methods,
                     key: format!("{def_rel}::{name}"),
                     name: name.clone(),
                     fields: *fields,
-                    methods,
                 });
             }
         }

@@ -1650,7 +1650,7 @@ impl RenderProgress {
         class_tolerance: f32,
         detect_descending_from: Option<usize>,
     ) {
-        let block_left = deinterleave_left(&block, usize::from(CHANNELS));
+        let block_left = deinterleave_left(block, usize::from(CHANNELS));
         self.peak = self.peak.max(max_abs(&block_left));
 
         let block_classes = if self.peak > MIN_RENDER_PEAK {
@@ -1700,7 +1700,7 @@ impl ToneRenderProgress {
     }
 
     fn push_block(&mut self, block: &[f32], sample_rate: u32) {
-        let block_left = deinterleave_left(&block, usize::from(CHANNELS));
+        let block_left = deinterleave_left(block, usize::from(CHANNELS));
         self.left.extend_from_slice(&block_left);
         self.rendered.extend_from_slice(block);
 

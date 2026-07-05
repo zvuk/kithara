@@ -41,9 +41,9 @@ pub struct ChunkPosition {
 /// coherent value readers need — a lone atomic, no torn read across fields.
 #[derive(Debug)]
 pub struct PlayheadState {
+    decoded_frontier_ns: AtomicU64,
     position_ns: AtomicU64,
     total_duration_ns: AtomicU64,
-    decoded_frontier_ns: AtomicU64,
 }
 
 /// Read-only view of the committed playhead.
@@ -58,14 +58,14 @@ pub trait PlayheadRead: Send + Sync {
 pub trait PlayheadWrite: PlayheadRead {
     /// Advance to the end of a consumed chunk (caps at total duration).
     fn advance(&self, pos: &ChunkPosition);
-    /// Pin after a seek to decoder truth, even when duration metadata is stale.
-    fn land(&self, pos: &ChunkPosition);
-    fn set_duration(&self, duration: Option<Duration>);
-    fn set_decoded_frontier(&self, t: Duration);
-    /// Absolute seek/reset write, not capped by duration metadata.
-    fn set_position(&self, position: Duration);
     /// Partial playback-progress write, capped at total duration.
     fn advance_partial(&self, position: Duration);
+    /// Pin after a seek to decoder truth, even when duration metadata is stale.
+    fn land(&self, pos: &ChunkPosition);
+    fn set_decoded_frontier(&self, t: Duration);
+    fn set_duration(&self, duration: Option<Duration>);
+    /// Absolute seek/reset write, not capped by duration metadata.
+    fn set_position(&self, position: Duration);
 }
 
 impl PlayheadState {
@@ -86,13 +86,13 @@ impl PlayheadState {
         }
     }
 
+    fn write_ns(&self, ns: u64) {
+        self.position_ns.store(ns, Ordering::Release);
+    }
+
     fn write_ns_capped(&self, ns: u64) {
         self.position_ns
             .store(ns.min(self.cap()), Ordering::Release);
-    }
-
-    fn write_ns(&self, ns: u64) {
-        self.position_ns.store(ns, Ordering::Release);
     }
 
     /// Capped playhead write that also fires the `committed_ns` USDT probe.
@@ -133,8 +133,18 @@ impl PlayheadWrite for PlayheadState {
         self.write_playhead(pos);
     }
 
+    fn advance_partial(&self, position: Duration) {
+        let nanos = u64::try_from(position.as_nanos()).unwrap_or(u64::MAX);
+        self.write_ns_capped(nanos);
+    }
+
     fn land(&self, pos: &ChunkPosition) {
         self.write_ns(pos.end_position_ns);
+    }
+
+    fn set_decoded_frontier(&self, t: Duration) {
+        let nanos = u64::try_from(t.as_nanos()).unwrap_or(u64::MAX);
+        self.decoded_frontier_ns.fetch_max(nanos, Ordering::Relaxed);
     }
 
     fn set_duration(&self, duration: Option<Duration>) {
@@ -144,19 +154,9 @@ impl PlayheadWrite for PlayheadState {
         self.total_duration_ns.store(raw, Ordering::Release);
     }
 
-    fn set_decoded_frontier(&self, t: Duration) {
-        let nanos = u64::try_from(t.as_nanos()).unwrap_or(u64::MAX);
-        self.decoded_frontier_ns.fetch_max(nanos, Ordering::Relaxed);
-    }
-
     fn set_position(&self, position: Duration) {
         let nanos = u64::try_from(position.as_nanos()).unwrap_or(u64::MAX);
         self.write_ns(nanos);
-    }
-
-    fn advance_partial(&self, position: Duration) {
-        let nanos = u64::try_from(position.as_nanos()).unwrap_or(u64::MAX);
-        self.write_ns_capped(nanos);
     }
 }
 

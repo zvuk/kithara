@@ -122,19 +122,6 @@ impl<T> Drop for Sender<T> {
 }
 
 impl<T> Sender<T> {
-    /// Create a new receiver that starts from the sender's current value.
-    #[must_use]
-    pub fn subscribe(&self) -> Receiver<T> {
-        let state = self.shared.state.lock();
-        let seen = state.version;
-        drop(state);
-        Receiver {
-            shared: Arc::clone(&self.shared),
-            seen,
-            pending: None,
-        }
-    }
-
     /// Replace the watched value and wake every receiver.
     ///
     /// # Errors
@@ -161,6 +148,19 @@ impl<T> Sender<T> {
         drop(state);
         self.shared.signal(drained);
         old
+    }
+
+    /// Create a new receiver that starts from the sender's current value.
+    #[must_use]
+    pub fn subscribe(&self) -> Receiver<T> {
+        let state = self.shared.state.lock();
+        let seen = state.version;
+        drop(state);
+        Receiver {
+            seen,
+            shared: Arc::clone(&self.shared),
+            pending: None,
+        }
     }
 }
 
@@ -242,8 +242,8 @@ impl<T> Receiver<T> {
         F: FnMut(&T) -> bool + Unpin,
     {
         WaitFor {
-            rx: self,
             predicate,
+            rx: self,
         }
     }
 }

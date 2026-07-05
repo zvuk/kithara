@@ -59,14 +59,14 @@ impl ChunkSink for XorSink {
 }
 
 impl ResourceProcessor for XorProcessor {
-    fn identity(&self) -> &[u8] {
-        &[0x5A]
-    }
-
     fn begin(&self) -> Box<dyn ChunkSink> {
         Box::new(XorSink {
             call_count: Arc::clone(&self.call_count),
         })
+    }
+
+    fn identity(&self) -> &[u8] {
+        &[0x5A]
     }
 }
 
@@ -79,8 +79,8 @@ fn xor_processor(call_count: Arc<AtomicUsize>) -> ProcessCtx {
 /// chaining restarts from the seed on each commit/reactivate.
 #[derive(Debug)]
 struct DecryptProcessor {
-    ctx: DecryptContext,
     identity: Box<[u8]>,
+    ctx: DecryptContext,
 }
 
 impl DecryptProcessor {
@@ -96,14 +96,14 @@ impl DecryptProcessor {
 }
 
 impl ResourceProcessor for DecryptProcessor {
-    fn identity(&self) -> &[u8] {
-        &self.identity
-    }
-
     fn begin(&self) -> Box<dyn ChunkSink> {
         Box::new(CbcSink {
             ctx: self.ctx.clone(),
         })
+    }
+
+    fn identity(&self) -> &[u8] {
+        &self.identity
     }
 }
 
