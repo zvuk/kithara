@@ -45,41 +45,39 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for ProbeLayer {
 
 #[derive(Default)]
 struct ProbeVisitor {
-    numeric: HashMap<String, u64>,
-    strings: HashMap<String, String>,
+    numeric: HashMap<&'static str, u64>,
+    strings: HashMap<&'static str, String>,
 }
 
 impl Visit for ProbeVisitor {
     fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-        self.numeric
-            .insert(field.name().to_string(), u64::from(value));
+        self.numeric.insert(field.name(), u64::from(value));
     }
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         let formatted = format!("{value:?}");
         if let Ok(parsed) = formatted.parse::<u64>() {
-            self.numeric.insert(field.name().to_string(), parsed);
+            self.numeric.insert(field.name(), parsed);
         } else if let Ok(parsed) = formatted.parse::<i64>() {
             if parsed >= 0 {
                 self.numeric
-                    .insert(field.name().to_string(), u64::try_from(parsed).unwrap_or(0));
+                    .insert(field.name(), u64::try_from(parsed).unwrap_or(0));
             } else {
-                self.strings.insert(field.name().to_string(), formatted);
+                self.strings.insert(field.name(), formatted);
             }
         } else {
-            self.strings.insert(field.name().to_string(), formatted);
+            self.strings.insert(field.name(), formatted);
         }
     }
     fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
         if value >= 0 {
             self.numeric
-                .insert(field.name().to_string(), u64::try_from(value).unwrap_or(0));
+                .insert(field.name(), u64::try_from(value).unwrap_or(0));
         }
     }
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        self.strings
-            .insert(field.name().to_string(), value.to_string());
+        self.strings.insert(field.name(), value.to_string());
     }
     fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-        self.numeric.insert(field.name().to_string(), value);
+        self.numeric.insert(field.name(), value);
     }
 }

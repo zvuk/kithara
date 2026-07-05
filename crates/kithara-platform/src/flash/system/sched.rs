@@ -5,6 +5,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     task::Waker,
+    time::Duration as StdDuration,
 };
 
 use super::{
@@ -141,9 +142,21 @@ impl Core {
             // PACE while real I/O is in flight: virtual time may not outrun real
             // time, so the earliest deadline fires only once the equivalent REAL
             // time has accrued since the first in-flight op anchored the pace.
-            // Deferred advances are re-attempted by the pace tick (`pace.rs`).
+            // Deferred advances unpark the event-driven pacer to re-evaluate at
+            // the next computed real deadline.
             let elapsed = u64::try_from(anchor_real.elapsed().as_nanos()).unwrap_or(u64::MAX);
             if min > anchor_virtual.saturating_add(elapsed) {
+                // Wake the pacer to re-target the next real deadline — but NEVER
+                // the pacer waking itself. The pacer runs this same advance rule
+                // after each park, and a self-unpark would arm its own park token,
+                // so the following `park_timeout` returns immediately → busy-spin
+                // until the deadline comes due. Its own deferred advance is already
+                // followed by a fresh `pace_target` + re-park, so it needs no wake.
+                if let Some(t) = &self.sched.pacer_wake
+                    && t.id() != std::thread::current().id()
+                {
+                    t.unpark();
+                }
                 return WakeBatch(Vec::new());
             }
         }
@@ -173,6 +186,20 @@ impl Core {
         }
         self.registry.account_woken(&woken);
         WakeBatch(woken)
+    }
+
+    pub(super) fn pace_target(&self, _clock: &Clock) -> Option<StdDuration> {
+        if self.registry.active != 0 || self.registry.active_async != 0 {
+            return None;
+        }
+        if self.sched.real_io == 0 {
+            return None;
+        }
+        let (anchor_real, anchor_virtual) = self.sched.pace_anchor?;
+        let (&(min, _), _) = self.sched.timed.iter().next()?;
+        let need = min.saturating_sub(anchor_virtual);
+        let have = u64::try_from(anchor_real.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        Some(StdDuration::from_nanos(need.saturating_sub(have)))
     }
 }
 

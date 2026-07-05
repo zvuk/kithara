@@ -142,7 +142,7 @@ async fn test_hls_session_events_consumption(
 async fn test_hls_invalid_url_handling(
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
-    let invalid_url = "http://invalid-domain-that-does-not-exist-12345.com/master.m3u8";
+    let invalid_url = "http://127.0.0.1:9/master.m3u8";
     let url_result = Url::parse(invalid_url);
 
     if let Ok(url) = url_result {

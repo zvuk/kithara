@@ -106,7 +106,7 @@ async fn key_store_with_different_processors(
 async fn key_store_error_handling(assets_fixture: TestAssets) -> HlsResult<()> {
     let key_store = test_key_store(&assets_fixture, None);
 
-    let invalid_url = Url::parse("http://invalid-domain-that-does-not-exist-12345.com/master.m3u8")
+    let invalid_url = Url::parse("http://127.0.0.1:9/master.m3u8")
         .map_err(|e| HlsError::InvalidUrl(e.to_string()))?;
 
     let result: HlsResult<Bytes> = key_store.get_raw_key(&invalid_url, None).await;

@@ -104,6 +104,7 @@ struct EventCollector {
     reader_segments: Mutex<Vec<(usize, usize)>>,
     applied_targets: Mutex<Vec<usize>>,
     audio_trace: Mutex<Vec<String>>,
+    event_tail: Mutex<Vec<String>>,
     switch_count: AtomicUsize,
 }
 
@@ -116,6 +117,7 @@ impl EventCollector {
             reader_segments: Mutex::new(Vec::new()),
             applied_targets: Mutex::new(Vec::new()),
             audio_trace: Mutex::new(Vec::new()),
+            event_tail: Mutex::new(Vec::new()),
             switch_count: AtomicUsize::new(0),
         }
     }
@@ -125,6 +127,14 @@ impl EventCollector {
         if trace.len() < 64 {
             trace.push(entry);
         }
+    }
+
+    fn push_event_tail(&self, entry: String) {
+        let mut tail = self.event_tail.lock();
+        if tail.len() >= 64 {
+            tail.remove(0);
+        }
+        tail.push(entry);
     }
 
     /// Fold every event published since the last drain into the accumulators.
@@ -139,6 +149,7 @@ impl EventCollector {
                 Err(TryRecvError::Lagged(_)) => continue,
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             };
+            self.push_event_tail(format!("{ev:?}"));
             match &ev {
                 Event::Downloader(DownloaderEvent::RequestEnqueued {
                     request_id, url, ..
@@ -235,9 +246,27 @@ impl EventCollector {
         self.switch_count.load(Ordering::Acquire)
     }
 
+    fn reader_reached_segment(&self, segment_index: usize) -> bool {
+        self.drain();
+        self.reader_segments
+            .lock()
+            .iter()
+            .any(|(_, s)| *s >= segment_index)
+    }
+
+    fn reader_segments(&self) -> Vec<(usize, usize)> {
+        self.drain();
+        self.reader_segments.lock().clone()
+    }
+
     fn applied_targets(&self) -> Vec<usize> {
         self.drain();
         self.applied_targets.lock().clone()
+    }
+
+    fn event_tail(&self) -> Vec<String> {
+        self.drain();
+        self.event_tail.lock().clone()
     }
 
     fn audio_trace(&self) -> Vec<String> {
@@ -297,6 +326,74 @@ fn read_phase_until_samples<S: StreamType>(
     }
 
     stats
+}
+
+async fn read_until_samples_blocking<S>(
+    mut audio: Audio<Stream<S>>,
+    target_samples: u64,
+    label: &str,
+) -> (Audio<Stream<S>>, u64)
+where
+    S: StreamType + 'static,
+    Audio<Stream<S>>: Send + 'static,
+{
+    spawn_blocking(move || {
+        let samples = read_until_samples(&mut audio, target_samples);
+        (audio, samples)
+    })
+    .await
+    .unwrap_or_else(|err| panic!("{label}: spawn_blocking failed: {err}"))
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BlockingReadStep {
+    samples: u64,
+    saw_eof: bool,
+}
+
+async fn read_one_chunk_blocking<S>(
+    mut audio: Audio<Stream<S>>,
+    label: &str,
+) -> (Audio<Stream<S>>, BlockingReadStep)
+where
+    S: StreamType + 'static,
+    Audio<Stream<S>>: Send + 'static,
+{
+    let read_label = label.to_owned();
+    let join_label = read_label.clone();
+    spawn_blocking(move || {
+        let mut buf = vec![0f32; 4096];
+        loop {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => continue,
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    let n = count.get();
+                    for &sample in &buf[..n] {
+                        assert!(sample.is_finite(), "{read_label}: non-finite sample");
+                    }
+                    return (
+                        audio,
+                        BlockingReadStep {
+                            samples: n as u64,
+                            saw_eof: false,
+                        },
+                    );
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    return (
+                        audio,
+                        BlockingReadStep {
+                            samples: 0,
+                            saw_eof: true,
+                        },
+                    );
+                }
+                Err(err) => panic!("{read_label}: decode error: {err}"),
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|err| panic!("{join_label}: spawn_blocking failed: {err}"))
 }
 
 /// Wait until every v0 media segment has been network-fetched (the all-cached
@@ -398,7 +495,16 @@ async fn vod_manual_switch_affects_future_segments() {
     );
 
     assert!(total > 0, "expected audio output");
-    assert!(switches > 0, "ABR must switch at least once");
+    let targets = collector.applied_targets();
+    let reader_segments = collector.reader_segments();
+    let event_tail = collector.event_tail();
+    assert!(
+        switches > 0,
+        "ABR must switch at least once. switch_count={switches}, \
+         applied_targets={targets:?}, reader_segments={reader_segments:?}, \
+         segments={segments:?}, last_events:\n{}",
+        event_tail.join("\n")
+    );
 
     let first_v0 = segments.iter().any(|s| s.variant == 0);
     let has_v1 = segments.iter().any(|s| s.variant == 1);
@@ -884,24 +990,16 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         .events(bus)
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
 
     // Warm up a couple of segments so the reader is past the boundary
     // commit gate, then trigger a Manual switch via the handle. The
-    // blocking `read` parks until the worker commits frames, so the loop
-    // waits on real decoded audio (the `total` gate), not a wall clock.
-    let mut buf = vec![0.0f32; 4096];
-    let mut total = 0u64;
-    while total < 8_192 {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) => {}
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("decode error in warmup: {e}"),
-        }
-    }
+    // blocking `read` parks until the worker commits frames, so run it on
+    // the blocking pool and wait on real decoded audio, not a wall clock.
+    let (mut audio, total) =
+        read_until_samples_blocking(audio, 8_192, "runtime manual warmup").await;
     assert!(total > 0, "warmup must yield audio before the Manual flip");
 
     let handle = audio
@@ -975,13 +1073,14 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .events(bus)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
 
     // Warmup: read until enough AAC samples are produced (state target, not a
     // wall-clock deadline). The outer test timeout is the only backstop.
-    let pre_total = read_until_samples(&mut audio, 16_384);
+    let (mut audio, pre_total) =
+        read_until_samples_blocking(audio, 16_384, "cross-codec manual warmup").await;
     assert!(
         pre_total > 0,
         "warmup must produce AAC samples before the cross-codec flip"
@@ -1086,24 +1185,14 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
         .media_info(wav_info)
         .block_on_underrun(true)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
 
-    // Tiny warmup read — kicks off the peer's prefetch, then drops the
-    // reader so the prefetch can finish on its own thread.
-    let mut buf = vec![0.0f32; 4096];
-    let mut warmup_samples = 0u64;
-    while warmup_samples < 8_192 {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => {
-                warmup_samples += count.get() as u64;
-            }
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Ok(ReadOutcome::Pending { .. }) => {}
-            Err(e) => panic!("decode error in warmup: {e}"),
-        }
-    }
+    // Tiny warmup read on the blocking pool so the current-thread runtime
+    // remains free to drive the peer prefetch.
+    let (audio, warmup_samples) =
+        read_until_samples_blocking(audio, 8_192, "all-cached manual warmup").await;
     assert!(warmup_samples > 0, "warmup must produce some audio");
 
     // The downloader must finish prefetching every v0 segment — the
@@ -1221,13 +1310,14 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
         .events(bus)
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
 
-    // Tiny warmup so the peer is actually pumping. Drop the reader to
-    // let the prefetch finish in the background.
-    let warmup_samples = read_until_samples(&mut audio, 8_192);
+    // Tiny warmup on the blocking pool so the peer is actually pumping while
+    // the current-thread runtime remains free to drive downloader tasks.
+    let (mut audio, warmup_samples) =
+        read_until_samples_blocking(audio, 8_192, "cache-and-seek manual warmup").await;
     assert!(warmup_samples > 0, "warmup must produce some audio");
 
     // Wait on the real prefetch state (one net fetch per v0 segment), not a
@@ -1381,28 +1471,26 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
         .events(bus)
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
 
-    // Read just enough to cross the first segment boundary — the reader
-    // moves from byte 0 into segment 1. We do NOT exhaust the fixture
-    // (large enough sample budget but bounded).
-    let mut buf = vec![0.0f32; 4096];
+    // Read until the reader itself enters segment 1. The read pump runs on the
+    // blocking pool so it cannot park the current-thread runtime that drives
+    // the HLS producer tasks.
+    let mut audio = audio;
     let mut samples = 0u64;
-    let single_segment_frames = (D.segment_size / 4) as u64; // 200 KB / (stereo i16) ≈ 50_000 frames
-    // Engine-aware blocking read parks until each chunk commits, so wait on
-    // the *fact* of two segments' worth of samples — not a wall-clock window
-    // (a virtual deadline would race the clock past in-flight real bytes
-    // under flash). A genuine wedge is bounded by `KITHARA_HANG_TIMEOUT_SECS`.
-    while samples < single_segment_frames * 2 {
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => samples += count.get() as u64,
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Ok(ReadOutcome::Pending { .. }) => {}
-            Err(e) => panic!("decode error: {e}"),
-        }
+    while !collector.reader_reached_segment(1) {
+        let (next_audio, step) =
+            read_one_chunk_blocking(audio, "auto defaults first-boundary read").await;
+        audio = next_audio;
+        samples += step.samples;
+        assert!(
+            !step.saw_eof,
+            "test reached EOF before the reader crossed the first segment boundary"
+        );
     }
+    drop(audio);
 
     let switches = collector.switch_count();
     let segments = collector.segments();
@@ -1476,12 +1564,13 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .events(bus)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
 
     // Warmup on v=0 (AAC).
-    let warmup_total = read_until_samples(&mut audio, 16_384);
+    let (mut audio, warmup_total) =
+        read_until_samples_blocking(audio, 16_384, "rapid switch warmup").await;
     assert!(warmup_total > 0, "warmup must produce AAC samples");
 
     let handle = audio

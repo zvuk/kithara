@@ -8,7 +8,7 @@
 //! shared bytes through the same `AssetResource`.
 
 use std::{
-    io::Read,
+    io::{self, Read},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -44,17 +44,17 @@ async fn serve_full(State(state): State<CountState>) -> Response {
         .expect("valid response")
 }
 
-fn read_to_end(mut stream: Stream<File>) -> Vec<u8> {
+fn read_to_end(mut stream: Stream<File>) -> io::Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut buf = [0u8; 16];
     loop {
         match stream.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => out.extend_from_slice(&buf[..n]),
-            Err(_) => break,
+            Err(err) => return Err(err),
         }
     }
-    out
+    Ok(out)
 }
 
 #[kithara::test(
@@ -104,6 +104,8 @@ async fn shared_store_one_get() {
     })
     .await
     .expect("blocking read task");
+    let waveform_bytes = waveform_bytes.expect("whole-file read must complete");
+    let player_bytes = player_bytes.expect("bounded read must complete");
 
     assert_eq!(
         waveform_bytes, BODY,

@@ -15,6 +15,7 @@ mod idioms;
 mod lint;
 mod manifest;
 mod orphans;
+mod perf;
 mod perf_compare;
 mod publish;
 mod quality;
@@ -37,6 +38,7 @@ use health::HealthArgs;
 use lint::LintArgs;
 use manifest::ManifestArgs;
 use orphans::OrphansArgs;
+use perf::PerfArgs;
 use publish::PublishArgs;
 use quality::QualityCommand;
 use release::ReleaseArgs;
@@ -71,6 +73,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Test-suite performance measurement pipeline (matrix/slow/profile/report/trace).
+    Perf(PerfArgs),
     /// Compare perf results.
     PerfCompare {
         /// Path to the current results file.
@@ -141,6 +145,7 @@ fn main() -> anyhow::Result<()> {
             baseline,
             threshold,
         } => perf_compare::run(&current, &baseline, threshold),
+        Command::Perf(ref args) => perf::run(args),
         Command::Lint(ref args) => lint::run(args),
         Command::Quality { command } => quality::run(command),
         Command::Android { command } => android::run(command),

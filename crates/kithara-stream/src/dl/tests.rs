@@ -562,6 +562,7 @@ async fn shared_client_keepalive_bounds_connection_count() {
 
     let mut total_ok = 0;
     let mut all_failures: Vec<String> = Vec::new();
+    let mut connection_history: Vec<String> = Vec::with_capacity(WAVES);
     let total_dls = WAVES * PARALLEL_DLS;
     for wave in 0..WAVES {
         let mut tasks = Vec::with_capacity(PARALLEL_DLS);
@@ -599,6 +600,11 @@ async fn shared_client_keepalive_bounds_connection_count() {
                 ));
             }
         }
+        connection_history.push(format!(
+            "wave {wave}: client_connections={}, served={}, ok={total_ok}",
+            shared_client.connection_count(),
+            total_served.load(Ordering::SeqCst)
+        ));
     }
 
     let expected = total_dls * REQUESTS_PER_DL;
@@ -616,7 +622,9 @@ async fn shared_client_keepalive_bounds_connection_count() {
          for {expected} requests \
          across {WAVES} waves of {PARALLEL_DLS} downloaders \
          (expected ≤ {MAX_CLIENT_CONNECTIONS}). Successive Downloaders should reuse sockets \
-         from the shared pool; this many indicates per-Downloader clients or severe churn."
+         from the shared pool; this many indicates per-Downloader clients or severe churn. \
+         Per-wave opened-connection history:\n{}",
+        connection_history.join("\n")
     );
 }
 

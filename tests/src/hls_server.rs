@@ -363,6 +363,157 @@ impl HlsTestServer {
         }
     }
 
+    pub fn for_each_expected_byte_mismatch(
+        &self,
+        variant: usize,
+        offset: u64,
+        actual: &[u8],
+        mut mismatch: impl FnMut(usize, u8, u8),
+    ) {
+        let init_data = self
+            .config
+            .init_data_per_variant
+            .as_ref()
+            .and_then(|data| data.get(variant));
+        let init_len = init_data.map_or(0u64, |data| data.len() as u64);
+
+        let mut checked = 0usize;
+        if offset < init_len {
+            let init_count = match usize::try_from(init_len - offset) {
+                Ok(remaining) => actual.len().min(remaining),
+                Err(_) => actual.len(),
+            };
+            if let Some(data) = init_data {
+                Self::scan_data_mismatches(data, offset, &actual[..init_count], 0, &mut mismatch);
+            } else {
+                Self::scan_repeated_mismatches(0, &actual[..init_count], 0, &mut mismatch);
+            }
+            checked = init_count;
+        }
+
+        if checked == actual.len() {
+            return;
+        }
+
+        let media_offset = offset.saturating_sub(init_len);
+        let media_actual = &actual[checked..];
+        if let Some(ref per_variant) = self.config.custom_data_per_variant
+            && let Some(data) = per_variant.get(variant)
+        {
+            Self::scan_data_mismatches(data, media_offset, media_actual, checked, &mut mismatch);
+            return;
+        }
+        if let Some(data) = &self.config.custom_data {
+            Self::scan_data_mismatches(data, media_offset, media_actual, checked, &mut mismatch);
+            return;
+        }
+
+        self.scan_generated_mismatches(variant, media_offset, media_actual, checked, &mut mismatch);
+    }
+
+    fn scan_data_mismatches(
+        data: &[u8],
+        data_offset: u64,
+        actual: &[u8],
+        base_index: usize,
+        mismatch: &mut impl FnMut(usize, u8, u8),
+    ) {
+        let Ok(data_offset) = usize::try_from(data_offset) else {
+            Self::scan_repeated_mismatches(0, actual, base_index, mismatch);
+            return;
+        };
+
+        if data_offset >= data.len() {
+            Self::scan_repeated_mismatches(0, actual, base_index, mismatch);
+            return;
+        }
+
+        let data_len = actual.len().min(data.len() - data_offset);
+        Self::scan_slice_mismatches(
+            &data[data_offset..data_offset + data_len],
+            &actual[..data_len],
+            base_index,
+            mismatch,
+        );
+        if data_len < actual.len() {
+            Self::scan_repeated_mismatches(0, &actual[data_len..], base_index + data_len, mismatch);
+        }
+    }
+
+    fn scan_generated_mismatches(
+        &self,
+        variant: usize,
+        mut media_offset: u64,
+        actual: &[u8],
+        base_index: usize,
+        mismatch: &mut impl FnMut(usize, u8, u8),
+    ) {
+        let segment_size = self.config.segment_size as u64;
+        let mut checked = 0usize;
+        while checked < actual.len() {
+            let seg_idx = (media_offset / segment_size) as usize;
+            let off_in_seg = (media_offset % segment_size) as usize;
+            let remaining_in_segment = self.config.segment_size - off_in_seg;
+            let n = remaining_in_segment.min(actual.len() - checked);
+            let prefix = format!("V{variant}-SEG-{seg_idx}:TEST_SEGMENT_DATA");
+            let prefix_bytes = prefix.as_bytes();
+
+            if off_in_seg < prefix_bytes.len() {
+                let prefix_len = n.min(prefix_bytes.len() - off_in_seg);
+                Self::scan_slice_mismatches(
+                    &prefix_bytes[off_in_seg..off_in_seg + prefix_len],
+                    &actual[checked..checked + prefix_len],
+                    base_index + checked,
+                    mismatch,
+                );
+                if prefix_len < n {
+                    Self::scan_repeated_mismatches(
+                        0xFF,
+                        &actual[checked + prefix_len..checked + n],
+                        base_index + checked + prefix_len,
+                        mismatch,
+                    );
+                }
+            } else {
+                Self::scan_repeated_mismatches(
+                    0xFF,
+                    &actual[checked..checked + n],
+                    base_index + checked,
+                    mismatch,
+                );
+            }
+
+            checked += n;
+            media_offset += n as u64;
+        }
+    }
+
+    fn scan_slice_mismatches(
+        expected: &[u8],
+        actual: &[u8],
+        base_index: usize,
+        mismatch: &mut impl FnMut(usize, u8, u8),
+    ) {
+        for (index, (&expected_byte, &actual_byte)) in expected.iter().zip(actual).enumerate() {
+            if actual_byte != expected_byte {
+                mismatch(base_index + index, expected_byte, actual_byte);
+            }
+        }
+    }
+
+    fn scan_repeated_mismatches(
+        expected: u8,
+        actual: &[u8],
+        base_index: usize,
+        mismatch: &mut impl FnMut(usize, u8, u8),
+    ) {
+        for (index, &actual_byte) in actual.iter().enumerate() {
+            if actual_byte != expected {
+                mismatch(base_index + index, expected, actual_byte);
+            }
+        }
+    }
+
     #[must_use]
     pub fn init_len(&self) -> u64 {
         self.config
@@ -506,11 +657,28 @@ impl PackagedTestServer {
         variant: usize,
         segment: usize,
     ) -> (Self, crate::SegmentGateHandle) {
-        let server = Self::new().await;
-        let handle = server
-            ._helper
-            .register_segment_gate(server.plain.token(), variant, segment);
+        let (server, mut handles) = Self::with_segment_gates(&[(variant, segment)]).await;
+        let handle = handles.pop().expect("one segment gate handle");
         (server, handle)
+    }
+
+    /// Build a packaged server whose `plain` fixture withholds each listed
+    /// `(variant, segment)` GET body until its corresponding handle releases it.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub async fn with_segment_gates(
+        gates: &[(usize, usize)],
+    ) -> (Self, Vec<crate::SegmentGateHandle>) {
+        let server = Self::new().await;
+        let handles = gates
+            .iter()
+            .map(|&(variant, segment)| {
+                server
+                    ._helper
+                    .register_segment_gate(server.plain.token(), variant, segment)
+            })
+            .collect();
+        (server, handles)
     }
 
     /// Build a packaged server whose `plain` fixture withholds the **size**
