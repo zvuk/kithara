@@ -189,6 +189,55 @@ virtualization distorted something. The FILE phase-continuity cluster is the
 first equivalence oracle: its sub-0.5-sample phase assertions fail on any
 divergence.
 
+## Blocking Detection (`no_block`)
+
+Poll-scoped async blocking detection, feature `no-block` (test lanes only;
+the inert twin `common/no_block_inert.rs` keeps prod builds byte-identical).
+Real tree: `src/no_block/` — cfg-free inside, selected in `lib.rs` like
+`flash`/`flash_inert`.
+
+Two detection levels, both scoped by the `Watched` per-poll combinator
+(installed automatically at every `#[kithara::test]` async root and both
+spawn chokepoints — native and flash `tokio::task::spawn`/`spawn_on`):
+
+1. **Chokepoint (`forbid`)** — deterministic, timing-independent. The native
+   blocking primitives (`thread::sleep`/`park`/`park_timeout`,
+   `Condvar::wait`/`wait_timeout`, `mpsc::recv`/`recv_timeout`) refuse to run
+   inside a poll, attributing the caller via an unbroken `#[track_caller]`
+   chain. `Mutex`/`RwLock` locks, `spawn_blocking`, and wake operations are
+   deliberately NOT intercepted (short locks in async are legal; long waits
+   are level 2's job).
+2. **Budget** — wall/CPU timing of each poll on the REAL clock (`std::time`,
+   never the virtualized platform clock). Blanket default 3000 ms (measured:
+   legitimate IO-bound polls reach 1.05 s; `KITHARA_NO_BLOCK_BUDGET_MS`
+   overrides); the strict 25 ms tier is opt-in via
+   `#[kithara::no_block(budget_ms = N)]`. Over-budget reports classify
+   CPU-spin vs blocked-wait from the thread-CPU/wall ratio.
+
+Modes via `KITHARA_NO_BLOCK`: `panic` (default), `census` (log-only; add
+`KITHARA_NO_BLOCK_LOG=<file>` for an append-mode sink — nextest swallows
+passing-test stderr), `off`.
+
+Escape: `#[kithara::allow_block]` — RAII permit on sync fns, per-poll
+`PermitPoll` combinator on async fns (guards are `!Send` by design: they
+mutate thread-local state in Drop and must not cross `.await`). A permit
+suppresses level 1 AND pauses the level-2 timer.
+
+Flash interop (direction: flash calls `no_block`, never the reverse —
+`no_block` is flash-ignorant): a BRIDGED wait (wrapped sync wait inside an
+async poll, see `flash/system/credit.rs`) reports through `forbid_bridged`
+BEFORE the engine wait; the engine's own `Token::wait` runs under a permit,
+so engine coordination neither trips level 1 nor counts against the budget.
+
+Deepening lane: `just rtsan-async` compiles every watched poll as an RTSan
+nonblocking context (nightly, `--cfg rtsan`); suppressions taxonomy in
+`.config/rtsan/async-suppressions.txt` — waits intercepted, instantaneous
+classes (alloc, spawn, lock calls, wakes, fd setup/teardown, panic-hook
+writes) suppressed with measured rationale.
+
+Guard rail: `arch.no-raw-no-block` (ast-grep) bans hand-calling the
+expansion targets outside their owner files.
+
 ## CancelToken
 
 `CancelToken` is the **single** cancellation token type across the workspace — no
