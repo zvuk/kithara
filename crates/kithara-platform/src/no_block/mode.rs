@@ -15,7 +15,8 @@ impl Consts {
     const ENV_MODE: &str = "KITHARA_NO_BLOCK";
     const ENV_LOG: &str = "KITHARA_NO_BLOCK_LOG";
     const ENV_BUDGET_MS: &str = "KITHARA_NO_BLOCK_BUDGET_MS";
-    const FALLBACK_BLANKET: Duration = Duration::from_millis(250);
+    /// Measured legitimate poll maximum: 1.05s across the suite (census 2026-07-06); 3x headroom against CI preemption; `KITHARA_NO_BLOCK_BUDGET_MS` overrides.
+    const FALLBACK_BLANKET: Duration = Duration::from_millis(3_000);
 }
 
 #[cfg(test)]
@@ -35,8 +36,8 @@ pub(super) fn mode() -> Mode {
     static CACHED: OnceLock<Mode> = OnceLock::new();
     *CACHED.get_or_init(|| match std::env::var(Consts::ENV_MODE).as_deref() {
         Ok("off") => Mode::Off,
-        Ok("panic") => Mode::Panic,
-        _ => Mode::Census,
+        Ok("census") => Mode::Census,
+        _ => Mode::Panic,
     })
 }
 
